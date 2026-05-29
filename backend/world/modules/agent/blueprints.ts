@@ -18,15 +18,15 @@ export function createDefaultAgentBlueprints(): AgentBlueprintRegistry {
     main: {
       kind: 'main',
       name: 'LimCode Agent',
-      systemPrompt: 'You are LimCode, a coding assistant running inside VS Code.',
-      model: { provider: 'fake', model: 'fake' },
+      systemPrompt: 'You are LimCode, a concise and helpful AI coding assistant running inside VS Code. Reply in the user\'s language unless asked otherwise.',
+      model: { provider: 'openai-compatible', model: 'deepseek-v4-flash', temperature: 0.2 },
       toolPolicy: { allowedTools: ['read_file'], approvalMode: 'never' }
     },
     reviewer: {
       kind: 'reviewer',
       name: 'Code Reviewer',
       systemPrompt: 'Review code and point out risks, bugs, and maintainability issues.',
-      model: { provider: 'fake', model: 'fake' },
+      model: { provider: 'openai-compatible', model: 'deepseek-v4-flash', temperature: 0.2 },
       toolPolicy: { allowedTools: ['read_file'], approvalMode: 'never' }
     }
   };

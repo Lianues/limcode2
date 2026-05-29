@@ -33,11 +33,14 @@ export const LlmPollSystem = defineSystem({
   },
   run(ctx) {
     const { world, cmd } = ctx;
+    const deltasByRequest = new Map<string, string>();
+
     for (const payload of readEvents(ctx, LlmEventType.Delta)) {
-      const assistant = assistantOf(world, payload.requestId);
-      if (assistant === undefined) continue;
-      const message = world.get(assistant, Message);
-      if (message) cmd.add(assistant, Message, { ...message, text: message.text + payload.text });
+      deltasByRequest.set(payload.requestId, `${deltasByRequest.get(payload.requestId) ?? ''}${payload.text}`);
+    }
+
+    for (const [requestId, delta] of deltasByRequest) {
+      appendDelta(world, cmd, requestId, delta);
     }
 
     for (const payload of readEvents(ctx, LlmEventType.ToolCall)) {
@@ -46,8 +49,14 @@ export const LlmPollSystem = defineSystem({
       for (const call of payload.calls) spawnToolCall(cmd, { assistant, name: call.name, argsJson: call.argsJson });
     }
 
-    for (const payload of readEvents(ctx, LlmEventType.Done)) finalize(world, cmd, payload.requestId, 'complete');
-    for (const payload of readEvents(ctx, LlmEventType.Error)) finalize(world, cmd, payload.requestId, 'error', payload.message);
+    const erroredRequests = new Set<string>();
+    for (const payload of readEvents(ctx, LlmEventType.Error)) {
+      erroredRequests.add(payload.requestId);
+      finalize(world, cmd, payload.requestId, 'error', payload.message, deltasByRequest.get(payload.requestId) ?? '');
+    }
+    for (const payload of readEvents(ctx, LlmEventType.Done)) {
+      if (!erroredRequests.has(payload.requestId)) finalize(world, cmd, payload.requestId, 'complete', undefined, deltasByRequest.get(payload.requestId) ?? '');
+    }
   }
 });
 
@@ -58,7 +67,15 @@ function assistantOf(world: WorldReader, requestId: string): Entity | undefined 
   const request = requestOf(world, requestId);
   return request === undefined ? undefined : world.get(request, LlmRequest)?.assistantEntity;
 }
-function finalize(world: WorldReader, cmd: CommandSink, requestId: string, status: 'complete' | 'error', errorMessage?: string): void {
+
+function appendDelta(world: WorldReader, cmd: CommandSink, requestId: string, delta: string): void {
+  const assistant = assistantOf(world, requestId);
+  if (assistant === undefined || !delta) return;
+  const message = world.get(assistant, Message);
+  if (message) cmd.add(assistant, Message, { ...message, text: message.text + delta });
+}
+
+function finalize(world: WorldReader, cmd: CommandSink, requestId: string, status: 'complete' | 'error', errorMessage?: string, pendingDelta = ''): void {
   const request = requestOf(world, requestId);
   if (request === undefined) return;
   const data = world.get(request, LlmRequest);
@@ -66,7 +83,8 @@ function finalize(world: WorldReader, cmd: CommandSink, requestId: string, statu
     const assistant = data.assistantEntity;
     const message = world.get(assistant, Message);
     if (message) {
-      const text = errorMessage ? `${message.text}\n[error] ${errorMessage}` : message.text;
+      const baseText = `${message.text}${pendingDelta}`;
+      const text = errorMessage ? `${baseText}\n[error] ${errorMessage}` : baseText;
       cmd.add(assistant, Message, { ...message, text, status });
     }
     cmd.remove(assistant, Streaming);

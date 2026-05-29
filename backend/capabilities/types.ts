@@ -1,6 +1,7 @@
 import type * as vscode from 'vscode';
 import type { LlmStartRequest } from '../world/modules/llm/contracts';
 import type { WorldEvent } from '../ecs/types';
+import type { ClientState } from '../../shared/protocol';
 
 export type Emit = (event: WorldEvent) => void;
 
@@ -19,4 +20,20 @@ export interface WebviewCapability {
   attach(webview: vscode.Webview): void;
   detach(): void;
   post(message: unknown): void;
+}
+
+/** 插件数据目录：集中记录所有 VS Code 持久化数据的根位置。 */
+export interface RuntimePaths {
+  globalStorageUri: vscode.Uri;
+  globalStoragePath: string;
+  chatHistoryUri: vscode.Uri;
+  chatHistoryPath: string;
+}
+
+/** VS Code 存储能力：通过 workspace.fs 读写插件全局数据。 */
+export interface StorageCapability {
+  readonly paths: RuntimePaths;
+  ensureReady(): Promise<void>;
+  loadClientState(): Promise<ClientState | undefined>;
+  saveClientState(state: ClientState): Promise<void>;
 }

@@ -13,7 +13,7 @@
       ],
       "preLaunchTask": "dev: extension watch + webview hmr",
       "env": {
-        "VSCODE_WEBVIEW_DEV_SERVER": "http://127.0.0.1:31773"
+        "VSCODE_WEBVIEW_DEV_SERVER": "http://localhost:31773"
       }
     },
     {

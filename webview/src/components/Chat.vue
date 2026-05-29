@@ -12,6 +12,14 @@ const sessionMessages = computed(() =>
   clientState.messages.filter((message) => message.sessionId === clientState.currentSessionId).sort((a, b) => a.seq - b.seq)
 );
 
+const currentSession = computed(() =>
+  clientState.sessions.find((session) => session.id === clientState.currentSessionId)
+);
+
+const currentAgent = computed(() =>
+  clientState.agents.find((agent) => agent.id === currentSession.value?.agentId)
+);
+
 function toolCallsForMessage(messageId: string) {
   return clientState.toolCalls.filter((toolCall) => toolCall.messageId === messageId);
 }
@@ -74,10 +82,13 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
 <template>
   <div class="chat">
     <header class="chat-header">
-      <span class="title">LimCode</span>
+      <span class="title">LimCode AI</span>
       <span class="hint">
-        <template v-if="clientState.currentSessionId">当前会话：<code>{{ clientState.currentSessionId }}</code> · 试试：<code>/read vscode/extension.ts</code></template>
-        <template v-else>当前还没有会话。等待外部显式创建 agent/session。</template>
+        <template v-if="clientState.currentSessionId">
+          当前会话：<code>{{ clientState.currentSessionId }}</code>
+          <template v-if="currentAgent?.model?.model"> · 模型：<code>{{ currentAgent.model.model }}</code></template>
+        </template>
+        <template v-else>正在初始化默认会话...</template>
       </span>
     </header>
 
@@ -96,12 +107,12 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
         </div>
       </div>
       <p v-if="!sessionMessages.length" class="empty">
-        {{ clientState.currentSessionId ? '还没有消息，发一条试试。' : '当前无会话，请由外部先创建 agent / session。' }}
+        {{ clientState.currentSessionId ? '还没有消息，发一条试试。' : '默认会话初始化中，请稍候。' }}
       </p>
     </div>
 
     <footer class="composer">
-      <textarea v-model="input" rows="2" :placeholder="clientState.currentSessionId ? '输入消息，Enter 发送，Shift+Enter 换行' : '当前无会话，无法发送消息'" @keydown="onKeydown"></textarea>
+      <textarea v-model="input" rows="2" :placeholder="clientState.currentSessionId ? '输入消息，Enter 发送，Shift+Enter 换行' : '默认会话初始化中...'" @keydown="onKeydown"></textarea>
       <button type="button" :disabled="!input.trim() || !clientState.currentSessionId" @click="send">发送</button>
     </footer>
   </div>

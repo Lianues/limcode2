@@ -48,17 +48,18 @@ function createContentSecurityPolicy(
   nonce: string,
   devServerUrl?: string
 ): string {
-  const devHttpSource = devServerUrl;
-  const devWebSocketSource = devServerUrl ? toWebSocketOrigin(devServerUrl) : undefined;
-  const devSources = [devHttpSource, devWebSocketSource].filter(Boolean).join(' ');
+  const devHttpSources = devServerUrl ? getLoopbackHttpOrigins(devServerUrl) : [];
+  const devConnectSources = [...devHttpSources, ...devHttpSources.map(toWebSocketOrigin)];
+  const devHttpSourceList = devHttpSources.length > 0 ? ` ${devHttpSources.join(' ')}` : '';
+  const devConnectSourceList = devConnectSources.join(' ');
 
   return [
     `default-src 'none';`,
-    `img-src ${webview.cspSource} https: data:${devHttpSource ? ` ${devHttpSource}` : ''};`,
-    `font-src ${webview.cspSource}${devHttpSource ? ` ${devHttpSource}` : ''};`,
-    `style-src ${webview.cspSource}${devHttpSource ? ` ${devHttpSource}` : ''} 'unsafe-inline';`,
-    `script-src 'nonce-${nonce}'${devHttpSource ? ` ${devHttpSource}` : ''};`,
-    devSources ? `connect-src ${webview.cspSource} ${devSources};` : ''
+    `img-src ${webview.cspSource} https: data:${devHttpSourceList};`,
+    `font-src ${webview.cspSource}${devHttpSourceList};`,
+    `style-src ${webview.cspSource}${devHttpSourceList} 'unsafe-inline';`,
+    `script-src 'nonce-${nonce}'${devHttpSourceList};`,
+    devConnectSourceList ? `connect-src ${webview.cspSource} ${devConnectSourceList};` : ''
   ]
     .filter(Boolean)
     .join(' ');
@@ -79,6 +80,23 @@ function getWebviewDevServerUrl(): string | undefined {
   }
 }
 
+function getLoopbackHttpOrigins(origin: string): string[] {
+  const url = new URL(origin);
+  const origins = new Set<string>([url.origin]);
+
+  if (isLoopbackHost(url.hostname)) {
+    const port = url.port ? `:${url.port}` : '';
+    origins.add(`${url.protocol}//localhost${port}`);
+    origins.add(`${url.protocol}//127.0.0.1${port}`);
+  }
+
+  return [...origins];
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+}
+
 function toWebSocketOrigin(httpOrigin: string): string {
   const url = new URL(httpOrigin);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -93,10 +111,17 @@ function getDevServerHtml(devServerUrl: string, csp: string, nonce: string): str
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="${csp}">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Vue TS Bridge - HMR</title>
+  <title>LimCode - HMR</title>
 </head>
 <body>
-  <div id="app"></div>
+  <div id="app">
+    <main style="padding: 24px; font-family: var(--vscode-font-family); color: var(--vscode-foreground);">
+      <h2 style="margin-top: 0;">正在连接 LimCode Webview HMR...</h2>
+      <p>如果这个提示一直存在，请确认 Vite dev server 已启动：</p>
+      <p><code>npm run dev:webview</code></p>
+      <p>当前 dev server：<code>${devServerUrl}</code></p>
+    </main>
+  </div>
   <script type="module" nonce="${nonce}" src="${devServerUrl}/@vite/client"></script>
   <script type="module" nonce="${nonce}" src="${devServerUrl}/src/main.ts"></script>
 </body>
@@ -110,7 +135,7 @@ function getMissingBuildHtml(csp: string): string {
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="${csp}">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Vue TS Bridge</title>
+  <title>LimCode</title>
   <style>
     body { font-family: var(--vscode-font-family); padding: 24px; color: var(--vscode-foreground); }
     code { background: var(--vscode-textCodeBlock-background); padding: 2px 6px; border-radius: 4px; }

@@ -1,7 +1,7 @@
 {
-  "name": "vscode-vue-ts-bridge-starter",
-  "displayName": "VSCode Vue TS Bridge Starter",
-  "description": "VS Code extension scaffold with a TypeScript backend, Vue webview frontend, and a typed bridge layer.",
+  "name": "limcode-vscode-assistant",
+  "displayName": "LimCode",
+  "description": "VS Code extension with a TypeScript ECS backend, Vue webview frontend, and a basic AI chat flow.",
   "version": "0.0.1",
   "publisher": "your-publisher",
   "private": true,
@@ -15,25 +15,67 @@
   "contributes": {
     "commands": [
       {
-        "command": "vscode-vue-ts-bridge-starter.openPanel",
-        "title": "Vue TS Bridge: Open Panel",
-        "category": "Vue TS Bridge"
+        "command": "limcode.openPanel",
+        "title": "LimCode: Open AI Chat",
+        "category": "LimCode"
+      },
+      {
+        "command": "limcode.configureApiKey",
+        "title": "LimCode: Configure OpenAI Compatible API Key",
+        "category": "LimCode"
+      },
+      {
+        "command": "limcode.revealGlobalStorage",
+        "title": "LimCode: Reveal Global Storage Folder",
+        "category": "LimCode"
       }
     ],
+    "configuration": {
+      "title": "LimCode",
+      "properties": {
+        "limcode.openAiCompatible.baseUrl": {
+          "type": "string",
+          "default": "https://api.deepseek.com/v1",
+          "description": "OpenAI-compatible API base URL. The extension appends /chat/completions when needed."
+        },
+        "limcode.openAiCompatible.model": {
+          "type": "string",
+          "default": "deepseek-v4-flash",
+          "description": "Default OpenAI-compatible model used by LimCode."
+        },
+        "limcode.openAiCompatible.temperature": {
+          "type": "number",
+          "default": 0.2,
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Default sampling temperature."
+        },
+        "limcode.openAiCompatible.enableTools": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether to send registered tool schemas to the OpenAI-compatible provider. Disabled for the initial basic chat flow."
+        },
+        "limcode.openAiCompatible.apiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Optional API key fallback. Prefer the command `LimCode: Configure OpenAI Compatible API Key` or environment variables `LIMCODE_OPENAI_API_KEY` / `DEEPSEEK_API_KEY` so secrets are not stored in settings files."
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "vue-ts-bridge-sidebar",
-          "title": "Vue TS Bridge",
+          "id": "limcode-sidebar",
+          "title": "LimCode",
           "icon": "assets/icons/activity-bar.svg"
         }
       ]
     },
     "views": {
-      "vue-ts-bridge-sidebar": [
+      "limcode-sidebar": [
         {
-          "id": "vue-ts-bridge-entry-view",
-          "name": "插件入口",
+          "id": "limcode-entry-view",
+          "name": "AI 对话",
           "type": "webview"
         }
       ]

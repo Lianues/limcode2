@@ -6,7 +6,7 @@ import { BackendApplication } from '../backend/application/BackendApplication';
 let backendApp: BackendApplication | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
-  backendApp = new BackendApplication();
+  backendApp = new BackendApplication(context);
 
   registerCommands(context, backendApp);
   registerSidebarEntryView(context, backendApp);

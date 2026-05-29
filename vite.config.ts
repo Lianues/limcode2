@@ -12,6 +12,16 @@ export default defineConfig({
       '@shared': path.resolve(__dirname, 'shared')
     }
   },
+  server: {
+    host: '127.0.0.1',
+    port: 31773,
+    strictPort: true,
+    cors: true,
+    hmr: {
+      host: 'localhost',
+      clientPort: 31773
+    }
+  },
   build: {
     outDir: '../dist/webview',
     emptyOutDir: true,

@@ -1,3 +1,9 @@
+export interface LlmModelSettings {
+  provider: 'fake' | 'openai-compatible' | 'anthropic';
+  model: string;
+  temperature?: number;
+}
+
 export interface PromptMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
@@ -13,4 +19,5 @@ export interface LlmStartRequest {
   id: string;
   messages: PromptMessage[];
   tools: ToolSchema[];
+  model?: LlmModelSettings;
 }

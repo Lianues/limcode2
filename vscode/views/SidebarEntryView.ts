@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { MainPanel } from '../panels/MainPanel';
 import type { BackendApplication } from '../../backend/application/BackendApplication';
 
-const SIDEBAR_ENTRY_VIEW_ID = 'vue-ts-bridge-entry-view';
+const SIDEBAR_ENTRY_VIEW_ID = 'limcode-entry-view';
 const OPEN_PANEL_MESSAGE = 'openPanel';
 
 export function registerSidebarEntryView(context: vscode.ExtensionContext, backendApp: BackendApplication): void {
@@ -50,7 +50,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>插件入口</title>
+  <title>LimCode AI</title>
   <style>
     body {
       margin: 0;
@@ -124,12 +124,12 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
   <main class="entry">
     <section class="placeholder">
       <img class="icon" src="${iconUri}" alt="" aria-hidden="true">
-      <h2>Vue TS Bridge</h2>
-      <p>这里是插件侧边栏占位入口，点击按钮展开主 Webview 面板。</p>
+      <h2>LimCode AI</h2>
+      <p>已接入基础 AI 对话链路。点击下方按钮打开主面板开始聊天。</p>
     </section>
 
-    <button id="openPanelButton" type="button" title="打开 Vue Webview 主面板">
-      打开主面板
+    <button id="openPanelButton" type="button" title="打开 LimCode AI 对话">
+      打开 AI 对话
     </button>
   </main>
 

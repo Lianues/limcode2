@@ -4,7 +4,7 @@ import type { BackendApplication } from '../../backend/application/BackendApplic
 
 export class MainPanel {
   public static currentPanel: MainPanel | undefined;
-  public static readonly viewType = 'vscodeVueTsBridge.mainPanel';
+  public static readonly viewType = 'limcode.mainPanel';
 
   private readonly panel: vscode.WebviewPanel;
   private readonly extensionUri: vscode.Uri;

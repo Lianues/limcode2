@@ -9,6 +9,11 @@ type ExtensionMessageListener<T extends ExtensionToWebviewMessage = ExtensionToW
   message: T
 ) => void;
 
+type LimCodeWindow = Window & typeof globalThis & {
+  __limcodeVsCodeApi?: VsCodeApi;
+  __limcodeBridge?: VscodeBridge;
+};
+
 class VscodeBridge {
   private readonly vscode = getVsCodeApi();
   private readonly listeners = new Map<string, Set<ExtensionMessageListener>>();
@@ -68,20 +73,35 @@ class VscodeBridge {
   }
 }
 
+function getOrCreateBridge(): VscodeBridge {
+  const limcodeWindow = window as LimCodeWindow;
+  limcodeWindow.__limcodeBridge ??= new VscodeBridge();
+  return limcodeWindow.__limcodeBridge;
+}
+
 function getVsCodeApi(): VsCodeApi {
+  const limcodeWindow = window as LimCodeWindow;
+  if (limcodeWindow.__limcodeVsCodeApi) {
+    return limcodeWindow.__limcodeVsCodeApi;
+  }
+
   if (typeof window.acquireVsCodeApi === 'function') {
-    return window.acquireVsCodeApi();
+    // acquireVsCodeApi 在同一个 Webview session 里只能调用一次。
+    // Vite HMR 会重新执行模块，所以必须缓存起来，否则热更新后会直接抛错导致空白页。
+    limcodeWindow.__limcodeVsCodeApi = window.acquireVsCodeApi();
+    return limcodeWindow.__limcodeVsCodeApi;
   }
 
   // 方便直接用 Vite 打开前端调试；在真正 VS Code Webview 内会走上面的 acquireVsCodeApi。
-  return {
+  limcodeWindow.__limcodeVsCodeApi = {
     postMessage: (message: unknown) => {
       console.debug('[mock vscode api] postMessage:', message);
     },
     getState: () => undefined,
     setState: () => undefined
   };
+  return limcodeWindow.__limcodeVsCodeApi;
 }
 
-export const bridge = new VscodeBridge();
+export const bridge = getOrCreateBridge();
 export { BridgeMessageType };

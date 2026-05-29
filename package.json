@@ -1,0 +1,62 @@
+{
+  "name": "vscode-vue-ts-bridge-starter",
+  "displayName": "VSCode Vue TS Bridge Starter",
+  "description": "VS Code extension scaffold with a TypeScript backend, Vue webview frontend, and a typed bridge layer.",
+  "version": "0.0.1",
+  "publisher": "your-publisher",
+  "private": true,
+  "engines": {
+    "vscode": "^1.89.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension/vscode/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vscode-vue-ts-bridge-starter.openPanel",
+        "title": "Vue TS Bridge: Open Panel",
+        "category": "Vue TS Bridge"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vue-ts-bridge-sidebar",
+          "title": "Vue TS Bridge",
+          "icon": "assets/icons/activity-bar.svg"
+        }
+      ]
+    },
+    "views": {
+      "vue-ts-bridge-sidebar": [
+        {
+          "id": "vue-ts-bridge-entry-view",
+          "name": "插件入口",
+          "type": "webview"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "clean:extension": "node -e \"require('fs').rmSync('dist/extension',{recursive:true,force:true})\"",
+    "compile": "npm run clean:extension && tsc -p tsconfig.json",
+    "watch": "tsc -watch -p tsconfig.json",
+    "build:webview": "vite build",
+    "dev:webview": "vite --host 127.0.0.1 --port 31773 --strictPort",
+    "build": "npm run compile && npm run build:webview",
+    "typecheck:webview": "vue-tsc -p tsconfig.webview.json --noEmit",
+    "check": "npm run compile && npm run typecheck:webview",
+    "vscode:prepublish": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "@types/vscode": "^1.89.0",
+    "@vitejs/plugin-vue": "^5.0.5",
+    "typescript": "^5.5.3",
+    "vite": "^5.3.3",
+    "vue": "^3.4.31",
+    "vue-tsc": "^2.0.26"
+  }
+}

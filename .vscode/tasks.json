@@ -1,0 +1,76 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "npm: compile",
+      "type": "npm",
+      "script": "compile",
+      "group": "build",
+      "problemMatcher": [
+        "$tsc"
+      ],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "npm: build",
+      "type": "npm",
+      "script": "build",
+      "group": "build",
+      "problemMatcher": [
+        "$tsc"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "npm: watch",
+      "type": "npm",
+      "script": "watch",
+      "isBackground": true,
+      "problemMatcher": "$tsc-watch",
+      "presentation": {
+        "reveal": "never",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "npm: dev:webview",
+      "type": "npm",
+      "script": "dev:webview",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "vite",
+        "fileLocation": [
+          "relative",
+          "${workspaceFolder}"
+        ],
+        "pattern": {
+          "regexp": "^\\u0000$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*VITE.*",
+          "endsPattern": ".*Local:.*http://127\\.0\\.0\\.1:31773/.*"
+        }
+      },
+      "presentation": {
+        "reveal": "never",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "dev: extension watch + webview hmr",
+      "dependsOn": [
+        "npm: watch",
+        "npm: dev:webview"
+      ],
+      "dependsOrder": "parallel",
+      "problemMatcher": []
+    }
+  ]
+}

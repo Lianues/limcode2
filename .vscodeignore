@@ -1,0 +1,14 @@
+.vscode/**
+backend/**
+shared/**
+vscode/**
+webview/**
+.iris/**
+tsconfig*.json
+vite.config.ts
+*.map
+node_modules/**
+.gitignore
+!dist/**
+!package.json
+!README.md

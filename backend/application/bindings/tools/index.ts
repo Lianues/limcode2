@@ -1,0 +1,25 @@
+import { ToolEventType } from '../../../world/modules/tools/events';
+import type { EffectHandlerRegistry } from '../registry';
+
+export function registerToolBindings(registry: EffectHandlerRegistry): void {
+  registry.register('tool.run', (effect, env, emit) => {
+    const tool = env.tools.registry.find((candidate) => candidate.name === effect.name);
+    if (!tool) {
+      emit({ type: ToolEventType.Done, payload: { toolCallId: effect.toolCallId, ok: false, output: `Unknown tool: ${effect.name}` } });
+      return;
+    }
+
+    let args: unknown;
+    try {
+      args = effect.argsJson ? JSON.parse(effect.argsJson) : {};
+    } catch (error) {
+      emit({ type: ToolEventType.Done, payload: { toolCallId: effect.toolCallId, ok: false, output: `Invalid args JSON: ${String(error)}` } });
+      return;
+    }
+
+    tool
+      .execute(args, { fs: env.fs })
+      .then((result) => emit({ type: ToolEventType.Done, payload: { toolCallId: effect.toolCallId, ok: result.ok, output: result.output } }))
+      .catch((error) => emit({ type: ToolEventType.Done, payload: { toolCallId: effect.toolCallId, ok: false, output: error instanceof Error ? error.message : String(error) } }));
+  });
+}

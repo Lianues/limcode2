@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "jsx": "preserve",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "lib": [
+      "ES2020",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "vite/client"
+    ],
+    "paths": {
+      "@webview/*": [
+        "./webview/src/*"
+      ],
+      "@shared/*": [
+        "./shared/*"
+      ]
+    }
+  },
+  "include": [
+    "webview/src/**/*.ts",
+    "webview/src/**/*.vue",
+    "webview/src/**/*.d.ts",
+    "shared/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

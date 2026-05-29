@@ -1,0 +1,38 @@
+{
+  "compilerOptions": {
+    "module": "CommonJS",
+    "target": "ES2020",
+    "lib": [
+      "ES2020"
+    ],
+    "outDir": "dist/extension",
+    "rootDir": ".",
+    "sourceMap": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "paths": {
+      "@shared/*": [
+        "./shared/*"
+      ],
+      "@backend/*": [
+        "./backend/*"
+      ]
+    },
+    "types": [
+      "node",
+      "vscode"
+    ]
+  },
+  "include": [
+    "backend/**/*.ts",
+    "shared/**/*.ts",
+    "vscode/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "webview"
+  ]
+}

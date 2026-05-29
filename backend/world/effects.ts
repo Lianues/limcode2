@@ -22,4 +22,21 @@ export class EffectOutbox {
     this.keys.clear();
     return out;
   }
+
+  public drainWhere(predicate: (effect: WorldEffect) => boolean): WorldEffect[] {
+    const out: WorldEffect[] = [];
+    const kept: WorldEffect[] = [];
+
+    for (const effect of this.queue) {
+      if (predicate(effect)) {
+        out.push(effect);
+        this.keys.delete(JSON.stringify(effect));
+      } else {
+        kept.push(effect);
+      }
+    }
+
+    this.queue.splice(0, this.queue.length, ...kept);
+    return out;
+  }
 }

@@ -6,6 +6,8 @@ import type { Emit, LlmCapability } from './types';
 export const LIMCODE_OPENAI_API_KEY_SECRET = 'limcode.openAiCompatible.apiKey';
 export const DEFAULT_OPENAI_COMPATIBLE_BASE_URL = 'https://api.deepseek.com/v1';
 export const DEFAULT_OPENAI_COMPATIBLE_MODEL = 'deepseek-v4-flash';
+const STREAM_FLUSH_INTERVAL_MS = 24;
+const STREAM_FLUSH_MAX_CHARS = 6;
 
 interface ChatCompletionMessage {
   role: 'system' | 'user' | 'assistant';
@@ -109,7 +111,7 @@ export async function startOpenAiCompatibleLlm(
     const contentType = response.headers.get('content-type') ?? '';
     if (!contentType.includes('text/event-stream')) {
       const json = await response.json() as ChatCompletionResponseLike;
-      emitNonStreamingResponse(request.id, json, emit);
+      await emitNonStreamingResponse(request.id, json, emit);
       return;
     }
 
@@ -158,43 +160,65 @@ async function emitStreamingResponse(requestId: string, response: Response, emit
 
   const decoder = new TextDecoder();
   let buffer = '';
-  let terminal = false;
+  let terminal: 'done' | 'error' | undefined;
+  let terminalError = '';
+  const deltaEmitter = new StreamingDeltaEmitter(requestId, emit);
 
-  const emitDone = (): void => {
+  const markDone = (): void => {
+    terminal ??= 'done';
+  };
+  const markError = (message: string): void => {
     if (!terminal) {
-      terminal = true;
-      emit({ type: LlmEventType.Done, payload: { requestId } });
+      terminal = 'error';
+      terminalError = message;
     }
   };
-  const emitError = (message: string): void => {
-    if (!terminal) {
-      terminal = true;
-      emitLlmError(emit, requestId, message);
-    }
-  };
 
-  for (;;) {
-    const { value, done: readerDone } = await reader.read();
-    if (readerDone) break;
-    if (terminal) break;
-    buffer += decoder.decode(value, { stream: true });
+  try {
+    for (;;) {
+      const { value, done: readerDone } = await reader.read();
+      if (readerDone || terminal) break;
+      buffer += decoder.decode(value, { stream: true });
 
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? '';
-    for (const line of lines) {
-      if (terminal) break;
-      handleSseLine(line, requestId, emit, emitDone, emitError);
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        if (terminal) break;
+        handleSseLine(line, {
+          pushDelta: (text) => deltaEmitter.push(text),
+          markDone,
+          markError
+        });
+      }
     }
+  } catch (error) {
+    await deltaEmitter.fail(error instanceof Error ? error.message : String(error));
+    return;
   }
 
   if (!terminal && buffer.trim()) {
-    handleSseLine(buffer, requestId, emit, emitDone, emitError);
+    handleSseLine(buffer, {
+      pushDelta: (text) => deltaEmitter.push(text),
+      markDone,
+      markError
+    });
   }
 
-  if (!terminal) emitDone();
+  if (terminal === 'error') {
+    await deltaEmitter.fail(terminalError);
+    return;
+  }
+
+  await deltaEmitter.finish();
 }
 
-function handleSseLine(line: string, requestId: string, emit: Emit, emitDone: () => void, emitError: (message: string) => void): void {
+interface SseLineHandlers {
+  pushDelta(text: string): void;
+  markDone(): void;
+  markError(message: string): void;
+}
+
+function handleSseLine(line: string, handlers: SseLineHandlers): void {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith(':')) return;
   if (!trimmed.startsWith('data:')) return;
@@ -202,7 +226,7 @@ function handleSseLine(line: string, requestId: string, emit: Emit, emitDone: ()
   const data = trimmed.slice('data:'.length).trim();
   if (!data) return;
   if (data === '[DONE]') {
-    emitDone();
+    handlers.markDone();
     return;
   }
 
@@ -214,29 +238,90 @@ function handleSseLine(line: string, requestId: string, emit: Emit, emitDone: ()
   }
 
   if (chunk.error?.message) {
-    emitError(chunk.error.message);
+    handlers.markError(chunk.error.message);
     return;
   }
 
   for (const choice of chunk.choices ?? []) {
     const delta = choice.delta?.content ?? choice.message?.content;
     if (delta) {
-      emit({ type: LlmEventType.Delta, payload: { requestId, text: delta } });
+      handlers.pushDelta(delta);
     }
   }
 }
 
-function emitNonStreamingResponse(requestId: string, json: ChatCompletionResponseLike, emit: Emit): void {
+class StreamingDeltaEmitter {
+  private pendingText = '';
+  private timer: ReturnType<typeof setInterval> | undefined;
+
+  public constructor(
+    private readonly requestId: string,
+    private readonly emit: Emit
+  ) {}
+
+  public push(text: string): void {
+    if (!text) return;
+    this.pendingText += text;
+    if (!this.timer) {
+      // 先立刻发出一个小块，避免短回复在 [DONE] 前都留在缓冲区里，看起来像“一次性显示”。
+      this.flushOnce();
+      this.ensureTimer();
+    }
+  }
+
+  public async finish(): Promise<void> {
+    await this.drain();
+    this.emit({ type: LlmEventType.Done, payload: { requestId: this.requestId } });
+  }
+
+  public async fail(message: string): Promise<void> {
+    await this.drain();
+    emitLlmError(this.emit, this.requestId, message);
+  }
+
+  private ensureTimer(): void {
+    if (this.timer) return;
+    this.timer = setInterval(() => this.flushOnce(), STREAM_FLUSH_INTERVAL_MS);
+  }
+
+  private stopTimer(): void {
+    if (!this.timer) return;
+    clearInterval(this.timer);
+    this.timer = undefined;
+  }
+
+  private flushOnce(): void {
+    if (!this.pendingText) {
+      this.stopTimer();
+      return;
+    }
+    const delta = this.pendingText.slice(0, STREAM_FLUSH_MAX_CHARS);
+    this.pendingText = this.pendingText.slice(delta.length);
+    this.emit({ type: LlmEventType.Delta, payload: { requestId: this.requestId, text: delta } });
+    if (!this.pendingText && this.timer) this.stopTimer();
+  }
+
+  private async drain(): Promise<void> {
+    this.stopTimer();
+    while (this.pendingText) {
+      this.flushOnce();
+      if (this.pendingText) await delay(STREAM_FLUSH_INTERVAL_MS);
+    }
+  }
+}
+
+async function emitNonStreamingResponse(requestId: string, json: ChatCompletionResponseLike, emit: Emit): Promise<void> {
+  const deltaEmitter = new StreamingDeltaEmitter(requestId, emit);
   if (json.error?.message) {
-    emitLlmError(emit, requestId, json.error.message);
+    await deltaEmitter.fail(json.error.message);
     return;
   }
 
   const content = json.choices?.map((choice) => choice.message?.content ?? choice.delta?.content ?? '').join('') ?? '';
   if (content) {
-    emit({ type: LlmEventType.Delta, payload: { requestId, text: content } });
+    deltaEmitter.push(content);
   }
-  emit({ type: LlmEventType.Done, payload: { requestId } });
+  await deltaEmitter.finish();
 }
 
 async function readErrorMessage(response: Response): Promise<string> {
@@ -261,6 +346,10 @@ async function resolveMaybe<T>(value: MaybeProvider<T>): Promise<T | undefined> 
     return (value as () => T | undefined | Promise<T | undefined>)();
   }
   return value;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function emitLlmError(emit: Emit, requestId: string, message: string): void {

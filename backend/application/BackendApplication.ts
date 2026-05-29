@@ -29,7 +29,7 @@ import {
   LIMCODE_OPENAI_API_KEY_SECRET
 } from '../capabilities';
 import { EffectHandlerRegistry, registerApplicationBindings } from './bindings';
-import { flushEffects } from './executeEffects';
+import { flushEffects, flushEffectsWhere } from './executeEffects';
 import type { RuntimeEnv } from './RuntimeEnv';
 import { BridgeMessageType, type AgentRecord, type ClientState, type MessageRecord, type WebviewToExtensionMessage } from '../../shared/protocol';
 
@@ -76,6 +76,9 @@ export class BackendApplication {
 
     this.scheduler = new Scheduler(this.world, {
       applyEffect: (effect) => this.outbox.push(effect as WorldEffect),
+      afterPass: () => {
+        flushEffectsWhere(this.outbox, this.env, (event) => this.world.enqueue(event), this.effectHandlers, isRealtimeClientEffect);
+      },
       afterTick: () => {
         flushEffects(this.outbox, this.env, (event) => this.world.enqueue(event), this.effectHandlers);
         this.queuePersistClientState();
@@ -314,4 +317,9 @@ function getOpenAiCompatibleNumberConfig(key: string, fallback: number): number 
 
 function getOpenAiCompatibleBooleanConfig(key: string, fallback: boolean): boolean {
   return vscode.workspace.getConfiguration('limcode.openAiCompatible').get<boolean>(key, fallback);
+}
+
+function isRealtimeClientEffect(effect: WorldEffect): boolean {
+  const kind = (effect as { kind?: string }).kind;
+  return kind === 'client.patch' || kind === 'client.snapshot';
 }

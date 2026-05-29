@@ -24,7 +24,9 @@ type WriteModeMap = Map<TokenKey, Set<MutationMode>>;
 interface SchedulerHooks {
   /** System 通过 cmd.effect 产出的 effect 会在 wave commit 时交给 Imperative Shell 收集。 */
   applyEffect?(effect: unknown): void;
-  /** 每次 tick 达到不动点后调用。用于 Imperative Shell 执行 System 产出的 effects。 */
+  /** 每轮 schedule pass 后调用。适合 flush client patch 等实时、只读外部副作用。 */
+  afterPass?(): void;
+  /** 每次 tick 达到不动点后调用。用于 Imperative Shell 执行稳定阶段 effects。 */
   afterTick?(): void;
 }
 
@@ -158,6 +160,12 @@ export class Scheduler {
         const ctx: SystemContext = { events };
 
         await this.runSchedule(schedule, ctx);
+
+        try {
+          this.hooks.afterPass?.();
+        } catch (error) {
+          console.error('[ECS] afterPass hook threw:', error);
+        }
 
         guard += 1;
         if (this.world.version() === before) {

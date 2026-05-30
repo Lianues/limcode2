@@ -280,6 +280,7 @@ const provider = createLLMFromConfig({
   provider: 'claude',
   model: 'claude-sonnet-4',
   apiKey: process.env.ANTHROPIC_API_KEY,
+  proxy: 'http://127.0.0.1:7890', // 可选：显式指定 HTTP/HTTPS 代理
   endpoint: {
     url: 'https://example.com/custom/messages',
     headers: {
@@ -302,6 +303,40 @@ const provider = createLLMFromConfig({
 - 自定义 `requestBody`
 - 自定义 `fetch`
 - 自定义超时
+- 显式指定 `proxy`
+
+---
+
+### 显式指定代理
+
+可以在 provider 配置上直接传代理地址：
+
+```ts
+const provider = createLLMFromConfig({
+  provider: 'openai-compatible',
+  model: 'gpt-4o',
+  apiKey: process.env.OPENAI_API_KEY,
+  baseUrl: 'https://api.openai.com/v1',
+  proxy: 'http://127.0.0.1:7890',
+}, registry.llmProviders);
+```
+
+也可以按 endpoint 单独覆盖：
+
+```ts
+endpoint: {
+  url: 'https://example.com/v1/chat/completions',
+  proxy: { url: 'http://127.0.0.1:7890' },
+}
+```
+
+单次调用也可以临时覆盖：
+
+```ts
+await provider.chat(request, {
+  proxy: 'http://127.0.0.1:7890',
+});
+```
 
 ---
 
@@ -620,6 +655,7 @@ curl -X POST 'https://api.anthropic.com/v1/messages' \
 - provider 调用桥接
 - thought signature 跟随格式自动处理
 - 调试钩子 `onRequest` / `onResponse` / `onStreamChunk`
+- 显式代理配置 `proxy`
 
 已验证通过：
 

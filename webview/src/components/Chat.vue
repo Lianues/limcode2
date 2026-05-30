@@ -6,6 +6,11 @@ import {
   type GlobalSettingsRecord,
   type LlmProviderKind,
   type LlmSettingsRecord,
+  isFileDataPart,
+  isFunctionCallPart,
+  isFunctionResponsePart,
+  isInlineDataPart,
+  isVisibleTextPart,
   type MessageRecord,
   type MsgRole,
   type ToolCallEventRecord,
@@ -57,7 +62,7 @@ const currentSession = computed(() =>
 
 const sessionMessages = computed(() =>
   clientState.messages
-    .filter((message) => message.sessionId === clientState.currentSessionId && message.role !== 'tool')
+    .filter((message) => message.sessionId === clientState.currentSessionId && !isToolResponseMessage(message))
     .sort((a, b) => a.seq - b.seq)
 );
 
@@ -88,14 +93,18 @@ function toolOutputDelta(event: ToolCallEventRecord): string {
 
 function messageDisplayText(message: MessageRecord): string {
   return message.content.parts.map((part) => {
-    if (part.type === 'text') return part.text;
+    if (isVisibleTextPart(part)) return part.text;
     // functionCall 由下面的工具卡片渲染，不再混入正文，避免“执行工具前”重复显示 [tool call] 文本。
-    if (part.type === 'functionCall') return '';
-    if (part.type === 'functionResponse') return `\n[tool result] ${part.name}: ${stringifyPartPayload(part.response)}`;
-    if (part.type === 'fileData') return `\n[file] ${part.uri}`;
-    if (part.type === 'inlineData') return `\n[inline data] ${part.mimeType}`;
+    if (isFunctionCallPart(part)) return '';
+    if (isFunctionResponsePart(part)) return `\n[tool result] ${part.functionResponse.name}: ${stringifyPartPayload(part.functionResponse.response)}`;
+    if (isFileDataPart(part)) return `\n[file] ${part.fileData.uri}`;
+    if (isInlineDataPart(part)) return `\n[inline data] ${part.inlineData.mimeType}`;
     return '';
   }).join('').trimStart();
+}
+
+function isToolResponseMessage(message: MessageRecord): boolean {
+  return message.content.parts.some(isFunctionResponsePart);
 }
 
 function stringifyPartPayload(value: unknown): string {
@@ -255,8 +264,7 @@ function applyConversationSettings(settings: ConversationSettingsRecord): void {
 }
 
 function roleLabel(role: MsgRole): string {
-  if (role === 'user') return '你';
-  return role === 'model' ? '助手' : '工具';
+  return role === 'user' ? '你' : '助手';
 }
 
 function scrollToBottom(): void {
@@ -518,7 +526,6 @@ code { background: var(--vscode-textCodeBlock-background); padding: 1px 5px; bor
 .msg.user { align-items: flex-end; }
 .bubble { border: 1px solid var(--vscode-panel-border); border-radius: 10px; padding: 8px 12px; background: var(--vscode-editor-background); max-width: 90%; }
 .msg.user .bubble { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
-.msg.tool .bubble { background: color-mix(in srgb, var(--vscode-editor-background) 80%, var(--vscode-foreground) 20%); }
 .text { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: inherit; }
 .cursor { animation: blink 1s steps(2, start) infinite; }
 @keyframes blink { to { opacity: 0; } }

@@ -40,7 +40,7 @@ export function spawnMessage(cmd: CommandSink, input: SpawnMessageInput): Entity
 }
 
 export function spawnUserMessage(cmd: CommandSink, session: Entity, text: string): Entity {
-  return spawnMessage(cmd, { parent: session, role: 'user', parts: [{ type: 'text', text }], status: 'complete' });
+  return spawnMessage(cmd, { parent: session, role: 'user', parts: [{ text }], status: 'complete' });
 }
 
 export function spawnModelMessage(cmd: CommandSink, session: Entity): Entity {
@@ -57,12 +57,10 @@ export function spawnToolResultMessage(
 ): Entity {
   return spawnMessage(cmd, {
     parent: input.session,
-    role: 'tool',
+    role: 'user',
     parts: [{
-      type: 'functionResponse',
       id: input.toolName,
-      name: input.toolName,
-      response: input.response,
+      functionResponse: { name: input.toolName, response: input.response },
       ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {})
     }],
     status: input.status === 'error' ? 'error' : 'complete'
@@ -75,12 +73,10 @@ export function spawnToolResponseMessage(
 ): Entity {
   return spawnMessage(cmd, {
     parent: input.session,
-    role: 'tool',
+    role: 'user',
     parts: [{
-      type: 'functionResponse',
       id: input.toolCallId,
-      name: input.toolName,
-      response: input.response,
+      functionResponse: { name: input.toolName, response: input.response },
       ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {})
     }],
     status: input.status === 'error' ? 'error' : 'complete'

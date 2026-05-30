@@ -65,6 +65,6 @@
     "vue-tsc": "^2.0.26"
   },
   "dependencies": {
-    "unified-llm-provider": "^0.1.1"
+    "unified-llm-provider": "^0.1.2"
   }
 }

@@ -9,7 +9,8 @@ import {
   type MessageRecord,
   type SessionRecord,
   type ToolCallEventRecord,
-  type ToolCallRecord
+  type ToolCallRecord,
+  isVisibleTextPart
 } from '../../../../shared/protocol';
 import { defineSystem, type AccessDeclaration, type WorldReader } from '../../../ecs/types';
 import { readEvents } from '../../events';
@@ -263,12 +264,12 @@ function diffMessages(prev: MessageRecord[], next: MessageRecord[]): ClientPatch
 
 function messageText(message: MessageRecord): string {
   return message.content.parts
-    .map((part) => part.type === 'text' ? part.text : '')
+    .map((part) => isVisibleTextPart(part) ? part.text : '')
     .join('');
 }
 
 function canAppendText(prev: MessageRecord, next: MessageRecord): boolean {
-  const withoutText = (message: MessageRecord) => message.content.parts.filter((part) => part.type !== 'text');
+  const withoutText = (message: MessageRecord) => message.content.parts.filter((part) => !isVisibleTextPart(part));
   return JSON.stringify(withoutText(prev)) === JSON.stringify(withoutText(next));
 }
 

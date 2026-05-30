@@ -4,11 +4,19 @@ import { LlmEventType } from '../../llm/events';
 import { ToolCall } from '../../tools/components';
 import { spawnToolCall, ToolCallBundle } from '../../tools/bundles';
 import { LlmRequest, Message, Streaming, type MessageData } from '../components';
-import type { ContentPart } from '../../../../../shared/protocol';
+import { isFunctionCallPart, isVisibleTextPart, type ContentPart } from '../../../../../shared/protocol';
+
+interface PendingThoughtPart {
+  text: string;
+  thoughtDurationMs: number;
+  thoughtSignature?: string;
+  thoughtSignatures?: Record<string, string | undefined>;
+}
 
 interface PendingRequestUpdate {
+  thoughts: PendingThoughtPart[];
   delta: string;
-  calls: Array<{ id?: string; name: string; argsJson: string }>;
+  calls: Array<{ id?: string; name: string; argsJson: string; thoughtSignature?: string }>;
   done: boolean;
   createdAt?: number;
   streamOutputDurationMs?: number;
@@ -46,12 +54,16 @@ export const LlmPollSystem = defineSystem({
   access: {
     queries: [LlmRequestsByIdQuery, ModelMessagesQuery, ToolCallLookupQuery],
     writes: { components: [Streaming] },
-    events: { read: [LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error] },
+    events: { read: [LlmEventType.Thought, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error] },
     bundles: [ToolCallBundle]
   },
   run(ctx) {
     const { world, cmd } = ctx;
     const updates = new Map<string, PendingRequestUpdate>();
+
+    for (const payload of readEvents(ctx, LlmEventType.Thought)) {
+      updateFor(updates, payload.requestId).thoughts.push(payload);
+    }
 
     for (const payload of readEvents(ctx, LlmEventType.Delta)) {
       updateFor(updates, payload.requestId).delta += payload.text;
@@ -85,7 +97,7 @@ export const LlmPollSystem = defineSystem({
 function updateFor(updates: Map<string, PendingRequestUpdate>, requestId: string): PendingRequestUpdate {
   let update = updates.get(requestId);
   if (!update) {
-    update = { delta: '', calls: [], done: false };
+    update = { thoughts: [], delta: '', calls: [], done: false };
     updates.set(requestId, update);
   }
   return update;
@@ -107,12 +119,14 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
   if (!current) return;
 
   let next = current;
+  for (const thought of update.thoughts) next = appendThoughtPart(next, thought);
   if (update.delta) next = appendTextToMessage(next, update.delta);
 
   const existingFunctionCallIds = new Set(
     next.content.parts
-      .filter((part): part is Extract<ContentPart, { type: 'functionCall' }> => part.type === 'functionCall')
+      .filter(isFunctionCallPart)
       .map((part) => part.id)
+      .filter((id): id is string => !!id)
   );
   const spawnedOrSeenCallIds = new Set<string>();
 
@@ -122,7 +136,7 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
     spawnedOrSeenCallIds.add(toolCallId);
 
     if (!existingFunctionCallIds.has(toolCallId)) {
-      next = appendFunctionCallPart(next, { id: toolCallId, name: rawCall.name, argsJson: rawCall.argsJson });
+      next = appendFunctionCallPart(next, { id: toolCallId, name: rawCall.name, argsJson: rawCall.argsJson, thoughtSignature: rawCall.thoughtSignature });
       existingFunctionCallIds.add(toolCallId);
     }
 
@@ -158,9 +172,20 @@ function withLlmTiming(message: MessageData, update: PendingRequestUpdate): Mess
   };
 }
 
+function appendThoughtPart(message: MessageData, thought: PendingThoughtPart): MessageData {
+  const part: ContentPart = {
+    text: thought.text,
+    thought: true,
+    thoughtDurationMs: thought.thoughtDurationMs,
+    ...(thought.thoughtSignature ? { thoughtSignature: thought.thoughtSignature } : {}),
+    ...(thought.thoughtSignatures ? { thoughtSignatures: thought.thoughtSignatures } : {})
+  };
+  return { ...message, content: { ...message.content, parts: [...message.content.parts, part] } };
+}
+
 function appendFunctionCallPart(
   message: MessageData,
-  call: { id: string; name: string; argsJson: string }
+  call: { id: string; name: string; argsJson: string; thoughtSignature?: string }
 ): MessageData {
   let args: unknown = {};
   try {
@@ -169,7 +194,11 @@ function appendFunctionCallPart(
     args = call.argsJson;
   }
 
-  const part: ContentPart = { type: 'functionCall', id: call.id, name: call.name, args };
+  const part: ContentPart = {
+    id: call.id,
+    functionCall: { name: call.name, args },
+    ...(call.thoughtSignature ? { thoughtSignature: call.thoughtSignature } : {})
+  };
   return { ...message, content: { ...message.content, parts: [...message.content.parts, part] } };
 }
 
@@ -177,17 +206,17 @@ function appendTextToMessage(message: MessageData, delta: string): MessageData {
   if (!delta) return message;
   const parts = [...message.content.parts];
   const last = parts[parts.length - 1];
-  if (last?.type === 'text') {
+  if (last && isVisibleTextPart(last)) {
     parts[parts.length - 1] = { ...last, text: last.text + delta };
   } else {
-    parts.push({ type: 'text', text: delta });
+    parts.push({ text: delta });
   }
   return { ...message, content: { ...message.content, parts } };
 }
 
 function normalizeToolCallId(
   requestId: string,
-  call: { id?: string; name: string; argsJson: string },
+  call: { id?: string; name: string; argsJson: string; thoughtSignature?: string },
   fallbackIndex: number
 ): string {
   return call.id || `tool-${requestId}-${call.name}-${shortHash(call.argsJson)}-${fallbackIndex}`;

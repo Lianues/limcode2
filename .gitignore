@@ -10,3 +10,6 @@ pnpm-debug.log*
 .env
 .env.*
 .iris
+unified-llm-provider-main/
+参考代码/
+README copy.md

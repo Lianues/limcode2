@@ -1,6 +1,13 @@
 import { LlmEventType } from '../world/modules/llm/events';
 import type { LlmStartRequest, ToolSchema } from '../world/modules/llm/contracts';
 import type { Emit, LlmCapability } from './types';
+import {
+  isFileDataPart,
+  isFunctionCallPart,
+  isFunctionResponsePart,
+  isInlineDataPart,
+  isTextPart
+} from '../../shared/protocol';
 import type { ContentPart, LlmProviderKind, LlmSettingsRecord, MessageContent } from '../../shared/protocol';
 
 export const DEFAULT_LLM_BASE_URL = 'https://api.deepseek.com/v1';
@@ -57,11 +64,14 @@ export async function startLlmProvider(
     let didEmitDone = false;
     let firstStreamChunkAt: number | undefined;
     let lastStreamChunkAt: number | undefined;
+    let activeThoughtBlock: ActiveThoughtBlock | undefined;
     for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(toUnifiedRequest(request, request.model?.temperature ?? settings.temperature), {
       inputFormat: 'unified',
       outputFormat: 'unified'
     })) {
       const chunkAt = Date.now();
+      activeThoughtBlock = collectThoughtBlock(activeThoughtBlock, chunk, chunkAt);
+      if (activeThoughtBlock && shouldCloseThoughtBlock(chunk)) activeThoughtBlock = flushThoughtBlock(request.id, activeThoughtBlock, chunkAt, emit);
       if (hasStreamOutput(chunk)) {
         firstStreamChunkAt ??= chunkAt;
         lastStreamChunkAt = chunkAt;
@@ -70,7 +80,9 @@ export async function startLlmProvider(
     }
 
     if (!didEmitDone) {
-      emit({ type: LlmEventType.Done, payload: { requestId: request.id, ...createDoneTiming(firstStreamChunkAt, lastStreamChunkAt) } });
+      const finishedAt = Date.now();
+      if (activeThoughtBlock) flushThoughtBlock(request.id, activeThoughtBlock, finishedAt, emit);
+      emit({ type: LlmEventType.Done, payload: { requestId: request.id, ...createDoneTiming(firstStreamChunkAt, lastStreamChunkAt, finishedAt) } });
     }
   } catch (error) {
     emitLlmError(emit, request.id, error instanceof Error ? error.message : String(error));
@@ -110,21 +122,32 @@ function toUnifiedContent(content: MessageContent): UnifiedContent {
 }
 
 function toUnifiedPart(part: ContentPart): UnifiedPart {
-  switch (part.type) {
-    case 'text':
-      return { text: part.text };
-    case 'functionCall':
-      return { functionCall: { name: part.name, args: asRecord(part.args), callId: part.id } };
-    case 'functionResponse':
-      return { functionResponse: { name: part.name, response: asRecord(part.response), callId: part.id } };
-    case 'inlineData':
-      return { inlineData: { mimeType: part.mimeType, data: part.data } };
-    case 'fileData':
-      // unified-llm-provider 当前统一 Part 没有 fileData；先作为文本占位保留语义。
-      return { text: `[fileData:${part.mimeType ?? 'unknown'}:${part.uri}]` };
-    default:
-      return assertNever(part);
+  if (isTextPart(part)) {
+    return {
+      text: part.text,
+      ...(part.thought !== undefined ? { thought: part.thought } : {}),
+      ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
+      ...(part.thoughtSignatures ? { thoughtSignatures: part.thoughtSignatures } : {})
+    };
   }
+  if (isFunctionCallPart(part)) {
+    return {
+      functionCall: { name: part.functionCall.name, args: asRecord(part.functionCall.args), ...(part.id ? { callId: part.id } : {}) },
+      // Gemini 会校验带工具调用的 thoughtSignature；作为 part 同层级字段透传给 provider。
+      ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {})
+    };
+  }
+  if (isFunctionResponsePart(part)) {
+    return {
+      functionResponse: { name: part.functionResponse.name, response: asRecord(part.functionResponse.response), ...(part.id ? { callId: part.id } : {}) }
+    };
+  }
+  if (isInlineDataPart(part)) return { inlineData: { mimeType: part.inlineData.mimeType, data: part.inlineData.data } };
+  if (isFileDataPart(part)) {
+    // unified-llm-provider 当前统一 Part 没有 fileData；先作为文本占位保留语义。
+    return { text: `[fileData:${part.fileData.mimeType ?? 'unknown'}:${part.fileData.uri}]` };
+  }
+  return assertNever(part);
 }
 
 function toUnifiedFunctionDeclaration(tool: ToolSchema): UnifiedFunctionDeclaration {
@@ -139,17 +162,21 @@ function toUnifiedFunctionDeclaration(tool: ToolSchema): UnifiedFunctionDeclarat
 }
 
 function emitUnifiedChunk(requestId: string, chunk: UnifiedLLMStreamChunk, emit: Emit, doneTiming: LlmDoneTiming): boolean {
-  const text = chunk.textDelta ?? textFromParts(chunk.partsDelta ?? []);
+  const text = chunk.textDelta ?? visibleTextFromParts(chunk.partsDelta ?? []);
   if (text) emit({ type: LlmEventType.Delta, payload: { requestId, text } });
 
   const calls = [
     ...(chunk.functionCalls ?? []),
     ...(chunk.partsDelta ?? []).filter(isUnifiedFunctionCallPart)
-  ].map((part, index) => ({
-    id: part.functionCall.callId ?? `tool_call_${index}`,
-    name: part.functionCall.name,
-    argsJson: stringifyJson(part.functionCall.args ?? {})
-  }));
+  ].map((part, index) => {
+    const thoughtSignature = thoughtSignatureFromPart(part);
+    return {
+      id: part.functionCall.callId ?? `tool_call_${index}`,
+      name: part.functionCall.name,
+      argsJson: stringifyJson(part.functionCall.args ?? {}),
+      ...(thoughtSignature ? { thoughtSignature } : {})
+    };
+  });
 
   if (calls.length > 0) {
     emit({ type: LlmEventType.ToolCall, payload: { requestId, calls } });
@@ -168,25 +195,86 @@ interface LlmDoneTiming {
   streamOutputDurationMs?: number;
 }
 
-function createDoneTiming(firstChunkAt: number | undefined, lastChunkAt: number | undefined, fallbackAt = Date.now()): LlmDoneTiming {
+function createDoneTiming(firstChunkAt: number | undefined, lastChunkAt: number | undefined, finishedAt = Date.now()): LlmDoneTiming {
   return {
-    createdAt: firstChunkAt ?? fallbackAt,
+    createdAt: firstChunkAt ?? finishedAt,
     ...(firstChunkAt !== undefined && lastChunkAt !== undefined ? { streamOutputDurationMs: Math.max(0, lastChunkAt - firstChunkAt) } : {})
   };
 }
 
 function hasStreamOutput(chunk: UnifiedLLMStreamChunk): boolean {
-  if (chunk.textDelta || textFromParts(chunk.partsDelta ?? [])) return true;
+  if (chunk.textDelta || visibleTextFromParts(chunk.partsDelta ?? [])) return true;
   if ((chunk.functionCalls?.length ?? 0) > 0) return true;
   return (chunk.partsDelta ?? []).some(isUnifiedFunctionCallPart);
 }
 
-function textFromParts(parts: UnifiedPart[]): string {
-  return parts.map((part) => 'text' in part ? part.text ?? '' : '').join('');
+function visibleTextFromParts(parts: UnifiedPart[]): string {
+  return parts.map((part) => 'text' in part && (part as { thought?: unknown }).thought !== true ? part.text ?? '' : '').join('');
+}
+
+interface ActiveThoughtBlock {
+  startedAt: number;
+  text: string;
+  thoughtSignature?: string;
+  thoughtSignatures?: Record<string, string | undefined>;
+}
+
+function collectThoughtBlock(current: ActiveThoughtBlock | undefined, chunk: UnifiedLLMStreamChunk, at: number): ActiveThoughtBlock | undefined {
+  let block = current;
+  for (const part of chunk.partsDelta ?? []) {
+    if (!isUnifiedThoughtTextPart(part)) continue;
+    const text = part.text ?? '';
+    if (!text) continue;
+    block ??= { startedAt: at, text: '' };
+    block.text += text;
+    const signature = thoughtSignatureFromPart(part);
+    if (signature) block.thoughtSignature = signature;
+    const signatures = thoughtSignaturesFromPart(part);
+    if (signatures) block.thoughtSignatures = { ...block.thoughtSignatures, ...signatures };
+  }
+  return block;
+}
+
+function shouldCloseThoughtBlock(chunk: UnifiedLLMStreamChunk): boolean {
+  return !!chunk.finishReason || hasStreamOutput(chunk);
+}
+
+function flushThoughtBlock(requestId: string, block: ActiveThoughtBlock, finishedAt: number, emit: Emit): undefined {
+  emit({
+    type: LlmEventType.Thought,
+    payload: {
+      requestId,
+      text: block.text,
+      thoughtDurationMs: Math.max(0, finishedAt - block.startedAt),
+      ...(block.thoughtSignature ? { thoughtSignature: block.thoughtSignature } : {}),
+      ...(block.thoughtSignatures ? { thoughtSignatures: block.thoughtSignatures } : {})
+    }
+  });
+  return undefined;
+}
+
+function isUnifiedThoughtTextPart(part: UnifiedPart): part is UnifiedPart & { text?: string; thought?: unknown } {
+  return 'text' in part && (part as { thought?: unknown }).thought === true;
 }
 
 function isUnifiedFunctionCallPart(part: UnifiedPart): part is Extract<UnifiedPart, { functionCall: unknown }> {
   return 'functionCall' in part;
+}
+
+function thoughtSignatureFromPart(part: UnifiedPart): string | undefined {
+  const record = part as { thoughtSignature?: unknown; thoughtSignatures?: Record<string, unknown> };
+  if (typeof record.thoughtSignature === 'string') return record.thoughtSignature;
+  if (record.thoughtSignatures) {
+    const gemini = record.thoughtSignatures.gemini;
+    if (typeof gemini === 'string') return gemini;
+    return Object.values(record.thoughtSignatures).find((value): value is string => typeof value === 'string');
+  }
+  return undefined;
+}
+
+function thoughtSignaturesFromPart(part: UnifiedPart): Record<string, string | undefined> | undefined {
+  const value = (part as { thoughtSignatures?: unknown }).thoughtSignatures;
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, string | undefined> : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

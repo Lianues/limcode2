@@ -89,8 +89,10 @@ export class ClientStatePersistence {
     if (tasks.messages.length === 0 && tasks.toolSnapshots.length === 0 && tasks.toolEvents.length === 0) return;
 
     this.incrementalPersistRunning = true;
-    void Promise.all(tasks.messages.map((task) => task()))
-      .then(() => Promise.all(tasks.toolSnapshots.map((task) => task())))
+    // Message/tool snapshot 写入都会读-改-写同一个会话下的 index/chunk 文件；并发执行会让后写入者用旧 index 覆盖先写入者，导致某些消息“显示了但没落盘”。
+    // 因此这里必须顺序提交。Tool event 本来就是 append/chunk 顺序写，也保持顺序。
+    void runSequentially(tasks.messages)
+      .then(() => runSequentially(tasks.toolSnapshots))
       .then(() => runSequentially(tasks.toolEvents))
       .catch((error) => console.warn('[LimCode] Failed to persist incremental state:', error))
       .finally(() => {

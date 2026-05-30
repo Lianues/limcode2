@@ -7,6 +7,7 @@ import {
   type ClientPatchOp,
   type ClientState,
   type MessageRecord,
+  isVisibleTextPart,
   type SessionRecord,
   type ToolCallEventRecord,
   type ToolCallRecord
@@ -91,8 +92,8 @@ function applyClientPatchOp(patch: ClientPatchOp): void {
       if (message) {
         const parts = [...message.content.parts];
         const last = parts[parts.length - 1];
-        if (last?.type === 'text') parts[parts.length - 1] = { ...last, text: last.text + patch.delta };
-        else parts.push({ type: 'text', text: patch.delta });
+        if (last && isVisibleTextPart(last)) parts[parts.length - 1] = { ...last, text: last.text + patch.delta };
+        else parts.push({ text: patch.delta });
         message.content = { ...message.content, parts };
       }
       break;

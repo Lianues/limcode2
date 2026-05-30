@@ -103,7 +103,7 @@ export interface WorkspaceInfo {
   folders: string[];
 }
 
-export type MsgRole = 'user' | 'model' | 'tool';
+export type MsgRole = 'user' | 'model';
 export type MsgStatus = 'streaming' | 'complete' | 'error';
 
 export const TOOL_CALL_STATUSES = [
@@ -154,14 +154,57 @@ export interface AgentConversationLinkRecord {
   role: AgentConversationRole;
 }
 
-export type ContentRole = 'user' | 'model' | 'tool';
+export type ContentRole = MsgRole;
 
-export type ContentPart =
-  | { type: 'text'; text: string }
-  | { type: 'functionCall'; id: string; name: string; args: unknown }
-  | { type: 'functionResponse'; id: string; name: string; response: unknown; durationMs?: number }
-  | { type: 'inlineData'; mimeType: string; data: string }
-  | { type: 'fileData'; mimeType?: string; uri: string };
+export interface TextPart {
+  text: string;
+  /** Gemini thinking 文本块。它是模型思考内容，不应作为普通正文展示/保存为可见输出。 */
+  thought?: boolean;
+  /** 便于直接存取的单字符串签名形式。 */
+  thoughtSignature?: string;
+  /** 不同 provider 的思考签名。 */
+  thoughtSignatures?: Record<string, string | undefined>;
+  thoughtDurationMs?: number;
+}
+
+export interface FunctionCallPart {
+  /** 应用侧工具调用 id，作为 Gemini-like part 的同层级元数据保留。 */
+  id?: string;
+  functionCall: {
+    name: string;
+    args: unknown;
+  };
+  /** Gemini thought signature 需要与 functionCall 同层级保存。 */
+  thoughtSignature?: string;
+}
+
+export interface FunctionResponsePart {
+  /** 应用侧工具调用 id，作为 Gemini-like part 的同层级元数据保留。 */
+  id?: string;
+  functionResponse: {
+    name: string;
+    response: unknown;
+  };
+  /** 非 Gemini 标准字段，但需要保持原有层级，便于 UI/诊断使用。 */
+  durationMs?: number;
+}
+
+export interface InlineDataPart {
+  inlineData: { mimeType: string; data: string };
+}
+
+export interface FileDataPart {
+  fileData: { mimeType?: string; uri: string };
+}
+
+export type ContentPart = TextPart | FunctionCallPart | FunctionResponsePart | InlineDataPart | FileDataPart;
+
+export function isTextPart(part: ContentPart): part is TextPart { return 'text' in part; }
+export function isVisibleTextPart(part: ContentPart): part is TextPart { return isTextPart(part) && part.thought !== true; }
+export function isFunctionCallPart(part: ContentPart): part is FunctionCallPart { return 'functionCall' in part; }
+export function isFunctionResponsePart(part: ContentPart): part is FunctionResponsePart { return 'functionResponse' in part; }
+export function isInlineDataPart(part: ContentPart): part is InlineDataPart { return 'inlineData' in part; }
+export function isFileDataPart(part: ContentPart): part is FileDataPart { return 'fileData' in part; }
 
 export interface MessageContent {
   role: ContentRole;
@@ -169,7 +212,7 @@ export interface MessageContent {
 }
 
 export function textContent(role: ContentRole, text: string): MessageContent {
-  return { role, parts: text ? [{ type: 'text', text }] : [] };
+  return { role, parts: text ? [{ text }] : [] };
 }
 
 export interface MessageRecord {

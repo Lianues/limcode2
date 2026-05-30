@@ -10,10 +10,16 @@ export interface ToolResultOut {
   output: string;
 }
 
-export interface ToolDefinition {
+/** LLM 可见的工具声明。后续 provider/schema 转换只应依赖这一层声明。 */
+export interface ToolDeclaration {
   name: string;
   description: string;
   parameters: unknown;
+}
+
+/** 工具运行定义 = 稳定声明 + 运行期 handler。 */
+export interface ToolDefinition {
+  declaration: ToolDeclaration;
   execute(args: unknown, deps: ToolDeps): Promise<ToolResultOut>;
 }
 
@@ -21,7 +27,12 @@ export class ToolRegistry {
   private readonly tools = new Map<string, ToolDefinition>();
 
   public register(def: ToolDefinition): this {
-    this.tools.set(def.name, def);
+    this.tools.set(def.declaration.name, def);
+    return this;
+  }
+
+  public registerMany(definitions: readonly ToolDefinition[]): this {
+    for (const definition of definitions) this.register(definition);
     return this;
   }
 
@@ -33,11 +44,7 @@ export class ToolRegistry {
     return [...this.tools.values()];
   }
 
-  public schemas(): Array<{ name: string; description: string; parameters: unknown }> {
-    return this.list().map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters
-    }));
+  public schemas(): ToolDeclaration[] {
+    return this.list().map((tool) => tool.declaration);
   }
 }

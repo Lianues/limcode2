@@ -3,7 +3,7 @@ import type { EffectHandlerRegistry } from '../registry';
 
 export function registerToolEffectHandlers(registry: EffectHandlerRegistry): void {
   registry.register('tool.run', (effect, env, emit) => {
-    const tool = env.tools.registry.find((candidate) => candidate.name === effect.name);
+    const tool = env.tools.registry.find((candidate) => candidate.declaration.name === effect.name);
     if (!tool) {
       emit({ type: ToolEventType.Done, payload: { toolCallId: effect.toolCallId, ok: false, output: `Unknown tool: ${effect.name}` } });
       return;

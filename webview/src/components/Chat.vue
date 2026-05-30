@@ -127,8 +127,7 @@ onMounted(() => {
       settingsStatus.value = '设置已同步';
     })
   );
-  resync();
-  requestLlmSettings();
+  bridge.ready();
 });
 
 onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));

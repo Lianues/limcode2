@@ -1,7 +1,13 @@
 import type * as vscode from 'vscode';
 import type { LlmStartRequest } from '../world/modules/llm/contracts';
 import type { WorldEvent } from '../ecs/types';
-import type { ClientState, LlmSettingsRecord } from '../../shared/protocol';
+import type {
+  BridgeClientId,
+  ClientState,
+  ExtensionToWebviewMessage,
+  LlmSettingsRecord,
+  WebviewClientMeta
+} from '../../shared/protocol';
 
 export type Emit = (event: WorldEvent) => void;
 
@@ -15,11 +21,14 @@ export interface FsCapability {
   readFile(path: string, startLine?: number, endLine?: number): Promise<string>;
 }
 
-/** Webview 能力：当前 webview 是可变外部句柄，集中封装在 RuntimeEnv 中。 */
+/** Webview 能力：集中管理多个 Webview client，真实 vscode.Webview 句柄不进入 ECS world。 */
 export interface WebviewCapability {
-  attach(webview: vscode.Webview): void;
-  detach(): void;
-  post(message: unknown): void;
+  attach(webview: vscode.Webview, meta?: WebviewClientMeta): BridgeClientId;
+  detach(clientId: BridgeClientId): void;
+  detachAll(): void;
+  post(clientId: BridgeClientId, message: ExtensionToWebviewMessage): void;
+  broadcast(message: ExtensionToWebviewMessage): void;
+  clientIds(): BridgeClientId[];
 }
 
 /** 插件数据目录：集中记录所有 VS Code 持久化数据的根位置。 */

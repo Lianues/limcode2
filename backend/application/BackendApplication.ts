@@ -40,7 +40,19 @@ import {
 import { EffectHandlerRegistry, registerApplicationBindings } from './bindings';
 import { flushEffects, flushEffectsWhere } from './executeEffects';
 import type { RuntimeEnv } from './RuntimeEnv';
-import { BridgeMessageType, type AgentConversationLinkRecord, type AgentRecord, type ClientState, type LlmSettingsUpdatePayload, type MessageRecord, type WebviewToExtensionMessage } from '../../shared/protocol';
+import {
+  BridgeMessageType,
+  createMessageId,
+  type AgentConversationLinkRecord,
+  type AgentRecord,
+  type BridgeClientId,
+  type ClientState,
+  type ExtensionToWebviewMessage,
+  type LlmSettingsUpdatePayload,
+  type MessageRecord,
+  type WebviewClientMeta,
+  type WebviewToExtensionMessage
+} from '../../shared/protocol';
 
 const DEFAULT_AGENT_ID = 'main';
 const DEFAULT_SESSION_ID = 'default';
@@ -61,6 +73,7 @@ export class BackendApplication {
   private lastPersistedStateJson = '';
   private pendingPersistStateJson = '';
   private persistTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly webviewClients = new Map<BridgeClientId, { meta: WebviewClientMeta; attachedAt: number }>();
 
   public constructor(private readonly context: vscode.ExtensionContext) {
     const registry = createToolRegistry();
@@ -105,42 +118,66 @@ export class BackendApplication {
     requestSpawnAgent(this.world, request);
   }
 
-  public attachWebview(webview: vscode.Webview): void {
-    this.env.webview.attach(webview);
-    if (this.hydrated) {
-      this.requestSnapshot();
-      void this.postLlmSettings();
-    }
+  public attachWebview(webview: vscode.Webview, meta: WebviewClientMeta = { kind: 'unknown' }): BridgeClientId {
+    const clientId = this.env.webview.attach(webview, meta);
+    this.webviewClients.set(clientId, { meta, attachedAt: Date.now() });
+    return clientId;
   }
 
-  public detachWebview(): void {
-    this.env.webview.detach();
+  public detachWebview(clientId: BridgeClientId): void {
+    this.env.webview.detach(clientId);
+    this.webviewClients.delete(clientId);
   }
 
-  public handleWebviewMessage(message: WebviewToExtensionMessage): void {
+  public handleWebviewMessage(clientId: BridgeClientId, message: WebviewToExtensionMessage): void {
     switch (message.type) {
       case BridgeMessageType.ChatSend:
-        if (!this.hydrated) return;
+        if (!this.hydrated || !message.payload) return;
         this.world.enqueue({ type: ChatEventType.Send, payload: message.payload });
         break;
       case BridgeMessageType.ChatAbort:
-        if (!this.hydrated) return;
+        if (!this.hydrated || !message.payload) return;
         this.world.enqueue({ type: ChatEventType.Abort, payload: message.payload });
         break;
       case BridgeMessageType.ClientResync:
         if (this.hydrated) this.requestSnapshot(message.payload?.sessionId);
         break;
       case BridgeMessageType.LlmSettingsGet:
-        void this.postLlmSettings();
+        void this.postLlmSettings(clientId, message.id);
         break;
       case BridgeMessageType.LlmSettingsUpdate:
-        void this.updateLlmSettings(message.payload);
+        void this.updateLlmSettings(message.payload, message.id);
         break;
       case BridgeMessageType.Ready:
+        this.sendBridgeHello(clientId, message.id);
         if (this.hydrated) {
           this.requestSnapshot();
-          void this.postLlmSettings();
+          void this.postLlmSettings(clientId, message.id);
         }
+        break;
+      case BridgeMessageType.Ping:
+        this.env.webview.post(clientId, {
+          id: createMessageId(),
+          type: BridgeMessageType.Pong,
+          channel: 'control',
+          correlationId: message.id,
+          payload: { text: message.payload?.text ?? 'pong', receivedAt: Date.now() }
+        });
+        break;
+      case BridgeMessageType.GetWorkspaceInfo:
+        this.env.webview.post(clientId, {
+          id: createMessageId(),
+          type: BridgeMessageType.WorkspaceInfo,
+          channel: 'control',
+          correlationId: message.id,
+          payload: {
+            name: vscode.workspace.name ?? '',
+            folders: vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? []
+          }
+        });
+        break;
+      case BridgeMessageType.ShowInfo:
+        if (message.payload?.message) void vscode.window.showInformationMessage(message.payload.message);
         break;
       default:
         break;
@@ -148,7 +185,8 @@ export class BackendApplication {
   }
 
   public dispose(): void {
-    this.env.webview.detach();
+    this.env.webview.detachAll();
+    this.webviewClients.clear();
     this.persistImmediately();
   }
 
@@ -269,27 +307,53 @@ export class BackendApplication {
     this.world.enqueue({ type: ClientSyncEventType.Resync, payload: sessionId ? { sessionId } : {} });
   }
 
-  private async postLlmSettings(): Promise<void> {
-    const settings = await this.env.storage.loadLlmSettings();
-    this.env.webview.post({
-      type: BridgeMessageType.LlmSettingsSnapshot,
+  private sendBridgeHello(clientId: BridgeClientId, correlationId?: string): void {
+    const client = this.webviewClients.get(clientId) ?? { meta: { kind: 'unknown' as const }, attachedAt: Date.now() };
+    this.env.webview.post(clientId, {
+      id: createMessageId(),
+      type: BridgeMessageType.Hello,
+      channel: 'control',
+      correlationId,
       payload: {
-        settings,
-        filePath: this.env.paths.llmSettingsPath
+        clientId,
+        attachedAt: client.attachedAt,
+        meta: client.meta
       }
     });
   }
 
-  private async updateLlmSettings(payload: LlmSettingsUpdatePayload | undefined): Promise<void> {
-    if (!payload) return;
-    const settings = await this.env.storage.saveLlmSettings(payload.settings);
-    this.env.webview.post({
+  private async postLlmSettings(clientId?: BridgeClientId, correlationId?: string): Promise<void> {
+    const settings = await this.env.storage.loadLlmSettings();
+    const message: ExtensionToWebviewMessage = {
+      id: createMessageId(),
       type: BridgeMessageType.LlmSettingsSnapshot,
+      channel: 'settings' as const,
+      correlationId,
       payload: {
         settings,
         filePath: this.env.paths.llmSettingsPath
       }
-    });
+    };
+
+    if (clientId) this.env.webview.post(clientId, message);
+    else this.env.webview.broadcast(message);
+  }
+
+  private async updateLlmSettings(payload: LlmSettingsUpdatePayload | undefined, correlationId?: string): Promise<void> {
+    if (!payload) return;
+    const settings = await this.env.storage.saveLlmSettings(payload.settings);
+    const message: ExtensionToWebviewMessage = {
+      id: createMessageId(),
+      type: BridgeMessageType.LlmSettingsSnapshot,
+      channel: 'settings' as const,
+      correlationId,
+      payload: {
+        settings,
+        filePath: this.env.paths.llmSettingsPath
+      }
+    };
+
+    this.env.webview.broadcast(message);
   }
 
   private queuePersistClientState(): void {

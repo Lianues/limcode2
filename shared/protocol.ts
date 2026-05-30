@@ -1,27 +1,64 @@
 export type MessageId = string;
+export type BridgeClientId = string;
+
+export type BridgeChannel = 'control' | 'command' | 'state' | 'settings' | 'diagnostics';
+
+export type BridgeScope =
+  | { kind: 'global' }
+  | { kind: 'conversation'; id: string }
+  | { kind: 'agent'; id: string }
+  | { kind: 'settings'; level: 'global' | 'conversation' | 'agent'; id?: string };
+
+export interface WebviewClientMeta {
+  kind: 'mainPanel' | 'sidebar' | 'unknown';
+  panelId?: string;
+  title?: string;
+  conversationId?: string;
+}
+
+export const GLOBAL_CLIENT_STATE_STREAM_ID = 'global:state';
 
 export enum BridgeMessageType {
-  Ready = 'bridge:ready',
-  Ping = 'bridge:ping',
-  Pong = 'bridge:pong',
-  GetWorkspaceInfo = 'workspace:getInfo',
-  WorkspaceInfo = 'workspace:info',
-  ShowInfo = 'vscode:showInfo',
-  Error = 'bridge:error',
-  ChatSend = 'chat:send',
-  ChatAbort = 'chat:abort',
-  ClientResync = 'client:resync',
-  ClientSnapshot = 'client:snapshot',
-  ClientPatch = 'client:patch',
-  LlmSettingsGet = 'settings:llm:get',
-  LlmSettingsUpdate = 'settings:llm:update',
-  LlmSettingsSnapshot = 'settings:llm:snapshot'
+  Hello = 'bridge.hello',
+  Ready = 'bridge.ready',
+  Ping = 'bridge.ping',
+  Pong = 'bridge.pong',
+  Ack = 'bridge.ack',
+  GetWorkspaceInfo = 'workspace.getInfo',
+  WorkspaceInfo = 'workspace.info',
+  ShowInfo = 'vscode.showInfo',
+  Error = 'bridge.error',
+  ChatSend = 'chat.send',
+  ChatAbort = 'chat.abort',
+  ClientResync = 'client.resync',
+  ClientSnapshot = 'state.snapshot',
+  ClientPatch = 'state.patch',
+  LlmSettingsGet = 'settings.llm.get',
+  LlmSettingsUpdate = 'settings.llm.update',
+  LlmSettingsSnapshot = 'settings.llm.snapshot'
 }
 
 export interface BridgeEnvelope<TType extends string = string, TPayload = unknown> {
-  id?: MessageId;
+  id: MessageId;
   type: TType;
+  channel: BridgeChannel;
+  scope?: BridgeScope;
+  clientId?: BridgeClientId;
+  correlationId?: MessageId;
+  seq?: number;
+  ack?: number;
   payload?: TPayload;
+}
+
+export interface BridgeHelloPayload {
+  clientId: BridgeClientId;
+  attachedAt: number;
+  meta: WebviewClientMeta;
+}
+
+export interface BridgeAckPayload {
+  streamId?: string;
+  seq?: number;
 }
 
 export interface WorkspaceInfo {
@@ -116,13 +153,16 @@ export interface ChatAbortPayload {
   sessionId: string;
 }
 export interface ClientResyncPayload {
+  streamId?: string;
   sessionId?: string;
 }
 export interface ClientSnapshotPayload {
+  streamId: string;
   version: number;
   state: ClientState;
 }
 export interface ClientPatchPayload {
+  streamId: string;
   version: number;
   patches: ClientPatchOp[];
 }
@@ -136,6 +176,7 @@ export interface LlmSettingsUpdatePayload {
 
 export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.Ready, undefined>
+  | BridgeEnvelope<BridgeMessageType.Ack, BridgeAckPayload>
   | BridgeEnvelope<BridgeMessageType.Ping, { text: string; sentAt: number }>
   | BridgeEnvelope<BridgeMessageType.GetWorkspaceInfo, undefined>
   | BridgeEnvelope<BridgeMessageType.ShowInfo, { message: string }>
@@ -146,6 +187,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.LlmSettingsUpdate, LlmSettingsUpdatePayload>;
 
 export type ExtensionToWebviewMessage =
+  | BridgeEnvelope<BridgeMessageType.Hello, BridgeHelloPayload>
   | BridgeEnvelope<BridgeMessageType.Pong, { text: string; receivedAt: number }>
   | BridgeEnvelope<BridgeMessageType.WorkspaceInfo, WorkspaceInfo>
   | BridgeEnvelope<BridgeMessageType.Error, { requestType?: string; message: string }>

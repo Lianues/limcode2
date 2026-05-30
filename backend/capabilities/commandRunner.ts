@@ -1,11 +1,13 @@
-import { exec, execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import type { CommandCapability, CommandRunArgs, CommandRunResult } from './types';
+import type { CommandCapability, CommandRunArgs, CommandRunObserver, CommandRunResult } from './types';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const MAX_BUFFER = 1024 * 1024 * 4;
 const MAX_OUTPUT_CHARS = 120_000;
+const STREAM_EVENT_FLUSH_INTERVAL_MS = 100;
+const STREAM_EVENT_FLUSH_CHARS = 8 * 1024;
+const MAX_STREAM_EVENT_DELTA_CHARS = 16 * 1024;
 const PS_UTF8_PREFIX = [
   '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
   '$OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
@@ -35,8 +37,8 @@ export function createCommandCapability(): CommandCapability {
   return {
     toolName: profile.toolName,
     description: profile.description,
-    run(args) {
-      return runCommand(profile, args);
+    run(args, observer) {
+      return runCommand(profile, args, observer);
     }
   };
 }
@@ -77,7 +79,7 @@ function resolvePowerShell(): string {
   return cachedPowerShell;
 }
 
-async function runCommand(profile: CommandProfile, args: CommandRunArgs): Promise<CommandRunResult> {
+async function runCommand(profile: CommandProfile, args: CommandRunArgs, observer?: CommandRunObserver): Promise<CommandRunResult> {
   const command = (args.command ?? '').trim();
   if (!command) return failedResult('', 'Missing required argument: command');
 
@@ -91,34 +93,163 @@ async function runCommand(profile: CommandProfile, args: CommandRunArgs): Promis
 
   const cwd = resolveWorkDir(args.cwd);
   const timeout = resolveTimeout(args.timeout);
-  const raw = await executeCommand(profile, command, cwd, timeout);
+  const raw = await executeCommand(profile, command, cwd, timeout, observer);
   return annotateResult(profile.kind, raw);
 }
 
-function executeCommand(profile: CommandProfile, command: string, cwd: string, timeout: number): Promise<CommandRunResult> {
+function executeCommand(profile: CommandProfile, command: string, cwd: string, timeout: number, observer?: CommandRunObserver): Promise<CommandRunResult> {
   const wrappedCommand = `${profile.commandPrefix ?? ''}${command}`;
   return new Promise((resolve) => {
-    const execOptions = {
+    const stdout = new OutputAccumulator(MAX_OUTPUT_CHARS);
+    const stderr = new OutputAccumulator(MAX_OUTPUT_CHARS);
+    const streamEvents = createStreamEventEmitter(observer);
+    let killed = false;
+    let settled = false;
+
+    const child = spawn(profile.executable, commandArgs(profile, wrappedCommand), {
       cwd,
-      timeout,
-      maxBuffer: MAX_BUFFER,
-      shell: profile.executable,
       windowsHide: true,
       detached: profile.kind === 'bash' && process.platform !== 'win32',
       env: nonInteractiveEnv(profile.kind)
-    } as any;
-    const child = exec(wrappedCommand, execOptions, (error: any, stdout: string, stderr: string) => {
-      if (error?.killed) killProcessTree(child.pid, profile.kind);
+    });
+
+    const timeoutTimer = timeout > 0
+      ? setTimeout(() => {
+        killed = true;
+        killProcessTree(child.pid, profile.kind);
+      }, timeout)
+      : undefined;
+    timeoutTimer?.unref?.();
+
+    const settle = (exitCode: number): void => {
+      if (settled) return;
+      settled = true;
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      streamEvents.flush();
       resolve({
         command,
-        exitCode: error ? error.code ?? 1 : 0,
-        killed: error ? !!error.killed : false,
-        stdout: truncate(stdout, MAX_OUTPUT_CHARS),
-        stderr: truncate(stderr, MAX_OUTPUT_CHARS)
+        exitCode,
+        killed,
+        stdout: stdout.value(),
+        stderr: stderr.value()
       });
+    };
+
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => {
+      stdout.append(chunk);
+      streamEvents.push('stdout', chunk);
+    });
+    child.stderr?.on('data', (chunk: string) => {
+      stderr.append(chunk);
+      streamEvents.push('stderr', chunk);
+    });
+    child.once('error', (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      stderr.append(message);
+      streamEvents.push('stderr', message);
+      settle(1);
+    });
+    child.once('close', (code, signal) => {
+      settle(killed ? (code ?? 1) : (code ?? (signal ? 1 : 0)));
     });
     child.stdin?.end();
   });
+}
+
+function commandArgs(profile: CommandProfile, wrappedCommand: string): string[] {
+  return profile.kind === 'powershell'
+    ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', wrappedCommand]
+    : ['-lc', wrappedCommand];
+}
+
+class OutputAccumulator {
+  private head = '';
+  private tail = '';
+  private totalLength = 0;
+  private truncated = false;
+
+  public constructor(private readonly maxChars: number) {}
+
+  public append(value: string): void {
+    if (!value) return;
+    const nextTotal = this.totalLength + value.length;
+
+    if (!this.truncated && nextTotal <= this.maxChars) {
+      this.head += value;
+      this.totalLength = nextTotal;
+      return;
+    }
+
+    const half = Math.max(1, Math.floor(this.maxChars / 2));
+    if (!this.truncated) {
+      const combined = this.head + value;
+      this.head = combined.slice(0, half);
+      this.tail = combined.slice(-half);
+      this.truncated = true;
+    } else {
+      this.tail = (this.tail + value).slice(-half);
+    }
+    this.totalLength = nextTotal;
+  }
+
+  public value(): string {
+    if (!this.truncated) return this.head;
+    return `${this.head}\n\n... (已截断，共 ${this.totalLength} 字符) ...\n\n${this.tail}`;
+  }
+}
+
+type StreamOutputKind = 'stdout' | 'stderr';
+
+function createStreamEventEmitter(observer?: CommandRunObserver): { push(kind: StreamOutputKind, delta: string): void; flush(): void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let pendingChars = 0;
+  const pending: Array<{ kind: StreamOutputKind; delta: string }> = [];
+
+  const clearTimer = (): void => {
+    if (!timer) return;
+    clearTimeout(timer);
+    timer = undefined;
+  };
+
+  const flush = (): void => {
+    clearTimer();
+    if (pending.length === 0) return;
+    const events = pending.splice(0, pending.length);
+    pendingChars = 0;
+    for (const event of events) emitStreamDelta(observer, event.kind, event.delta);
+  };
+
+  const schedule = (): void => {
+    if (timer || !observer?.onEvent) return;
+    timer = setTimeout(flush, STREAM_EVENT_FLUSH_INTERVAL_MS);
+    timer.unref?.();
+  };
+
+  return {
+    push(kind, delta) {
+      if (!observer?.onEvent || !delta) return;
+      const last = pending[pending.length - 1];
+      if (last?.kind === kind) last.delta += delta;
+      else pending.push({ kind, delta });
+      pendingChars += delta.length;
+      if (pendingChars >= STREAM_EVENT_FLUSH_CHARS) flush();
+      else schedule();
+    },
+    flush
+  };
+}
+
+function emitStreamDelta(observer: CommandRunObserver | undefined, kind: StreamOutputKind, delta: string): void {
+  for (let offset = 0; offset < delta.length; offset += MAX_STREAM_EVENT_DELTA_CHARS) {
+    const chunk = delta.slice(offset, offset + MAX_STREAM_EVENT_DELTA_CHARS);
+    try {
+      observer?.onEvent?.({ kind, delta: chunk });
+    } catch (error) {
+      console.warn('[LimCode] Command stream observer failed:', error);
+    }
+  }
 }
 
 function resolveTimeout(value: number | undefined): number {
@@ -190,11 +321,6 @@ function failedResult(command: string, stderr: string): CommandRunResult {
   return { command, exitCode: 1, killed: false, stdout: '', stderr };
 }
 
-function truncate(text: string, max: number): string {
-  if (text.length <= max) return text;
-  const half = Math.floor(max / 2);
-  return `${text.slice(0, half)}\n\n... (已截断，共 ${text.length} 字符) ...\n\n${text.slice(-half)}`;
-}
 
 const POWERSHELL_DENY: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\bformat\b.*\b[a-zA-Z]:/i, reason: '禁止格式化磁盘' },

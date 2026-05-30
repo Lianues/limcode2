@@ -26,6 +26,16 @@ export interface FsCapability {
   readFile(path: string, startLine?: number, endLine?: number): Promise<string>;
 }
 
+export interface CommandRunEvent {
+  kind: 'stdout' | 'stderr' | 'progress';
+  delta?: string;
+  payload?: unknown;
+}
+
+export interface CommandRunObserver {
+  onEvent?: (event: CommandRunEvent) => void;
+}
+
 export interface CommandRunArgs {
   command?: string;
   cwd?: string;
@@ -45,7 +55,7 @@ export interface CommandRunResult {
 export interface CommandCapability {
   readonly toolName: 'shell' | 'bash';
   readonly description: string;
-  run(args: CommandRunArgs): Promise<CommandRunResult>;
+  run(args: CommandRunArgs, observer?: CommandRunObserver): Promise<CommandRunResult>;
 }
 
 /** Webview 能力：集中管理多个 Webview client，真实 vscode.Webview 句柄不进入 ECS world。 */

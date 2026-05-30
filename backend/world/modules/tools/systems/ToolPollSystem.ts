@@ -37,11 +37,12 @@ export const ToolPollSystem = defineSystem({
 
       try {
         const now = Date.now();
+        const isOutputEvent = payload.eventKind === 'stdout' || payload.eventKind === 'stderr';
         const next = transitionToolState(current, payload.status, {
           result: payload.result,
           error: payload.error,
           progress: payload.progress,
-          delta: payload.delta,
+          delta: isOutputEvent ? undefined : payload.delta,
           durationMs: payload.durationMs
         }, now);
         cmd.add(entity, ToolState, next);

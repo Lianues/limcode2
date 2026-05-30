@@ -545,12 +545,56 @@ async function appendToolCallEventToFolder(toolCallsDir: vscode.Uri, folder: str
   const eventsRoot = vscode.Uri.joinPath(toolCallsDir, ...folder.split('/'), EVENTS_DIR);
   const chunksRoot = vscode.Uri.joinPath(eventsRoot, CHUNKS_DIR);
   await vscode.workspace.fs.createDirectory(chunksRoot);
+
   const indexUri = vscode.Uri.joinPath(eventsRoot, INDEX_FILE);
-  const index = await readJson<ToolCallEventsIndexFile>(indexUri) ?? { schemaVersion: STORAGE_VERSION, savedAt, toolCallId: event.toolCallId, eventCount: 0, chunks: [] };
-  const existingEvents = await loadToolCallEvents(toolCallsDir, folder, event.toolCallId);
-  if (existingEvents.some((candidate) => candidate.id === event.id)) return existingEvents.length;
-  const next = sortToolCallEvents([...existingEvents, event]);
-  return writeToolCallEvents(toolCallsDir, folder, event.toolCallId, next, savedAt);
+  const previous = await readJson<ToolCallEventsIndexFile>(indexUri);
+  const index: ToolCallEventsIndexFile = previous?.schemaVersion === STORAGE_VERSION && previous.toolCallId === event.toolCallId
+    ? previous
+    : { schemaVersion: STORAGE_VERSION, savedAt, toolCallId: event.toolCallId, eventCount: 0, chunks: [] };
+  const chunks = [...index.chunks];
+  const last = chunks[chunks.length - 1];
+
+  if (last && event.seq <= last.endSeq) {
+    const existingEvents = await loadToolCallEvents(toolCallsDir, folder, event.toolCallId);
+    if (existingEvents.some((candidate) => candidate.id === event.id)) return existingEvents.length;
+    return writeToolCallEvents(toolCallsDir, folder, event.toolCallId, [...existingEvents, event], savedAt);
+  }
+
+  if (!last || last.count >= TOOL_CALL_EVENTS_PER_CHUNK) {
+    const chunkId = chunks.length.toString().padStart(6, '0');
+    const file = `${CHUNKS_DIR}/${chunkId}.json`;
+    await writeToolCallEventChunk(eventsRoot, file, event.toolCallId, chunkId, [event], savedAt);
+    chunks.push({ id: chunkId, file, startSeq: event.seq, endSeq: event.seq, count: 1 });
+  } else {
+    const chunk = await readJson<ToolCallEventChunkFile>(vscode.Uri.joinPath(eventsRoot, ...last.file.split('/')));
+    const existingEvents = chunk?.schemaVersion === STORAGE_VERSION && chunk.toolCallId === event.toolCallId
+      ? chunk.events
+      : [];
+    if (existingEvents.some((candidate) => candidate.id === event.id)) return index.eventCount;
+
+    const events = sortToolCallEvents([...existingEvents, event]);
+    await writeToolCallEventChunk(eventsRoot, last.file, event.toolCallId, last.id, events, savedAt);
+    chunks[chunks.length - 1] = {
+      ...last,
+      startSeq: events[0]?.seq ?? event.seq,
+      endSeq: events[events.length - 1]?.seq ?? event.seq,
+      count: events.length
+    };
+  }
+
+  const eventCount = chunks.reduce((count, chunk) => count + chunk.count, 0);
+  await writeJson(indexUri, { schemaVersion: STORAGE_VERSION, savedAt, toolCallId: event.toolCallId, eventCount, chunks } satisfies ToolCallEventsIndexFile);
+  return eventCount;
+}
+
+async function writeToolCallEventChunk(eventsRoot: vscode.Uri, file: string, toolCallId: string, chunkId: string, events: ToolCallEventRecord[], savedAt: string): Promise<void> {
+  await writeJson(vscode.Uri.joinPath(eventsRoot, ...file.split('/')), {
+    schemaVersion: STORAGE_VERSION,
+    savedAt,
+    toolCallId,
+    chunkId,
+    events
+  } satisfies ToolCallEventChunkFile);
 }
 
 async function countPersistedToolCallEvents(toolCallsDir: vscode.Uri, folder: string, toolCallId: string): Promise<number> {

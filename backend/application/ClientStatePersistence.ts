@@ -23,6 +23,7 @@ export class ClientStatePersistence {
   private readonly persistedToolCallJson = new Map<string, string>();
   private readonly persistedToolCallEventIds = new Set<string>();
   private incrementalPersistRunning = false;
+  private incrementalPersistDirty = false;
 
   public constructor(
     private readonly world: WorldReader,
@@ -80,17 +81,25 @@ export class ClientStatePersistence {
   }
 
   private queueIncrementalPersist(state: ClientState): void {
-    if (this.incrementalPersistRunning) return;
+    if (this.incrementalPersistRunning) {
+      this.incrementalPersistDirty = true;
+      return;
+    }
     const tasks = this.collectIncrementalTasks(state);
     if (tasks.messages.length === 0 && tasks.toolSnapshots.length === 0 && tasks.toolEvents.length === 0) return;
 
     this.incrementalPersistRunning = true;
     void Promise.all(tasks.messages.map((task) => task()))
       .then(() => Promise.all(tasks.toolSnapshots.map((task) => task())))
-      .then(() => Promise.all(tasks.toolEvents.map((task) => task())))
+      .then(() => runSequentially(tasks.toolEvents))
       .catch((error) => console.warn('[LimCode] Failed to persist incremental state:', error))
       .finally(() => {
         this.incrementalPersistRunning = false;
+        if (this.incrementalPersistDirty) {
+          this.incrementalPersistDirty = false;
+          const latestState = this.world.tryGetResource(ClientSyncStateKey)?.lastState;
+          if (latestState) this.queueIncrementalPersist(latestState);
+        }
       });
   }
 
@@ -177,4 +186,10 @@ function globalPersistenceSlice(state: ClientState): Pick<ClientState, 'agents' 
     sessions: state.sessions,
     agentConversationLinks: state.agentConversationLinks
   };
+}
+
+async function runSequentially(tasks: Array<() => Promise<void>>): Promise<void> {
+  for (const task of tasks) {
+    await task();
+  }
 }

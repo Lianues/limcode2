@@ -1,6 +1,6 @@
 import { ToolEventType } from '../../../world/modules/tools/events';
 import type { ToolStatePayload } from '../../../world/modules/tools/events';
-import type { ToolResultOut } from '../../../world/modules/tools/registry';
+import type { ToolResultOut, ToolRuntimeEvent } from '../../../world/modules/tools/registry';
 import type { EffectHandlerRegistry } from '../registry';
 
 export function registerToolEffectHandlers(registry: EffectHandlerRegistry): void {
@@ -27,8 +27,12 @@ export function registerToolEffectHandlers(registry: EffectHandlerRegistry): voi
     }
 
     const startedAt = Date.now();
+    const emitRuntimeEvent = (event: ToolRuntimeEvent): void => {
+      emitToolState(emit, toRunningToolStatePayload(effect.toolCallId, event));
+    };
+
     tool
-      .execute(args, { fs: env.fs, command: env.command })
+      .execute(args, { fs: env.fs, command: env.command }, { toolCallId: effect.toolCallId, emit: emitRuntimeEvent })
       .then((result) => emitToolState(emit, toToolStatePayload(effect.toolCallId, result, Date.now() - startedAt)))
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
@@ -43,6 +47,17 @@ function toToolStatePayload(toolCallId: string, result: ToolResultOut, durationM
     return { toolCallId, status: 'success', result: response, durationMs };
   }
   return { toolCallId, status: 'error', error: result.output, result: response, durationMs };
+}
+
+function toRunningToolStatePayload(toolCallId: string, event: ToolRuntimeEvent): ToolStatePayload {
+  const progress = event.progress ?? event.payload;
+  return {
+    toolCallId,
+    status: 'executing',
+    eventKind: event.kind,
+    ...(event.delta !== undefined ? { delta: event.delta } : {}),
+    ...(progress !== undefined ? { progress } : {})
+  };
 }
 
 function emitToolState(emit: (event: { type: string; payload: ToolStatePayload }) => void, payload: ToolStatePayload): void {

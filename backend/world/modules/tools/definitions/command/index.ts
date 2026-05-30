@@ -39,8 +39,16 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
         required: ['command']
       }
     },
-    async execute(rawArgs, deps) {
-      const result = await deps.command.run((rawArgs ?? {}) as Parameters<CommandCapability['run']>[0]);
+    async execute(rawArgs, deps, ctx) {
+      const result = await deps.command.run((rawArgs ?? {}) as Parameters<CommandCapability['run']>[0], {
+        onEvent(event) {
+          ctx?.emit({
+            kind: event.kind,
+            ...(event.delta !== undefined ? { delta: event.delta } : {}),
+            ...(event.payload !== undefined ? { payload: event.payload } : {})
+          });
+        }
+      });
       return {
         ok: result.exitCode === 0,
         output: JSON.stringify(result, null, 2)

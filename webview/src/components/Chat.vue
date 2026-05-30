@@ -8,6 +8,7 @@ import {
   type LlmSettingsRecord,
   type MessageRecord,
   type MsgRole,
+  type ToolCallEventRecord,
   type ToolCallRecord
 } from '@shared/protocol';
 import { bridge, BridgeMessageType } from '../bridge/vscodeBridge';
@@ -77,6 +78,14 @@ function eventsForToolCall(toolCallId: string) {
   return clientState.toolCallEvents.filter((event) => event.toolCallId === toolCallId).sort((a, b) => a.seq - b.seq);
 }
 
+function outputEventsForToolCall(toolCallId: string): ToolCallEventRecord[] {
+  return eventsForToolCall(toolCallId).filter((event) => event.kind === 'stdout' || event.kind === 'stderr');
+}
+
+function toolOutputDelta(event: ToolCallEventRecord): string {
+  return event.delta ?? (event.payload !== undefined ? stringifyPartPayload(event.payload) : '');
+}
+
 function messageDisplayText(message: MessageRecord): string {
   return message.content.parts.map((part) => {
     if (part.type === 'text') return part.text;
@@ -116,6 +125,10 @@ function hasToolDetails(tool: ToolCallRecord): boolean {
   return tool.result !== undefined || !!tool.error || tool.progress !== undefined || eventsForToolCall(tool.id).length > 0;
 }
 
+function hasToolOutput(tool: ToolCallRecord): boolean {
+  return outputEventsForToolCall(tool.id).some((event) => toolOutputDelta(event).length > 0);
+}
+
 function toolDetailText(tool: ToolCallRecord): string {
   const lines: string[] = [];
   if (tool.progress !== undefined) lines.push(`progress: ${stringifyPartPayload(tool.progress)}`);
@@ -123,8 +136,9 @@ function toolDetailText(tool: ToolCallRecord): string {
   if (tool.error) lines.push(`error: ${tool.error}`);
   for (const event of eventsForToolCall(tool.id)) {
     lines.push(`[${event.seq}] ${event.kind}${event.status ? ` → ${event.status}` : ''}${event.durationMs !== undefined ? ` (${event.durationMs}ms)` : ''}`);
-    if (event.delta) lines.push(event.delta);
-    if (event.payload !== undefined) lines.push(stringifyPartPayload(event.payload));
+    const isOutput = event.kind === 'stdout' || event.kind === 'stderr';
+    if (event.delta && !isOutput) lines.push(event.delta);
+    if (event.payload !== undefined && !isOutput) lines.push(stringifyPartPayload(event.payload));
     if (event.error) lines.push(`error: ${event.error}`);
   }
   return lines.join('\n');
@@ -248,11 +262,23 @@ function roleLabel(role: MsgRole): string {
 function scrollToBottom(): void {
   void nextTick(() => {
     const element = scroller.value;
-    if (element) element.scrollTop = element.scrollHeight;
+    if (!element) return;
+    element.scrollTop = element.scrollHeight;
+    element.querySelectorAll<HTMLElement>('.tool-output').forEach((output) => {
+      output.scrollTop = output.scrollHeight;
+    });
   });
 }
 
 watch(() => sessionMessages.value.reduce((acc, message) => acc + messageDisplayText(message).length, sessionMessages.value.length), scrollToBottom);
+
+watch(() => {
+  const messageIds = new Set(sessionMessages.value.map((message) => message.id));
+  const toolCallIds = new Set(clientState.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId)).map((toolCall) => toolCall.id));
+  return clientState.toolCallEvents
+    .filter((event) => toolCallIds.has(event.toolCallId))
+    .reduce((acc, event) => acc + (event.delta?.length ?? 0), clientState.toolCallEvents.length);
+}, scrollToBottom);
 
 watch(
   () => clientState.currentSessionId,
@@ -441,6 +467,7 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
               <span class="tool-name">⚙ {{ t.name }}</span>
               <span class="tool-status">{{ toolStatusLabel(t.status) }}</span>
               <code class="tool-args">{{ t.args }}</code>
+              <pre v-if="hasToolOutput(t)" class="tool-output" aria-live="polite"><span v-for="event in outputEventsForToolCall(t.id)" :key="event.id" class="tool-output-delta" :class="event.kind">{{ toolOutputDelta(event) }}</span></pre>
               <details v-if="hasToolDetails(t)" class="tool-details">
                 <summary>详情</summary>
                 <pre>{{ toolDetailText(t) }}</pre>
@@ -507,6 +534,9 @@ code { background: var(--vscode-textCodeBlock-background); padding: 1px 5px; bor
 .tool.warning { border-color: var(--vscode-editorWarning-foreground, #d29922); }
 .tool.error { border-color: var(--vscode-errorForeground); }
 .tool-args { color: var(--vscode-descriptionForeground); }
+.tool-output { flex-basis: 100%; width: 100%; max-height: 260px; overflow: auto; margin: 4px 0 0; padding: 8px; border-radius: 6px; border: 1px solid var(--vscode-panel-border); background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background)); white-space: pre-wrap; word-break: break-word; font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; line-height: 1.45; }
+.tool-output-delta.stdout { color: var(--vscode-foreground); }
+.tool-output-delta.stderr { color: var(--vscode-errorForeground); }
 .tool-details { flex-basis: 100%; color: var(--vscode-descriptionForeground); }
 .tool-details summary { cursor: pointer; }
 .tool-details pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; }

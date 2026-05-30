@@ -9,7 +9,7 @@ import type { EffectHandlerRegistry } from '../registry';
 
 export function registerClientSyncEffectHandlers(registry: EffectHandlerRegistry): void {
   registry.register('client.snapshot', (effect, env) => {
-    env.webview.broadcast({
+    env.webview.broadcastToStream(effect.streamId, {
       id: createMessageId(),
       type: BridgeMessageType.ClientSnapshot,
       channel: 'state',
@@ -24,7 +24,7 @@ export function registerClientSyncEffectHandlers(registry: EffectHandlerRegistry
 
   registry.register('client.patch', (effect, env) => {
     if (effect.patches.length > 0) {
-      env.webview.broadcast({
+      env.webview.broadcastToStream(effect.streamId, {
         id: createMessageId(),
         type: BridgeMessageType.ClientPatch,
         channel: 'state',

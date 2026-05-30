@@ -26,8 +26,11 @@ export interface WebviewCapability {
   attach(webview: vscode.Webview, meta?: WebviewClientMeta): BridgeClientId;
   detach(clientId: BridgeClientId): void;
   detachAll(): void;
+  subscribe(clientId: BridgeClientId, streamId: string): void;
+  unsubscribe(clientId: BridgeClientId, streamId: string): void;
   post(clientId: BridgeClientId, message: ExtensionToWebviewMessage): void;
   broadcast(message: ExtensionToWebviewMessage): void;
+  broadcastToStream(streamId: string, message: ExtensionToWebviewMessage): void;
   clientIds(): BridgeClientId[];
 }
 

@@ -129,6 +129,14 @@ watch(
 
 onMounted(() => {
   disposers.push(
+    bridge.on(BridgeMessageType.Hello, (message) => {
+      const conversationId = message.payload?.meta.conversationId;
+      if (!conversationId) return;
+      clientState.currentSessionId = conversationId;
+      ensureConversationStream(conversationId);
+    })
+  );
+  disposers.push(
     bridge.on(BridgeMessageType.ClientSnapshot, (message) => {
       if (!message.payload) return;
       applyClientSnapshot(message.payload.streamId, message.payload.streamSeq, message.payload.state);

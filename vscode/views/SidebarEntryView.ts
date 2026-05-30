@@ -4,6 +4,7 @@ import type { BackendApplication } from '../../backend/application/BackendApplic
 
 const SIDEBAR_ENTRY_VIEW_ID = 'limcode-entry-view';
 const OPEN_PANEL_MESSAGE = 'openPanel';
+const NEW_CONVERSATION_MESSAGE = 'newConversation';
 
 export function registerSidebarEntryView(context: vscode.ExtensionContext, backendApp: BackendApplication): void {
   const provider = new SidebarEntryViewProvider(context.extensionUri, backendApp);
@@ -34,6 +35,11 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage((message: { type?: string }) => {
       if (message.type === OPEN_PANEL_MESSAGE) {
         MainPanel.createOrShow(this.extensionUri, this.backendApp);
+        return;
+      }
+      if (message.type === NEW_CONVERSATION_MESSAGE) {
+        const conversationId = this.backendApp.createConversation();
+        MainPanel.createOrShow(this.extensionUri, this.backendApp, { conversationId });
       }
     });
   }
@@ -128,8 +134,11 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       <p>基础 AI 对话已就绪。历史记录会保存到插件全局数据目录。</p>
     </section>
 
-    <button id="openPanelButton" type="button" title="打开 LimCode AI 对话">
-      打开 AI 对话
+    <button id="openPanelButton" type="button" title="加载默认 LimCode AI 对话">
+      加载默认对话
+    </button>
+    <button id="newConversationButton" type="button" title="新建 LimCode AI 对话">
+      新建对话
     </button>
   </main>
 
@@ -137,6 +146,9 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
     const vscode = acquireVsCodeApi();
     document.getElementById('openPanelButton').addEventListener('click', () => {
       vscode.postMessage({ type: '${OPEN_PANEL_MESSAGE}' });
+    });
+    document.getElementById('newConversationButton').addEventListener('click', () => {
+      vscode.postMessage({ type: '${NEW_CONVERSATION_MESSAGE}' });
     });
   </script>
 </body>

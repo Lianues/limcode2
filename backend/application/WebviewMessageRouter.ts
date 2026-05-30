@@ -4,6 +4,9 @@ import type { WebviewCapability } from '../capabilities/types';
 import { ChatEventType } from '../world/modules/chat/events';
 import {
   BridgeMessageType,
+  GLOBAL_CLIENT_STATE_STREAM_ID,
+  conversationClientStateStreamId,
+  conversationIdFromClientStateStreamId,
   createMessageId,
   type BridgeClientId,
   type WebviewToExtensionMessage
@@ -38,7 +41,8 @@ export class WebviewMessageRouter {
         this.deps.world.enqueue({ type: ChatEventType.Abort, payload: message.payload });
         break;
       case BridgeMessageType.ClientResync:
-        if (this.deps.isHydrated()) this.deps.requestSnapshot(message.payload?.sessionId);
+        this.subscribeRequestedStream(clientId, message.payload?.streamId, message.payload?.sessionId);
+        if (this.deps.isHydrated()) this.deps.requestSnapshot(message.payload?.sessionId ?? conversationIdFromClientStateStreamId(message.payload?.streamId ?? ''));
         break;
       case BridgeMessageType.LlmSettingsGet:
         void this.deps.settingsBridge.postSnapshot(clientId, message.id);
@@ -47,6 +51,7 @@ export class WebviewMessageRouter {
         void this.deps.settingsBridge.update(message.payload, message.id);
         break;
       case BridgeMessageType.Ready:
+        this.deps.webview.subscribe(clientId, GLOBAL_CLIENT_STATE_STREAM_ID);
         this.sendBridgeHello(clientId, message.id);
         if (this.deps.isHydrated()) {
           this.deps.requestSnapshot();
@@ -80,6 +85,18 @@ export class WebviewMessageRouter {
       default:
         break;
     }
+  }
+
+  private subscribeRequestedStream(clientId: BridgeClientId, streamId: string | undefined, sessionId: string | undefined): void {
+    if (streamId) {
+      this.deps.webview.subscribe(clientId, streamId);
+      return;
+    }
+    if (sessionId) {
+      this.deps.webview.subscribe(clientId, conversationClientStateStreamId(sessionId));
+      return;
+    }
+    this.deps.webview.subscribe(clientId, GLOBAL_CLIENT_STATE_STREAM_ID);
   }
 
   private sendBridgeHello(clientId: BridgeClientId, correlationId?: string): void {

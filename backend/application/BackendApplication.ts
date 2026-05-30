@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { MapWorld } from '../ecs/World';
 import { Scheduler } from '../ecs/Scheduler';
+import type { Entity } from '../ecs/types';
 import { ClientSyncEventType } from '../world/clientSync/events';
 import { EffectOutbox, type WorldEffect } from '../world/effects';
 import { installWorldPlugins } from '../world/plugin';
@@ -12,17 +13,20 @@ import {
   toolsPlugin
 } from '../world/modules';
 import type { AgentSpawnRequestData } from '../world/modules/agent/requests';
+import { Agent, AgentConversationLink } from '../world/modules/agent/components';
+import { Session } from '../world/modules/chat/components';
 import { clientSyncPlugin } from '../world/clientSync';
 import { EffectHandlerRegistry, registerApplicationEffectHandlers } from './effectHandlers';
 import { flushEffects, flushEffectsWhere } from './executeEffects';
 import type { RuntimeEnv } from './RuntimeEnv';
+import { createMessageId } from '../../shared/protocol';
 import type {
   BridgeClientId,
   WebviewClientMeta,
   WebviewToExtensionMessage
 } from '../../shared/protocol';
 import { createRuntimeEnv } from './createRuntimeEnv';
-import { createDefaultAgentSpawnRequest } from './defaults';
+import { createDefaultAgentSpawnRequest, DEFAULT_AGENT_ID } from './defaults';
 import { hydrateClientState } from './clientStateHydration';
 import { ClientStatePersistence } from './ClientStatePersistence';
 import { LlmSettingsBridge } from './LlmSettingsBridge';
@@ -91,6 +95,33 @@ export class BackendApplication {
     requestSpawnAgent(this.world, request);
   }
 
+  /** 创建一个独立 conversation，并用独立 AgentConversationLink 绑定到默认 agent。 */
+  public createConversation(): string {
+    const sessionId = `conversation-${createMessageId()}`;
+    const agent = this.findDefaultAgent();
+    if (agent === undefined) {
+      requestSpawnAgent(this.world, { ...createDefaultAgentSpawnRequest(), sessionId });
+      return sessionId;
+    }
+
+    const session = this.world.spawn();
+    this.world.add(session, Session, { id: sessionId });
+
+    const link = this.world.spawn();
+    const now = Date.now();
+    this.world.add(link, AgentConversationLink, {
+      id: `acl${link}`,
+      agent,
+      conversation: session,
+      role: 'active',
+      createdAt: now,
+      updatedAt: now
+    });
+
+    this.requestSnapshot();
+    return sessionId;
+  }
+
   public attachWebview(webview: vscode.Webview, meta: WebviewClientMeta = { kind: 'unknown' }): BridgeClientId {
     const clientId = this.env.webview.attach(webview, meta);
     this.webviewClients.register(clientId, meta);
@@ -135,6 +166,11 @@ export class BackendApplication {
 
   private requestSnapshot(sessionId?: string): void {
     this.world.enqueue({ type: ClientSyncEventType.Resync, payload: sessionId ? { sessionId } : {} });
+  }
+
+  private findDefaultAgent(): Entity | undefined {
+    return this.world.query(Agent).find((entity) => this.world.get(entity, Agent)?.id === DEFAULT_AGENT_ID)
+      ?? this.world.query(Agent)[0];
   }
 }
 

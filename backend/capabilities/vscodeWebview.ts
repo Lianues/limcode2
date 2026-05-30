@@ -12,6 +12,7 @@ interface WebviewClientEntry {
   readonly webview: vscode.Webview;
   readonly meta: WebviewClientMeta;
   readonly attachedAt: number;
+  readonly subscriptions: Set<string>;
   seq: number;
 }
 
@@ -26,6 +27,7 @@ export class WebviewHub implements WebviewCapability {
       webview,
       meta,
       attachedAt: Date.now(),
+      subscriptions: new Set<string>(),
       seq: 0
     });
     return clientId;
@@ -39,6 +41,14 @@ export class WebviewHub implements WebviewCapability {
     this.clients.clear();
   }
 
+  public subscribe(clientId: BridgeClientId, streamId: string): void {
+    this.clients.get(clientId)?.subscriptions.add(streamId);
+  }
+
+  public unsubscribe(clientId: BridgeClientId, streamId: string): void {
+    this.clients.get(clientId)?.subscriptions.delete(streamId);
+  }
+
   public post(clientId: BridgeClientId, message: ExtensionToWebviewMessage): void {
     const client = this.clients.get(clientId);
     if (!client) return;
@@ -48,6 +58,14 @@ export class WebviewHub implements WebviewCapability {
   public broadcast(message: ExtensionToWebviewMessage): void {
     for (const clientId of this.clients.keys()) {
       this.post(clientId, message);
+    }
+  }
+
+  public broadcastToStream(streamId: string, message: ExtensionToWebviewMessage): void {
+    for (const client of this.clients.values()) {
+      if (client.subscriptions.has(streamId)) {
+        this.post(client.id, message);
+      }
     }
   }
 

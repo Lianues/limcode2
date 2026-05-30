@@ -1,11 +1,20 @@
 import { reactive } from 'vue';
-import type { AgentRecord, ClientPatchOp, ClientState, MessageRecord, SessionRecord, ToolCallRecord } from '@shared/protocol';
+import type {
+  AgentConversationLinkRecord,
+  AgentRecord,
+  ClientPatchOp,
+  ClientState,
+  MessageRecord,
+  SessionRecord,
+  ToolCallRecord
+} from '@shared/protocol';
 
 interface ClientStateStore {
   version: number;
   currentSessionId: string;
   agents: AgentRecord[];
   sessions: SessionRecord[];
+  agentConversationLinks: AgentConversationLinkRecord[];
   messages: MessageRecord[];
   toolCalls: ToolCallRecord[];
 }
@@ -15,6 +24,7 @@ export const clientState = reactive<ClientStateStore>({
   currentSessionId: '',
   agents: [],
   sessions: [],
+  agentConversationLinks: [],
   messages: [],
   toolCalls: []
 });
@@ -23,6 +33,7 @@ export function applyClientSnapshot(version: number, state: ClientState): void {
   clientState.version = version;
   clientState.agents = state.agents;
   clientState.sessions = state.sessions;
+  clientState.agentConversationLinks = state.agentConversationLinks;
   clientState.messages = state.messages;
   clientState.toolCalls = state.toolCalls;
 
@@ -59,6 +70,12 @@ function applyClientPatchOp(patch: ClientPatchOp): void {
     case 'session.remove':
       remove(clientState.sessions, (item) => item.id === patch.id);
       if (clientState.currentSessionId === patch.id) clientState.currentSessionId = clientState.sessions[0]?.id ?? '';
+      break;
+    case 'agentConversationLink.upsert':
+      upsert(clientState.agentConversationLinks, patch.link, (item) => item.id === patch.link.id);
+      break;
+    case 'agentConversationLink.remove':
+      remove(clientState.agentConversationLinks, (item) => item.id === patch.id);
       break;
     case 'message.upsert':
       upsert(clientState.messages, patch.message, (item) => item.id === patch.message.id);

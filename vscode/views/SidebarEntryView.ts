@@ -67,7 +67,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       align-items: stretch;
     }
 
-    .placeholder {
+    .entry-card {
       border: 1px dashed var(--vscode-sideBarSectionHeader-border, var(--vscode-panel-border));
       border-radius: 10px;
       padding: 14px;
@@ -122,10 +122,10 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
   <main class="entry">
-    <section class="placeholder">
+    <section class="entry-card">
       <img class="icon" src="${iconUri}" alt="" aria-hidden="true">
       <h2>LimCode AI</h2>
-      <p>已接入基础 AI 对话链路。点击下方按钮打开主面板开始聊天。</p>
+      <p>基础 AI 对话已就绪。历史记录会保存到插件全局数据目录。</p>
     </section>
 
     <button id="openPanelButton" type="button" title="打开 LimCode AI 对话">

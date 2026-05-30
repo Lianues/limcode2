@@ -1,7 +1,16 @@
 import { defineBundle, type CommandSink, type Entity } from '../../../ecs/types';
 import { NeedsResponse, Message, PartOf, Session } from '../chat/components';
 import { spawnUserMessage, spawnSession } from '../chat/bundles';
-import { Agent, AgentKind, AgentStatus, ModelProfile, OwnedByAgent, ParentAgent, SystemPrompt, ToolPolicy } from './components';
+import {
+  Agent,
+  AgentConversationLink,
+  AgentKind,
+  AgentStatus,
+  ModelProfile,
+  ParentAgent,
+  SystemPrompt,
+  ToolPolicy
+} from './components';
 import type { AgentBlueprint } from './blueprints';
 
 export const AgentFromBlueprintBundle = defineBundle({
@@ -15,7 +24,7 @@ export const AgentFromBlueprintBundle = defineBundle({
     SystemPrompt,
     ParentAgent,
     Session,
-    OwnedByAgent,
+    AgentConversationLink,
     Message,
     PartOf,
     NeedsResponse
@@ -36,6 +45,7 @@ export interface SpawnAgentFromBlueprintInput {
 export interface SpawnAgentFromBlueprintResult {
   agent: Entity;
   session: Entity;
+  link: Entity;
 }
 
 export function spawnAgentFromBlueprint(
@@ -54,12 +64,21 @@ export function spawnAgentFromBlueprint(
   }
 
   const session = spawnSession(cmd, { id: input.sessionId });
-  cmd.add(session, OwnedByAgent, { agent });
+  const link = cmd.spawn();
+  const now = Date.now();
+  cmd.add(link, AgentConversationLink, {
+    id: `acl${link}`,
+    agent,
+    conversation: session,
+    role: 'active',
+    createdAt: now,
+    updatedAt: now
+  });
 
   if (input.initialTask && input.initialTask.trim()) {
     spawnUserMessage(cmd, session, input.initialTask.trim());
     cmd.add(session, NeedsResponse, { since: Date.now() });
   }
 
-  return { agent, session };
+  return { agent, session, link };
 }

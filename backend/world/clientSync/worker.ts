@@ -39,7 +39,7 @@ export function runClientSyncProjection(input: ClientSyncWorkerInput, cmd: Comma
 }
 
 export function projectClientState(world: SnapshotWorldReader, contributors: readonly ClientStateContributorDescriptor[]): ClientState {
-  const state: ClientState = { agents: [], sessions: [], messages: [], toolCalls: [] };
+  const state: ClientState = { agents: [], sessions: [], agentConversationLinks: [], messages: [], toolCalls: [] };
   for (const contributor of contributors) {
     Object.assign(state, loadProjector(contributor)(world));
   }

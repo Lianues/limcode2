@@ -26,8 +26,12 @@ export interface WebviewCapability {
 export interface RuntimePaths {
   globalStorageUri: vscode.Uri;
   globalStoragePath: string;
-  chatHistoryUri: vscode.Uri;
-  chatHistoryPath: string;
+  /** 分块对话数据根目录：<globalStorage>/chat */
+  chatRootUri: vscode.Uri;
+  chatRootPath: string;
+  /** 对话索引入口：<globalStorage>/chat/manifest.json */
+  chatManifestUri: vscode.Uri;
+  chatManifestPath: string;
 }
 
 /** VS Code 存储能力：通过 workspace.fs 读写插件全局数据。 */

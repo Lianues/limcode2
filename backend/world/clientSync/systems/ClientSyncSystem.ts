@@ -67,7 +67,7 @@ function emptyReads(): AccessDeclaration {
 }
 
 function projectClientState(world: WorldReader, contributors: ClientStateContributor[]): ClientState {
-  const state: ClientState = { agents: [], sessions: [], messages: [], toolCalls: [] };
+  const state: ClientState = { agents: [], sessions: [], agentConversationLinks: [], messages: [], toolCalls: [] };
   for (const contributor of contributors) {
     if (!contributor.project) {
       throw new Error(`ClientState contributor "${contributor.key}" does not provide a main-thread projector.`);

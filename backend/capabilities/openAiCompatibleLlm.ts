@@ -5,7 +5,7 @@ import type { Emit, LlmCapability } from './types';
 
 export const LIMCODE_OPENAI_API_KEY_SECRET = 'limcode.openAiCompatible.apiKey';
 export const DEFAULT_OPENAI_COMPATIBLE_BASE_URL = 'https://api.deepseek.com/v1';
-export const DEFAULT_OPENAI_COMPATIBLE_MODEL = 'deepseek-v4-flash';
+export const DEFAULT_OPENAI_COMPATIBLE_MODEL = 'deepseek-v4-falsh';
 const STREAM_FLUSH_INTERVAL_MS = 24;
 const STREAM_FLUSH_MAX_CHARS = 6;
 

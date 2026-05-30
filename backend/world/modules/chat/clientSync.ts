@@ -2,13 +2,11 @@ import type { ClientPatchOp, ClientState, MessageRecord, SessionRecord } from '.
 import type { WorldReader } from '../../../ecs/types';
 import { diffUpsertRemove } from '../../clientSync/diff';
 import { defineClientStateContributor, type ClientStateSlice } from '../../clientSync/contributors';
-import { Agent, OwnedByAgent } from '../agent/components';
 import { Message, PartOf, Session } from './components';
 
 export function projectChatClientState(world: WorldReader): ClientStateSlice {
-  const sessions: SessionRecord[] = world.query(Session, OwnedByAgent).map((entity) => ({
-    id: world.get(entity, Session)!.id,
-    agentId: world.get(world.get(entity, OwnedByAgent)!.agent, Agent)?.id ?? 'unknown'
+  const sessions: SessionRecord[] = world.query(Session).map((entity) => ({
+    id: world.get(entity, Session)!.id
   }));
 
   const messages: MessageRecord[] = world
@@ -47,7 +45,7 @@ export function diffChatClientState(prev: ClientState, next: ClientState): Clien
 
 export const chatClientSyncContributor = defineClientStateContributor({
   key: 'chat',
-  reads: { components: [Agent, OwnedByAgent, Message, PartOf, Session] },
+  reads: { components: [Message, PartOf, Session] },
   project: projectChatClientState,
   diff: diffChatClientState,
   worker: {

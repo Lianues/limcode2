@@ -12,12 +12,13 @@ const sessionMessages = computed(() =>
   clientState.messages.filter((message) => message.sessionId === clientState.currentSessionId).sort((a, b) => a.seq - b.seq)
 );
 
-const currentSession = computed(() =>
-  clientState.sessions.find((session) => session.id === clientState.currentSessionId)
+const activeAgentLink = computed(() =>
+  clientState.agentConversationLinks.find((link) => link.sessionId === clientState.currentSessionId && link.role === 'active')
+    ?? clientState.agentConversationLinks.find((link) => link.sessionId === clientState.currentSessionId)
 );
 
 const currentAgent = computed(() =>
-  clientState.agents.find((agent) => agent.id === currentSession.value?.agentId)
+  clientState.agents.find((agent) => agent.id === activeAgentLink.value?.agentId)
 );
 
 function toolCallsForMessage(messageId: string) {

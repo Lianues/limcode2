@@ -43,7 +43,16 @@ export interface AgentRecord {
 
 export interface SessionRecord {
   id: string;
+  title?: string;
+}
+
+export type AgentConversationRole = 'active' | 'participant' | 'reviewer';
+
+export interface AgentConversationLinkRecord {
+  id: string;
   agentId: string;
+  sessionId: string;
+  role: AgentConversationRole;
 }
 
 export interface MessageRecord {
@@ -67,6 +76,7 @@ export interface ToolCallRecord {
 export interface ClientState {
   agents: AgentRecord[];
   sessions: SessionRecord[];
+  agentConversationLinks: AgentConversationLinkRecord[];
   messages: MessageRecord[];
   toolCalls: ToolCallRecord[];
 }
@@ -76,6 +86,8 @@ export type ClientPatchOp =
   | { kind: 'agent.remove'; id: string }
   | { kind: 'session.upsert'; session: SessionRecord }
   | { kind: 'session.remove'; id: string }
+  | { kind: 'agentConversationLink.upsert'; link: AgentConversationLinkRecord }
+  | { kind: 'agentConversationLink.remove'; id: string }
   | { kind: 'message.upsert'; message: MessageRecord }
   | { kind: 'message.remove'; id: string }
   | { kind: 'message.appendText'; id: string; delta: string }

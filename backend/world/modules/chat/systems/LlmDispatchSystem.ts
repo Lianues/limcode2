@@ -1,9 +1,9 @@
-import { defineQuery, defineSystem } from '../../../../ecs/types';
-import { ModelProfile, OwnedByAgent, SystemPrompt, ToolPolicy } from '../../agent/components';
+import { defineQuery, defineSystem, type Entity, type WorldReader } from '../../../../ecs/types';
+import { AgentConversationLink, ModelProfile, SystemPrompt, ToolPolicy } from '../../agent/components';
 import { ToolSchemasKey } from '../../tools/resources';
 import { sessionMessages } from '../queries';
 import type { PromptMessage } from '../../llm/contracts';
-import { InFlight, LlmRequest, Message, PartOf, Session } from '../components';
+import { InFlight, LlmRequest, Message, PartOf } from '../components';
 
 const PendingLlmRequestsQuery = defineQuery({
   name: 'PendingLlmRequests',
@@ -24,8 +24,8 @@ const SessionMessagesQuery = defineQuery({
 
 const AgentContextQuery = defineQuery({
   name: 'AgentContext',
-  all: [Session, OwnedByAgent],
-  read: [Session, OwnedByAgent, SystemPrompt, ModelProfile, ToolPolicy],
+  all: [AgentConversationLink],
+  read: [AgentConversationLink, SystemPrompt, ModelProfile, ToolPolicy],
   role: 'lookup'
 });
 
@@ -47,14 +47,12 @@ export const LlmDispatchSystem = defineSystem({
       const data = world.get(request, LlmRequest);
       if (!data) continue;
 
-      const agent = world.get(data.sessionEntity, OwnedByAgent)?.agent;
+      const agent = activeAgentForConversation(world, data.sessionEntity);
       const systemPrompt = agent === undefined ? undefined : world.get(agent, SystemPrompt)?.text;
       const model = agent === undefined ? undefined : world.get(agent, ModelProfile);
       const toolPolicy = agent === undefined ? undefined : world.get(agent, ToolPolicy);
       const allowedTools = toolPolicy?.allowedTools;
-      const tools = allowedTools && allowedTools.length > 0
-        ? allTools.filter((tool) => allowedTools.includes(tool.name))
-        : allTools;
+      const tools = allowedTools ? allTools.filter((tool) => allowedTools.includes(tool.name)) : [];
 
       const messages: PromptMessage[] = [
         ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
@@ -70,3 +68,12 @@ export const LlmDispatchSystem = defineSystem({
     }
   }
 });
+
+function activeAgentForConversation(world: WorldReader, conversation: Entity): Entity | undefined {
+  const links = world
+    .query(AgentConversationLink)
+    .map((entity) => world.get(entity, AgentConversationLink))
+    .filter((link): link is NonNullable<typeof link> => !!link && link.conversation === conversation);
+
+  return links.find((link) => link.role === 'active')?.agent ?? links[0]?.agent;
+}

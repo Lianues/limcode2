@@ -16,7 +16,18 @@ import {
   toolsPlugin
 } from '../world/modules';
 import type { AgentSpawnRequestData } from '../world/modules/agent/requests';
-import { Agent, AgentKind, AgentStatus, ModelProfile, OwnedByAgent, ParentAgent, SystemPrompt, ToolPolicy, type ModelProfileData, type ToolPolicyData } from '../world/modules/agent/components';
+import {
+  Agent,
+  AgentConversationLink,
+  AgentKind,
+  AgentStatus,
+  ModelProfile,
+  ParentAgent,
+  SystemPrompt,
+  ToolPolicy,
+  type ModelProfileData,
+  type ToolPolicyData
+} from '../world/modules/agent/components';
 import { Message, PartOf, Session } from '../world/modules/chat/components';
 import { clientSyncPlugin } from '../world/clientSync';
 import {
@@ -31,7 +42,7 @@ import {
 import { EffectHandlerRegistry, registerApplicationBindings } from './bindings';
 import { flushEffects, flushEffectsWhere } from './executeEffects';
 import type { RuntimeEnv } from './RuntimeEnv';
-import { BridgeMessageType, type AgentRecord, type ClientState, type MessageRecord, type WebviewToExtensionMessage } from '../../shared/protocol';
+import { BridgeMessageType, type AgentConversationLinkRecord, type AgentRecord, type ClientState, type MessageRecord, type WebviewToExtensionMessage } from '../../shared/protocol';
 
 const DEFAULT_AGENT_ID = 'main';
 const DEFAULT_SESSION_ID = 'default';
@@ -144,7 +155,7 @@ export class BackendApplication {
       } else {
         this.spawnDefaultAgent();
       }
-      console.log(`[LimCode] Global storage: ${this.env.paths.globalStoragePath}`);
+      console.log(`[LimCode] Chat manifest: ${this.env.paths.chatManifestPath}`);
     } catch (error) {
       console.warn('[LimCode] Failed to initialize stored chat state. Starting with a fresh session.', error);
       this.spawnDefaultAgent();
@@ -170,7 +181,7 @@ export class BackendApplication {
     const agents = state.agents.length > 0 ? state.agents : [createDefaultAgentRecord()];
     const sessions = state.sessions.length > 0
       ? state.sessions
-      : [{ id: DEFAULT_SESSION_ID, agentId: agents[0]?.id ?? DEFAULT_AGENT_ID }];
+      : [{ id: DEFAULT_SESSION_ID }];
 
     const agentEntities = new Map<string, Entity>();
     for (const agent of agents) {
@@ -198,10 +209,10 @@ export class BackendApplication {
       const entity = this.world.spawn();
       sessionEntities.set(session.id, entity);
       this.world.add(entity, Session, { id: session.id });
-      const owner = agentEntities.get(session.agentId) ?? (agentEntities.values().next().value as Entity | undefined);
-      if (owner !== undefined) {
-        this.world.add(entity, OwnedByAgent, { agent: owner });
-      }
+    }
+
+    for (const link of state.agentConversationLinks) {
+      this.spawnHydratedAgentConversationLink(agentEntities, sessionEntities, link);
     }
 
     for (const record of state.messages) {
@@ -224,6 +235,27 @@ export class BackendApplication {
       createdAt: Date.now()
     });
     this.world.add(entity, PartOf, { parent: session });
+  }
+
+  private spawnHydratedAgentConversationLink(
+    agents: Map<string, Entity>,
+    sessions: Map<string, Entity>,
+    record: AgentConversationLinkRecord
+  ): void {
+    const agent = agents.get(record.agentId);
+    const conversation = sessions.get(record.sessionId);
+    if (agent === undefined || conversation === undefined) return;
+
+    const entity = this.world.spawn();
+    const now = Date.now();
+    this.world.add(entity, AgentConversationLink, {
+      id: record.id,
+      agent,
+      conversation,
+      role: record.role,
+      createdAt: now,
+      updatedAt: now
+    });
   }
 
   private requestSnapshot(sessionId?: string): void {
@@ -270,7 +302,7 @@ function createDefaultAgentRecord(): AgentRecord {
     kind: 'main',
     status: 'idle',
     model: { provider: 'openai-compatible', model: DEFAULT_OPENAI_COMPATIBLE_MODEL, temperature: 0.2 },
-    toolPolicy: { allowedTools: ['read_file'], approvalMode: 'never' },
+    toolPolicy: { allowedTools: [], approvalMode: 'never' },
     systemPrompt: 'You are LimCode, a concise and helpful AI coding assistant running inside VS Code. Reply in the user\'s language unless asked otherwise.'
   };
 }
@@ -291,7 +323,7 @@ function normalizeToolPolicy(toolPolicy: AgentRecord['toolPolicy']): ToolPolicyD
     ? toolPolicy.approvalMode
     : 'never';
   return {
-    allowedTools: Array.isArray(toolPolicy?.allowedTools) ? toolPolicy.allowedTools : ['read_file'],
+    allowedTools: Array.isArray(toolPolicy?.allowedTools) ? toolPolicy.allowedTools : [],
     approvalMode
   };
 }

@@ -103,7 +103,7 @@ export interface WorkspaceInfo {
   folders: string[];
 }
 
-export type MsgRole = 'user' | 'assistant' | 'tool';
+export type MsgRole = 'user' | 'model' | 'tool';
 export type MsgStatus = 'streaming' | 'complete' | 'error';
 export type ToolCallStatus = 'pending' | 'running' | 'done' | 'failed';
 
@@ -142,11 +142,29 @@ export interface AgentConversationLinkRecord {
   role: AgentConversationRole;
 }
 
+export type ContentRole = 'user' | 'model' | 'tool';
+
+export type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'functionCall'; id: string; name: string; args: unknown }
+  | { type: 'functionResponse'; id: string; name: string; response: unknown }
+  | { type: 'inlineData'; mimeType: string; data: string }
+  | { type: 'fileData'; mimeType?: string; uri: string };
+
+export interface MessageContent {
+  role: ContentRole;
+  parts: ContentPart[];
+}
+
+export function textContent(role: ContentRole, text: string): MessageContent {
+  return { role, parts: text ? [{ type: 'text', text }] : [] };
+}
+
 export interface MessageRecord {
   id: string;
   sessionId: string;
   role: MsgRole;
-  text: string;
+  content: MessageContent;
   status: MsgStatus;
   seq: number;
 }
@@ -155,6 +173,7 @@ export interface ToolCallRecord {
   id: string;
   messageId: string;
   name: string;
+  functionCallId?: string;
   args: string;
   status: ToolCallStatus;
   result?: string;

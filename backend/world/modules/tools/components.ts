@@ -3,6 +3,7 @@ import { defineComponent } from '../../../ecs/types';
 export interface ToolCallData {
   id: string;
   name: string;
+  functionCallId?: string;
   argsJson: string;
 }
 export const ToolCall = defineComponent<ToolCallData>('ToolCall');

@@ -1,5 +1,5 @@
 import type { ToolDefinition } from '../world/modules/tools/registry';
-import type { FsCapability, LlmCapability, RuntimePaths, StorageCapability, WebviewCapability } from '../capabilities/types';
+import type { CommandCapability, FsCapability, LlmCapability, RuntimePaths, StorageCapability, WebviewCapability } from '../capabilities/types';
 
 export type { Emit } from '../capabilities/types';
 
@@ -14,6 +14,7 @@ export interface ToolCapability {
 export interface RuntimeEnv {
   llm: LlmCapability;
   fs: FsCapability;
+  command: CommandCapability;
   webview: WebviewCapability;
   storage: StorageCapability;
   paths: RuntimePaths;

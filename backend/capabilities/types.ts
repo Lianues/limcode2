@@ -24,6 +24,28 @@ export interface FsCapability {
   readFile(path: string, startLine?: number, endLine?: number): Promise<string>;
 }
 
+export interface CommandRunArgs {
+  command?: string;
+  cwd?: string;
+  timeout?: number;
+  force?: boolean;
+}
+
+export interface CommandRunResult {
+  command: string;
+  exitCode: number;
+  killed: boolean;
+  stdout: string;
+  stderr: string;
+}
+
+/** 命令执行能力：根据 extension host 平台自动选择 PowerShell(shell) 或 Bash(bash)。 */
+export interface CommandCapability {
+  readonly toolName: 'shell' | 'bash';
+  readonly description: string;
+  run(args: CommandRunArgs): Promise<CommandRunResult>;
+}
+
 /** Webview 能力：集中管理多个 Webview client，真实 vscode.Webview 句柄不进入 ECS world。 */
 export interface WebviewCapability {
   attach(webview: vscode.Webview, meta?: WebviewClientMeta): BridgeClientId;

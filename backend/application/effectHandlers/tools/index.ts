@@ -18,7 +18,7 @@ export function registerToolEffectHandlers(registry: EffectHandlerRegistry): voi
     }
 
     tool
-      .execute(args, { fs: env.fs })
+      .execute(args, { fs: env.fs, command: env.command })
       .then((result) => emit({ type: ToolEventType.Done, payload: { toolCallId: effect.toolCallId, ok: result.ok, output: result.output } }))
       .catch((error) => emit({ type: ToolEventType.Done, payload: { toolCallId: effect.toolCallId, ok: false, output: error instanceof Error ? error.message : String(error) } }));
   });

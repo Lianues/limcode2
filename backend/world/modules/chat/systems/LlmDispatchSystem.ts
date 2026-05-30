@@ -2,8 +2,8 @@ import { defineQuery, defineSystem, type Entity, type WorldReader } from '../../
 import { AgentConversationLink, ModelProfile, SystemPrompt, ToolPolicy } from '../../agent/components';
 import { ToolSchemasKey } from '../../tools/resources';
 import { sessionMessages } from '../queries';
-import type { PromptMessage } from '../../llm/contracts';
 import { InFlight, LlmRequest, Message, PartOf } from '../components';
+import { textContent } from '../../../../../shared/protocol';
 
 const PendingLlmRequestsQuery = defineQuery({
   name: 'PendingLlmRequests',
@@ -52,18 +52,28 @@ export const LlmDispatchSystem = defineSystem({
       const model = agent === undefined ? undefined : world.get(agent, ModelProfile);
       const toolPolicy = agent === undefined ? undefined : world.get(agent, ToolPolicy);
       const allowedTools = toolPolicy?.allowedTools;
-      const tools = allowedTools ? allTools.filter((tool) => allowedTools.includes(tool.name)) : [];
+      const tools = allowedTools && allowedTools.length > 0
+        ? allTools.filter((tool) => allowedTools.includes(tool.name))
+        : allTools;
 
-      const messages: PromptMessage[] = [
-        ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
+      const contents = [
         ...sessionMessages(world, data.sessionEntity)
-        .filter((entity) => entity !== data.assistantEntity)
+        .filter((entity) => entity !== data.modelMessageEntity)
         .map((entity) => world.get(entity, Message))
         .filter((message): message is NonNullable<typeof message> => !!message && message.status !== 'streaming')
-        .map((message) => ({ role: message.role, content: message.text }))
+        .map((message) => message.content)
       ];
 
-      cmd.effect({ kind: 'llm.start', request: { id: data.id, messages, tools, model } });
+      cmd.effect({
+        kind: 'llm.start',
+        request: {
+          id: data.id,
+          systemInstruction: systemPrompt ? textContent('user', systemPrompt) : undefined,
+          contents,
+          tools,
+          model
+        }
+      });
       cmd.add(request, InFlight, { kind: 'llm', startedAt: Date.now() });
     }
   }

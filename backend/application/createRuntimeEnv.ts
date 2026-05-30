@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import {
   createLlmProviderCapability,
+  createCommandCapability,
   createVsCodeFsCapability,
   createVsCodeStorageCapability,
   createWebviewCapability
@@ -19,7 +20,8 @@ export interface RuntimeEnvSetup {
  * 只负责把 VS Code 侧能力实现组装成 RuntimeEnv，不包含领域规则。
  */
 export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSetup {
-  const registry = createToolRegistry();
+  const command = createCommandCapability();
+  const registry = createToolRegistry(command);
   const storage = createVsCodeStorageCapability(context);
 
   return {
@@ -31,6 +33,7 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
         }
       }),
       fs: createVsCodeFsCapability(),
+      command,
       webview: createWebviewCapability(),
       storage,
       paths: storage.paths,

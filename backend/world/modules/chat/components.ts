@@ -1,5 +1,5 @@
 import { defineComponent, Entity } from '../../../ecs/types';
-import type { MsgRole, MsgStatus } from '../../../../shared/protocol';
+import type { MessageContent, MsgRole, MsgStatus } from '../../../../shared/protocol';
 
 export interface SessionData {
   id: string;
@@ -12,7 +12,7 @@ export const Aborted = defineComponent<true>('Aborted');
 export interface MessageData {
   id: string;
   role: MsgRole;
-  text: string;
+  content: MessageContent;
   status: MsgStatus;
   seq: number;
   createdAt: number;
@@ -24,7 +24,7 @@ export const Streaming = defineComponent<true>('Streaming');
 export interface LlmRequestData {
   id: string;
   sessionEntity: Entity;
-  assistantEntity: Entity;
+  modelMessageEntity: Entity;
 }
 export const LlmRequest = defineComponent<LlmRequestData>('LlmRequest');
 

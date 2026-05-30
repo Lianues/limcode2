@@ -2,7 +2,8 @@ import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldRea
 import { readEvents } from '../../../events';
 import { LlmEventType } from '../../llm/events';
 import { spawnToolCall, ToolCallBundle } from '../../tools/bundles';
-import { LlmRequest, Message, Streaming } from '../components';
+import { LlmRequest, Message, Streaming, type MessageData } from '../components';
+import type { ContentPart } from '../../../../../shared/protocol';
 
 const LlmRequestsByIdQuery = defineQuery({
   name: 'LlmRequestsById',
@@ -13,8 +14,8 @@ const LlmRequestsByIdQuery = defineQuery({
   role: 'lookup'
 });
 
-const AssistantMessagesQuery = defineQuery({
-  name: 'AssistantMessages',
+const ModelMessagesQuery = defineQuery({
+  name: 'ModelMessages',
   all: [Message],
   read: [Message],
   write: [Message],
@@ -26,7 +27,7 @@ export const LlmPollSystem = defineSystem({
   name: 'LlmPollSystem',
   worker: { modulePath: '../world/modules/chat/systems/LlmPollSystem', exportName: 'LlmPollSystem' },
   access: {
-    queries: [LlmRequestsByIdQuery, AssistantMessagesQuery],
+    queries: [LlmRequestsByIdQuery, ModelMessagesQuery],
     writes: { components: [Streaming] },
     events: { read: [LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error] },
     bundles: [ToolCallBundle]
@@ -44,9 +45,13 @@ export const LlmPollSystem = defineSystem({
     }
 
     for (const payload of readEvents(ctx, LlmEventType.ToolCall)) {
-      const assistant = assistantOf(world, payload.requestId);
-      if (assistant === undefined) continue;
-      for (const call of payload.calls) spawnToolCall(cmd, { assistant, name: call.name, argsJson: call.argsJson });
+      const modelMessage = modelMessageOf(world, payload.requestId);
+      if (modelMessage === undefined) continue;
+      for (const call of payload.calls) {
+        const toolCallId = call.id || `tool-${payload.requestId}-${call.name}`;
+        appendFunctionCall(world, cmd, modelMessage, { id: toolCallId, name: call.name, argsJson: call.argsJson });
+        spawnToolCall(cmd, { modelMessage, id: toolCallId, name: call.name, argsJson: call.argsJson });
+      }
     }
 
     const erroredRequests = new Set<string>();
@@ -63,16 +68,36 @@ export const LlmPollSystem = defineSystem({
 function requestOf(world: WorldReader, requestId: string): Entity | undefined {
   return world.query(LlmRequest).find((request) => world.get(request, LlmRequest)?.id === requestId);
 }
-function assistantOf(world: WorldReader, requestId: string): Entity | undefined {
+function modelMessageOf(world: WorldReader, requestId: string): Entity | undefined {
   const request = requestOf(world, requestId);
-  return request === undefined ? undefined : world.get(request, LlmRequest)?.assistantEntity;
+  return request === undefined ? undefined : world.get(request, LlmRequest)?.modelMessageEntity;
 }
 
 function appendDelta(world: WorldReader, cmd: CommandSink, requestId: string, delta: string): void {
-  const assistant = assistantOf(world, requestId);
-  if (assistant === undefined || !delta) return;
-  const message = world.get(assistant, Message);
-  if (message) cmd.add(assistant, Message, { ...message, text: message.text + delta });
+  const modelMessage = modelMessageOf(world, requestId);
+  if (modelMessage === undefined || !delta) return;
+  const message = world.get(modelMessage, Message);
+  if (message) cmd.add(modelMessage, Message, appendTextToMessage(message, delta));
+}
+
+function appendFunctionCall(
+  world: WorldReader,
+  cmd: CommandSink,
+  modelMessage: Entity,
+  call: { id: string; name: string; argsJson: string }
+): void {
+  const message = world.get(modelMessage, Message);
+  if (!message) return;
+
+  let args: unknown = {};
+  try {
+    args = call.argsJson ? JSON.parse(call.argsJson) : {};
+  } catch {
+    args = call.argsJson;
+  }
+
+  const part: ContentPart = { type: 'functionCall', id: call.id, name: call.name, args };
+  cmd.add(modelMessage, Message, { ...message, content: { ...message.content, parts: [...message.content.parts, part] } });
 }
 
 function finalize(world: WorldReader, cmd: CommandSink, requestId: string, status: 'complete' | 'error', errorMessage?: string, pendingDelta = ''): void {
@@ -80,14 +105,26 @@ function finalize(world: WorldReader, cmd: CommandSink, requestId: string, statu
   if (request === undefined) return;
   const data = world.get(request, LlmRequest);
   if (data) {
-    const assistant = data.assistantEntity;
-    const message = world.get(assistant, Message);
+    const modelMessage = data.modelMessageEntity;
+    const message = world.get(modelMessage, Message);
     if (message) {
-      const baseText = `${message.text}${pendingDelta}`;
-      const text = errorMessage ? `${baseText}\n[error] ${errorMessage}` : baseText;
-      cmd.add(assistant, Message, { ...message, text, status });
+      const withPending = pendingDelta ? appendTextToMessage(message, pendingDelta) : message;
+      const withError = errorMessage ? appendTextToMessage(withPending, `\n[error] ${errorMessage}`) : withPending;
+      cmd.add(modelMessage, Message, { ...withError, status });
     }
-    cmd.remove(assistant, Streaming);
+    cmd.remove(modelMessage, Streaming);
   }
   cmd.despawn(request);
+}
+
+function appendTextToMessage(message: MessageData, delta: string): MessageData {
+  if (!delta) return message;
+  const parts = [...message.content.parts];
+  const last = parts[parts.length - 1];
+  if (last?.type === 'text') {
+    parts[parts.length - 1] = { ...last, text: last.text + delta };
+  } else {
+    parts.push({ type: 'text', text: delta });
+  }
+  return { ...message, content: { ...message.content, parts } };
 }

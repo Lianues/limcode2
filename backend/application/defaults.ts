@@ -13,7 +13,7 @@ export function createDefaultAgentRecord(): AgentRecord {
     kind: 'main',
     status: 'idle',
     model: { provider: 'deepseek', model: DEFAULT_LLM_MODEL, temperature: 0.2 },
-    toolPolicy: { allowedTools: [], approvalMode: 'never' },
+    toolPolicy: { allowedTools: ['read_file', 'shell', 'bash'], approvalMode: 'never' },
     systemPrompt: 'You are LimCode, a concise and helpful AI coding assistant running inside VS Code. Reply in the user\'s language unless asked otherwise.'
   };
 }

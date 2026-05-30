@@ -1,0 +1,351 @@
+import { exec, execFileSync, spawn } from 'node:child_process';
+import * as path from 'node:path';
+import * as vscode from 'vscode';
+import type { CommandCapability, CommandRunArgs, CommandRunResult } from './types';
+
+const DEFAULT_TIMEOUT_MS = 30_000;
+const MAX_BUFFER = 1024 * 1024 * 4;
+const MAX_OUTPUT_CHARS = 120_000;
+const PS_UTF8_PREFIX = '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ';
+
+type ShellKind = 'powershell' | 'bash';
+type StaticClassification = 'allow' | 'deny' | 'unknown';
+
+interface CommandProfile {
+  readonly kind: ShellKind;
+  readonly toolName: 'shell' | 'bash';
+  readonly executable: string;
+  readonly description: string;
+  readonly commandPrefix?: string;
+}
+
+interface CommandSafetyConfig {
+  safe?: boolean;
+  safeSubcommands?: string[];
+  isDangerous?: (args: string[]) => boolean;
+}
+
+export function createCommandCapability(): CommandCapability {
+  const profile = detectCommandProfile();
+  return {
+    toolName: profile.toolName,
+    description: profile.description,
+    run(args) {
+      return runCommand(profile, args);
+    }
+  };
+}
+
+function detectCommandProfile(): CommandProfile {
+  if (process.platform === 'win32') {
+    return {
+      kind: 'powershell',
+      toolName: 'shell',
+      executable: resolvePowerShell(),
+      commandPrefix: PS_UTF8_PREFIX,
+      description: `在项目目录下通过 PowerShell 后台执行非交互命令。返回 stdout、stderr 和退出码。
+内置安全检查：只读命令自动放行；危险命令拒绝；未知命令需用户确认后使用 force。
+命令规范：多条命令用分号 ; 分隔；路径含空格时用双引号；长输出建议加 | Select-Object -First N。`
+    };
+  }
+
+  return {
+    kind: 'bash',
+    toolName: 'bash',
+    executable: process.env.SHELL || '/bin/bash',
+    description: `在项目目录下通过 Bash/Shell 后台执行非交互命令。返回 stdout、stderr 和退出码。
+内置安全检查：只读命令自动放行；危险命令拒绝；未知命令需用户确认后使用 force。
+命令规范：多条命令建议用 && 连接；路径含空格时用双引号；长输出建议加 | head -n N。`
+  };
+}
+
+let cachedPowerShell: string | undefined;
+function resolvePowerShell(): string {
+  if (cachedPowerShell) return cachedPowerShell;
+  try {
+    execFileSync('pwsh.exe', ['-NoProfile', '-Command', 'exit 0'], { stdio: 'ignore', timeout: 3000, windowsHide: true });
+    cachedPowerShell = 'pwsh.exe';
+  } catch {
+    cachedPowerShell = 'powershell.exe';
+  }
+  return cachedPowerShell;
+}
+
+async function runCommand(profile: CommandProfile, args: CommandRunArgs): Promise<CommandRunResult> {
+  const command = (args.command ?? '').trim();
+  if (!command) return failedResult('', 'Missing required argument: command');
+
+  const safety = classifyCommand(profile.kind, command);
+  if (safety === 'deny') {
+    return failedResult(command, `安全拒绝: ${getDenyReason(profile.kind, command) ?? '命令被安全策略拒绝'}\n此操作在黑名单中，force 参数也无法绕过。`);
+  }
+  if (safety === 'unknown' && args.force !== true) {
+    return failedResult(command, `命令不在安全白名单中，已拒绝执行。请确认风险后设置 force: true 重试。`);
+  }
+
+  const cwd = resolveWorkDir(args.cwd);
+  const timeout = resolveTimeout(args.timeout);
+  const raw = await executeCommand(profile, command, cwd, timeout);
+  return annotateResult(profile.kind, raw);
+}
+
+function executeCommand(profile: CommandProfile, command: string, cwd: string, timeout: number): Promise<CommandRunResult> {
+  const wrappedCommand = `${profile.commandPrefix ?? ''}${command}`;
+  return new Promise((resolve) => {
+    const execOptions = {
+      cwd,
+      timeout,
+      maxBuffer: MAX_BUFFER,
+      shell: profile.executable,
+      windowsHide: true,
+      detached: profile.kind === 'bash' && process.platform !== 'win32',
+      env: nonInteractiveEnv(profile.kind)
+    } as any;
+    const child = exec(wrappedCommand, execOptions, (error: any, stdout: string, stderr: string) => {
+      if (error?.killed) killProcessTree(child.pid, profile.kind);
+      resolve({
+        command,
+        exitCode: error ? error.code ?? 1 : 0,
+        killed: error ? !!error.killed : false,
+        stdout: truncate(stdout, MAX_OUTPUT_CHARS),
+        stderr: truncate(stderr, MAX_OUTPUT_CHARS)
+      });
+    });
+    child.stdin?.end();
+  });
+}
+
+function resolveTimeout(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return DEFAULT_TIMEOUT_MS;
+  return value;
+}
+
+function resolveWorkDir(cwd: string | undefined): string {
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+  if (!cwd?.trim()) return root;
+  if (path.isAbsolute(cwd)) return cwd;
+  return path.resolve(root, cwd);
+}
+
+function nonInteractiveEnv(kind: ShellKind): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    CI: process.env.CI ?? '1',
+    NO_COLOR: process.env.NO_COLOR ?? '1',
+    PYTHONIOENCODING: 'utf-8',
+    ...(kind === 'bash' ? { LANG: process.env.LANG || 'en_US.UTF-8' } : {})
+  };
+}
+
+function killProcessTree(pid: number | undefined, kind: ShellKind): void {
+  if (!pid) return;
+  try {
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore', windowsHide: true }).on('error', () => undefined);
+      return;
+    }
+    if (kind === 'bash') {
+      try { process.kill(-pid, 'SIGTERM'); }
+      catch { try { process.kill(pid, 'SIGTERM'); } catch { /* ignore */ } }
+      const timer = setTimeout(() => {
+        try { process.kill(-pid, 'SIGKILL'); }
+        catch { try { process.kill(pid, 'SIGKILL'); } catch { /* ignore */ } }
+      }, 500);
+      timer.unref?.();
+    }
+  } catch {
+    // process already exited
+  }
+}
+
+function annotateResult(kind: ShellKind, result: CommandRunResult): CommandRunResult {
+  let stderr = result.stderr;
+  const append = (note: string): void => {
+    stderr = stderr ? `${stderr}\n${note}` : note;
+  };
+
+  if (result.killed) append('(命令执行超时被终止。如需更长时间，请增加 timeout 参数。)');
+
+  if (result.exitCode === 1 && !stderr) {
+    const cmd = result.command.trim();
+    if (kind === 'powershell') {
+      if (/^(select-string|sls|findstr|grep|rg)\b/i.test(cmd) || /\|\s*(select-string|sls|findstr|grep|rg)\b/i.test(cmd)) append('(退出码 1 表示无匹配结果，不是错误)');
+      if (/^(fc|compare-object|diff)\b/i.test(cmd)) append('(退出码 1 表示文件有差异，不是错误)');
+    } else {
+      if (/^(grep|egrep|fgrep|rg|ag|ack)\b/i.test(cmd) || /\|\s*(grep|egrep|fgrep|rg|ag|ack)\b/i.test(cmd)) append('(退出码 1 表示无匹配结果，不是错误)');
+      if (/^(diff|colordiff|cmp)\b/i.test(cmd)) append('(退出码 1 表示文件有差异，不是错误)');
+    }
+  }
+
+  return { ...result, stderr };
+}
+
+function failedResult(command: string, stderr: string): CommandRunResult {
+  return { command, exitCode: 1, killed: false, stdout: '', stderr };
+}
+
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const half = Math.floor(max / 2);
+  return `${text.slice(0, half)}\n\n... (已截断，共 ${text.length} 字符) ...\n\n${text.slice(-half)}`;
+}
+
+const POWERSHELL_DENY: Array<{ pattern: RegExp; reason: string }> = [
+  { pattern: /\bformat\b.*\b[a-zA-Z]:/i, reason: '禁止格式化磁盘' },
+  { pattern: /\b(shutdown|restart-computer|stop-computer)\b/i, reason: '禁止系统关机/重启' },
+  { pattern: /\bInvoke-Expression\b|\biex\b/i, reason: '禁止动态代码执行' },
+  { pattern: /\bcurl\b.*\|\s*(ba)?sh\b/i, reason: '禁止 curl | bash 远程代码执行' },
+  { pattern: /\bwget\b.*\|\s*(ba)?sh\b/i, reason: '禁止 wget | bash 远程代码执行' },
+  { pattern: /Invoke-WebRequest\b.*\|.*Invoke-Expression\b/i, reason: '禁止 iwr | iex 远程代码执行' },
+  { pattern: /Start-Process\b.*-Verb\s+RunAs/i, reason: '禁止 UAC 提权' },
+  { pattern: /\bRemove-Item\b.*-Recurse.*-Force.*[\\\/](\s|$)/i, reason: '禁止递归强制删除根路径' }
+];
+
+const BASH_DENY: Array<{ pattern: RegExp; reason: string }> = [
+  { pattern: /\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+)?\/(\s|$)/, reason: '禁止删除根目录' },
+  { pattern: /\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+)?~\/?(\s|$)/, reason: '禁止删除用户主目录' },
+  { pattern: /\bdd\b.*\bof=\/dev\/[sh]d/i, reason: '禁止直接写入磁盘设备' },
+  { pattern: /\bmkfs\b/i, reason: '禁止格式化文件系统' },
+  { pattern: /\b(shutdown|reboot|poweroff|halt)\b/i, reason: '禁止系统关机/重启' },
+  { pattern: /\bcurl\b.*\|\s*(ba)?sh\b/i, reason: '禁止 curl | bash 远程代码执行' },
+  { pattern: /\bwget\b.*\|\s*(ba)?sh\b/i, reason: '禁止 wget | bash 远程代码执行' },
+  { pattern: /\beval\b/, reason: '禁止 eval 动态代码执行' },
+  { pattern: /\bsudo\b/, reason: '禁止 sudo 提权' },
+  { pattern: /:\(\)\s*\{[^}]*:\|:/, reason: '禁止 fork 炸弹' }
+];
+
+const COMMON_SAFE: Record<string, CommandSafetyConfig> = {
+  git: { safeSubcommands: ['status', 'log', 'diff', 'show', 'branch', 'tag', 'remote', 'config', 'rev-parse', 'ls-files', 'grep'] },
+  npm: { safeSubcommands: ['list', 'ls', 'view', 'info', 'show', 'outdated', 'audit', 'config list', 'config get', 'why', 'explain'] },
+  pnpm: { safeSubcommands: ['list', 'ls', 'why', 'config list', 'outdated', 'audit'] },
+  yarn: { safeSubcommands: ['list', 'info', 'why', 'config list', 'versions'] },
+  node: { safeSubcommands: ['--version', '-v'] },
+  python: { safeSubcommands: ['--version', '-V'] },
+  python3: { safeSubcommands: ['--version', '-V'] },
+  pip: { safeSubcommands: ['list', 'show', 'freeze', 'check'] },
+  pip3: { safeSubcommands: ['list', 'show', 'freeze', 'check'] },
+  docker: { safeSubcommands: ['ps', 'images', 'info', 'version', 'inspect', 'logs', 'stats', 'top'] },
+  rg: { safe: true },
+  grep: { safe: true },
+  jq: { safe: true }
+};
+
+const POWERSHELL_SAFE: Record<string, CommandSafetyConfig> = {
+  ...COMMON_SAFE,
+  dir: { safe: true },
+  type: { safe: true },
+  more: { safe: true },
+  findstr: { safe: true },
+  where: { safe: true },
+  echo: { safe: true },
+  pwd: { safe: true },
+  cd: { safe: true },
+  ls: { safe: true },
+  cat: { safe: true },
+  'get-childitem': { safe: true },
+  'get-content': { safe: true },
+  'get-item': { safe: true },
+  'test-path': { safe: true },
+  'resolve-path': { safe: true },
+  'select-string': { safe: true },
+  'select-object': { safe: true },
+  'sort-object': { safe: true },
+  'where-object': { safe: true },
+  'get-process': { safe: true },
+  'get-service': { safe: true },
+  'get-command': { safe: true },
+  'get-location': { safe: true },
+  'compare-object': { safe: true },
+  fc: { safe: true },
+  ipconfig: { isDangerous: (args) => args.some((arg) => /^\/(release|renew|flushdns|registerdns)/i.test(arg)) },
+  ping: { safe: true }
+};
+
+const BASH_SAFE: Record<string, CommandSafetyConfig> = {
+  ...COMMON_SAFE,
+  ls: { safe: true },
+  cat: { safe: true },
+  head: { safe: true },
+  tail: { safe: true },
+  wc: { safe: true },
+  stat: { safe: true },
+  file: { safe: true },
+  pwd: { safe: true },
+  cd: { safe: true },
+  echo: { safe: true },
+  printf: { safe: true },
+  find: { isDangerous: (args) => args.some((arg) => /^(-exec|-execdir|-delete|-ok|-okdir)$/.test(arg)) },
+  sed: { isDangerous: (args) => args.some((arg) => /^-[a-zA-Z]*i/.test(arg)) },
+  awk: { safe: true },
+  sort: { safe: true },
+  uniq: { safe: true },
+  cut: { safe: true },
+  tr: { safe: true },
+  diff: { safe: true },
+  cmp: { safe: true },
+  uname: { safe: true },
+  whoami: { safe: true },
+  id: { safe: true },
+  ps: { safe: true },
+  df: { safe: true },
+  du: { safe: true },
+  env: { safe: true },
+  printenv: { safe: true },
+  which: { safe: true },
+  date: { safe: true },
+  sleep: { safe: true },
+  ping: { isDangerous: (args) => !args.some((arg) => arg === '-c') },
+  curl: { isDangerous: (args) => args.some((arg) => /^(-X|--request|-d|--data|--data-raw|--data-binary|-F|--form|--upload-file|-T|--delete)$/.test(arg)) },
+  wget: { isDangerous: () => true }
+};
+
+function classifyCommand(kind: ShellKind, command: string): StaticClassification {
+  const trimmed = command.trim();
+  if (!trimmed) return 'deny';
+  const deny = kind === 'powershell' ? POWERSHELL_DENY : BASH_DENY;
+  for (const { pattern } of deny) if (pattern.test(trimmed)) return 'deny';
+
+  const statements = splitStatements(trimmed);
+  let allAllow = true;
+  for (const stmt of statements) {
+    const result = classifySingleStatement(kind, stmt);
+    if (result === 'deny') return 'deny';
+    if (result === 'unknown') allAllow = false;
+  }
+  return allAllow ? 'allow' : 'unknown';
+}
+
+function classifySingleStatement(kind: ShellKind, stmt: string): StaticClassification {
+  const cleaned = kind === 'bash'
+    ? stmt.replace(/\s+[12]?>\s*\/dev\/null\b/g, '').replace(/\s+2>&1\b/g, '').replace(/\s+<\s*\/dev\/null\b/g, '')
+    : stmt;
+  if (/(?:^|[^\-])(?:>>?|2>>?)\s*[^&]/.test(cleaned)) return 'unknown';
+
+  const tokens = stmt.trim().split(/\s+/);
+  const firstToken = tokens[0]?.toLowerCase().replace(/\.exe$/, '');
+  if (!firstToken) return 'unknown';
+  const config = (kind === 'powershell' ? POWERSHELL_SAFE : BASH_SAFE)[firstToken];
+  if (!config) return 'unknown';
+  if (config.safe) return 'allow';
+
+  const restArgs = tokens.slice(1);
+  if (config.isDangerous) return config.isDangerous(restArgs) ? 'unknown' : 'allow';
+  if (config.safeSubcommands) {
+    const rest = stmt.slice(tokens[0].length).trim().toLowerCase();
+    for (const sub of config.safeSubcommands) {
+      if (rest.startsWith(sub.toLowerCase())) return 'allow';
+    }
+    return 'unknown';
+  }
+  return 'unknown';
+}
+
+function splitStatements(command: string): string[] {
+  return command.split(/\s*(?:;|&&|\|\||\||\r?\n)\s*/).map((item) => item.trim()).filter(Boolean);
+}
+
+function getDenyReason(kind: ShellKind, command: string): string | null {
+  const deny = kind === 'powershell' ? POWERSHELL_DENY : BASH_DENY;
+  for (const { pattern, reason } of deny) if (pattern.test(command.trim())) return reason;
+  return null;
+}

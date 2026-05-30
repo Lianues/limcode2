@@ -1,4 +1,4 @@
-import type { LlmProviderKind } from '../../../../shared/protocol';
+import type { LlmProviderKind, MessageContent } from '../../../../shared/protocol';
 
 export type { LlmProviderKind };
 
@@ -6,11 +6,6 @@ export interface LlmModelSettings {
   provider: LlmProviderKind;
   model: string;
   temperature?: number;
-}
-
-export interface PromptMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
 }
 
 export interface ToolSchema {
@@ -21,7 +16,8 @@ export interface ToolSchema {
 
 export interface LlmStartRequest {
   id: string;
-  messages: PromptMessage[];
+  systemInstruction?: MessageContent;
+  contents: MessageContent[];
   tools: ToolSchema[];
   model?: LlmModelSettings;
 }

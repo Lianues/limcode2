@@ -11,7 +11,7 @@ export interface LlmDeltaPayload {
 }
 export interface LlmToolCallPayload {
   requestId: string;
-  calls: Array<{ name: string; argsJson: string }>;
+  calls: Array<{ id?: string; name: string; argsJson: string }>;
 }
 export interface LlmDonePayload {
   requestId: string;

@@ -90,7 +90,13 @@ function applyClientPatchOp(patch: ClientPatchOp): void {
       break;
     case 'message.appendText': {
       const message = clientState.messages.find((item) => item.id === patch.id);
-      if (message) message.text += patch.delta;
+      if (message) {
+        const parts = [...message.content.parts];
+        const last = parts[parts.length - 1];
+        if (last?.type === 'text') parts[parts.length - 1] = { ...last, text: last.text + patch.delta };
+        else parts.push({ type: 'text', text: patch.delta });
+        message.content = { ...message.content, parts };
+      }
       break;
     }
     case 'message.status': {

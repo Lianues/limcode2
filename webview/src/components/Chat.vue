@@ -6,6 +6,7 @@ import {
   type GlobalSettingsRecord,
   type LlmProviderKind,
   type LlmSettingsRecord,
+  type MessageRecord,
   type MsgRole
 } from '@shared/protocol';
 import { bridge, BridgeMessageType } from '../bridge/vscodeBridge';
@@ -67,6 +68,26 @@ const currentAgent = computed(() =>
 
 function toolCallsForMessage(messageId: string) {
   return clientState.toolCalls.filter((toolCall) => toolCall.messageId === messageId);
+}
+
+function messageDisplayText(message: MessageRecord): string {
+  return message.content.parts.map((part) => {
+    if (part.type === 'text') return part.text;
+    if (part.type === 'functionCall') return `\n[tool call] ${part.name}(${JSON.stringify(part.args)})`;
+    if (part.type === 'functionResponse') return `\n[tool result] ${part.name}: ${stringifyPartPayload(part.response)}`;
+    if (part.type === 'fileData') return `\n[file] ${part.uri}`;
+    if (part.type === 'inlineData') return `\n[inline data] ${part.mimeType}`;
+    return '';
+  }).join('').trimStart();
+}
+
+function stringifyPartPayload(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 function send(): void {
@@ -181,7 +202,7 @@ function applyConversationSettings(settings: ConversationSettingsRecord): void {
 
 function roleLabel(role: MsgRole): string {
   if (role === 'user') return '你';
-  return role === 'assistant' ? '助手' : '工具';
+  return role === 'model' ? '助手' : '工具';
 }
 
 function scrollToBottom(): void {
@@ -191,7 +212,7 @@ function scrollToBottom(): void {
   });
 }
 
-watch(() => sessionMessages.value.reduce((acc, message) => acc + message.text.length, sessionMessages.value.length), scrollToBottom);
+watch(() => sessionMessages.value.reduce((acc, message) => acc + messageDisplayText(message).length, sessionMessages.value.length), scrollToBottom);
 
 watch(
   () => clientState.currentSessionId,
@@ -374,7 +395,7 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
       <div v-for="m in sessionMessages" :key="m.id" class="msg" :class="m.role">
         <div class="meta">{{ roleLabel(m.role) }}</div>
         <div class="bubble">
-          <pre class="text">{{ m.text }}<span v-if="m.status === 'streaming'" class="cursor">▋</span></pre>
+          <pre class="text">{{ messageDisplayText(m) }}<span v-if="m.status === 'streaming'" class="cursor">▋</span></pre>
           <div v-if="toolCallsForMessage(m.id).length" class="tools">
             <div v-for="t in toolCallsForMessage(m.id)" :key="t.id" class="tool" :class="t.status">
               <span class="tool-name">⚙ {{ t.name }}</span>

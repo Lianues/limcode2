@@ -81,7 +81,7 @@ function spawnHydratedMessage(world: World, session: Entity, record: MessageReco
   world.add(entity, Message, {
     id: record.id,
     role: record.role,
-    text: record.text,
+    content: record.content,
     status: record.status === 'streaming' ? 'error' : record.status,
     seq: record.seq,
     createdAt: Date.now()
@@ -124,7 +124,9 @@ function normalizeToolPolicy(toolPolicy: AgentRecord['toolPolicy']): ToolPolicyD
     ? toolPolicy.approvalMode
     : 'never';
   return {
-    allowedTools: Array.isArray(toolPolicy?.allowedTools) ? toolPolicy.allowedTools : [],
+    allowedTools: Array.isArray(toolPolicy?.allowedTools) && toolPolicy.allowedTools.length > 0
+      ? toolPolicy.allowedTools
+      : ['read_file', 'shell', 'bash'],
     approvalMode
   };
 }

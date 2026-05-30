@@ -1,7 +1,8 @@
-import type { FsCapability } from '../../../capabilities/types';
+import type { CommandCapability, FsCapability } from '../../../capabilities/types';
 
 export interface ToolDeps {
   fs: FsCapability;
+  command: CommandCapability;
 }
 
 export interface ToolResultOut {

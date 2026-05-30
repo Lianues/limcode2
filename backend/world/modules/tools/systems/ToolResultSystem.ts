@@ -1,6 +1,6 @@
 import { defineQuery, defineSystem, type Entity, type WorldReader } from '../../../../ecs/types';
 import { NeedsResponse, PartOf } from '../../chat/components';
-import { spawnToolResultMessage, ToolResultMessageBundle } from '../../chat/bundles';
+import { spawnToolResponseMessage, ToolResultMessageBundle } from '../../chat/bundles';
 import { ToolCall, ToolCompleted, ToolFailed, ToolResult, ToolResultConsumed } from '../components';
 
 const SettledToolCallsQuery = defineQuery({
@@ -49,12 +49,12 @@ export const ToolResultSystem = defineSystem({
     for (const entity of settled) {
       const call = world.get(entity, ToolCall);
       const result = world.get(entity, ToolResult);
-      const assistant = world.get(entity, PartOf)?.parent;
-      if (!call || !result || assistant === undefined) continue;
-      const session = world.get(assistant, PartOf)?.parent;
+      const modelMessage = world.get(entity, PartOf)?.parent;
+      if (!call || !result || modelMessage === undefined) continue;
+      const session = world.get(modelMessage, PartOf)?.parent;
       if (session === undefined) continue;
 
-      spawnToolResultMessage(cmd, { session, toolName: call.name, ok: result.ok, output: result.output });
+      spawnToolResponseMessage(cmd, { session, toolCallId: call.functionCallId ?? call.id, toolName: call.name, ok: result.ok, output: result.output });
       cmd.add(entity, ToolResultConsumed, true);
       touchedSessions.add(session);
     }
@@ -67,9 +67,9 @@ export const ToolResultSystem = defineSystem({
 
 function hasPendingToolWork(world: WorldReader, session: Entity): boolean {
   return world.query(ToolCall).some((entity) => {
-    const assistant = world.get(entity, PartOf)?.parent;
-    if (assistant === undefined) return false;
-    if (world.get(assistant, PartOf)?.parent !== session) return false;
+    const modelMessage = world.get(entity, PartOf)?.parent;
+    if (modelMessage === undefined) return false;
+    if (world.get(modelMessage, PartOf)?.parent !== session) return false;
     const fullySettled =
       (world.has(entity, ToolCompleted) || world.has(entity, ToolFailed)) &&
       world.has(entity, ToolResultConsumed);

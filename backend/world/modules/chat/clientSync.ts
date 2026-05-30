@@ -20,7 +20,7 @@ export function projectChatClientState(world: WorldReader): ClientStateSlice {
         id: message.id,
         sessionId: world.get(sessionEntity, Session)!.id,
         role: message.role,
-        text: message.text,
+        content: message.content,
         status: message.status,
         seq: message.seq
       };
@@ -66,8 +66,10 @@ function diffMessages(prev: MessageRecord[], next: MessageRecord[]): ClientPatch
       patches.push({ kind: 'message.upsert', message: item });
       continue;
     }
-    if (old.text !== item.text) {
-      if (item.text.startsWith(old.text)) patches.push({ kind: 'message.appendText', id: item.id, delta: item.text.slice(old.text.length) });
+    const oldText = messageText(old);
+    const nextText = messageText(item);
+    if (JSON.stringify(old.content) !== JSON.stringify(item.content)) {
+      if (canAppendText(old, item) && nextText.startsWith(oldText)) patches.push({ kind: 'message.appendText', id: item.id, delta: nextText.slice(oldText.length) });
       else patches.push({ kind: 'message.upsert', message: item });
     }
     if (old.status !== item.status) patches.push({ kind: 'message.status', id: item.id, status: item.status });
@@ -76,4 +78,16 @@ function diffMessages(prev: MessageRecord[], next: MessageRecord[]): ClientPatch
     if (!nextMap.has(id)) patches.push({ kind: 'message.remove', id });
   }
   return patches;
+}
+
+
+function messageText(message: MessageRecord): string {
+  return message.content.parts
+    .map((part) => part.type === 'text' ? part.text : '')
+    .join('');
+}
+
+function canAppendText(prev: MessageRecord, next: MessageRecord): boolean {
+  const withoutText = (message: MessageRecord) => message.content.parts.filter((part) => part.type !== 'text');
+  return JSON.stringify(withoutText(prev)) === JSON.stringify(withoutText(next));
 }

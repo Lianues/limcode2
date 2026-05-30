@@ -47,6 +47,7 @@ function buildToolCallRecord(world: WorldReader, entity: number): ToolCallRecord
     id: call.id,
     messageId: message.id,
     name: call.name,
+    functionCallId: call.functionCallId,
     args: call.argsJson,
     status: world.has(entity, PendingTool)
       ? 'pending'

@@ -1,6 +1,6 @@
 import { defineQuery, defineSystem, type Entity, type WorldReader } from '../../../../ecs/types';
 import { LlmRequest, NeedsResponse, Session } from '../components';
-import { AssistantMessageBundle, LlmRequestBundle, spawnAssistantMessage, spawnLlmRequest } from '../bundles';
+import { ModelMessageBundle, LlmRequestBundle, spawnModelMessage, spawnLlmRequest } from '../bundles';
 
 const SessionsNeedingResponseQuery = defineQuery({
   name: 'SessionsNeedingResponse',
@@ -23,16 +23,15 @@ export const ContextAssemblySystem = defineSystem({
   worker: { modulePath: '../world/modules/chat/systems/ContextAssemblySystem', exportName: 'ContextAssemblySystem' },
   access: {
     queries: [SessionsNeedingResponseQuery, ActiveLlmRequestsQuery],
-    bundles: [AssistantMessageBundle, LlmRequestBundle]
+    bundles: [ModelMessageBundle, LlmRequestBundle]
   },
   run({ world, cmd }) {
     for (const session of world.query(Session, NeedsResponse)) {
       if (hasActiveRequest(world, session)) {
-        cmd.remove(session, NeedsResponse);
         continue;
       }
-      const assistant = spawnAssistantMessage(cmd, session);
-      spawnLlmRequest(cmd, { session, assistant });
+      const modelMessage = spawnModelMessage(cmd, session);
+      spawnLlmRequest(cmd, { session, modelMessage });
       cmd.remove(session, NeedsResponse);
     }
   }

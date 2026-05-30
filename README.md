@@ -9,11 +9,13 @@ LimCode 是一个 VS Code 扩展原型：后端使用 TypeScript ECS world，前
 - LLM driver 使用 OpenAI-compatible Chat Completions 接口，默认配置为 Deepseek：
   - Base URL: `https://api.deepseek.com/v1`
   - Model: `deepseek-v4-flash`
-- 会话历史通过 VS Code `globalStorageUri` 按分块索引格式持久化：
-  - `chat/manifest.json`：全局索引、agent/session 摘要，以及 agent 与对话的 link 关系。
-  - `chat/sessions/{sessionIdBase64Url}/index.json`：单会话 chunk 索引。
-  - `chat/sessions/{sessionIdBase64Url}/chunks/000000.json`：消息块文件。
-- `RuntimeEnv.paths` 记录插件全局数据目录、对话根目录和 manifest 路径。
+- 持久化通过 VS Code `globalStorageUri`，并在文件层面拆分 agent、conversation、link：
+  - 索引里记录的文件/目录名使用 `{yyyyMMdd-HHmmss-SSS}-{可读slug}-{短hash}`，便于按创建时间排序，也避免纯 base64url 名称难读。
+  - `agents/index.json` + `agents/records/{timeSlugHash}.json`：只保存 agent 组件投影。
+  - `conversations/index.json` + `conversations/{timeSlugHash}/conversation.json`：只保存对话元数据。
+  - `conversations/{timeSlugHash}/messages/index.json` + `messages/chunks/000000.json`：保存该对话的消息块和消息关联的 toolCalls。
+  - `agent-conversation-links/index.json` + `agent-conversation-links/records/{timeSlugHash}.json`：只保存 agent 与 conversation 的 link 关系。
+- `RuntimeEnv.paths` 记录插件全局数据目录，以及 agents / conversations / links 三类独立数据根目录和索引路径。
 
 > 不建议把 API Key 写进仓库。请使用命令 `LimCode: Configure OpenAI Compatible API Key` 保存到 VS Code SecretStorage，或设置环境变量 `LIMCODE_OPENAI_API_KEY` / `DEEPSEEK_API_KEY`。
 

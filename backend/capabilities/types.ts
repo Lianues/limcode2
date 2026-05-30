@@ -26,12 +26,21 @@ export interface WebviewCapability {
 export interface RuntimePaths {
   globalStorageUri: vscode.Uri;
   globalStoragePath: string;
-  /** 分块对话数据根目录：<globalStorage>/chat */
-  chatRootUri: vscode.Uri;
-  chatRootPath: string;
-  /** 对话索引入口：<globalStorage>/chat/manifest.json */
-  chatManifestUri: vscode.Uri;
-  chatManifestPath: string;
+  /** Agent 数据根目录：<globalStorage>/agents */
+  agentsRootUri: vscode.Uri;
+  agentsRootPath: string;
+  agentsIndexUri: vscode.Uri;
+  agentsIndexPath: string;
+  /** Conversation/消息数据根目录：<globalStorage>/conversations */
+  conversationsRootUri: vscode.Uri;
+  conversationsRootPath: string;
+  conversationsIndexUri: vscode.Uri;
+  conversationsIndexPath: string;
+  /** Agent 与 Conversation 的关系数据根目录：<globalStorage>/agent-conversation-links */
+  linksRootUri: vscode.Uri;
+  linksRootPath: string;
+  linksIndexUri: vscode.Uri;
+  linksIndexPath: string;
 }
 
 /** VS Code 存储能力：通过 workspace.fs 读写插件全局数据。 */

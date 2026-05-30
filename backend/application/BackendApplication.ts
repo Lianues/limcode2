@@ -155,7 +155,7 @@ export class BackendApplication {
       } else {
         this.spawnDefaultAgent();
       }
-      console.log(`[LimCode] Chat manifest: ${this.env.paths.chatManifestPath}`);
+      console.log(`[LimCode] Storage roots: agents=${this.env.paths.agentsRootPath}, conversations=${this.env.paths.conversationsRootPath}, links=${this.env.paths.linksRootPath}`);
     } catch (error) {
       console.warn('[LimCode] Failed to initialize stored chat state. Starting with a fresh session.', error);
       this.spawnDefaultAgent();

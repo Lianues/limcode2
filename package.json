@@ -40,7 +40,7 @@
         },
         "limcode.openAiCompatible.model": {
           "type": "string",
-          "default": "deepseek-v4-falsh",
+          "default": "deepseek-v4-flash",
           "description": "Default OpenAI-compatible model used by LimCode."
         },
         "limcode.openAiCompatible.temperature": {

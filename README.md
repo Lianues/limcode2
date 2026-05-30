@@ -8,7 +8,7 @@ LimCode 是一个 VS Code 扩展原型：后端使用 TypeScript ECS world，前
 - Webview 通过 bridge 发送 `chat:send`，后端 ECS chat systems 生成 assistant 消息并触发 `llm.start` effect。
 - LLM driver 使用 OpenAI-compatible Chat Completions 接口，默认配置为 Deepseek：
   - Base URL: `https://api.deepseek.com/v1`
-  - Model: `deepseek-v4-falsh`
+  - Model: `deepseek-v4-flash`
 - 会话历史通过 VS Code `globalStorageUri` 按分块索引格式持久化：
   - `chat/manifest.json`：全局索引、agent/session 摘要，以及 agent 与对话的 link 关系。
   - `chat/sessions/{sessionIdBase64Url}/index.json`：单会话 chunk 索引。

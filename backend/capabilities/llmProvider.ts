@@ -21,6 +21,7 @@ type UnifiedPart = import('unified-llm-provider').Part;
 type UnifiedLLMRequest = import('unified-llm-provider').LLMRequest;
 type UnifiedLLMStreamChunk = import('unified-llm-provider').LLMStreamChunk;
 type UnifiedFunctionDeclaration = import('unified-llm-provider').FunctionDeclaration;
+type UndiciModule = typeof import('undici');
 
 export interface LlmProviderOptions {
   settings: MaybeProvider<LlmSettingsRecord>;
@@ -53,12 +54,16 @@ export async function startLlmProvider(
 
     const unified = await importUnifiedLlmProvider();
     const registry = unified.createBootstrapExtensionRegistry();
+    const proxy = normalizeOptionalString(settings.proxy);
+    const proxyFetch = proxy ? await createUndiciFetch() : undefined;
+    if (proxy) console.log(`[LimCode] LLM proxy enabled: ${proxy} (fetch=undici)`);
     const provider = unified.createLLMFromConfig({
       provider: settings.provider,
       model: settings.model,
       apiKey: settings.apiKey,
       baseUrl: settings.baseUrl,
-      headers: await resolveMaybe(options.headers)
+      headers: await resolveMaybe(options.headers),
+      ...(proxy ? { proxy, fetch: proxyFetch } : {})
     }, registry.llmProviders);
 
     let didEmitDone = false;
@@ -95,7 +100,8 @@ function normalizeSettings(settings: LlmSettingsRecord | undefined): LlmSettings
     baseUrl: settings?.baseUrl?.trim() || DEFAULT_LLM_BASE_URL,
     model: settings?.model?.trim() || DEFAULT_LLM_MODEL,
     apiKey: settings?.apiKey?.trim() ?? '',
-    temperature: settings?.temperature
+    temperature: settings?.temperature,
+    ...(normalizeOptionalString(settings?.proxy) ? { proxy: normalizeOptionalString(settings?.proxy) } : {})
   };
 }
 
@@ -295,6 +301,11 @@ function stringifyJson(value: unknown): string {
   }
 }
 
+function normalizeOptionalString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
 async function resolveMaybe<T>(value: MaybeProvider<T>): Promise<T | undefined> {
   if (typeof value === 'function') return (value as () => T | undefined | Promise<T | undefined>)();
   return value;
@@ -303,6 +314,18 @@ async function resolveMaybe<T>(value: MaybeProvider<T>): Promise<T | undefined> 
 async function importUnifiedLlmProvider(): Promise<UnifiedModule> {
   const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<UnifiedModule>;
   return dynamicImport('unified-llm-provider');
+}
+
+async function createUndiciFetch(): Promise<typeof fetch> {
+  const undici = await importUndici();
+  // VS Code Extension Host 的 global fetch 可能不是 undici 实现，会忽略 dispatcher。
+  // 这里仅在用户显式配置 LLM proxy 时指定 undici.fetch；ProxyAgent/requestTls 仍由 unified-llm-provider@0.1.3 维护。
+  return undici.fetch as unknown as typeof fetch;
+}
+
+async function importUndici(): Promise<UndiciModule> {
+  const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<UndiciModule>;
+  return dynamicImport('undici');
 }
 
 function emitLlmError(emit: Emit, requestId: string, message: string): void {

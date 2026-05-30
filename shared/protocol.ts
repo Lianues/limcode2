@@ -126,6 +126,8 @@ export interface LlmSettingsRecord {
   baseUrl: string;
   model: string;
   apiKey: string;
+  /** 可选 HTTP/HTTPS 代理地址，例如 http://localhost:8000。 */
+  proxy?: string;
   temperature?: number;
 }
 

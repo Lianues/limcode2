@@ -44,6 +44,7 @@ export function createDefaultLlmSettings(): LlmSettingsRecord {
     baseUrl: DEFAULT_LLM_BASE_URL,
     model: DEFAULT_LLM_MODEL,
     apiKey: '',
+    proxy: undefined,
     temperature: 0.2
   };
 }
@@ -56,6 +57,7 @@ export function normalizeLlmSettings(input: Partial<LlmSettingsRecord> | undefin
     baseUrl: stringOrDefault(input?.baseUrl, defaults.baseUrl),
     model: stringOrDefault(input?.model, defaults.model),
     apiKey: typeof input?.apiKey === 'string' ? input.apiKey.trim() : defaults.apiKey,
+    ...(optionalString(input?.proxy) ? { proxy: optionalString(input?.proxy) } : {}),
     temperature: Number.isFinite(temperature) ? temperature : defaults.temperature
   };
 }
@@ -65,7 +67,8 @@ function sameLlmSettings(a: LlmSettingsRecord, b: Partial<LlmSettingsRecord>): b
     a.baseUrl === b.baseUrl &&
     a.model === b.model &&
     a.apiKey === b.apiKey &&
-    a.temperature === b.temperature;
+    a.temperature === b.temperature &&
+    a.proxy === optionalString(b.proxy);
 }
 
 function isKnownProvider(provider: unknown): provider is LlmProviderKind {
@@ -74,4 +77,9 @@ function isKnownProvider(provider: unknown): provider is LlmProviderKind {
 
 function stringOrDefault(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function optionalString(value: unknown): string | undefined {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  return trimmed || undefined;
 }

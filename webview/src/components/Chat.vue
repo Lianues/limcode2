@@ -48,6 +48,7 @@ const llmSettings = reactive<LlmSettingsRecord>({
     baseUrl: 'https://api.deepseek.com/v1',
     model: 'deepseek-v4-flash',
     apiKey: '',
+    proxy: '',
     temperature: 0.2
 });
 
@@ -241,6 +242,7 @@ function saveLlmSettings(): void {
       baseUrl: llmSettings.baseUrl,
       model: llmSettings.model,
       apiKey: llmSettings.apiKey,
+      ...(llmSettings.proxy?.trim() ? { proxy: llmSettings.proxy.trim() } : {}),
       temperature: Number(llmSettings.temperature)
     }
   });
@@ -255,6 +257,7 @@ function applyLlmSettings(settings: LlmSettingsRecord): void {
   llmSettings.baseUrl = settings.baseUrl;
   llmSettings.model = settings.model;
   llmSettings.apiKey = settings.apiKey;
+  llmSettings.proxy = settings.proxy ?? '';
   llmSettings.temperature = settings.temperature;
 }
 
@@ -408,6 +411,10 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
         <label>
           <span>Temperature</span>
           <input v-model.number="llmSettings.temperature" type="number" min="0" max="2" step="0.1" />
+        </label>
+        <label>
+          <span>HTTP/HTTPS 代理（可选）</span>
+          <input v-model="llmSettings.proxy" type="text" placeholder="例如：http://localhost:8000" />
         </label>
       </div>
 

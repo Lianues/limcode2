@@ -1,4 +1,4 @@
-/* 最终冒烟：开放式 events/effects + world/clientSync + application/bindings + module clientSync 命名收口 */
+/* 最终冒烟：开放式 events/effects + world/clientSync + application/effectHandlers + module clientSync 命名收口 */
 const path = require('path');
 const base = path.join(__dirname, '..', 'dist', 'extension', 'backend');
 const { MapWorld } = require(path.join(base, 'ecs', 'World.js'));
@@ -10,14 +10,14 @@ const { clientSyncPlugin } = require(path.join(base, 'world', 'clientSync', 'ind
 const { ChatEventType } = require(path.join(base, 'world', 'modules', 'chat', 'events.js'));
 const { Session } = require(path.join(base, 'world', 'modules', 'chat', 'components.js'));
 const { createFakeLlmCapability } = require(path.join(base, 'capabilities', 'fakeLlm.js'));
-const { EffectHandlerRegistry, registerApplicationBindings } = require(path.join(base, 'application', 'bindings', 'index.js'));
+const { EffectHandlerRegistry, registerApplicationEffectHandlers } = require(path.join(base, 'application', 'effectHandlers', 'index.js'));
 const { flushEffects } = require(path.join(base, 'application', 'executeEffects.js'));
 
 const world = new MapWorld();
 const outbox = new EffectOutbox();
 const registry = createToolRegistry();
 const handlers = new EffectHandlerRegistry();
-registerApplicationBindings(handlers);
+registerApplicationEffectHandlers(handlers);
 
 let snapshots = 0;
 let patches = 0;

@@ -1,7 +1,7 @@
 import { ToolEventType } from '../../../world/modules/tools/events';
 import type { EffectHandlerRegistry } from '../registry';
 
-export function registerToolBindings(registry: EffectHandlerRegistry): void {
+export function registerToolEffectHandlers(registry: EffectHandlerRegistry): void {
   registry.register('tool.run', (effect, env, emit) => {
     const tool = env.tools.registry.find((candidate) => candidate.name === effect.name);
     if (!tool) {

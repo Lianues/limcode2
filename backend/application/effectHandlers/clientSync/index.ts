@@ -7,7 +7,7 @@ import {
 } from '../../../../shared/protocol';
 import type { EffectHandlerRegistry } from '../registry';
 
-export function registerClientSyncBindings(registry: EffectHandlerRegistry): void {
+export function registerClientSyncEffectHandlers(registry: EffectHandlerRegistry): void {
   registry.register('client.snapshot', (effect, env) => {
     env.webview.broadcast({
       id: createMessageId(),

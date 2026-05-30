@@ -3,8 +3,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import {
   conversationClientStateStreamId,
   type ConversationSettingsRecord,
-  type LlmProviderKind,
   type GlobalSettingsRecord,
+  type LlmProviderKind,
+  type LlmSettingsRecord,
   type MsgRole
 } from '@shared/protocol';
 import { bridge, BridgeMessageType } from '../bridge/vscodeBridge';
@@ -17,6 +18,7 @@ const conversationSettingsOpen = ref(false);
 const conversationSettingsStatus = ref('');
 const settingsStatus = ref('');
 const globalSettingsPath = ref('');
+const llmSettingsPath = ref('');
 const disposers: Array<() => void> = [];
 const requestedConversationStreams = new Set<string>();
 const requestedConversationSettings = new Set<string>();
@@ -30,14 +32,15 @@ const providerOptions: Array<{ value: LlmProviderKind; label: string }> = [
 ];
 
 const globalSettings = reactive<GlobalSettingsRecord>({
-  llm: {
+  dataFilePath: ''
+});
+
+const llmSettings = reactive<LlmSettingsRecord>({
     provider: 'deepseek',
     baseUrl: 'https://api.deepseek.com/v1',
     model: 'deepseek-v4-flash',
     apiKey: '',
     temperature: 0.2
-  },
-  dataFilePath: ''
 });
 
 const conversationSettings = reactive<ConversationSettingsRecord>({
@@ -121,32 +124,53 @@ function saveConversationSettings(): void {
 
 function requestGlobalSettings(): void {
   settingsStatus.value = '正在读取设置...';
-  bridge.request(BridgeMessageType.GlobalSettingsGet);
+  bridge.request(BridgeMessageType.GlobalSettingsGet, { section: 'common' });
+}
+
+function requestLlmSettings(): void {
+  settingsStatus.value = '正在读取设置...';
+  bridge.request(BridgeMessageType.GlobalSettingsGet, { section: 'llm' });
+}
+
+function requestAllGlobalSettings(): void {
+  requestGlobalSettings();
+  requestLlmSettings();
 }
 
 function saveGlobalSettings(): void {
   settingsStatus.value = '正在保存设置...';
   bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
+    section: 'common',
     settings: {
-      llm: {
-        provider: globalSettings.llm.provider,
-        baseUrl: globalSettings.llm.baseUrl,
-        model: globalSettings.llm.model,
-        apiKey: globalSettings.llm.apiKey,
-        temperature: Number(globalSettings.llm.temperature)
-      },
       dataFilePath: globalSettings.dataFilePath
     }
   });
 }
 
+function saveLlmSettings(): void {
+  settingsStatus.value = '正在保存设置...';
+  bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
+    section: 'llm',
+    settings: {
+      provider: llmSettings.provider,
+      baseUrl: llmSettings.baseUrl,
+      model: llmSettings.model,
+      apiKey: llmSettings.apiKey,
+      temperature: Number(llmSettings.temperature)
+    }
+  });
+}
+
 function applyGlobalSettings(settings: GlobalSettingsRecord): void {
-  globalSettings.llm.provider = settings.llm.provider;
-  globalSettings.llm.baseUrl = settings.llm.baseUrl;
-  globalSettings.llm.model = settings.llm.model;
-  globalSettings.llm.apiKey = settings.llm.apiKey;
-  globalSettings.llm.temperature = settings.llm.temperature;
   globalSettings.dataFilePath = settings.dataFilePath;
+}
+
+function applyLlmSettings(settings: LlmSettingsRecord): void {
+  llmSettings.provider = settings.provider;
+  llmSettings.baseUrl = settings.baseUrl;
+  llmSettings.model = settings.model;
+  llmSettings.apiKey = settings.apiKey;
+  llmSettings.temperature = settings.temperature;
 }
 
 function applyConversationSettings(settings: ConversationSettingsRecord): void {
@@ -198,7 +222,7 @@ onMounted(() => {
       const meta = message.payload?.meta;
       viewKind.value = meta?.kind === 'globalSettings' ? 'globalSettings' : 'chat';
       if (viewKind.value === 'globalSettings') {
-        requestGlobalSettings();
+        requestAllGlobalSettings();
         return;
       }
 
@@ -226,8 +250,13 @@ onMounted(() => {
   disposers.push(
     bridge.on(BridgeMessageType.GlobalSettingsSnapshot, (message) => {
       if (!message.payload) return;
-      applyGlobalSettings(message.payload.settings);
-      globalSettingsPath.value = message.payload.filePath;
+      if (message.payload.section === 'llm') {
+        applyLlmSettings(message.payload.settings as LlmSettingsRecord);
+        llmSettingsPath.value = message.payload.filePath;
+      } else {
+        applyGlobalSettings(message.payload.settings as GlobalSettingsRecord);
+        globalSettingsPath.value = message.payload.filePath;
+      }
       settingsStatus.value = '设置已同步';
     })
   );
@@ -264,7 +293,7 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
       <div class="settings-grid">
         <label>
           <span>Provider</span>
-          <select v-model="globalSettings.llm.provider">
+          <select v-model="llmSettings.provider">
             <option v-for="option in providerOptions" :key="option.value" :value="option.value">
               {{ option.label }}
             </option>
@@ -272,31 +301,35 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
         </label>
         <label>
           <span>Base URL</span>
-          <input v-model="globalSettings.llm.baseUrl" type="text" placeholder="https://api.deepseek.com/v1" />
+          <input v-model="llmSettings.baseUrl" type="text" placeholder="https://api.deepseek.com/v1" />
         </label>
         <label>
           <span>Model</span>
-          <input v-model="globalSettings.llm.model" type="text" placeholder="deepseek-v4-flash" />
+          <input v-model="llmSettings.model" type="text" placeholder="deepseek-v4-flash" />
         </label>
         <label>
           <span>Temperature</span>
-          <input v-model.number="globalSettings.llm.temperature" type="number" min="0" max="2" step="0.1" />
+          <input v-model.number="llmSettings.temperature" type="number" min="0" max="2" step="0.1" />
         </label>
       </div>
 
       <label class="api-key-field">
         <span>API Key（明文显示 / 明文保存）</span>
-        <input v-model="globalSettings.llm.apiKey" type="text" placeholder="sk-..." autocomplete="off" spellcheck="false" />
+        <input v-model="llmSettings.apiKey" type="text" placeholder="sk-..." autocomplete="off" spellcheck="false" />
       </label>
 
       <div class="settings-actions">
         <button type="button" @click="saveGlobalSettings">保存全局设置</button>
-        <button type="button" class="secondary" @click="requestGlobalSettings">重新读取</button>
+        <button type="button" @click="saveLlmSettings">保存 LLM 设置</button>
+        <button type="button" class="secondary" @click="requestAllGlobalSettings">重新读取</button>
         <span class="settings-status">{{ settingsStatus }}</span>
       </div>
 
       <p class="settings-path">
-        文件：<code>{{ globalSettingsPath || '等待后端返回 settings/global.json 路径...' }}</code>
+        全局 common 文件：<code>{{ globalSettingsPath || '等待后端返回 settings/common.json 路径...' }}</code>
+      </p>
+      <p class="settings-path">
+        LLM 文件：<code>{{ llmSettingsPath || '等待后端返回 settings/llm.json 路径...' }}</code>
       </p>
     </section>
   </div>
@@ -331,7 +364,7 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
         <button type="button" class="secondary" :disabled="!clientState.currentSessionId" @click="requestConversationSettings()">重新读取</button>
         <span class="settings-status">{{ conversationSettingsStatus }}</span>
       </div>
-      <p class="settings-note">对话级设置会保存到当前 conversation 目录下的 <code>settings/conversation.json</code>。</p>
+      <p class="settings-note">对话级 common 设置会保存到当前 conversation 目录下的 <code>settings/common.json</code>。</p>
     </section>
 
     <div ref="scroller" class="messages">

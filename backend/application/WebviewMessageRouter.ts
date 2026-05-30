@@ -5,10 +5,11 @@ import { ChatEventType } from '../world/modules/chat/events';
 import {
   BridgeMessageType,
   GLOBAL_CLIENT_STATE_STREAM_ID,
-  GLOBAL_SETTINGS_STREAM_ID,
+  GLOBAL_SETTINGS_SECTIONS,
   conversationClientStateStreamId,
   conversationIdFromClientStateStreamId,
   conversationSettingsStreamId,
+  globalSettingsStreamId,
   createMessageId,
   type BridgeClientId,
   type WebviewToExtensionMessage
@@ -49,11 +50,13 @@ export class WebviewMessageRouter {
         if (this.deps.isHydrated()) this.deps.requestSnapshot(message.payload?.sessionId ?? conversationIdFromClientStateStreamId(message.payload?.streamId ?? ''));
         break;
       case BridgeMessageType.GlobalSettingsGet:
-        this.deps.webview.subscribe(clientId, GLOBAL_SETTINGS_STREAM_ID);
-        void this.deps.globalSettingsBridge.postSnapshot(clientId, message.id);
+        if (!message.payload) return;
+        this.deps.webview.subscribe(clientId, globalSettingsStreamId(message.payload.section));
+        void this.deps.globalSettingsBridge.postSnapshot(clientId, message.payload.section, message.id);
         break;
       case BridgeMessageType.GlobalSettingsUpdate:
-        this.deps.webview.subscribe(clientId, GLOBAL_SETTINGS_STREAM_ID);
+        if (!message.payload) return;
+        this.deps.webview.subscribe(clientId, globalSettingsStreamId(message.payload.section));
         void this.deps.globalSettingsBridge.update(message.payload, message.id);
         break;
       case BridgeMessageType.ConversationSettingsGet:
@@ -69,8 +72,10 @@ export class WebviewMessageRouter {
         this.sendBridgeHello(clientId, message.id);
         if (!this.deps.isHydrated()) break;
         if (this.deps.clients.getOrUnknown(clientId).meta.kind === 'globalSettings') {
-          this.deps.webview.subscribe(clientId, GLOBAL_SETTINGS_STREAM_ID);
-          void this.deps.globalSettingsBridge.postSnapshot(clientId, message.id);
+          for (const section of GLOBAL_SETTINGS_SECTIONS) {
+            this.deps.webview.subscribe(clientId, globalSettingsStreamId(section));
+            void this.deps.globalSettingsBridge.postSnapshot(clientId, section, message.id);
+          }
         } else {
           this.deps.webview.subscribe(clientId, GLOBAL_CLIENT_STATE_STREAM_ID);
           this.deps.requestSnapshot();

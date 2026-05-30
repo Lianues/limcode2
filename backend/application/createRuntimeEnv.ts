@@ -25,7 +25,10 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
   return {
     env: {
       llm: createLlmProviderCapability({
-        settings: async () => (await storage.loadGlobalSettings()).llm
+        settings: async () => {
+          const stored = await storage.loadGlobalSettings('llm');
+          return stored.settings as import('../../shared/protocol').LlmSettingsRecord;
+        }
       }),
       fs: createVsCodeFsCapability(),
       webview: createWebviewCapability(),

@@ -19,7 +19,7 @@ import { clientSyncPlugin } from '../world/clientSync';
 import { EffectHandlerRegistry, registerApplicationEffectHandlers } from './effectHandlers';
 import { flushEffects, flushEffectsWhere } from './executeEffects';
 import type { RuntimeEnv } from './RuntimeEnv';
-import { createMessageId } from '../../shared/protocol';
+import { GLOBAL_SETTINGS_SECTIONS, createMessageId } from '../../shared/protocol';
 import type {
   BridgeClientId,
   WebviewClientMeta,
@@ -170,7 +170,9 @@ export class BackendApplication {
       this.hydrated = true;
       this.persistence.enable();
       this.requestSnapshot();
-      void this.globalSettingsBridge.postSnapshot();
+      for (const section of GLOBAL_SETTINGS_SECTIONS) {
+        void this.globalSettingsBridge.postSnapshot(undefined, section);
+      }
     }
   }
 

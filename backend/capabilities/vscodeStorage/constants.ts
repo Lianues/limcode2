@@ -12,6 +12,7 @@ export const MESSAGES_DIR = 'messages';
 export const CHUNKS_DIR = 'chunks';
 export const MESSAGES_PER_CHUNK = 100;
 export const CONVERSATION_SETTINGS_DIR = 'settings';
-export const CONVERSATION_SETTINGS_FILE = 'conversation.json';
+export const CONVERSATION_SETTINGS_FILE = 'common.json';
 
-export const GLOBAL_SETTINGS_FILE = 'global.json';
+export const GLOBAL_SETTINGS_FILE = 'common.json';
+export const LLM_SETTINGS_FILE = 'llm.json';

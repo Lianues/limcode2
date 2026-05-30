@@ -17,7 +17,14 @@ export interface WebviewClientMeta {
 }
 
 export const GLOBAL_CLIENT_STATE_STREAM_ID = 'global:state';
-export const GLOBAL_SETTINGS_STREAM_ID = 'settings:global';
+export const GLOBAL_SETTINGS_STREAM_PREFIX = 'settings:global:';
+export const GLOBAL_SETTINGS_SECTIONS = ['common', 'llm'] as const;
+export type GlobalSettingsSection = typeof GLOBAL_SETTINGS_SECTIONS[number];
+
+export function globalSettingsStreamId(section: GlobalSettingsSection): string {
+  return `${GLOBAL_SETTINGS_STREAM_PREFIX}${section}`;
+}
+
 export const CONVERSATION_SETTINGS_STREAM_PREFIX = 'settings:conversation:';
 export const CONVERSATION_CLIENT_STATE_STREAM_PREFIX = 'conversation:';
 export const CONVERSATION_CLIENT_STATE_STREAM_SUFFIX = ':state';
@@ -194,15 +201,20 @@ export interface ClientPatchPayload {
   patches: ClientPatchOp[];
 }
 export interface GlobalSettingsRecord {
-  llm: LlmSettingsRecord;
   dataFilePath: string;
 }
+export type GlobalSettingsSectionValue = GlobalSettingsRecord | LlmSettingsRecord;
+export interface GlobalSettingsGetPayload {
+  section: GlobalSettingsSection;
+}
 export interface GlobalSettingsSnapshotPayload {
-  settings: GlobalSettingsRecord;
+  section: GlobalSettingsSection;
+  settings: GlobalSettingsSectionValue;
   filePath: string;
 }
 export interface GlobalSettingsUpdatePayload {
-  settings: GlobalSettingsRecord;
+  section: GlobalSettingsSection;
+  settings: GlobalSettingsSectionValue;
 }
 export interface ConversationSettingsRecord {
   sessionId: string;
@@ -227,7 +239,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ChatSend, ChatSendPayload>
   | BridgeEnvelope<BridgeMessageType.ChatAbort, ChatAbortPayload>
   | BridgeEnvelope<BridgeMessageType.ClientResync, ClientResyncPayload>
-  | BridgeEnvelope<BridgeMessageType.GlobalSettingsGet, undefined>
+  | BridgeEnvelope<BridgeMessageType.GlobalSettingsGet, GlobalSettingsGetPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsUpdate, GlobalSettingsUpdatePayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsGet, ConversationSettingsGetPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsUpdate, ConversationSettingsUpdatePayload>;

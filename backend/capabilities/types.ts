@@ -6,7 +6,8 @@ import type {
   ClientState,
   ConversationSettingsRecord,
   ExtensionToWebviewMessage,
-  GlobalSettingsRecord,
+  GlobalSettingsSection,
+  GlobalSettingsSectionValue,
   WebviewClientMeta
 } from '../../shared/protocol';
 
@@ -57,9 +58,12 @@ export interface RuntimePaths {
   /** 通用设置根目录：<globalStorage>/settings */
   settingsRootUri: vscode.Uri;
   settingsRootPath: string;
-  /** 全局设置文件：<globalStorage>/settings/global.json */
+  /** 全局 common 设置文件：<globalStorage>/settings/common.json */
   globalSettingsUri: vscode.Uri;
   globalSettingsPath: string;
+  /** LLM 设置文件：<globalStorage>/settings/llm.json */
+  llmSettingsUri: vscode.Uri;
+  llmSettingsPath: string;
 }
 
 /** VS Code 存储能力：通过 workspace.fs 读写插件全局数据。 */
@@ -68,8 +72,8 @@ export interface StorageCapability {
   ensureReady(): Promise<void>;
   loadClientState(): Promise<ClientState | undefined>;
   saveClientState(state: ClientState): Promise<void>;
-  loadGlobalSettings(): Promise<GlobalSettingsRecord>;
-  saveGlobalSettings(settings: GlobalSettingsRecord): Promise<GlobalSettingsRecord>;
+  loadGlobalSettings(section: GlobalSettingsSection): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
+  saveGlobalSettings(section: GlobalSettingsSection, settings: GlobalSettingsSectionValue): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
   loadConversationSettings(sessionId: string): Promise<ConversationSettingsRecord | undefined>;
   saveConversationSettings(settings: ConversationSettingsRecord): Promise<ConversationSettingsRecord>;
 }

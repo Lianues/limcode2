@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { ClientState } from '../../../shared/protocol';
+import { GLOBAL_SETTINGS_SECTIONS, type ClientState } from '../../../shared/protocol';
 import type { StorageCapability } from '../types';
 import { loadAgents, saveAgents } from './agents';
 import {
@@ -8,7 +8,7 @@ import {
   saveConversationSettings,
   saveConversations
 } from './conversations';
-import { ensureGlobalSettingsFile, loadGlobalSettingsFile, normalizeGlobalSettings, writeGlobalSettingsFile } from './globalSettings';
+import { ensureGlobalSettingsFile, loadGlobalSettingsFile, writeGlobalSettingsFile } from './globalSettings';
 import { loadLinks, saveLinks } from './links';
 import { createVscodeStoragePaths, ensureStorageRoots } from './paths';
 
@@ -24,7 +24,9 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
         paths.linksRootUri,
         paths.settingsRootUri
       );
-      await ensureGlobalSettingsFile(paths.globalSettingsUri);
+      await Promise.all(
+        GLOBAL_SETTINGS_SECTIONS.map((section) => ensureGlobalSettingsFile(paths.settingsRootUri, section))
+      );
     },
     async loadClientState() {
       await ensureStorageRoots(paths.agentsRootUri, paths.conversationsRootUri, paths.linksRootUri);
@@ -53,15 +55,14 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
         saveLinks(paths.linksRootUri, paths.linksIndexUri, state.agentConversationLinks)
       ]);
     },
-    async loadGlobalSettings() {
+    async loadGlobalSettings(section) {
       await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
-      return loadGlobalSettingsFile(paths.globalSettingsUri);
+      return loadGlobalSettingsFile(paths.settingsRootUri, section);
     },
-    async saveGlobalSettings(settings) {
+    async saveGlobalSettings(section, settings) {
       await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
-      const normalized = normalizeGlobalSettings(settings);
-      await writeGlobalSettingsFile(paths.globalSettingsUri, normalized);
-      return normalized;
+      await writeGlobalSettingsFile(paths.settingsRootUri, section, settings);
+      return loadGlobalSettingsFile(paths.settingsRootUri, section);
     },
     async loadConversationSettings(sessionId) {
       await ensureStorageRoots(paths.conversationsRootUri);

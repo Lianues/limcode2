@@ -16,7 +16,22 @@ export async function writeJson(uri: vscode.Uri, value: unknown): Promise<void> 
   await vscode.workspace.fs.writeFile(uri, Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8'));
 }
 
+interface FileSystemLikeError {
+  name?: unknown;
+  code?: unknown;
+  message?: unknown;
+  stack?: unknown;
+}
+
 function isFileNotFound(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  return /FileNotFound|ENOENT|not found/i.test(error.message);
+  const candidate = error as FileSystemLikeError;
+  const text = [
+    candidate.name,
+    candidate.code,
+    candidate.message,
+    candidate.stack,
+    String(error)
+  ].filter((part): part is string => typeof part === 'string').join('\n');
+
+  return /FileNotFound|EntryNotFound|ENOENT|ENOTDIR|not found|no such file|不存在|无法解析不存在的文件/i.test(text);
 }

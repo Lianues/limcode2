@@ -31,18 +31,16 @@ import {
 import { Message, PartOf, Session } from '../world/modules/chat/components';
 import { clientSyncPlugin } from '../world/clientSync';
 import {
-  createOpenAiCompatibleLlmCapability,
+  createLlmProviderCapability,
   createVsCodeFsCapability,
   createVsCodeStorageCapability,
   createWebviewCapability,
-  DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
-  DEFAULT_OPENAI_COMPATIBLE_MODEL,
-  LIMCODE_OPENAI_API_KEY_SECRET
+  DEFAULT_LLM_MODEL
 } from '../capabilities';
 import { EffectHandlerRegistry, registerApplicationBindings } from './bindings';
 import { flushEffects, flushEffectsWhere } from './executeEffects';
 import type { RuntimeEnv } from './RuntimeEnv';
-import { BridgeMessageType, type AgentConversationLinkRecord, type AgentRecord, type ClientState, type MessageRecord, type WebviewToExtensionMessage } from '../../shared/protocol';
+import { BridgeMessageType, type AgentConversationLinkRecord, type AgentRecord, type ClientState, type LlmSettingsUpdatePayload, type MessageRecord, type WebviewToExtensionMessage } from '../../shared/protocol';
 
 const DEFAULT_AGENT_ID = 'main';
 const DEFAULT_SESSION_ID = 'default';
@@ -69,12 +67,8 @@ export class BackendApplication {
     const storage = createVsCodeStorageCapability(context);
 
     this.env = {
-      llm: createOpenAiCompatibleLlmCapability({
-        apiKey: () => resolveOpenAiCompatibleApiKey(context),
-        baseUrl: () => getOpenAiCompatibleConfig('baseUrl', DEFAULT_OPENAI_COMPATIBLE_BASE_URL),
-        model: () => getOpenAiCompatibleConfig('model', DEFAULT_OPENAI_COMPATIBLE_MODEL),
-        temperature: () => getOpenAiCompatibleNumberConfig('temperature', 0.2),
-        enableTools: () => getOpenAiCompatibleBooleanConfig('enableTools', false)
+      llm: createLlmProviderCapability({
+        settings: () => storage.loadLlmSettings()
       }),
       fs: createVsCodeFsCapability(),
       webview: createWebviewCapability(),
@@ -113,7 +107,10 @@ export class BackendApplication {
 
   public attachWebview(webview: vscode.Webview): void {
     this.env.webview.attach(webview);
-    if (this.hydrated) this.requestSnapshot();
+    if (this.hydrated) {
+      this.requestSnapshot();
+      void this.postLlmSettings();
+    }
   }
 
   public detachWebview(): void {
@@ -133,8 +130,17 @@ export class BackendApplication {
       case BridgeMessageType.ClientResync:
         if (this.hydrated) this.requestSnapshot(message.payload?.sessionId);
         break;
+      case BridgeMessageType.LlmSettingsGet:
+        void this.postLlmSettings();
+        break;
+      case BridgeMessageType.LlmSettingsUpdate:
+        void this.updateLlmSettings(message.payload);
+        break;
       case BridgeMessageType.Ready:
-        if (this.hydrated) this.requestSnapshot();
+        if (this.hydrated) {
+          this.requestSnapshot();
+          void this.postLlmSettings();
+        }
         break;
       default:
         break;
@@ -162,6 +168,7 @@ export class BackendApplication {
     } finally {
       this.hydrated = true;
       this.requestSnapshot();
+      void this.postLlmSettings();
     }
   }
 
@@ -262,6 +269,29 @@ export class BackendApplication {
     this.world.enqueue({ type: ClientSyncEventType.Resync, payload: sessionId ? { sessionId } : {} });
   }
 
+  private async postLlmSettings(): Promise<void> {
+    const settings = await this.env.storage.loadLlmSettings();
+    this.env.webview.post({
+      type: BridgeMessageType.LlmSettingsSnapshot,
+      payload: {
+        settings,
+        filePath: this.env.paths.llmSettingsPath
+      }
+    });
+  }
+
+  private async updateLlmSettings(payload: LlmSettingsUpdatePayload | undefined): Promise<void> {
+    if (!payload) return;
+    const settings = await this.env.storage.saveLlmSettings(payload.settings);
+    this.env.webview.post({
+      type: BridgeMessageType.LlmSettingsSnapshot,
+      payload: {
+        settings,
+        filePath: this.env.paths.llmSettingsPath
+      }
+    });
+  }
+
   private queuePersistClientState(): void {
     if (!this.hydrated) return;
 
@@ -301,19 +331,16 @@ function createDefaultAgentRecord(): AgentRecord {
     name: DEFAULT_AGENT_NAME,
     kind: 'main',
     status: 'idle',
-    model: { provider: 'openai-compatible', model: DEFAULT_OPENAI_COMPATIBLE_MODEL, temperature: 0.2 },
+    model: { provider: 'deepseek', model: DEFAULT_LLM_MODEL, temperature: 0.2 },
     toolPolicy: { allowedTools: [], approvalMode: 'never' },
     systemPrompt: 'You are LimCode, a concise and helpful AI coding assistant running inside VS Code. Reply in the user\'s language unless asked otherwise.'
   };
 }
 
 function normalizeModelProfile(model: AgentRecord['model']): ModelProfileData {
-  const provider = model?.provider === 'fake' || model?.provider === 'openai-compatible' || model?.provider === 'anthropic'
-    ? model.provider
-    : 'openai-compatible';
   return {
-    provider,
-    model: model?.model || DEFAULT_OPENAI_COMPATIBLE_MODEL,
+    provider: isKnownLlmProvider(model?.provider) ? model.provider : 'deepseek',
+    model: model?.model || DEFAULT_LLM_MODEL,
     temperature: model?.temperature
   };
 }
@@ -328,27 +355,8 @@ function normalizeToolPolicy(toolPolicy: AgentRecord['toolPolicy']): ToolPolicyD
   };
 }
 
-async function resolveOpenAiCompatibleApiKey(context: vscode.ExtensionContext): Promise<string | undefined> {
-  const secret = (await context.secrets.get(LIMCODE_OPENAI_API_KEY_SECRET))?.trim();
-  if (secret) return secret;
-
-  const setting = getOpenAiCompatibleConfig('apiKey', '');
-  if (setting) return setting;
-
-  return process.env.LIMCODE_OPENAI_API_KEY?.trim() || process.env.DEEPSEEK_API_KEY?.trim() || undefined;
-}
-
-function getOpenAiCompatibleConfig(key: string, fallback: string): string {
-  return vscode.workspace.getConfiguration('limcode.openAiCompatible').get<string>(key, fallback).trim() || fallback;
-}
-
-function getOpenAiCompatibleNumberConfig(key: string, fallback: number): number {
-  const value = vscode.workspace.getConfiguration('limcode.openAiCompatible').get<number>(key, fallback);
-  return Number.isFinite(value) ? value : fallback;
-}
-
-function getOpenAiCompatibleBooleanConfig(key: string, fallback: boolean): boolean {
-  return vscode.workspace.getConfiguration('limcode.openAiCompatible').get<boolean>(key, fallback);
+function isKnownLlmProvider(provider: string | undefined): provider is ModelProfileData['provider'] {
+  return provider === 'deepseek' || provider === 'openai-compatible' || provider === 'openai-responses' || provider === 'claude' || provider === 'gemini';
 }
 
 function isRealtimeClientEffect(effect: WorldEffect): boolean {

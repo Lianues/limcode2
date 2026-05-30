@@ -12,7 +12,10 @@ export enum BridgeMessageType {
   ChatAbort = 'chat:abort',
   ClientResync = 'client:resync',
   ClientSnapshot = 'client:snapshot',
-  ClientPatch = 'client:patch'
+  ClientPatch = 'client:patch',
+  LlmSettingsGet = 'settings:llm:get',
+  LlmSettingsUpdate = 'settings:llm:update',
+  LlmSettingsSnapshot = 'settings:llm:snapshot'
 }
 
 export interface BridgeEnvelope<TType extends string = string, TPayload = unknown> {
@@ -29,6 +32,16 @@ export interface WorkspaceInfo {
 export type MsgRole = 'user' | 'assistant' | 'tool';
 export type MsgStatus = 'streaming' | 'complete' | 'error';
 export type ToolCallStatus = 'pending' | 'running' | 'done' | 'failed';
+
+export type LlmProviderKind = 'deepseek' | 'openai-compatible' | 'openai-responses' | 'claude' | 'gemini';
+
+export interface LlmSettingsRecord {
+  provider: LlmProviderKind;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  temperature?: number;
+}
 
 export interface AgentRecord {
   id: string;
@@ -113,6 +126,13 @@ export interface ClientPatchPayload {
   version: number;
   patches: ClientPatchOp[];
 }
+export interface LlmSettingsSnapshotPayload {
+  settings: LlmSettingsRecord;
+  filePath: string;
+}
+export interface LlmSettingsUpdatePayload {
+  settings: LlmSettingsRecord;
+}
 
 export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.Ready, undefined>
@@ -121,14 +141,17 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ShowInfo, { message: string }>
   | BridgeEnvelope<BridgeMessageType.ChatSend, ChatSendPayload>
   | BridgeEnvelope<BridgeMessageType.ChatAbort, ChatAbortPayload>
-  | BridgeEnvelope<BridgeMessageType.ClientResync, ClientResyncPayload>;
+  | BridgeEnvelope<BridgeMessageType.ClientResync, ClientResyncPayload>
+  | BridgeEnvelope<BridgeMessageType.LlmSettingsGet, undefined>
+  | BridgeEnvelope<BridgeMessageType.LlmSettingsUpdate, LlmSettingsUpdatePayload>;
 
 export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.Pong, { text: string; receivedAt: number }>
   | BridgeEnvelope<BridgeMessageType.WorkspaceInfo, WorkspaceInfo>
   | BridgeEnvelope<BridgeMessageType.Error, { requestType?: string; message: string }>
   | BridgeEnvelope<BridgeMessageType.ClientSnapshot, ClientSnapshotPayload>
-  | BridgeEnvelope<BridgeMessageType.ClientPatch, ClientPatchPayload>;
+  | BridgeEnvelope<BridgeMessageType.ClientPatch, ClientPatchPayload>
+  | BridgeEnvelope<BridgeMessageType.LlmSettingsSnapshot, LlmSettingsSnapshotPayload>;
 
 export function createMessageId(): MessageId {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;

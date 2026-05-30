@@ -1,12 +1,31 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { MsgRole } from '@shared/protocol';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import type { LlmProviderKind, LlmSettingsRecord, MsgRole } from '@shared/protocol';
 import { bridge, BridgeMessageType } from '../bridge/vscodeBridge';
 import { applyClientPatch, applyClientSnapshot, clientState } from '../stores/clientStateStore';
 
 const input = ref('');
 const scroller = ref<HTMLElement | null>(null);
+const settingsOpen = ref(false);
+const settingsStatus = ref('');
+const llmSettingsPath = ref('');
 const disposers: Array<() => void> = [];
+
+const providerOptions: Array<{ value: LlmProviderKind; label: string }> = [
+  { value: 'deepseek', label: 'DeepSeek' },
+  { value: 'openai-compatible', label: 'OpenAI-compatible' },
+  { value: 'openai-responses', label: 'OpenAI Responses' },
+  { value: 'claude', label: 'Claude' },
+  { value: 'gemini', label: 'Gemini' }
+];
+
+const llmSettings = reactive<LlmSettingsRecord>({
+  provider: 'deepseek',
+  baseUrl: 'https://api.deepseek.com/v1',
+  model: 'deepseek-v4-flash',
+  apiKey: '',
+  temperature: 0.2
+});
 
 const sessionMessages = computed(() =>
   clientState.messages.filter((message) => message.sessionId === clientState.currentSessionId).sort((a, b) => a.seq - b.seq)
@@ -47,6 +66,32 @@ function resync(): void {
   }
 }
 
+function requestLlmSettings(): void {
+  settingsStatus.value = '正在读取设置...';
+  bridge.request(BridgeMessageType.LlmSettingsGet);
+}
+
+function saveLlmSettings(): void {
+  settingsStatus.value = '正在保存设置...';
+  bridge.request(BridgeMessageType.LlmSettingsUpdate, {
+    settings: {
+      provider: llmSettings.provider,
+      baseUrl: llmSettings.baseUrl,
+      model: llmSettings.model,
+      apiKey: llmSettings.apiKey,
+      temperature: Number(llmSettings.temperature)
+    }
+  });
+}
+
+function applyLlmSettings(settings: LlmSettingsRecord): void {
+  llmSettings.provider = settings.provider;
+  llmSettings.baseUrl = settings.baseUrl;
+  llmSettings.model = settings.model;
+  llmSettings.apiKey = settings.apiKey;
+  llmSettings.temperature = settings.temperature;
+}
+
 function roleLabel(role: MsgRole): string {
   if (role === 'user') return '你';
   return role === 'assistant' ? '助手' : '工具';
@@ -74,7 +119,16 @@ onMounted(() => {
       if (!applyClientPatch(message.payload.version, message.payload.patches)) resync();
     })
   );
+  disposers.push(
+    bridge.on(BridgeMessageType.LlmSettingsSnapshot, (message) => {
+      if (!message.payload) return;
+      applyLlmSettings(message.payload.settings);
+      llmSettingsPath.value = message.payload.filePath;
+      settingsStatus.value = '设置已同步';
+    })
+  );
   resync();
+  requestLlmSettings();
 });
 
 onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
@@ -83,15 +137,61 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
 <template>
   <div class="chat">
     <header class="chat-header">
-      <span class="title">LimCode AI</span>
-      <span class="hint">
-        <template v-if="clientState.currentSessionId">
-          当前会话：<code>{{ clientState.currentSessionId }}</code>
-          <template v-if="currentAgent?.model?.model"> · 模型：<code>{{ currentAgent.model.model }}</code></template>
-        </template>
-        <template v-else>正在初始化默认会话...</template>
-      </span>
+      <div class="header-main">
+        <span class="title">LimCode AI</span>
+        <span class="hint">
+          <template v-if="clientState.currentSessionId">
+            当前会话：<code>{{ clientState.currentSessionId }}</code>
+            <template v-if="currentAgent?.model?.model"> · 模型：<code>{{ llmSettings.model || currentAgent.model.model }}</code></template>
+          </template>
+          <template v-else>正在初始化默认会话...</template>
+        </span>
+      </div>
+      <button type="button" class="settings-toggle" @click="settingsOpen = !settingsOpen">
+        {{ settingsOpen ? '收起设置' : 'LLM 设置' }}
+      </button>
     </header>
+
+    <section v-if="settingsOpen" class="settings-panel">
+      <div class="settings-grid">
+        <label>
+          <span>Provider</span>
+          <select v-model="llmSettings.provider">
+            <option v-for="option in providerOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+        <label>
+          <span>Base URL</span>
+          <input v-model="llmSettings.baseUrl" type="text" placeholder="https://api.deepseek.com/v1" />
+        </label>
+        <label>
+          <span>Model</span>
+          <input v-model="llmSettings.model" type="text" placeholder="deepseek-v4-flash" />
+        </label>
+        <label>
+          <span>Temperature</span>
+          <input v-model.number="llmSettings.temperature" type="number" min="0" max="2" step="0.1" />
+        </label>
+      </div>
+
+      <label class="api-key-field">
+        <span>API Key（明文显示 / 明文保存）</span>
+        <input v-model="llmSettings.apiKey" type="text" placeholder="sk-..." autocomplete="off" spellcheck="false" />
+      </label>
+
+      <div class="settings-actions">
+        <button type="button" @click="saveLlmSettings">保存设置</button>
+        <button type="button" class="secondary" @click="requestLlmSettings">重新读取</button>
+        <span class="settings-status">{{ settingsStatus }}</span>
+      </div>
+
+      <p class="settings-path">
+        文件：<code>{{ llmSettingsPath || '等待后端返回 settings/llm-api.json 路径...' }}</code>
+      </p>
+      <p class="settings-note">此文件位于 VS Code 插件 globalStorage 的 <code>settings/llm-api.json</code>，API Key 会按你的要求明文保存，方便前端查看和修改。</p>
+    </section>
 
     <div ref="scroller" class="messages">
       <div v-for="m in sessionMessages" :key="m.id" class="msg" :class="m.role">
@@ -121,10 +221,25 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
 
 <style scoped>
 .chat { display: flex; flex-direction: column; height: 100vh; color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: 13px; }
-.chat-header { display: flex; align-items: baseline; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--vscode-panel-border); }
+.chat-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--vscode-panel-border); }
+.header-main { min-width: 0; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .chat-header .title { font-weight: 600; }
 .chat-header .hint { color: var(--vscode-descriptionForeground); font-size: 12px; }
+.settings-toggle { flex: 0 0 auto; padding: 5px 10px; font-size: 12px; }
 code { background: var(--vscode-textCodeBlock-background); padding: 1px 5px; border-radius: 4px; }
+.settings-panel { border-bottom: 1px solid var(--vscode-panel-border); padding: 12px 14px; background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-foreground) 8%); display: flex; flex-direction: column; gap: 10px; }
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.settings-panel label { display: flex; flex-direction: column; gap: 5px; color: var(--vscode-descriptionForeground); font-size: 12px; }
+.settings-panel input,
+.settings-panel select { width: 100%; border-radius: 6px; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); background: var(--vscode-input-background); color: var(--vscode-input-foreground); font: inherit; padding: 7px 8px; }
+.api-key-field input { font-family: var(--vscode-editor-font-family, monospace); }
+.settings-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.settings-actions button { padding: 6px 12px; }
+.settings-actions .secondary { background: var(--vscode-button-secondaryBackground, transparent); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); }
+.settings-status,
+.settings-path,
+.settings-note { color: var(--vscode-descriptionForeground); font-size: 12px; margin: 0; }
+.settings-path code { word-break: break-all; }
 .messages { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
 .msg { display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
 .msg .meta { font-size: 11px; color: var(--vscode-descriptionForeground); }
@@ -147,4 +262,7 @@ code { background: var(--vscode-textCodeBlock-background); padding: 1px 5px; bor
 .composer button { align-self: flex-end; border: 1px solid var(--vscode-button-border, transparent); border-radius: 6px; padding: 8px 16px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); cursor: pointer; font: inherit; }
 .composer button:disabled { opacity: 0.5; cursor: default; }
 .composer button:hover:not(:disabled) { background: var(--vscode-button-hoverBackground); }
+@media (max-width: 640px) {
+  .settings-grid { grid-template-columns: 1fr; }
+}
 </style>

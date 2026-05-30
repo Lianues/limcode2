@@ -1,11 +1,12 @@
 import { TextDecoder } from 'node:util';
 import { LlmEventType } from '../world/modules/llm/events';
-import type { LlmStartRequest, PromptMessage, ToolSchema } from '../world/modules/llm/contracts';
+import type { LlmStartRequest, PromptMessage } from '../world/modules/llm/contracts';
 import type { Emit, LlmCapability } from './types';
+import type { LlmSettingsRecord } from '../../shared/protocol';
 
-export const LIMCODE_OPENAI_API_KEY_SECRET = 'limcode.openAiCompatible.apiKey';
-export const DEFAULT_OPENAI_COMPATIBLE_BASE_URL = 'https://api.deepseek.com/v1';
-export const DEFAULT_OPENAI_COMPATIBLE_MODEL = 'deepseek-v4-flash';
+export const DEFAULT_LLM_BASE_URL = 'https://api.deepseek.com/v1';
+export const DEFAULT_LLM_MODEL = 'deepseek-v4-flash';
+
 const STREAM_FLUSH_INTERVAL_MS = 24;
 const STREAM_FLUSH_MAX_CHARS = 6;
 
@@ -14,21 +15,11 @@ interface ChatCompletionMessage {
   content: string;
 }
 
-interface OpenAiToolDefinition {
-  type: 'function';
-  function: {
-    name: string;
-    description: string;
-    parameters: unknown;
-  };
-}
-
 interface ChatCompletionRequestBody {
   model: string;
   messages: ChatCompletionMessage[];
   stream: boolean;
   temperature?: number;
-  tools?: OpenAiToolDefinition[];
 }
 
 interface ChatCompletionResponseLike {
@@ -42,55 +33,51 @@ interface ChatCompletionResponseLike {
 
 type MaybeProvider<T> = T | undefined | (() => T | undefined | Promise<T | undefined>);
 
-export interface OpenAiCompatibleLlmOptions {
-  apiKey: MaybeProvider<string>;
-  baseUrl?: MaybeProvider<string>;
-  model?: MaybeProvider<string>;
-  temperature?: MaybeProvider<number>;
-  enableTools?: MaybeProvider<boolean>;
+export interface LlmProviderOptions {
+  settings: MaybeProvider<LlmSettingsRecord>;
   headers?: MaybeProvider<Record<string, string>>;
 }
 
-export function createOpenAiCompatibleLlmCapability(options: OpenAiCompatibleLlmOptions): LlmCapability {
+/**
+ * 通用 LLM capability。
+ * 当前基础链路用 Chat Completions 兼容请求跑通 DeepSeek；命名不绑定 Claude/OpenAI，后续可按 provider/format 扩展。
+ */
+export function createLlmProviderCapability(options: LlmProviderOptions): LlmCapability {
   return {
     start(request, emit) {
-      void startOpenAiCompatibleLlm(request, emit, options);
+      void startLlmProvider(request, emit, options);
     }
   };
 }
 
-export async function startOpenAiCompatibleLlm(
+export async function startLlmProvider(
   request: LlmStartRequest,
   emit: Emit,
-  options: OpenAiCompatibleLlmOptions
+  options: LlmProviderOptions
 ): Promise<void> {
   try {
-    const apiKey = await resolveMaybe(options.apiKey);
+    const settings = await resolveMaybe(options.settings);
+    const apiKey = settings?.apiKey?.trim();
     if (!apiKey) {
       emitLlmError(
         emit,
         request.id,
-        'Missing OpenAI-compatible API key. Run "LimCode: Configure OpenAI Compatible API Key" or set LIMCODE_OPENAI_API_KEY / DEEPSEEK_API_KEY.'
+        '缺少 LLM API Key。请在 Webview 顶部“LLM 设置”里填写并保存。'
       );
       return;
     }
 
-    const baseUrl = (await resolveMaybe(options.baseUrl)) ?? DEFAULT_OPENAI_COMPATIBLE_BASE_URL;
-    const configuredModel = (await resolveMaybe(options.model)) ?? DEFAULT_OPENAI_COMPATIBLE_MODEL;
-    const temperature = request.model?.temperature ?? (await resolveMaybe(options.temperature));
-    const enableTools = (await resolveMaybe(options.enableTools)) ?? false;
+    const baseUrl = settings?.baseUrl?.trim() || DEFAULT_LLM_BASE_URL;
+    const configuredModel = settings?.model?.trim() || request.model?.model || DEFAULT_LLM_MODEL;
+    const temperature = settings?.temperature ?? request.model?.temperature;
     const extraHeaders = (await resolveMaybe(options.headers)) ?? {};
 
     const body: ChatCompletionRequestBody = {
-      model: request.model?.model ?? configuredModel,
+      model: configuredModel,
       messages: toChatCompletionMessages(request.messages),
       stream: true,
       ...(temperature === undefined ? {} : { temperature })
     };
-
-    if (enableTools && request.tools.length > 0) {
-      body.tools = request.tools.map(toOpenAiToolDefinition);
-    }
 
     const response = await fetch(chatCompletionsUrl(baseUrl), {
       method: 'POST',
@@ -104,7 +91,7 @@ export async function startOpenAiCompatibleLlm(
 
     if (!response.ok) {
       const message = await readErrorMessage(response);
-      emitLlmError(emit, request.id, `LLM request failed (${response.status}): ${message}`);
+      emitLlmError(emit, request.id, `LLM 请求失败 (${response.status}): ${message}`);
       return;
     }
 
@@ -128,33 +115,21 @@ function toChatCompletionMessages(messages: PromptMessage[]): ChatCompletionMess
     if (message.role === 'system' || message.role === 'user' || message.role === 'assistant') {
       out.push({ role: message.role, content: message.content });
     } else {
-      // 基础链路暂不传 OpenAI tool role（需要 tool_call_id）。先把工具结果作为普通上下文保留。
-      out.push({ role: 'user', content: `Tool result:\n${message.content}` });
+      out.push({ role: 'user', content: `工具结果：\n${message.content}` });
     }
   }
 
   if (out.length === 0) {
-    out.push({ role: 'user', content: 'Hello' });
+    out.push({ role: 'user', content: '你好' });
   }
 
   return out;
 }
 
-function toOpenAiToolDefinition(tool: ToolSchema): OpenAiToolDefinition {
-  return {
-    type: 'function',
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters
-    }
-  };
-}
-
 async function emitStreamingResponse(requestId: string, response: Response, emit: Emit): Promise<void> {
   const reader = response.body?.getReader();
   if (!reader) {
-    emitLlmError(emit, requestId, 'LLM response body is empty.');
+    emitLlmError(emit, requestId, 'LLM 响应体为空。');
     return;
   }
 
@@ -263,7 +238,6 @@ class StreamingDeltaEmitter {
     if (!text) return;
     this.pendingText += text;
     if (!this.timer) {
-      // 先立刻发出一个小块，避免短回复在 [DONE] 前都留在缓冲区里，看起来像“一次性显示”。
       this.flushOnce();
       this.ensureTimer();
     }

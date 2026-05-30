@@ -1,5 +1,9 @@
+import type { LlmProviderKind } from '../../../../shared/protocol';
+
+export type { LlmProviderKind };
+
 export interface LlmModelSettings {
-  provider: 'fake' | 'openai-compatible' | 'anthropic';
+  provider: LlmProviderKind;
   model: string;
   temperature?: number;
 }

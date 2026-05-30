@@ -20,48 +20,11 @@
         "category": "LimCode"
       },
       {
-        "command": "limcode.configureApiKey",
-        "title": "LimCode: Configure OpenAI Compatible API Key",
-        "category": "LimCode"
-      },
-      {
         "command": "limcode.revealGlobalStorage",
         "title": "LimCode: Reveal Global Storage Folder",
         "category": "LimCode"
       }
     ],
-    "configuration": {
-      "title": "LimCode",
-      "properties": {
-        "limcode.openAiCompatible.baseUrl": {
-          "type": "string",
-          "default": "https://api.deepseek.com/v1",
-          "description": "OpenAI-compatible API base URL. The extension appends /chat/completions when needed."
-        },
-        "limcode.openAiCompatible.model": {
-          "type": "string",
-          "default": "deepseek-v4-flash",
-          "description": "Default OpenAI-compatible model used by LimCode."
-        },
-        "limcode.openAiCompatible.temperature": {
-          "type": "number",
-          "default": 0.2,
-          "minimum": 0,
-          "maximum": 2,
-          "description": "Default sampling temperature."
-        },
-        "limcode.openAiCompatible.enableTools": {
-          "type": "boolean",
-          "default": false,
-          "description": "Whether to send registered tool schemas to the OpenAI-compatible provider. Disabled for the initial basic chat flow."
-        },
-        "limcode.openAiCompatible.apiKey": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Optional API key fallback. Prefer the command `LimCode: Configure OpenAI Compatible API Key` or environment variables `LIMCODE_OPENAI_API_KEY` / `DEEPSEEK_API_KEY` so secrets are not stored in settings files."
-        }
-      }
-    },
     "viewsContainers": {
       "activitybar": [
         {

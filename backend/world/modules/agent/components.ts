@@ -1,5 +1,6 @@
 import { defineComponent, Entity } from '../../../ecs/types';
 import type { AgentConversationRole } from '../../../../shared/protocol';
+import type { LlmProviderKind } from '../llm/contracts';
 
 export interface AgentData {
   id: string;
@@ -22,7 +23,7 @@ export const ParentAgent = defineComponent<{ parent: Entity }>('ParentAgent');
 export const AgentStatus = defineComponent<{ status: 'idle' | 'thinking' | 'running' | 'done' | 'error' }>('AgentStatus');
 
 export interface ModelProfileData {
-  provider: 'fake' | 'openai-compatible' | 'anthropic';
+  provider: LlmProviderKind;
   model: string;
   temperature?: number;
 }

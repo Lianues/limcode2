@@ -1,7 +1,7 @@
 import type * as vscode from 'vscode';
 import type { LlmStartRequest } from '../world/modules/llm/contracts';
 import type { WorldEvent } from '../ecs/types';
-import type { ClientState } from '../../shared/protocol';
+import type { ClientState, LlmSettingsRecord } from '../../shared/protocol';
 
 export type Emit = (event: WorldEvent) => void;
 
@@ -41,6 +41,12 @@ export interface RuntimePaths {
   linksRootPath: string;
   linksIndexUri: vscode.Uri;
   linksIndexPath: string;
+  /** 通用设置根目录：<globalStorage>/settings */
+  settingsRootUri: vscode.Uri;
+  settingsRootPath: string;
+  /** LLM API 明文设置文件：<globalStorage>/settings/llm-api.json */
+  llmSettingsUri: vscode.Uri;
+  llmSettingsPath: string;
 }
 
 /** VS Code 存储能力：通过 workspace.fs 读写插件全局数据。 */
@@ -49,4 +55,6 @@ export interface StorageCapability {
   ensureReady(): Promise<void>;
   loadClientState(): Promise<ClientState | undefined>;
   saveClientState(state: ClientState): Promise<void>;
+  loadLlmSettings(): Promise<LlmSettingsRecord>;
+  saveLlmSettings(settings: LlmSettingsRecord): Promise<LlmSettingsRecord>;
 }

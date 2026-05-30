@@ -7,7 +7,9 @@ import type {
   SessionRecord,
   ToolCallRecord
 } from '../../shared/protocol';
+import type { LlmProviderKind, LlmSettingsRecord } from '../../shared/protocol';
 import type { RuntimePaths, StorageCapability } from './types';
+import { DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL } from './llmProvider';
 
 const STORAGE_VERSION = 1;
 const INDEX_FILE = 'index.json';
@@ -15,6 +17,8 @@ const RECORDS_DIR = 'records';
 const AGENTS_ROOT_DIR = 'agents';
 const CONVERSATIONS_ROOT_DIR = 'conversations';
 const LINKS_ROOT_DIR = 'agent-conversation-links';
+const SETTINGS_ROOT_DIR = 'settings';
+const LLM_SETTINGS_FILE = 'llm-api.json';
 const CONVERSATION_META_FILE = 'conversation.json';
 const MESSAGES_DIR = 'messages';
 const CHUNKS_DIR = 'chunks';
@@ -107,6 +111,11 @@ interface LinkRecordFile {
   link: AgentConversationLinkRecord;
 }
 
+interface LlmSettingsFile extends LlmSettingsRecord {
+  schemaVersion: typeof STORAGE_VERSION;
+  savedAt: string;
+}
+
 export function createVsCodeStorageCapability(context: vscode.ExtensionContext): StorageCapability {
   const agentsRootUri = vscode.Uri.joinPath(context.globalStorageUri, AGENTS_ROOT_DIR);
   const agentsIndexUri = vscode.Uri.joinPath(agentsRootUri, INDEX_FILE);
@@ -114,6 +123,8 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
   const conversationsIndexUri = vscode.Uri.joinPath(conversationsRootUri, INDEX_FILE);
   const linksRootUri = vscode.Uri.joinPath(context.globalStorageUri, LINKS_ROOT_DIR);
   const linksIndexUri = vscode.Uri.joinPath(linksRootUri, INDEX_FILE);
+  const settingsRootUri = vscode.Uri.joinPath(context.globalStorageUri, SETTINGS_ROOT_DIR);
+  const llmSettingsUri = vscode.Uri.joinPath(settingsRootUri, LLM_SETTINGS_FILE);
 
   const paths: RuntimePaths = {
     globalStorageUri: context.globalStorageUri,
@@ -129,13 +140,18 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     linksRootUri,
     linksRootPath: linksRootUri.fsPath,
     linksIndexUri,
-    linksIndexPath: linksIndexUri.fsPath
+    linksIndexPath: linksIndexUri.fsPath,
+    settingsRootUri,
+    settingsRootPath: settingsRootUri.fsPath,
+    llmSettingsUri,
+    llmSettingsPath: llmSettingsUri.fsPath
   };
 
   return {
     paths,
     async ensureReady() {
-      await ensureStorageRoots(agentsRootUri, conversationsRootUri, linksRootUri);
+      await ensureStorageRoots(agentsRootUri, conversationsRootUri, linksRootUri, settingsRootUri);
+      await ensureLlmSettingsFile(llmSettingsUri);
     },
     async loadClientState() {
       await ensureStorageRoots(agentsRootUri, conversationsRootUri, linksRootUri);
@@ -163,6 +179,16 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
         saveConversations(conversationsRootUri, conversationsIndexUri, state.sessions, state.messages, state.toolCalls),
         saveLinks(linksRootUri, linksIndexUri, state.agentConversationLinks)
       ]);
+    },
+    async loadLlmSettings() {
+      await vscode.workspace.fs.createDirectory(settingsRootUri);
+      return loadLlmSettingsFile(llmSettingsUri);
+    },
+    async saveLlmSettings(settings) {
+      await vscode.workspace.fs.createDirectory(settingsRootUri);
+      const normalized = normalizeLlmSettings(settings);
+      await writeLlmSettingsFile(llmSettingsUri, normalized);
+      return normalized;
     }
   };
 }
@@ -367,6 +393,74 @@ async function saveLinks(root: vscode.Uri, indexUri: vscode.Uri, links: AgentCon
     savedAt,
     records
   } satisfies LinksIndexFile);
+}
+
+
+async function ensureLlmSettingsFile(uri: vscode.Uri): Promise<void> {
+  const settings = await readJson<LlmSettingsFile>(uri);
+  if (settings?.schemaVersion === STORAGE_VERSION) return;
+  await writeLlmSettingsFile(uri, createDefaultLlmSettings());
+}
+
+async function loadLlmSettingsFile(uri: vscode.Uri): Promise<LlmSettingsRecord> {
+  const file = await readJson<LlmSettingsFile>(uri);
+  if (!file || file.schemaVersion !== STORAGE_VERSION) {
+    const defaults = createDefaultLlmSettings();
+    await writeLlmSettingsFile(uri, defaults);
+    return defaults;
+  }
+
+  const settings = normalizeLlmSettings(file);
+  if (!sameLlmSettings(settings, file)) {
+    await writeLlmSettingsFile(uri, settings);
+  }
+  return settings;
+}
+
+async function writeLlmSettingsFile(uri: vscode.Uri, settings: LlmSettingsRecord): Promise<void> {
+  await writeJson(uri, {
+    schemaVersion: STORAGE_VERSION,
+    savedAt: new Date().toISOString(),
+    ...settings
+  } satisfies LlmSettingsFile);
+}
+
+function createDefaultLlmSettings(): LlmSettingsRecord {
+  return {
+    provider: 'deepseek',
+    baseUrl: DEFAULT_LLM_BASE_URL,
+    model: DEFAULT_LLM_MODEL,
+    apiKey: '',
+    temperature: 0.2
+  };
+}
+
+function normalizeLlmSettings(input: Partial<LlmSettingsRecord> | undefined): LlmSettingsRecord {
+  const defaults = createDefaultLlmSettings();
+  const temperature = Number(input?.temperature ?? defaults.temperature);
+  return {
+    provider: isKnownProvider(input?.provider) ? input.provider : defaults.provider,
+    baseUrl: stringOrDefault(input?.baseUrl, defaults.baseUrl),
+    model: stringOrDefault(input?.model, defaults.model),
+    apiKey: typeof input?.apiKey === 'string' ? input.apiKey.trim() : defaults.apiKey,
+    temperature: Number.isFinite(temperature) ? temperature : defaults.temperature
+  };
+}
+
+function sameLlmSettings(a: LlmSettingsRecord, b: Partial<LlmSettingsRecord>): boolean {
+  return a.provider === b.provider &&
+    a.baseUrl === b.baseUrl &&
+    a.model === b.model &&
+    a.apiKey === b.apiKey &&
+    a.temperature === b.temperature;
+}
+
+function isKnownProvider(provider: unknown): provider is LlmProviderKind {
+  return provider === 'deepseek' || provider === 'openai-compatible' || provider === 'openai-responses' || provider === 'claude' || provider === 'gemini';
+}
+
+function stringOrDefault(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
 
 function sortableName(id: string, label = id): string {

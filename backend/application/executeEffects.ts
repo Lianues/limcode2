@@ -1,6 +1,6 @@
 import type { EffectOutbox, WorldEffect } from '../world/effects';
 import type { RuntimeEnv, Emit } from './RuntimeEnv';
-import type { EffectHandlerRegistry } from './bindings';
+import type { EffectHandlerRegistry } from './effectHandlers';
 
 export function flushEffects(outbox: EffectOutbox, env: RuntimeEnv, emit: Emit, handlers: EffectHandlerRegistry): void {
   for (const effect of outbox.drain()) {

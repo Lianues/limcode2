@@ -53,7 +53,7 @@ function contentRoleForMessage(role: MsgRole): ContentRole { return role; }
 
 export function spawnToolResultMessage(
   cmd: CommandSink,
-  input: { session: Entity; toolName: string; ok: boolean; output: string }
+  input: { session: Entity; toolName: string; status: 'success' | 'warning' | 'error'; response: unknown }
 ): Entity {
   return spawnMessage(cmd, {
     parent: input.session,
@@ -62,15 +62,15 @@ export function spawnToolResultMessage(
       type: 'functionResponse',
       id: input.toolName,
       name: input.toolName,
-      response: { ok: input.ok, output: input.output }
+      response: input.response
     }],
-    status: input.ok ? 'complete' : 'error'
+    status: input.status === 'error' ? 'error' : 'complete'
   });
 }
 
 export function spawnToolResponseMessage(
   cmd: CommandSink,
-  input: { session: Entity; toolCallId: string; toolName: string; ok: boolean; output: string }
+  input: { session: Entity; toolCallId: string; toolName: string; status: 'success' | 'warning' | 'error'; response: unknown }
 ): Entity {
   return spawnMessage(cmd, {
     parent: input.session,
@@ -79,9 +79,9 @@ export function spawnToolResponseMessage(
       type: 'functionResponse',
       id: input.toolCallId,
       name: input.toolName,
-      response: { ok: input.ok, output: input.output }
+      response: input.response
     }],
-    status: input.ok ? 'complete' : 'error'
+    status: input.status === 'error' ? 'error' : 'complete'
   });
 }
 

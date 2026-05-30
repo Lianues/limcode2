@@ -9,6 +9,7 @@ export const SETTINGS_ROOT_DIR = 'settings';
 
 export const CONVERSATION_META_FILE = 'conversation.json';
 export const MESSAGES_DIR = 'messages';
+export const TOOL_CALLS_DIR = 'tool-calls';
 export const CHUNKS_DIR = 'chunks';
 export const MESSAGES_PER_CHUNK = 100;
 export const CONVERSATION_SETTINGS_DIR = 'settings';

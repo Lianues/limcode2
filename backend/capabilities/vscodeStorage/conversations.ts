@@ -15,10 +15,11 @@ import {
   INDEX_FILE,
   MESSAGES_DIR,
   MESSAGES_PER_CHUNK,
+  TOOL_CALLS_DIR,
   STORAGE_VERSION
 } from './constants';
 import { readJson, writeJson } from './json';
-import { sortableName } from './naming';
+import { sortableNameWithReadableSuffix } from './naming';
 
 interface ConversationsIndexFile {
   schemaVersion: typeof STORAGE_VERSION;
@@ -32,7 +33,7 @@ interface ConversationIndexRecord extends SessionRecord {
   messagesIndexFile: string;
   messageCount: number;
   chunkCount: number;
-  latestSeq: number;
+  latestMessageId?: string;
   updatedAt: string;
 }
 
@@ -60,17 +61,49 @@ interface MessageIndexFile {
 interface MessageChunkRef {
   id: string;
   file: string;
-  startSeq: number;
-  endSeq: number;
+  startMessageId?: string;
+  endMessageId?: string;
   count: number;
 }
+
+type StoredMessageRecord = {
+  id: string;
+  role: MessageRecord['content']['role'];
+  parts: MessageRecord['content']['parts'];
+  status: MessageRecord['status'];
+};
 
 interface MessageChunkFile {
   schemaVersion: typeof STORAGE_VERSION;
   savedAt: string;
   sessionId: string;
   chunkId: string;
-  messages: MessageRecord[];
+  messages: StoredMessageRecord[];
+}
+
+interface ToolCallsIndexFile {
+  schemaVersion: typeof STORAGE_VERSION;
+  savedAt: string;
+  sessionId: string;
+  toolCallCount: number;
+  chunks: ToolCallChunkRef[];
+}
+
+interface ToolCallChunkRef {
+  id: string;
+  file: string;
+  messageChunkId: string;
+  startMessageId?: string;
+  endMessageId?: string;
+  count: number;
+}
+
+interface ToolCallChunkFile {
+  schemaVersion: typeof STORAGE_VERSION;
+  savedAt: string;
+  sessionId: string;
+  chunkId: string;
+  messageChunkId: string;
   toolCalls: ToolCallRecord[];
 }
 
@@ -87,6 +120,7 @@ export async function loadConversations(root: vscode.Uri, indexUri: vscode.Uri):
   const sessions: SessionRecord[] = [];
   const messages: MessageRecord[] = [];
   const toolCalls: ToolCallRecord[] = [];
+  let nextSeq = 1;
 
   for (const record of index.conversations) {
     const conversationDir = vscode.Uri.joinPath(root, record.folder);
@@ -101,8 +135,17 @@ export async function loadConversations(root: vscode.Uri, indexUri: vscode.Uri):
     for (const chunkRef of messageIndex.chunks) {
       const chunk = await readJson<MessageChunkFile>(vscode.Uri.joinPath(conversationDir, MESSAGES_DIR, ...chunkRef.file.split('/')));
       if (!chunk || chunk.schemaVersion !== STORAGE_VERSION) continue;
-      messages.push(...chunk.messages);
-      toolCalls.push(...chunk.toolCalls);
+      for (const message of chunk.messages) {
+        messages.push(toRuntimeMessage(messageIndex.sessionId, message, nextSeq++));
+      }
+    }
+
+    const toolCallsIndex = await readJson<ToolCallsIndexFile>(vscode.Uri.joinPath(conversationDir, TOOL_CALLS_DIR, INDEX_FILE));
+    if (toolCallsIndex?.schemaVersion === STORAGE_VERSION) {
+      for (const chunkRef of toolCallsIndex.chunks) {
+        const chunk = await readJson<ToolCallChunkFile>(vscode.Uri.joinPath(conversationDir, TOOL_CALLS_DIR, ...chunkRef.file.split('/')));
+        if (chunk?.schemaVersion === STORAGE_VERSION) toolCalls.push(...chunk.toolCalls);
+      }
     }
   }
 
@@ -122,17 +165,21 @@ export async function saveConversations(
   const previousById = new Map(previousIndex?.conversations.map((record) => [record.id, record]));
 
   for (const session of sessions) {
-    const folder = previousById.get(session.id)?.folder ?? sortableName(session.id, session.title);
+    const folder = previousById.get(session.id)?.folder ?? sortableNameWithReadableSuffix(session.id, session.title);
     const conversationDir = vscode.Uri.joinPath(root, folder);
     const messagesDir = vscode.Uri.joinPath(conversationDir, MESSAGES_DIR);
-    const chunksDir = vscode.Uri.joinPath(messagesDir, CHUNKS_DIR);
+    const messageChunksDir = vscode.Uri.joinPath(messagesDir, CHUNKS_DIR);
+    const toolCallsDir = vscode.Uri.joinPath(conversationDir, TOOL_CALLS_DIR);
+    const toolCallChunksDir = vscode.Uri.joinPath(toolCallsDir, CHUNKS_DIR);
     const settingsDir = vscode.Uri.joinPath(conversationDir, CONVERSATION_SETTINGS_DIR);
-    await vscode.workspace.fs.createDirectory(chunksDir);
+    await vscode.workspace.fs.createDirectory(messageChunksDir);
+    await vscode.workspace.fs.createDirectory(toolCallChunksDir);
     await vscode.workspace.fs.createDirectory(settingsDir);
 
     const sessionMessages = sortMessages(messages.filter((message) => message.sessionId === session.id));
     const sessionToolCalls = toolCallsByMessageId(toolCalls, new Set(sessionMessages.map((message) => message.id)));
     const chunkRefs: MessageChunkRef[] = [];
+    const toolCallChunkRefs: ToolCallChunkRef[] = [];
 
     for (let offset = 0; offset < sessionMessages.length; offset += MESSAGES_PER_CHUNK) {
       const chunkMessages = sessionMessages.slice(offset, offset + MESSAGES_PER_CHUNK);
@@ -148,15 +195,34 @@ export async function saveConversations(
         savedAt,
         sessionId: session.id,
         chunkId,
-        messages: chunkMessages,
-        toolCalls: chunkToolCalls
+        messages: chunkMessages.map(toStoredMessage)
       } satisfies MessageChunkFile);
+
+      if (chunkToolCalls.length > 0) {
+        await writeJson(vscode.Uri.joinPath(toolCallsDir, ...chunkFile.split('/')), {
+          schemaVersion: STORAGE_VERSION,
+          savedAt,
+          sessionId: session.id,
+          chunkId,
+          messageChunkId: chunkId,
+          toolCalls: chunkToolCalls
+        } satisfies ToolCallChunkFile);
+
+        toolCallChunkRefs.push({
+          id: chunkId,
+          file: chunkFile,
+          messageChunkId: chunkId,
+          startMessageId: first?.id,
+          endMessageId: last?.id,
+          count: chunkToolCalls.length
+        });
+      }
 
       chunkRefs.push({
         id: chunkId,
         file: chunkFile,
-        startSeq: first?.seq ?? 0,
-        endSeq: last?.seq ?? 0,
+        startMessageId: first?.id,
+        endMessageId: last?.id,
         count: chunkMessages.length
       });
     }
@@ -181,6 +247,13 @@ export async function saveConversations(
       messageCount: sessionMessages.length,
       chunks: chunkRefs
     } satisfies MessageIndexFile);
+    await writeJson(vscode.Uri.joinPath(toolCallsDir, INDEX_FILE), {
+      schemaVersion: STORAGE_VERSION,
+      savedAt,
+      sessionId: session.id,
+      toolCallCount: sessionToolCalls.length,
+      chunks: toolCallChunkRefs
+    } satisfies ToolCallsIndexFile);
 
     conversations.push({
       id: session.id,
@@ -190,7 +263,7 @@ export async function saveConversations(
       messagesIndexFile,
       messageCount: sessionMessages.length,
       chunkCount: chunkRefs.length,
-      latestSeq: sessionMessages[sessionMessages.length - 1]?.seq ?? 0,
+      latestMessageId: sessionMessages[sessionMessages.length - 1]?.id,
       updatedAt: savedAt
     });
   }
@@ -227,7 +300,7 @@ export async function saveConversationSettings(
   const savedAt = new Date().toISOString();
   const index = await readJson<ConversationsIndexFile>(indexUri);
   const record = index?.conversations.find((candidate) => candidate.id === settings.sessionId);
-  const folder = record?.folder ?? sortableName(settings.sessionId, settings.name);
+  const folder = record?.folder ?? sortableNameWithReadableSuffix(settings.sessionId, settings.name);
   const conversationDir = vscode.Uri.joinPath(root, folder);
   const settingsDir = vscode.Uri.joinPath(conversationDir, CONVERSATION_SETTINGS_DIR);
   await vscode.workspace.fs.createDirectory(settingsDir);
@@ -266,6 +339,29 @@ function normalizeConversationSettings(section: ConversationSettingsSection, inp
 function conversationSettingsFileName(section: ConversationSettingsSection): string {
   void section;
   return CONVERSATION_SETTINGS_FILE;
+}
+
+function toStoredMessage(message: MessageRecord): StoredMessageRecord {
+  return {
+    id: message.id,
+    role: message.content.role,
+    parts: message.content.parts,
+    status: message.status
+  };
+}
+
+function toRuntimeMessage(sessionId: string, message: StoredMessageRecord, seq: number): MessageRecord {
+  return {
+    id: message.id,
+    sessionId,
+    role: message.role,
+    content: {
+      role: message.role,
+      parts: message.parts
+    },
+    status: message.status,
+    seq
+  };
 }
 
 function sortMessages(messages: MessageRecord[]): MessageRecord[] {

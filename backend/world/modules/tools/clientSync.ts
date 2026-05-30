@@ -3,11 +3,11 @@ import type { WorldReader } from '../../../ecs/types';
 import { diffUpsertRemove } from '../../clientSync/diff';
 import { defineClientStateContributor, type ClientStateSlice } from '../../clientSync/contributors';
 import { Message, PartOf } from '../chat/components';
-import { PendingTool, RunningTool, ToolCall, ToolCompleted, ToolFailed, ToolResult } from './components';
+import { ToolCall, ToolResultConsumed, ToolState } from './components';
 
 export function projectToolsClientState(world: WorldReader): ClientStateSlice {
   const toolCalls = world
-    .query(ToolCall, PartOf)
+    .query(ToolCall, ToolState, PartOf)
     .map((entity) => buildToolCallRecord(world, entity))
     .filter((item): item is ToolCallRecord => item !== undefined);
   return { toolCalls };
@@ -24,7 +24,7 @@ export function diffToolsClientState(prev: ClientState, next: ClientState): Clie
 
 export const toolsClientSyncContributor = defineClientStateContributor({
   key: 'tools',
-  reads: { components: [Message, PartOf, PendingTool, RunningTool, ToolCall, ToolCompleted, ToolFailed, ToolResult] },
+  reads: { components: [Message, PartOf, ToolCall, ToolState, ToolResultConsumed] },
   project: projectToolsClientState,
   diff: diffToolsClientState,
   worker: {
@@ -36,28 +36,24 @@ export const toolsClientSyncContributor = defineClientStateContributor({
 
 function buildToolCallRecord(world: WorldReader, entity: number): ToolCallRecord | undefined {
   const call = world.get(entity, ToolCall);
+  const state = world.get(entity, ToolState);
   const messageEntity = world.get(entity, PartOf)?.parent;
-  if (!call || messageEntity === undefined) return undefined;
+  if (!call || !state || messageEntity === undefined) return undefined;
 
   const message = world.get(messageEntity, Message);
   if (!message) return undefined;
 
-  const result = world.get(entity, ToolResult);
   return {
     id: call.id,
     messageId: message.id,
     name: call.name,
     functionCallId: call.functionCallId,
     args: call.argsJson,
-    status: world.has(entity, PendingTool)
-      ? 'pending'
-      : world.has(entity, RunningTool)
-        ? 'running'
-        : world.has(entity, ToolFailed)
-          ? 'failed'
-          : world.has(entity, ToolCompleted)
-            ? 'done'
-            : 'pending',
-    ...(result ? { result: result.output } : {})
+    status: state.status,
+    ...(state.result !== undefined ? { result: state.result } : {}),
+    ...(state.error !== undefined ? { error: state.error } : {}),
+    ...(state.progress !== undefined ? { progress: state.progress } : {}),
+    createdAt: call.createdAt,
+    updatedAt: state.updatedAt
   };
 }

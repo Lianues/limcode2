@@ -7,7 +7,8 @@ import {
   type LlmProviderKind,
   type LlmSettingsRecord,
   type MessageRecord,
-  type MsgRole
+  type MsgRole,
+  type ToolCallRecord
 } from '@shared/protocol';
 import { bridge, BridgeMessageType } from '../bridge/vscodeBridge';
 import { applyClientPatch, applyClientSnapshot, clientState } from '../stores/clientStateStore';
@@ -54,7 +55,9 @@ const currentSession = computed(() =>
 );
 
 const sessionMessages = computed(() =>
-  clientState.messages.filter((message) => message.sessionId === clientState.currentSessionId).sort((a, b) => a.seq - b.seq)
+  clientState.messages
+    .filter((message) => message.sessionId === clientState.currentSessionId && message.role !== 'tool')
+    .sort((a, b) => a.seq - b.seq)
 );
 
 const activeAgentLink = computed(() =>
@@ -88,6 +91,32 @@ function stringifyPartPayload(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function toolStatusLabel(status: ToolCallRecord['status']): string {
+  const labels: Record<ToolCallRecord['status'], string> = {
+    streaming: '生成参数',
+    queued: '已排队',
+    awaiting_approval: '等待批准',
+    executing: '执行中',
+    awaiting_apply: '等待应用',
+    success: '成功',
+    warning: '警告',
+    error: '失败'
+  };
+  return labels[status];
+}
+
+function hasToolDetails(tool: ToolCallRecord): boolean {
+  return tool.result !== undefined || !!tool.error || tool.progress !== undefined;
+}
+
+function toolDetailText(tool: ToolCallRecord): string {
+  const lines: string[] = [];
+  if (tool.progress !== undefined) lines.push(`progress: ${stringifyPartPayload(tool.progress)}`);
+  if (tool.result !== undefined) lines.push(`result: ${stringifyPartPayload(tool.result)}`);
+  if (tool.error) lines.push(`error: ${tool.error}`);
+  return lines.join('\n');
 }
 
 function send(): void {
@@ -399,8 +428,12 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
           <div v-if="toolCallsForMessage(m.id).length" class="tools">
             <div v-for="t in toolCallsForMessage(m.id)" :key="t.id" class="tool" :class="t.status">
               <span class="tool-name">⚙ {{ t.name }}</span>
-              <span class="tool-status">{{ t.status }}</span>
+              <span class="tool-status">{{ toolStatusLabel(t.status) }}</span>
               <code class="tool-args">{{ t.args }}</code>
+              <details v-if="hasToolDetails(t)" class="tool-details">
+                <summary>详情</summary>
+                <pre>{{ toolDetailText(t) }}</pre>
+              </details>
             </div>
           </div>
         </div>
@@ -452,11 +485,20 @@ code { background: var(--vscode-textCodeBlock-background); padding: 1px 5px; bor
 .cursor { animation: blink 1s steps(2, start) infinite; }
 @keyframes blink { to { opacity: 0; } }
 .tools { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
-.tool { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--vscode-panel-border); }
+.tool { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--vscode-panel-border); }
 .tool .tool-status { text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px; }
-.tool.running { border-color: var(--vscode-progressBar-background); }
-.tool.failed { border-color: var(--vscode-errorForeground); }
+.tool.streaming,
+.tool.queued,
+.tool.executing,
+.tool.awaiting_approval,
+.tool.awaiting_apply { border-color: var(--vscode-progressBar-background); }
+.tool.success { border-color: var(--vscode-testing-iconPassed, #3fb950); }
+.tool.warning { border-color: var(--vscode-editorWarning-foreground, #d29922); }
+.tool.error { border-color: var(--vscode-errorForeground); }
 .tool-args { color: var(--vscode-descriptionForeground); }
+.tool-details { flex-basis: 100%; color: var(--vscode-descriptionForeground); }
+.tool-details summary { cursor: pointer; }
+.tool-details pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; }
 .empty { color: var(--vscode-descriptionForeground); text-align: center; margin-top: 40px; }
 .composer { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--vscode-panel-border); }
 .composer textarea { flex: 1; resize: none; border-radius: 6px; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); background: var(--vscode-input-background); color: var(--vscode-input-foreground); font: inherit; padding: 8px; }

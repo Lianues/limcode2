@@ -1,15 +1,19 @@
+import type { ToolCallStatus } from '../../../../shared/protocol';
+
 export const ToolEventType = {
-  Done: 'tool:done'
+  State: 'tool:state'
 } as const;
 
-export interface ToolDonePayload {
+export interface ToolStatePayload {
   toolCallId: string;
-  ok: boolean;
-  output: string;
+  status: ToolCallStatus;
+  result?: unknown;
+  error?: string;
+  progress?: unknown;
 }
 
 declare module '@backend/world/events' {
   interface WorldEventPayloadMap {
-    'tool:done': ToolDonePayload;
+    'tool:state': ToolStatePayload;
   }
 }

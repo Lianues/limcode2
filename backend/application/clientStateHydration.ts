@@ -12,11 +12,14 @@ import {
   type ToolPolicyData
 } from '../world/modules/agent/components';
 import { Message, PartOf, Session } from '../world/modules/chat/components';
+import { ToolCall, ToolResultConsumed, ToolState } from '../world/modules/tools/components';
+import { isTerminalToolStatus } from '../world/modules/tools/state';
 import type {
   AgentConversationLinkRecord,
   AgentRecord,
   ClientState,
-  MessageRecord
+  MessageRecord,
+  ToolCallRecord
 } from '../../shared/protocol';
 import { createDefaultAgentRecord, DEFAULT_AGENT_NAME, DEFAULT_SESSION_ID } from './defaults';
 import { DEFAULT_LLM_MODEL } from '../capabilities';
@@ -67,16 +70,22 @@ export function hydrateClientState(world: World, state: ClientState): boolean {
     spawnHydratedAgentConversationLink(world, agentEntities, sessionEntities, link);
   }
 
+  const messageEntities = new Map<string, Entity>();
   for (const record of state.messages) {
     const sessionEntity = sessionEntities.get(record.sessionId);
     if (sessionEntity === undefined) continue;
-    spawnHydratedMessage(world, sessionEntity, record);
+    const entity = spawnHydratedMessage(world, sessionEntity, record);
+    messageEntities.set(record.id, entity);
+  }
+
+  for (const record of state.toolCalls) {
+    spawnHydratedToolCall(world, messageEntities, record);
   }
 
   return true;
 }
 
-function spawnHydratedMessage(world: World, session: Entity, record: MessageRecord): void {
+function spawnHydratedMessage(world: World, session: Entity, record: MessageRecord): Entity {
   const entity = world.spawn();
   world.add(entity, Message, {
     id: record.id,
@@ -87,6 +96,37 @@ function spawnHydratedMessage(world: World, session: Entity, record: MessageReco
     createdAt: Date.now()
   });
   world.add(entity, PartOf, { parent: session });
+  return entity;
+}
+
+function spawnHydratedToolCall(world: World, messages: Map<string, Entity>, record: ToolCallRecord): void {
+  const modelMessage = messages.get(record.messageId);
+  if (modelMessage === undefined) return;
+
+  const entity = world.spawn();
+  const now = Date.now();
+  const interrupted = !isTerminalToolStatus(record.status);
+  const status = interrupted ? 'error' : record.status;
+  const error = interrupted
+    ? record.error ?? '工具执行因扩展重启中断。'
+    : record.error;
+
+  world.add(entity, ToolCall, {
+    id: record.id,
+    name: record.name,
+    functionCallId: record.functionCallId,
+    argsJson: record.args,
+    createdAt: record.createdAt
+  });
+  world.add(entity, PartOf, { parent: modelMessage });
+  world.add(entity, ToolState, {
+    status,
+    updatedAt: record.updatedAt || now,
+    ...(record.result !== undefined ? { result: record.result } : {}),
+    ...(error !== undefined ? { error } : {}),
+    ...(record.progress !== undefined ? { progress: record.progress } : {})
+  });
+  world.add(entity, ToolResultConsumed, true);
 }
 
 function spawnHydratedAgentConversationLink(

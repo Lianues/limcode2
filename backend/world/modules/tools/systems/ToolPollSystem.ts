@@ -1,16 +1,17 @@
 import { defineQuery, defineSystem } from '../../../../ecs/types';
 import { readEvents } from '../../../events';
 import { InFlight } from '../../chat/components';
+import { ToolCall, ToolState } from '../components';
 import { ToolEventType } from '../events';
-import { RunningTool, ToolCall, ToolCompleted, ToolFailed, ToolResult } from '../components';
+import { isTerminalToolStatus, transitionToolState } from '../state';
 
 const ToolCallsByIdQuery = defineQuery({
   name: 'ToolCallsById',
-  all: [ToolCall],
-  read: [ToolCall],
-  add: [ToolResult, ToolCompleted, ToolFailed],
-  remove: [RunningTool, InFlight],
-  mutationMode: 'consume',
+  all: [ToolCall, ToolState],
+  read: [ToolCall, ToolState],
+  write: [ToolState],
+  remove: [InFlight],
+  mutationMode: 'update',
   role: 'lookup'
 });
 
@@ -19,17 +20,30 @@ export const ToolPollSystem = defineSystem({
   worker: { modulePath: '../world/modules/tools/systems/ToolPollSystem', exportName: 'ToolPollSystem' },
   access: {
     queries: [ToolCallsByIdQuery],
-    events: { read: [ToolEventType.Done] }
+    events: { read: [ToolEventType.State] }
   },
   run(ctx) {
     const { world, cmd } = ctx;
-    for (const payload of readEvents(ctx, ToolEventType.Done)) {
-      const entity = world.query(ToolCall).find((candidate) => world.get(candidate, ToolCall)?.id === payload.toolCallId);
+    for (const payload of readEvents(ctx, ToolEventType.State)) {
+      const entity = world.query(ToolCall, ToolState).find((candidate) => world.get(candidate, ToolCall)?.id === payload.toolCallId);
       if (entity === undefined) continue;
-      cmd.add(entity, ToolResult, { ok: payload.ok, output: payload.output });
-      cmd.remove(entity, RunningTool);
-      cmd.remove(entity, InFlight);
-      cmd.add(entity, payload.ok ? ToolCompleted : ToolFailed, true);
+
+      const current = world.get(entity, ToolState);
+      if (!current) continue;
+
+      try {
+        const next = transitionToolState(current, payload.status, {
+          result: payload.result,
+          error: payload.error,
+          progress: payload.progress
+        });
+        cmd.add(entity, ToolState, next);
+        if (isTerminalToolStatus(next.status)) {
+          cmd.remove(entity, InFlight);
+        }
+      } catch (error) {
+        console.warn('[LimCode] Ignored invalid tool state transition:', error);
+      }
     }
   }
 });

@@ -105,7 +105,19 @@ export interface WorkspaceInfo {
 
 export type MsgRole = 'user' | 'model' | 'tool';
 export type MsgStatus = 'streaming' | 'complete' | 'error';
-export type ToolCallStatus = 'pending' | 'running' | 'done' | 'failed';
+
+export const TOOL_CALL_STATUSES = [
+  'streaming',
+  'queued',
+  'awaiting_approval',
+  'executing',
+  'awaiting_apply',
+  'success',
+  'warning',
+  'error'
+] as const;
+export type ToolCallStatus = typeof TOOL_CALL_STATUSES[number];
+export const TERMINAL_TOOL_CALL_STATUSES: ReadonlySet<ToolCallStatus> = new Set(['success', 'warning', 'error']);
 
 export type LlmProviderKind = 'deepseek' | 'openai-compatible' | 'openai-responses' | 'claude' | 'gemini';
 
@@ -176,7 +188,11 @@ export interface ToolCallRecord {
   functionCallId?: string;
   args: string;
   status: ToolCallStatus;
-  result?: string;
+  result?: unknown;
+  error?: string;
+  progress?: unknown;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface ClientState {

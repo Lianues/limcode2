@@ -1,22 +1,22 @@
 import { defineComponent } from '../../../ecs/types';
+import type { ToolCallStatus } from '../../../../shared/protocol';
 
 export interface ToolCallData {
   id: string;
   name: string;
   functionCallId?: string;
   argsJson: string;
+  createdAt: number;
 }
 export const ToolCall = defineComponent<ToolCallData>('ToolCall');
 
-export const PendingTool = defineComponent<true>('PendingTool');
-export const RunningTool = defineComponent<true>('RunningTool');
-
-export interface ToolResultData {
-  ok: boolean;
-  output: string;
+export interface ToolStateData {
+  status: ToolCallStatus;
+  updatedAt: number;
+  result?: unknown;
+  error?: string;
+  progress?: unknown;
 }
-export const ToolResult = defineComponent<ToolResultData>('ToolResult');
+export const ToolState = defineComponent<ToolStateData>('ToolState');
 
-export const ToolCompleted = defineComponent<true>('ToolCompleted');
-export const ToolFailed = defineComponent<true>('ToolFailed');
 export const ToolResultConsumed = defineComponent<true>('ToolResultConsumed');

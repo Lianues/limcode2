@@ -1,5 +1,12 @@
 import * as vscode from 'vscode';
-import type { ConversationSettingsRecord, MessageRecord, SessionRecord, ToolCallRecord } from '../../../shared/protocol';
+import type {
+  ConversationSettingsRecord,
+  ConversationSettingsSection,
+  ConversationSettingsSectionValue,
+  MessageRecord,
+  SessionRecord,
+  ToolCallRecord
+} from '../../../shared/protocol';
 import {
   CHUNKS_DIR,
   CONVERSATION_SETTINGS_DIR,
@@ -38,7 +45,7 @@ interface ConversationMetaFile {
 interface ConversationSettingsFile {
   schemaVersion: typeof STORAGE_VERSION;
   savedAt: string;
-  settings: ConversationSettingsRecord;
+  settings: ConversationSettingsSectionValue;
 }
 
 interface MessageIndexFile {
@@ -85,7 +92,7 @@ export async function loadConversations(root: vscode.Uri, indexUri: vscode.Uri):
     const conversationDir = vscode.Uri.joinPath(root, record.folder);
     const meta = await readJson<ConversationMetaFile>(vscode.Uri.joinPath(root, ...record.metaFile.split('/')));
     if (meta?.schemaVersion !== STORAGE_VERSION) continue;
-    const settings = await readConversationSettingsFile(conversationDir, meta.session.id);
+    const settings = await readConversationSettingsFile(conversationDir, meta.session.id, 'common');
     sessions.push({ ...meta.session, ...(settings ? { title: settings.name } : {}) });
 
     const messageIndex = await readJson<MessageIndexFile>(vscode.Uri.joinPath(root, ...record.messagesIndexFile.split('/')));
@@ -164,7 +171,7 @@ export async function saveConversations(
     await writeJson(vscode.Uri.joinPath(settingsDir, CONVERSATION_SETTINGS_FILE), {
       schemaVersion: STORAGE_VERSION,
       savedAt,
-      settings: createConversationSettings(session)
+      settings: createDefaultConversationSettings('common', session)
     } satisfies ConversationSettingsFile);
     await writeJson(vscode.Uri.joinPath(root, ...messagesIndexFile.split('/')), {
       schemaVersion: STORAGE_VERSION,
@@ -198,48 +205,67 @@ export async function saveConversations(
 export async function loadConversationSettings(
   root: vscode.Uri,
   indexUri: vscode.Uri,
-  sessionId: string
-): Promise<ConversationSettingsRecord | undefined> {
+  sessionId: string,
+  section: ConversationSettingsSection
+): Promise<{ sessionId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string } | undefined> {
   const index = await readJson<ConversationsIndexFile>(indexUri);
   const record = index?.conversations.find((candidate) => candidate.id === sessionId);
   if (!record) return undefined;
-  return readConversationSettingsFile(vscode.Uri.joinPath(root, record.folder), sessionId);
+  const conversationDir = vscode.Uri.joinPath(root, record.folder);
+  const settings = await readConversationSettingsFile(conversationDir, sessionId, section)
+    ?? createDefaultConversationSettings(section, { id: sessionId, title: record.title });
+  const fileUri = vscode.Uri.joinPath(conversationDir, CONVERSATION_SETTINGS_DIR, conversationSettingsFileName(section));
+  return { sessionId, section, settings, filePath: fileUri.fsPath };
 }
 
 export async function saveConversationSettings(
   root: vscode.Uri,
   indexUri: vscode.Uri,
-  settings: ConversationSettingsRecord
-): Promise<ConversationSettingsRecord> {
+  section: ConversationSettingsSection,
+  settings: ConversationSettingsSectionValue
+): Promise<{ sessionId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }> {
   const savedAt = new Date().toISOString();
   const index = await readJson<ConversationsIndexFile>(indexUri);
   const record = index?.conversations.find((candidate) => candidate.id === settings.sessionId);
-  if (!record) return settings;
-  const folder = record.folder;
+  const folder = record?.folder ?? sortableName(settings.sessionId, settings.name);
   const conversationDir = vscode.Uri.joinPath(root, folder);
   const settingsDir = vscode.Uri.joinPath(conversationDir, CONVERSATION_SETTINGS_DIR);
   await vscode.workspace.fs.createDirectory(settingsDir);
-  await writeJson(vscode.Uri.joinPath(settingsDir, CONVERSATION_SETTINGS_FILE), {
+  const fileUri = vscode.Uri.joinPath(settingsDir, conversationSettingsFileName(section));
+  const normalized = normalizeConversationSettings(section, settings);
+  await writeJson(fileUri, {
     schemaVersion: STORAGE_VERSION,
     savedAt,
-    settings
+    settings: normalized
   } satisfies ConversationSettingsFile);
-  return settings;
+  return { sessionId: normalized.sessionId, section, settings: normalized, filePath: fileUri.fsPath };
 }
 
-async function readConversationSettingsFile(conversationDir: vscode.Uri, sessionId: string): Promise<ConversationSettingsRecord | undefined> {
+async function readConversationSettingsFile(conversationDir: vscode.Uri, sessionId: string, section: ConversationSettingsSection): Promise<ConversationSettingsRecord | undefined> {
   const file = await readJson<ConversationSettingsFile>(
-    vscode.Uri.joinPath(conversationDir, CONVERSATION_SETTINGS_DIR, CONVERSATION_SETTINGS_FILE)
+    vscode.Uri.joinPath(conversationDir, CONVERSATION_SETTINGS_DIR, conversationSettingsFileName(section))
   );
   if (!file || file.schemaVersion !== STORAGE_VERSION) return undefined;
-  return { sessionId, name: file.settings.name || sessionId };
+  return normalizeConversationSettings(section, { ...file.settings, sessionId });
 }
 
-function createConversationSettings(session: SessionRecord): ConversationSettingsRecord {
+function createDefaultConversationSettings(section: ConversationSettingsSection, session: SessionRecord): ConversationSettingsRecord {
+  void section;
   return {
     sessionId: session.id,
     name: session.title?.trim() || session.id
   };
+}
+
+function normalizeConversationSettings(section: ConversationSettingsSection, input: ConversationSettingsSectionValue): ConversationSettingsRecord {
+  void section;
+  const name = input.name.trim() || input.sessionId;
+  return { sessionId: input.sessionId, name };
+}
+
+function conversationSettingsFileName(section: ConversationSettingsSection): string {
+  void section;
+  return CONVERSATION_SETTINGS_FILE;
 }
 
 function sortMessages(messages: MessageRecord[]): MessageRecord[] {

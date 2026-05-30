@@ -7,6 +7,8 @@ import {
   createMessageId,
   type BridgeClientId,
   type ConversationSettingsRecord,
+  type ConversationSettingsSection,
+  type ConversationSettingsSectionValue,
   type ConversationSettingsUpdatePayload,
   type ExtensionToWebviewMessage
 } from '../../shared/protocol';
@@ -18,52 +20,75 @@ export interface ConversationSettingsBridgeDeps {
   requestSnapshot: (sessionId?: string) => void;
 }
 
-/** 对话级设置桥接：当前 MVP 只包含对话名称。 */
+/** 对话级设置桥接：通过 section 泛化读写，当前 common -> settings/common.json。 */
 export class ConversationSettingsBridge {
   public constructor(private readonly deps: ConversationSettingsBridgeDeps) {}
 
-  public async postSnapshot(clientId: BridgeClientId, sessionId: string, correlationId?: string): Promise<void> {
-    this.deps.webview.subscribe(clientId, conversationSettingsStreamId(sessionId));
-    this.deps.webview.post(clientId, this.createSnapshotMessage(await this.readSettings(sessionId), correlationId));
+  public async postSnapshot(
+    clientId: BridgeClientId,
+    sessionId: string,
+    section: ConversationSettingsSection,
+    correlationId?: string
+  ): Promise<void> {
+    const streamId = conversationSettingsStreamId(sessionId, section);
+    this.deps.webview.subscribe(clientId, streamId);
+    this.deps.webview.post(clientId, this.createSnapshotMessage(await this.readSettings(sessionId, section), correlationId));
   }
 
   public async update(payload: ConversationSettingsUpdatePayload | undefined, correlationId?: string): Promise<void> {
     if (!payload) return;
 
-    const settings = normalizeConversationSettings(payload.settings);
-    const entity = this.findSession(settings.sessionId);
-    if (entity !== undefined) {
-      const session = this.deps.world.get(entity, Session);
-      if (session) this.deps.world.add(entity, Session, { ...session, title: settings.name });
-    }
+    const settings = normalizeConversationSettings(payload.section, payload.settings);
+    if (payload.section === 'common') this.applyCommonSettingsToWorld(settings);
 
-    await this.deps.storage.saveConversationSettings(settings);
+    const stored = await this.deps.storage.saveConversationSettings(payload.section, settings);
     this.deps.webview.broadcastToStream(
-      conversationSettingsStreamId(settings.sessionId),
-      this.createSnapshotMessage(settings, correlationId)
+      conversationSettingsStreamId(stored.sessionId, stored.section),
+      this.createSnapshotMessage(stored, correlationId)
     );
     this.deps.requestSnapshot();
-    this.deps.requestSnapshot(settings.sessionId);
+    this.deps.requestSnapshot(stored.sessionId);
   }
 
-  private async readSettings(sessionId: string): Promise<ConversationSettingsRecord> {
+  private async readSettings(
+    sessionId: string,
+    section: ConversationSettingsSection
+  ): Promise<{ sessionId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }> {
+    const stored = await this.deps.storage.loadConversationSettings(sessionId, section);
+    if (section !== 'common') return stored ?? { sessionId, section, settings: { sessionId, name: sessionId }, filePath: '' };
+
     const entity = this.findSession(sessionId);
     const session = entity === undefined ? undefined : this.deps.world.get(entity, Session);
-    if (session) return { sessionId, name: session.title?.trim() || session.id };
-
-    const stored = await this.deps.storage.loadConversationSettings(sessionId);
-    return stored ?? { sessionId, name: sessionId };
+    const settings = session
+      ? { sessionId, name: session.title?.trim() || session.id }
+      : (stored?.settings as ConversationSettingsRecord | undefined) ?? { sessionId, name: sessionId };
+    return { sessionId, section, settings, filePath: stored?.filePath ?? '' };
   }
 
-  private createSnapshotMessage(settings: ConversationSettingsRecord, correlationId?: string): ExtensionToWebviewMessage {
+  private createSnapshotMessage(
+    stored: { sessionId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string },
+    correlationId?: string
+  ): ExtensionToWebviewMessage {
     return {
       id: createMessageId(),
       type: BridgeMessageType.ConversationSettingsSnapshot,
       channel: 'settings',
-      scope: { kind: 'settings', level: 'conversation', id: settings.sessionId },
+      scope: { kind: 'settings', level: 'conversation', id: stored.sessionId },
       correlationId,
-      payload: { settings }
+      payload: {
+        sessionId: stored.sessionId,
+        section: stored.section,
+        settings: stored.settings,
+        filePath: stored.filePath
+      }
     };
+  }
+
+  private applyCommonSettingsToWorld(settings: ConversationSettingsRecord): void {
+    const entity = this.findSession(settings.sessionId);
+    if (entity === undefined) return;
+    const session = this.deps.world.get(entity, Session);
+    if (session) this.deps.world.add(entity, Session, { ...session, title: settings.name });
   }
 
   private findSession(sessionId: string): number | undefined {
@@ -71,7 +96,8 @@ export class ConversationSettingsBridge {
   }
 }
 
-function normalizeConversationSettings(settings: ConversationSettingsRecord): ConversationSettingsRecord {
+function normalizeConversationSettings(section: ConversationSettingsSection, settings: ConversationSettingsSectionValue): ConversationSettingsRecord {
+  void section;
   const name = settings.name.trim() || settings.sessionId;
   return { sessionId: settings.sessionId, name };
 }

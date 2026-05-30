@@ -26,17 +26,20 @@ export function globalSettingsStreamId(section: GlobalSettingsSection): string {
 }
 
 export const CONVERSATION_SETTINGS_STREAM_PREFIX = 'settings:conversation:';
+export const CONVERSATION_SETTINGS_SECTIONS = ['common'] as const;
+export type ConversationSettingsSection = typeof CONVERSATION_SETTINGS_SECTIONS[number];
 export const CONVERSATION_CLIENT_STATE_STREAM_PREFIX = 'conversation:';
 export const CONVERSATION_CLIENT_STATE_STREAM_SUFFIX = ':state';
 
-export function conversationSettingsStreamId(sessionId: string): string {
-  return `${CONVERSATION_SETTINGS_STREAM_PREFIX}${sessionId}`;
+export function conversationSettingsStreamId(sessionId: string, section: ConversationSettingsSection = 'common'): string {
+  return `${CONVERSATION_SETTINGS_STREAM_PREFIX}${sessionId}:${section}`;
 }
 
 export function conversationIdFromSettingsStreamId(streamId: string): string | undefined {
-  return streamId.startsWith(CONVERSATION_SETTINGS_STREAM_PREFIX)
-    ? streamId.slice(CONVERSATION_SETTINGS_STREAM_PREFIX.length)
-    : undefined;
+  if (!streamId.startsWith(CONVERSATION_SETTINGS_STREAM_PREFIX)) return undefined;
+  const rest = streamId.slice(CONVERSATION_SETTINGS_STREAM_PREFIX.length);
+  const separator = rest.lastIndexOf(':');
+  return separator >= 0 ? rest.slice(0, separator) : rest;
 }
 
 export function conversationClientStateStreamId(sessionId: string): string {
@@ -220,14 +223,20 @@ export interface ConversationSettingsRecord {
   sessionId: string;
   name: string;
 }
+export type ConversationSettingsSectionValue = ConversationSettingsRecord;
 export interface ConversationSettingsGetPayload {
   sessionId: string;
+  section: ConversationSettingsSection;
 }
 export interface ConversationSettingsSnapshotPayload {
-  settings: ConversationSettingsRecord;
+  sessionId: string;
+  section: ConversationSettingsSection;
+  settings: ConversationSettingsSectionValue;
+  filePath: string;
 }
 export interface ConversationSettingsUpdatePayload {
-  settings: ConversationSettingsRecord;
+  section: ConversationSettingsSection;
+  settings: ConversationSettingsSectionValue;
 }
 
 export type WebviewToExtensionMessage =

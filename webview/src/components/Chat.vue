@@ -108,13 +108,14 @@ function ensureConversationSettings(sessionId: string): void {
 function requestConversationSettings(sessionId = clientState.currentSessionId): void {
   if (!sessionId) return;
   conversationSettingsStatus.value = '正在读取对话设置...';
-  bridge.request(BridgeMessageType.ConversationSettingsGet, { sessionId });
+  bridge.request(BridgeMessageType.ConversationSettingsGet, { sessionId, section: 'common' });
 }
 
 function saveConversationSettings(): void {
   if (!conversationSettings.sessionId) return;
   conversationSettingsStatus.value = '正在保存对话设置...';
   bridge.request(BridgeMessageType.ConversationSettingsUpdate, {
+    section: 'common',
     settings: {
       sessionId: conversationSettings.sessionId,
       name: conversationSettings.name
@@ -263,7 +264,9 @@ onMounted(() => {
   disposers.push(
     bridge.on(BridgeMessageType.ConversationSettingsSnapshot, (message) => {
       if (!message.payload) return;
-      applyConversationSettings(message.payload.settings);
+      if (message.payload.section === 'common') {
+        applyConversationSettings(message.payload.settings as ConversationSettingsRecord);
+      }
       conversationSettingsStatus.value = '对话设置已同步';
     })
   );

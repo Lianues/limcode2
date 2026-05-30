@@ -4,7 +4,8 @@ import type { WorldEvent } from '../ecs/types';
 import type {
   BridgeClientId,
   ClientState,
-  ConversationSettingsRecord,
+  ConversationSettingsSection,
+  ConversationSettingsSectionValue,
   ExtensionToWebviewMessage,
   GlobalSettingsSection,
   GlobalSettingsSectionValue,
@@ -74,6 +75,6 @@ export interface StorageCapability {
   saveClientState(state: ClientState): Promise<void>;
   loadGlobalSettings(section: GlobalSettingsSection): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
   saveGlobalSettings(section: GlobalSettingsSection, settings: GlobalSettingsSectionValue): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
-  loadConversationSettings(sessionId: string): Promise<ConversationSettingsRecord | undefined>;
-  saveConversationSettings(settings: ConversationSettingsRecord): Promise<ConversationSettingsRecord>;
+  loadConversationSettings(sessionId: string, section: ConversationSettingsSection): Promise<{ sessionId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string } | undefined>;
+  saveConversationSettings(section: ConversationSettingsSection, settings: ConversationSettingsSectionValue): Promise<{ sessionId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }>;
 }

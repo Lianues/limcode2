@@ -64,13 +64,13 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       await writeGlobalSettingsFile(paths.settingsRootUri, section, settings);
       return loadGlobalSettingsFile(paths.settingsRootUri, section);
     },
-    async loadConversationSettings(sessionId) {
+    async loadConversationSettings(sessionId, section) {
       await ensureStorageRoots(paths.conversationsRootUri);
-      return loadConversationSettings(paths.conversationsRootUri, paths.conversationsIndexUri, sessionId);
+      return loadConversationSettings(paths.conversationsRootUri, paths.conversationsIndexUri, sessionId, section);
     },
-    async saveConversationSettings(settings) {
+    async saveConversationSettings(section, settings) {
       await ensureStorageRoots(paths.conversationsRootUri);
-      return saveConversationSettings(paths.conversationsRootUri, paths.conversationsIndexUri, settings);
+      return saveConversationSettings(paths.conversationsRootUri, paths.conversationsIndexUri, section, settings);
     }
   };
 }

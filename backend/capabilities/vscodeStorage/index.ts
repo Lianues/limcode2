@@ -6,8 +6,10 @@ import {
   loadConversationSettings,
   loadConversations,
   appendToolCallEvent as appendStoredToolCallEvent,
+  removeMessage as removeStoredMessage,
   saveConversationSettings,
   saveConversations,
+  saveMessageSnapshot as saveStoredMessageSnapshot,
   saveToolCallSnapshot as saveStoredToolCallSnapshot
 } from './conversations';
 import { ensureGlobalSettingsFile, loadGlobalSettingsFile, writeGlobalSettingsFile } from './globalSettings';
@@ -57,6 +59,14 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
         saveConversations(paths.conversationsRootUri, paths.conversationsIndexUri, state.sessions, state.messages, state.toolCalls, state.toolCallEvents),
         saveLinks(paths.linksRootUri, paths.linksIndexUri, state.agentConversationLinks)
       ]);
+    },
+    async saveMessageSnapshot(sessionId, message) {
+      await ensureStorageRoots(paths.conversationsRootUri);
+      return saveStoredMessageSnapshot(paths.conversationsRootUri, paths.conversationsIndexUri, sessionId, message);
+    },
+    async removeMessage(sessionId, messageId) {
+      await ensureStorageRoots(paths.conversationsRootUri);
+      return removeStoredMessage(paths.conversationsRootUri, paths.conversationsIndexUri, sessionId, messageId);
     },
     async saveToolCallSnapshot(sessionId, toolCall) {
       await ensureStorageRoots(paths.conversationsRootUri);

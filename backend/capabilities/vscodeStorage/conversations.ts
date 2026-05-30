@@ -63,6 +63,14 @@ interface MessageIndexFile {
   chunkSize: number;
   messageCount: number;
   chunks: MessageChunkRef[];
+  /** 只做定位索引：message id -> chunk。实际消息内容仍读取对应 chunk 文件。 */
+  records: MessageIndexRecord[];
+}
+
+interface MessageIndexRecord {
+  id: string;
+  chunkId: string;
+  file: string;
 }
 
 interface MessageChunkRef {
@@ -209,6 +217,7 @@ export async function saveConversations(
     const toolCallIds = new Set(sessionToolCalls.map((toolCall) => toolCall.id));
     const sessionToolCallEvents = sortToolCallEvents(toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId)));
     const chunkRefs: MessageChunkRef[] = [];
+    const messageRecords: MessageIndexRecord[] = [];
 
     for (let offset = 0; offset < sessionMessages.length; offset += MESSAGES_PER_CHUNK) {
       const chunkMessages = sessionMessages.slice(offset, offset + MESSAGES_PER_CHUNK);
@@ -225,6 +234,10 @@ export async function saveConversations(
         chunkId,
         messages: chunkMessages.map(toStoredMessage)
       } satisfies MessageChunkFile);
+
+      for (const message of chunkMessages) {
+        messageRecords.push({ id: message.id, chunkId, file: chunkFile });
+      }
 
       chunkRefs.push({ id: chunkId, file: chunkFile, startMessageId: first?.id, endMessageId: last?.id, count: chunkMessages.length });
     }
@@ -247,13 +260,16 @@ export async function saveConversations(
       sessionId: session.id,
       chunkSize: MESSAGES_PER_CHUNK,
       messageCount: sessionMessages.length,
-      chunks: chunkRefs
+      chunks: chunkRefs,
+      records: messageRecords
     } satisfies MessageIndexFile);
 
     await saveToolCallsForConversation(conversationDir, session.id, sessionToolCalls, sessionToolCallEvents, savedAt);
 
     conversations.push({
       id: session.id,
+
+
       title: session.title,
       folder,
       metaFile,
@@ -267,6 +283,57 @@ export async function saveConversations(
 
   await writeJson(indexUri, { schemaVersion: STORAGE_VERSION, savedAt, conversations } satisfies ConversationsIndexFile);
 }
+
+export async function saveMessageSnapshot(
+  root: vscode.Uri,
+  indexUri: vscode.Uri,
+  sessionId: string,
+  message: MessageRecord
+): Promise<void> {
+  const { conversationDir } = await ensureConversationFolder(root, indexUri, { id: sessionId });
+  const messagesDir = vscode.Uri.joinPath(conversationDir, MESSAGES_DIR);
+  await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(messagesDir, CHUNKS_DIR));
+
+  const index = await readMessageIndex(messagesDir, sessionId);
+  const existing = index.records.find((record) => record.id === message.id);
+
+  if (existing) {
+    const chunk = await readMessageChunk(messagesDir, existing.file, sessionId, existing.chunkId);
+    const messages = upsertStoredMessage(chunk.messages, message).sort(compareStoredMessagesById(index));
+    await writeMessageChunk(messagesDir, existing.file, sessionId, existing.chunkId, messages);
+    await writeMessageIndex(messagesDir, rebuildMessageIndex(index, messagesByChunk(index, existing.chunkId, messages)));
+    return;
+  }
+
+  const target = chooseAppendMessageChunk(index);
+  const chunk = await readMessageChunk(messagesDir, target.file, sessionId, target.id);
+  const messages = [...chunk.messages, toStoredMessage(message)];
+  await writeMessageChunk(messagesDir, target.file, sessionId, target.id, messages);
+  const nextIndex = addMessageToIndex(index, target, message.id, messages);
+  await writeMessageIndex(messagesDir, nextIndex);
+}
+
+export async function removeMessage(
+  root: vscode.Uri,
+  indexUri: vscode.Uri,
+  sessionId: string,
+  messageId: string
+): Promise<void> {
+  const index = await readJson<ConversationsIndexFile>(indexUri);
+  const record = index?.conversations.find((candidate) => candidate.id === sessionId);
+  if (!record) return;
+  const conversationDir = vscode.Uri.joinPath(root, record.folder);
+  const messagesDir = vscode.Uri.joinPath(conversationDir, MESSAGES_DIR);
+  const messageIndex = await readMessageIndex(messagesDir, sessionId);
+  const locator = messageIndex.records.find((candidate) => candidate.id === messageId);
+  if (!locator) return;
+
+  const chunk = await readMessageChunk(messagesDir, locator.file, sessionId, locator.chunkId);
+  const nextMessages = chunk.messages.filter((message) => message.id !== messageId);
+  await writeMessageChunk(messagesDir, locator.file, sessionId, locator.chunkId, nextMessages);
+  await writeMessageIndex(messagesDir, removeMessageFromIndex(messageIndex, locator, nextMessages));
+}
+
 
 export async function saveToolCallSnapshot(
   root: vscode.Uri,
@@ -358,7 +425,7 @@ async function ensureConversationFolder(
   const conversationDir = vscode.Uri.joinPath(root, folder);
   await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(conversationDir, MESSAGES_DIR, CHUNKS_DIR));
   await writeJson(vscode.Uri.joinPath(root, ...record.metaFile.split('/')), { schemaVersion: STORAGE_VERSION, savedAt, session } satisfies ConversationMetaFile);
-  await writeJson(vscode.Uri.joinPath(root, ...record.messagesIndexFile.split('/')), { schemaVersion: STORAGE_VERSION, savedAt, sessionId: session.id, chunkSize: MESSAGES_PER_CHUNK, messageCount: 0, chunks: [] } satisfies MessageIndexFile);
+  await writeJson(vscode.Uri.joinPath(root, ...record.messagesIndexFile.split('/')), { schemaVersion: STORAGE_VERSION, savedAt, sessionId: session.id, chunkSize: MESSAGES_PER_CHUNK, messageCount: 0, chunks: [], records: [] } satisfies MessageIndexFile);
   await writeJson(indexUri, { schemaVersion: STORAGE_VERSION, savedAt, conversations: [...index.conversations, record] } satisfies ConversationsIndexFile);
   return { record, conversationDir };
 }
@@ -499,6 +566,98 @@ function groupEventsByToolCall(events: ToolCallEventRecord[]): Map<string, ToolC
     grouped.set(event.toolCallId, bucket);
   }
   return grouped;
+}
+
+
+async function readMessageIndex(messagesDir: vscode.Uri, sessionId: string): Promise<MessageIndexFile> {
+  const index = await readJson<MessageIndexFile>(vscode.Uri.joinPath(messagesDir, INDEX_FILE));
+  if (index?.schemaVersion === STORAGE_VERSION) return index;
+  return { schemaVersion: STORAGE_VERSION, savedAt: new Date().toISOString(), sessionId, chunkSize: MESSAGES_PER_CHUNK, messageCount: 0, chunks: [], records: [] };
+}
+
+async function writeMessageIndex(messagesDir: vscode.Uri, index: MessageIndexFile): Promise<void> {
+  await vscode.workspace.fs.createDirectory(messagesDir);
+  await writeJson(vscode.Uri.joinPath(messagesDir, INDEX_FILE), { ...index, savedAt: new Date().toISOString() } satisfies MessageIndexFile);
+}
+
+async function readMessageChunk(messagesDir: vscode.Uri, file: string, sessionId: string, chunkId: string): Promise<MessageChunkFile> {
+  const chunk = await readJson<MessageChunkFile>(vscode.Uri.joinPath(messagesDir, ...file.split('/')));
+  if (chunk?.schemaVersion === STORAGE_VERSION) return chunk;
+  return { schemaVersion: STORAGE_VERSION, savedAt: new Date().toISOString(), sessionId, chunkId, messages: [] };
+}
+
+async function writeMessageChunk(messagesDir: vscode.Uri, file: string, sessionId: string, chunkId: string, messages: StoredMessageRecord[]): Promise<void> {
+  await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(messagesDir, CHUNKS_DIR));
+  await writeJson(vscode.Uri.joinPath(messagesDir, ...file.split('/')), { schemaVersion: STORAGE_VERSION, savedAt: new Date().toISOString(), sessionId, chunkId, messages } satisfies MessageChunkFile);
+}
+
+function chooseAppendMessageChunk(index: MessageIndexFile): MessageChunkRef {
+  const last = index.chunks[index.chunks.length - 1];
+  if (last && last.count < index.chunkSize) return last;
+  const chunkId = index.chunks.length.toString().padStart(6, '0');
+  return { id: chunkId, file: `${CHUNKS_DIR}/${chunkId}.json`, count: 0 };
+}
+
+function upsertStoredMessage(messages: StoredMessageRecord[], message: MessageRecord): StoredMessageRecord[] {
+  const stored = toStoredMessage(message);
+  const index = messages.findIndex((candidate) => candidate.id === message.id);
+  if (index < 0) return [...messages, stored];
+  const copy = [...messages];
+  copy[index] = stored;
+  return copy;
+}
+
+function compareStoredMessagesById(index: MessageIndexFile): (a: StoredMessageRecord, b: StoredMessageRecord) => number {
+  const order = new Map(index.records.map((record, position) => [record.id, position]));
+  return (a, b) => (order.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.id) ?? Number.MAX_SAFE_INTEGER) || a.id.localeCompare(b.id);
+}
+
+function messagesByChunk(index: MessageIndexFile, chunkId: string, messages: StoredMessageRecord[]): Map<string, StoredMessageRecord[]> {
+  const grouped = new Map<string, StoredMessageRecord[]>();
+  for (const chunk of index.chunks) grouped.set(chunk.id, []);
+  grouped.set(chunkId, messages);
+  return grouped;
+}
+
+function rebuildMessageIndex(index: MessageIndexFile, chunkMessages: Map<string, StoredMessageRecord[]>): MessageIndexFile {
+  const chunks = index.chunks.map((chunk) => {
+    const messages = chunkMessages.get(chunk.id);
+    if (!messages) return chunk;
+    return {
+      ...chunk,
+      startMessageId: messages[0]?.id,
+      endMessageId: messages[messages.length - 1]?.id,
+      count: messages.length
+    };
+  });
+  const records = index.records.map((record) => chunkMessages.has(record.chunkId) && !chunkMessages.get(record.chunkId)!.some((message) => message.id === record.id)
+    ? undefined
+    : record
+  ).filter((record): record is MessageIndexRecord => !!record);
+  return { ...index, messageCount: records.length, chunks, records };
+}
+
+function addMessageToIndex(index: MessageIndexFile, chunk: MessageChunkRef, messageId: string, messages: StoredMessageRecord[]): MessageIndexFile {
+  const chunkRef: MessageChunkRef = {
+    ...chunk,
+    startMessageId: messages[0]?.id,
+    endMessageId: messages[messages.length - 1]?.id,
+    count: messages.length
+  };
+  const chunks = index.chunks.some((candidate) => candidate.id === chunk.id)
+    ? index.chunks.map((candidate) => candidate.id === chunk.id ? chunkRef : candidate)
+    : [...index.chunks, chunkRef];
+  const records = [...index.records.filter((record) => record.id !== messageId), { id: messageId, chunkId: chunk.id, file: chunk.file }];
+  return { ...index, chunks, records, messageCount: records.length };
+}
+
+function removeMessageFromIndex(index: MessageIndexFile, locator: MessageIndexRecord, messages: StoredMessageRecord[]): MessageIndexFile {
+  const chunks = index.chunks.map((chunk) => chunk.id === locator.chunkId
+    ? { ...chunk, startMessageId: messages[0]?.id, endMessageId: messages[messages.length - 1]?.id, count: messages.length }
+    : chunk
+  );
+  const records = index.records.filter((record) => record.id !== locator.id);
+  return { ...index, chunks, records, messageCount: records.length };
 }
 
 async function readConversationSettingsFile(conversationDir: vscode.Uri, sessionId: string, section: ConversationSettingsSection): Promise<ConversationSettingsRecord | undefined> {

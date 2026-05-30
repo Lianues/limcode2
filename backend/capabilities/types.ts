@@ -97,6 +97,8 @@ export interface StorageCapability {
   ensureReady(): Promise<void>;
   loadClientState(): Promise<ClientState | undefined>;
   saveClientState(state: ClientState): Promise<void>;
+  saveMessageSnapshot(sessionId: string, message: import('../../shared/protocol').MessageRecord): Promise<void>;
+  removeMessage(sessionId: string, messageId: string): Promise<void>;
   saveToolCallSnapshot(sessionId: string, toolCall: ToolCallRecord): Promise<void>;
   appendToolCallEvent(sessionId: string, event: ToolCallEventRecord): Promise<void>;
   loadGlobalSettings(section: GlobalSettingsSection): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;

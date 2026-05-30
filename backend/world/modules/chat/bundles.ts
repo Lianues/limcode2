@@ -9,9 +9,9 @@ export const AssistantMessageBundle = defineBundle({ name: 'AssistantMessageBund
 export const ToolResultMessageBundle = defineBundle({ name: 'ToolResultMessageBundle', writes: [Message, PartOf], mutationMode: 'create', spawns: true });
 export const LlmRequestBundle = defineBundle({ name: 'LlmRequestBundle', writes: [LlmRequest], mutationMode: 'create', spawns: true });
 
-export function spawnSession(cmd: CommandSink, input: { id: string }): Entity {
+export function spawnSession(cmd: CommandSink, input: { id: string; title?: string }): Entity {
   const entity = cmd.spawn();
-  cmd.add(entity, Session, { id: input.id });
+  cmd.add(entity, Session, { id: input.id, title: input.title });
   return entity;
 }
 

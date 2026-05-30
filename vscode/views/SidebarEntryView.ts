@@ -5,6 +5,7 @@ import type { BackendApplication } from '../../backend/application/BackendApplic
 const SIDEBAR_ENTRY_VIEW_ID = 'limcode-entry-view';
 const OPEN_PANEL_MESSAGE = 'openPanel';
 const NEW_CONVERSATION_MESSAGE = 'newConversation';
+const OPEN_GLOBAL_SETTINGS_MESSAGE = 'openGlobalSettings';
 
 export function registerSidebarEntryView(context: vscode.ExtensionContext, backendApp: BackendApplication): void {
   const provider = new SidebarEntryViewProvider(context.extensionUri, backendApp);
@@ -40,6 +41,10 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       if (message.type === NEW_CONVERSATION_MESSAGE) {
         const conversationId = this.backendApp.createConversation();
         MainPanel.createOrShow(this.extensionUri, this.backendApp, { conversationId });
+        return;
+      }
+      if (message.type === OPEN_GLOBAL_SETTINGS_MESSAGE) {
+        MainPanel.createOrShow(this.extensionUri, this.backendApp, { kind: 'globalSettings' });
       }
     });
   }
@@ -140,6 +145,9 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
     <button id="newConversationButton" type="button" title="新建 LimCode AI 对话">
       新建对话
     </button>
+    <button id="openGlobalSettingsButton" type="button" title="打开 LimCode 全局设置">
+      全局设置
+    </button>
   </main>
 
   <script nonce="${nonce}">
@@ -149,6 +157,9 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
     });
     document.getElementById('newConversationButton').addEventListener('click', () => {
       vscode.postMessage({ type: '${NEW_CONVERSATION_MESSAGE}' });
+    });
+    document.getElementById('openGlobalSettingsButton').addEventListener('click', () => {
+      vscode.postMessage({ type: '${OPEN_GLOBAL_SETTINGS_MESSAGE}' });
     });
   </script>
 </body>

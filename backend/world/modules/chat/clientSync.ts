@@ -6,7 +6,8 @@ import { Message, PartOf, Session } from './components';
 
 export function projectChatClientState(world: WorldReader): ClientStateSlice {
   const sessions: SessionRecord[] = world.query(Session).map((entity) => ({
-    id: world.get(entity, Session)!.id
+    id: world.get(entity, Session)!.id,
+    title: world.get(entity, Session)!.title
   }));
 
   const messages: MessageRecord[] = world

@@ -10,15 +10,27 @@ export type BridgeScope =
   | { kind: 'settings'; level: 'global' | 'conversation' | 'agent'; id?: string };
 
 export interface WebviewClientMeta {
-  kind: 'mainPanel' | 'sidebar' | 'unknown';
+  kind: 'mainPanel' | 'globalSettings' | 'sidebar' | 'unknown';
   panelId?: string;
   title?: string;
   conversationId?: string;
 }
 
 export const GLOBAL_CLIENT_STATE_STREAM_ID = 'global:state';
+export const GLOBAL_SETTINGS_STREAM_ID = 'settings:global';
+export const CONVERSATION_SETTINGS_STREAM_PREFIX = 'settings:conversation:';
 export const CONVERSATION_CLIENT_STATE_STREAM_PREFIX = 'conversation:';
 export const CONVERSATION_CLIENT_STATE_STREAM_SUFFIX = ':state';
+
+export function conversationSettingsStreamId(sessionId: string): string {
+  return `${CONVERSATION_SETTINGS_STREAM_PREFIX}${sessionId}`;
+}
+
+export function conversationIdFromSettingsStreamId(streamId: string): string | undefined {
+  return streamId.startsWith(CONVERSATION_SETTINGS_STREAM_PREFIX)
+    ? streamId.slice(CONVERSATION_SETTINGS_STREAM_PREFIX.length)
+    : undefined;
+}
 
 export function conversationClientStateStreamId(sessionId: string): string {
   return `${CONVERSATION_CLIENT_STATE_STREAM_PREFIX}${sessionId}${CONVERSATION_CLIENT_STATE_STREAM_SUFFIX}`;
@@ -45,9 +57,12 @@ export enum BridgeMessageType {
   ClientResync = 'client.resync',
   ClientSnapshot = 'state.snapshot',
   ClientPatch = 'state.patch',
-  LlmSettingsGet = 'settings.llm.get',
-  LlmSettingsUpdate = 'settings.llm.update',
-  LlmSettingsSnapshot = 'settings.llm.snapshot'
+  GlobalSettingsGet = 'settings.global.get',
+  GlobalSettingsUpdate = 'settings.global.update',
+  GlobalSettingsSnapshot = 'settings.global.snapshot',
+  ConversationSettingsGet = 'settings.conversation.get',
+  ConversationSettingsUpdate = 'settings.conversation.update',
+  ConversationSettingsSnapshot = 'settings.conversation.snapshot'
 }
 
 export interface BridgeEnvelope<TType extends string = string, TPayload = unknown> {
@@ -178,12 +193,29 @@ export interface ClientPatchPayload {
   streamSeq: number;
   patches: ClientPatchOp[];
 }
-export interface LlmSettingsSnapshotPayload {
-  settings: LlmSettingsRecord;
+export interface GlobalSettingsRecord {
+  llm: LlmSettingsRecord;
+  dataFilePath: string;
+}
+export interface GlobalSettingsSnapshotPayload {
+  settings: GlobalSettingsRecord;
   filePath: string;
 }
-export interface LlmSettingsUpdatePayload {
-  settings: LlmSettingsRecord;
+export interface GlobalSettingsUpdatePayload {
+  settings: GlobalSettingsRecord;
+}
+export interface ConversationSettingsRecord {
+  sessionId: string;
+  name: string;
+}
+export interface ConversationSettingsGetPayload {
+  sessionId: string;
+}
+export interface ConversationSettingsSnapshotPayload {
+  settings: ConversationSettingsRecord;
+}
+export interface ConversationSettingsUpdatePayload {
+  settings: ConversationSettingsRecord;
 }
 
 export type WebviewToExtensionMessage =
@@ -195,8 +227,10 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ChatSend, ChatSendPayload>
   | BridgeEnvelope<BridgeMessageType.ChatAbort, ChatAbortPayload>
   | BridgeEnvelope<BridgeMessageType.ClientResync, ClientResyncPayload>
-  | BridgeEnvelope<BridgeMessageType.LlmSettingsGet, undefined>
-  | BridgeEnvelope<BridgeMessageType.LlmSettingsUpdate, LlmSettingsUpdatePayload>;
+  | BridgeEnvelope<BridgeMessageType.GlobalSettingsGet, undefined>
+  | BridgeEnvelope<BridgeMessageType.GlobalSettingsUpdate, GlobalSettingsUpdatePayload>
+  | BridgeEnvelope<BridgeMessageType.ConversationSettingsGet, ConversationSettingsGetPayload>
+  | BridgeEnvelope<BridgeMessageType.ConversationSettingsUpdate, ConversationSettingsUpdatePayload>;
 
 export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.Hello, BridgeHelloPayload>
@@ -205,7 +239,8 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.Error, { requestType?: string; message: string }>
   | BridgeEnvelope<BridgeMessageType.ClientSnapshot, ClientSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ClientPatch, ClientPatchPayload>
-  | BridgeEnvelope<BridgeMessageType.LlmSettingsSnapshot, LlmSettingsSnapshotPayload>;
+  | BridgeEnvelope<BridgeMessageType.GlobalSettingsSnapshot, GlobalSettingsSnapshotPayload>
+  | BridgeEnvelope<BridgeMessageType.ConversationSettingsSnapshot, ConversationSettingsSnapshotPayload>;
 
 export function createMessageId(): MessageId {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;

@@ -107,8 +107,10 @@ function channelForType(type: WebviewToExtensionMessage['type']): BridgeChannel 
       return 'command';
     case BridgeMessageType.ClientResync:
       return 'state';
-    case BridgeMessageType.LlmSettingsGet:
-    case BridgeMessageType.LlmSettingsUpdate:
+    case BridgeMessageType.GlobalSettingsGet:
+    case BridgeMessageType.GlobalSettingsUpdate:
+    case BridgeMessageType.ConversationSettingsGet:
+    case BridgeMessageType.ConversationSettingsUpdate:
       return 'settings';
     default:
       return 'control';

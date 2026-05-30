@@ -60,7 +60,7 @@ export function hydrateClientState(world: World, state: ClientState): boolean {
   for (const session of sessions) {
     const entity = world.spawn();
     sessionEntities.set(session.id, entity);
-    world.add(entity, Session, { id: session.id });
+    world.add(entity, Session, { id: session.id, title: session.title });
   }
 
   for (const link of state.agentConversationLinks) {

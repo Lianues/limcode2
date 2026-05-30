@@ -3,6 +3,7 @@ import type { MsgRole, MsgStatus } from '../../../../shared/protocol';
 
 export interface SessionData {
   id: string;
+  title?: string;
 }
 export const Session = defineComponent<SessionData>('Session');
 export const NeedsResponse = defineComponent<{ since: number }>('NeedsResponse');

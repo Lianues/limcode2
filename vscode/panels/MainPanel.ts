@@ -5,6 +5,7 @@ import type { BackendApplication } from '../../backend/application/BackendApplic
 
 export interface MainPanelOptions {
   conversationId?: string;
+  kind?: 'chat' | 'globalSettings';
   reuse?: boolean;
 }
 
@@ -28,7 +29,7 @@ export class MainPanel {
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
 
     if (options.reuse) {
-      const existing = [...MainPanel.panels.values()].find((candidate) => candidate.matchesConversation(options.conversationId));
+      const existing = [...MainPanel.panels.values()].find((candidate) => candidate.matches(options));
       if (existing) {
         existing.panel.reveal(column);
         return;
@@ -37,7 +38,7 @@ export class MainPanel {
 
     const panel = vscode.window.createWebviewPanel(
       MainPanel.viewType,
-      options.conversationId ? `LimCode: ${options.conversationId}` : 'LimCode',
+      panelTitle(options),
       column,
       {
         enableScripts: true,
@@ -62,7 +63,7 @@ export class MainPanel {
     this.backendApp = backendApp;
     this.panelId = createMessageId();
     this.clientId = this.backendApp.attachWebview(panel.webview, {
-      kind: 'mainPanel',
+      kind: options.kind === 'globalSettings' ? 'globalSettings' : 'mainPanel',
       panelId: this.panelId,
       title: panel.title,
       conversationId: options.conversationId
@@ -90,8 +91,14 @@ export class MainPanel {
     }
   }
 
-  private matchesConversation(conversationId: string | undefined): boolean {
-    if (!conversationId) return true;
-    return this.panel.title.endsWith(conversationId);
+  private matches(options: MainPanelOptions): boolean {
+    if (options.kind === 'globalSettings') return this.panel.title === panelTitle(options);
+    if (!options.conversationId) return this.panel.title === 'LimCode';
+    return this.panel.title.endsWith(options.conversationId);
   }
+}
+
+function panelTitle(options: MainPanelOptions): string {
+  if (options.kind === 'globalSettings') return 'LimCode 设置';
+  return options.conversationId ? `LimCode: ${options.conversationId}` : 'LimCode';
 }

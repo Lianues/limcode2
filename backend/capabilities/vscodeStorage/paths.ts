@@ -5,7 +5,7 @@ import {
   CONVERSATIONS_ROOT_DIR,
   INDEX_FILE,
   LINKS_ROOT_DIR,
-  LLM_SETTINGS_FILE,
+  GLOBAL_SETTINGS_FILE,
   SETTINGS_ROOT_DIR
 } from './constants';
 
@@ -17,7 +17,7 @@ export interface VscodeStorageUris {
   linksRootUri: vscode.Uri;
   linksIndexUri: vscode.Uri;
   settingsRootUri: vscode.Uri;
-  llmSettingsUri: vscode.Uri;
+  globalSettingsUri: vscode.Uri;
 }
 
 export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimePaths & VscodeStorageUris {
@@ -28,7 +28,7 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const linksRootUri = vscode.Uri.joinPath(globalStorageUri, LINKS_ROOT_DIR);
   const linksIndexUri = vscode.Uri.joinPath(linksRootUri, INDEX_FILE);
   const settingsRootUri = vscode.Uri.joinPath(globalStorageUri, SETTINGS_ROOT_DIR);
-  const llmSettingsUri = vscode.Uri.joinPath(settingsRootUri, LLM_SETTINGS_FILE);
+  const globalSettingsUri = vscode.Uri.joinPath(settingsRootUri, GLOBAL_SETTINGS_FILE);
 
   return {
     globalStorageUri,
@@ -47,8 +47,8 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     linksIndexPath: linksIndexUri.fsPath,
     settingsRootUri,
     settingsRootPath: settingsRootUri.fsPath,
-    llmSettingsUri,
-    llmSettingsPath: llmSettingsUri.fsPath
+    globalSettingsUri,
+    globalSettingsPath: globalSettingsUri.fsPath
   };
 }
 

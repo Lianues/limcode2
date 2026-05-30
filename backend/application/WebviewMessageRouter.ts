@@ -5,20 +5,24 @@ import { ChatEventType } from '../world/modules/chat/events';
 import {
   BridgeMessageType,
   GLOBAL_CLIENT_STATE_STREAM_ID,
+  GLOBAL_SETTINGS_STREAM_ID,
   conversationClientStateStreamId,
   conversationIdFromClientStateStreamId,
+  conversationSettingsStreamId,
   createMessageId,
   type BridgeClientId,
   type WebviewToExtensionMessage
 } from '../../shared/protocol';
-import type { LlmSettingsBridge } from './LlmSettingsBridge';
+import type { GlobalSettingsBridge } from './GlobalSettingsBridge';
+import type { ConversationSettingsBridge } from './ConversationSettingsBridge';
 import type { WebviewClientRegistry } from './WebviewClientRegistry';
 
 export interface WebviewMessageRouterDeps {
   world: World;
   webview: WebviewCapability;
   clients: WebviewClientRegistry;
-  settingsBridge: LlmSettingsBridge;
+  globalSettingsBridge: GlobalSettingsBridge;
+  conversationSettingsBridge: ConversationSettingsBridge;
   isHydrated: () => boolean;
   requestSnapshot: (sessionId?: string) => void;
 }
@@ -44,18 +48,32 @@ export class WebviewMessageRouter {
         this.subscribeRequestedStream(clientId, message.payload?.streamId, message.payload?.sessionId);
         if (this.deps.isHydrated()) this.deps.requestSnapshot(message.payload?.sessionId ?? conversationIdFromClientStateStreamId(message.payload?.streamId ?? ''));
         break;
-      case BridgeMessageType.LlmSettingsGet:
-        void this.deps.settingsBridge.postSnapshot(clientId, message.id);
+      case BridgeMessageType.GlobalSettingsGet:
+        this.deps.webview.subscribe(clientId, GLOBAL_SETTINGS_STREAM_ID);
+        void this.deps.globalSettingsBridge.postSnapshot(clientId, message.id);
         break;
-      case BridgeMessageType.LlmSettingsUpdate:
-        void this.deps.settingsBridge.update(message.payload, message.id);
+      case BridgeMessageType.GlobalSettingsUpdate:
+        this.deps.webview.subscribe(clientId, GLOBAL_SETTINGS_STREAM_ID);
+        void this.deps.globalSettingsBridge.update(message.payload, message.id);
+        break;
+      case BridgeMessageType.ConversationSettingsGet:
+        if (!message.payload) return;
+        void this.deps.conversationSettingsBridge.postSnapshot(clientId, message.payload.sessionId, message.id);
+        break;
+      case BridgeMessageType.ConversationSettingsUpdate:
+        if (!message.payload) return;
+        this.deps.webview.subscribe(clientId, conversationSettingsStreamId(message.payload.settings.sessionId));
+        void this.deps.conversationSettingsBridge.update(message.payload, message.id);
         break;
       case BridgeMessageType.Ready:
-        this.deps.webview.subscribe(clientId, GLOBAL_CLIENT_STATE_STREAM_ID);
         this.sendBridgeHello(clientId, message.id);
-        if (this.deps.isHydrated()) {
+        if (!this.deps.isHydrated()) break;
+        if (this.deps.clients.getOrUnknown(clientId).meta.kind === 'globalSettings') {
+          this.deps.webview.subscribe(clientId, GLOBAL_SETTINGS_STREAM_ID);
+          void this.deps.globalSettingsBridge.postSnapshot(clientId, message.id);
+        } else {
+          this.deps.webview.subscribe(clientId, GLOBAL_CLIENT_STATE_STREAM_ID);
           this.deps.requestSnapshot();
-          void this.deps.settingsBridge.postSnapshot(clientId, message.id);
         }
         break;
       case BridgeMessageType.Ping:

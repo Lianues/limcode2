@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
-import type { MessageRecord, SessionRecord, ToolCallRecord } from '../../../shared/protocol';
+import type { ConversationSettingsRecord, MessageRecord, SessionRecord, ToolCallRecord } from '../../../shared/protocol';
 import {
   CHUNKS_DIR,
+  CONVERSATION_SETTINGS_DIR,
+  CONVERSATION_SETTINGS_FILE,
   CONVERSATION_META_FILE,
   INDEX_FILE,
   MESSAGES_DIR,
@@ -31,6 +33,12 @@ interface ConversationMetaFile {
   schemaVersion: typeof STORAGE_VERSION;
   savedAt: string;
   session: SessionRecord;
+}
+
+interface ConversationSettingsFile {
+  schemaVersion: typeof STORAGE_VERSION;
+  savedAt: string;
+  settings: ConversationSettingsRecord;
 }
 
 interface MessageIndexFile {
@@ -77,7 +85,8 @@ export async function loadConversations(root: vscode.Uri, indexUri: vscode.Uri):
     const conversationDir = vscode.Uri.joinPath(root, record.folder);
     const meta = await readJson<ConversationMetaFile>(vscode.Uri.joinPath(root, ...record.metaFile.split('/')));
     if (meta?.schemaVersion !== STORAGE_VERSION) continue;
-    sessions.push(meta.session);
+    const settings = await readConversationSettingsFile(conversationDir, meta.session.id);
+    sessions.push({ ...meta.session, ...(settings ? { title: settings.name } : {}) });
 
     const messageIndex = await readJson<MessageIndexFile>(vscode.Uri.joinPath(root, ...record.messagesIndexFile.split('/')));
     if (!messageIndex || messageIndex.schemaVersion !== STORAGE_VERSION) continue;
@@ -110,7 +119,9 @@ export async function saveConversations(
     const conversationDir = vscode.Uri.joinPath(root, folder);
     const messagesDir = vscode.Uri.joinPath(conversationDir, MESSAGES_DIR);
     const chunksDir = vscode.Uri.joinPath(messagesDir, CHUNKS_DIR);
+    const settingsDir = vscode.Uri.joinPath(conversationDir, CONVERSATION_SETTINGS_DIR);
     await vscode.workspace.fs.createDirectory(chunksDir);
+    await vscode.workspace.fs.createDirectory(settingsDir);
 
     const sessionMessages = sortMessages(messages.filter((message) => message.sessionId === session.id));
     const sessionToolCalls = toolCallsByMessageId(toolCalls, new Set(sessionMessages.map((message) => message.id)));
@@ -150,6 +161,11 @@ export async function saveConversations(
       savedAt,
       session
     } satisfies ConversationMetaFile);
+    await writeJson(vscode.Uri.joinPath(settingsDir, CONVERSATION_SETTINGS_FILE), {
+      schemaVersion: STORAGE_VERSION,
+      savedAt,
+      settings: createConversationSettings(session)
+    } satisfies ConversationSettingsFile);
     await writeJson(vscode.Uri.joinPath(root, ...messagesIndexFile.split('/')), {
       schemaVersion: STORAGE_VERSION,
       savedAt,
@@ -177,6 +193,53 @@ export async function saveConversations(
     savedAt,
     conversations
   } satisfies ConversationsIndexFile);
+}
+
+export async function loadConversationSettings(
+  root: vscode.Uri,
+  indexUri: vscode.Uri,
+  sessionId: string
+): Promise<ConversationSettingsRecord | undefined> {
+  const index = await readJson<ConversationsIndexFile>(indexUri);
+  const record = index?.conversations.find((candidate) => candidate.id === sessionId);
+  if (!record) return undefined;
+  return readConversationSettingsFile(vscode.Uri.joinPath(root, record.folder), sessionId);
+}
+
+export async function saveConversationSettings(
+  root: vscode.Uri,
+  indexUri: vscode.Uri,
+  settings: ConversationSettingsRecord
+): Promise<ConversationSettingsRecord> {
+  const savedAt = new Date().toISOString();
+  const index = await readJson<ConversationsIndexFile>(indexUri);
+  const record = index?.conversations.find((candidate) => candidate.id === settings.sessionId);
+  if (!record) return settings;
+  const folder = record.folder;
+  const conversationDir = vscode.Uri.joinPath(root, folder);
+  const settingsDir = vscode.Uri.joinPath(conversationDir, CONVERSATION_SETTINGS_DIR);
+  await vscode.workspace.fs.createDirectory(settingsDir);
+  await writeJson(vscode.Uri.joinPath(settingsDir, CONVERSATION_SETTINGS_FILE), {
+    schemaVersion: STORAGE_VERSION,
+    savedAt,
+    settings
+  } satisfies ConversationSettingsFile);
+  return settings;
+}
+
+async function readConversationSettingsFile(conversationDir: vscode.Uri, sessionId: string): Promise<ConversationSettingsRecord | undefined> {
+  const file = await readJson<ConversationSettingsFile>(
+    vscode.Uri.joinPath(conversationDir, CONVERSATION_SETTINGS_DIR, CONVERSATION_SETTINGS_FILE)
+  );
+  if (!file || file.schemaVersion !== STORAGE_VERSION) return undefined;
+  return { sessionId, name: file.settings.name || sessionId };
+}
+
+function createConversationSettings(session: SessionRecord): ConversationSettingsRecord {
+  return {
+    sessionId: session.id,
+    name: session.title?.trim() || session.id
+  };
 }
 
 function sortMessages(messages: MessageRecord[]): MessageRecord[] {

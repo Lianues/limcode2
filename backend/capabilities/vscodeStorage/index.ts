@@ -2,8 +2,13 @@ import * as vscode from 'vscode';
 import type { ClientState } from '../../../shared/protocol';
 import type { StorageCapability } from '../types';
 import { loadAgents, saveAgents } from './agents';
-import { loadConversations, saveConversations } from './conversations';
-import { ensureLlmSettingsFile, loadLlmSettingsFile, normalizeLlmSettings, writeLlmSettingsFile } from './llmSettings';
+import {
+  loadConversationSettings,
+  loadConversations,
+  saveConversationSettings,
+  saveConversations
+} from './conversations';
+import { ensureGlobalSettingsFile, loadGlobalSettingsFile, normalizeGlobalSettings, writeGlobalSettingsFile } from './globalSettings';
 import { loadLinks, saveLinks } from './links';
 import { createVscodeStoragePaths, ensureStorageRoots } from './paths';
 
@@ -19,7 +24,7 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
         paths.linksRootUri,
         paths.settingsRootUri
       );
-      await ensureLlmSettingsFile(paths.llmSettingsUri);
+      await ensureGlobalSettingsFile(paths.globalSettingsUri);
     },
     async loadClientState() {
       await ensureStorageRoots(paths.agentsRootUri, paths.conversationsRootUri, paths.linksRootUri);
@@ -48,15 +53,23 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
         saveLinks(paths.linksRootUri, paths.linksIndexUri, state.agentConversationLinks)
       ]);
     },
-    async loadLlmSettings() {
+    async loadGlobalSettings() {
       await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
-      return loadLlmSettingsFile(paths.llmSettingsUri);
+      return loadGlobalSettingsFile(paths.globalSettingsUri);
     },
-    async saveLlmSettings(settings) {
+    async saveGlobalSettings(settings) {
       await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
-      const normalized = normalizeLlmSettings(settings);
-      await writeLlmSettingsFile(paths.llmSettingsUri, normalized);
+      const normalized = normalizeGlobalSettings(settings);
+      await writeGlobalSettingsFile(paths.globalSettingsUri, normalized);
       return normalized;
+    },
+    async loadConversationSettings(sessionId) {
+      await ensureStorageRoots(paths.conversationsRootUri);
+      return loadConversationSettings(paths.conversationsRootUri, paths.conversationsIndexUri, sessionId);
+    },
+    async saveConversationSettings(settings) {
+      await ensureStorageRoots(paths.conversationsRootUri);
+      return saveConversationSettings(paths.conversationsRootUri, paths.conversationsIndexUri, settings);
     }
   };
 }

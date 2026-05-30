@@ -4,8 +4,9 @@ import type { WorldEvent } from '../ecs/types';
 import type {
   BridgeClientId,
   ClientState,
+  ConversationSettingsRecord,
   ExtensionToWebviewMessage,
-  LlmSettingsRecord,
+  GlobalSettingsRecord,
   WebviewClientMeta
 } from '../../shared/protocol';
 
@@ -56,9 +57,9 @@ export interface RuntimePaths {
   /** 通用设置根目录：<globalStorage>/settings */
   settingsRootUri: vscode.Uri;
   settingsRootPath: string;
-  /** LLM API 明文设置文件：<globalStorage>/settings/llm-api.json */
-  llmSettingsUri: vscode.Uri;
-  llmSettingsPath: string;
+  /** 全局设置文件：<globalStorage>/settings/global.json */
+  globalSettingsUri: vscode.Uri;
+  globalSettingsPath: string;
 }
 
 /** VS Code 存储能力：通过 workspace.fs 读写插件全局数据。 */
@@ -67,6 +68,8 @@ export interface StorageCapability {
   ensureReady(): Promise<void>;
   loadClientState(): Promise<ClientState | undefined>;
   saveClientState(state: ClientState): Promise<void>;
-  loadLlmSettings(): Promise<LlmSettingsRecord>;
-  saveLlmSettings(settings: LlmSettingsRecord): Promise<LlmSettingsRecord>;
+  loadGlobalSettings(): Promise<GlobalSettingsRecord>;
+  saveGlobalSettings(settings: GlobalSettingsRecord): Promise<GlobalSettingsRecord>;
+  loadConversationSettings(sessionId: string): Promise<ConversationSettingsRecord | undefined>;
+  saveConversationSettings(settings: ConversationSettingsRecord): Promise<ConversationSettingsRecord>;
 }

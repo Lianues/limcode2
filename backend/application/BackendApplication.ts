@@ -29,7 +29,8 @@ import { createRuntimeEnv } from './createRuntimeEnv';
 import { createDefaultAgentSpawnRequest, DEFAULT_AGENT_ID } from './defaults';
 import { hydrateClientState } from './clientStateHydration';
 import { ClientStatePersistence } from './ClientStatePersistence';
-import { LlmSettingsBridge } from './LlmSettingsBridge';
+import { GlobalSettingsBridge } from './GlobalSettingsBridge';
+import { ConversationSettingsBridge } from './ConversationSettingsBridge';
 import { WebviewClientRegistry } from './WebviewClientRegistry';
 import { WebviewMessageRouter } from './WebviewMessageRouter';
 
@@ -44,7 +45,8 @@ export class BackendApplication {
   private readonly scheduler: Scheduler;
   private readonly effectHandlers = new EffectHandlerRegistry();
   private readonly persistence: ClientStatePersistence;
-  private readonly settingsBridge: LlmSettingsBridge;
+  private readonly globalSettingsBridge: GlobalSettingsBridge;
+  private readonly conversationSettingsBridge: ConversationSettingsBridge;
   private readonly webviewClients = new WebviewClientRegistry();
   private readonly webviewRouter: WebviewMessageRouter;
   private hydrated = false;
@@ -53,16 +55,23 @@ export class BackendApplication {
     const { env, toolSchemas } = createRuntimeEnv(context);
     this.env = env;
     this.persistence = new ClientStatePersistence(this.world, this.env.storage);
-    this.settingsBridge = new LlmSettingsBridge({
+    this.globalSettingsBridge = new GlobalSettingsBridge({
       storage: this.env.storage,
       webview: this.env.webview,
       paths: this.env.paths
+    });
+    this.conversationSettingsBridge = new ConversationSettingsBridge({
+      world: this.world,
+      storage: this.env.storage,
+      webview: this.env.webview,
+      requestSnapshot: (sessionId) => this.requestSnapshot(sessionId)
     });
     this.webviewRouter = new WebviewMessageRouter({
       world: this.world,
       webview: this.env.webview,
       clients: this.webviewClients,
-      settingsBridge: this.settingsBridge,
+      globalSettingsBridge: this.globalSettingsBridge,
+      conversationSettingsBridge: this.conversationSettingsBridge,
       isHydrated: () => this.hydrated,
       requestSnapshot: (sessionId) => this.requestSnapshot(sessionId)
     });
@@ -98,14 +107,15 @@ export class BackendApplication {
   /** 创建一个独立 conversation，并用独立 AgentConversationLink 绑定到默认 agent。 */
   public createConversation(): string {
     const sessionId = `conversation-${createMessageId()}`;
+    const title = '新对话';
     const agent = this.findDefaultAgent();
     if (agent === undefined) {
-      requestSpawnAgent(this.world, { ...createDefaultAgentSpawnRequest(), sessionId });
+      requestSpawnAgent(this.world, { ...createDefaultAgentSpawnRequest(), sessionId, initialTask: undefined });
       return sessionId;
     }
 
     const session = this.world.spawn();
-    this.world.add(session, Session, { id: sessionId });
+    this.world.add(session, Session, { id: sessionId, title });
 
     const link = this.world.spawn();
     const now = Date.now();
@@ -160,7 +170,7 @@ export class BackendApplication {
       this.hydrated = true;
       this.persistence.enable();
       this.requestSnapshot();
-      void this.settingsBridge.postSnapshot();
+      void this.globalSettingsBridge.postSnapshot();
     }
   }
 

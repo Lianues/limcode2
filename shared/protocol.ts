@@ -17,6 +17,18 @@ export interface WebviewClientMeta {
 }
 
 export const GLOBAL_CLIENT_STATE_STREAM_ID = 'global:state';
+export const CONVERSATION_CLIENT_STATE_STREAM_PREFIX = 'conversation:';
+export const CONVERSATION_CLIENT_STATE_STREAM_SUFFIX = ':state';
+
+export function conversationClientStateStreamId(sessionId: string): string {
+  return `${CONVERSATION_CLIENT_STATE_STREAM_PREFIX}${sessionId}${CONVERSATION_CLIENT_STATE_STREAM_SUFFIX}`;
+}
+
+export function conversationIdFromClientStateStreamId(streamId: string): string | undefined {
+  return streamId.startsWith(CONVERSATION_CLIENT_STATE_STREAM_PREFIX) && streamId.endsWith(CONVERSATION_CLIENT_STATE_STREAM_SUFFIX)
+    ? streamId.slice(CONVERSATION_CLIENT_STATE_STREAM_PREFIX.length, -CONVERSATION_CLIENT_STATE_STREAM_SUFFIX.length)
+    : undefined;
+}
 
 export enum BridgeMessageType {
   Hello = 'bridge.hello',
@@ -158,12 +170,12 @@ export interface ClientResyncPayload {
 }
 export interface ClientSnapshotPayload {
   streamId: string;
-  version: number;
+  streamSeq: number;
   state: ClientState;
 }
 export interface ClientPatchPayload {
   streamId: string;
-  version: number;
+  streamSeq: number;
   patches: ClientPatchOp[];
 }
 export interface LlmSettingsSnapshotPayload {

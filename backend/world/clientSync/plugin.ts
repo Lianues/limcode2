@@ -8,7 +8,7 @@ export function clientSyncPlugin(): WorldPlugin {
     name: 'clientSync',
     install(ctx) {
       ctx.world.setResource(ClientStateContributorsKey, new ClientStateContributorRegistry());
-      ctx.world.setResource(ClientSyncStateKey, { version: 0, lastState: null });
+      ctx.world.setResource(ClientSyncStateKey, { lastState: null, streams: {} });
       registerClientSyncSystems(ctx.scheduler);
     }
   };

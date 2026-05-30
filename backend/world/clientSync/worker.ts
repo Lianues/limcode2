@@ -1,5 +1,5 @@
 import * as path from 'path';
-import type { ClientPatchOp, ClientState } from '../../../shared/protocol';
+import { GLOBAL_CLIENT_STATE_STREAM_ID, type ClientPatchOp, type ClientState } from '../../../shared/protocol';
 import { CommandBuffer, type EntityAllocator } from '../../ecs/CommandBuffer';
 import { SnapshotWorldReader } from '../../ecs/SnapshotWorldReader';
 import type { SystemContext, WorldSnapshot } from '../../ecs/types';
@@ -11,7 +11,7 @@ export interface ClientSyncWorkerInput {
   readonly events: SystemContext['events'];
   readonly contributors: readonly ClientStateContributorDescriptor[];
   readonly previousState: ClientState | null;
-  readonly version: number;
+  readonly streamSeq: number;
   readonly wantSnapshot: boolean;
 }
 
@@ -20,9 +20,12 @@ export function runClientSyncProjection(input: ClientSyncWorkerInput, cmd: Comma
   const next = projectClientState(world, input.contributors);
 
   if (input.previousState === null || input.wantSnapshot) {
-    const version = input.version + 1;
-    cmd.setResource(ClientSyncStateKey, { version, lastState: next });
-    cmd.effect({ kind: 'client.snapshot', version, state: next });
+    const streamSeq = input.streamSeq + 1;
+    cmd.setResource(ClientSyncStateKey, {
+      lastState: next,
+      streams: { [GLOBAL_CLIENT_STATE_STREAM_ID]: { streamSeq, lastState: next } }
+    });
+    cmd.effect({ kind: 'client.snapshot', streamId: GLOBAL_CLIENT_STATE_STREAM_ID, streamSeq, state: next });
     return;
   }
 
@@ -32,9 +35,12 @@ export function runClientSyncProjection(input: ClientSyncWorkerInput, cmd: Comma
   });
 
   if (patches.length > 0) {
-    const version = input.version + 1;
-    cmd.setResource(ClientSyncStateKey, { version, lastState: next });
-    cmd.effect({ kind: 'client.patch', version, patches });
+    const streamSeq = input.streamSeq + 1;
+    cmd.setResource(ClientSyncStateKey, {
+      lastState: next,
+      streams: { [GLOBAL_CLIENT_STATE_STREAM_ID]: { streamSeq, lastState: next } }
+    });
+    cmd.effect({ kind: 'client.patch', streamId: GLOBAL_CLIENT_STATE_STREAM_ID, streamSeq, patches });
   }
 }
 

@@ -3,6 +3,7 @@ export const ClientSyncEventType = {
 } as const;
 
 export interface ClientResyncPayload {
+  streamId?: string;
   sessionId?: string;
 }
 

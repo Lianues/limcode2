@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import type { LlmProviderKind, LlmSettingsRecord, MsgRole } from '@shared/protocol';
+import {
+  conversationClientStateStreamId,
+  type LlmProviderKind,
+  type LlmSettingsRecord,
+  type MsgRole
+} from '@shared/protocol';
 import { bridge, BridgeMessageType } from '../bridge/vscodeBridge';
 import { applyClientPatch, applyClientSnapshot, clientState } from '../stores/clientStateStore';
 
@@ -10,6 +15,7 @@ const settingsOpen = ref(false);
 const settingsStatus = ref('');
 const llmSettingsPath = ref('');
 const disposers: Array<() => void> = [];
+const requestedConversationStreams = new Set<string>();
 
 const providerOptions: Array<{ value: LlmProviderKind; label: string }> = [
   { value: 'deepseek', label: 'DeepSeek' },
@@ -60,10 +66,18 @@ function onKeydown(event: KeyboardEvent): void {
 
 function resync(): void {
   if (clientState.currentSessionId) {
-    bridge.request(BridgeMessageType.ClientResync, { sessionId: clientState.currentSessionId });
+    const streamId = conversationClientStateStreamId(clientState.currentSessionId);
+    bridge.request(BridgeMessageType.ClientResync, { sessionId: clientState.currentSessionId, streamId });
   } else {
     bridge.request(BridgeMessageType.ClientResync, {});
   }
+}
+
+function ensureConversationStream(sessionId: string): void {
+  const streamId = conversationClientStateStreamId(sessionId);
+  if (requestedConversationStreams.has(streamId)) return;
+  requestedConversationStreams.add(streamId);
+  bridge.request(BridgeMessageType.ClientResync, { sessionId, streamId });
 }
 
 function requestLlmSettings(): void {
@@ -106,17 +120,24 @@ function scrollToBottom(): void {
 
 watch(() => sessionMessages.value.reduce((acc, message) => acc + message.text.length, sessionMessages.value.length), scrollToBottom);
 
+watch(
+  () => clientState.currentSessionId,
+  (sessionId) => {
+    if (sessionId) ensureConversationStream(sessionId);
+  }
+);
+
 onMounted(() => {
   disposers.push(
     bridge.on(BridgeMessageType.ClientSnapshot, (message) => {
       if (!message.payload) return;
-      applyClientSnapshot(message.payload.version, message.payload.state);
+      applyClientSnapshot(message.payload.streamId, message.payload.streamSeq, message.payload.state);
     })
   );
   disposers.push(
     bridge.on(BridgeMessageType.ClientPatch, (message) => {
       if (!message.payload) return;
-      if (!applyClientPatch(message.payload.version, message.payload.patches)) resync();
+      if (!applyClientPatch(message.payload.streamId, message.payload.streamSeq, message.payload.patches)) resync();
     })
   );
   disposers.push(

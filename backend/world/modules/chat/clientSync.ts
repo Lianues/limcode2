@@ -22,6 +22,8 @@ export function projectChatClientState(world: WorldReader): ClientStateSlice {
         role: message.role,
         content: message.content,
         status: message.status,
+        createdAt: message.createdAt,
+        ...(message.streamOutputDurationMs !== undefined ? { streamOutputDurationMs: message.streamOutputDurationMs } : {}),
         seq: message.seq
       };
     })

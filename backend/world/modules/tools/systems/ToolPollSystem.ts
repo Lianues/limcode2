@@ -1,9 +1,11 @@
 import { defineQuery, defineSystem } from '../../../../ecs/types';
 import { readEvents } from '../../../events';
 import { InFlight } from '../../chat/components';
+import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
 import { ToolCall, ToolState } from '../components';
 import { ToolEventType } from '../events';
 import { isTerminalToolStatus, transitionToolState } from '../state';
+import type { ToolCallEventKind } from '../../../../../shared/protocol';
 
 const ToolCallsByIdQuery = defineQuery({
   name: 'ToolCallsById',
@@ -20,6 +22,7 @@ export const ToolPollSystem = defineSystem({
   worker: { modulePath: '../world/modules/tools/systems/ToolPollSystem', exportName: 'ToolPollSystem' },
   access: {
     queries: [ToolCallsByIdQuery],
+    bundles: [ToolCallEventBundle],
     events: { read: [ToolEventType.State] }
   },
   run(ctx) {
@@ -28,16 +31,32 @@ export const ToolPollSystem = defineSystem({
       const entity = world.query(ToolCall, ToolState).find((candidate) => world.get(candidate, ToolCall)?.id === payload.toolCallId);
       if (entity === undefined) continue;
 
+      const call = world.get(entity, ToolCall);
       const current = world.get(entity, ToolState);
-      if (!current) continue;
+      if (!call || !current) continue;
 
       try {
+        const now = Date.now();
         const next = transitionToolState(current, payload.status, {
           result: payload.result,
           error: payload.error,
-          progress: payload.progress
-        });
+          progress: payload.progress,
+          delta: payload.delta,
+          durationMs: payload.durationMs
+        }, now);
         cmd.add(entity, ToolState, next);
+        spawnToolCallEvent(cmd, {
+          toolCall: entity,
+          toolCallId: call.id,
+          kind: eventKindForPayload(payload.eventKind, next.status),
+          status: next.status,
+          at: now,
+          elapsedMs: Math.max(0, now - call.createdAt),
+          durationMs: payload.durationMs,
+          delta: payload.delta,
+          payload: payload.progress ?? payload.result,
+          error: payload.error
+        });
         if (isTerminalToolStatus(next.status)) {
           cmd.remove(entity, InFlight);
         }
@@ -47,3 +66,11 @@ export const ToolPollSystem = defineSystem({
     }
   }
 });
+
+function eventKindForPayload(preferred: ToolCallEventKind | undefined, status: ReturnType<typeof transitionToolState>['status']): ToolCallEventKind {
+  if (preferred) return preferred;
+  if (status === 'success' || status === 'warning') return 'completed';
+  if (status === 'error') return 'failed';
+  if (status === 'executing') return 'progress';
+  return 'state';
+}

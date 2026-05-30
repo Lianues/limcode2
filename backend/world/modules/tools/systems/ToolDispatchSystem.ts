@@ -1,5 +1,6 @@
 import { defineQuery, defineSystem } from '../../../../ecs/types';
 import { InFlight } from '../../chat/components';
+import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
 import { ToolCall, ToolState } from '../components';
 import { transitionToolState } from '../state';
 
@@ -19,6 +20,7 @@ export const ToolDispatchSystem = defineSystem({
   worker: { modulePath: '../world/modules/tools/systems/ToolDispatchSystem', exportName: 'ToolDispatchSystem' },
   access: {
     queries: [QueuedToolCallsQuery],
+    bundles: [ToolCallEventBundle],
     effects: { emit: ['tool.run'] }
   },
   run({ world, cmd }) {
@@ -33,8 +35,10 @@ export const ToolDispatchSystem = defineSystem({
       if (!call || !state) continue;
 
       cmd.effect({ kind: 'tool.run', toolCallId: call.id, name: call.name, argsJson: call.argsJson });
-      cmd.add(entity, ToolState, transitionToolState(state, 'executing'));
-      cmd.add(entity, InFlight, { kind: 'tool', startedAt: Date.now() });
+      const now = Date.now();
+      cmd.add(entity, ToolState, transitionToolState(state, 'executing', {}, now));
+      spawnToolCallEvent(cmd, { toolCall: entity, toolCallId: call.id, kind: 'started', status: 'executing', at: now, elapsedMs: Math.max(0, now - call.createdAt) });
+      cmd.add(entity, InFlight, { kind: 'tool', startedAt: now });
     }
   }
 });

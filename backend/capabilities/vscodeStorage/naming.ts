@@ -6,6 +6,10 @@ export function sortableNameWithReadableSuffix(id: string, label = id): string {
   return `${timestampForFileName()}-${slugify(label)}-${readableIdSuffix(id)}`;
 }
 
+export function sortableNameWithExactIdSuffix(id: string): string {
+  return `${timestampForFileName()}-${fileSafeId(id)}`;
+}
+
 function timestampForFileName(date = new Date()): string {
   return date.toISOString().replace(/[-:]/g, '').replace('T', '-').replace('Z', '').replace('.', '-');
 }
@@ -34,4 +38,14 @@ function readableIdSuffix(id: string): string {
   const suffix = slugify(normalized).slice(0, 64);
   if (suffix) return suffix;
   return shortHash(id);
+}
+
+function fileSafeId(id: string): string {
+  const safe = id
+    .trim()
+    .replace(/[<>:"/\\|?*\x00-\x1F]+/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 96);
+  return safe || shortHash(id);
 }

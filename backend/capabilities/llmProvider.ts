@@ -55,15 +55,22 @@ export async function startLlmProvider(
     }, registry.llmProviders);
 
     let didEmitDone = false;
+    let firstStreamChunkAt: number | undefined;
+    let lastStreamChunkAt: number | undefined;
     for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(toUnifiedRequest(request, request.model?.temperature ?? settings.temperature), {
       inputFormat: 'unified',
       outputFormat: 'unified'
     })) {
-      didEmitDone = emitUnifiedChunk(request.id, chunk, emit) || didEmitDone;
+      const chunkAt = Date.now();
+      if (hasStreamOutput(chunk)) {
+        firstStreamChunkAt ??= chunkAt;
+        lastStreamChunkAt = chunkAt;
+      }
+      didEmitDone = emitUnifiedChunk(request.id, chunk, emit, createDoneTiming(firstStreamChunkAt, lastStreamChunkAt, chunkAt)) || didEmitDone;
     }
 
     if (!didEmitDone) {
-      emit({ type: LlmEventType.Done, payload: { requestId: request.id } });
+      emit({ type: LlmEventType.Done, payload: { requestId: request.id, ...createDoneTiming(firstStreamChunkAt, lastStreamChunkAt) } });
     }
   } catch (error) {
     emitLlmError(emit, request.id, error instanceof Error ? error.message : String(error));
@@ -131,7 +138,7 @@ function toUnifiedFunctionDeclaration(tool: ToolSchema): UnifiedFunctionDeclarat
   };
 }
 
-function emitUnifiedChunk(requestId: string, chunk: UnifiedLLMStreamChunk, emit: Emit): boolean {
+function emitUnifiedChunk(requestId: string, chunk: UnifiedLLMStreamChunk, emit: Emit, doneTiming: LlmDoneTiming): boolean {
   const text = chunk.textDelta ?? textFromParts(chunk.partsDelta ?? []);
   if (text) emit({ type: LlmEventType.Delta, payload: { requestId, text } });
 
@@ -149,11 +156,29 @@ function emitUnifiedChunk(requestId: string, chunk: UnifiedLLMStreamChunk, emit:
   }
 
   if (chunk.finishReason) {
-    emit({ type: LlmEventType.Done, payload: { requestId } });
+    emit({ type: LlmEventType.Done, payload: { requestId, ...doneTiming } });
     return true;
   }
 
   return false;
+}
+
+interface LlmDoneTiming {
+  createdAt: number;
+  streamOutputDurationMs?: number;
+}
+
+function createDoneTiming(firstChunkAt: number | undefined, lastChunkAt: number | undefined, fallbackAt = Date.now()): LlmDoneTiming {
+  return {
+    createdAt: firstChunkAt ?? fallbackAt,
+    ...(firstChunkAt !== undefined && lastChunkAt !== undefined ? { streamOutputDurationMs: Math.max(0, lastChunkAt - firstChunkAt) } : {})
+  };
+}
+
+function hasStreamOutput(chunk: UnifiedLLMStreamChunk): boolean {
+  if (chunk.textDelta || textFromParts(chunk.partsDelta ?? [])) return true;
+  if ((chunk.functionCalls?.length ?? 0) > 0) return true;
+  return (chunk.partsDelta ?? []).some(isUnifiedFunctionCallPart);
 }
 
 function textFromParts(parts: UnifiedPart[]): string {

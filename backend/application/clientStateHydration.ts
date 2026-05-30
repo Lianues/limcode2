@@ -12,13 +12,14 @@ import {
   type ToolPolicyData
 } from '../world/modules/agent/components';
 import { Message, PartOf, Session } from '../world/modules/chat/components';
-import { ToolCall, ToolResultConsumed, ToolState } from '../world/modules/tools/components';
+import { ToolCall, ToolCallEvent, ToolResultConsumed, ToolState } from '../world/modules/tools/components';
 import { isTerminalToolStatus } from '../world/modules/tools/state';
 import type {
   AgentConversationLinkRecord,
   AgentRecord,
   ClientState,
   MessageRecord,
+  ToolCallEventRecord,
   ToolCallRecord
 } from '../../shared/protocol';
 import { createDefaultAgentRecord, DEFAULT_AGENT_NAME, DEFAULT_SESSION_ID } from './defaults';
@@ -78,8 +79,14 @@ export function hydrateClientState(world: World, state: ClientState): boolean {
     messageEntities.set(record.id, entity);
   }
 
+  const toolCallEntities = new Map<string, Entity>();
   for (const record of state.toolCalls) {
-    spawnHydratedToolCall(world, messageEntities, record);
+    const entity = spawnHydratedToolCall(world, messageEntities, record);
+    if (entity !== undefined) toolCallEntities.set(record.id, entity);
+  }
+
+  for (const record of state.toolCallEvents ?? []) {
+    spawnHydratedToolCallEvent(world, toolCallEntities, record);
   }
 
   return true;
@@ -93,15 +100,16 @@ function spawnHydratedMessage(world: World, session: Entity, record: MessageReco
     content: record.content,
     status: record.status === 'streaming' ? 'error' : record.status,
     seq: record.seq,
-    createdAt: Date.now()
+    createdAt: record.createdAt,
+    streamOutputDurationMs: record.streamOutputDurationMs
   });
   world.add(entity, PartOf, { parent: session });
   return entity;
 }
 
-function spawnHydratedToolCall(world: World, messages: Map<string, Entity>, record: ToolCallRecord): void {
+function spawnHydratedToolCall(world: World, messages: Map<string, Entity>, record: ToolCallRecord): Entity | undefined {
   const modelMessage = messages.get(record.messageId);
-  if (modelMessage === undefined) return;
+  if (modelMessage === undefined) return undefined;
 
   const entity = world.spawn();
   const now = Date.now();
@@ -124,9 +132,19 @@ function spawnHydratedToolCall(world: World, messages: Map<string, Entity>, reco
     updatedAt: record.updatedAt || now,
     ...(record.result !== undefined ? { result: record.result } : {}),
     ...(error !== undefined ? { error } : {}),
-    ...(record.progress !== undefined ? { progress: record.progress } : {})
+    ...(record.progress !== undefined ? { progress: record.progress } : {}),
+    ...(record.durationMs !== undefined ? { durationMs: record.durationMs } : {})
   });
   world.add(entity, ToolResultConsumed, true);
+  return entity;
+}
+
+function spawnHydratedToolCallEvent(world: World, toolCalls: Map<string, Entity>, record: ToolCallEventRecord): void {
+  const toolCall = toolCalls.get(record.toolCallId);
+  if (toolCall === undefined) return;
+  const entity = world.spawn();
+  world.add(entity, ToolCallEvent, record);
+  world.add(entity, PartOf, { parent: toolCall });
 }
 
 function spawnHydratedAgentConversationLink(

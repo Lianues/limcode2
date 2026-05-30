@@ -7,6 +7,8 @@ export interface ToolStateTransitionPayload {
   result?: unknown;
   error?: string;
   progress?: unknown;
+  delta?: string;
+  durationMs?: number;
 }
 
 const VALID_TRANSITIONS: Record<ToolCallStatus, readonly ToolCallStatus[]> = {
@@ -47,7 +49,9 @@ export function transitionToolState(
     updatedAt: now,
     ...(payload.result !== undefined ? { result: payload.result } : {}),
     ...(payload.error !== undefined ? { error: payload.error } : {}),
-    ...(payload.progress !== undefined ? { progress: payload.progress } : {})
+    ...(payload.progress !== undefined ? { progress: payload.progress } : {}),
+    ...(payload.delta !== undefined ? { progress: payload.delta } : {}),
+    ...(payload.durationMs !== undefined ? { durationMs: payload.durationMs } : {})
   };
 }
 

@@ -159,7 +159,7 @@ export type ContentRole = 'user' | 'model' | 'tool';
 export type ContentPart =
   | { type: 'text'; text: string }
   | { type: 'functionCall'; id: string; name: string; args: unknown }
-  | { type: 'functionResponse'; id: string; name: string; response: unknown }
+  | { type: 'functionResponse'; id: string; name: string; response: unknown; durationMs?: number }
   | { type: 'inlineData'; mimeType: string; data: string }
   | { type: 'fileData'; mimeType?: string; uri: string };
 
@@ -178,6 +178,8 @@ export interface MessageRecord {
   role: MsgRole;
   content: MessageContent;
   status: MsgStatus;
+  createdAt: number;
+  streamOutputDurationMs?: number;
   seq: number;
 }
 
@@ -191,8 +193,34 @@ export interface ToolCallRecord {
   result?: unknown;
   error?: string;
   progress?: unknown;
+  durationMs?: number;
   createdAt: number;
   updatedAt: number;
+}
+
+export type ToolCallEventKind =
+  | 'created'
+  | 'queued'
+  | 'started'
+  | 'progress'
+  | 'stdout'
+  | 'stderr'
+  | 'state'
+  | 'completed'
+  | 'failed';
+
+export interface ToolCallEventRecord {
+  id: string;
+  toolCallId: string;
+  seq: number;
+  kind: ToolCallEventKind;
+  at: number;
+  status?: ToolCallStatus;
+  elapsedMs?: number;
+  durationMs?: number;
+  delta?: string;
+  payload?: unknown;
+  error?: string;
 }
 
 export interface ClientState {
@@ -201,6 +229,7 @@ export interface ClientState {
   agentConversationLinks: AgentConversationLinkRecord[];
   messages: MessageRecord[];
   toolCalls: ToolCallRecord[];
+  toolCallEvents: ToolCallEventRecord[];
 }
 
 export type ClientPatchOp =
@@ -215,7 +244,9 @@ export type ClientPatchOp =
   | { kind: 'message.appendText'; id: string; delta: string }
   | { kind: 'message.status'; id: string; status: MsgStatus }
   | { kind: 'toolcall.upsert'; toolCall: ToolCallRecord }
-  | { kind: 'toolcall.remove'; id: string };
+  | { kind: 'toolcall.remove'; id: string }
+  | { kind: 'toolcallEvent.append'; event: ToolCallEventRecord }
+  | { kind: 'toolcallEvent.remove'; id: string };
 
 export interface ChatSendPayload {
   sessionId: string;

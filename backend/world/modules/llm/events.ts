@@ -15,10 +15,14 @@ export interface LlmToolCallPayload {
 }
 export interface LlmDonePayload {
   requestId: string;
+  createdAt?: number;
+  streamOutputDurationMs?: number;
 }
 export interface LlmErrorPayload {
   requestId: string;
   message: string;
+  createdAt?: number;
+  streamOutputDurationMs?: number;
 }
 
 declare module '@backend/world/events' {

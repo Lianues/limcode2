@@ -16,6 +16,7 @@ export interface MessageData {
   status: MsgStatus;
   seq: number;
   createdAt: number;
+  streamOutputDurationMs?: number;
 }
 export const Message = defineComponent<MessageData>('Message');
 export const PartOf = defineComponent<{ parent: Entity }>('PartOf');

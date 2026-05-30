@@ -1,4 +1,4 @@
-import type { ToolCallStatus } from '../../../../shared/protocol';
+import type { ToolCallEventKind, ToolCallStatus } from '../../../../shared/protocol';
 
 export const ToolEventType = {
   State: 'tool:state'
@@ -10,6 +10,9 @@ export interface ToolStatePayload {
   result?: unknown;
   error?: string;
   progress?: unknown;
+  eventKind?: ToolCallEventKind;
+  delta?: string;
+  durationMs?: number;
 }
 
 declare module '@backend/world/events' {

@@ -9,6 +9,8 @@ import type {
   ExtensionToWebviewMessage,
   GlobalSettingsSection,
   GlobalSettingsSectionValue,
+  ToolCallEventRecord,
+  ToolCallRecord,
   WebviewClientMeta
 } from '../../shared/protocol';
 
@@ -95,6 +97,8 @@ export interface StorageCapability {
   ensureReady(): Promise<void>;
   loadClientState(): Promise<ClientState | undefined>;
   saveClientState(state: ClientState): Promise<void>;
+  saveToolCallSnapshot(sessionId: string, toolCall: ToolCallRecord): Promise<void>;
+  appendToolCallEvent(sessionId: string, event: ToolCallEventRecord): Promise<void>;
   loadGlobalSettings(section: GlobalSettingsSection): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
   saveGlobalSettings(section: GlobalSettingsSection, settings: GlobalSettingsSectionValue): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
   loadConversationSettings(sessionId: string, section: ConversationSettingsSection): Promise<{ sessionId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string } | undefined>;

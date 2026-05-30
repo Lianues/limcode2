@@ -60,7 +60,8 @@ export const ToolResultSystem = defineSystem({
         toolCallId: call.functionCallId ?? call.id,
         toolName: call.name,
         status: state.status,
-        response: toolStateToResponse(state)
+        response: toolStateToResponse(state),
+        durationMs: state.durationMs
       });
       cmd.add(entity, ToolResultConsumed, true);
       consumedThisPass.add(entity);

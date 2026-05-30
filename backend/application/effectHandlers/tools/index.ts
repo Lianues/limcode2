@@ -11,6 +11,7 @@ export function registerToolEffectHandlers(registry: EffectHandlerRegistry): voi
         toolCallId: effect.toolCallId,
         status: 'error',
         error: `Unknown tool: ${effect.name}`,
+        durationMs: 0,
         result: { error: `Unknown tool: ${effect.name}` }
       });
       return;
@@ -21,26 +22,27 @@ export function registerToolEffectHandlers(registry: EffectHandlerRegistry): voi
       args = effect.argsJson ? JSON.parse(effect.argsJson) : {};
     } catch (error) {
       const message = `Invalid args JSON: ${String(error)}`;
-      emitToolState(emit, { toolCallId: effect.toolCallId, status: 'error', error: message, result: { error: message } });
+      emitToolState(emit, { toolCallId: effect.toolCallId, status: 'error', error: message, result: { error: message }, durationMs: 0 });
       return;
     }
 
+    const startedAt = Date.now();
     tool
       .execute(args, { fs: env.fs, command: env.command })
-      .then((result) => emitToolState(emit, toToolStatePayload(effect.toolCallId, result)))
+      .then((result) => emitToolState(emit, toToolStatePayload(effect.toolCallId, result, Date.now() - startedAt)))
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
-        emitToolState(emit, { toolCallId: effect.toolCallId, status: 'error', error: message, result: { error: message } });
+        emitToolState(emit, { toolCallId: effect.toolCallId, status: 'error', error: message, result: { error: message }, durationMs: Date.now() - startedAt });
       });
   });
 }
 
-function toToolStatePayload(toolCallId: string, result: ToolResultOut): ToolStatePayload {
+function toToolStatePayload(toolCallId: string, result: ToolResultOut, durationMs: number): ToolStatePayload {
   const response = { ok: result.ok, output: result.output };
   if (result.ok) {
-    return { toolCallId, status: 'success', result: response };
+    return { toolCallId, status: 'success', result: response, durationMs };
   }
-  return { toolCallId, status: 'error', error: result.output, result: response };
+  return { toolCallId, status: 'error', error: result.output, result: response, durationMs };
 }
 
 function emitToolState(emit: (event: { type: string; payload: ToolStatePayload }) => void, payload: ToolStatePayload): void {

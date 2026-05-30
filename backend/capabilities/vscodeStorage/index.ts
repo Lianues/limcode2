@@ -5,8 +5,10 @@ import { loadAgents, saveAgents } from './agents';
 import {
   loadConversationSettings,
   loadConversations,
+  appendToolCallEvent as appendStoredToolCallEvent,
   saveConversationSettings,
-  saveConversations
+  saveConversations,
+  saveToolCallSnapshot as saveStoredToolCallSnapshot
 } from './conversations';
 import { ensureGlobalSettingsFile, loadGlobalSettingsFile, writeGlobalSettingsFile } from './globalSettings';
 import { loadLinks, saveLinks } from './links';
@@ -44,16 +46,25 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
         sessions: sessionsAndMessages?.sessions ?? [],
         agentConversationLinks: agentConversationLinks ?? [],
         messages: sessionsAndMessages?.messages ?? [],
-        toolCalls: sessionsAndMessages?.toolCalls ?? []
+        toolCalls: sessionsAndMessages?.toolCalls ?? [],
+        toolCallEvents: sessionsAndMessages?.toolCallEvents ?? []
       } satisfies ClientState;
     },
     async saveClientState(state) {
       await ensureStorageRoots(paths.agentsRootUri, paths.conversationsRootUri, paths.linksRootUri);
       await Promise.all([
         saveAgents(paths.agentsRootUri, paths.agentsIndexUri, state.agents),
-        saveConversations(paths.conversationsRootUri, paths.conversationsIndexUri, state.sessions, state.messages, state.toolCalls),
+        saveConversations(paths.conversationsRootUri, paths.conversationsIndexUri, state.sessions, state.messages, state.toolCalls, state.toolCallEvents),
         saveLinks(paths.linksRootUri, paths.linksIndexUri, state.agentConversationLinks)
       ]);
+    },
+    async saveToolCallSnapshot(sessionId, toolCall) {
+      await ensureStorageRoots(paths.conversationsRootUri);
+      return saveStoredToolCallSnapshot(paths.conversationsRootUri, paths.conversationsIndexUri, sessionId, toolCall);
+    },
+    async appendToolCallEvent(sessionId, event) {
+      await ensureStorageRoots(paths.conversationsRootUri);
+      return appendStoredToolCallEvent(paths.conversationsRootUri, paths.conversationsIndexUri, sessionId, event);
     },
     async loadGlobalSettings(section) {
       await vscode.workspace.fs.createDirectory(paths.settingsRootUri);

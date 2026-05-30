@@ -73,10 +73,15 @@ function toolCallsForMessage(messageId: string) {
   return clientState.toolCalls.filter((toolCall) => toolCall.messageId === messageId);
 }
 
+function eventsForToolCall(toolCallId: string) {
+  return clientState.toolCallEvents.filter((event) => event.toolCallId === toolCallId).sort((a, b) => a.seq - b.seq);
+}
+
 function messageDisplayText(message: MessageRecord): string {
   return message.content.parts.map((part) => {
     if (part.type === 'text') return part.text;
-    if (part.type === 'functionCall') return `\n[tool call] ${part.name}(${JSON.stringify(part.args)})`;
+    // functionCall 由下面的工具卡片渲染，不再混入正文，避免“执行工具前”重复显示 [tool call] 文本。
+    if (part.type === 'functionCall') return '';
     if (part.type === 'functionResponse') return `\n[tool result] ${part.name}: ${stringifyPartPayload(part.response)}`;
     if (part.type === 'fileData') return `\n[file] ${part.uri}`;
     if (part.type === 'inlineData') return `\n[inline data] ${part.mimeType}`;
@@ -108,7 +113,7 @@ function toolStatusLabel(status: ToolCallRecord['status']): string {
 }
 
 function hasToolDetails(tool: ToolCallRecord): boolean {
-  return tool.result !== undefined || !!tool.error || tool.progress !== undefined;
+  return tool.result !== undefined || !!tool.error || tool.progress !== undefined || eventsForToolCall(tool.id).length > 0;
 }
 
 function toolDetailText(tool: ToolCallRecord): string {
@@ -116,6 +121,12 @@ function toolDetailText(tool: ToolCallRecord): string {
   if (tool.progress !== undefined) lines.push(`progress: ${stringifyPartPayload(tool.progress)}`);
   if (tool.result !== undefined) lines.push(`result: ${stringifyPartPayload(tool.result)}`);
   if (tool.error) lines.push(`error: ${tool.error}`);
+  for (const event of eventsForToolCall(tool.id)) {
+    lines.push(`[${event.seq}] ${event.kind}${event.status ? ` → ${event.status}` : ''}${event.durationMs !== undefined ? ` (${event.durationMs}ms)` : ''}`);
+    if (event.delta) lines.push(event.delta);
+    if (event.payload !== undefined) lines.push(stringifyPartPayload(event.payload));
+    if (event.error) lines.push(`error: ${event.error}`);
+  }
   return lines.join('\n');
 }
 
@@ -424,7 +435,7 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
       <div v-for="m in sessionMessages" :key="m.id" class="msg" :class="m.role">
         <div class="meta">{{ roleLabel(m.role) }}</div>
         <div class="bubble">
-          <pre class="text">{{ messageDisplayText(m) }}<span v-if="m.status === 'streaming'" class="cursor">▋</span></pre>
+          <pre v-if="messageDisplayText(m) || m.status === 'streaming'" class="text">{{ messageDisplayText(m) }}<span v-if="m.status === 'streaming'" class="cursor">▋</span></pre>
           <div v-if="toolCallsForMessage(m.id).length" class="tools">
             <div v-for="t in toolCallsForMessage(m.id)" :key="t.id" class="tool" :class="t.status">
               <span class="tool-name">⚙ {{ t.name }}</span>

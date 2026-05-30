@@ -8,6 +8,7 @@ import {
   type ClientState,
   type MessageRecord,
   type SessionRecord,
+  type ToolCallEventRecord,
   type ToolCallRecord
 } from '@shared/protocol';
 
@@ -20,6 +21,7 @@ interface ClientStateStore {
   agentConversationLinks: AgentConversationLinkRecord[];
   messages: MessageRecord[];
   toolCalls: ToolCallRecord[];
+  toolCallEvents: ToolCallEventRecord[];
 }
 
 export const clientState = reactive<ClientStateStore>({
@@ -29,7 +31,8 @@ export const clientState = reactive<ClientStateStore>({
   sessions: [],
   agentConversationLinks: [],
   messages: [],
-  toolCalls: []
+  toolCalls: [],
+  toolCallEvents: []
 });
 
 export function applyClientSnapshot(streamId: string, streamSeq: number, state: ClientState): void {
@@ -44,17 +47,13 @@ export function applyClientSnapshot(streamId: string, streamSeq: number, state: 
 
   const sessionId = conversationIdFromClientStateStreamId(streamId) ?? state.sessions[0]?.id ?? state.messages[0]?.sessionId;
   if (!sessionId) return;
-  replaceConversationState(sessionId, state.messages, state.toolCalls);
+  replaceConversationState(sessionId, state.messages, state.toolCalls, state.toolCallEvents ?? []);
 }
 
 export function applyClientPatch(streamId: string, streamSeq: number, patches: ClientPatchOp[]): boolean {
   const currentStreamSeq = clientState.streamSeqs[streamId] ?? 0;
-  if (streamSeq !== currentStreamSeq + 1) {
-    return false;
-  }
-  for (const patch of patches) {
-    applyClientPatchOp(patch);
-  }
+  if (streamSeq !== currentStreamSeq + 1) return false;
+  for (const patch of patches) applyClientPatchOp(patch);
   clientState.streamSeqs[streamId] = streamSeq;
   ensureCurrentSession();
   return true;
@@ -85,8 +84,7 @@ function applyClientPatchOp(patch: ClientPatchOp): void {
       clientState.messages.sort((a, b) => a.seq - b.seq);
       break;
     case 'message.remove':
-      remove(clientState.messages, (item) => item.id === patch.id);
-      remove(clientState.toolCalls, (item) => item.messageId === patch.id);
+      removeMessage(patch.id);
       break;
     case 'message.appendText': {
       const message = clientState.messages.find((item) => item.id === patch.id);
@@ -108,32 +106,50 @@ function applyClientPatchOp(patch: ClientPatchOp): void {
       upsert(clientState.toolCalls, patch.toolCall, (item) => item.id === patch.toolCall.id);
       break;
     case 'toolcall.remove':
-      remove(clientState.toolCalls, (item) => item.id === patch.id);
+      removeToolCall(patch.id);
+      break;
+    case 'toolcallEvent.append':
+      upsert(clientState.toolCallEvents, patch.event, (item) => item.id === patch.event.id);
+      clientState.toolCallEvents.sort((a, b) => a.seq - b.seq || a.id.localeCompare(b.id));
+      break;
+    case 'toolcallEvent.remove':
+      remove(clientState.toolCallEvents, (item) => item.id === patch.id);
       break;
     default:
       break;
   }
 }
 
-function replaceConversationState(sessionId: string, messages: MessageRecord[], toolCalls: ToolCallRecord[]): void {
+function replaceConversationState(sessionId: string, messages: MessageRecord[], toolCalls: ToolCallRecord[], toolCallEvents: ToolCallEventRecord[]): void {
   const previousMessageIds = new Set(clientState.messages.filter((message) => message.sessionId === sessionId).map((message) => message.id));
-  clientState.messages = [
-    ...clientState.messages.filter((message) => message.sessionId !== sessionId),
-    ...messages
-  ].sort((a, b) => a.seq - b.seq);
-  clientState.toolCalls = [
-    ...clientState.toolCalls.filter((toolCall) => !previousMessageIds.has(toolCall.messageId)),
-    ...toolCalls
-  ];
+  const previousToolCallIds = new Set(clientState.toolCalls.filter((toolCall) => previousMessageIds.has(toolCall.messageId)).map((toolCall) => toolCall.id));
+  clientState.messages = [...clientState.messages.filter((message) => message.sessionId !== sessionId), ...messages].sort((a, b) => a.seq - b.seq);
+  clientState.toolCalls = [...clientState.toolCalls.filter((toolCall) => !previousMessageIds.has(toolCall.messageId)), ...toolCalls];
+  clientState.toolCallEvents = [...clientState.toolCallEvents.filter((event) => !previousToolCallIds.has(event.toolCallId)), ...toolCallEvents]
+    .sort((a, b) => a.seq - b.seq || a.id.localeCompare(b.id));
 }
 
 function removeSession(sessionId: string): void {
   const messageIds = new Set(clientState.messages.filter((message) => message.sessionId === sessionId).map((message) => message.id));
+  const toolCallIds = new Set(clientState.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId)).map((toolCall) => toolCall.id));
   remove(clientState.sessions, (item) => item.id === sessionId);
   remove(clientState.agentConversationLinks, (item) => item.sessionId === sessionId);
   clientState.messages = clientState.messages.filter((message) => message.sessionId !== sessionId);
-  clientState.toolCalls = clientState.toolCalls.filter((toolCall) => !messageIds.has(toolCall.messageId));
+  clientState.toolCalls = clientState.toolCalls.filter((toolCall) => !toolCallIds.has(toolCall.id));
+  clientState.toolCallEvents = clientState.toolCallEvents.filter((event) => !toolCallIds.has(event.toolCallId));
   if (clientState.currentSessionId === sessionId) clientState.currentSessionId = clientState.sessions[0]?.id ?? '';
+}
+
+function removeMessage(messageId: string): void {
+  const toolCallIds = new Set(clientState.toolCalls.filter((toolCall) => toolCall.messageId === messageId).map((toolCall) => toolCall.id));
+  remove(clientState.messages, (item) => item.id === messageId);
+  clientState.toolCalls = clientState.toolCalls.filter((toolCall) => toolCall.messageId !== messageId);
+  clientState.toolCallEvents = clientState.toolCallEvents.filter((event) => !toolCallIds.has(event.toolCallId));
+}
+
+function removeToolCall(toolCallId: string): void {
+  remove(clientState.toolCalls, (item) => item.id === toolCallId);
+  clientState.toolCallEvents = clientState.toolCallEvents.filter((event) => event.toolCallId !== toolCallId);
 }
 
 function ensureCurrentSession(): void {

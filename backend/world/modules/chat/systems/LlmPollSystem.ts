@@ -10,6 +10,8 @@ interface PendingRequestUpdate {
   delta: string;
   calls: Array<{ id?: string; name: string; argsJson: string }>;
   done: boolean;
+  createdAt?: number;
+  streamOutputDurationMs?: number;
   error?: string;
 }
 
@@ -62,11 +64,16 @@ export const LlmPollSystem = defineSystem({
     for (const payload of readEvents(ctx, LlmEventType.Error)) {
       const update = updateFor(updates, payload.requestId);
       update.error = payload.message;
+      update.createdAt = payload.createdAt;
+      update.streamOutputDurationMs = payload.streamOutputDurationMs;
       update.done = true;
     }
 
     for (const payload of readEvents(ctx, LlmEventType.Done)) {
-      updateFor(updates, payload.requestId).done = true;
+      const update = updateFor(updates, payload.requestId);
+      update.createdAt = payload.createdAt;
+      update.streamOutputDurationMs = payload.streamOutputDurationMs;
+      update.done = true;
     }
 
     for (const [requestId, update] of updates) {
@@ -126,9 +133,11 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
 
   if (update.error) {
     next = appendTextToMessage(next, `\n[error] ${update.error}`);
-    next = { ...next, status: 'error' };
+    next = withLlmTiming({ ...next, status: 'error' }, update);
   } else if (update.done) {
-    next = { ...next, status: 'complete' };
+    next = withLlmTiming({ ...next, status: 'complete' }, update);
+  } else if (update.createdAt !== undefined || update.streamOutputDurationMs !== undefined) {
+    next = withLlmTiming(next, update);
   }
 
   if (next !== current) {
@@ -139,6 +148,14 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
     cmd.remove(modelMessage, Streaming);
     cmd.despawn(request);
   }
+}
+
+function withLlmTiming(message: MessageData, update: PendingRequestUpdate): MessageData {
+  return {
+    ...message,
+    ...(update.createdAt !== undefined ? { createdAt: update.createdAt } : {}),
+    ...(update.streamOutputDurationMs !== undefined ? { streamOutputDurationMs: update.streamOutputDurationMs } : {})
+  };
 }
 
 function appendFunctionCallPart(

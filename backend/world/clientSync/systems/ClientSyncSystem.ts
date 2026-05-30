@@ -8,6 +8,7 @@ import {
   type ClientState,
   type MessageRecord,
   type SessionRecord,
+  type ToolCallEventRecord,
   type ToolCallRecord
 } from '../../../../shared/protocol';
 import { defineSystem, type AccessDeclaration, type WorldReader } from '../../../ecs/types';
@@ -132,7 +133,7 @@ function projectClientState(world: WorldReader, contributors: ClientStateContrib
 }
 
 function emptyClientState(): ClientState {
-  return { agents: [], sessions: [], agentConversationLinks: [], messages: [], toolCalls: [] };
+  return { agents: [], sessions: [], agentConversationLinks: [], messages: [], toolCalls: [], toolCallEvents: [] };
 }
 
 function globalClientState(state: ClientState): ClientState {
@@ -141,19 +142,23 @@ function globalClientState(state: ClientState): ClientState {
     sessions: state.sessions,
     agentConversationLinks: state.agentConversationLinks,
     messages: [],
-    toolCalls: []
+    toolCalls: [],
+    toolCallEvents: []
   };
 }
 
 function conversationClientState(state: ClientState, sessionId: string): ClientState {
   const messages = state.messages.filter((message) => message.sessionId === sessionId);
   const messageIds = new Set(messages.map((message) => message.id));
+  const toolCalls = state.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId));
+  const toolCallIds = new Set(toolCalls.map((toolCall) => toolCall.id));
   return {
     agents: [],
     sessions: state.sessions.filter((session) => session.id === sessionId),
     agentConversationLinks: [],
     messages,
-    toolCalls: state.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId))
+    toolCalls,
+    toolCallEvents: state.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId))
   };
 }
 
@@ -214,8 +219,22 @@ function diffConversationClientState(prev: ClientState, next: ClientState): Clie
       next.toolCalls,
       (toolCall): ClientPatchOp => ({ kind: 'toolcall.upsert', toolCall }),
       (id): ClientPatchOp => ({ kind: 'toolcall.remove', id })
-    )
+    ),
+    ...diffToolCallEvents(prev.toolCallEvents, next.toolCallEvents)
   ];
+}
+
+function diffToolCallEvents(prev: ToolCallEventRecord[], next: ToolCallEventRecord[]): ClientPatchOp[] {
+  const patches: ClientPatchOp[] = [];
+  const prevIds = new Set(prev.map((event) => event.id));
+  const nextIds = new Set(next.map((event) => event.id));
+  for (const event of next) {
+    if (!prevIds.has(event.id)) patches.push({ kind: 'toolcallEvent.append', event });
+  }
+  for (const id of prevIds) {
+    if (!nextIds.has(id)) patches.push({ kind: 'toolcallEvent.remove', id });
+  }
+  return patches;
 }
 
 function diffMessages(prev: MessageRecord[], next: MessageRecord[]): ClientPatchOp[] {

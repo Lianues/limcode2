@@ -53,7 +53,7 @@ function contentRoleForMessage(role: MsgRole): ContentRole { return role; }
 
 export function spawnToolResultMessage(
   cmd: CommandSink,
-  input: { session: Entity; toolName: string; status: 'success' | 'warning' | 'error'; response: unknown }
+  input: { session: Entity; toolName: string; status: 'success' | 'warning' | 'error'; response: unknown; durationMs?: number }
 ): Entity {
   return spawnMessage(cmd, {
     parent: input.session,
@@ -62,7 +62,8 @@ export function spawnToolResultMessage(
       type: 'functionResponse',
       id: input.toolName,
       name: input.toolName,
-      response: input.response
+      response: input.response,
+      ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {})
     }],
     status: input.status === 'error' ? 'error' : 'complete'
   });
@@ -70,7 +71,7 @@ export function spawnToolResultMessage(
 
 export function spawnToolResponseMessage(
   cmd: CommandSink,
-  input: { session: Entity; toolCallId: string; toolName: string; status: 'success' | 'warning' | 'error'; response: unknown }
+  input: { session: Entity; toolCallId: string; toolName: string; status: 'success' | 'warning' | 'error'; response: unknown; durationMs?: number }
 ): Entity {
   return spawnMessage(cmd, {
     parent: input.session,
@@ -79,7 +80,8 @@ export function spawnToolResponseMessage(
       type: 'functionResponse',
       id: input.toolCallId,
       name: input.toolName,
-      response: input.response
+      response: input.response,
+      ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {})
     }],
     status: input.status === 'error' ? 'error' : 'complete'
   });

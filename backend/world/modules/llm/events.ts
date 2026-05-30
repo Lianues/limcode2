@@ -1,6 +1,7 @@
 export const LlmEventType = {
   Delta: 'llm:delta',
-  Thought: 'llm:thought',
+  ThoughtDelta: 'llm:thoughtDelta',
+  ThoughtDone: 'llm:thoughtDone',
   ToolCall: 'llm:toolcall',
   Done: 'llm:done',
   Error: 'llm:error'
@@ -10,12 +11,15 @@ export interface LlmDeltaPayload {
   requestId: string;
   text: string;
 }
-export interface LlmThoughtPayload {
+export interface LlmThoughtDeltaPayload {
   requestId: string;
   text: string;
+  thoughtSignature?: string;
+}
+export interface LlmThoughtDonePayload {
+  requestId: string;
   thoughtDurationMs: number;
   thoughtSignature?: string;
-  thoughtSignatures?: Record<string, string | undefined>;
 }
 export interface LlmToolCallPayload {
   requestId: string;
@@ -36,7 +40,8 @@ export interface LlmErrorPayload {
 declare module '@backend/world/events' {
   interface WorldEventPayloadMap {
     'llm:delta': LlmDeltaPayload;
-    'llm:thought': LlmThoughtPayload;
+    'llm:thoughtDelta': LlmThoughtDeltaPayload;
+    'llm:thoughtDone': LlmThoughtDonePayload;
     'llm:toolcall': LlmToolCallPayload;
     'llm:done': LlmDonePayload;
     'llm:error': LlmErrorPayload;

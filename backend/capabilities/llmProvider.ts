@@ -75,8 +75,8 @@ export async function startLlmProvider(
       outputFormat: 'unified'
     })) {
       const chunkAt = Date.now();
-      activeThoughtBlock = collectThoughtBlock(activeThoughtBlock, chunk, chunkAt);
-      if (activeThoughtBlock && shouldCloseThoughtBlock(chunk)) activeThoughtBlock = flushThoughtBlock(request.id, activeThoughtBlock, chunkAt, emit);
+      activeThoughtBlock = emitThoughtDeltas(request.id, activeThoughtBlock, chunk, chunkAt, emit);
+      if (activeThoughtBlock && shouldCloseThoughtBlock(chunk)) activeThoughtBlock = finishThoughtBlock(request.id, activeThoughtBlock, chunkAt, emit);
       if (hasStreamOutput(chunk)) {
         firstStreamChunkAt ??= chunkAt;
         lastStreamChunkAt = chunkAt;
@@ -86,7 +86,7 @@ export async function startLlmProvider(
 
     if (!didEmitDone) {
       const finishedAt = Date.now();
-      if (activeThoughtBlock) flushThoughtBlock(request.id, activeThoughtBlock, finishedAt, emit);
+      if (activeThoughtBlock) finishThoughtBlock(request.id, activeThoughtBlock, finishedAt, emit);
       emit({ type: LlmEventType.Done, payload: { requestId: request.id, ...createDoneTiming(firstStreamChunkAt, lastStreamChunkAt, finishedAt) } });
     }
   } catch (error) {
@@ -132,8 +132,7 @@ function toUnifiedPart(part: ContentPart): UnifiedPart {
     return {
       text: part.text,
       ...(part.thought !== undefined ? { thought: part.thought } : {}),
-      ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
-      ...(part.thoughtSignatures ? { thoughtSignatures: part.thoughtSignatures } : {})
+      ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {})
     };
   }
   if (isFunctionCallPart(part)) {
@@ -220,23 +219,26 @@ function visibleTextFromParts(parts: UnifiedPart[]): string {
 
 interface ActiveThoughtBlock {
   startedAt: number;
-  text: string;
   thoughtSignature?: string;
-  thoughtSignatures?: Record<string, string | undefined>;
 }
 
-function collectThoughtBlock(current: ActiveThoughtBlock | undefined, chunk: UnifiedLLMStreamChunk, at: number): ActiveThoughtBlock | undefined {
+function emitThoughtDeltas(requestId: string, current: ActiveThoughtBlock | undefined, chunk: UnifiedLLMStreamChunk, at: number, emit: Emit): ActiveThoughtBlock | undefined {
   let block = current;
   for (const part of chunk.partsDelta ?? []) {
     if (!isUnifiedThoughtTextPart(part)) continue;
     const text = part.text ?? '';
     if (!text) continue;
-    block ??= { startedAt: at, text: '' };
-    block.text += text;
+    block ??= { startedAt: at };
     const signature = thoughtSignatureFromPart(part);
     if (signature) block.thoughtSignature = signature;
-    const signatures = thoughtSignaturesFromPart(part);
-    if (signatures) block.thoughtSignatures = { ...block.thoughtSignatures, ...signatures };
+    emit({
+      type: LlmEventType.ThoughtDelta,
+      payload: {
+        requestId,
+        text,
+        ...(signature ? { thoughtSignature: signature } : {})
+      }
+    });
   }
   return block;
 }
@@ -245,15 +247,13 @@ function shouldCloseThoughtBlock(chunk: UnifiedLLMStreamChunk): boolean {
   return !!chunk.finishReason || hasStreamOutput(chunk);
 }
 
-function flushThoughtBlock(requestId: string, block: ActiveThoughtBlock, finishedAt: number, emit: Emit): undefined {
+function finishThoughtBlock(requestId: string, block: ActiveThoughtBlock, finishedAt: number, emit: Emit): undefined {
   emit({
-    type: LlmEventType.Thought,
+    type: LlmEventType.ThoughtDone,
     payload: {
       requestId,
-      text: block.text,
       thoughtDurationMs: Math.max(0, finishedAt - block.startedAt),
-      ...(block.thoughtSignature ? { thoughtSignature: block.thoughtSignature } : {}),
-      ...(block.thoughtSignatures ? { thoughtSignatures: block.thoughtSignatures } : {})
+      ...(block.thoughtSignature ? { thoughtSignature: block.thoughtSignature } : {})
     }
   });
   return undefined;
@@ -268,19 +268,8 @@ function isUnifiedFunctionCallPart(part: UnifiedPart): part is Extract<UnifiedPa
 }
 
 function thoughtSignatureFromPart(part: UnifiedPart): string | undefined {
-  const record = part as { thoughtSignature?: unknown; thoughtSignatures?: Record<string, unknown> };
-  if (typeof record.thoughtSignature === 'string') return record.thoughtSignature;
-  if (record.thoughtSignatures) {
-    const gemini = record.thoughtSignatures.gemini;
-    if (typeof gemini === 'string') return gemini;
-    return Object.values(record.thoughtSignatures).find((value): value is string => typeof value === 'string');
-  }
-  return undefined;
-}
-
-function thoughtSignaturesFromPart(part: UnifiedPart): Record<string, string | undefined> | undefined {
-  const value = (part as { thoughtSignatures?: unknown }).thoughtSignatures;
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, string | undefined> : undefined;
+  const value = (part as { thoughtSignature?: unknown }).thoughtSignature;
+  return typeof value === 'string' ? value : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

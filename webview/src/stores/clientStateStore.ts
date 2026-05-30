@@ -7,6 +7,7 @@ import {
   type ClientPatchOp,
   type ClientState,
   type MessageRecord,
+  isTextPart,
   isVisibleTextPart,
   type SessionRecord,
   type ToolCallEventRecord,
@@ -94,6 +95,30 @@ function applyClientPatchOp(patch: ClientPatchOp): void {
         const last = parts[parts.length - 1];
         if (last && isVisibleTextPart(last)) parts[parts.length - 1] = { ...last, text: last.text + patch.delta };
         else parts.push({ text: patch.delta });
+        message.content = { ...message.content, parts };
+      }
+      break;
+    }
+    case 'message.appendThought': {
+      const message = clientState.messages.find((item) => item.id === patch.id);
+      if (message) {
+        const parts = [...message.content.parts];
+        const existing = parts[patch.partIndex];
+        if (existing && isTextPart(existing) && existing.thought === true) {
+          parts[patch.partIndex] = {
+            ...existing,
+            text: existing.text + patch.delta,
+            ...(patch.thoughtSignature ? { thoughtSignature: patch.thoughtSignature } : {})
+          };
+        } else {
+          const thoughtPart = {
+            text: patch.delta,
+            thought: true as const,
+            ...(patch.thoughtSignature ? { thoughtSignature: patch.thoughtSignature } : {})
+          };
+          if (patch.partIndex >= 0 && patch.partIndex <= parts.length) parts.splice(patch.partIndex, 0, thoughtPart);
+          else parts.push(thoughtPart);
+        }
         message.content = { ...message.content, parts };
       }
       break;

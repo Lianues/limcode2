@@ -1,26 +1,28 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
-import { readEvents } from '../../../events';
-import { LlmEventType } from '../../llm/events';
+import {
+  LlmEventType,
+  type LlmDeltaPayload,
+  type LlmDonePayload,
+  type LlmErrorPayload,
+  type LlmThoughtDeltaPayload,
+  type LlmThoughtDonePayload,
+  type LlmToolCallPayload
+} from '../../llm/events';
 import { ToolCall } from '../../tools/components';
 import { spawnToolCall, ToolCallBundle } from '../../tools/bundles';
 import { LlmRequest, Message, Streaming, type MessageData } from '../components';
-import { isFunctionCallPart, isVisibleTextPart, type ContentPart } from '../../../../../shared/protocol';
+import { isFunctionCallPart, isTextPart, isVisibleTextPart, type ContentPart } from '../../../../../shared/protocol';
 
-interface PendingThoughtPart {
-  text: string;
-  thoughtDurationMs: number;
-  thoughtSignature?: string;
-  thoughtSignatures?: Record<string, string | undefined>;
-}
+type PendingOperation =
+  | { kind: 'thoughtDelta'; payload: LlmThoughtDeltaPayload }
+  | { kind: 'thoughtDone'; payload: LlmThoughtDonePayload }
+  | { kind: 'delta'; payload: LlmDeltaPayload }
+  | { kind: 'toolCall'; payload: LlmToolCallPayload }
+  | { kind: 'done'; payload: LlmDonePayload }
+  | { kind: 'error'; payload: LlmErrorPayload };
 
 interface PendingRequestUpdate {
-  thoughts: PendingThoughtPart[];
-  delta: string;
-  calls: Array<{ id?: string; name: string; argsJson: string; thoughtSignature?: string }>;
-  done: boolean;
-  createdAt?: number;
-  streamOutputDurationMs?: number;
-  error?: string;
+  operations: PendingOperation[];
 }
 
 const LlmRequestsByIdQuery = defineQuery({
@@ -54,38 +56,34 @@ export const LlmPollSystem = defineSystem({
   access: {
     queries: [LlmRequestsByIdQuery, ModelMessagesQuery, ToolCallLookupQuery],
     writes: { components: [Streaming] },
-    events: { read: [LlmEventType.Thought, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error] },
+    events: { read: [LlmEventType.ThoughtDelta, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error] },
     bundles: [ToolCallBundle]
   },
   run(ctx) {
     const { world, cmd } = ctx;
     const updates = new Map<string, PendingRequestUpdate>();
 
-    for (const payload of readEvents(ctx, LlmEventType.Thought)) {
-      updateFor(updates, payload.requestId).thoughts.push(payload);
-    }
-
-    for (const payload of readEvents(ctx, LlmEventType.Delta)) {
-      updateFor(updates, payload.requestId).delta += payload.text;
-    }
-
-    for (const payload of readEvents(ctx, LlmEventType.ToolCall)) {
-      updateFor(updates, payload.requestId).calls.push(...payload.calls);
-    }
-
-    for (const payload of readEvents(ctx, LlmEventType.Error)) {
-      const update = updateFor(updates, payload.requestId);
-      update.error = payload.message;
-      update.createdAt = payload.createdAt;
-      update.streamOutputDurationMs = payload.streamOutputDurationMs;
-      update.done = true;
-    }
-
-    for (const payload of readEvents(ctx, LlmEventType.Done)) {
-      const update = updateFor(updates, payload.requestId);
-      update.createdAt = payload.createdAt;
-      update.streamOutputDurationMs = payload.streamOutputDurationMs;
-      update.done = true;
+    for (const event of ctx.events) {
+      switch (event.type) {
+        case LlmEventType.ThoughtDelta:
+          pushOperation(updates, { kind: 'thoughtDelta', payload: event.payload as LlmThoughtDeltaPayload });
+          break;
+        case LlmEventType.ThoughtDone:
+          pushOperation(updates, { kind: 'thoughtDone', payload: event.payload as LlmThoughtDonePayload });
+          break;
+        case LlmEventType.Delta:
+          pushOperation(updates, { kind: 'delta', payload: event.payload as LlmDeltaPayload });
+          break;
+        case LlmEventType.ToolCall:
+          pushOperation(updates, { kind: 'toolCall', payload: event.payload as LlmToolCallPayload });
+          break;
+        case LlmEventType.Done:
+          pushOperation(updates, { kind: 'done', payload: event.payload as LlmDonePayload });
+          break;
+        case LlmEventType.Error:
+          pushOperation(updates, { kind: 'error', payload: event.payload as LlmErrorPayload });
+          break;
+      }
     }
 
     for (const [requestId, update] of updates) {
@@ -94,10 +92,14 @@ export const LlmPollSystem = defineSystem({
   }
 });
 
+function pushOperation(updates: Map<string, PendingRequestUpdate>, operation: PendingOperation): void {
+  updateFor(updates, operation.payload.requestId).operations.push(operation);
+}
+
 function updateFor(updates: Map<string, PendingRequestUpdate>, requestId: string): PendingRequestUpdate {
   let update = updates.get(requestId);
   if (!update) {
-    update = { thoughts: [], delta: '', calls: [], done: false };
+    update = { operations: [] };
     updates.set(requestId, update);
   }
   return update;
@@ -119,9 +121,6 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
   if (!current) return;
 
   let next = current;
-  for (const thought of update.thoughts) next = appendThoughtPart(next, thought);
-  if (update.delta) next = appendTextToMessage(next, update.delta);
-
   const existingFunctionCallIds = new Set(
     next.content.parts
       .filter(isFunctionCallPart)
@@ -129,42 +128,58 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
       .filter((id): id is string => !!id)
   );
   const spawnedOrSeenCallIds = new Set<string>();
+  let shouldFinish = false;
 
-  for (const rawCall of update.calls) {
-    const toolCallId = normalizeToolCallId(requestId, rawCall, spawnedOrSeenCallIds.size);
-    if (spawnedOrSeenCallIds.has(toolCallId)) continue;
-    spawnedOrSeenCallIds.add(toolCallId);
+  for (const operation of update.operations) {
+    switch (operation.kind) {
+      case 'thoughtDelta':
+        next = appendThoughtDelta(next, operation.payload);
+        break;
+      case 'thoughtDone':
+        next = finishThoughtPart(next, operation.payload);
+        break;
+      case 'delta':
+        next = appendTextToMessage(next, operation.payload.text);
+        break;
+      case 'toolCall':
+        for (const rawCall of operation.payload.calls) {
+          const toolCallId = normalizeToolCallId(requestId, rawCall, spawnedOrSeenCallIds.size);
+          if (spawnedOrSeenCallIds.has(toolCallId)) continue;
+          spawnedOrSeenCallIds.add(toolCallId);
 
-    if (!existingFunctionCallIds.has(toolCallId)) {
-      next = appendFunctionCallPart(next, { id: toolCallId, name: rawCall.name, argsJson: rawCall.argsJson, thoughtSignature: rawCall.thoughtSignature });
-      existingFunctionCallIds.add(toolCallId);
+          if (!existingFunctionCallIds.has(toolCallId)) {
+            next = appendFunctionCallPart(next, { id: toolCallId, name: rawCall.name, argsJson: rawCall.argsJson, thoughtSignature: rawCall.thoughtSignature });
+            existingFunctionCallIds.add(toolCallId);
+          }
+
+          if (!toolCallExists(world, toolCallId)) {
+            spawnToolCall(cmd, { modelMessage, id: toolCallId, name: rawCall.name, argsJson: rawCall.argsJson });
+          }
+        }
+        break;
+      case 'error':
+        next = appendTextToMessage(next, `\n[error] ${operation.payload.message}`);
+        next = withLlmTiming({ ...next, status: 'error' }, operation.payload);
+        shouldFinish = true;
+        break;
+      case 'done':
+        next = withLlmTiming({ ...next, status: 'complete' }, operation.payload);
+        shouldFinish = true;
+        break;
     }
-
-    if (!toolCallExists(world, toolCallId)) {
-      spawnToolCall(cmd, { modelMessage, id: toolCallId, name: rawCall.name, argsJson: rawCall.argsJson });
-    }
-  }
-
-  if (update.error) {
-    next = appendTextToMessage(next, `\n[error] ${update.error}`);
-    next = withLlmTiming({ ...next, status: 'error' }, update);
-  } else if (update.done) {
-    next = withLlmTiming({ ...next, status: 'complete' }, update);
-  } else if (update.createdAt !== undefined || update.streamOutputDurationMs !== undefined) {
-    next = withLlmTiming(next, update);
   }
 
   if (next !== current) {
     cmd.add(modelMessage, Message, next);
   }
 
-  if (update.done) {
+  if (shouldFinish) {
     cmd.remove(modelMessage, Streaming);
     cmd.despawn(request);
   }
 }
 
-function withLlmTiming(message: MessageData, update: PendingRequestUpdate): MessageData {
+function withLlmTiming(message: MessageData, update: LlmDonePayload | LlmErrorPayload): MessageData {
   return {
     ...message,
     ...(update.createdAt !== undefined ? { createdAt: update.createdAt } : {}),
@@ -172,15 +187,39 @@ function withLlmTiming(message: MessageData, update: PendingRequestUpdate): Mess
   };
 }
 
-function appendThoughtPart(message: MessageData, thought: PendingThoughtPart): MessageData {
+function appendThoughtDelta(message: MessageData, thought: LlmThoughtDeltaPayload): MessageData {
+  const parts = [...message.content.parts];
+  const last = parts[parts.length - 1];
+  if (last && isTextPart(last) && last.thought === true && last.thoughtDurationMs === undefined) {
+    parts[parts.length - 1] = {
+      ...last,
+      text: last.text + thought.text,
+      ...(thought.thoughtSignature ? { thoughtSignature: thought.thoughtSignature } : {})
+    };
+    return { ...message, content: { ...message.content, parts } };
+  }
+
   const part: ContentPart = {
     text: thought.text,
     thought: true,
-    thoughtDurationMs: thought.thoughtDurationMs,
-    ...(thought.thoughtSignature ? { thoughtSignature: thought.thoughtSignature } : {}),
-    ...(thought.thoughtSignatures ? { thoughtSignatures: thought.thoughtSignatures } : {})
+    ...(thought.thoughtSignature ? { thoughtSignature: thought.thoughtSignature } : {})
   };
   return { ...message, content: { ...message.content, parts: [...message.content.parts, part] } };
+}
+
+function finishThoughtPart(message: MessageData, thought: LlmThoughtDonePayload): MessageData {
+  const parts = [...message.content.parts];
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index];
+    if (!part || !isTextPart(part) || part.thought !== true || part.thoughtDurationMs !== undefined) continue;
+    parts[index] = {
+      ...part,
+      thoughtDurationMs: thought.thoughtDurationMs,
+      ...(thought.thoughtSignature ? { thoughtSignature: thought.thoughtSignature } : {})
+    };
+    return { ...message, content: { ...message.content, parts } };
+  }
+  return message;
 }
 
 function appendFunctionCallPart(

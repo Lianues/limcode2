@@ -10,9 +10,11 @@ import {
   isFunctionCallPart,
   isFunctionResponsePart,
   isInlineDataPart,
+  isTextPart,
   isVisibleTextPart,
   type MessageRecord,
   type MsgRole,
+  type TextPart,
   type ToolCallEventRecord,
   type ToolCallRecord
 } from '@shared/protocol';
@@ -106,6 +108,30 @@ function messageDisplayText(message: MessageRecord): string {
 
 function isToolResponseMessage(message: MessageRecord): boolean {
   return message.content.parts.some(isFunctionResponsePart);
+}
+
+function thoughtParts(message: MessageRecord): TextPart[] {
+  return message.content.parts.filter((part): part is TextPart =>
+    isTextPart(part) && part.thought === true && part.text.trim().length > 0
+  );
+}
+
+function thoughtSummary(message: MessageRecord): string {
+  const parts = thoughtParts(message);
+  if (parts.length === 0) return '';
+  const totalDuration = parts.reduce((sum, part) => sum + (part.thoughtDurationMs ?? 0), 0);
+  const duration = totalDuration > 0 ? ` · ${formatDuration(totalDuration)}` : '';
+  return parts.length === 1 ? `思考${duration}` : `思考 ${parts.length} 段${duration}`;
+}
+
+function thoughtPartTitle(part: TextPart, index: number, total: number): string {
+  const prefix = total > 1 ? `思考 ${index + 1}` : '思考内容';
+  return part.thoughtDurationMs !== undefined ? `${prefix} · ${formatDuration(part.thoughtDurationMs)}` : prefix;
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
 }
 
 function stringifyPartPayload(value: unknown): string {
@@ -476,6 +502,13 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
       <div v-for="m in sessionMessages" :key="m.id" class="msg" :class="m.role">
         <div class="meta">{{ roleLabel(m.role) }}</div>
         <div class="bubble">
+          <details v-if="thoughtParts(m).length" class="thoughts">
+            <summary>{{ thoughtSummary(m) }}</summary>
+            <div v-for="(thought, index) in thoughtParts(m)" :key="index" class="thought-block">
+              <div class="thought-title">{{ thoughtPartTitle(thought, index, thoughtParts(m).length) }}</div>
+              <pre class="thought-text">{{ thought.text }}</pre>
+            </div>
+          </details>
           <pre v-if="messageDisplayText(m) || m.status === 'streaming'" class="text">{{ messageDisplayText(m) }}<span v-if="m.status === 'streaming'" class="cursor">▋</span></pre>
           <div v-if="toolCallsForMessage(m.id).length" class="tools">
             <div v-for="t in toolCallsForMessage(m.id)" :key="t.id" class="tool" :class="t.status">
@@ -534,6 +567,11 @@ code { background: var(--vscode-textCodeBlock-background); padding: 1px 5px; bor
 .bubble { border: 1px solid var(--vscode-panel-border); border-radius: 10px; padding: 8px 12px; background: var(--vscode-editor-background); max-width: 90%; }
 .msg.user .bubble { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
 .text { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: inherit; }
+.thoughts { margin: 0 0 8px; color: var(--vscode-descriptionForeground); font-size: 12px; }
+.thoughts summary { cursor: pointer; user-select: none; }
+.thought-block { margin-top: 6px; padding: 6px 8px; border-left: 2px solid var(--vscode-panel-border); background: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%); }
+.thought-title { margin-bottom: 4px; font-size: 11px; opacity: 0.9; }
+.thought-text { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: inherit; }
 .cursor { animation: blink 1s steps(2, start) infinite; }
 @keyframes blink { to { opacity: 0; } }
 .tools { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }

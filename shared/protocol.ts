@@ -164,8 +164,6 @@ export interface TextPart {
   thought?: boolean;
   /** 便于直接存取的单字符串签名形式。 */
   thoughtSignature?: string;
-  /** 不同 provider 的思考签名。 */
-  thoughtSignatures?: Record<string, string | undefined>;
   thoughtDurationMs?: number;
 }
 
@@ -287,6 +285,7 @@ export type ClientPatchOp =
   | { kind: 'message.upsert'; message: MessageRecord }
   | { kind: 'message.remove'; id: string }
   | { kind: 'message.appendText'; id: string; delta: string }
+  | { kind: 'message.appendThought'; id: string; partIndex: number; delta: string; thoughtSignature?: string }
   | { kind: 'message.status'; id: string; status: MsgStatus }
   | { kind: 'toolcall.upsert'; toolCall: ToolCallRecord }
   | { kind: 'toolcall.remove'; id: string }

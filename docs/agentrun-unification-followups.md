@@ -427,7 +427,7 @@ RunEditPolicy
 
 ---
 
-### 8. 存储层是可运行版，不是最终分目录版
+### 8. 存储层是可运行版，不是最终分目录版(已完成)
 
 当前为了完成大一统核心，存储已改成新的 `ClientState` 全量文件方式：
 
@@ -452,6 +452,108 @@ mode-approval-policy-links/
 ```
 
 当前 `RuntimePaths` 已经预留了这些 root path，但 `vscodeStorage/index.ts` 暂时没有逐类使用它们。
+
+
+
+第 8 部分「存储层分目录化」已完成，并通过：
+npm run check
+完成内容
+
+1. 移除 client-state.json 主存储路径
+
+原来：
+<dataRoot>/client-state.json
+承载所有业务数据。
+
+现在 vscodeStorage/index.ts 不再读写这个文件，也不做旧格式 fallback。
+
+2. 新增分目录 ClientState store
+
+新增文件：
+backend/capabilities/vscodeStorage/clientStateStore.ts
+负责把 ClientState 拆成多个独立 record store 读写。
+
+3. 结构对象按领域目录存储
+
+现在会使用这些 root：
+agents/
+agent-modes/
+tool-policies/
+approval-policies/
+system-prompts/
+model-profiles/
+agent-conversation-links/
+agent-mode-links/
+mode-tool-policy-links/
+mode-approval-policy-links/
+mode-system-prompt-links/
+mode-model-profile-links/
+agent-runs/
+agent-run-source-links/
+agent-run-target-links/
+message-run-links/
+tool-call-run-links/
+message-revisions/
+run-policies/
+其中 run-policies/ 内部继续按类型拆分：
+run-policies/conversation-policies/
+run-policies/context-policies/
+run-policies/delivery-policies/
+run-policies/edit-policies/
+run-policies/mode-links/
+run-policies/system-prompt-links/
+run-policies/model-profile-links/
+run-policies/tool-policy-links/
+run-policies/approval-policy-links/
+run-policies/conversation-policy-links/
+run-policies/context-policy-links/
+run-policies/delivery-policy-links/
+run-policies/edit-policy-links/
+4. Conversation 相关数据分片存储
+
+Conversation 本体：
+conversations/index.json
+conversations/records/*.json
+Messages：
+conversations/messages/{conversationShard}/index.json
+conversations/messages/{conversationShard}/records/*.json
+ToolCall snapshots：
+conversations/tool-calls/{conversationShard}/index.json
+conversations/tool-calls/{conversationShard}/records/*.json
+ToolCall events：
+conversations/tool-call-events/{conversationShard}/index.json
+conversations/tool-call-events/{conversationShard}/records/*.json
+Conversation links：
+conversations/reuse-links/
+conversations/branch-links/
+5. 增量写入不再改全量 state
+
+这些接口现在直接写对应分片：
+saveMessageSnapshot()
+removeMessage()
+saveToolCallSnapshot()
+appendToolCallEvent()
+不再执行：
+load client-state.json -> 改数组 -> save client-state.json
+6. loadClientState() 可从分目录重组完整投影
+
+启动时会从各个目录读取 records，重新组装成完整 ClientState，供现有 hydration 流程继续使用。
+
+如果所有 store 都为空，返回 undefined，让默认初始化逻辑继续创建 default Agent / Conversation。
+
+修改文件
+backend/capabilities/vscodeStorage/clientStateStore.ts
+backend/capabilities/vscodeStorage/index.ts
+验证
+
+已通过：
+npm run check
+本轮没有加入旧 client-state.json 兼容读取，也没有引入自动 diff / workspace snapshot / 修改归因。
+23:33  302.9s  ↑274,201(272,896)  ↓912   32.9 t/s
+Iris 进度 · 3/3 已完成
+  ✓ 新增分目录 ClientState store
+  ✓ 改造 VS Code storage capability
+  ✓ 验证存储类型检查
 
 ---
 

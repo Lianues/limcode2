@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { ClientState, ConversationSettingsRecord, GlobalSettingsRecord, GlobalSettingsSectionValue } from '../../../shared/protocol';
+import type { ConversationSettingsRecord, GlobalSettingsRecord, GlobalSettingsSectionValue } from '../../../shared/protocol';
 import type { StorageCapability } from '../types';
 import { ensureGlobalSettingsFile, loadGlobalSettingsFile, writeGlobalSettingsFile } from './globalSettings';
 import {
@@ -12,8 +12,14 @@ import {
 import { migrateStorageRoot } from './migration';
 import { createVscodeStoragePaths, ensureStorageRoots } from './paths';
 import { readJson, writeJson } from './json';
-
-const CLIENT_STATE_FILE = 'client-state.json';
+import {
+  appendToolCallEventRecord,
+  loadClientStateFromStores,
+  removeMessageRecord,
+  saveClientStateToStores,
+  saveMessageRecord,
+  saveToolCallRecord
+} from './clientStateStore';
 
 type StoragePaths = ReturnType<typeof createVscodeStoragePaths>;
 
@@ -55,10 +61,6 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     await ensureGlobalSettingsFile(paths.settingsRootUri, 'llm');
   }
 
-  function clientStateUri(paths: StoragePaths): vscode.Uri {
-    return vscode.Uri.joinPath(paths.globalStorageUri, CLIENT_STATE_FILE);
-  }
-
   async function loadCommonGlobalSettings(): Promise<{ section: 'common'; settings: GlobalSettingsRecord; filePath: string }> {
     return { section: 'common', settings: createGlobalSettingsRecord(context), filePath: LIMCODE_GLOBAL_STATUS_LABEL };
   }
@@ -75,52 +77,38 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     return loadCommonGlobalSettings();
   }
 
-  async function loadState(paths: StoragePaths): Promise<ClientState> {
-    return (await readJson<ClientState>(clientStateUri(paths))) ?? emptyClientState();
-  }
-
-  async function saveState(paths: StoragePaths, state: ClientState): Promise<void> {
-    await writeJson(clientStateUri(paths), state);
-  }
-
   return {
     get paths() { return getPaths(); },
     async ensureReady() { await ensureReadyFor(getPaths()); },
     async loadClientState() {
       const paths = getPaths();
       await ensureReadyFor(paths);
-      const state = await readJson<ClientState>(clientStateUri(paths));
-      return state ?? undefined;
+      return loadClientStateFromStores(paths);
     },
     async saveClientState(state) {
       const paths = getPaths();
       await ensureReadyFor(paths);
-      await saveState(paths, state);
+      await saveClientStateToStores(paths, state);
     },
     async saveMessageSnapshot(conversationId, message) {
       const paths = getPaths();
-      const state = await loadState(paths);
-      const normalized = { ...message, conversationId };
-      state.messages = upsertById(state.messages, normalized);
-      await saveState(paths, state);
+      await ensureReadyFor(paths);
+      await saveMessageRecord(paths, conversationId, message);
     },
     async removeMessage(_conversationId, messageId) {
       const paths = getPaths();
-      const state = await loadState(paths);
-      state.messages = state.messages.filter((message) => message.id !== messageId);
-      await saveState(paths, state);
+      await ensureReadyFor(paths);
+      await removeMessageRecord(paths, _conversationId, messageId);
     },
     async saveToolCallSnapshot(_conversationId, toolCall) {
       const paths = getPaths();
-      const state = await loadState(paths);
-      state.toolCalls = upsertById(state.toolCalls, toolCall);
-      await saveState(paths, state);
+      await ensureReadyFor(paths);
+      await saveToolCallRecord(paths, _conversationId, toolCall);
     },
     async appendToolCallEvent(_conversationId, event) {
       const paths = getPaths();
-      const state = await loadState(paths);
-      state.toolCallEvents = upsertById(state.toolCallEvents, event);
-      await saveState(paths, state);
+      await ensureReadyFor(paths);
+      await appendToolCallEventRecord(paths, _conversationId, event);
     },
     async loadGlobalSettings(section) {
       if (section === 'common') return loadCommonGlobalSettings();
@@ -161,22 +149,4 @@ function safeFileName(input: string): string {
   return input.replace(/[^a-zA-Z0-9_.-]+/g, '_');
 }
 
-function upsertById<T extends { id: string }>(items: T[], item: T): T[] {
-  const index = items.findIndex((candidate) => candidate.id === item.id);
-  if (index < 0) return [...items, item];
-  const next = [...items];
-  next[index] = item;
-  return next;
-}
 
-function emptyClientState(): ClientState {
-  return {
-    agents: [], agentModes: [], toolPolicies: [], approvalPolicies: [], systemPrompts: [], modelProfiles: [],
-    agentModeLinks: [], modeToolPolicyLinks: [], modeApprovalPolicyLinks: [], modeSystemPromptLinks: [], modeModelProfileLinks: [],
-    conversations: [], conversationReuseLinks: [], conversationBranchLinks: [], agentConversationLinks: [], messages: [], messageRevisions: [], messageCurrentRevisionLinks: [],
-    toolCalls: [], toolCallEvents: [], agentRuns: [], agentRunSourceLinks: [], agentRunTargetLinks: [], messageRunLinks: [], toolCallRunLinks: [],
-    runConversationPolicies: [], runContextPolicies: [], runDeliveryPolicies: [], runEditPolicies: [],
-    runModeLinks: [], runSystemPromptLinks: [], runModelProfileLinks: [], runToolPolicyLinks: [], runApprovalPolicyLinks: [],
-    runConversationPolicyLinks: [], runContextPolicyLinks: [], runDeliveryPolicyLinks: [], runEditPolicyLinks: [], agentRunInputRevisions: []
-  };
-}

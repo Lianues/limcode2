@@ -13,8 +13,9 @@ export function registerCommands(context: vscode.ExtensionContext, backendApp: B
   });
 
   const revealGlobalStorageCommand = vscode.commands.registerCommand(COMMANDS.revealGlobalStorage, async () => {
-    await vscode.workspace.fs.createDirectory(context.globalStorageUri);
-    await vscode.commands.executeCommand('revealFileInOS', context.globalStorageUri);
+    const storageRootUri = backendApp.getStorageRootUri();
+    await vscode.workspace.fs.createDirectory(storageRootUri);
+    await vscode.commands.executeCommand('revealFileInOS', storageRootUri);
   });
 
   context.subscriptions.push(openPanelCommand, revealGlobalStorageCommand);

@@ -71,78 +71,77 @@ export interface WebviewCapability {
   clientIds(): BridgeClientId[];
 }
 
-/** 插件数据目录：集中记录所有 VS Code 持久化数据的根位置。 */
+/** 插件数据目录：集中记录所有持久化数据的当前根位置；可由扩展级 globalState 指向自定义目录。 */
 export interface RuntimePaths {
+  /** 当前 active data root；未配置自定义目录时等于 VS Code context.globalStorageUri。 */
   globalStorageUri: vscode.Uri;
   globalStoragePath: string;
-  /** Agent 数据根目录：<globalStorage>/agents */
+  /** Agent 数据根目录：<dataRoot>/agents */
   agentsRootUri: vscode.Uri;
   agentsRootPath: string;
   agentsIndexUri: vscode.Uri;
   agentsIndexPath: string;
-  /** Agent Mode 数据根目录：<globalStorage>/agent-modes */
+  /** Agent Mode 数据根目录：<dataRoot>/agent-modes */
   agentModesRootUri: vscode.Uri;
   agentModesRootPath: string;
   agentModesIndexUri: vscode.Uri;
   agentModesIndexPath: string;
-  /** ToolPolicy 数据根目录：<globalStorage>/tool-policies */
+  /** ToolPolicy 数据根目录：<dataRoot>/tool-policies */
   toolPoliciesRootUri: vscode.Uri;
   toolPoliciesRootPath: string;
   toolPoliciesIndexUri: vscode.Uri;
   toolPoliciesIndexPath: string;
-  /** SystemPrompt 数据根目录：<globalStorage>/system-prompts */
+  /** SystemPrompt 数据根目录：<dataRoot>/system-prompts */
   systemPromptsRootUri: vscode.Uri;
   systemPromptsRootPath: string;
   systemPromptsIndexUri: vscode.Uri;
   systemPromptsIndexPath: string;
-  /** ModelProfile 数据根目录：<globalStorage>/model-profiles */
+  /** ModelProfile 数据根目录：<dataRoot>/model-profiles */
   modelProfilesRootUri: vscode.Uri;
   modelProfilesRootPath: string;
   modelProfilesIndexUri: vscode.Uri;
   modelProfilesIndexPath: string;
-  /** Conversation/消息数据根目录：<globalStorage>/conversations */
+  /** Conversation/消息数据根目录：<dataRoot>/conversations */
   conversationsRootUri: vscode.Uri;
   conversationsRootPath: string;
   conversationsIndexUri: vscode.Uri;
   conversationsIndexPath: string;
-  /** Agent 与 Conversation 的关系数据根目录：<globalStorage>/agent-conversation-links */
+  /** Agent 与 Conversation 的关系数据根目录：<dataRoot>/agent-conversation-links */
   linksRootUri: vscode.Uri;
   linksRootPath: string;
   linksIndexUri: vscode.Uri;
   linksIndexPath: string;
-  /** Agent 与 Mode 的关系数据根目录：<globalStorage>/agent-mode-links */
+  /** Agent 与 Mode 的关系数据根目录：<dataRoot>/agent-mode-links */
   agentModeLinksRootUri: vscode.Uri;
   agentModeLinksRootPath: string;
   agentModeLinksIndexUri: vscode.Uri;
   agentModeLinksIndexPath: string;
-  /** Mode 与 ToolPolicy 的关系数据根目录：<globalStorage>/mode-tool-policy-links */
+  /** Mode 与 ToolPolicy 的关系数据根目录：<dataRoot>/mode-tool-policy-links */
   modeToolPolicyLinksRootUri: vscode.Uri;
   modeToolPolicyLinksRootPath: string;
   modeToolPolicyLinksIndexUri: vscode.Uri;
   modeToolPolicyLinksIndexPath: string;
-  /** Mode 与 SystemPrompt 的关系数据根目录：<globalStorage>/mode-system-prompt-links */
+  /** Mode 与 SystemPrompt 的关系数据根目录：<dataRoot>/mode-system-prompt-links */
   modeSystemPromptLinksRootUri: vscode.Uri;
   modeSystemPromptLinksRootPath: string;
   modeSystemPromptLinksIndexUri: vscode.Uri;
   modeSystemPromptLinksIndexPath: string;
-  /** Mode 与 ModelProfile 的关系数据根目录：<globalStorage>/mode-model-profile-links */
+  /** Mode 与 ModelProfile 的关系数据根目录：<dataRoot>/mode-model-profile-links */
   modeModelProfileLinksRootUri: vscode.Uri;
   modeModelProfileLinksRootPath: string;
   modeModelProfileLinksIndexUri: vscode.Uri;
   modeModelProfileLinksIndexPath: string;
-  /** 通用设置根目录：<globalStorage>/settings */
+  /** 通用设置根目录：<dataRoot>/settings */
   settingsRootUri: vscode.Uri;
   settingsRootPath: string;
-  /** 全局 common 设置文件：<globalStorage>/settings/common.json */
-  globalSettingsUri: vscode.Uri;
-  globalSettingsPath: string;
-  /** LLM 设置文件：<globalStorage>/settings/llm.json */
+  /** LLM 设置文件：<dataRoot>/settings/llm.json */
   llmSettingsUri: vscode.Uri;
   llmSettingsPath: string;
 }
 
-/** VS Code 存储能力：通过 workspace.fs 读写插件全局数据。 */
+/** VS Code 存储能力：通过 workspace.fs/globalState 读写插件全局数据。 */
 export interface StorageCapability {
+  /** 当前 active data root 派生出的路径；数据目录切换后 getter 会返回新路径。 */
   readonly paths: RuntimePaths;
   ensureReady(): Promise<void>;
   loadClientState(): Promise<ClientState | undefined>;

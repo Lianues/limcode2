@@ -36,7 +36,7 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
       command,
       webview: createWebviewCapability(),
       storage,
-      paths: storage.paths,
+      get paths() { return storage.paths; },
       tools: { registry: registry.list() }
     },
     toolSchemas: registry.schemas()

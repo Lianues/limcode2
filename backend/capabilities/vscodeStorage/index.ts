@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
 import {
-  GLOBAL_SETTINGS_SECTIONS,
   type AgentModeLinkRecord,
   type AgentModeRecord,
   type ClientState,
+  type GlobalSettingsRecord,
+  type GlobalSettingsSectionValue,
   type ModeModelProfileLinkRecord,
   type ModeSystemPromptLinkRecord,
   type ModeToolPolicyLinkRecord,
@@ -24,37 +25,89 @@ import {
   saveToolCallSnapshot as saveStoredToolCallSnapshot
 } from './conversations';
 import { ensureGlobalSettingsFile, loadGlobalSettingsFile, writeGlobalSettingsFile } from './globalSettings';
+import {
+  createGlobalSettingsRecord,
+  LIMCODE_GLOBAL_STATUS_LABEL,
+  normalizeStatusDataRootPath,
+  resolveDataRootUri,
+  saveGlobalStatus
+} from './globalStatus';
 import { loadLinks, saveLinks } from './links';
+import { migrateStorageRoot } from './migration';
 import { createVscodeStoragePaths, ensureStorageRoots } from './paths';
 import { loadRecordStore, saveRecordStore } from './recordStore';
 
-export function createVsCodeStorageCapability(context: vscode.ExtensionContext): StorageCapability {
-  const paths = createVscodeStoragePaths(context.globalStorageUri);
+type StoragePaths = ReturnType<typeof createVscodeStoragePaths>;
 
-  const structuralRoots = [
-    paths.agentsRootUri,
-    paths.agentModesRootUri,
-    paths.toolPoliciesRootUri,
-    paths.systemPromptsRootUri,
-    paths.modelProfilesRootUri,
-    paths.conversationsRootUri,
-    paths.linksRootUri,
-    paths.agentModeLinksRootUri,
-    paths.modeToolPolicyLinksRootUri,
-    paths.modeSystemPromptLinksRootUri,
-    paths.modeModelProfileLinksRootUri
-  ];
+export function createVsCodeStorageCapability(context: vscode.ExtensionContext): StorageCapability {
+  let currentPaths = createVscodeStoragePaths(resolveDataRootUri(context));
+
+  function getPaths(): StoragePaths {
+    currentPaths = createVscodeStoragePaths(resolveDataRootUri(context));
+    return currentPaths;
+  }
+
+  function structuralRoots(paths: StoragePaths): vscode.Uri[] {
+    return [
+      paths.agentsRootUri,
+      paths.agentModesRootUri,
+      paths.toolPoliciesRootUri,
+      paths.systemPromptsRootUri,
+      paths.modelProfilesRootUri,
+      paths.conversationsRootUri,
+      paths.linksRootUri,
+      paths.agentModeLinksRootUri,
+      paths.modeToolPolicyLinksRootUri,
+      paths.modeSystemPromptLinksRootUri,
+      paths.modeModelProfileLinksRootUri
+    ];
+  }
+
+  async function ensureReadyFor(paths: StoragePaths): Promise<void> {
+    await ensureStorageRoots(...structuralRoots(paths), paths.settingsRootUri);
+    await ensureGlobalSettingsFile(paths.settingsRootUri, 'llm');
+  }
+
+  async function loadCommonGlobalSettings(): Promise<{ section: 'common'; settings: GlobalSettingsRecord; filePath: string }> {
+    return {
+      section: 'common',
+      settings: createGlobalSettingsRecord(context),
+      filePath: LIMCODE_GLOBAL_STATUS_LABEL
+    };
+  }
+
+  async function saveCommonGlobalSettings(settings: GlobalSettingsSectionValue): Promise<{ section: 'common'; settings: GlobalSettingsRecord; filePath: string }> {
+    const input = settings as Partial<GlobalSettingsRecord> | undefined;
+    const previousPaths = getPaths();
+    const targetDataRootPath = normalizeStatusDataRootPath(context, input?.dataFilePath ?? '');
+    const targetRootUri = resolveDataRootUri(context, targetDataRootPath);
+    const migration = await migrateStorageRoot(previousPaths.globalStorageUri, targetRootUri);
+
+    await saveGlobalStatus(
+      context,
+      targetDataRootPath,
+      migration.skipped ? undefined : {
+        fromPath: migration.fromPath,
+        toPath: migration.toPath,
+        migratedAt: migration.migratedAt
+      }
+    );
+
+    const nextPaths = getPaths();
+    await ensureReadyFor(nextPaths);
+    return loadCommonGlobalSettings();
+  }
 
   return {
-    paths,
+    get paths() {
+      return getPaths();
+    },
     async ensureReady() {
-      await ensureStorageRoots(...structuralRoots, paths.settingsRootUri);
-      await Promise.all(
-        GLOBAL_SETTINGS_SECTIONS.map((section) => ensureGlobalSettingsFile(paths.settingsRootUri, section))
-      );
+      await ensureReadyFor(getPaths());
     },
     async loadClientState() {
-      await ensureStorageRoots(...structuralRoots);
+      const paths = getPaths();
+      await ensureStorageRoots(...structuralRoots(paths));
 
       const [
         agents,
@@ -114,7 +167,8 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       } satisfies ClientState;
     },
     async saveClientState(state) {
-      await ensureStorageRoots(...structuralRoots);
+      const paths = getPaths();
+      await ensureStorageRoots(...structuralRoots(paths));
       await Promise.all([
         saveAgents(paths.agentsRootUri, paths.agentsIndexUri, state.agents),
         saveRecordStore(paths.agentModesRootUri, paths.agentModesIndexUri, state.agentModes, 'agentMode', (record) => record.name),
@@ -130,35 +184,45 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       ]);
     },
     async saveMessageSnapshot(sessionId, message) {
+      const paths = getPaths();
       await ensureStorageRoots(paths.conversationsRootUri);
       return saveStoredMessageSnapshot(paths.conversationsRootUri, paths.conversationsIndexUri, sessionId, message);
     },
     async removeMessage(sessionId, messageId) {
+      const paths = getPaths();
       await ensureStorageRoots(paths.conversationsRootUri);
       return removeStoredMessage(paths.conversationsRootUri, paths.conversationsIndexUri, sessionId, messageId);
     },
     async saveToolCallSnapshot(sessionId, toolCall) {
+      const paths = getPaths();
       await ensureStorageRoots(paths.conversationsRootUri);
       return saveStoredToolCallSnapshot(paths.conversationsRootUri, paths.conversationsIndexUri, sessionId, toolCall);
     },
     async appendToolCallEvent(sessionId, event) {
+      const paths = getPaths();
       await ensureStorageRoots(paths.conversationsRootUri);
       return appendStoredToolCallEvent(paths.conversationsRootUri, paths.conversationsIndexUri, sessionId, event);
     },
     async loadGlobalSettings(section) {
+      if (section === 'common') return loadCommonGlobalSettings();
+      const paths = getPaths();
       await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
       return loadGlobalSettingsFile(paths.settingsRootUri, section);
     },
     async saveGlobalSettings(section, settings) {
+      if (section === 'common') return saveCommonGlobalSettings(settings);
+      const paths = getPaths();
       await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
       await writeGlobalSettingsFile(paths.settingsRootUri, section, settings);
       return loadGlobalSettingsFile(paths.settingsRootUri, section);
     },
     async loadConversationSettings(sessionId, section) {
+      const paths = getPaths();
       await ensureStorageRoots(paths.conversationsRootUri);
       return loadConversationSettings(paths.conversationsRootUri, paths.conversationsIndexUri, sessionId, section);
     },
     async saveConversationSettings(section, settings) {
+      const paths = getPaths();
       await ensureStorageRoots(paths.conversationsRootUri);
       return saveConversationSettings(paths.conversationsRootUri, paths.conversationsIndexUri, section, settings);
     }

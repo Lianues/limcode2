@@ -54,30 +54,32 @@ export class ClientStatePersistence {
     this.pendingPersistGlobalJson = globalJson;
     this.pendingPersistState = state;
     if (this.persistTimer) clearTimeout(this.persistTimer);
-    this.persistTimer = setTimeout(() => this.persistImmediately(), this.debounceMs);
+    this.persistTimer = setTimeout(() => { void this.persistImmediately(); }, this.debounceMs);
   }
 
-  public persistImmediately(): void {
+  public async persistImmediately(options: { force?: boolean; throwOnError?: boolean } = {}): Promise<void> {
     if (this.persistTimer) {
       clearTimeout(this.persistTimer);
       this.persistTimer = undefined;
     }
 
     const latestState = this.world.tryGetResource(ClientSyncStateKey)?.lastState;
-    const state = this.pendingPersistState ?? latestState;
+    const state = options.force ? (latestState ?? this.pendingPersistState) : (this.pendingPersistState ?? latestState);
     if (!this.enabled || !state) return;
 
-    const globalJson = this.pendingPersistGlobalJson || JSON.stringify(globalPersistenceSlice(state));
-    if (!globalJson || globalJson === this.lastPersistedGlobalJson) return;
+    const globalJson = options.force ? JSON.stringify(globalPersistenceSlice(state)) : (this.pendingPersistGlobalJson || JSON.stringify(globalPersistenceSlice(state)));
+    if (!globalJson || (!options.force && globalJson === this.lastPersistedGlobalJson)) return;
 
     this.pendingPersistGlobalJson = '';
     this.pendingPersistState = undefined;
-    void this.storage.saveClientState(state)
-      .then(() => {
-        this.lastPersistedGlobalJson = globalJson;
-        this.rememberIncrementalState(state);
-      })
-      .catch((error) => console.warn('[LimCode] Failed to persist global client state:', error));
+    try {
+      await this.storage.saveClientState(state);
+      this.lastPersistedGlobalJson = globalJson;
+      this.rememberIncrementalState(state);
+    } catch (error) {
+      console.warn('[LimCode] Failed to persist global client state:', error);
+      if (options.throwOnError) throw error;
+    }
   }
 
   private queueIncrementalPersist(state: ClientState): void {

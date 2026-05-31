@@ -1,10 +1,11 @@
-import type { RuntimePaths, StorageCapability, WebviewCapability } from '../capabilities/types';
+import type { StorageCapability, WebviewCapability } from '../capabilities/types';
 import {
   BridgeMessageType,
   globalSettingsStreamId,
   createMessageId,
   type BridgeClientId,
   type ExtensionToWebviewMessage,
+  type GlobalSettingsRecord,
   type GlobalSettingsSection,
   type GlobalSettingsUpdatePayload
 } from '../../shared/protocol';
@@ -12,13 +13,12 @@ import {
 export interface GlobalSettingsBridgeDeps {
   storage: StorageCapability;
   webview: WebviewCapability;
-  paths: RuntimePaths;
+  beforeDataRootChange?: () => Promise<void>;
 }
 
 /**
  * 全局设置桥接。
- * 通过 section 泛化读写：common -> settings/common.json，llm -> settings/llm.json。
- * 后续新增全局设置文件时，只需要扩展 shared section 与 storage section spec。
+ * common 属于扩展级配置，保存于 VS Code globalState；llm 属于可迁移数据，保存于当前 dataRoot/settings/llm.json。
  */
 export class GlobalSettingsBridge {
   public constructor(private readonly deps: GlobalSettingsBridgeDeps) {}
@@ -37,11 +37,39 @@ export class GlobalSettingsBridge {
   public async update(payload: GlobalSettingsUpdatePayload | undefined, correlationId?: string): Promise<void> {
     if (!payload) return;
 
-    const stored = await this.deps.storage.saveGlobalSettings(payload.section, payload.settings);
-    this.deps.webview.broadcastToStream(
-      globalSettingsStreamId(payload.section),
-      this.createSnapshotMessage(stored, correlationId)
-    );
+    try {
+      const dataRootPathChanged = payload.section === 'common' && await this.isDataRootPathChange(payload);
+      if (dataRootPathChanged) {
+        await this.deps.beforeDataRootChange?.();
+      }
+
+      const stored = await this.deps.storage.saveGlobalSettings(payload.section, payload.settings);
+      this.deps.webview.broadcastToStream(
+        globalSettingsStreamId(payload.section),
+        this.createSnapshotMessage(stored, correlationId)
+      );
+      if (dataRootPathChanged) {
+        const llmSettings = await this.deps.storage.loadGlobalSettings('llm');
+        this.deps.webview.broadcastToStream(
+          globalSettingsStreamId('llm'),
+          this.createSnapshotMessage(llmSettings, correlationId)
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn('[LimCode] Failed to update global settings:', error);
+      this.deps.webview.broadcast({
+        id: createMessageId(),
+        type: BridgeMessageType.Error,
+        channel: 'settings',
+        scope: { kind: 'settings', level: 'global', id: payload.section },
+        correlationId,
+        payload: {
+          requestType: BridgeMessageType.GlobalSettingsUpdate,
+          message
+        }
+      });
+    }
   }
 
   private createSnapshotMessage(
@@ -60,5 +88,12 @@ export class GlobalSettingsBridge {
         filePath: stored.filePath
       }
     };
+  }
+
+  private async isDataRootPathChange(payload: GlobalSettingsUpdatePayload): Promise<boolean> {
+    const current = await this.deps.storage.loadGlobalSettings('common');
+    const currentSettings = current.settings as GlobalSettingsRecord;
+    const nextSettings = payload.settings as Partial<GlobalSettingsRecord> | undefined;
+    return (nextSettings?.dataFilePath ?? '').trim() !== currentSettings.dataFilePath.trim();
   }
 }

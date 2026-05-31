@@ -15,6 +15,25 @@ export const MODE_MODEL_PROFILE_LINKS_ROOT_DIR = 'mode-model-profile-links';
 export const CONVERSATIONS_ROOT_DIR = 'conversations';
 export const SETTINGS_ROOT_DIR = 'settings';
 
+/**
+ * 当前插件明确注册的数据根目录名。
+ * 自定义 data root 可能包含用户其它文件；迁移和删除只能触碰这些已注册目录。
+ */
+export const REGISTERED_STORAGE_ROOT_DIRS = [
+  AGENTS_ROOT_DIR,
+  AGENT_MODES_ROOT_DIR,
+  TOOL_POLICIES_ROOT_DIR,
+  SYSTEM_PROMPTS_ROOT_DIR,
+  MODEL_PROFILES_ROOT_DIR,
+  AGENT_CONVERSATION_LINKS_ROOT_DIR,
+  AGENT_MODE_LINKS_ROOT_DIR,
+  MODE_TOOL_POLICY_LINKS_ROOT_DIR,
+  MODE_SYSTEM_PROMPT_LINKS_ROOT_DIR,
+  MODE_MODEL_PROFILE_LINKS_ROOT_DIR,
+  CONVERSATIONS_ROOT_DIR,
+  SETTINGS_ROOT_DIR
+] as const;
+
 export const CONVERSATION_META_FILE = 'conversation.json';
 export const MESSAGES_DIR = 'messages';
 export const TOOL_CALLS_DIR = 'tool-calls';
@@ -25,5 +44,4 @@ export const MESSAGES_PER_CHUNK = 100;
 export const CONVERSATION_SETTINGS_DIR = 'settings';
 export const CONVERSATION_SETTINGS_FILE = 'common.json';
 
-export const GLOBAL_SETTINGS_FILE = 'common.json';
 export const LLM_SETTINGS_FILE = 'llm.json';

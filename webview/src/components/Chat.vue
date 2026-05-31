@@ -42,7 +42,9 @@ const providerOptions: Array<{ value: LlmProviderKind; label: string }> = [
 ];
 
 const globalSettings = reactive<GlobalSettingsRecord>({
-  dataFilePath: ''
+  dataFilePath: '',
+  activeDataRootPath: '',
+  defaultDataRootPath: ''
 });
 
 const llmSettings = reactive<LlmSettingsRecord>({
@@ -282,11 +284,13 @@ function requestAllGlobalSettings(): void {
 }
 
 function saveGlobalSettings(): void {
-  settingsStatus.value = '正在保存设置...';
+  settingsStatus.value = '正在保存设置，并按需迁移、删除旧数据目录中的插件数据...';
   bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
     section: 'common',
     settings: {
-      dataFilePath: globalSettings.dataFilePath
+      dataFilePath: globalSettings.dataFilePath,
+      activeDataRootPath: globalSettings.activeDataRootPath,
+      defaultDataRootPath: globalSettings.defaultDataRootPath
     }
   });
 }
@@ -308,6 +312,8 @@ function saveLlmSettings(): void {
 
 function applyGlobalSettings(settings: GlobalSettingsRecord): void {
   globalSettings.dataFilePath = settings.dataFilePath;
+  globalSettings.activeDataRootPath = settings.activeDataRootPath;
+  globalSettings.defaultDataRootPath = settings.defaultDataRootPath;
 }
 
 function applyLlmSettings(settings: LlmSettingsRecord): void {
@@ -426,6 +432,13 @@ onMounted(() => {
       conversationSettingsStatus.value = '对话设置已同步';
     })
   );
+  disposers.push(
+    bridge.on(BridgeMessageType.Error, (message) => {
+      if (message.payload?.requestType === BridgeMessageType.GlobalSettingsUpdate) {
+        settingsStatus.value = `设置保存失败：${message.payload.message}`;
+      }
+    })
+  );
   bridge.ready();
 });
 
@@ -444,7 +457,7 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
     <section class="settings-panel global-settings-panel">
       <h2>全局配置</h2>
       <label>
-        <span>数据文件路径（存储测试，暂不接入迁移/运行时）</span>
+        <span>数据目录路径（留空使用 VS Code 默认目录；保存后只迁移并删除旧目录中已注册的插件数据目录）</span>
         <input v-model="globalSettings.dataFilePath" type="text" placeholder="例如：D:/limcode/data" />
       </label>
 
@@ -489,7 +502,13 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
       </div>
 
       <p class="settings-path">
-        全局 common 文件：<code>{{ globalSettingsPath || '等待后端返回 settings/common.json 路径...' }}</code>
+        当前数据目录：<code>{{ globalSettings.activeDataRootPath || '等待后端返回当前数据目录...' }}</code>
+      </p>
+      <p class="settings-path">
+        默认数据目录：<code>{{ globalSettings.defaultDataRootPath || '等待后端返回默认数据目录...' }}</code>
+      </p>
+      <p class="settings-path">
+        路径配置保存位置：<code>{{ globalSettingsPath || '等待后端返回 VS Code globalState 位置...' }}</code>
       </p>
       <p class="settings-path">
         LLM 文件：<code>{{ llmSettingsPath || '等待后端返回 settings/llm.json 路径...' }}</code>

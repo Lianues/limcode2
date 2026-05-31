@@ -21,7 +21,7 @@
       },
       {
         "command": "limcode.revealGlobalStorage",
-        "title": "LimCode: Reveal Global Storage Folder",
+        "title": "LimCode: Reveal Data Storage Folder",
         "category": "LimCode"
       }
     ],

@@ -402,7 +402,12 @@ export interface ClientPatchPayload {
   patches: ClientPatchOp[];
 }
 export interface GlobalSettingsRecord {
+  /** 用户配置的数据根目录；空字符串表示使用 VS Code 默认 globalStorageUri。 */
   dataFilePath: string;
+  /** 后端解析后的当前实际数据根目录。 */
+  activeDataRootPath: string;
+  /** VS Code 默认 globalStorageUri，便于 UI 展示“留空时使用哪里”。 */
+  defaultDataRootPath: string;
 }
 export type GlobalSettingsSectionValue = GlobalSettingsRecord | LlmSettingsRecord;
 export interface GlobalSettingsGetPayload {

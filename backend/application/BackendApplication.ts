@@ -59,7 +59,7 @@ export class BackendApplication {
     this.globalSettingsBridge = new GlobalSettingsBridge({
       storage: this.env.storage,
       webview: this.env.webview,
-      paths: this.env.paths
+      beforeDataRootChange: () => this.persistence.persistImmediately({ force: true, throwOnError: true })
     });
     this.conversationSettingsBridge = new ConversationSettingsBridge({
       world: this.world,
@@ -133,6 +133,11 @@ export class BackendApplication {
     return sessionId;
   }
 
+  /** 当前 active data root；可能是 VS Code 默认 globalStorageUri，也可能是用户配置的自定义目录。 */
+  public getStorageRootUri(): vscode.Uri {
+    return this.env.storage.paths.globalStorageUri;
+  }
+
   public attachWebview(webview: vscode.Webview, meta: WebviewClientMeta = { kind: 'unknown' }): BridgeClientId {
     const clientId = this.env.webview.attach(webview, meta);
     this.webviewClients.register(clientId, meta);
@@ -151,7 +156,7 @@ export class BackendApplication {
   public dispose(): void {
     this.env.webview.detachAll();
     this.webviewClients.clear();
-    this.persistence.persistImmediately();
+    void this.persistence.persistImmediately();
   }
 
   private async initializeClientState(): Promise<void> {
@@ -163,7 +168,9 @@ export class BackendApplication {
       } else {
         requestSpawnAgent(this.world, createDefaultAgentSpawnRequest());
       }
-      console.log(`[LimCode] Storage roots: agents=${this.env.paths.agentsRootPath}, conversations=${this.env.paths.conversationsRootPath}, links=${this.env.paths.linksRootPath}`);
+      const paths = this.env.storage.paths;
+      console.log(`[LimCode] Data root: ${paths.globalStoragePath}`);
+      console.log(`[LimCode] Storage roots: agents=${paths.agentsRootPath}, conversations=${paths.conversationsRootPath}, links=${paths.linksRootPath}`);
     } catch (error) {
       console.warn('[LimCode] Failed to initialize stored chat state. Starting with a fresh session.', error);
       requestSpawnAgent(this.world, createDefaultAgentSpawnRequest());

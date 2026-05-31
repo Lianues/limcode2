@@ -31,8 +31,8 @@ export type ConversationSettingsSection = typeof CONVERSATION_SETTINGS_SECTIONS[
 export const CONVERSATION_CLIENT_STATE_STREAM_PREFIX = 'conversation:';
 export const CONVERSATION_CLIENT_STATE_STREAM_SUFFIX = ':state';
 
-export function conversationSettingsStreamId(sessionId: string, section: ConversationSettingsSection = 'common'): string {
-  return `${CONVERSATION_SETTINGS_STREAM_PREFIX}${sessionId}:${section}`;
+export function conversationSettingsStreamId(conversationId: string, section: ConversationSettingsSection = 'common'): string {
+  return `${CONVERSATION_SETTINGS_STREAM_PREFIX}${conversationId}:${section}`;
 }
 
 export function conversationIdFromSettingsStreamId(streamId: string): string | undefined {
@@ -42,8 +42,8 @@ export function conversationIdFromSettingsStreamId(streamId: string): string | u
   return separator >= 0 ? rest.slice(0, separator) : rest;
 }
 
-export function conversationClientStateStreamId(sessionId: string): string {
-  return `${CONVERSATION_CLIENT_STATE_STREAM_PREFIX}${sessionId}${CONVERSATION_CLIENT_STATE_STREAM_SUFFIX}`;
+export function conversationClientStateStreamId(conversationId: string): string {
+  return `${CONVERSATION_CLIENT_STATE_STREAM_PREFIX}${conversationId}${CONVERSATION_CLIENT_STATE_STREAM_SUFFIX}`;
 }
 
 export function conversationIdFromClientStateStreamId(streamId: string): string | undefined {
@@ -138,7 +138,6 @@ export interface LlmSettingsRecord {
   baseUrl: string;
   model: string;
   apiKey: string;
-  /** 可选 HTTP/HTTPS 代理地址，例如 http://localhost:8000。 */
   proxy?: string;
   temperature?: number;
 }
@@ -148,10 +147,16 @@ export interface AgentRecord {
   name: string;
   kind: string;
   status: 'idle' | 'thinking' | 'running' | 'done' | 'error';
-  parentAgentId?: string;
 }
 
-export type ToolApprovalMode = 'never' | 'onRisk' | 'always';
+export type ApprovalMode = 'never' | 'onRisk' | 'always' | 'manualOnly';
+export type AgentRunKind = 'chat' | 'tool_invoked' | 'delegated' | 'review' | 'notification' | 'scheduled';
+export type AgentRunStatus = 'queued' | 'preparing' | 'running' | 'waiting_tool' | 'waiting_child_run' | 'delivering' | 'completed' | 'failed' | 'cancelled' | 'stale';
+export type AgentRunSourceKind = 'user' | 'toolCall' | 'agentRun' | 'schedule' | 'system';
+export type AgentRunTargetRole = 'executor';
+export type MessageRunRole = 'input' | 'model' | 'tool_response' | 'notification';
+export type ToolCallRunRole = 'produced_by';
+export type PolicyBindingRole = 'active';
 
 export interface AgentModeRecord {
   id: string;
@@ -159,11 +164,18 @@ export interface AgentModeRecord {
   description?: string;
 }
 
+
 export interface ToolPolicyRecord {
   id: string;
   name: string;
   allowedTools: string[];
-  approvalMode: ToolApprovalMode;
+}
+
+export interface ApprovalPolicyRecord {
+  id: string;
+  name: string;
+  mode: ApprovalMode;
+  allowInteractiveApproval: boolean;
 }
 
 export interface SystemPromptRecord {
@@ -197,6 +209,13 @@ export interface ModeToolPolicyLinkRecord {
   role: ModeBindingRole;
 }
 
+export interface ModeApprovalPolicyLinkRecord {
+  id: string;
+  modeId: string;
+  approvalPolicyId: string;
+  role: ModeBindingRole;
+}
+
 export interface ModeSystemPromptLinkRecord {
   id: string;
   modeId: string;
@@ -211,17 +230,19 @@ export interface ModeModelProfileLinkRecord {
   role: ModeBindingRole;
 }
 
-export interface SessionRecord {
+export interface ConversationRecord {
   id: string;
   title?: string;
+  visibility?: 'visible' | 'hidden' | 'collapsed';
 }
 
-export type AgentConversationRole = 'active' | 'participant' | 'reviewer';
+
+export type AgentConversationRole = 'default' | 'participant' | 'reviewer';
 
 export interface AgentConversationLinkRecord {
   id: string;
   agentId: string;
-  sessionId: string;
+  conversationId: string;
   role: AgentConversationRole;
 }
 
@@ -229,32 +250,26 @@ export type ContentRole = MsgRole;
 
 export interface TextPart {
   text: string;
-  /** Gemini thinking 文本块。它是模型思考内容，不应作为普通正文展示/保存为可见输出。 */
   thought?: boolean;
-  /** 便于直接存取的单字符串签名形式。 */
   thoughtSignature?: string;
   thoughtDurationMs?: number;
 }
 
 export interface FunctionCallPart {
-  /** 应用侧工具调用 id，作为 Gemini-like part 的同层级元数据保留。 */
   id?: string;
   functionCall: {
     name: string;
     args: unknown;
   };
-  /** Gemini thought signature 需要与 functionCall 同层级保存。 */
   thoughtSignature?: string;
 }
 
 export interface FunctionResponsePart {
-  /** 应用侧工具调用 id，作为 Gemini-like part 的同层级元数据保留。 */
   id?: string;
   functionResponse: {
     name: string;
     response: unknown;
   };
-  /** 非 Gemini 标准字段，但需要保持原有层级，便于 UI/诊断使用。 */
   durationMs?: number;
 }
 
@@ -286,7 +301,7 @@ export function textContent(role: ContentRole, text: string): MessageContent {
 
 export interface MessageRecord {
   id: string;
-  sessionId: string;
+  conversationId: string;
   role: MsgRole;
   content: MessageContent;
   status: MsgStatus;
@@ -294,6 +309,23 @@ export interface MessageRecord {
   streamOutputDurationMs?: number;
   usageMetadata?: LlmUsageMetadataRecord;
   seq: number;
+}
+
+export type MessageRevisionReason = 'created' | 'edited' | 'regenerated' | 'system';
+
+export interface MessageRevisionRecord {
+  id: string;
+  messageId: string;
+  conversationId: string;
+  content: MessageContent;
+  createdAt: number;
+  reason: MessageRevisionReason;
+}
+
+export interface MessageCurrentRevisionLinkRecord {
+  id: string;
+  messageId: string;
+  revisionId: string;
 }
 
 export interface ToolCallRecord {
@@ -336,21 +368,198 @@ export interface ToolCallEventRecord {
   error?: string;
 }
 
+export type ConversationPolicyMode = 'same_conversation' | 'new_conversation' | 'reuse_conversation' | 'fork_conversation' | 'branch_from_revision';
+export type ConversationVisibility = 'visible' | 'hidden' | 'collapsed';
+export type ContextHistoryMode = 'none' | 'full' | 'last_n' | 'since_message' | 'selected_messages' | 'summary';
+export type DeliveryMode = 'direct_reply' | 'tool_response' | 'notification' | 'append_to_source_conversation' | 'silent';
+export type TranscriptInclusion = 'none' | 'summary' | 'selected' | 'full' | 'link';
+export type SourceEditBehavior = 'ignore_snapshot' | 'abort_and_restart' | 'append_correction' | 'branch_new_run' | 'mark_stale';
+export type NewMessageWhileRunningBehavior = 'queue_next_run' | 'interrupt_current' | 'append_to_target' | 'ignore';
+
+export interface RunConversationPolicyRecord {
+  id: string;
+  mode: ConversationPolicyMode;
+  conversationId?: string;
+  reuseKey?: string;
+  branchFromConversationId?: string;
+  branchFromRevisionId?: string;
+  visibility: ConversationVisibility;
+}
+
+export interface RunContextPolicyRecord {
+  id: string;
+  historyMode: ContextHistoryMode;
+  lastN?: number;
+  sinceMessageId?: string;
+  selectedMessageIds?: string[];
+  includeSourceContext?: boolean;
+  includeSourceToolResult?: boolean;
+}
+
+export interface RunDeliveryPolicyRecord {
+  id: string;
+  mode: DeliveryMode;
+  includeTranscript: TranscriptInclusion;
+  targetConversationId?: string;
+  targetToolCallId?: string;
+}
+
+export interface RunEditPolicyRecord {
+  id: string;
+  onSourceEdited: SourceEditBehavior;
+  onNewUserMessageWhileRunning: NewMessageWhileRunningBehavior;
+}
+
+export interface AgentRunRecord {
+  id: string;
+  kind: AgentRunKind;
+  status: AgentRunStatus;
+  createdAt: number;
+  updatedAt: number;
+  error?: string;
+}
+
+export interface AgentRunSourceLinkRecord {
+  id: string;
+  runId: string;
+  sourceKind: AgentRunSourceKind;
+  sourceAgentId?: string;
+  sourceConversationId?: string;
+  sourceMessageId?: string;
+  sourceToolCallId?: string;
+  sourceRunId?: string;
+}
+
+export interface AgentRunTargetLinkRecord {
+  id: string;
+  runId: string;
+  agentId: string;
+  conversationId: string;
+  role: AgentRunTargetRole;
+}
+
+export interface MessageRunLinkRecord {
+  id: string;
+  messageId: string;
+  runId: string;
+  role: MessageRunRole;
+}
+
+export interface ToolCallRunLinkRecord {
+  id: string;
+  toolCallId: string;
+  runId: string;
+  role: ToolCallRunRole;
+}
+
+export interface RunModeLinkRecord {
+  id: string;
+  runId: string;
+  modeId: string;
+  role: PolicyBindingRole;
+}
+
+export interface RunSystemPromptLinkRecord {
+  id: string;
+  runId: string;
+  systemPromptId: string;
+  role: PolicyBindingRole;
+}
+
+export interface RunModelProfileLinkRecord {
+  id: string;
+  runId: string;
+  modelProfileId: string;
+  role: PolicyBindingRole;
+}
+
+export interface RunToolPolicyLinkRecord {
+  id: string;
+  runId: string;
+  toolPolicyId: string;
+  role: PolicyBindingRole;
+}
+
+export interface RunApprovalPolicyLinkRecord {
+  id: string;
+  runId: string;
+  approvalPolicyId: string;
+  role: PolicyBindingRole;
+}
+
+export interface RunConversationPolicyLinkRecord {
+  id: string;
+  runId: string;
+  policyId: string;
+  role: PolicyBindingRole;
+}
+
+export interface RunContextPolicyLinkRecord {
+  id: string;
+  runId: string;
+  policyId: string;
+  role: PolicyBindingRole;
+}
+
+export interface RunDeliveryPolicyLinkRecord {
+  id: string;
+  runId: string;
+  policyId: string;
+  role: PolicyBindingRole;
+}
+
+export interface RunEditPolicyLinkRecord {
+  id: string;
+  runId: string;
+  policyId: string;
+  role: PolicyBindingRole;
+}
+
+export interface AgentRunInputRevisionRecord {
+  id: string;
+  runId: string;
+  conversationId: string;
+  revisionId: string;
+}
+
 export interface ClientState {
   agents: AgentRecord[];
   agentModes: AgentModeRecord[];
   toolPolicies: ToolPolicyRecord[];
+  approvalPolicies: ApprovalPolicyRecord[];
   systemPrompts: SystemPromptRecord[];
   modelProfiles: ModelProfileRecord[];
   agentModeLinks: AgentModeLinkRecord[];
   modeToolPolicyLinks: ModeToolPolicyLinkRecord[];
+  modeApprovalPolicyLinks: ModeApprovalPolicyLinkRecord[];
   modeSystemPromptLinks: ModeSystemPromptLinkRecord[];
   modeModelProfileLinks: ModeModelProfileLinkRecord[];
-  sessions: SessionRecord[];
+  conversations: ConversationRecord[];
   agentConversationLinks: AgentConversationLinkRecord[];
   messages: MessageRecord[];
+  messageRevisions: MessageRevisionRecord[];
+  messageCurrentRevisionLinks: MessageCurrentRevisionLinkRecord[];
   toolCalls: ToolCallRecord[];
   toolCallEvents: ToolCallEventRecord[];
+  agentRuns: AgentRunRecord[];
+  agentRunSourceLinks: AgentRunSourceLinkRecord[];
+  agentRunTargetLinks: AgentRunTargetLinkRecord[];
+  messageRunLinks: MessageRunLinkRecord[];
+  toolCallRunLinks: ToolCallRunLinkRecord[];
+  runConversationPolicies: RunConversationPolicyRecord[];
+  runContextPolicies: RunContextPolicyRecord[];
+  runDeliveryPolicies: RunDeliveryPolicyRecord[];
+  runEditPolicies: RunEditPolicyRecord[];
+  runModeLinks: RunModeLinkRecord[];
+  runSystemPromptLinks: RunSystemPromptLinkRecord[];
+  runModelProfileLinks: RunModelProfileLinkRecord[];
+  runToolPolicyLinks: RunToolPolicyLinkRecord[];
+  runApprovalPolicyLinks: RunApprovalPolicyLinkRecord[];
+  runConversationPolicyLinks: RunConversationPolicyLinkRecord[];
+  runContextPolicyLinks: RunContextPolicyLinkRecord[];
+  runDeliveryPolicyLinks: RunDeliveryPolicyLinkRecord[];
+  runEditPolicyLinks: RunEditPolicyLinkRecord[];
+  agentRunInputRevisions: AgentRunInputRevisionRecord[];
 }
 
 export type ClientPatchOp =
@@ -360,6 +569,8 @@ export type ClientPatchOp =
   | { kind: 'agentMode.remove'; id: string }
   | { kind: 'toolPolicy.upsert'; toolPolicy: ToolPolicyRecord }
   | { kind: 'toolPolicy.remove'; id: string }
+  | { kind: 'approvalPolicy.upsert'; approvalPolicy: ApprovalPolicyRecord }
+  | { kind: 'approvalPolicy.remove'; id: string }
   | { kind: 'systemPrompt.upsert'; systemPrompt: SystemPromptRecord }
   | { kind: 'systemPrompt.remove'; id: string }
   | { kind: 'modelProfile.upsert'; modelProfile: ModelProfileRecord }
@@ -368,12 +579,14 @@ export type ClientPatchOp =
   | { kind: 'agentModeLink.remove'; id: string }
   | { kind: 'modeToolPolicyLink.upsert'; link: ModeToolPolicyLinkRecord }
   | { kind: 'modeToolPolicyLink.remove'; id: string }
+  | { kind: 'modeApprovalPolicyLink.upsert'; link: ModeApprovalPolicyLinkRecord }
+  | { kind: 'modeApprovalPolicyLink.remove'; id: string }
   | { kind: 'modeSystemPromptLink.upsert'; link: ModeSystemPromptLinkRecord }
   | { kind: 'modeSystemPromptLink.remove'; id: string }
   | { kind: 'modeModelProfileLink.upsert'; link: ModeModelProfileLinkRecord }
   | { kind: 'modeModelProfileLink.remove'; id: string }
-  | { kind: 'session.upsert'; session: SessionRecord }
-  | { kind: 'session.remove'; id: string }
+  | { kind: 'conversation.upsert'; conversation: ConversationRecord }
+  | { kind: 'conversation.remove'; id: string }
   | { kind: 'agentConversationLink.upsert'; link: AgentConversationLinkRecord }
   | { kind: 'agentConversationLink.remove'; id: string }
   | { kind: 'message.upsert'; message: MessageRecord }
@@ -381,27 +594,67 @@ export type ClientPatchOp =
   | { kind: 'message.appendText'; id: string; delta: string }
   | { kind: 'message.appendThought'; id: string; partIndex: number; delta: string; thoughtSignature?: string }
   | { kind: 'message.status'; id: string; status: MsgStatus }
+  | { kind: 'messageRevision.upsert'; revision: MessageRevisionRecord }
+  | { kind: 'messageRevision.remove'; id: string }
+  | { kind: 'messageCurrentRevisionLink.upsert'; link: MessageCurrentRevisionLinkRecord }
+  | { kind: 'messageCurrentRevisionLink.remove'; id: string }
   | { kind: 'toolcall.upsert'; toolCall: ToolCallRecord }
   | { kind: 'toolcall.remove'; id: string }
   | { kind: 'toolcallEvent.append'; event: ToolCallEventRecord }
-  | { kind: 'toolcallEvent.remove'; id: string };
+  | { kind: 'toolcallEvent.remove'; id: string }
+  | { kind: 'agentRun.upsert'; run: AgentRunRecord }
+  | { kind: 'agentRun.remove'; id: string }
+  | { kind: 'agentRunSourceLink.upsert'; link: AgentRunSourceLinkRecord }
+  | { kind: 'agentRunSourceLink.remove'; id: string }
+  | { kind: 'agentRunTargetLink.upsert'; link: AgentRunTargetLinkRecord }
+  | { kind: 'agentRunTargetLink.remove'; id: string }
+  | { kind: 'messageRunLink.upsert'; link: MessageRunLinkRecord }
+  | { kind: 'messageRunLink.remove'; id: string }
+  | { kind: 'toolCallRunLink.upsert'; link: ToolCallRunLinkRecord }
+  | { kind: 'toolCallRunLink.remove'; id: string }
+  | { kind: 'runConversationPolicy.upsert'; policy: RunConversationPolicyRecord }
+  | { kind: 'runConversationPolicy.remove'; id: string }
+  | { kind: 'runContextPolicy.upsert'; policy: RunContextPolicyRecord }
+  | { kind: 'runContextPolicy.remove'; id: string }
+  | { kind: 'runDeliveryPolicy.upsert'; policy: RunDeliveryPolicyRecord }
+  | { kind: 'runDeliveryPolicy.remove'; id: string }
+  | { kind: 'runEditPolicy.upsert'; policy: RunEditPolicyRecord }
+  | { kind: 'runEditPolicy.remove'; id: string }
+  | { kind: 'runModeLink.upsert'; link: RunModeLinkRecord }
+  | { kind: 'runModeLink.remove'; id: string }
+  | { kind: 'runSystemPromptLink.upsert'; link: RunSystemPromptLinkRecord }
+  | { kind: 'runSystemPromptLink.remove'; id: string }
+  | { kind: 'runModelProfileLink.upsert'; link: RunModelProfileLinkRecord }
+  | { kind: 'runModelProfileLink.remove'; id: string }
+  | { kind: 'runToolPolicyLink.upsert'; link: RunToolPolicyLinkRecord }
+  | { kind: 'runToolPolicyLink.remove'; id: string }
+  | { kind: 'runApprovalPolicyLink.upsert'; link: RunApprovalPolicyLinkRecord }
+  | { kind: 'runApprovalPolicyLink.remove'; id: string }
+  | { kind: 'runConversationPolicyLink.upsert'; link: RunConversationPolicyLinkRecord }
+  | { kind: 'runConversationPolicyLink.remove'; id: string }
+  | { kind: 'runContextPolicyLink.upsert'; link: RunContextPolicyLinkRecord }
+  | { kind: 'runContextPolicyLink.remove'; id: string }
+  | { kind: 'runDeliveryPolicyLink.upsert'; link: RunDeliveryPolicyLinkRecord }
+  | { kind: 'runDeliveryPolicyLink.remove'; id: string }
+  | { kind: 'runEditPolicyLink.upsert'; link: RunEditPolicyLinkRecord }
+  | { kind: 'runEditPolicyLink.remove'; id: string }
+  | { kind: 'agentRunInputRevision.upsert'; inputRevision: AgentRunInputRevisionRecord }
+  | { kind: 'agentRunInputRevision.remove'; id: string };
 
 export interface ChatSendPayload {
-  sessionId: string;
+  conversationId: string;
   text: string;
 }
 export interface ChatAbortPayload {
-  sessionId: string;
+  conversationId: string;
 }
 export interface ToolExecutePayload {
   toolCallId: string;
-  sessionId: string;
-  executorAgentId: string;
-  executorModeId: string;
+  conversationId?: string;
 }
 export interface ClientResyncPayload {
   streamId?: string;
-  sessionId?: string;
+  conversationId?: string;
 }
 export interface ClientSnapshotPayload {
   streamId: string;
@@ -414,11 +667,8 @@ export interface ClientPatchPayload {
   patches: ClientPatchOp[];
 }
 export interface GlobalSettingsRecord {
-  /** 用户配置的数据根目录；空字符串表示使用 VS Code 默认 globalStorageUri。 */
   dataFilePath: string;
-  /** 后端解析后的当前实际数据根目录。 */
   activeDataRootPath: string;
-  /** VS Code 默认 globalStorageUri，便于 UI 展示“留空时使用哪里”。 */
   defaultDataRootPath: string;
 }
 export type GlobalSettingsSectionValue = GlobalSettingsRecord | LlmSettingsRecord;
@@ -435,16 +685,16 @@ export interface GlobalSettingsUpdatePayload {
   settings: GlobalSettingsSectionValue;
 }
 export interface ConversationSettingsRecord {
-  sessionId: string;
+  conversationId: string;
   name: string;
 }
 export type ConversationSettingsSectionValue = ConversationSettingsRecord;
 export interface ConversationSettingsGetPayload {
-  sessionId: string;
+  conversationId: string;
   section: ConversationSettingsSection;
 }
 export interface ConversationSettingsSnapshotPayload {
-  sessionId: string;
+  conversationId: string;
   section: ConversationSettingsSection;
   settings: ConversationSettingsSectionValue;
   filePath: string;

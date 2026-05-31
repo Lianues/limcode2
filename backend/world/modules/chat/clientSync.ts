@@ -1,24 +1,25 @@
-import { isTextPart, isVisibleTextPart, type ClientPatchOp, type ClientState, type MessageRecord, type SessionRecord, type TextPart } from '../../../../shared/protocol';
+import { isTextPart, isVisibleTextPart, type ClientPatchOp, type ClientState, type ConversationRecord, type MessageCurrentRevisionLinkRecord, type MessageRecord, type MessageRevisionRecord, type TextPart } from '../../../../shared/protocol';
 import type { WorldReader } from '../../../ecs/types';
 import { diffUpsertRemove } from '../../clientSync/diff';
 import { defineClientStateContributor, type ClientStateSlice } from '../../clientSync/contributors';
-import { Message, PartOf, Session } from './components';
+import { Conversation, Message, MessageCurrentRevisionLink, MessageRevision, PartOf } from './components';
 
 export function projectChatClientState(world: WorldReader): ClientStateSlice {
-  const sessions: SessionRecord[] = world.query(Session).map((entity) => ({
-    id: world.get(entity, Session)!.id,
-    title: world.get(entity, Session)!.title
+  const conversations: ConversationRecord[] = world.query(Conversation).map((entity) => ({
+    id: world.get(entity, Conversation)!.id,
+    title: world.get(entity, Conversation)!.title,
+    visibility: world.get(entity, Conversation)!.visibility
   }));
 
   const messages: MessageRecord[] = world
     .query(Message, PartOf)
-    .filter((entity) => world.has(world.get(entity, PartOf)!.parent, Session))
+    .filter((entity) => world.has(world.get(entity, PartOf)!.parent, Conversation))
     .map((entity) => {
       const message = world.get(entity, Message)!;
-      const sessionEntity = world.get(entity, PartOf)!.parent;
+      const conversationEntity = world.get(entity, PartOf)!.parent;
       return {
         id: message.id,
-        sessionId: world.get(sessionEntity, Session)!.id,
+        conversationId: world.get(conversationEntity, Conversation)!.id,
         role: message.role,
         content: message.content,
         status: message.status,
@@ -30,26 +31,42 @@ export function projectChatClientState(world: WorldReader): ClientStateSlice {
     })
     .sort((a, b) => a.seq - b.seq);
 
-  return { sessions, messages };
+  const messageRevisions: MessageRevisionRecord[] = world
+    .query(MessageRevision, PartOf)
+    .map((entity) => buildMessageRevisionRecord(world, entity))
+    .filter((item): item is MessageRevisionRecord => item !== undefined);
+
+  const messageCurrentRevisionLinks: MessageCurrentRevisionLinkRecord[] = world
+    .query(MessageCurrentRevisionLink)
+    .map((entity) => buildMessageCurrentRevisionLinkRecord(world, entity))
+    .filter((item): item is MessageCurrentRevisionLinkRecord => item !== undefined);
+
+  return { conversations, messages, messageRevisions, messageCurrentRevisionLinks };
 }
 
 export function diffChatClientState(prev: ClientState, next: ClientState): ClientPatchOp[] {
   const patches: ClientPatchOp[] = [];
   patches.push(
     ...diffUpsertRemove(
-      prev.sessions,
-      next.sessions,
-      (session): ClientPatchOp => ({ kind: 'session.upsert', session }),
-      (id): ClientPatchOp => ({ kind: 'session.remove', id })
+      prev.conversations,
+      next.conversations,
+      (conversation): ClientPatchOp => ({ kind: 'conversation.upsert', conversation }),
+      (id): ClientPatchOp => ({ kind: 'conversation.remove', id })
     )
   );
   patches.push(...diffMessages(prev.messages, next.messages));
+  patches.push(
+    ...diffUpsertRemove(prev.messageRevisions, next.messageRevisions, (revision): ClientPatchOp => ({ kind: 'messageRevision.upsert', revision }), (id): ClientPatchOp => ({ kind: 'messageRevision.remove', id }))
+  );
+  patches.push(
+    ...diffUpsertRemove(prev.messageCurrentRevisionLinks, next.messageCurrentRevisionLinks, (link): ClientPatchOp => ({ kind: 'messageCurrentRevisionLink.upsert', link }), (id): ClientPatchOp => ({ kind: 'messageCurrentRevisionLink.remove', id }))
+  );
   return patches;
 }
 
 export const chatClientSyncContributor = defineClientStateContributor({
   key: 'chat',
-  reads: { components: [Message, PartOf, Session] },
+  reads: { components: [Message, MessageRevision, MessageCurrentRevisionLink, PartOf, Conversation] },
   project: projectChatClientState,
   diff: diffChatClientState,
   worker: {
@@ -58,6 +75,26 @@ export const chatClientSyncContributor = defineClientStateContributor({
     diffExport: 'diffChatClientState'
   }
 });
+
+function buildMessageRevisionRecord(world: WorldReader, entity: number): MessageRevisionRecord | undefined {
+  const revision = world.get(entity, MessageRevision);
+  const messageEntity = world.get(entity, PartOf)?.parent;
+  if (!revision || messageEntity === undefined) return undefined;
+  const message = world.get(messageEntity, Message);
+  const conversationEntity = messageEntity === undefined ? undefined : world.get(messageEntity, PartOf)?.parent;
+  const conversation = conversationEntity === undefined ? undefined : world.get(conversationEntity, Conversation);
+  if (!message || !conversation) return undefined;
+  return { id: revision.id, messageId: message.id, conversationId: conversation.id, content: revision.content, createdAt: revision.createdAt, reason: revision.reason };
+}
+
+function buildMessageCurrentRevisionLinkRecord(world: WorldReader, entity: number): MessageCurrentRevisionLinkRecord | undefined {
+  const link = world.get(entity, MessageCurrentRevisionLink);
+  if (!link) return undefined;
+  const message = world.get(link.message, Message);
+  const revision = world.get(link.revision, MessageRevision);
+  if (!message || !revision) return undefined;
+  return { id: link.id, messageId: message.id, revisionId: revision.id };
+}
 
 function diffMessages(prev: MessageRecord[], next: MessageRecord[]): ClientPatchOp[] {
   const patches: ClientPatchOp[] = [];

@@ -57,7 +57,7 @@ const llmSettings = reactive<LlmSettingsRecord>({
 });
 
 const conversationSettings = reactive<ConversationSettingsRecord>({
-  sessionId: '',
+  conversationId: '',
   name: ''
 });
 
@@ -67,13 +67,13 @@ const currentSession = computed(() =>
 
 const sessionMessages = computed(() =>
   clientState.messages
-    .filter((message) => message.sessionId === clientState.currentSessionId && !isToolResponseMessage(message))
+    .filter((message) => message.conversationId === clientState.currentSessionId && !isToolResponseMessage(message))
     .sort((a, b) => a.seq - b.seq)
 );
 
 const activeAgentLink = computed(() =>
-  clientState.agentConversationLinks.find((link) => link.sessionId === clientState.currentSessionId && link.role === 'active')
-    ?? clientState.agentConversationLinks.find((link) => link.sessionId === clientState.currentSessionId)
+  clientState.agentConversationLinks.find((link) => link.conversationId === clientState.currentSessionId && link.role === 'default')
+    ?? clientState.agentConversationLinks.find((link) => link.conversationId === clientState.currentSessionId)
 );
 
 const currentAgent = computed(() =>
@@ -208,16 +208,14 @@ function executeTool(tool: ToolCallRecord): void {
   if (!canExecuteTool(tool) || !currentAgent.value || !currentMode.value) return;
   bridge.request(BridgeMessageType.ToolExecute, {
     toolCallId: tool.id,
-    sessionId: clientState.currentSessionId,
-    executorAgentId: currentAgent.value.id,
-    executorModeId: currentMode.value.id
+    conversationId: clientState.currentSessionId
   });
 }
 
 function send(): void {
   const text = input.value.trim();
   if (!text || !clientState.currentSessionId) return;
-  bridge.request(BridgeMessageType.ChatSend, { sessionId: clientState.currentSessionId, text });
+  bridge.request(BridgeMessageType.ChatSend, { conversationId: clientState.currentSessionId, text });
   input.value = '';
 }
 
@@ -231,7 +229,7 @@ function onKeydown(event: KeyboardEvent): void {
 function resync(): void {
   if (clientState.currentSessionId) {
     const streamId = conversationClientStateStreamId(clientState.currentSessionId);
-    bridge.request(BridgeMessageType.ClientResync, { sessionId: clientState.currentSessionId, streamId });
+    bridge.request(BridgeMessageType.ClientResync, { conversationId: clientState.currentSessionId, streamId });
   } else {
     bridge.request(BridgeMessageType.ClientResync, {});
   }
@@ -241,7 +239,7 @@ function ensureConversationStream(sessionId: string): void {
   const streamId = conversationClientStateStreamId(sessionId);
   if (requestedConversationStreams.has(streamId)) return;
   requestedConversationStreams.add(streamId);
-  bridge.request(BridgeMessageType.ClientResync, { sessionId, streamId });
+  bridge.request(BridgeMessageType.ClientResync, { conversationId: sessionId, streamId });
 }
 
 function ensureConversationSettings(sessionId: string): void {
@@ -253,16 +251,16 @@ function ensureConversationSettings(sessionId: string): void {
 function requestConversationSettings(sessionId = clientState.currentSessionId): void {
   if (!sessionId) return;
   conversationSettingsStatus.value = '正在读取对话设置...';
-  bridge.request(BridgeMessageType.ConversationSettingsGet, { sessionId, section: 'common' });
+  bridge.request(BridgeMessageType.ConversationSettingsGet, { conversationId: sessionId, section: 'common' });
 }
 
 function saveConversationSettings(): void {
-  if (!conversationSettings.sessionId) return;
+  if (!conversationSettings.conversationId) return;
   conversationSettingsStatus.value = '正在保存对话设置...';
   bridge.request(BridgeMessageType.ConversationSettingsUpdate, {
     section: 'common',
     settings: {
-      sessionId: conversationSettings.sessionId,
+      conversationId: conversationSettings.conversationId,
       name: conversationSettings.name
     }
   });
@@ -326,7 +324,7 @@ function applyLlmSettings(settings: LlmSettingsRecord): void {
 }
 
 function applyConversationSettings(settings: ConversationSettingsRecord): void {
-  conversationSettings.sessionId = settings.sessionId;
+  conversationSettings.conversationId = settings.conversationId;
   conversationSettings.name = settings.name;
 }
 
@@ -361,8 +359,8 @@ watch(
     if (viewKind.value !== 'chat' || !sessionId) return;
     ensureConversationStream(sessionId);
     ensureConversationSettings(sessionId);
-    if (!conversationSettings.sessionId) {
-      conversationSettings.sessionId = sessionId;
+    if (!conversationSettings.conversationId) {
+      conversationSettings.conversationId = sessionId;
       conversationSettings.name = currentSession.value?.title || sessionId;
     }
   }
@@ -372,8 +370,8 @@ watch(
   () => currentSession.value?.title,
   (title) => {
     if (viewKind.value !== 'chat' || !clientState.currentSessionId) return;
-    if (!conversationSettings.name || conversationSettings.name === conversationSettings.sessionId) {
-      conversationSettings.sessionId = clientState.currentSessionId;
+    if (!conversationSettings.name || conversationSettings.name === conversationSettings.conversationId) {
+      conversationSettings.conversationId = clientState.currentSessionId;
       conversationSettings.name = title || clientState.currentSessionId;
     }
   }
@@ -392,7 +390,7 @@ onMounted(() => {
       const conversationId = meta?.conversationId;
       if (!conversationId) return;
       clientState.currentSessionId = conversationId;
-      conversationSettings.sessionId = conversationId;
+      conversationSettings.conversationId = conversationId;
       conversationSettings.name = currentSession.value?.title || conversationId;
       ensureConversationStream(conversationId);
       ensureConversationSettings(conversationId);
@@ -543,7 +541,7 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
         </label>
       </div>
       <div class="settings-actions">
-        <button type="button" :disabled="!conversationSettings.sessionId" @click="saveConversationSettings">保存对话设置</button>
+        <button type="button" :disabled="!conversationSettings.conversationId" @click="saveConversationSettings">保存对话设置</button>
         <button type="button" class="secondary" :disabled="!clientState.currentSessionId" @click="requestConversationSettings()">重新读取</button>
         <span class="settings-status">{{ conversationSettingsStatus }}</span>
       </div>

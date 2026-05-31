@@ -7,9 +7,7 @@ export const ToolEventType = {
 
 export interface ToolExecuteRequestedPayload {
   toolCallId: string;
-  sessionId: string;
-  executorAgentId: string;
-  executorModeId: string;
+  conversationId?: string;
 }
 
 export interface ToolStatePayload {

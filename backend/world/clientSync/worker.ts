@@ -45,26 +45,23 @@ export function runClientSyncProjection(input: ClientSyncWorkerInput, cmd: Comma
 }
 
 export function projectClientState(world: SnapshotWorldReader, contributors: readonly ClientStateContributorDescriptor[]): ClientState {
-  const state: ClientState = {
-    agents: [],
-    agentModes: [],
-    toolPolicies: [],
-    systemPrompts: [],
-    modelProfiles: [],
-    agentModeLinks: [],
-    modeToolPolicyLinks: [],
-    modeSystemPromptLinks: [],
-    modeModelProfileLinks: [],
-    sessions: [],
-    agentConversationLinks: [],
-    messages: [],
-    toolCalls: [],
-    toolCallEvents: []
-  };
+  const state: ClientState = emptyClientState();
   for (const contributor of contributors) {
     Object.assign(state, loadProjector(contributor)(world));
   }
   return state;
+}
+
+function emptyClientState(): ClientState {
+  return {
+    agents: [], agentModes: [], toolPolicies: [], approvalPolicies: [], systemPrompts: [], modelProfiles: [],
+    agentModeLinks: [], modeToolPolicyLinks: [], modeApprovalPolicyLinks: [], modeSystemPromptLinks: [], modeModelProfileLinks: [],
+    conversations: [], agentConversationLinks: [], messages: [], messageRevisions: [], messageCurrentRevisionLinks: [],
+    toolCalls: [], toolCallEvents: [], agentRuns: [], agentRunSourceLinks: [], agentRunTargetLinks: [], messageRunLinks: [], toolCallRunLinks: [],
+    runConversationPolicies: [], runContextPolicies: [], runDeliveryPolicies: [], runEditPolicies: [],
+    runModeLinks: [], runSystemPromptLinks: [], runModelProfileLinks: [], runToolPolicyLinks: [], runApprovalPolicyLinks: [],
+    runConversationPolicyLinks: [], runContextPolicyLinks: [], runDeliveryPolicyLinks: [], runEditPolicyLinks: [], agentRunInputRevisions: []
+  };
 }
 
 function loadProjector(contributor: ClientStateContributorDescriptor): ClientStateProjector {

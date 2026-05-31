@@ -4,11 +4,11 @@ export const ChatEventType = {
 } as const;
 
 export interface ChatSendPayload {
-  sessionId: string;
+  conversationId: string;
   text: string;
 }
 export interface ChatAbortPayload {
-  sessionId: string;
+  conversationId: string;
 }
 
 declare module '@backend/world/events' {

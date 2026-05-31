@@ -10,12 +10,13 @@ import {
   chatPlugin,
   commonPlugin,
   modePlugin,
+  agentRunPlugin,
   requestSpawnAgent,
   toolsPlugin
 } from '../world/modules';
 import type { AgentSpawnRequestData } from '../world/modules/agent/requests';
 import { Agent, AgentConversationLink } from '../world/modules/agent/components';
-import { Session } from '../world/modules/chat/components';
+import { Conversation } from '../world/modules/chat/components';
 import { clientSyncPlugin } from '../world/clientSync';
 import { EffectHandlerRegistry, registerApplicationEffectHandlers } from './effectHandlers';
 import { flushEffects, flushEffectsWhere } from './executeEffects';
@@ -94,7 +95,7 @@ export class BackendApplication {
 
     installWorldPlugins(
       { world: this.world, scheduler: this.scheduler },
-      [commonPlugin(), clientSyncPlugin(), agentPlugin(), modePlugin(), toolsPlugin({ toolSchemas }), chatPlugin()]
+      [commonPlugin(), clientSyncPlugin(), agentPlugin(), modePlugin(), toolsPlugin({ toolSchemas }), chatPlugin(), agentRunPlugin()]
     );
 
     void this.initializeClientState();
@@ -107,30 +108,30 @@ export class BackendApplication {
 
   /** 创建一个独立 conversation，并用独立 AgentConversationLink 绑定到默认 agent。 */
   public createConversation(): string {
-    const sessionId = `conversation-${createMessageId()}`;
+    const conversationId = `conversation-${createMessageId()}`;
     const title = '新对话';
     const agent = this.findDefaultAgent();
     if (agent === undefined) {
-      requestSpawnAgent(this.world, { ...createDefaultAgentSpawnRequest(), sessionId, initialTask: undefined });
-      return sessionId;
+      requestSpawnAgent(this.world, { ...createDefaultAgentSpawnRequest(), conversationId, initialMessage: undefined });
+      return conversationId;
     }
 
-    const session = this.world.spawn();
-    this.world.add(session, Session, { id: sessionId, title });
+    const conversation = this.world.spawn();
+    this.world.add(conversation, Conversation, { id: conversationId, title, visibility: 'visible' });
 
     const link = this.world.spawn();
     const now = Date.now();
     this.world.add(link, AgentConversationLink, {
       id: `acl${link}`,
       agent,
-      conversation: session,
-      role: 'active',
+      conversation,
+      role: 'default',
       createdAt: now,
       updatedAt: now
     });
 
     this.requestSnapshot();
-    return sessionId;
+    return conversationId;
   }
 
   /** 当前 active data root；可能是 VS Code 默认 globalStorageUri，也可能是用户配置的自定义目录。 */
@@ -184,8 +185,8 @@ export class BackendApplication {
     }
   }
 
-  private requestSnapshot(sessionId?: string): void {
-    this.world.enqueue({ type: ClientSyncEventType.Resync, payload: sessionId ? { sessionId } : {} });
+  private requestSnapshot(conversationId?: string): void {
+    this.world.enqueue({ type: ClientSyncEventType.Resync, payload: conversationId ? { conversationId } : {} });
   }
 
   private findDefaultAgent(): Entity | undefined {

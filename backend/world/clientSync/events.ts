@@ -4,7 +4,7 @@ export const ClientSyncEventType = {
 
 export interface ClientResyncPayload {
   streamId?: string;
-  sessionId?: string;
+  conversationId?: string;
 }
 
 declare module '@backend/world/events' {

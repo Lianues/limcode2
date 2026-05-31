@@ -2,7 +2,7 @@ import type { AgentRecord } from '../../shared/protocol';
 import type { AgentSpawnRequestData } from '../world/modules/agent/requests';
 
 export const DEFAULT_AGENT_ID = 'main';
-export const DEFAULT_SESSION_ID = 'default';
+export const DEFAULT_CONVERSATION_ID = 'default';
 export const DEFAULT_AGENT_NAME = 'LimCode Agent';
 
 export function createDefaultAgentRecord(): AgentRecord {
@@ -19,6 +19,6 @@ export function createDefaultAgentSpawnRequest(): AgentSpawnRequestData {
     kind: 'main',
     agentId: DEFAULT_AGENT_ID,
     agentName: DEFAULT_AGENT_NAME,
-    sessionId: DEFAULT_SESSION_ID
+    conversationId: DEFAULT_CONVERSATION_ID
   };
 }

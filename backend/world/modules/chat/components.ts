@@ -1,12 +1,13 @@
-import { defineComponent, Entity } from '../../../ecs/types';
-import type { LlmUsageMetadataRecord, MessageContent, MsgRole, MsgStatus } from '../../../../shared/protocol';
+import { defineComponent, type Entity } from '../../../ecs/types';
+import type { LlmUsageMetadataRecord, MessageContent, MessageRevisionReason, MsgRole, MsgStatus } from '../../../../shared/protocol';
 
-export interface SessionData {
+export interface ConversationData {
   id: string;
   title?: string;
+  visibility?: 'visible' | 'hidden' | 'collapsed';
 }
-export const Session = defineComponent<SessionData>('Session');
-export const NeedsResponse = defineComponent<{ since: number }>('NeedsResponse');
+export const Conversation = defineComponent<ConversationData>('Conversation');
+
 export const Aborted = defineComponent<true>('Aborted');
 
 export interface MessageData {
@@ -23,10 +24,20 @@ export const Message = defineComponent<MessageData>('Message');
 export const PartOf = defineComponent<{ parent: Entity }>('PartOf');
 export const Streaming = defineComponent<true>('Streaming');
 
+export interface MessageRevisionData {
+  id: string;
+  content: MessageContent;
+  createdAt: number;
+  reason: MessageRevisionReason;
+}
+export const MessageRevision = defineComponent<MessageRevisionData>('MessageRevision');
+export const MessageCurrentRevisionLink = defineComponent<{ id: string; message: Entity; revision: Entity }>('MessageCurrentRevisionLink');
+
 export interface LlmRequestData {
   id: string;
-  sessionEntity: Entity;
-  modelMessageEntity: Entity;
+  run: Entity;
+  conversation: Entity;
+  modelMessage: Entity;
 }
 export const LlmRequest = defineComponent<LlmRequestData>('LlmRequest');
 

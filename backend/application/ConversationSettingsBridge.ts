@@ -1,6 +1,6 @@
 import type { World } from '../ecs/types';
 import type { StorageCapability, WebviewCapability } from '../capabilities/types';
-import { Session } from '../world/modules/chat/components';
+import { Conversation } from '../world/modules/chat/components';
 import {
   BridgeMessageType,
   conversationSettingsStreamId,
@@ -17,87 +17,68 @@ export interface ConversationSettingsBridgeDeps {
   world: World;
   storage: StorageCapability;
   webview: WebviewCapability;
-  requestSnapshot: (sessionId?: string) => void;
+  requestSnapshot: (conversationId?: string) => void;
 }
 
-/** 对话级设置桥接：通过 section 泛化读写，当前 common -> settings/common.json。 */
 export class ConversationSettingsBridge {
   public constructor(private readonly deps: ConversationSettingsBridgeDeps) {}
 
-  public async postSnapshot(
-    clientId: BridgeClientId,
-    sessionId: string,
-    section: ConversationSettingsSection,
-    correlationId?: string
-  ): Promise<void> {
-    const streamId = conversationSettingsStreamId(sessionId, section);
+  public async postSnapshot(clientId: BridgeClientId, conversationId: string, section: ConversationSettingsSection, correlationId?: string): Promise<void> {
+    const streamId = conversationSettingsStreamId(conversationId, section);
     this.deps.webview.subscribe(clientId, streamId);
-    this.deps.webview.post(clientId, this.createSnapshotMessage(await this.readSettings(sessionId, section), correlationId));
+    this.deps.webview.post(clientId, this.createSnapshotMessage(await this.readSettings(conversationId, section), correlationId));
   }
 
   public async update(payload: ConversationSettingsUpdatePayload | undefined, correlationId?: string): Promise<void> {
     if (!payload) return;
-
     const settings = normalizeConversationSettings(payload.section, payload.settings);
     if (payload.section === 'common') this.applyCommonSettingsToWorld(settings);
 
     const stored = await this.deps.storage.saveConversationSettings(payload.section, settings);
-    this.deps.webview.broadcastToStream(
-      conversationSettingsStreamId(stored.sessionId, stored.section),
-      this.createSnapshotMessage(stored, correlationId)
-    );
+    this.deps.webview.broadcastToStream(conversationSettingsStreamId(stored.conversationId, stored.section), this.createSnapshotMessage(stored, correlationId));
     this.deps.requestSnapshot();
-    this.deps.requestSnapshot(stored.sessionId);
+    this.deps.requestSnapshot(stored.conversationId);
   }
 
-  private async readSettings(
-    sessionId: string,
-    section: ConversationSettingsSection
-  ): Promise<{ sessionId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }> {
-    const stored = await this.deps.storage.loadConversationSettings(sessionId, section);
-    if (section !== 'common') return stored ?? { sessionId, section, settings: { sessionId, name: sessionId }, filePath: '' };
+  private async readSettings(conversationId: string, section: ConversationSettingsSection): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }> {
+    const stored = await this.deps.storage.loadConversationSettings(conversationId, section);
+    if (section !== 'common') return stored ?? { conversationId, section, settings: { conversationId, name: conversationId }, filePath: '' };
 
-    const entity = this.findSession(sessionId);
-    const session = entity === undefined ? undefined : this.deps.world.get(entity, Session);
-    const settings = session
-      ? { sessionId, name: session.title?.trim() || session.id }
-      : (stored?.settings as ConversationSettingsRecord | undefined) ?? { sessionId, name: sessionId };
-    return { sessionId, section, settings, filePath: stored?.filePath ?? '' };
+    const entity = this.findConversation(conversationId);
+    const conversation = entity === undefined ? undefined : this.deps.world.get(entity, Conversation);
+    const settings = conversation
+      ? { conversationId, name: conversation.title?.trim() || conversation.id }
+      : (stored?.settings as ConversationSettingsRecord | undefined) ?? { conversationId, name: conversationId };
+    return { conversationId, section, settings, filePath: stored?.filePath ?? '' };
   }
 
-  private createSnapshotMessage(
-    stored: { sessionId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string },
-    correlationId?: string
-  ): ExtensionToWebviewMessage {
+  private createSnapshotMessage(stored: { conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }, correlationId?: string): ExtensionToWebviewMessage {
     return {
       id: createMessageId(),
       type: BridgeMessageType.ConversationSettingsSnapshot,
       channel: 'settings',
-      scope: { kind: 'settings', level: 'conversation', id: stored.sessionId },
+      scope: { kind: 'settings', level: 'conversation', id: stored.conversationId },
       correlationId,
-      payload: {
-        sessionId: stored.sessionId,
-        section: stored.section,
-        settings: stored.settings,
-        filePath: stored.filePath
-      }
+      payload: { conversationId: stored.conversationId, section: stored.section, settings: stored.settings, filePath: stored.filePath }
     };
   }
 
   private applyCommonSettingsToWorld(settings: ConversationSettingsRecord): void {
-    const entity = this.findSession(settings.sessionId);
+    const conversationId = settings.conversationId;
+    const entity = this.findConversation(conversationId);
     if (entity === undefined) return;
-    const session = this.deps.world.get(entity, Session);
-    if (session) this.deps.world.add(entity, Session, { ...session, title: settings.name });
+    const conversation = this.deps.world.get(entity, Conversation);
+    if (conversation) this.deps.world.add(entity, Conversation, { ...conversation, title: settings.name });
   }
 
-  private findSession(sessionId: string): number | undefined {
-    return this.deps.world.query(Session).find((entity) => this.deps.world.get(entity, Session)?.id === sessionId);
+  private findConversation(conversationId: string): number | undefined {
+    return this.deps.world.query(Conversation).find((entity) => this.deps.world.get(entity, Conversation)?.id === conversationId);
   }
 }
 
 function normalizeConversationSettings(section: ConversationSettingsSection, settings: ConversationSettingsSectionValue): ConversationSettingsRecord {
   void section;
-  const name = settings.name.trim() || settings.sessionId;
-  return { sessionId: settings.sessionId, name };
+  const id = settings.conversationId;
+  const name = settings.name.trim() || id;
+  return { conversationId: id, name };
 }

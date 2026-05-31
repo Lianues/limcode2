@@ -3,6 +3,8 @@ export interface ToolRunEffect {
   toolCallId: string;
   name: string;
   argsJson: string;
+  runId?: string;
+  conversationId?: string;
 }
 
 declare module '@backend/world/effects' {

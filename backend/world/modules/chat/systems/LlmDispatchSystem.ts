@@ -1,22 +1,15 @@
-import { defineQuery, defineSystem, type Entity, type WorldReader } from '../../../../ecs/types';
-import { AgentConversationLink } from '../../agent/components';
-import {
-  AgentModeLink,
-  ModeModelProfileLink,
-  ModeSystemPromptLink,
-  ModeToolPolicyLink,
-  ModelProfile,
-  type ModelProfileData,
-  SystemPrompt,
-  type SystemPromptData,
-  ToolPolicy,
-  type ToolPolicyData
-} from '../../mode/components';
+import { defineQuery, defineSystem } from '../../../../ecs/types';
 import { ToolSchemasKey } from '../../tools/resources';
-import { sessionMessages } from '../queries';
-import { InFlight, LlmRequest, Message, PartOf } from '../components';
+import { conversationMessages } from '../queries';
+import { InFlight, LlmRequest, Message } from '../components';
 import { textContent } from '../../../../../shared/protocol';
 import type { LlmModelSettings } from '../../llm/contracts';
+import {
+  activeContextPolicyForRun,
+  activeModelProfileForRun,
+  activeSystemPromptForRun,
+  activeToolPolicyForRun
+} from '../../agentRun/queries';
 
 const PendingLlmRequestsQuery = defineQuery({
   name: 'PendingLlmRequests',
@@ -28,26 +21,10 @@ const PendingLlmRequestsQuery = defineQuery({
   role: 'work'
 });
 
-const SessionMessagesQuery = defineQuery({
-  name: 'SessionMessages',
-  all: [Message, PartOf],
-  read: [Message, PartOf],
-  role: 'lookup'
-});
-
-const AgentContextQuery = defineQuery({
-  name: 'AgentContext',
-  all: [AgentConversationLink],
-  read: [
-    AgentConversationLink,
-    AgentModeLink,
-    ModeToolPolicyLink,
-    ModeSystemPromptLink,
-    ModeModelProfileLink,
-    ToolPolicy,
-    SystemPrompt,
-    ModelProfile
-  ],
+const MessageLookupQuery = defineQuery({
+  name: 'RunConversationMessages',
+  all: [Message],
+  read: [Message],
   role: 'lookup'
 });
 
@@ -55,7 +32,7 @@ export const LlmDispatchSystem = defineSystem({
   name: 'LlmDispatchSystem',
   worker: { modulePath: '../world/modules/chat/systems/LlmDispatchSystem', exportName: 'LlmDispatchSystem' },
   access: {
-    queries: [PendingLlmRequestsQuery, SessionMessagesQuery, AgentContextQuery],
+    queries: [PendingLlmRequestsQuery, MessageLookupQuery],
     resources: { read: [ToolSchemasKey] },
     effects: { emit: ['llm.start'] }
   },
@@ -69,25 +46,23 @@ export const LlmDispatchSystem = defineSystem({
       const data = world.get(request, LlmRequest);
       if (!data) continue;
 
-      const agent = activeAgentForConversation(world, data.sessionEntity);
-      const mode = agent === undefined ? undefined : activeModeForAgent(world, agent);
-      const systemPrompt = mode === undefined ? undefined : activeSystemPromptForMode(world, mode)?.text;
-      const modelProfile = mode === undefined ? undefined : activeModelProfileForMode(world, mode);
+      const systemPrompt = activeSystemPromptForRun(world, data.run)?.text;
+      const modelProfile = activeModelProfileForRun(world, data.run);
       const model = modelProfile === undefined
         ? undefined
         : { provider: modelProfile.provider, model: modelProfile.model, temperature: modelProfile.temperature } satisfies LlmModelSettings;
-      const toolPolicy = mode === undefined ? undefined : activeToolPolicyForMode(world, mode);
+      const toolPolicy = activeToolPolicyForRun(world, data.run);
       const tools = toolPolicy
         ? allTools.filter((tool) => toolPolicy.allowedTools.includes(tool.name))
         : [];
 
-      const contents = [
-        ...sessionMessages(world, data.sessionEntity)
-        .filter((entity) => entity !== data.modelMessageEntity)
+      const contextPolicy = activeContextPolicyForRun(world, data.run);
+      const messages = conversationMessages(world, data.conversation)
+        .filter((entity) => entity !== data.modelMessage)
         .map((entity) => world.get(entity, Message))
-        .filter((message): message is NonNullable<typeof message> => !!message && message.status !== 'streaming')
-        .map((message) => message.content)
-      ];
+        .filter((message): message is NonNullable<typeof message> => !!message && message.status !== 'streaming');
+      const scopedMessages = applyContextPolicy(messages, contextPolicy?.historyMode ?? 'full', contextPolicy?.lastN);
+      const contents = scopedMessages.map((message) => message.content);
 
       cmd.effect({
         kind: 'llm.start',
@@ -104,46 +79,14 @@ export const LlmDispatchSystem = defineSystem({
   }
 });
 
-function activeAgentForConversation(world: WorldReader, conversation: Entity): Entity | undefined {
-  const links = world
-    .query(AgentConversationLink)
-    .map((entity) => world.get(entity, AgentConversationLink))
-    .filter((link): link is NonNullable<typeof link> => !!link && link.conversation === conversation);
-
-  return links.find((link) => link.role === 'active')?.agent ?? links[0]?.agent;
-}
-
-function activeModeForAgent(world: WorldReader, agent: Entity): Entity | undefined {
-  const links = world
-    .query(AgentModeLink)
-    .map((entity) => world.get(entity, AgentModeLink))
-    .filter((link): link is NonNullable<typeof link> => !!link && link.agent === agent);
-
-  return links.find((link) => link.role === 'active')?.mode
-    ?? links.find((link) => link.role === 'default')?.mode
-    ?? links[0]?.mode;
-}
-
-function activeToolPolicyForMode(world: WorldReader, mode: Entity): ToolPolicyData | undefined {
-  const link = world
-    .query(ModeToolPolicyLink)
-    .map((entity) => world.get(entity, ModeToolPolicyLink))
-    .find((candidate) => candidate?.mode === mode && candidate.role === 'active');
-  return link ? world.get(link.toolPolicy, ToolPolicy) : undefined;
-}
-
-function activeSystemPromptForMode(world: WorldReader, mode: Entity): SystemPromptData | undefined {
-  const link = world
-    .query(ModeSystemPromptLink)
-    .map((entity) => world.get(entity, ModeSystemPromptLink))
-    .find((candidate) => candidate?.mode === mode && candidate.role === 'active');
-  return link ? world.get(link.systemPrompt, SystemPrompt) : undefined;
-}
-
-function activeModelProfileForMode(world: WorldReader, mode: Entity): ModelProfileData | undefined {
-  const link = world
-    .query(ModeModelProfileLink)
-    .map((entity) => world.get(entity, ModeModelProfileLink))
-    .find((candidate) => candidate?.mode === mode && candidate.role === 'active');
-  return link ? world.get(link.modelProfile, ModelProfile) : undefined;
+function applyContextPolicy<T>(messages: T[], mode: string, lastN?: number): T[] {
+  switch (mode) {
+    case 'none':
+      return messages.slice(-1);
+    case 'last_n':
+      return messages.slice(-(lastN ?? 20));
+    case 'full':
+    default:
+      return messages;
+  }
 }

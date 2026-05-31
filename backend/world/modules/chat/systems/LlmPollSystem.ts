@@ -10,6 +10,8 @@ import {
 } from '../../llm/events';
 import { ToolCall } from '../../tools/components';
 import { spawnToolCall, ToolCallBundle } from '../../tools/bundles';
+import { AgentRun } from '../../agentRun/components';
+import { spawnToolCallRunLink } from '../../agentRun/bundles';
 import { LlmRequest, Message, Streaming, type MessageData } from '../components';
 import { isFunctionCallPart, isTextPart, isVisibleTextPart, type ContentPart } from '../../../../../shared/protocol';
 
@@ -52,10 +54,9 @@ const ToolCallLookupQuery = defineQuery({
 
 export const LlmPollSystem = defineSystem({
   name: 'LlmPollSystem',
-  worker: { modulePath: '../world/modules/chat/systems/LlmPollSystem', exportName: 'LlmPollSystem' },
   access: {
     queries: [LlmRequestsByIdQuery, ModelMessagesQuery, ToolCallLookupQuery],
-    writes: { components: [Streaming] },
+    writes: { components: [Streaming, AgentRun] },
     events: { read: [LlmEventType.ThoughtDelta, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error] },
     bundles: [ToolCallBundle]
   },
@@ -116,7 +117,7 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
   const requestData = world.get(request, LlmRequest);
   if (!requestData) return;
 
-  const modelMessage = requestData.modelMessageEntity;
+  const modelMessage = requestData.modelMessage;
   const current = world.get(modelMessage, Message);
   if (!current) return;
 
@@ -129,6 +130,8 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
   );
   const spawnedOrSeenCallIds = new Set<string>();
   let shouldFinish = false;
+  let sawToolCall = false;
+  let errorMessage: string | undefined;
 
   for (const operation of update.operations) {
     switch (operation.kind) {
@@ -142,6 +145,7 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
         next = appendTextToMessage(next, operation.payload.text);
         break;
       case 'toolCall':
+        sawToolCall = true;
         for (const rawCall of operation.payload.calls) {
           const toolCallId = normalizeToolCallId(requestId, rawCall, spawnedOrSeenCallIds.size);
           if (spawnedOrSeenCallIds.has(toolCallId)) continue;
@@ -153,11 +157,13 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
           }
 
           if (!toolCallExists(world, toolCallId)) {
-            spawnToolCall(cmd, { modelMessage, id: toolCallId, name: rawCall.name, argsJson: rawCall.argsJson });
+            const toolCall = spawnToolCall(cmd, { modelMessage, id: toolCallId, name: rawCall.name, argsJson: rawCall.argsJson });
+            spawnToolCallRunLink(cmd, { toolCall, run: requestData.run });
           }
         }
         break;
       case 'error':
+        errorMessage = operation.payload.message;
         next = appendTextToMessage(next, `\n[error] ${operation.payload.message}`);
         next = withLlmTiming({ ...next, status: 'error' }, operation.payload);
         shouldFinish = true;
@@ -176,6 +182,16 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
   if (shouldFinish) {
     cmd.remove(modelMessage, Streaming);
     cmd.despawn(request);
+    const run = world.get(requestData.run, AgentRun);
+    if (run) {
+      const now = Date.now();
+      cmd.add(requestData.run, AgentRun, {
+        ...run,
+        status: errorMessage ? 'failed' : sawToolCall ? 'waiting_tool' : 'delivering',
+        updatedAt: now,
+        ...(errorMessage ? { error: errorMessage } : {})
+      });
+    }
   }
 }
 

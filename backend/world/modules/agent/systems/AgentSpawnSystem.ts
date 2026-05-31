@@ -37,14 +37,14 @@ export const AgentSpawnSystem = defineSystem({
       }
 
       const agentId = request.agentId ?? `${request.kind}-${entity}`;
-      const sessionId = request.sessionId ?? `${agentId}-session`;
+      const conversationId = request.conversationId ?? `${agentId}-conversation`;
       spawnAgentFromBlueprint(cmd, {
         blueprint,
         agentId,
         agentName: request.agentName,
-        sessionId,
-        parentAgent: request.parentAgent,
-        initialTask: request.initialTask
+        conversationId,
+        conversationTitle: request.conversationTitle,
+        initialMessage: request.initialMessage
       });
 
       cmd.despawn(entity);

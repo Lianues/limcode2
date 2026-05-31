@@ -1,16 +1,10 @@
 import type { WorldReader } from '../ecs/types';
 import type { StorageCapability } from '../capabilities/types';
 import { ClientSyncStateKey } from '../world/clientSync/resources';
-import type { ClientState, MessageRecord } from '../../shared/protocol';
+import type { ClientState } from '../../shared/protocol';
 
 const DEFAULT_PERSIST_DEBOUNCE_MS = 500;
 
-/**
- * ClientState 持久化协调器。
- * - Agent/Session/Link 等低频结构变化仍走 debounce 全量保存。
- * - Message CRUD 走 chunk 级增量保存。
- * - ToolCall 是高频状态对象，按 toolCallId 增量写 snapshot / event。
- */
 export class ClientStatePersistence {
   private enabled = false;
   private lastPersistedGlobalJson = '';
@@ -19,7 +13,7 @@ export class ClientStatePersistence {
   private persistTimer: ReturnType<typeof setTimeout> | undefined;
 
   private readonly persistedMessageJson = new Map<string, string>();
-  private readonly persistedMessageSession = new Map<string, string>();
+  private readonly persistedMessageConversation = new Map<string, string>();
   private readonly persistedToolCallJson = new Map<string, string>();
   private readonly persistedToolCallEventIds = new Set<string>();
   private incrementalPersistRunning = false;
@@ -31,9 +25,7 @@ export class ClientStatePersistence {
     private readonly debounceMs = DEFAULT_PERSIST_DEBOUNCE_MS
   ) {}
 
-  public enable(): void {
-    this.enabled = true;
-  }
+  public enable(): void { this.enabled = true; }
 
   public rememberPersistedState(state: ClientState): void {
     this.lastPersistedGlobalJson = JSON.stringify(globalPersistenceSlice(state));
@@ -42,12 +34,10 @@ export class ClientStatePersistence {
 
   public queuePersist(): void {
     if (!this.enabled) return;
-
     const state = this.world.tryGetResource(ClientSyncStateKey)?.lastState;
     if (!state) return;
 
     this.queueIncrementalPersist(state);
-
     const globalJson = JSON.stringify(globalPersistenceSlice(state));
     if (globalJson === this.lastPersistedGlobalJson || globalJson === this.pendingPersistGlobalJson) return;
 
@@ -91,8 +81,6 @@ export class ClientStatePersistence {
     if (tasks.messages.length === 0 && tasks.toolSnapshots.length === 0 && tasks.toolEvents.length === 0) return;
 
     this.incrementalPersistRunning = true;
-    // Message/tool snapshot 写入都会读-改-写同一个会话下的 index/chunk 文件；并发执行会让后写入者用旧 index 覆盖先写入者，导致某些消息“显示了但没落盘”。
-    // 因此这里必须顺序提交。Tool event 本来就是 append/chunk 顺序写，也保持顺序。
     void runSequentially(tasks.messages)
       .then(() => runSequentially(tasks.toolSnapshots))
       .then(() => runSequentially(tasks.toolEvents))
@@ -107,44 +95,41 @@ export class ClientStatePersistence {
       });
   }
 
-  private collectIncrementalTasks(state: ClientState): {
-    messages: Array<() => Promise<void>>;
-    toolSnapshots: Array<() => Promise<void>>;
-    toolEvents: Array<() => Promise<void>>;
-  } {
+  private collectIncrementalTasks(state: ClientState): { messages: Array<() => Promise<void>>; toolSnapshots: Array<() => Promise<void>>; toolEvents: Array<() => Promise<void>> } {
     const messages: Array<() => Promise<void>> = [];
     const toolSnapshots: Array<() => Promise<void>> = [];
     const toolEvents: Array<() => Promise<void>> = [];
     const currentMessages = new Map(state.messages.map((message) => [message.id, message]));
-    const messageSession = new Map(state.messages.map((message) => [message.id, message.sessionId]));
+    const messageConversation = new Map(state.messages.map((message) => [message.id, message.conversationId]));
     const toolCallsById = new Map(state.toolCalls.map((toolCall) => [toolCall.id, toolCall]));
 
     for (const message of state.messages) {
+      const conversationId = message.conversationId;
       const json = JSON.stringify(message);
       if (this.persistedMessageJson.get(message.id) === json) continue;
       messages.push(async () => {
-        await this.storage.saveMessageSnapshot(message.sessionId, message);
+        await this.storage.saveMessageSnapshot(conversationId, message);
         this.persistedMessageJson.set(message.id, json);
-        this.persistedMessageSession.set(message.id, message.sessionId);
+        this.persistedMessageConversation.set(message.id, conversationId);
       });
     }
 
-    for (const [messageId, sessionId] of this.persistedMessageSession) {
+    for (const [messageId, conversationId] of this.persistedMessageConversation) {
       if (currentMessages.has(messageId)) continue;
       messages.push(async () => {
-        await this.storage.removeMessage(sessionId, messageId);
+        await this.storage.removeMessage(conversationId, messageId);
         this.persistedMessageJson.delete(messageId);
-        this.persistedMessageSession.delete(messageId);
+        this.persistedMessageConversation.delete(messageId);
       });
     }
 
     for (const toolCall of state.toolCalls) {
-      const sessionId = messageSession.get(toolCall.messageId);
-      if (!sessionId) continue;
+      const conversationId = messageConversation.get(toolCall.messageId);
+      if (!conversationId) continue;
       const json = JSON.stringify(toolCall);
       if (this.persistedToolCallJson.get(toolCall.id) === json) continue;
       toolSnapshots.push(async () => {
-        await this.storage.saveToolCallSnapshot(sessionId, toolCall);
+        await this.storage.saveToolCallSnapshot(conversationId, toolCall);
         this.persistedToolCallJson.set(toolCall.id, json);
       });
     }
@@ -153,10 +138,10 @@ export class ClientStatePersistence {
       if (this.persistedToolCallEventIds.has(event.id)) continue;
       const toolCall = toolCallsById.get(event.toolCallId);
       if (!toolCall) continue;
-      const sessionId = messageSession.get(toolCall.messageId);
-      if (!sessionId) continue;
+      const conversationId = messageConversation.get(toolCall.messageId);
+      if (!conversationId) continue;
       toolEvents.push(async () => {
-        await this.storage.appendToolCallEvent(sessionId, event);
+        await this.storage.appendToolCallEvent(conversationId, event);
         this.persistedToolCallEventIds.add(event.id);
       });
     }
@@ -166,55 +151,25 @@ export class ClientStatePersistence {
 
   private rememberIncrementalState(state: ClientState): void {
     this.persistedMessageJson.clear();
-    this.persistedMessageSession.clear();
+    this.persistedMessageConversation.clear();
     for (const message of state.messages) {
+      const conversationId = message.conversationId;
       this.persistedMessageJson.set(message.id, JSON.stringify(message));
-      this.persistedMessageSession.set(message.id, message.sessionId);
+      this.persistedMessageConversation.set(message.id, conversationId);
     }
 
     this.persistedToolCallJson.clear();
-    for (const toolCall of state.toolCalls) {
-      this.persistedToolCallJson.set(toolCall.id, JSON.stringify(toolCall));
-    }
+    for (const toolCall of state.toolCalls) this.persistedToolCallJson.set(toolCall.id, JSON.stringify(toolCall));
 
     this.persistedToolCallEventIds.clear();
-    for (const event of state.toolCallEvents ?? []) {
-      this.persistedToolCallEventIds.add(event.id);
-    }
+    for (const event of state.toolCallEvents ?? []) this.persistedToolCallEventIds.add(event.id);
   }
 }
 
-function globalPersistenceSlice(state: ClientState): Pick<
-  ClientState,
-  | 'agents'
-  | 'agentModes'
-  | 'toolPolicies'
-  | 'systemPrompts'
-  | 'modelProfiles'
-  | 'agentModeLinks'
-  | 'modeToolPolicyLinks'
-  | 'modeSystemPromptLinks'
-  | 'modeModelProfileLinks'
-  | 'sessions'
-  | 'agentConversationLinks'
-> {
-  return {
-    agents: state.agents,
-    agentModes: state.agentModes,
-    toolPolicies: state.toolPolicies,
-    systemPrompts: state.systemPrompts,
-    modelProfiles: state.modelProfiles,
-    agentModeLinks: state.agentModeLinks,
-    modeToolPolicyLinks: state.modeToolPolicyLinks,
-    modeSystemPromptLinks: state.modeSystemPromptLinks,
-    modeModelProfileLinks: state.modeModelProfileLinks,
-    sessions: state.sessions,
-    agentConversationLinks: state.agentConversationLinks
-  };
+function globalPersistenceSlice(state: ClientState): ClientState {
+  return { ...state, messages: [], toolCalls: [], toolCallEvents: [] };
 }
 
 async function runSequentially(tasks: Array<() => Promise<void>>): Promise<void> {
-  for (const task of tasks) {
-    await task();
-  }
+  for (const task of tasks) await task();
 }

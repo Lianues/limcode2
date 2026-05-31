@@ -1,8 +1,10 @@
 import type {
   AgentModeLinkRecord,
   AgentModeRecord,
+  ApprovalPolicyRecord,
   ClientPatchOp,
   ClientState,
+  ModeApprovalPolicyLinkRecord,
   ModeModelProfileLinkRecord,
   ModeSystemPromptLinkRecord,
   ModeToolPolicyLinkRecord,
@@ -17,6 +19,8 @@ import { Agent } from '../agent/components';
 import {
   AgentMode,
   AgentModeLink,
+  ApprovalPolicy,
+  ModeApprovalPolicyLink,
   ModeModelProfileLink,
   ModeSystemPromptLink,
   ModeToolPolicyLink,
@@ -28,6 +32,7 @@ import {
 export function projectModeClientState(world: WorldReader): ClientStateSlice {
   const agentModes: AgentModeRecord[] = world.query(AgentMode).map((entity) => ({ ...world.get(entity, AgentMode)! }));
   const toolPolicies: ToolPolicyRecord[] = world.query(ToolPolicy).map((entity) => ({ ...world.get(entity, ToolPolicy)! }));
+  const approvalPolicies: ApprovalPolicyRecord[] = world.query(ApprovalPolicy).map((entity) => ({ ...world.get(entity, ApprovalPolicy)! }));
   const systemPrompts: SystemPromptRecord[] = world.query(SystemPrompt).map((entity) => ({ ...world.get(entity, SystemPrompt)! }));
   const modelProfiles: ModelProfileRecord[] = world.query(ModelProfile).map((entity) => ({ ...world.get(entity, ModelProfile)! }));
 
@@ -39,6 +44,10 @@ export function projectModeClientState(world: WorldReader): ClientStateSlice {
     .query(ModeToolPolicyLink)
     .map((entity) => buildModeToolPolicyLinkRecord(world, entity))
     .filter((item): item is ModeToolPolicyLinkRecord => item !== undefined);
+  const modeApprovalPolicyLinks: ModeApprovalPolicyLinkRecord[] = world
+    .query(ModeApprovalPolicyLink)
+    .map((entity) => buildModeApprovalPolicyLinkRecord(world, entity))
+    .filter((item): item is ModeApprovalPolicyLinkRecord => item !== undefined);
   const modeSystemPromptLinks: ModeSystemPromptLinkRecord[] = world
     .query(ModeSystemPromptLink)
     .map((entity) => buildModeSystemPromptLinkRecord(world, entity))
@@ -51,10 +60,12 @@ export function projectModeClientState(world: WorldReader): ClientStateSlice {
   return {
     agentModes,
     toolPolicies,
+    approvalPolicies,
     systemPrompts,
     modelProfiles,
     agentModeLinks,
     modeToolPolicyLinks,
+    modeApprovalPolicyLinks,
     modeSystemPromptLinks,
     modeModelProfileLinks
   };
@@ -64,10 +75,12 @@ export function diffModeClientState(prev: ClientState, next: ClientState): Clien
   return [
     ...diffUpsertRemove(prev.agentModes, next.agentModes, (agentMode): ClientPatchOp => ({ kind: 'agentMode.upsert', agentMode }), (id): ClientPatchOp => ({ kind: 'agentMode.remove', id })),
     ...diffUpsertRemove(prev.toolPolicies, next.toolPolicies, (toolPolicy): ClientPatchOp => ({ kind: 'toolPolicy.upsert', toolPolicy }), (id): ClientPatchOp => ({ kind: 'toolPolicy.remove', id })),
+    ...diffUpsertRemove(prev.approvalPolicies, next.approvalPolicies, (approvalPolicy): ClientPatchOp => ({ kind: 'approvalPolicy.upsert', approvalPolicy }), (id): ClientPatchOp => ({ kind: 'approvalPolicy.remove', id })),
     ...diffUpsertRemove(prev.systemPrompts, next.systemPrompts, (systemPrompt): ClientPatchOp => ({ kind: 'systemPrompt.upsert', systemPrompt }), (id): ClientPatchOp => ({ kind: 'systemPrompt.remove', id })),
     ...diffUpsertRemove(prev.modelProfiles, next.modelProfiles, (modelProfile): ClientPatchOp => ({ kind: 'modelProfile.upsert', modelProfile }), (id): ClientPatchOp => ({ kind: 'modelProfile.remove', id })),
     ...diffUpsertRemove(prev.agentModeLinks, next.agentModeLinks, (link): ClientPatchOp => ({ kind: 'agentModeLink.upsert', link }), (id): ClientPatchOp => ({ kind: 'agentModeLink.remove', id })),
     ...diffUpsertRemove(prev.modeToolPolicyLinks, next.modeToolPolicyLinks, (link): ClientPatchOp => ({ kind: 'modeToolPolicyLink.upsert', link }), (id): ClientPatchOp => ({ kind: 'modeToolPolicyLink.remove', id })),
+    ...diffUpsertRemove(prev.modeApprovalPolicyLinks, next.modeApprovalPolicyLinks, (link): ClientPatchOp => ({ kind: 'modeApprovalPolicyLink.upsert', link }), (id): ClientPatchOp => ({ kind: 'modeApprovalPolicyLink.remove', id })),
     ...diffUpsertRemove(prev.modeSystemPromptLinks, next.modeSystemPromptLinks, (link): ClientPatchOp => ({ kind: 'modeSystemPromptLink.upsert', link }), (id): ClientPatchOp => ({ kind: 'modeSystemPromptLink.remove', id })),
     ...diffUpsertRemove(prev.modeModelProfileLinks, next.modeModelProfileLinks, (link): ClientPatchOp => ({ kind: 'modeModelProfileLink.upsert', link }), (id): ClientPatchOp => ({ kind: 'modeModelProfileLink.remove', id }))
   ];
@@ -80,10 +93,12 @@ export const modeClientSyncContributor = defineClientStateContributor({
       Agent,
       AgentMode,
       ToolPolicy,
+      ApprovalPolicy,
       SystemPrompt,
       ModelProfile,
       AgentModeLink,
       ModeToolPolicyLink,
+      ModeApprovalPolicyLink,
       ModeSystemPromptLink,
       ModeModelProfileLink
     ]
@@ -113,6 +128,15 @@ function buildModeToolPolicyLinkRecord(world: WorldReader, entity: number): Mode
   const toolPolicy = world.get(link.toolPolicy, ToolPolicy);
   if (!mode || !toolPolicy) return undefined;
   return { id: link.id, modeId: mode.id, toolPolicyId: toolPolicy.id, role: link.role };
+}
+
+function buildModeApprovalPolicyLinkRecord(world: WorldReader, entity: number): ModeApprovalPolicyLinkRecord | undefined {
+  const link = world.get(entity, ModeApprovalPolicyLink);
+  if (!link) return undefined;
+  const mode = world.get(link.mode, AgentMode);
+  const approvalPolicy = world.get(link.approvalPolicy, ApprovalPolicy);
+  if (!mode || !approvalPolicy) return undefined;
+  return { id: link.id, modeId: mode.id, approvalPolicyId: approvalPolicy.id, role: link.role };
 }
 
 function buildModeSystemPromptLinkRecord(world: WorldReader, entity: number): ModeSystemPromptLinkRecord | undefined {

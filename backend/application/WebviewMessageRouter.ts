@@ -51,8 +51,8 @@ export class WebviewMessageRouter {
         this.deps.world.enqueue({ type: ToolEventType.ExecuteRequested, payload: message.payload });
         break;
       case BridgeMessageType.ClientResync:
-        this.subscribeRequestedStream(clientId, message.payload?.streamId, message.payload?.sessionId);
-        if (this.deps.isHydrated()) this.deps.requestSnapshot(message.payload?.sessionId ?? conversationIdFromClientStateStreamId(message.payload?.streamId ?? ''));
+        this.subscribeRequestedStream(clientId, message.payload?.streamId, message.payload?.conversationId);
+        if (this.deps.isHydrated()) this.deps.requestSnapshot(message.payload?.conversationId ?? conversationIdFromClientStateStreamId(message.payload?.streamId ?? ''));
         break;
       case BridgeMessageType.GlobalSettingsGet:
         if (!message.payload) return;
@@ -66,11 +66,11 @@ export class WebviewMessageRouter {
         break;
       case BridgeMessageType.ConversationSettingsGet:
         if (!message.payload) return;
-        void this.deps.conversationSettingsBridge.postSnapshot(clientId, message.payload.sessionId, message.payload.section, message.id);
+        void this.deps.conversationSettingsBridge.postSnapshot(clientId, message.payload.conversationId, message.payload.section, message.id);
         break;
       case BridgeMessageType.ConversationSettingsUpdate:
         if (!message.payload) return;
-        this.deps.webview.subscribe(clientId, conversationSettingsStreamId(message.payload.settings.sessionId, message.payload.section));
+        this.deps.webview.subscribe(clientId, conversationSettingsStreamId(message.payload.settings.conversationId ?? '', message.payload.section));
         void this.deps.conversationSettingsBridge.update(message.payload, message.id);
         break;
       case BridgeMessageType.Ready:

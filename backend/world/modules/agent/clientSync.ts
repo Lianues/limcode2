@@ -2,13 +2,12 @@ import type { AgentConversationLinkRecord, AgentRecord, ClientPatchOp, ClientSta
 import type { WorldReader } from '../../../ecs/types';
 import { diffUpsertRemove } from '../../clientSync/diff';
 import { defineClientStateContributor, type ClientStateSlice } from '../../clientSync/contributors';
-import { Session } from '../chat/components';
+import { Conversation } from '../chat/components';
 import {
   Agent,
   AgentConversationLink,
   AgentKind,
-  AgentStatus,
-  ParentAgent
+  AgentStatus
 } from './components';
 
 export function projectAgentClientState(world: WorldReader): ClientStateSlice {
@@ -18,11 +17,7 @@ export function projectAgentClientState(world: WorldReader): ClientStateSlice {
       id: agent.id,
       name: agent.name,
       kind: world.get(entity, AgentKind)?.kind ?? 'unknown',
-      status: world.get(entity, AgentStatus)?.status ?? 'idle',
-      parentAgentId: (() => {
-        const parentEntity = world.get(entity, ParentAgent)?.parent;
-        return parentEntity === undefined ? undefined : world.get(parentEntity, Agent)?.id;
-      })()
+      status: world.get(entity, AgentStatus)?.status ?? 'idle'
     };
   });
 
@@ -63,8 +58,7 @@ export const agentClientSyncContributor = defineClientStateContributor({
       AgentConversationLink,
       AgentKind,
       AgentStatus,
-      ParentAgent,
-      Session
+      Conversation
     ]
   },
   project: projectAgentClientState,
@@ -81,13 +75,13 @@ function buildAgentConversationLinkRecord(world: WorldReader, entity: number): A
   if (!link) return undefined;
 
   const agent = world.get(link.agent, Agent);
-  const session = world.get(link.conversation, Session);
-  if (!agent || !session) return undefined;
+  const conversation = world.get(link.conversation, Conversation);
+  if (!agent || !conversation) return undefined;
 
   return {
     id: link.id,
     agentId: agent.id,
-    sessionId: session.id,
+    conversationId: conversation.id,
     role: link.role
   };
 }

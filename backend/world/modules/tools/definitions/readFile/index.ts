@@ -28,6 +28,7 @@ export const readFileTool: ToolDefinition = {
       required: ['path']
     }
   },
+  execution: 'runtime',
   async execute(rawArgs, deps) {
     const args = (rawArgs ?? {}) as ReadFileArgs;
     if (!args.path) {

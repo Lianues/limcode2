@@ -91,6 +91,11 @@ export interface RuntimePaths {
   toolPoliciesRootPath: string;
   toolPoliciesIndexUri: vscode.Uri;
   toolPoliciesIndexPath: string;
+  /** ApprovalPolicy 数据根目录：<dataRoot>/approval-policies */
+  approvalPoliciesRootUri: vscode.Uri;
+  approvalPoliciesRootPath: string;
+  approvalPoliciesIndexUri: vscode.Uri;
+  approvalPoliciesIndexPath: string;
   /** SystemPrompt 数据根目录：<dataRoot>/system-prompts */
   systemPromptsRootUri: vscode.Uri;
   systemPromptsRootPath: string;
@@ -121,6 +126,10 @@ export interface RuntimePaths {
   modeToolPolicyLinksRootPath: string;
   modeToolPolicyLinksIndexUri: vscode.Uri;
   modeToolPolicyLinksIndexPath: string;
+  modeApprovalPolicyLinksRootUri: vscode.Uri;
+  modeApprovalPolicyLinksRootPath: string;
+  modeApprovalPolicyLinksIndexUri: vscode.Uri;
+  modeApprovalPolicyLinksIndexPath: string;
   /** Mode 与 SystemPrompt 的关系数据根目录：<dataRoot>/mode-system-prompt-links */
   modeSystemPromptLinksRootUri: vscode.Uri;
   modeSystemPromptLinksRootPath: string;
@@ -131,6 +140,34 @@ export interface RuntimePaths {
   modeModelProfileLinksRootPath: string;
   modeModelProfileLinksIndexUri: vscode.Uri;
   modeModelProfileLinksIndexPath: string;
+  agentRunsRootUri: vscode.Uri;
+  agentRunsRootPath: string;
+  agentRunsIndexUri: vscode.Uri;
+  agentRunsIndexPath: string;
+  agentRunSourceLinksRootUri: vscode.Uri;
+  agentRunSourceLinksRootPath: string;
+  agentRunSourceLinksIndexUri: vscode.Uri;
+  agentRunSourceLinksIndexPath: string;
+  agentRunTargetLinksRootUri: vscode.Uri;
+  agentRunTargetLinksRootPath: string;
+  agentRunTargetLinksIndexUri: vscode.Uri;
+  agentRunTargetLinksIndexPath: string;
+  messageRunLinksRootUri: vscode.Uri;
+  messageRunLinksRootPath: string;
+  messageRunLinksIndexUri: vscode.Uri;
+  messageRunLinksIndexPath: string;
+  toolCallRunLinksRootUri: vscode.Uri;
+  toolCallRunLinksRootPath: string;
+  toolCallRunLinksIndexUri: vscode.Uri;
+  toolCallRunLinksIndexPath: string;
+  runPoliciesRootUri: vscode.Uri;
+  runPoliciesRootPath: string;
+  runPoliciesIndexUri: vscode.Uri;
+  runPoliciesIndexPath: string;
+  messageRevisionsRootUri: vscode.Uri;
+  messageRevisionsRootPath: string;
+  messageRevisionsIndexUri: vscode.Uri;
+  messageRevisionsIndexPath: string;
   /** 通用设置根目录：<dataRoot>/settings */
   settingsRootUri: vscode.Uri;
   settingsRootPath: string;
@@ -146,12 +183,12 @@ export interface StorageCapability {
   ensureReady(): Promise<void>;
   loadClientState(): Promise<ClientState | undefined>;
   saveClientState(state: ClientState): Promise<void>;
-  saveMessageSnapshot(sessionId: string, message: import('../../shared/protocol').MessageRecord): Promise<void>;
-  removeMessage(sessionId: string, messageId: string): Promise<void>;
-  saveToolCallSnapshot(sessionId: string, toolCall: ToolCallRecord): Promise<void>;
-  appendToolCallEvent(sessionId: string, event: ToolCallEventRecord): Promise<void>;
+  saveMessageSnapshot(conversationId: string, message: import('../../shared/protocol').MessageRecord): Promise<void>;
+  removeMessage(conversationId: string, messageId: string): Promise<void>;
+  saveToolCallSnapshot(conversationId: string, toolCall: ToolCallRecord): Promise<void>;
+  appendToolCallEvent(conversationId: string, event: ToolCallEventRecord): Promise<void>;
   loadGlobalSettings(section: GlobalSettingsSection): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
   saveGlobalSettings(section: GlobalSettingsSection, settings: GlobalSettingsSectionValue): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
-  loadConversationSettings(sessionId: string, section: ConversationSettingsSection): Promise<{ sessionId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string } | undefined>;
-  saveConversationSettings(section: ConversationSettingsSection, settings: ConversationSettingsSectionValue): Promise<{ sessionId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }>;
+  loadConversationSettings(conversationId: string, section: ConversationSettingsSection): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string } | undefined>;
+  saveConversationSettings(section: ConversationSettingsSection, settings: ConversationSettingsSectionValue): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }>;
 }

@@ -20,21 +20,29 @@ export interface ToolRuntimeEvent {
 
 export interface ToolExecutionContext {
   toolCallId: string;
+  runId?: string;
+  conversationId?: string;
   emit(event: ToolRuntimeEvent): void;
 }
 
-/** LLM 可见的工具声明。后续 provider/schema 转换只应依赖这一层声明。 */
 export interface ToolDeclaration {
   name: string;
   description: string;
   parameters: unknown;
 }
 
-/** 工具运行定义 = 稳定声明 + 运行期 handler。 */
-export interface ToolDefinition {
+export interface RuntimeToolDefinition {
   declaration: ToolDeclaration;
+  execution: 'runtime';
   execute(args: unknown, deps: ToolDeps, ctx?: ToolExecutionContext): Promise<ToolResultOut>;
 }
+
+export interface AgentRunToolDefinition {
+  declaration: ToolDeclaration;
+  execution: 'agentRun';
+}
+
+export type ToolDefinition = RuntimeToolDefinition | AgentRunToolDefinition;
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDefinition>();

@@ -6,13 +6,13 @@ import type { EffectHandlerRegistry } from '../registry';
 export function registerToolEffectHandlers(registry: EffectHandlerRegistry): void {
   registry.register('tool.run', (effect, env, emit) => {
     const tool = env.tools.registry.find((candidate) => candidate.declaration.name === effect.name);
-    if (!tool) {
+    if (!tool || tool.execution !== 'runtime') {
       emitToolState(emit, {
         toolCallId: effect.toolCallId,
         status: 'error',
-        error: `Unknown tool: ${effect.name}`,
+        error: `Unknown runtime tool: ${effect.name}`,
         durationMs: 0,
-        result: { error: `Unknown tool: ${effect.name}` }
+        result: { error: `Unknown runtime tool: ${effect.name}` }
       });
       return;
     }
@@ -32,7 +32,7 @@ export function registerToolEffectHandlers(registry: EffectHandlerRegistry): voi
     };
 
     tool
-      .execute(args, { fs: env.fs, command: env.command }, { toolCallId: effect.toolCallId, emit: emitRuntimeEvent })
+      .execute(args, { fs: env.fs, command: env.command }, { toolCallId: effect.toolCallId, runId: effect.runId, conversationId: effect.conversationId, emit: emitRuntimeEvent })
       .then((result) => emitToolState(emit, toToolStatePayload(effect.toolCallId, result, Date.now() - startedAt)))
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);

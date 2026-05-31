@@ -1,17 +1,17 @@
 import { defineBundle, type CommandSink, type Entity } from '../../../ecs/types';
-import type { ContentPart, ContentRole, MsgRole, MsgStatus } from '../../../../shared/protocol';
-import { LlmRequest, Message, PartOf, Session, Streaming } from './components';
+import type { ContentPart, ContentRole, MessageContent, MessageRevisionReason, MsgRole, MsgStatus } from '../../../../shared/protocol';
+import { Conversation, LlmRequest, Message, MessageCurrentRevisionLink, MessageRevision, PartOf, Streaming } from './components';
 
-export const SessionBundle = defineBundle({ name: 'SessionBundle', writes: [Session], mutationMode: 'create', spawns: true });
-export const MessageBundle = defineBundle({ name: 'MessageBundle', writes: [Message, PartOf], mutationMode: 'create', spawns: true });
-export const UserMessageBundle = defineBundle({ name: 'UserMessageBundle', writes: [Message, PartOf], mutationMode: 'create', spawns: true });
-export const ModelMessageBundle = defineBundle({ name: 'ModelMessageBundle', writes: [Message, PartOf, Streaming], mutationMode: 'create', spawns: true });
-export const ToolResultMessageBundle = defineBundle({ name: 'ToolResultMessageBundle', writes: [Message, PartOf], mutationMode: 'create', spawns: true });
+export const ConversationBundle = defineBundle({ name: 'ConversationBundle', writes: [Conversation], mutationMode: 'create', spawns: true });
+export const MessageBundle = defineBundle({ name: 'MessageBundle', writes: [Message, PartOf, MessageRevision, MessageCurrentRevisionLink], mutationMode: 'create', spawns: true });
+export const UserMessageBundle = MessageBundle;
+export const ModelMessageBundle = defineBundle({ name: 'ModelMessageBundle', writes: [Message, PartOf, Streaming, MessageRevision, MessageCurrentRevisionLink], mutationMode: 'create', spawns: true });
+export const ToolResultMessageBundle = MessageBundle;
 export const LlmRequestBundle = defineBundle({ name: 'LlmRequestBundle', writes: [LlmRequest], mutationMode: 'create', spawns: true });
 
-export function spawnSession(cmd: CommandSink, input: { id: string; title?: string }): Entity {
+export function spawnConversation(cmd: CommandSink, input: { id: string; title?: string; visibility?: 'visible' | 'hidden' | 'collapsed' }): Entity {
   const entity = cmd.spawn();
-  cmd.add(entity, Session, { id: input.id, title: input.title });
+  cmd.add(entity, Conversation, { id: input.id, title: input.title, visibility: input.visibility ?? 'visible' });
   return entity;
 }
 
@@ -20,59 +20,60 @@ export interface SpawnMessageInput {
   role: MsgRole;
   parts?: ContentPart[];
   status?: MsgStatus;
+  revisionReason?: MessageRevisionReason;
 }
 
 export function spawnMessage(cmd: CommandSink, input: SpawnMessageInput): Entity {
   const entity = cmd.spawn();
+  const content: MessageContent = {
+    role: contentRoleForMessage(input.role),
+    parts: input.parts ?? []
+  };
   cmd.add(entity, Message, {
     id: `m${entity}`,
     role: input.role,
-    content: {
-      role: contentRoleForMessage(input.role),
-      parts: input.parts ?? []
-    },
+    content,
     status: input.status ?? 'complete',
     seq: entity,
     createdAt: Date.now()
   });
   cmd.add(entity, PartOf, { parent: input.parent });
+  spawnMessageRevision(cmd, entity, content, input.revisionReason ?? 'created');
   return entity;
 }
 
-export function spawnUserMessage(cmd: CommandSink, session: Entity, text: string): Entity {
-  return spawnMessage(cmd, { parent: session, role: 'user', parts: [{ text }], status: 'complete' });
+export function spawnMessageRevision(cmd: CommandSink, message: Entity, content: MessageContent, reason: MessageRevisionReason): Entity {
+  const revision = cmd.spawn();
+  cmd.add(revision, MessageRevision, {
+    id: `rev${revision}`,
+    content,
+    createdAt: Date.now(),
+    reason
+  });
+  cmd.add(revision, PartOf, { parent: message });
+  const link = cmd.spawn();
+  cmd.add(link, MessageCurrentRevisionLink, { id: `mcr${link}`, message, revision });
+  return revision;
 }
 
-export function spawnModelMessage(cmd: CommandSink, session: Entity): Entity {
-  const entity = spawnMessage(cmd, { parent: session, role: 'model', parts: [], status: 'streaming' });
+export function spawnUserMessage(cmd: CommandSink, conversation: Entity, text: string): Entity {
+  return spawnMessage(cmd, { parent: conversation, role: 'user', parts: [{ text }], status: 'complete' });
+}
+
+export function spawnModelMessage(cmd: CommandSink, conversation: Entity): Entity {
+  const entity = spawnMessage(cmd, { parent: conversation, role: 'model', parts: [], status: 'streaming' });
   cmd.add(entity, Streaming, true);
   return entity;
 }
 
 function contentRoleForMessage(role: MsgRole): ContentRole { return role; }
 
-export function spawnToolResultMessage(
-  cmd: CommandSink,
-  input: { session: Entity; toolName: string; status: 'success' | 'warning' | 'error'; response: unknown; durationMs?: number }
-): Entity {
-  return spawnMessage(cmd, {
-    parent: input.session,
-    role: 'user',
-    parts: [{
-      id: input.toolName,
-      functionResponse: { name: input.toolName, response: input.response },
-      ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {})
-    }],
-    status: input.status === 'error' ? 'error' : 'complete'
-  });
-}
-
 export function spawnToolResponseMessage(
   cmd: CommandSink,
-  input: { session: Entity; toolCallId: string; toolName: string; status: 'success' | 'warning' | 'error'; response: unknown; durationMs?: number }
+  input: { conversation: Entity; toolCallId: string; toolName: string; status: 'success' | 'warning' | 'error'; response: unknown; durationMs?: number }
 ): Entity {
   return spawnMessage(cmd, {
-    parent: input.session,
+    parent: input.conversation,
     role: 'user',
     parts: [{
       id: input.toolCallId,
@@ -83,12 +84,13 @@ export function spawnToolResponseMessage(
   });
 }
 
-export function spawnLlmRequest(cmd: CommandSink, input: { session: Entity; modelMessage: Entity }): Entity {
+export function spawnLlmRequest(cmd: CommandSink, input: { run: Entity; conversation: Entity; modelMessage: Entity }): Entity {
   const entity = cmd.spawn();
   cmd.add(entity, LlmRequest, {
     id: `req${entity}`,
-    sessionEntity: input.session,
-    modelMessageEntity: input.modelMessage
+    run: input.run,
+    conversation: input.conversation,
+    modelMessage: input.modelMessage
   });
   return entity;
 }

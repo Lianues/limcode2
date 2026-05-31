@@ -15,7 +15,7 @@ import {
   type ModelProfileRecord,
   isTextPart,
   isVisibleTextPart,
-  type SessionRecord,
+  type ConversationRecord,
   type SystemPromptRecord,
   type ToolCallEventRecord,
   type ToolCallRecord,
@@ -35,7 +35,7 @@ interface ClientStateStore {
   modeToolPolicyLinks: ModeToolPolicyLinkRecord[];
   modeSystemPromptLinks: ModeSystemPromptLinkRecord[];
   modeModelProfileLinks: ModeModelProfileLinkRecord[];
-  sessions: SessionRecord[];
+  sessions: ConversationRecord[];
   agentConversationLinks: AgentConversationLinkRecord[];
   messages: MessageRecord[];
   toolCalls: ToolCallRecord[];
@@ -73,13 +73,13 @@ export function applyClientSnapshot(streamId: string, streamSeq: number, state: 
     clientState.modeToolPolicyLinks = state.modeToolPolicyLinks;
     clientState.modeSystemPromptLinks = state.modeSystemPromptLinks;
     clientState.modeModelProfileLinks = state.modeModelProfileLinks;
-    clientState.sessions = state.sessions;
+    clientState.sessions = state.conversations;
     clientState.agentConversationLinks = state.agentConversationLinks;
     ensureCurrentSession();
     return;
   }
 
-  const sessionId = conversationIdFromClientStateStreamId(streamId) ?? state.sessions[0]?.id ?? state.messages[0]?.sessionId;
+  const sessionId = conversationIdFromClientStateStreamId(streamId) ?? state.conversations[0]?.id ?? state.messages[0]?.conversationId;
   if (!sessionId) return;
   replaceConversationState(sessionId, state.messages, state.toolCalls, state.toolCallEvents ?? []);
 }
@@ -149,10 +149,10 @@ function applyClientPatchOp(patch: ClientPatchOp): void {
     case 'modeModelProfileLink.remove':
       remove(clientState.modeModelProfileLinks, (item) => item.id === patch.id);
       break;
-    case 'session.upsert':
-      upsert(clientState.sessions, patch.session, (item) => item.id === patch.session.id);
+    case 'conversation.upsert':
+      upsert(clientState.sessions, patch.conversation, (item) => item.id === patch.conversation.id);
       break;
-    case 'session.remove':
+    case 'conversation.remove':
       removeSession(patch.id);
       break;
     case 'agentConversationLink.upsert':
@@ -227,20 +227,20 @@ function applyClientPatchOp(patch: ClientPatchOp): void {
 }
 
 function replaceConversationState(sessionId: string, messages: MessageRecord[], toolCalls: ToolCallRecord[], toolCallEvents: ToolCallEventRecord[]): void {
-  const previousMessageIds = new Set(clientState.messages.filter((message) => message.sessionId === sessionId).map((message) => message.id));
+  const previousMessageIds = new Set(clientState.messages.filter((message) => message.conversationId === sessionId).map((message) => message.id));
   const previousToolCallIds = new Set(clientState.toolCalls.filter((toolCall) => previousMessageIds.has(toolCall.messageId)).map((toolCall) => toolCall.id));
-  clientState.messages = [...clientState.messages.filter((message) => message.sessionId !== sessionId), ...messages].sort((a, b) => a.seq - b.seq);
+  clientState.messages = [...clientState.messages.filter((message) => message.conversationId !== sessionId), ...messages].sort((a, b) => a.seq - b.seq);
   clientState.toolCalls = [...clientState.toolCalls.filter((toolCall) => !previousMessageIds.has(toolCall.messageId)), ...toolCalls];
   clientState.toolCallEvents = [...clientState.toolCallEvents.filter((event) => !previousToolCallIds.has(event.toolCallId)), ...toolCallEvents]
     .sort((a, b) => a.seq - b.seq || a.id.localeCompare(b.id));
 }
 
 function removeSession(sessionId: string): void {
-  const messageIds = new Set(clientState.messages.filter((message) => message.sessionId === sessionId).map((message) => message.id));
+  const messageIds = new Set(clientState.messages.filter((message) => message.conversationId === sessionId).map((message) => message.id));
   const toolCallIds = new Set(clientState.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId)).map((toolCall) => toolCall.id));
   remove(clientState.sessions, (item) => item.id === sessionId);
-  remove(clientState.agentConversationLinks, (item) => item.sessionId === sessionId);
-  clientState.messages = clientState.messages.filter((message) => message.sessionId !== sessionId);
+  remove(clientState.agentConversationLinks, (item) => item.conversationId === sessionId);
+  clientState.messages = clientState.messages.filter((message) => message.conversationId !== sessionId);
   clientState.toolCalls = clientState.toolCalls.filter((toolCall) => !toolCallIds.has(toolCall.id));
   clientState.toolCallEvents = clientState.toolCallEvents.filter((event) => !toolCallIds.has(event.toolCallId));
   if (clientState.currentSessionId === sessionId) clientState.currentSessionId = clientState.sessions[0]?.id ?? '';

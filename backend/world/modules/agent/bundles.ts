@@ -1,16 +1,17 @@
 import { defineBundle, type CommandSink, type Entity } from '../../../ecs/types';
-import { NeedsResponse, Message, PartOf, Session } from '../chat/components';
-import { spawnUserMessage, spawnSession } from '../chat/bundles';
+import { Conversation, PartOf, Message } from '../chat/components';
+import { spawnConversation, spawnUserMessage } from '../chat/bundles';
 import {
   Agent,
   AgentConversationLink,
   AgentKind,
-  AgentStatus,
-  ParentAgent
+  AgentStatus
 } from './components';
 import {
   AgentMode,
   AgentModeLink,
+  ApprovalPolicy,
+  ModeApprovalPolicyLink,
   ModeModelProfileLink,
   ModeSystemPromptLink,
   ModeToolPolicyLink,
@@ -27,20 +28,20 @@ export const AgentFromBlueprintBundle = defineBundle({
     Agent,
     AgentKind,
     AgentStatus,
-    ParentAgent,
     AgentMode,
     ToolPolicy,
+    ApprovalPolicy,
     SystemPrompt,
     ModelProfile,
     AgentModeLink,
     ModeToolPolicyLink,
+    ModeApprovalPolicyLink,
     ModeSystemPromptLink,
     ModeModelProfileLink,
-    Session,
+    Conversation,
     AgentConversationLink,
     Message,
-    PartOf,
-    NeedsResponse
+    PartOf
   ],
   mutationMode: 'create',
   spawns: true
@@ -49,15 +50,15 @@ export const AgentFromBlueprintBundle = defineBundle({
 export interface SpawnAgentFromBlueprintInput {
   blueprint: AgentBlueprint;
   agentId: string;
-  sessionId: string;
+  conversationId: string;
   agentName?: string;
-  parentAgent?: Entity;
-  initialTask?: string;
+  initialMessage?: string;
+  conversationTitle?: string;
 }
 
 export interface SpawnAgentFromBlueprintResult {
   agent: Entity;
-  session: Entity;
+  conversation: Entity;
   link: Entity;
 }
 
@@ -69,9 +70,6 @@ export function spawnAgentFromBlueprint(
   cmd.add(agent, Agent, { id: input.agentId, name: input.agentName ?? input.blueprint.name });
   cmd.add(agent, AgentKind, { kind: input.blueprint.kind });
   cmd.add(agent, AgentStatus, { status: 'idle' });
-  if (input.parentAgent !== undefined) {
-    cmd.add(agent, ParentAgent, { parent: input.parentAgent });
-  }
 
   for (const modeBlueprint of input.blueprint.modes) {
     spawnModeFromBlueprint(cmd, {
@@ -82,24 +80,31 @@ export function spawnAgentFromBlueprint(
     });
   }
 
-  const session = spawnSession(cmd, { id: input.sessionId });
+  const conversation = spawnConversation(cmd, { id: input.conversationId, title: input.conversationTitle });
+  const link = linkAgentToConversation(cmd, { agent, conversation, role: 'default' });
+
+  if (input.initialMessage?.trim()) {
+    spawnUserMessage(cmd, conversation, input.initialMessage.trim());
+  }
+
+  return { agent, conversation, link };
+}
+
+export function linkAgentToConversation(
+  cmd: CommandSink,
+  input: { agent: Entity; conversation: Entity; role?: 'default' | 'participant' | 'reviewer' }
+): Entity {
   const link = cmd.spawn();
   const now = Date.now();
   cmd.add(link, AgentConversationLink, {
     id: `acl${link}`,
-    agent,
-    conversation: session,
-    role: 'active',
+    agent: input.agent,
+    conversation: input.conversation,
+    role: input.role ?? 'participant',
     createdAt: now,
     updatedAt: now
   });
-
-  if (input.initialTask && input.initialTask.trim()) {
-    spawnUserMessage(cmd, session, input.initialTask.trim());
-    cmd.add(session, NeedsResponse, { since: Date.now() });
-  }
-
-  return { agent, session, link };
+  return link;
 }
 
 function spawnModeFromBlueprint(
@@ -133,14 +138,31 @@ function spawnModeFromBlueprint(
   cmd.add(toolPolicy, ToolPolicy, {
     id: toolPolicyId,
     name: input.blueprint.toolPolicy.name ?? `${input.blueprint.name} Tools`,
-    allowedTools: input.blueprint.toolPolicy.allowedTools,
-    approvalMode: input.blueprint.toolPolicy.approvalMode
+    allowedTools: input.blueprint.toolPolicy.allowedTools
   });
   const toolPolicyLink = cmd.spawn();
   cmd.add(toolPolicyLink, ModeToolPolicyLink, {
     id: `mode-tool-policy:${modeId}:${toolPolicyId}`,
     mode,
     toolPolicy,
+    role: 'active',
+    createdAt: now,
+    updatedAt: now
+  });
+
+  const approvalPolicy = cmd.spawn();
+  const approvalPolicyId = `${modeId}:approval-policy`;
+  cmd.add(approvalPolicy, ApprovalPolicy, {
+    id: approvalPolicyId,
+    name: input.blueprint.approvalPolicy.name ?? `${input.blueprint.name} Approval`,
+    mode: input.blueprint.approvalPolicy.mode,
+    allowInteractiveApproval: input.blueprint.approvalPolicy.allowInteractiveApproval
+  });
+  const approvalPolicyLink = cmd.spawn();
+  cmd.add(approvalPolicyLink, ModeApprovalPolicyLink, {
+    id: `mode-approval-policy:${modeId}:${approvalPolicyId}`,
+    mode,
+    approvalPolicy,
     role: 'active',
     createdAt: now,
     updatedAt: now

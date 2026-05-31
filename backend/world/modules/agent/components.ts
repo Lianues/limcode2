@@ -1,4 +1,4 @@
-import { defineComponent, Entity } from '../../../ecs/types';
+import { defineComponent, type Entity } from '../../../ecs/types';
 import type { AgentConversationRole } from '../../../../shared/protocol';
 
 export interface AgentData {
@@ -18,5 +18,4 @@ export interface AgentConversationLinkData {
 export const AgentConversationLink = defineComponent<AgentConversationLinkData>('AgentConversationLink');
 
 export const AgentKind = defineComponent<{ kind: string }>('AgentKind');
-export const ParentAgent = defineComponent<{ parent: Entity }>('ParentAgent');
 export const AgentStatus = defineComponent<{ status: 'idle' | 'thinking' | 'running' | 'done' | 'error' }>('AgentStatus');

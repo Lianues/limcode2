@@ -64,6 +64,7 @@ export enum BridgeMessageType {
   Error = 'bridge.error',
   ChatSend = 'chat.send',
   ChatAbort = 'chat.abort',
+  MessageEdit = 'message.edit',
   ToolExecute = 'tool.execute',
   ClientResync = 'client.resync',
   ClientSnapshot = 'state.snapshot',
@@ -671,6 +672,11 @@ export interface ChatSendPayload {
 export interface ChatAbortPayload {
   conversationId: string;
 }
+export interface MessageEditPayload {
+  conversationId: string;
+  messageId: string;
+  text: string;
+}
 export interface ToolExecutePayload {
   toolCallId: string;
   conversationId?: string;
@@ -735,6 +741,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ShowInfo, { message: string }>
   | BridgeEnvelope<BridgeMessageType.ChatSend, ChatSendPayload>
   | BridgeEnvelope<BridgeMessageType.ChatAbort, ChatAbortPayload>
+  | BridgeEnvelope<BridgeMessageType.MessageEdit, MessageEditPayload>
   | BridgeEnvelope<BridgeMessageType.ToolExecute, ToolExecutePayload>
   | BridgeEnvelope<BridgeMessageType.ClientResync, ClientResyncPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsGet, GlobalSettingsGetPayload>

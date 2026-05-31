@@ -43,6 +43,36 @@ export function buildRunContextContents(world: WorldReader, input: BuildRunConte
   ];
 }
 
+export function selectRunContextMessageEntities(world: WorldReader, input: BuildRunContextInput): Entity[] {
+  const policy = input.policy ?? defaultContextPolicy();
+  const selected: Entity[] = [];
+  const seen = new Set<Entity>();
+  const push = (entities: Entity[]): void => {
+    for (const entity of entities) {
+      if (seen.has(entity)) continue;
+      seen.add(entity);
+      selected.push(entity);
+    }
+  };
+
+  const source = world
+    .query(AgentRunSourceLink)
+    .map((entity) => world.get(entity, AgentRunSourceLink))
+    .find((candidate) => candidate?.run === input.run);
+  if (policy.includeSourceContext === true && source?.sourceConversation !== undefined && source.sourceConversation !== input.conversation) {
+    push(selectHistoryMessages(world, nonStreamingConversationMessages(world, source.sourceConversation), policy));
+  }
+
+  const targetMessages = nonStreamingConversationMessagesBefore(world, input.conversation, input.modelMessage);
+  const runScopedMessageSet = runScopedMessagesIn(world, input.run, targetMessages);
+  const runScopedMessages = targetMessages.filter((entity) => runScopedMessageSet.has(entity));
+  const extraHistoryMessages = targetMessages.filter((entity) => !runScopedMessageSet.has(entity));
+  const selectedHistory = selectHistoryMessages(world, extraHistoryMessages, policy);
+  push(targetMessages.filter((entity) => selectedHistory.includes(entity) || runScopedMessageSet.has(entity)));
+
+  return selected;
+}
+
 function buildTargetConversationContents(
   world: WorldReader,
   input: BuildRunContextInput,

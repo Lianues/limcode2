@@ -22,6 +22,9 @@ import { bridge, BridgeMessageType } from '../bridge/vscodeBridge';
 import { applyClientPatch, applyClientSnapshot, clientState } from '../stores/clientStateStore';
 
 const input = ref('');
+const editingMessageId = ref('');
+const editingText = ref('');
+const editStatus = ref('');
 const scroller = ref<HTMLElement | null>(null);
 const viewKind = ref<'chat' | 'globalSettings'>('chat');
 const conversationSettingsOpen = ref(false);
@@ -136,6 +139,10 @@ function isToolResponseMessage(message: MessageRecord): boolean {
   return message.content.parts.some(isFunctionResponsePart);
 }
 
+function editableMessageText(message: MessageRecord): string {
+  return message.content.parts.map((part) => isVisibleTextPart(part) ? part.text : '').join('');
+}
+
 function thoughtParts(message: MessageRecord): TextPart[] {
   return message.content.parts.filter((part): part is TextPart =>
     isTextPart(part) && part.thought === true && part.text.trim().length > 0
@@ -216,6 +223,30 @@ function executeTool(tool: ToolCallRecord): void {
     toolCallId: tool.id,
     conversationId: clientState.currentConversationId
   });
+}
+
+function canEditMessage(message: MessageRecord): boolean {
+  return message.status !== 'streaming' && !!message.conversationId;
+}
+
+function startEditMessage(message: MessageRecord): void {
+  if (!canEditMessage(message)) return;
+  editingMessageId.value = message.id;
+  editingText.value = editableMessageText(message);
+  editStatus.value = '';
+}
+
+function cancelEditMessage(): void {
+  editingMessageId.value = '';
+  editingText.value = '';
+  editStatus.value = '';
+}
+
+function saveEditedMessage(message: MessageRecord): void {
+  if (!editingText.value.trim()) return;
+  editStatus.value = '正在保存编辑...';
+  bridge.request(BridgeMessageType.MessageEdit, { conversationId: message.conversationId, messageId: message.id, text: editingText.value });
+  cancelEditMessage();
 }
 
 function send(): void {
@@ -586,8 +617,15 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
 
     <div ref="scroller" class="messages">
       <div v-for="m in conversationMessages" :key="m.id" class="msg" :class="m.role">
-        <div class="meta">{{ roleLabel(m.role) }}</div>
+        <div class="meta">
+          <span>{{ roleLabel(m.role) }}</span>
+          <button v-if="canEditMessage(m)" type="button" class="message-action" @click="startEditMessage(m)">编辑</button>
+        </div>
         <div class="bubble">
+          <div v-if="editingMessageId === m.id" class="message-editor">
+            <textarea v-model="editingText" rows="4"></textarea>
+            <div class="message-editor-actions"><button type="button" @click="saveEditedMessage(m)">保存</button><button type="button" class="secondary" @click="cancelEditMessage">取消</button></div>
+          </div>
           <details v-if="thoughtParts(m).length" class="thoughts">
             <summary>{{ thoughtSummary(m) }}</summary>
             <div v-for="(thought, index) in thoughtParts(m)" :key="index" class="thought-block">
@@ -611,6 +649,7 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
           </div>
         </div>
       </div>
+      <p v-if="editStatus" class="edit-status">{{ editStatus }}</p>
       <p v-if="!conversationMessages.length" class="empty">
         {{ clientState.currentConversationId ? '还没有消息，发一条试试。' : '默认对话初始化中，请稍候。' }}
       </p>
@@ -658,8 +697,12 @@ code { background: var(--vscode-textCodeBlock-background); padding: 1px 5px; bor
 .settings-path code { word-break: break-all; }
 .messages { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
 .msg { display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
-.msg .meta { font-size: 11px; color: var(--vscode-descriptionForeground); }
+.msg .meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--vscode-descriptionForeground); }
 .msg.user { align-items: flex-end; }
+.message-action { border: 0; background: transparent; color: var(--vscode-textLink-foreground); cursor: pointer; font: inherit; font-size: 11px; padding: 0; }
+.message-editor { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.message-editor textarea { width: 100%; box-sizing: border-box; resize: vertical; border-radius: 6px; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); background: var(--vscode-input-background); color: var(--vscode-input-foreground); font: inherit; padding: 7px 8px; }
+.message-editor-actions { display: flex; gap: 6px; }
 .bubble { border: 1px solid var(--vscode-panel-border); border-radius: 10px; padding: 8px 12px; background: var(--vscode-editor-background); max-width: 90%; }
 .msg.user .bubble { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
 .text { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: inherit; }
@@ -689,6 +732,7 @@ code { background: var(--vscode-textCodeBlock-background); padding: 1px 5px; bor
 .tool-details { flex-basis: 100%; color: var(--vscode-descriptionForeground); }
 .tool-details summary { cursor: pointer; }
 .tool-details pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; }
+.edit-status,
 .empty { color: var(--vscode-descriptionForeground); text-align: center; margin-top: 40px; }
 .composer { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--vscode-panel-border); }
 .composer textarea { flex: 1; resize: none; border-radius: 6px; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); background: var(--vscode-input-background); color: var(--vscode-input-foreground); font: inherit; padding: 8px; }

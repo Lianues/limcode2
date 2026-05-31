@@ -29,13 +29,16 @@ import {
   RunContextPolicyLink,
   RunDeliveryPolicy,
   RunDeliveryPolicyLink,
+  RunEditPolicy,
+  RunEditPolicyLink,
   RunModelProfileLink,
   RunModeLink,
   RunSystemPromptLink,
   RunToolPolicyLink,
   ToolCallRunLink,
   type RunContextPolicyData,
-  type RunDeliveryPolicyData
+  type RunDeliveryPolicyData,
+  type RunEditPolicyData
 } from './components';
 
 export function defaultAgentForConversation(world: WorldReader, conversation: Entity): Entity | undefined {
@@ -171,6 +174,15 @@ export function activeContextPolicyForRun(world: WorldReader, run: Entity): RunC
 export function activeDeliveryPolicyForRun(world: WorldReader, run: Entity): RunDeliveryPolicyData | undefined {
   const link = latestActiveRunPolicyLink(world, run, RunDeliveryPolicyLink);
   return link ? world.get(link.policy, RunDeliveryPolicy) : undefined;
+}
+
+export function activeEditPolicyForRun(world: WorldReader, run: Entity): RunEditPolicyData | undefined {
+  const link = latestActiveRunPolicyLink(world, run, RunEditPolicyLink);
+  return link ? world.get(link.policy, RunEditPolicy) : undefined;
+}
+
+export function effectiveEditPolicyForRun(world: WorldReader, run: Entity): RunEditPolicyData {
+  return activeEditPolicyForRun(world, run) ?? { id: 'default-edit-policy', onSourceEdited: 'mark_stale', onNewUserMessageWhileRunning: 'queue_next_run' };
 }
 
 function latestActiveRunPolicyLink<T extends { run: Entity; policy: Entity; role: 'active'; createdAt: number; updatedAt: number }>(

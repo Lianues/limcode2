@@ -375,7 +375,7 @@ npm run check
 本轮仍然没有引入自动 diff、workspace snapshot 或文件修改归因，保持 AgentRun 核心边界。
 
 
-### 6. Message Revision / 编辑请求只完成数据结构
+### 6. Message Revision / 编辑请求只完成数据结构（已完成）
 
 当前已经有：
 
@@ -402,6 +402,160 @@ RunEditPolicy
   - `interrupt_current`
   - `append_to_target`
   - `ignore`
+
+
+
+已完成第 6 部分「Message Revision / 编辑请求」实现，并通过：
+npm run check
+本轮完成内容
+
+1. 新增编辑协议与事件
+
+新增 Webview → Backend 命令：
+BridgeMessageType.MessageEdit = 'message.edit'
+新增 payload：
+interface MessageEditPayload {
+  conversationId: string;
+  messageId: string;
+  text: string;
+}
+后端新增：
+ChatEventType.Edit = 'chat:edit'
+并已在 WebviewMessageRouter 中接入。
+2. Webview 支持编辑消息
+
+现在每条非 streaming message 都会显示「编辑」按钮。
+
+交互：
+
+- 点击「编辑」
+- 展开 textarea
+- 保存后发送 message.edit
+- 取消则关闭编辑框
+
+初版编辑文本使用 message 的 visible text；保存后后端会把 message content 更新成单个 text part。
+3. 编辑后创建新 MessageRevision
+
+新增系统：
+backend/world/modules/chat/systems/MessageEditSystem.ts
+编辑流程：
+
+1. 找到目标 message。
+2. 更新 Message.content。
+3. 保留旧 MessageRevision。
+4. 移除旧 MessageCurrentRevisionLink。
+5. 创建新的：
+MessageRevision(reason='edited')
+MessageCurrentRevisionLink -> new revision
+即：Message 本体保持当前内容，Revision 历史独立保存。
+4. Run 启动时记录 AgentRunInputRevision
+
+现在 LlmDispatchSystem 在发起 llm.start 前，会根据 ContextPolicy 选中的 message，记录当前 revision：
+AgentRunInputRevision {
+  run,
+  conversation,
+  revision
+}
+这样后续编辑消息时，可以判断哪些 running run 使用过旧 revision。
+5. 实现 RunEditPolicy.onSourceEdited
+
+已实现：
+ignore_snapshot
+mark_stale
+abort_and_restart
+append_correction
+branch_new_run
+行为摘要：
+
+- ignore_snapshot
+  - 不影响已运行中的 run。
+
+- mark_stale
+  - 将受影响 run 标记为 stale。
+
+- abort_and_restart
+  - 将旧 run 标记为 cancelled。
+  - 基于旧 run target/source 创建 replacement run。
+
+- append_correction
+  - 向 run target conversation 追加 correction message。
+  - 建立 MessageRunLink(role='input')。
+  - 如当前无 active LLM request，则重新触发模型。
+
+- branch_new_run
+  - 创建 branch conversation。
+  - 复制到被编辑 message 为止的历史。
+  - 用新 revision content 替换对应 message。
+  - 写入 ConversationBranchLink(kind='branch_from_revision')。
+  - 创建新 AgentRun。
+6. 实现 RunEditPolicy.onNewUserMessageWhileRunning
+
+修改了 InputSystem，现在运行中收到新用户消息时会按 policy 处理：
+queue_next_run
+interrupt_current
+append_to_target
+ignore
+行为摘要：
+
+- queue_next_run
+  - 创建新 message。
+  - 创建 queued run，但暂不启动模型。
+  - 等前一个 run 完成后由队列系统激活。
+
+- interrupt_current
+  - 当前 active run 标记为 cancelled。
+  - 新 message 创建新 run 并立即启动。
+
+- append_to_target
+  - 新 message 追加到当前 active run target conversation。
+  - 建立 MessageRunLink(role='input')。
+  - 不创建新 run。
+
+- ignore
+  - 不创建 message，不创建 run。
+
+新增队列系统：
+backend/world/modules/agentRun/systems/AgentRunQueueSystem.ts
+用于激活等待中的 queued run。
+7. cancelled / stale run 不再被旧 LLM 流污染
+
+修改：
+backend/world/modules/chat/systems/LlmPollSystem.ts
+如果 run 已经是：
+cancelled | stale
+则后续 LLM stream 的 delta/toolcall 不再写入；收到 done/error 后清理 request，并保持 run 状态不被改回 delivering/completed。
+8. Webview store 补齐 revision 状态
+
+webview/src/stores/clientStateStore.ts 现在支持：
+messageRevisions
+messageCurrentRevisionLinks
+并处理 patch：
+messageRevision.upsert/remove
+messageCurrentRevisionLink.upsert/remove
+修改文件
+shared/protocol.ts
+backend/application/WebviewMessageRouter.ts
+
+backend/world/modules/chat/events.ts
+backend/world/modules/chat/systems/InputSystem.ts
+backend/world/modules/chat/systems/MessageEditSystem.ts
+backend/world/modules/chat/systems/LlmDispatchSystem.ts
+backend/world/modules/chat/systems/LlmPollSystem.ts
+backend/world/modules/chat/systems/index.ts
+
+backend/world/modules/agentRun/contextPolicy.ts
+backend/world/modules/agentRun/queries.ts
+backend/world/modules/agentRun/systems/AgentRunQueueSystem.ts
+backend/world/modules/agentRun/systems/index.ts
+
+webview/src/bridge/vscodeBridge.ts
+webview/src/components/Chat.vue
+webview/src/stores/clientStateStore.ts
+验证
+
+已通过：
+npm run check
+本轮没有引入自动 diff、workspace snapshot 或文件修改归因；仍保持 Message / Revision / Run / Policy 解耦。
 
 ---
 

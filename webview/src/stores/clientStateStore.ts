@@ -14,7 +14,9 @@ import {
   type ConversationRecord,
   isTextPart,
   isVisibleTextPart,
+  type MessageCurrentRevisionLinkRecord,
   type MessageRecord,
+  type MessageRevisionRecord,
   type ModeModelProfileLinkRecord,
   type ModeSystemPromptLinkRecord,
   type ModeToolPolicyLinkRecord,
@@ -45,6 +47,8 @@ interface ClientStateStore {
   agentRunSourceLinks: AgentRunSourceLinkRecord[];
   agentRunTargetLinks: AgentRunTargetLinkRecord[];
   messages: MessageRecord[];
+  messageRevisions: MessageRevisionRecord[];
+  messageCurrentRevisionLinks: MessageCurrentRevisionLinkRecord[];
   toolCalls: ToolCallRecord[];
   toolCallEvents: ToolCallEventRecord[];
 }
@@ -68,6 +72,8 @@ export const clientState = reactive<ClientStateStore>({
   agentRunSourceLinks: [],
   agentRunTargetLinks: [],
   messages: [],
+  messageRevisions: [],
+  messageCurrentRevisionLinks: [],
   toolCalls: [],
   toolCallEvents: []
 });
@@ -89,13 +95,15 @@ export function applyClientSnapshot(streamId: string, streamSeq: number, state: 
     clientState.agentRuns = state.agentRuns;
     clientState.agentRunSourceLinks = state.agentRunSourceLinks;
     clientState.agentRunTargetLinks = state.agentRunTargetLinks;
+    clientState.messageRevisions = state.messageRevisions;
+    clientState.messageCurrentRevisionLinks = state.messageCurrentRevisionLinks;
     ensureCurrentConversation();
     return;
   }
 
   const conversationId = conversationIdFromClientStateStreamId(streamId) ?? state.conversations[0]?.id ?? state.messages[0]?.conversationId;
   if (!conversationId) return;
-  replaceConversationState(conversationId, state.messages, state.toolCalls, state.toolCallEvents ?? []);
+  replaceConversationState(conversationId, state.messages, state.toolCalls, state.toolCallEvents ?? [], state.messageRevisions ?? [], state.messageCurrentRevisionLinks ?? []);
 }
 
 export function applyClientPatch(streamId: string, streamSeq: number, patches: ClientPatchOp[]): boolean {
@@ -174,6 +182,10 @@ function applyClientPatchOp(patch: ClientPatchOp): void {
       if (message) message.status = patch.status;
       break;
     }
+    case 'messageRevision.upsert': upsert(clientState.messageRevisions, patch.revision, (item) => item.id === patch.revision.id); break;
+    case 'messageRevision.remove': remove(clientState.messageRevisions, (item) => item.id === patch.id); break;
+    case 'messageCurrentRevisionLink.upsert': upsert(clientState.messageCurrentRevisionLinks, patch.link, (item) => item.id === patch.link.id); break;
+    case 'messageCurrentRevisionLink.remove': remove(clientState.messageCurrentRevisionLinks, (item) => item.id === patch.id); break;
     case 'toolcall.upsert': upsert(clientState.toolCalls, patch.toolCall, (item) => item.id === patch.toolCall.id); break;
     case 'toolcall.remove': removeToolCall(patch.id); break;
     case 'toolcallEvent.append':
@@ -185,10 +197,12 @@ function applyClientPatchOp(patch: ClientPatchOp): void {
   }
 }
 
-function replaceConversationState(conversationId: string, messages: MessageRecord[], toolCalls: ToolCallRecord[], toolCallEvents: ToolCallEventRecord[]): void {
+function replaceConversationState(conversationId: string, messages: MessageRecord[], toolCalls: ToolCallRecord[], toolCallEvents: ToolCallEventRecord[], revisions: MessageRevisionRecord[], currentLinks: MessageCurrentRevisionLinkRecord[]): void {
   const previousMessageIds = new Set(clientState.messages.filter((message) => message.conversationId === conversationId).map((message) => message.id));
   const previousToolCallIds = new Set(clientState.toolCalls.filter((toolCall) => previousMessageIds.has(toolCall.messageId)).map((toolCall) => toolCall.id));
   clientState.messages = [...clientState.messages.filter((message) => message.conversationId !== conversationId), ...messages].sort((a, b) => a.seq - b.seq);
+  clientState.messageRevisions = [...clientState.messageRevisions.filter((revision) => revision.conversationId !== conversationId), ...revisions].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  clientState.messageCurrentRevisionLinks = [...clientState.messageCurrentRevisionLinks.filter((link) => !previousMessageIds.has(link.messageId)), ...currentLinks];
   clientState.toolCalls = [...clientState.toolCalls.filter((toolCall) => !previousMessageIds.has(toolCall.messageId)), ...toolCalls];
   clientState.toolCallEvents = [...clientState.toolCallEvents.filter((event) => !previousToolCallIds.has(event.toolCallId)), ...toolCallEvents]
     .sort((a, b) => a.seq - b.seq || a.id.localeCompare(b.id));
@@ -200,6 +214,8 @@ function removeConversation(conversationId: string): void {
   remove(clientState.conversations, (item) => item.id === conversationId);
   remove(clientState.agentConversationLinks, (item) => item.conversationId === conversationId);
   clientState.messages = clientState.messages.filter((message) => message.conversationId !== conversationId);
+  clientState.messageRevisions = clientState.messageRevisions.filter((revision) => revision.conversationId !== conversationId);
+  clientState.messageCurrentRevisionLinks = clientState.messageCurrentRevisionLinks.filter((link) => !messageIds.has(link.messageId));
   clientState.toolCalls = clientState.toolCalls.filter((toolCall) => !toolCallIds.has(toolCall.id));
   clientState.toolCallEvents = clientState.toolCallEvents.filter((event) => !toolCallIds.has(event.toolCallId));
   if (clientState.currentConversationId === conversationId) clientState.currentConversationId = clientState.conversations[0]?.id ?? '';
@@ -208,6 +224,8 @@ function removeConversation(conversationId: string): void {
 function removeMessage(messageId: string): void {
   const toolCallIds = new Set(clientState.toolCalls.filter((toolCall) => toolCall.messageId === messageId).map((toolCall) => toolCall.id));
   remove(clientState.messages, (item) => item.id === messageId);
+  clientState.messageRevisions = clientState.messageRevisions.filter((revision) => revision.messageId !== messageId);
+  clientState.messageCurrentRevisionLinks = clientState.messageCurrentRevisionLinks.filter((link) => link.messageId !== messageId);
   clientState.toolCalls = clientState.toolCalls.filter((toolCall) => toolCall.messageId !== messageId);
   clientState.toolCallEvents = clientState.toolCallEvents.filter((event) => !toolCallIds.has(event.toolCallId));
 }

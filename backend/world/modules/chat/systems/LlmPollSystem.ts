@@ -121,6 +121,11 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
   const current = world.get(modelMessage, Message);
   if (!current) return;
 
+  if (isRunCancelledOrStale(world, requestData.run)) {
+    if (hasTerminalOperation(update)) cleanupCancelledRequest(cmd, request, modelMessage, current);
+    return;
+  }
+
   let next = current;
   const existingFunctionCallIds = new Set(
     next.content.parts
@@ -288,4 +293,19 @@ function shortHash(input: string): string {
     hash = ((hash << 5) + hash) ^ input.charCodeAt(index);
   }
   return (hash >>> 0).toString(36);
+}
+
+function isRunCancelledOrStale(world: WorldReader, run: Entity): boolean {
+  const data = world.get(run, AgentRun);
+  return data?.status === 'cancelled' || data?.status === 'stale';
+}
+
+function hasTerminalOperation(update: PendingRequestUpdate): boolean {
+  return update.operations.some((operation) => operation.kind === 'done' || operation.kind === 'error');
+}
+
+function cleanupCancelledRequest(cmd: CommandSink, request: Entity, modelMessage: Entity, current: MessageData): void {
+  cmd.add(modelMessage, Message, { ...current, status: 'error' });
+  cmd.remove(modelMessage, Streaming);
+  cmd.despawn(request);
 }

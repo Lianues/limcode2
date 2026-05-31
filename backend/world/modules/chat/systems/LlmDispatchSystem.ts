@@ -1,6 +1,7 @@
-import { defineQuery, defineSystem } from '../../../../ecs/types';
+import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
 import { AgentModeLink, ModeModelProfileLink, ModeSystemPromptLink, ModeToolPolicyLink, ModelProfile, SystemPrompt, ToolPolicy } from '../../mode/components';
 import {
+  AgentRunInputRevision,
   AgentRunSourceLink,
   AgentRunTargetLink,
   MessageRunLink,
@@ -13,7 +14,7 @@ import {
 } from '../../agentRun/components';
 import { ToolCall, ToolState } from '../../tools/components';
 import { ToolSchemasKey } from '../../tools/resources';
-import { InFlight, LlmRequest, Message, PartOf } from '../components';
+import { InFlight, LlmRequest, Message, MessageCurrentRevisionLink, PartOf } from '../components';
 import { textContent } from '../../../../../shared/protocol';
 import type { LlmModelSettings } from '../../llm/contracts';
 import {
@@ -22,7 +23,8 @@ import {
   activeSystemPromptForRun,
   activeToolPolicyForRun
 } from '../../agentRun/queries';
-import { buildRunContextContents } from '../../agentRun/contextPolicy';
+import { buildRunContextContents, selectRunContextMessageEntities } from '../../agentRun/contextPolicy';
+import { AgentRunBundle } from '../../agentRun/bundles';
 
 const PendingLlmRequestsQuery = defineQuery({
   name: 'PendingLlmRequests',
@@ -38,6 +40,8 @@ const LlmContextLookupComponents = [
   Message,
   PartOf,
   MessageRunLink,
+  MessageCurrentRevisionLink,
+  AgentRunInputRevision,
   AgentRunSourceLink,
   AgentRunTargetLink,
   RunContextPolicy,
@@ -63,6 +67,7 @@ export const LlmDispatchSystem = defineSystem({
   access: {
     queries: [PendingLlmRequestsQuery],
     reads: { components: LlmContextLookupComponents },
+    bundles: [AgentRunBundle],
     resources: { read: [ToolSchemasKey] },
     effects: { emit: ['llm.start'] }
   },
@@ -87,12 +92,14 @@ export const LlmDispatchSystem = defineSystem({
         : [];
 
       const contextPolicy = activeContextPolicyForRun(world, data.run);
-      const contents = buildRunContextContents(world, {
+      const contextInput = {
         run: data.run,
         conversation: data.conversation,
         modelMessage: data.modelMessage,
         policy: contextPolicy
-      });
+      };
+      recordInputRevisions(world, cmd, contextInput.run, selectRunContextMessageEntities(world, contextInput));
+      const contents = buildRunContextContents(world, contextInput);
 
       cmd.effect({
         kind: 'llm.start',
@@ -108,3 +115,29 @@ export const LlmDispatchSystem = defineSystem({
     }
   }
 });
+
+function recordInputRevisions(world: WorldReader, cmd: CommandSink, run: Entity, messages: Entity[]): void {
+  const existingRevisionIds = new Set(
+    world
+      .query(AgentRunInputRevision)
+      .filter((entity) => world.get(entity, AgentRunInputRevision)?.run === run)
+      .map((entity) => world.get(entity, AgentRunInputRevision)?.revision)
+      .filter((revision): revision is Entity => revision !== undefined)
+  );
+
+  for (const message of messages) {
+    const revision = currentRevisionForMessage(world, message);
+    const conversation = world.get(message, PartOf)?.parent;
+    if (revision === undefined || conversation === undefined || existingRevisionIds.has(revision)) continue;
+    const entity = cmd.spawn();
+    cmd.add(entity, AgentRunInputRevision, { id: `arir${entity}`, run, conversation, revision });
+    existingRevisionIds.add(revision);
+  }
+}
+
+function currentRevisionForMessage(world: WorldReader, message: Entity): Entity | undefined {
+  return world
+    .query(MessageCurrentRevisionLink)
+    .map((entity) => world.get(entity, MessageCurrentRevisionLink))
+    .find((link) => link?.message === message)?.revision;
+}

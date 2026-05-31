@@ -46,6 +46,10 @@ export class WebviewMessageRouter {
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ChatEventType.Abort, payload: message.payload });
         break;
+      case BridgeMessageType.MessageEdit:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: ChatEventType.Edit, payload: message.payload });
+        break;
       case BridgeMessageType.ToolExecute:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ToolEventType.ExecuteRequested, payload: message.payload });

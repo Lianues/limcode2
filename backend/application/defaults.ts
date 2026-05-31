@@ -1,6 +1,5 @@
 import type { AgentRecord } from '../../shared/protocol';
 import type { AgentSpawnRequestData } from '../world/modules/agent/requests';
-import { DEFAULT_LLM_MODEL } from '../capabilities';
 
 export const DEFAULT_AGENT_ID = 'main';
 export const DEFAULT_SESSION_ID = 'default';
@@ -11,10 +10,7 @@ export function createDefaultAgentRecord(): AgentRecord {
     id: DEFAULT_AGENT_ID,
     name: DEFAULT_AGENT_NAME,
     kind: 'main',
-    status: 'idle',
-    model: { provider: 'deepseek', model: DEFAULT_LLM_MODEL, temperature: 0.2 },
-    toolPolicy: { allowedTools: ['read_file', 'shell', 'bash'], approvalMode: 'never' },
-    systemPrompt: 'You are LimCode, a concise and helpful AI coding assistant running inside VS Code. Reply in the user\'s language unless asked otherwise.'
+    status: 'idle'
   };
 }
 

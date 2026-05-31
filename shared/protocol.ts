@@ -137,9 +137,66 @@ export interface AgentRecord {
   kind: string;
   status: 'idle' | 'thinking' | 'running' | 'done' | 'error';
   parentAgentId?: string;
-  model?: { provider: string; model: string; temperature?: number };
-  toolPolicy?: { allowedTools: string[]; approvalMode: 'never' | 'onRisk' | 'always' };
-  systemPrompt?: string;
+}
+
+export type ToolApprovalMode = 'never' | 'onRisk' | 'always';
+
+export interface AgentModeRecord {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+export interface ToolPolicyRecord {
+  id: string;
+  name: string;
+  allowedTools: string[];
+  approvalMode: ToolApprovalMode;
+}
+
+export interface SystemPromptRecord {
+  id: string;
+  name: string;
+  text: string;
+}
+
+export interface ModelProfileRecord {
+  id: string;
+  name: string;
+  provider: LlmProviderKind;
+  model: string;
+  temperature?: number;
+}
+
+export type AgentModeRole = 'active' | 'available' | 'default';
+export type ModeBindingRole = 'active';
+
+export interface AgentModeLinkRecord {
+  id: string;
+  agentId: string;
+  modeId: string;
+  role: AgentModeRole;
+}
+
+export interface ModeToolPolicyLinkRecord {
+  id: string;
+  modeId: string;
+  toolPolicyId: string;
+  role: ModeBindingRole;
+}
+
+export interface ModeSystemPromptLinkRecord {
+  id: string;
+  modeId: string;
+  systemPromptId: string;
+  role: ModeBindingRole;
+}
+
+export interface ModeModelProfileLinkRecord {
+  id: string;
+  modeId: string;
+  modelProfileId: string;
+  role: ModeBindingRole;
 }
 
 export interface SessionRecord {
@@ -268,6 +325,14 @@ export interface ToolCallEventRecord {
 
 export interface ClientState {
   agents: AgentRecord[];
+  agentModes: AgentModeRecord[];
+  toolPolicies: ToolPolicyRecord[];
+  systemPrompts: SystemPromptRecord[];
+  modelProfiles: ModelProfileRecord[];
+  agentModeLinks: AgentModeLinkRecord[];
+  modeToolPolicyLinks: ModeToolPolicyLinkRecord[];
+  modeSystemPromptLinks: ModeSystemPromptLinkRecord[];
+  modeModelProfileLinks: ModeModelProfileLinkRecord[];
   sessions: SessionRecord[];
   agentConversationLinks: AgentConversationLinkRecord[];
   messages: MessageRecord[];
@@ -278,6 +343,22 @@ export interface ClientState {
 export type ClientPatchOp =
   | { kind: 'agent.upsert'; agent: AgentRecord }
   | { kind: 'agent.remove'; id: string }
+  | { kind: 'agentMode.upsert'; agentMode: AgentModeRecord }
+  | { kind: 'agentMode.remove'; id: string }
+  | { kind: 'toolPolicy.upsert'; toolPolicy: ToolPolicyRecord }
+  | { kind: 'toolPolicy.remove'; id: string }
+  | { kind: 'systemPrompt.upsert'; systemPrompt: SystemPromptRecord }
+  | { kind: 'systemPrompt.remove'; id: string }
+  | { kind: 'modelProfile.upsert'; modelProfile: ModelProfileRecord }
+  | { kind: 'modelProfile.remove'; id: string }
+  | { kind: 'agentModeLink.upsert'; link: AgentModeLinkRecord }
+  | { kind: 'agentModeLink.remove'; id: string }
+  | { kind: 'modeToolPolicyLink.upsert'; link: ModeToolPolicyLinkRecord }
+  | { kind: 'modeToolPolicyLink.remove'; id: string }
+  | { kind: 'modeSystemPromptLink.upsert'; link: ModeSystemPromptLinkRecord }
+  | { kind: 'modeSystemPromptLink.remove'; id: string }
+  | { kind: 'modeModelProfileLink.upsert'; link: ModeModelProfileLinkRecord }
+  | { kind: 'modeModelProfileLink.remove'; id: string }
   | { kind: 'session.upsert'; session: SessionRecord }
   | { kind: 'session.remove'; id: string }
   | { kind: 'agentConversationLink.upsert'; link: AgentConversationLinkRecord }

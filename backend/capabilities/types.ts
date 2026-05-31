@@ -80,6 +80,26 @@ export interface RuntimePaths {
   agentsRootPath: string;
   agentsIndexUri: vscode.Uri;
   agentsIndexPath: string;
+  /** Agent Mode 数据根目录：<globalStorage>/agent-modes */
+  agentModesRootUri: vscode.Uri;
+  agentModesRootPath: string;
+  agentModesIndexUri: vscode.Uri;
+  agentModesIndexPath: string;
+  /** ToolPolicy 数据根目录：<globalStorage>/tool-policies */
+  toolPoliciesRootUri: vscode.Uri;
+  toolPoliciesRootPath: string;
+  toolPoliciesIndexUri: vscode.Uri;
+  toolPoliciesIndexPath: string;
+  /** SystemPrompt 数据根目录：<globalStorage>/system-prompts */
+  systemPromptsRootUri: vscode.Uri;
+  systemPromptsRootPath: string;
+  systemPromptsIndexUri: vscode.Uri;
+  systemPromptsIndexPath: string;
+  /** ModelProfile 数据根目录：<globalStorage>/model-profiles */
+  modelProfilesRootUri: vscode.Uri;
+  modelProfilesRootPath: string;
+  modelProfilesIndexUri: vscode.Uri;
+  modelProfilesIndexPath: string;
   /** Conversation/消息数据根目录：<globalStorage>/conversations */
   conversationsRootUri: vscode.Uri;
   conversationsRootPath: string;
@@ -90,6 +110,26 @@ export interface RuntimePaths {
   linksRootPath: string;
   linksIndexUri: vscode.Uri;
   linksIndexPath: string;
+  /** Agent 与 Mode 的关系数据根目录：<globalStorage>/agent-mode-links */
+  agentModeLinksRootUri: vscode.Uri;
+  agentModeLinksRootPath: string;
+  agentModeLinksIndexUri: vscode.Uri;
+  agentModeLinksIndexPath: string;
+  /** Mode 与 ToolPolicy 的关系数据根目录：<globalStorage>/mode-tool-policy-links */
+  modeToolPolicyLinksRootUri: vscode.Uri;
+  modeToolPolicyLinksRootPath: string;
+  modeToolPolicyLinksIndexUri: vscode.Uri;
+  modeToolPolicyLinksIndexPath: string;
+  /** Mode 与 SystemPrompt 的关系数据根目录：<globalStorage>/mode-system-prompt-links */
+  modeSystemPromptLinksRootUri: vscode.Uri;
+  modeSystemPromptLinksRootPath: string;
+  modeSystemPromptLinksIndexUri: vscode.Uri;
+  modeSystemPromptLinksIndexPath: string;
+  /** Mode 与 ModelProfile 的关系数据根目录：<globalStorage>/mode-model-profile-links */
+  modeModelProfileLinksRootUri: vscode.Uri;
+  modeModelProfileLinksRootPath: string;
+  modeModelProfileLinksIndexUri: vscode.Uri;
+  modeModelProfileLinksIndexPath: string;
   /** 通用设置根目录：<globalStorage>/settings */
   settingsRootUri: vscode.Uri;
   settingsRootPath: string;

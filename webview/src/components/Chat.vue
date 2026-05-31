@@ -78,6 +78,24 @@ const currentAgent = computed(() =>
   clientState.agents.find((agent) => agent.id === activeAgentLink.value?.agentId)
 );
 
+const activeModeLink = computed(() =>
+  clientState.agentModeLinks.find((link) => link.agentId === currentAgent.value?.id && link.role === 'active')
+    ?? clientState.agentModeLinks.find((link) => link.agentId === currentAgent.value?.id && link.role === 'default')
+    ?? clientState.agentModeLinks.find((link) => link.agentId === currentAgent.value?.id)
+);
+
+const currentMode = computed(() =>
+  clientState.agentModes.find((mode) => mode.id === activeModeLink.value?.modeId)
+);
+
+const currentModelProfileLink = computed(() =>
+  clientState.modeModelProfileLinks.find((link) => link.modeId === currentMode.value?.id && link.role === 'active')
+);
+
+const currentModelProfile = computed(() =>
+  clientState.modelProfiles.find((profile) => profile.id === currentModelProfileLink.value?.modelProfileId)
+);
+
 function toolCallsForMessage(messageId: string) {
   return clientState.toolCalls.filter((toolCall) => toolCall.messageId === messageId);
 }
@@ -472,7 +490,8 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
         <span class="hint">
           <template v-if="clientState.currentSessionId">
             当前会话：<code>{{ currentSession?.title || clientState.currentSessionId }}</code>
-            <template v-if="currentAgent?.model?.model"> · 模型：<code>{{ currentAgent.model.model }}</code></template>
+            <template v-if="currentMode?.name"> · 模式：<code>{{ currentMode.name }}</code></template>
+            <template v-if="currentModelProfile?.model"> · 模型：<code>{{ currentModelProfile.model }}</code></template>
           </template>
           <template v-else>正在初始化默认会话...</template>
         </span>

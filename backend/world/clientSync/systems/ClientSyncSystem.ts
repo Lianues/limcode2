@@ -3,13 +3,21 @@ import {
   conversationClientStateStreamId,
   conversationIdFromClientStateStreamId,
   type AgentConversationLinkRecord,
+  type AgentModeLinkRecord,
+  type AgentModeRecord,
   type AgentRecord,
   type ClientPatchOp,
   type ClientState,
   type MessageRecord,
+  type ModeModelProfileLinkRecord,
+  type ModeSystemPromptLinkRecord,
+  type ModeToolPolicyLinkRecord,
+  type ModelProfileRecord,
   type SessionRecord,
+  type SystemPromptRecord,
   type ToolCallEventRecord,
   type ToolCallRecord,
+  type ToolPolicyRecord,
   isTextPart,
   isVisibleTextPart,
   type TextPart
@@ -136,12 +144,35 @@ function projectClientState(world: WorldReader, contributors: ClientStateContrib
 }
 
 function emptyClientState(): ClientState {
-  return { agents: [], sessions: [], agentConversationLinks: [], messages: [], toolCalls: [], toolCallEvents: [] };
+  return {
+    agents: [],
+    agentModes: [],
+    toolPolicies: [],
+    systemPrompts: [],
+    modelProfiles: [],
+    agentModeLinks: [],
+    modeToolPolicyLinks: [],
+    modeSystemPromptLinks: [],
+    modeModelProfileLinks: [],
+    sessions: [],
+    agentConversationLinks: [],
+    messages: [],
+    toolCalls: [],
+    toolCallEvents: []
+  };
 }
 
 function globalClientState(state: ClientState): ClientState {
   return {
     agents: state.agents,
+    agentModes: state.agentModes,
+    toolPolicies: state.toolPolicies,
+    systemPrompts: state.systemPrompts,
+    modelProfiles: state.modelProfiles,
+    agentModeLinks: state.agentModeLinks,
+    modeToolPolicyLinks: state.modeToolPolicyLinks,
+    modeSystemPromptLinks: state.modeSystemPromptLinks,
+    modeModelProfileLinks: state.modeModelProfileLinks,
     sessions: state.sessions,
     agentConversationLinks: state.agentConversationLinks,
     messages: [],
@@ -157,6 +188,14 @@ function conversationClientState(state: ClientState, sessionId: string): ClientS
   const toolCallIds = new Set(toolCalls.map((toolCall) => toolCall.id));
   return {
     agents: [],
+    agentModes: [],
+    toolPolicies: [],
+    systemPrompts: [],
+    modelProfiles: [],
+    agentModeLinks: [],
+    modeToolPolicyLinks: [],
+    modeSystemPromptLinks: [],
+    modeModelProfileLinks: [],
     sessions: state.sessions.filter((session) => session.id === sessionId),
     agentConversationLinks: [],
     messages,
@@ -198,6 +237,54 @@ function diffGlobalClientState(prev: ClientState, next: ClientState): ClientPatc
       next.agents,
       (agent): ClientPatchOp => ({ kind: 'agent.upsert', agent }),
       (id): ClientPatchOp => ({ kind: 'agent.remove', id })
+    ),
+    ...diffUpsertRemove<AgentModeRecord, ClientPatchOp, ClientPatchOp>(
+      prev.agentModes,
+      next.agentModes,
+      (agentMode): ClientPatchOp => ({ kind: 'agentMode.upsert', agentMode }),
+      (id): ClientPatchOp => ({ kind: 'agentMode.remove', id })
+    ),
+    ...diffUpsertRemove<ToolPolicyRecord, ClientPatchOp, ClientPatchOp>(
+      prev.toolPolicies,
+      next.toolPolicies,
+      (toolPolicy): ClientPatchOp => ({ kind: 'toolPolicy.upsert', toolPolicy }),
+      (id): ClientPatchOp => ({ kind: 'toolPolicy.remove', id })
+    ),
+    ...diffUpsertRemove<SystemPromptRecord, ClientPatchOp, ClientPatchOp>(
+      prev.systemPrompts,
+      next.systemPrompts,
+      (systemPrompt): ClientPatchOp => ({ kind: 'systemPrompt.upsert', systemPrompt }),
+      (id): ClientPatchOp => ({ kind: 'systemPrompt.remove', id })
+    ),
+    ...diffUpsertRemove<ModelProfileRecord, ClientPatchOp, ClientPatchOp>(
+      prev.modelProfiles,
+      next.modelProfiles,
+      (modelProfile): ClientPatchOp => ({ kind: 'modelProfile.upsert', modelProfile }),
+      (id): ClientPatchOp => ({ kind: 'modelProfile.remove', id })
+    ),
+    ...diffUpsertRemove<AgentModeLinkRecord, ClientPatchOp, ClientPatchOp>(
+      prev.agentModeLinks,
+      next.agentModeLinks,
+      (link): ClientPatchOp => ({ kind: 'agentModeLink.upsert', link }),
+      (id): ClientPatchOp => ({ kind: 'agentModeLink.remove', id })
+    ),
+    ...diffUpsertRemove<ModeToolPolicyLinkRecord, ClientPatchOp, ClientPatchOp>(
+      prev.modeToolPolicyLinks,
+      next.modeToolPolicyLinks,
+      (link): ClientPatchOp => ({ kind: 'modeToolPolicyLink.upsert', link }),
+      (id): ClientPatchOp => ({ kind: 'modeToolPolicyLink.remove', id })
+    ),
+    ...diffUpsertRemove<ModeSystemPromptLinkRecord, ClientPatchOp, ClientPatchOp>(
+      prev.modeSystemPromptLinks,
+      next.modeSystemPromptLinks,
+      (link): ClientPatchOp => ({ kind: 'modeSystemPromptLink.upsert', link }),
+      (id): ClientPatchOp => ({ kind: 'modeSystemPromptLink.remove', id })
+    ),
+    ...diffUpsertRemove<ModeModelProfileLinkRecord, ClientPatchOp, ClientPatchOp>(
+      prev.modeModelProfileLinks,
+      next.modeModelProfileLinks,
+      (link): ClientPatchOp => ({ kind: 'modeModelProfileLink.upsert', link }),
+      (id): ClientPatchOp => ({ kind: 'modeModelProfileLink.remove', id })
     ),
     ...diffUpsertRemove<SessionRecord, ClientPatchOp, ClientPatchOp>(
       prev.sessions,

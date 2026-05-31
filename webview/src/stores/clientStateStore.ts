@@ -3,15 +3,23 @@ import {
   GLOBAL_CLIENT_STATE_STREAM_ID,
   conversationIdFromClientStateStreamId,
   type AgentConversationLinkRecord,
+  type AgentModeLinkRecord,
+  type AgentModeRecord,
   type AgentRecord,
   type ClientPatchOp,
   type ClientState,
   type MessageRecord,
+  type ModeModelProfileLinkRecord,
+  type ModeSystemPromptLinkRecord,
+  type ModeToolPolicyLinkRecord,
+  type ModelProfileRecord,
   isTextPart,
   isVisibleTextPart,
   type SessionRecord,
+  type SystemPromptRecord,
   type ToolCallEventRecord,
-  type ToolCallRecord
+  type ToolCallRecord,
+  type ToolPolicyRecord
 } from '@shared/protocol';
 
 interface ClientStateStore {
@@ -19,6 +27,14 @@ interface ClientStateStore {
   streamSeqs: Record<string, number>;
   currentSessionId: string;
   agents: AgentRecord[];
+  agentModes: AgentModeRecord[];
+  toolPolicies: ToolPolicyRecord[];
+  systemPrompts: SystemPromptRecord[];
+  modelProfiles: ModelProfileRecord[];
+  agentModeLinks: AgentModeLinkRecord[];
+  modeToolPolicyLinks: ModeToolPolicyLinkRecord[];
+  modeSystemPromptLinks: ModeSystemPromptLinkRecord[];
+  modeModelProfileLinks: ModeModelProfileLinkRecord[];
   sessions: SessionRecord[];
   agentConversationLinks: AgentConversationLinkRecord[];
   messages: MessageRecord[];
@@ -30,6 +46,14 @@ export const clientState = reactive<ClientStateStore>({
   streamSeqs: {},
   currentSessionId: '',
   agents: [],
+  agentModes: [],
+  toolPolicies: [],
+  systemPrompts: [],
+  modelProfiles: [],
+  agentModeLinks: [],
+  modeToolPolicyLinks: [],
+  modeSystemPromptLinks: [],
+  modeModelProfileLinks: [],
   sessions: [],
   agentConversationLinks: [],
   messages: [],
@@ -41,6 +65,14 @@ export function applyClientSnapshot(streamId: string, streamSeq: number, state: 
   clientState.streamSeqs[streamId] = streamSeq;
   if (streamId === GLOBAL_CLIENT_STATE_STREAM_ID) {
     clientState.agents = state.agents;
+    clientState.agentModes = state.agentModes;
+    clientState.toolPolicies = state.toolPolicies;
+    clientState.systemPrompts = state.systemPrompts;
+    clientState.modelProfiles = state.modelProfiles;
+    clientState.agentModeLinks = state.agentModeLinks;
+    clientState.modeToolPolicyLinks = state.modeToolPolicyLinks;
+    clientState.modeSystemPromptLinks = state.modeSystemPromptLinks;
+    clientState.modeModelProfileLinks = state.modeModelProfileLinks;
     clientState.sessions = state.sessions;
     clientState.agentConversationLinks = state.agentConversationLinks;
     ensureCurrentSession();
@@ -68,6 +100,54 @@ function applyClientPatchOp(patch: ClientPatchOp): void {
       break;
     case 'agent.remove':
       remove(clientState.agents, (item) => item.id === patch.id);
+      break;
+    case 'agentMode.upsert':
+      upsert(clientState.agentModes, patch.agentMode, (item) => item.id === patch.agentMode.id);
+      break;
+    case 'agentMode.remove':
+      remove(clientState.agentModes, (item) => item.id === patch.id);
+      break;
+    case 'toolPolicy.upsert':
+      upsert(clientState.toolPolicies, patch.toolPolicy, (item) => item.id === patch.toolPolicy.id);
+      break;
+    case 'toolPolicy.remove':
+      remove(clientState.toolPolicies, (item) => item.id === patch.id);
+      break;
+    case 'systemPrompt.upsert':
+      upsert(clientState.systemPrompts, patch.systemPrompt, (item) => item.id === patch.systemPrompt.id);
+      break;
+    case 'systemPrompt.remove':
+      remove(clientState.systemPrompts, (item) => item.id === patch.id);
+      break;
+    case 'modelProfile.upsert':
+      upsert(clientState.modelProfiles, patch.modelProfile, (item) => item.id === patch.modelProfile.id);
+      break;
+    case 'modelProfile.remove':
+      remove(clientState.modelProfiles, (item) => item.id === patch.id);
+      break;
+    case 'agentModeLink.upsert':
+      upsert(clientState.agentModeLinks, patch.link, (item) => item.id === patch.link.id);
+      break;
+    case 'agentModeLink.remove':
+      remove(clientState.agentModeLinks, (item) => item.id === patch.id);
+      break;
+    case 'modeToolPolicyLink.upsert':
+      upsert(clientState.modeToolPolicyLinks, patch.link, (item) => item.id === patch.link.id);
+      break;
+    case 'modeToolPolicyLink.remove':
+      remove(clientState.modeToolPolicyLinks, (item) => item.id === patch.id);
+      break;
+    case 'modeSystemPromptLink.upsert':
+      upsert(clientState.modeSystemPromptLinks, patch.link, (item) => item.id === patch.link.id);
+      break;
+    case 'modeSystemPromptLink.remove':
+      remove(clientState.modeSystemPromptLinks, (item) => item.id === patch.id);
+      break;
+    case 'modeModelProfileLink.upsert':
+      upsert(clientState.modeModelProfileLinks, patch.link, (item) => item.id === patch.link.id);
+      break;
+    case 'modeModelProfileLink.remove':
+      remove(clientState.modeModelProfileLinks, (item) => item.id === patch.id);
       break;
     case 'session.upsert':
       upsert(clientState.sessions, patch.session, (item) => item.id === patch.session.id);

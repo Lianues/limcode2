@@ -182,9 +182,30 @@ export class ClientStatePersistence {
   }
 }
 
-function globalPersistenceSlice(state: ClientState): Pick<ClientState, 'agents' | 'sessions' | 'agentConversationLinks'> {
+function globalPersistenceSlice(state: ClientState): Pick<
+  ClientState,
+  | 'agents'
+  | 'agentModes'
+  | 'toolPolicies'
+  | 'systemPrompts'
+  | 'modelProfiles'
+  | 'agentModeLinks'
+  | 'modeToolPolicyLinks'
+  | 'modeSystemPromptLinks'
+  | 'modeModelProfileLinks'
+  | 'sessions'
+  | 'agentConversationLinks'
+> {
   return {
     agents: state.agents,
+    agentModes: state.agentModes,
+    toolPolicies: state.toolPolicies,
+    systemPrompts: state.systemPrompts,
+    modelProfiles: state.modelProfiles,
+    agentModeLinks: state.agentModeLinks,
+    modeToolPolicyLinks: state.modeToolPolicyLinks,
+    modeSystemPromptLinks: state.modeSystemPromptLinks,
+    modeModelProfileLinks: state.modeModelProfileLinks,
     sessions: state.sessions,
     agentConversationLinks: state.agentConversationLinks
   };

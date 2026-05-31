@@ -9,6 +9,7 @@ import {
   agentPlugin,
   chatPlugin,
   commonPlugin,
+  modePlugin,
   requestSpawnAgent,
   toolsPlugin
 } from '../world/modules';
@@ -93,7 +94,7 @@ export class BackendApplication {
 
     installWorldPlugins(
       { world: this.world, scheduler: this.scheduler },
-      [commonPlugin(), clientSyncPlugin(), agentPlugin(), toolsPlugin({ toolSchemas }), chatPlugin()]
+      [commonPlugin(), clientSyncPlugin(), agentPlugin(), modePlugin(), toolsPlugin({ toolSchemas }), chatPlugin()]
     );
 
     void this.initializeClientState();

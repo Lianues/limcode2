@@ -8,17 +8,12 @@ import {
   AgentConversationLink,
   AgentKind,
   AgentStatus,
-  ModelProfile,
-  ParentAgent,
-  SystemPrompt,
-  ToolPolicy
+  ParentAgent
 } from './components';
 
 export function projectAgentClientState(world: WorldReader): ClientStateSlice {
   const agents: AgentRecord[] = world.query(Agent).map((entity) => {
     const agent = world.get(entity, Agent)!;
-    const model = world.get(entity, ModelProfile);
-    const toolPolicy = world.get(entity, ToolPolicy);
     return {
       id: agent.id,
       name: agent.name,
@@ -27,21 +22,7 @@ export function projectAgentClientState(world: WorldReader): ClientStateSlice {
       parentAgentId: (() => {
         const parentEntity = world.get(entity, ParentAgent)?.parent;
         return parentEntity === undefined ? undefined : world.get(parentEntity, Agent)?.id;
-      })(),
-      model: model
-        ? {
-            provider: model.provider,
-            model: model.model,
-            temperature: model.temperature
-          }
-        : undefined,
-      toolPolicy: toolPolicy
-        ? {
-            allowedTools: toolPolicy.allowedTools,
-            approvalMode: toolPolicy.approvalMode
-          }
-        : undefined,
-      systemPrompt: world.get(entity, SystemPrompt)?.text
+      })()
     };
   });
 
@@ -83,9 +64,6 @@ export const agentClientSyncContributor = defineClientStateContributor({
       AgentKind,
       AgentStatus,
       ParentAgent,
-      ModelProfile,
-      ToolPolicy,
-      SystemPrompt,
       Session
     ]
   },

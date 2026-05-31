@@ -1,5 +1,15 @@
 import { defineResource } from '../../../ecs/types';
-import type { ApprovalMode, LlmProviderKind } from '../../../../shared/protocol';
+import type {
+  ApprovalMode,
+  ContextHistoryMode,
+  ConversationPolicyMode,
+  ConversationVisibility,
+  DeliveryMode,
+  LlmProviderKind,
+  NewMessageWhileRunningBehavior,
+  SourceEditBehavior,
+  TranscriptInclusion
+} from '../../../../shared/protocol';
 
 export interface ModeModelProfileBlueprint {
   name?: string;
@@ -19,6 +29,32 @@ export interface ModeApprovalPolicyBlueprint {
   allowInteractiveApproval: boolean;
 }
 
+export interface RunConversationPolicyBlueprint {
+  mode: ConversationPolicyMode;
+  visibility?: ConversationVisibility;
+  reuseKey?: string;
+  conversationId?: string;
+}
+
+export interface RunContextPolicyBlueprint {
+  historyMode: ContextHistoryMode;
+  lastN?: number;
+  sinceMessageId?: string;
+  selectedMessageIds?: string[];
+  includeSourceContext?: boolean;
+  includeSourceToolResult?: boolean;
+}
+
+export interface RunDeliveryPolicyBlueprint {
+  mode: DeliveryMode;
+  includeTranscript: TranscriptInclusion;
+}
+
+export interface RunEditPolicyBlueprint {
+  onSourceEdited: SourceEditBehavior;
+  onNewUserMessageWhileRunning: NewMessageWhileRunningBehavior;
+}
+
 export interface AgentModeBlueprint {
   id: string;
   name: string;
@@ -27,6 +63,10 @@ export interface AgentModeBlueprint {
   model: ModeModelProfileBlueprint;
   toolPolicy: ModeToolPolicyBlueprint;
   approvalPolicy: ModeApprovalPolicyBlueprint;
+  conversationPolicy?: RunConversationPolicyBlueprint;
+  contextPolicy?: RunContextPolicyBlueprint;
+  deliveryPolicy?: RunDeliveryPolicyBlueprint;
+  editPolicy?: RunEditPolicyBlueprint;
 }
 
 export interface AgentBlueprint {
@@ -34,6 +74,10 @@ export interface AgentBlueprint {
   name: string;
   defaultModeId: string;
   modes: AgentModeBlueprint[];
+  defaultConversationPolicy?: RunConversationPolicyBlueprint;
+  defaultContextPolicy?: RunContextPolicyBlueprint;
+  defaultDeliveryPolicy?: RunDeliveryPolicyBlueprint;
+  defaultEditPolicy?: RunEditPolicyBlueprint;
 }
 
 export type AgentBlueprintRegistry = Record<string, AgentBlueprint>;
@@ -44,6 +88,8 @@ const DEFAULT_SYSTEM_PROMPT = 'You are LimCode, a concise and helpful AI coding 
 const DEFAULT_MODEL = 'deepseek-v4-flash';
 const DEFAULT_TOOLS = ['read_file', 'shell', 'bash', 'sub_agent'];
 const READONLY_TOOLS = ['read_file', 'shell', 'bash'];
+const DEFAULT_CONTEXT_POLICY: RunContextPolicyBlueprint = { historyMode: 'full' };
+const DEFAULT_EDIT_POLICY: RunEditPolicyBlueprint = { onSourceEdited: 'mark_stale', onNewUserMessageWhileRunning: 'queue_next_run' };
 
 export function createDefaultAgentBlueprints(): AgentBlueprintRegistry {
   return {
@@ -51,6 +97,10 @@ export function createDefaultAgentBlueprints(): AgentBlueprintRegistry {
       kind: 'main',
       name: 'LimCode Agent',
       defaultModeId: 'default',
+      defaultConversationPolicy: { mode: 'same_conversation', visibility: 'visible' },
+      defaultContextPolicy: DEFAULT_CONTEXT_POLICY,
+      defaultDeliveryPolicy: { mode: 'direct_reply', includeTranscript: 'full' },
+      defaultEditPolicy: DEFAULT_EDIT_POLICY,
       modes: [
         {
           id: 'default',
@@ -67,6 +117,10 @@ export function createDefaultAgentBlueprints(): AgentBlueprintRegistry {
       kind: 'reviewer',
       name: 'Code Reviewer',
       defaultModeId: 'review',
+      defaultConversationPolicy: { mode: 'new_conversation', visibility: 'collapsed' },
+      defaultContextPolicy: DEFAULT_CONTEXT_POLICY,
+      defaultDeliveryPolicy: { mode: 'tool_response', includeTranscript: 'summary' },
+      defaultEditPolicy: DEFAULT_EDIT_POLICY,
       modes: [
         {
           id: 'review',
@@ -83,6 +137,10 @@ export function createDefaultAgentBlueprints(): AgentBlueprintRegistry {
       kind: 'general-purpose',
       name: 'General Purpose Agent',
       defaultModeId: 'default',
+      defaultConversationPolicy: { mode: 'new_conversation', visibility: 'collapsed' },
+      defaultContextPolicy: DEFAULT_CONTEXT_POLICY,
+      defaultDeliveryPolicy: { mode: 'tool_response', includeTranscript: 'summary' },
+      defaultEditPolicy: DEFAULT_EDIT_POLICY,
       modes: [
         {
           id: 'default',
@@ -99,6 +157,10 @@ export function createDefaultAgentBlueprints(): AgentBlueprintRegistry {
       kind: 'explore',
       name: 'Explore Agent',
       defaultModeId: 'explore',
+      defaultConversationPolicy: { mode: 'new_conversation', visibility: 'collapsed' },
+      defaultContextPolicy: DEFAULT_CONTEXT_POLICY,
+      defaultDeliveryPolicy: { mode: 'tool_response', includeTranscript: 'summary' },
+      defaultEditPolicy: { onSourceEdited: 'ignore_snapshot', onNewUserMessageWhileRunning: 'queue_next_run' },
       modes: [
         {
           id: 'explore',

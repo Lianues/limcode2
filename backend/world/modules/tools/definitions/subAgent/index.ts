@@ -50,7 +50,35 @@ export const subAgentTool: ToolDefinition = {
             approvalPolicyId: { type: 'string' },
             contextPolicyId: { type: 'string' },
             deliveryPolicyId: { type: 'string' },
-            editPolicyId: { type: 'string' }
+            editPolicyId: { type: 'string' },
+            contextPolicy: {
+              type: 'object',
+              description: 'Inline 临时 ContextPolicy，优先于 contextPolicyId / conversation.history shorthand。',
+              properties: {
+                historyMode: { type: 'string', description: 'none | full | last_n | since_message | selected_messages | summary' },
+                lastN: { type: 'number' },
+                sinceMessageId: { type: 'string' },
+                selectedMessageIds: { type: 'array', items: { type: 'string' } },
+                includeSourceContext: { type: 'boolean' },
+                includeSourceToolResult: { type: 'boolean' }
+              }
+            },
+            deliveryPolicy: {
+              type: 'object',
+              description: 'Inline 临时 DeliveryPolicy，优先于 deliveryPolicyId / delivery shorthand。',
+              properties: {
+                mode: { type: 'string', description: 'direct_reply | tool_response | notification | append_to_source_conversation | silent' },
+                includeTranscript: { type: 'string', description: 'none | summary | selected | full | link' }
+              }
+            },
+            editPolicy: {
+              type: 'object',
+              description: 'Inline 临时 EditPolicy，优先于 editPolicyId / blueprint default。',
+              properties: {
+                onSourceEdited: { type: 'string', description: 'ignore_snapshot | abort_and_restart | append_correction | branch_new_run | mark_stale' },
+                onNewUserMessageWhileRunning: { type: 'string', description: 'queue_next_run | interrupt_current | append_to_target | ignore' }
+              }
+            }
           }
         },
         delivery: {

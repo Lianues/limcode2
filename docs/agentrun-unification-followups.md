@@ -222,7 +222,7 @@ npm run check
 
 ---
 
-### 4. sub_agent mode 全套参数还未完全落地
+### 4. sub_agent mode 全套参数还未完全落地(已完成)
 
 `sub_agent` 工具 schema 里已经暴露了完整 mode 覆盖入口：
 
@@ -254,6 +254,124 @@ mode: {
 - `editPolicyId`
 - inline 创建临时 policy 的能力。
 - subagent type/blueprint 的默认 conversation/context/delivery/edit policy 全量落地。
+
+
+
+已经完成第 4 部分 sub_agent mode 全套参数 的落地，并通过：
+npm run check
+完成内容
+
+1. contextPolicyId / deliveryPolicyId / editPolicyId 已支持
+
+sub_agent 现在支持：
+mode: {
+  contextPolicyId?: string;
+  deliveryPolicyId?: string;
+  editPolicyId?: string;
+}
+运行时会根据 id 查找已有：
+RunContextPolicy
+RunDeliveryPolicy
+RunEditPolicy
+并创建对应 active link：
+RunContextPolicyLink
+RunDeliveryPolicyLink
+RunEditPolicyLink
+仍然保持 policy 独立对象 + link 覆盖的 ECS 模型。
+2. 支持 inline 临时 policy
+
+sub_agent.mode 现在支持 inline 临时策略：
+mode: {
+  contextPolicy?: {
+    historyMode?: 'none' | 'full' | 'last_n' | 'since_message' | 'selected_messages' | 'summary';
+    lastN?: number;
+    sinceMessageId?: string;
+    selectedMessageIds?: string[];
+    includeSourceContext?: boolean;
+    includeSourceToolResult?: boolean;
+  };
+
+  deliveryPolicy?: {
+    mode?: 'direct_reply' | 'tool_response' | 'notification' | 'append_to_source_conversation' | 'silent';
+    includeTranscript?: 'none' | 'summary' | 'selected' | 'full' | 'link';
+  };
+
+  editPolicy?: {
+    onSourceEdited?: 'ignore_snapshot' | 'abort_and_restart' | 'append_correction' | 'branch_new_run' | 'mark_stale';
+    onNewUserMessageWhileRunning?: 'queue_next_run' | 'interrupt_current' | 'append_to_target' | 'ignore';
+  };
+}
+inline policy 会创建临时 run-scoped policy entity，并用 active link 绑定到 child run。
+
+优先级是：
+inline policy
+  > policyId
+  > sub_agent shorthand 参数
+  > blueprint default
+  > hardcoded fallback
+3. subagent blueprint 默认 policy 已落地
+
+扩展了：
+AgentBlueprint
+AgentModeBlueprint
+新增默认策略：
+defaultConversationPolicy
+defaultContextPolicy
+defaultDeliveryPolicy
+defaultEditPolicy
+以及 mode 级覆盖：
+conversationPolicy
+contextPolicy
+deliveryPolicy
+editPolicy
+内置类型已配置默认值：
+
+main
+conversation: same_conversation / visible
+context: full
+delivery: direct_reply / full
+edit: mark_stale / queue_next_run
+general-purpose
+conversation: new_conversation / collapsed
+context: full
+delivery: tool_response / summary
+edit: mark_stale / queue_next_run
+explore
+conversation: new_conversation / collapsed
+context: full
+delivery: tool_response / summary
+edit: ignore_snapshot / queue_next_run
+reviewer
+conversation: new_conversation / collapsed
+context: full
+delivery: tool_response / summary
+edit: mark_stale / queue_next_run
+4. conversation/context/delivery/edit 解析链已统一
+
+sub_agent 创建 child run 时现在会完整解析：
+sub_agent args
+  > inline mode policy
+  > explicit policyId
+  > selected mode blueprint policy
+  > agent blueprint default policy
+  > hardcoded fallback
+并且：
+
+- conversation.history 仍作为 context shorthand 可用；
+- delivery.mode/includeTranscript 仍作为 delivery shorthand 可用；
+- run_in_background 仍能影响默认 delivery；
+- blueprint 默认 conversation policy 会影响 fresh/reuse/fork/same/branch 的默认行为。
+修改文件
+backend/world/modules/agent/blueprints.ts
+backend/world/modules/tools/definitions/subAgent/index.ts
+backend/world/modules/tools/systems/ToolDispatchSystem.ts
+验证
+
+已通过：
+npm run check
+没有引入新的 Agent/Conversation 耦合字段，仍然通过独立 Run*Policy 和 Run*PolicyLink 表达覆盖关系。
+
+
 
 ---
 

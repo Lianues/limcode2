@@ -1,6 +1,6 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
 import { readEvents } from '../../../events';
-import { Agent, AgentConversationLink } from '../../agent/components';
+import { Agent, AgentConversationLink, AgentKind } from '../../agent/components';
 import {
   AgentBlueprintsKey,
   type AgentBlueprint,
@@ -188,8 +188,8 @@ function authorizeRunToolExecution(world: WorldReader, toolCall: Entity, call: T
 }
 
 function dispatchToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
-  if (call.name === 'sub_agent') {
-    executeSubAgentTool(world, cmd, entity, call, state, authorization);
+  if (call.name === 'run_agent') {
+    executeRunAgentTool(world, cmd, entity, call, state, authorization);
     return;
   }
   executeRuntimeToolCall(cmd, entity, call, state, authorization);
@@ -211,9 +211,16 @@ function executeRuntimeToolCall(cmd: CommandSink, entity: Entity, call: ToolCall
   cmd.add(entity, InFlight, { kind: 'tool', startedAt: now });
 }
 
-interface SubAgentArgs {
+interface RunAgentArgs {
   prompt?: string;
+  agentId?: string;
   type?: string;
+  agent?: {
+    id?: string;
+    type?: string;
+    name?: string;
+    createIfMissing?: boolean;
+  };
   context?: string;
   run_in_background?: boolean;
   conversation?: {
@@ -263,7 +270,7 @@ interface ResolvedConversation {
   branchFromRevisionId?: string;
 }
 
-interface ResolvedSubAgentPolicyDefaults {
+interface ResolvedRunAgentPolicyDefaults {
   conversationPolicy: RunConversationPolicyBlueprint;
   contextPolicy: RunContextPolicyBlueprint;
   deliveryPolicy: RunDeliveryPolicyBlueprint;
@@ -278,7 +285,7 @@ function resolveTargetModeBlueprint(blueprint: AgentBlueprint, modeId: string | 
   return blueprint.modes.find((mode) => mode.id === blueprint.defaultModeId) ?? blueprint.modes[0];
 }
 
-function resolveSubAgentPolicyDefaults(blueprint: AgentBlueprint, mode: AgentModeBlueprint | undefined): ResolvedSubAgentPolicyDefaults {
+function resolveRunAgentPolicyDefaults(blueprint: AgentBlueprint, mode: AgentModeBlueprint | undefined): ResolvedRunAgentPolicyDefaults {
   return {
     conversationPolicy: mode?.conversationPolicy ?? blueprint.defaultConversationPolicy ?? { mode: 'new_conversation', visibility: 'collapsed' },
     contextPolicy: mode?.contextPolicy ?? blueprint.defaultContextPolicy ?? { historyMode: 'full' },
@@ -288,7 +295,7 @@ function resolveSubAgentPolicyDefaults(blueprint: AgentBlueprint, mode: AgentMod
 }
 
 function resolveDeliveryPolicy(
-  args: SubAgentArgs,
+  args: RunAgentArgs,
   defaultPolicy: RunDeliveryPolicyBlueprint,
   background: boolean,
   linkedPolicy?: RunDeliveryPolicyData
@@ -303,17 +310,17 @@ function resolveDeliveryPolicy(
   };
 }
 
-function executeSubAgentTool(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
-  let args: SubAgentArgs = {};
+function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
+  let args: RunAgentArgs = {};
   try {
-    args = call.argsJson ? JSON.parse(call.argsJson) as SubAgentArgs : {};
+    args = call.argsJson ? JSON.parse(call.argsJson) as RunAgentArgs : {};
   } catch (error) {
-    rejectToolCall(cmd, entity, call, state, `sub_agent 参数不是合法 JSON: ${String(error)}`);
+    rejectToolCall(cmd, entity, call, state, `run_agent 参数不是合法 JSON: ${String(error)}`);
     return;
   }
   const prompt = args.prompt?.trim();
   if (!prompt) {
-    rejectToolCall(cmd, entity, call, state, 'sub_agent 缺少必填 prompt。');
+    rejectToolCall(cmd, entity, call, state, 'run_agent 缺少必填 prompt。');
     return;
   }
 
@@ -323,17 +330,24 @@ function executeSubAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     return;
   }
 
-  const kind = args.type?.trim() || 'general-purpose';
+  const requestedAgentId = args.agent?.id?.trim() || args.agentId?.trim();
+  const requestedKind = args.agent?.type?.trim() || args.type?.trim();
   const blueprints = world.getResource(AgentBlueprintsKey);
+  const existingAgent = requestedAgentId ? findAgentById(world, requestedAgentId) : undefined;
+  if (requestedAgentId && existingAgent === undefined && args.agent?.createIfMissing !== true) {
+    rejectToolCall(cmd, entity, call, state, `指定 Agent 不存在: ${requestedAgentId}`);
+    return;
+  }
+  const kind = requestedKind || (existingAgent !== undefined ? world.get(existingAgent, AgentKind)?.kind : undefined) || 'general-purpose';
   const blueprint = blueprints[kind];
   if (!blueprint) {
     rejectToolCall(cmd, entity, call, state, `未知 Agent 类型: ${kind}`);
     return;
   }
 
-  const targetAgent = findAgentByKind(world, kind) ?? spawnAgentProfileFromBlueprint(cmd, { blueprint, agentId: `${kind}-${entity}`, agentName: blueprint.name });
+  const targetAgent = existingAgent ?? findAgentByKind(world, kind) ?? spawnAgentProfileFromBlueprint(cmd, { blueprint, agentId: requestedAgentId ?? `${kind}-${entity}`, agentName: args.agent?.name ?? blueprint.name });
   const targetModeBlueprint = resolveTargetModeBlueprint(blueprint, args.mode?.modeId);
-  const policyDefaults = resolveSubAgentPolicyDefaults(blueprint, targetModeBlueprint);
+  const policyDefaults = resolveRunAgentPolicyDefaults(blueprint, targetModeBlueprint);
   const resolved = resolveTargetConversation(world, cmd, {
     sourceConversation: parentTarget.conversation,
     targetAgent,
@@ -401,7 +415,7 @@ function executeSubAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
 function resolveTargetConversation(
   world: WorldReader,
   cmd: CommandSink,
-  input: { sourceConversation: Entity; targetAgent: Entity; kind: string; toolCallEntity: Entity; prompt: string; args: SubAgentArgs; defaultPolicy: RunConversationPolicyBlueprint }
+  input: { sourceConversation: Entity; targetAgent: Entity; kind: string; toolCallEntity: Entity; prompt: string; args: RunAgentArgs; defaultPolicy: RunConversationPolicyBlueprint }
 ): { ok: true; value: ResolvedConversation } | { ok: false; reason: string } {
   const conversationArgs = input.args.conversation ?? {};
   const policyMode = conversationArgs.mode ? normalizeConversationPolicyMode(conversationArgs.mode) : input.defaultPolicy.mode;
@@ -462,7 +476,7 @@ function resolveTargetConversation(
   return { ok: true, value: { conversation, policyMode, visibility } };
 }
 
-function copyProjectedHistory(world: WorldReader, cmd: CommandSink, sourceConversation: Entity, targetConversation: Entity, args: NonNullable<SubAgentArgs['conversation']>): void {
+function copyProjectedHistory(world: WorldReader, cmd: CommandSink, sourceConversation: Entity, targetConversation: Entity, args: NonNullable<RunAgentArgs['conversation']>): void {
   const messages = selectedMessagesForPolicy(world, sourceConversation, normalizeHistoryMode(args.history), args);
   const historyMode = normalizeHistoryMode(args.history);
   if (historyMode === 'summary') {
@@ -498,7 +512,7 @@ function copyBranchFromRevision(world: WorldReader, cmd: CommandSink, sourceConv
   return { ok: true, revision };
 }
 
-function selectedMessagesForPolicy(world: WorldReader, sourceConversation: Entity, historyMode: ContextHistoryMode, args: NonNullable<SubAgentArgs['conversation']>): Entity[] {
+function selectedMessagesForPolicy(world: WorldReader, sourceConversation: Entity, historyMode: ContextHistoryMode, args: NonNullable<RunAgentArgs['conversation']>): Entity[] {
   const messages = conversationMessages(world, sourceConversation);
   switch (historyMode) {
     case 'none': return [];
@@ -617,7 +631,7 @@ function applyRunConversationPolicy(cmd: CommandSink, run: Entity, resolved: Res
   cmd.add(link, RunConversationPolicyLink, { id: `run-conversation-policy-link:${run}`, run, policy, role: 'active', createdAt: now, updatedAt: now });
 }
 
-function applyRunContextPolicy(cmd: CommandSink, run: Entity, args: SubAgentArgs, resolved: ResolvedConversation, defaultPolicy: RunContextPolicyBlueprint): void {
+function applyRunContextPolicy(cmd: CommandSink, run: Entity, args: RunAgentArgs, resolved: ResolvedConversation, defaultPolicy: RunContextPolicyBlueprint): void {
   const contextPolicy = resolveContextPolicy(args, resolved, defaultPolicy);
   const policy = cmd.spawn();
   cmd.add(policy, RunContextPolicy, {
@@ -629,7 +643,7 @@ function applyRunContextPolicy(cmd: CommandSink, run: Entity, args: SubAgentArgs
   cmd.add(link, RunContextPolicyLink, { id: `run-context-policy-link:${run}`, run, policy, role: 'active', createdAt: now, updatedAt: now });
 }
 
-function resolveContextPolicy(args: SubAgentArgs, resolved: ResolvedConversation, defaultPolicy: RunContextPolicyBlueprint): RunContextPolicyBlueprint {
+function resolveContextPolicy(args: RunAgentArgs, resolved: ResolvedConversation, defaultPolicy: RunContextPolicyBlueprint): RunContextPolicyBlueprint {
   const shorthand = args.conversation;
   const hasShorthand = !!shorthand && (
     shorthand.history !== undefined
@@ -653,7 +667,7 @@ function resolveContextPolicy(args: SubAgentArgs, resolved: ResolvedConversation
   return { ...base, historyMode: base.historyMode ?? 'full' };
 }
 
-function contextHistoryModeForResolvedConversation(resolved: ResolvedConversation, args: SubAgentArgs): ContextHistoryMode {
+function contextHistoryModeForResolvedConversation(resolved: ResolvedConversation, args: RunAgentArgs): ContextHistoryMode {
   // fork/branch 已经在目标 conversation 中投影出所需历史；LLM 上下文应读取完整目标投影，
   // 避免 selected/since 使用源 message id 再过滤克隆后的 message 而丢失上下文。
   if (resolved.policyMode === 'fork_conversation' || resolved.policyMode === 'branch_from_revision') return 'full';
@@ -676,7 +690,7 @@ function applyRunEditPolicy(cmd: CommandSink, run: Entity, editPolicy: RunEditPo
   cmd.add(link, RunEditPolicyLink, { id: `run-edit-policy-link:${run}`, run, policy, role: 'active', createdAt: now, updatedAt: now });
 }
 
-function applyRunModeOverrides(world: WorldReader, cmd: CommandSink, run: Entity, mode?: SubAgentArgs['mode']): void {
+function applyRunModeOverrides(world: WorldReader, cmd: CommandSink, run: Entity, mode?: RunAgentArgs['mode']): void {
   if (!mode) return;
   const now = Date.now();
   const modeEntity = mode.modeId ? findByRecordId(world, AgentMode, mode.modeId) : undefined;
@@ -784,6 +798,10 @@ function normalizeNewMessageWhileRunningBehavior(value: string | undefined): New
 
 function findByRecordId<T extends { id: string }>(world: WorldReader, component: { id: symbol }, id: string): Entity | undefined {
   return world.query(component as never).find((entity) => (world.get(entity, component as never) as T | undefined)?.id === id);
+}
+
+function findAgentById(world: WorldReader, id: string): Entity | undefined {
+  return world.query(Agent).find((agent) => world.get(agent, Agent)?.id === id);
 }
 
 function findAgentByKind(world: WorldReader, kind: string): Entity | undefined {

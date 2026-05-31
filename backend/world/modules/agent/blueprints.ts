@@ -86,7 +86,7 @@ export const AgentBlueprintsKey = defineResource<AgentBlueprintRegistry>('AgentB
 
 const DEFAULT_SYSTEM_PROMPT = 'You are LimCode, a concise and helpful AI coding assistant running inside VS Code. Reply in the user\'s language unless asked otherwise.';
 const DEFAULT_MODEL = 'deepseek-v4-flash';
-const DEFAULT_TOOLS = ['read_file', 'shell', 'bash', 'sub_agent'];
+const DEFAULT_TOOLS = ['read_file', 'shell', 'bash', 'run_agent'];
 const READONLY_TOOLS = ['read_file', 'shell', 'bash'];
 const DEFAULT_CONTEXT_POLICY: RunContextPolicyBlueprint = { historyMode: 'full' };
 const DEFAULT_EDIT_POLICY: RunEditPolicyBlueprint = { onSourceEdited: 'mark_stale', onNewUserMessageWhileRunning: 'queue_next_run' };

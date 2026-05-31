@@ -1,25 +1,36 @@
 import type { ToolDefinition } from '../../registry';
 import { defineToolDefinitionModule } from '../types';
 
-export const subAgentToolModule = defineToolDefinitionModule({
-  id: 'sub_agent',
+export const runAgentToolModule = defineToolDefinitionModule({
+  id: 'run_agent',
   create() {
-    return subAgentTool;
+    return runAgentTool;
   }
 });
 
-export const subAgentTool: ToolDefinition = {
+export const runAgentTool: ToolDefinition = {
   execution: 'agentRun',
   declaration: {
-    name: 'sub_agent',
-    description: `启动一个同级 AgentRun 来执行子任务。它不是低级 Agent，而是统一 AgentRun 执行体系中的另一次执行。
+    name: 'run_agent',
+    description: `启动一个 AgentRun，让指定 Agent 或指定类型 Agent 执行任务。所有 Agent 都是平等的一等对象；本工具只是创建一次新的 AgentRun，不引入子 Agent / 委派 Agent 的特殊执行核心。
 
-可通过 conversation 参数决定是否新建、复用、fork 或使用同一个对话；通过 mode 参数覆盖完整 mode 配置（systemPrompt/modelProfile/toolPolicy/approvalPolicy/context/delivery/edit）；通过 delivery 决定结果如何回流。默认同步返回 tool_response；run_in_background=true 时默认 notification。`,
+可通过 agent.id/agentId 指定已有 Agent；通过 agent.type/type 按蓝图选择或创建 Agent；通过 conversation 决定 same/fresh/reuse/fork/branch；通过 mode 覆盖 systemPrompt/modelProfile/toolPolicy/approvalPolicy/context/delivery/edit；通过 delivery 决定结果如何回流。默认同步 tool_response，run_in_background=true 时默认 notification。`,
     parameters: {
       type: 'object',
       properties: {
         prompt: { type: 'string', description: '交给目标 AgentRun 执行的任务描述，应尽量详细清晰。' },
-        type: { type: 'string', description: '目标 Agent 类型/蓝图 kind，例如 general-purpose、explore、reviewer。默认 general-purpose。' },
+        agent: {
+          type: 'object',
+          description: '目标 Agent 选择器。id 指定已有 Agent；type 按蓝图 kind 找或创建 Agent。',
+          properties: {
+            id: { type: 'string', description: '已有 Agent id。指定后优先使用该 Agent。' },
+            type: { type: 'string', description: 'Agent 蓝图 kind，例如 general-purpose、explore、reviewer。默认 general-purpose。' },
+            name: { type: 'string', description: '按 type 创建 Agent 时使用的可选名称。' },
+            createIfMissing: { type: 'boolean', description: '指定 agent.id 但找不到时，是否允许按 type 创建。默认 false。' }
+          }
+        },
+        agentId: { type: 'string', description: 'agent.id 的简写。' },
+        type: { type: 'string', description: 'agent.type 的简写。默认 general-purpose。' },
         context: { type: 'string', description: '可选背景。目标 run 是否读取历史由 conversation/context policy 决定；这里用于显式补充关键上下文。' },
         conversation: {
           type: 'object',
@@ -35,8 +46,8 @@ export const subAgentTool: ToolDefinition = {
             revisionId: { type: 'string' },
             visibility: { type: 'string', description: 'visible | hidden | collapsed' },
             selectedMessageIds: { type: 'array', items: { type: 'string' } },
-            includeSourceContext: { type: 'boolean', description: '是否把 source conversation 中按 history policy 选中的上下文作为文本块注入 child run。' },
-            includeSourceToolResult: { type: 'boolean', description: '是否把 source tool call 的状态/结果作为文本块注入 child run。' }
+            includeSourceContext: { type: 'boolean', description: '是否把 source conversation 中按 history policy 选中的上下文作为文本块注入目标 run。' },
+            includeSourceToolResult: { type: 'boolean', description: '是否把 source tool call 的状态/结果作为文本块注入目标 run。' }
           }
         },
         mode: {

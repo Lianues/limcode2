@@ -829,7 +829,7 @@ Iris 进度 · 3/3 已完成
 
 ---
 
-### 9. ClientSync 目前偏简单
+### 9. ClientSync 目前偏简单(已完成)
 
 当前 ClientSync 为了适配新 `ClientState`，采用了更保守的 snapshot 逻辑。
 
@@ -839,6 +839,161 @@ Iris 进度 · 3/3 已完成
 - conversation stream 增量推送更细粒度。
 - 减少全量 snapshot 频率。
 - Webview store 支持新增 patch 类型的完整处理，而不是只处理当前 UI 需要的子集。
+
+
+
+第 9 部分 ClientSync 精细化 已完成，并通过：
+npm run check
+完成内容
+
+1. ClientSync 改为 snapshot + patch 混合模式
+
+修改：
+backend/world/clientSync/systems/ClientSyncSystem.ts
+之前逻辑：
+只要 stream 有变化，就发 client.snapshot
+现在逻辑：
+首次订阅 / 显式 resync / 无 lastState
+  -> client.snapshot
+
+已有 stream 且只是增量变化
+  -> client.patch
+也就是说：
+
+- global stream 不再每次全量 snapshot。
+- conversation stream 不再每次全量 snapshot。
+- 已有 stream 会基于 contributor diff 发送 patch。
+2. 启用了已有 contributor diff
+
+现在 ClientSyncSystem 会调用各 contributor 的 diff：
+agentClientSyncContributor.diff
+modeClientSyncContributor.diff
+chatClientSyncContributor.diff
+toolsClientSyncContributor.diff
+agentRunClientSyncContributor.diff
+因此这些 patch 现在会真正被使用：
+agentRun.upsert/remove
+agentRunSourceLink.upsert/remove
+agentRunTargetLink.upsert/remove
+messageRunLink.upsert/remove
+toolCallRunLink.upsert/remove
+runConversationPolicy.upsert/remove
+runContextPolicy.upsert/remove
+runDeliveryPolicy.upsert/remove
+runEditPolicy.upsert/remove
+runModeLink.upsert/remove
+runSystemPromptLink.upsert/remove
+runModelProfileLink.upsert/remove
+runToolPolicyLink.upsert/remove
+runApprovalPolicyLink.upsert/remove
+run*PolicyLink.upsert/remove
+agentRunInputRevision.upsert/remove
+3. conversation stream 内容更完整
+
+conversationClientState(...) 现在不只包含：
+messages
+toolCalls
+toolCallEvents
+还会包含与该 conversation 相关的：
+agentRuns
+agentRunSourceLinks
+agentRunTargetLinks
+messageRunLinks
+toolCallRunLinks
+runConversationPolicies
+runContextPolicies
+runDeliveryPolicies
+runEditPolicies
+runModeLinks
+runSystemPromptLinks
+runModelProfileLinks
+runToolPolicyLinks
+runApprovalPolicyLinks
+runConversationPolicyLinks
+runContextPolicyLinks
+runDeliveryPolicyLinks
+runEditPolicyLinks
+agentRunInputRevisions
+过滤逻辑基于：
+
+- 当前 conversation 的 messages
+- 当前 conversation 的 toolCalls
+- target conversation
+- source conversation
+- sourceRun parent-child 关系
+- runId 关联闭包
+
+因此 child run / parent run / run policy 信息可以进入 conversation stream 的增量同步。
+4. Webview store 补齐完整 ClientState 字段
+
+修改：
+webview/src/stores/clientStateStore.ts
+现在 Webview store 不再只存 UI 当前用到的一部分字段，而是补齐完整 ClientState 结构，包括：
+approvalPolicies
+modeApprovalPolicyLinks
+conversationReuseLinks
+conversationBranchLinks
+messageRevisions
+messageCurrentRevisionLinks
+messageRunLinks
+toolCallRunLinks
+runConversationPolicies
+runContextPolicies
+runDeliveryPolicies
+runEditPolicies
+runModeLinks
+runSystemPromptLinks
+runModelProfileLinks
+runToolPolicyLinks
+runApprovalPolicyLinks
+runConversationPolicyLinks
+runContextPolicyLinks
+runDeliveryPolicyLinks
+runEditPolicyLinks
+agentRunInputRevisions
+5. Webview store 支持所有 ClientPatchOp
+
+现在 applyClientPatchOp() 已补齐所有 patch 类型处理，包括：
+approvalPolicy.*
+modeApprovalPolicyLink.*
+conversationReuseLink.*
+conversationBranchLink.*
+messageRevision.*
+messageCurrentRevisionLink.*
+messageRunLink.*
+toolCallRunLink.*
+runConversationPolicy.*
+runContextPolicy.*
+runDeliveryPolicy.*
+runEditPolicy.*
+runModeLink.*
+runSystemPromptLink.*
+runModelProfileLink.*
+runToolPolicyLink.*
+runApprovalPolicyLink.*
+runConversationPolicyLink.*
+runContextPolicyLink.*
+runDeliveryPolicyLink.*
+runEditPolicyLink.*
+agentRunInputRevision.*
+并增强了级联清理：
+
+- conversation.remove 会清理相关 messages/toolCalls/revisions/run links。
+- message.remove 会清理 revisions/currentRevisionLinks/messageRunLinks/toolCalls/events。
+- agentRun.remove 会清理 run-scoped links/policies/input revisions。
+修改文件
+backend/world/clientSync/systems/ClientSyncSystem.ts
+webview/src/stores/clientStateStore.ts
+验证
+
+已通过：
+npm run check
+现在第 9 部分的核心目标已经完成：
+
+- AgentRun / RunPolicy / Link 精细 patch 已启用。
+- conversation stream 支持增量 patch。
+- 全量 snapshot 频率降低。
+- Webview store 不再忽略大量新增 patch 类型。
 
 ---
 
@@ -892,7 +1047,7 @@ conversation: {
 
 ---
 
-### 13. 命名清理
+### 13. 命名清理（已完成）
 
 主要命名清理已完成。公共协议不再保留 `SessionRecord/sessionId/ToolApprovalMode` 旧别名；前端 store 与主要 UI 已使用 conversation 命名。
 

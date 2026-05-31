@@ -2,6 +2,7 @@ import {
   GLOBAL_CLIENT_STATE_STREAM_ID,
   conversationClientStateStreamId,
   conversationIdFromClientStateStreamId,
+  type ClientPatchOp,
   type ClientState
 } from '../../../../shared/protocol';
 import { defineSystem, type AccessDeclaration, type WorldReader } from '../../../ecs/types';
@@ -50,12 +51,17 @@ export const ClientSyncSystem = defineSystem({
     let didUpdateStreams = false;
     const fullChanged = prevFull === null || !sameClientState(prevFull, nextFull);
 
-    if (wantsGlobalSnapshot || (fullChanged && streams[GLOBAL_CLIENT_STATE_STREAM_ID])) {
-      const next = globalClientState(nextFull);
-      const stream = nextStreamSnapshot(streams[GLOBAL_CLIENT_STATE_STREAM_ID], next);
-      streams[GLOBAL_CLIENT_STATE_STREAM_ID] = stream;
+    const globalNext = globalClientState(nextFull);
+    const globalExisting = streams[GLOBAL_CLIENT_STATE_STREAM_ID];
+    if (wantsGlobalSnapshot) {
+      streams[GLOBAL_CLIENT_STATE_STREAM_ID] = emitSnapshot(cmd, GLOBAL_CLIENT_STATE_STREAM_ID, globalExisting, globalNext);
       didUpdateStreams = true;
-      cmd.effect({ kind: 'client.snapshot', streamId: GLOBAL_CLIENT_STATE_STREAM_ID, streamSeq: stream.streamSeq, state: next });
+    } else if (globalExisting) {
+      const updated = emitPatchIfChanged(cmd, contributors, GLOBAL_CLIENT_STATE_STREAM_ID, globalExisting, globalNext);
+      if (updated) {
+        streams[GLOBAL_CLIENT_STATE_STREAM_ID] = updated;
+        didUpdateStreams = true;
+      }
     }
 
     for (const conversationId of collectConversationIds(prevFull, nextFull, streams, requestedConversationIds)) {
@@ -64,11 +70,16 @@ export const ClientSyncSystem = defineSystem({
       const requested = requestedConversationIds.has(conversationId);
       if (!requested && !existing) continue;
       const next = conversationClientState(nextFull, conversationId);
-      if (!requested && existing?.lastState && sameClientState(existing.lastState, next)) continue;
-      const updated = nextStreamSnapshot(existing, next);
-      streams[streamId] = updated;
-      didUpdateStreams = true;
-      cmd.effect({ kind: 'client.snapshot', streamId, streamSeq: updated.streamSeq, state: next });
+      if (requested || !existing?.lastState) {
+        streams[streamId] = emitSnapshot(cmd, streamId, existing, next);
+        didUpdateStreams = true;
+        continue;
+      }
+      const updated = emitPatchIfChanged(cmd, contributors, streamId, existing, next);
+      if (updated) {
+        streams[streamId] = updated;
+        didUpdateStreams = true;
+      }
     }
 
     if (fullChanged || didUpdateStreams) {
@@ -79,6 +90,32 @@ export const ClientSyncSystem = defineSystem({
 
 function emptyReads(): AccessDeclaration {
   return { components: [], resources: [], events: [], effects: [] };
+}
+
+function emitSnapshot(cmd: { effect(effect: unknown): void }, streamId: string, current: ClientStreamState | undefined, state: ClientState): ClientStreamState {
+  const stream = nextStreamSnapshot(current, state);
+  cmd.effect({ kind: 'client.snapshot', streamId, streamSeq: stream.streamSeq, state });
+  return stream;
+}
+
+function emitPatchIfChanged(
+  cmd: { effect(effect: unknown): void },
+  contributors: ClientStateContributor[],
+  streamId: string,
+  current: ClientStreamState,
+  next: ClientState
+): ClientStreamState | undefined {
+  if (!current.lastState) return emitSnapshot(cmd, streamId, current, next);
+  if (sameClientState(current.lastState, next)) return undefined;
+  const patches = diffClientState(contributors, current.lastState, next);
+  if (patches.length === 0) return undefined;
+  const stream: ClientStreamState = { streamSeq: current.streamSeq + 1, lastState: next };
+  cmd.effect({ kind: 'client.patch', streamId, streamSeq: stream.streamSeq, patches });
+  return stream;
+}
+
+function diffClientState(contributors: ClientStateContributor[], prev: ClientState, next: ClientState): ClientPatchOp[] {
+  return contributors.flatMap((contributor) => contributor.diff?.(prev, next) ?? []);
 }
 
 function projectClientState(world: WorldReader, contributors: ClientStateContributor[]): ClientState {
@@ -106,7 +143,6 @@ function emptyClientState(): ClientState {
     conversations: [],
     conversationReuseLinks: [],
     conversationBranchLinks: [],
-
     agentConversationLinks: [],
     messages: [],
     messageRevisions: [],
@@ -180,17 +216,80 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
   const messageIds = new Set(messages.map((message) => message.id));
   const toolCalls = state.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId));
   const toolCallIds = new Set(toolCalls.map((toolCall) => toolCall.id));
+  const runIds = collectConversationRunIds(state, conversationId, messageIds, toolCallIds);
+  const runPolicyIds = collectRunPolicyIds(state, runIds);
+
   return {
     ...emptyClientState(),
-    conversations: state.conversations.filter((conversation) => conversation.id === conversationId),
+    conversations: state.conversations.filter((conversation) => conversation.id === conversationId || conversationReferencedByRuns(state, conversation.id, runIds)),
     conversationReuseLinks: state.conversationReuseLinks.filter((link) => link.conversationId === conversationId),
     conversationBranchLinks: state.conversationBranchLinks.filter((link) => link.sourceConversationId === conversationId || link.targetConversationId === conversationId),
     messages,
     messageRevisions: state.messageRevisions.filter((revision) => revision.conversationId === conversationId),
     messageCurrentRevisionLinks: state.messageCurrentRevisionLinks.filter((link) => messageIds.has(link.messageId)),
     toolCalls,
-    toolCallEvents: state.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId))
+    toolCallEvents: state.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId)),
+    agentRuns: state.agentRuns.filter((run) => runIds.has(run.id)),
+    agentRunSourceLinks: state.agentRunSourceLinks.filter((link) => runIds.has(link.runId) || (link.sourceRunId !== undefined && runIds.has(link.sourceRunId))),
+    agentRunTargetLinks: state.agentRunTargetLinks.filter((link) => runIds.has(link.runId)),
+    messageRunLinks: state.messageRunLinks.filter((link) => runIds.has(link.runId) || messageIds.has(link.messageId)),
+    toolCallRunLinks: state.toolCallRunLinks.filter((link) => runIds.has(link.runId) || toolCallIds.has(link.toolCallId)),
+    runConversationPolicies: state.runConversationPolicies.filter((policy) => runPolicyIds.conversationPolicyIds.has(policy.id)),
+    runContextPolicies: state.runContextPolicies.filter((policy) => runPolicyIds.contextPolicyIds.has(policy.id)),
+    runDeliveryPolicies: state.runDeliveryPolicies.filter((policy) => runPolicyIds.deliveryPolicyIds.has(policy.id)),
+    runEditPolicies: state.runEditPolicies.filter((policy) => runPolicyIds.editPolicyIds.has(policy.id)),
+    runModeLinks: state.runModeLinks.filter((link) => runIds.has(link.runId)),
+    runSystemPromptLinks: state.runSystemPromptLinks.filter((link) => runIds.has(link.runId)),
+    runModelProfileLinks: state.runModelProfileLinks.filter((link) => runIds.has(link.runId)),
+    runToolPolicyLinks: state.runToolPolicyLinks.filter((link) => runIds.has(link.runId)),
+    runApprovalPolicyLinks: state.runApprovalPolicyLinks.filter((link) => runIds.has(link.runId)),
+    runConversationPolicyLinks: state.runConversationPolicyLinks.filter((link) => runIds.has(link.runId)),
+    runContextPolicyLinks: state.runContextPolicyLinks.filter((link) => runIds.has(link.runId)),
+    runDeliveryPolicyLinks: state.runDeliveryPolicyLinks.filter((link) => runIds.has(link.runId)),
+    runEditPolicyLinks: state.runEditPolicyLinks.filter((link) => runIds.has(link.runId)),
+    agentRunInputRevisions: state.agentRunInputRevisions.filter((inputRevision) => runIds.has(inputRevision.runId))
   };
+}
+
+function collectConversationRunIds(state: ClientState, conversationId: string, messageIds: ReadonlySet<string>, toolCallIds: ReadonlySet<string>): Set<string> {
+  const runIds = new Set<string>();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const add = (id: string | undefined): void => {
+      if (!id || runIds.has(id)) return;
+      runIds.add(id);
+      changed = true;
+    };
+    for (const link of state.agentRunTargetLinks) if (link.conversationId === conversationId || runIds.has(link.runId)) add(link.runId);
+    for (const link of state.agentRunSourceLinks) {
+      if (link.sourceConversationId === conversationId || (link.sourceMessageId && messageIds.has(link.sourceMessageId)) || (link.sourceToolCallId && toolCallIds.has(link.sourceToolCallId)) || (link.sourceRunId && runIds.has(link.sourceRunId)) || runIds.has(link.runId)) {
+        add(link.runId);
+      }
+    }
+    for (const link of state.messageRunLinks) if (messageIds.has(link.messageId) || runIds.has(link.runId)) add(link.runId);
+    for (const link of state.toolCallRunLinks) if (toolCallIds.has(link.toolCallId) || runIds.has(link.runId)) add(link.runId);
+  }
+  return runIds;
+}
+
+function collectRunPolicyIds(state: ClientState, runIds: ReadonlySet<string>): {
+  conversationPolicyIds: Set<string>;
+  contextPolicyIds: Set<string>;
+  deliveryPolicyIds: Set<string>;
+  editPolicyIds: Set<string>;
+} {
+  return {
+    conversationPolicyIds: new Set(state.runConversationPolicyLinks.filter((link) => runIds.has(link.runId)).map((link) => link.policyId)),
+    contextPolicyIds: new Set(state.runContextPolicyLinks.filter((link) => runIds.has(link.runId)).map((link) => link.policyId)),
+    deliveryPolicyIds: new Set(state.runDeliveryPolicyLinks.filter((link) => runIds.has(link.runId)).map((link) => link.policyId)),
+    editPolicyIds: new Set(state.runEditPolicyLinks.filter((link) => runIds.has(link.runId)).map((link) => link.policyId))
+  };
+}
+
+function conversationReferencedByRuns(state: ClientState, conversationId: string, runIds: ReadonlySet<string>): boolean {
+  return state.agentRunTargetLinks.some((link) => runIds.has(link.runId) && link.conversationId === conversationId)
+    || state.agentRunSourceLinks.some((link) => runIds.has(link.runId) && link.sourceConversationId === conversationId);
 }
 
 function nextStreamSnapshot(current: ClientStreamState | undefined, state: ClientState): ClientStreamState {

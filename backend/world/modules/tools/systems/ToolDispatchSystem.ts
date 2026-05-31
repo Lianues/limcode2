@@ -411,10 +411,15 @@ function resolveTargetConversation(
   if (explicitConversationId) {
     const explicit = findConversationById(world, explicitConversationId);
     if (explicit === undefined) return { ok: false, reason: `指定 conversation 不存在: ${explicitConversationId}` };
-    if (policyMode === 'fork_conversation') copyProjectedHistory(world, cmd, input.sourceConversation, explicit, conversationArgs);
+    ensureAgentConversationLink(world, cmd, input.targetAgent, explicit, 'participant');
+    if (policyMode === 'fork_conversation') {
+      copyProjectedHistory(world, cmd, input.sourceConversation, explicit, conversationArgs);
+      spawnConversationBranchLink(cmd, { sourceConversation: input.sourceConversation, targetConversation: explicit, kind: 'fork' });
+    }
     if (policyMode === 'branch_from_revision') {
       const branch = copyBranchFromRevision(world, cmd, input.sourceConversation, explicit, conversationArgs.branchFromRevisionId ?? conversationArgs.revisionId);
       if (!branch.ok) return branch;
+      spawnConversationBranchLink(cmd, { sourceConversation: input.sourceConversation, targetConversation: explicit, sourceRevision: branch.revision, kind: 'branch_from_revision' });
       return { ok: true, value: { conversation: explicit, policyMode, branchRevision: branch.revision, visibility, explicitConversationId, branchFromRevisionId: conversationArgs.branchFromRevisionId ?? conversationArgs.revisionId } };
     }
     return { ok: true, value: { conversation: explicit, policyMode, reuseKey: conversationArgs.reuseKey ?? input.defaultPolicy.reuseKey, visibility, explicitConversationId } };
@@ -428,7 +433,10 @@ function resolveTargetConversation(
   if (policyMode === 'reuse_conversation') {
     const reuseKey = conversationArgs.reuseKey?.trim() || input.defaultPolicy.reuseKey || `${input.kind}:default`;
     const reused = findReuseConversation(world, reuseKey, input.targetAgent);
-    if (reused !== undefined) return { ok: true, value: { conversation: reused, policyMode, reuseKey, visibility } };
+    if (reused !== undefined) {
+      ensureAgentConversationLink(world, cmd, input.targetAgent, reused, 'default');
+      return { ok: true, value: { conversation: reused, policyMode, reuseKey, visibility } };
+    }
     const conversation = spawnConversation(cmd, { id: `conversation-reuse-${slug(reuseKey)}-${input.toolCallEntity}`, title: `${input.kind}: ${reuseKey}`, visibility });
     linkAgentToConversation(cmd, { agent: input.targetAgent, conversation, role: 'default' });
     spawnConversationReuseLink(cmd, { key: reuseKey, conversation, agent: input.targetAgent });

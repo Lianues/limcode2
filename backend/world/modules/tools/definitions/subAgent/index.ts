@@ -28,7 +28,7 @@ export const subAgentTool: ToolDefinition = {
             mode: { type: 'string', description: 'fresh | reuse | fork | same | branch' },
             reuseKey: { type: 'string' },
             conversationId: { type: 'string' },
-            history: { type: 'string', description: 'none | summary | last_n | full | selected' },
+            history: { type: 'string', description: 'none | summary | last_n | full | selected/selected_messages | since/since_message' },
             lastN: { type: 'number' },
             sinceMessageId: { type: 'string' },
             branchFromRevisionId: { type: 'string' },

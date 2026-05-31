@@ -1206,7 +1206,7 @@ npm run check
 
 ---
 
-### 12. sub_agent 的复用/fork/branch 语义还需增强
+### 12. sub_agent 的复用/fork/branch 语义还需增强(已完成)
 
 当前 `sub_agent` 已是统一 AgentRun 入口，但它的参数还有一些只声明未完全实现：
 
@@ -1226,6 +1226,75 @@ conversation: {
 - `branch`：按 revision 建分支。
 - `conversationId`：显式指定目标 conversation。
 - `history` 参数映射到 `RunContextPolicy`。
+
+第 12 部分之前主路径基本已经完成，但我检查后发现还有几个边角语义没补全，所以这轮已经补上，并通过：
+npm run check
+已补齐内容
+
+1. 显式 conversationId 时确保 AgentConversationLink
+
+之前 sub_agent.conversation.conversationId 可以显式指定目标 conversation，但没有保证目标 agent 和该 conversation 之间有关系数据。
+
+现在会确保：
+AgentConversationLink(targetAgent, explicitConversation, participant)
+避免出现 child run 指向了 conversation，但 target agent 没有参与关系的问题。
+2. conversationId + fork 现在会写 branch link
+
+之前：
+conversation: {
+  mode: 'fork',
+  conversationId: '...'
+}
+只会把历史投影复制到指定 conversation，但不会记录 fork 来源。
+
+现在会额外写入：
+ConversationBranchLink {
+  sourceConversation,
+  targetConversation: explicitConversation,
+  kind: 'fork'
+}
+3. conversationId + branch 现在会写 branch link
+
+之前：
+conversation: {
+  mode: 'branch',
+  conversationId: '...',
+  branchFromRevisionId: '...'
+}
+会复制 revision 历史，但不会记录 branch link。
+
+现在会写入：
+ConversationBranchLink {
+  sourceConversation,
+  targetConversation: explicitConversation,
+  sourceRevision,
+  kind: 'branch_from_revision'
+}
+4. reuse 命中已有 conversation 时确保 agent link
+
+之前 reuse 命中已有 ConversationReuseLink 时会直接返回目标 conversation。
+
+现在会额外确保：
+AgentConversationLink(targetAgent, reusedConversation, default)
+这样即使已有 reuse link 是旧数据或不带 agent，也能保证 target agent 与 reused conversation 的关系完整。
+5. sub_agent schema 补齐 history alias 说明
+
+conversation.history 描述从：
+none | summary | last_n | full | selected
+更新为：
+none | summary | last_n | full | selected/selected_messages | since/since_message
+代码本身之前已经支持这些 alias，这次补齐了 schema 描述。
+
+修改文件
+backend/world/modules/tools/systems/ToolDispatchSystem.ts
+backend/world/modules/tools/definitions/subAgent/index.ts
+验证
+
+已通过：
+npm run check
+所以第 12 部分现在也完成了。
+
+
 
 ---
 

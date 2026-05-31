@@ -196,7 +196,7 @@ Storage capability 只负责读写当前投影数据
 推荐结构：
 
 ```text
-<globalStorage>/
+<dataRoot>/
   agents/
     index.json
     records/{timeSlugHash}.json
@@ -265,6 +265,32 @@ agent-conversation-links/index.json 只列 link records
 3. 未发布阶段不写旧格式兼容或迁移代码
 ```
 
+### 5.4 数据文件路径必须通过 getPaths 获取
+
+当需要读写/创建任何业务数据文件或目录时，必须先通过当前 storage capability 内部的 `getPaths()` 获取路径：
+
+```ts
+function getPaths(): StoragePaths {
+  currentPaths = createVscodeStoragePaths(resolveDataRootUri(context));
+  return currentPaths;
+}
+```
+
+要求：
+
+```text
+1. 业务数据文件必须写到 getPaths() 返回的对应 root/index 路径下，例如 agentsRootUri、conversationsRootUri、linksRootUri、settingsRootUri 等。
+2. 每次 load/save/ensure storage roots 前都应重新调用 getPaths()，不要长期缓存旧路径。
+3. 不要直接使用 VS Code extension context 的 globalStorageUri/globalStoragePath/globalState 拼接业务数据路径。
+4. globalStatus 只用于保存数据根目录配置、当前激活数据目录与迁移记录，不用于承载业务数据文件。
+```
+
+原因：
+
+```text
+通过 resolveDataRootUri(context) + createVscodeStoragePaths(...) 统一生成路径，才能集中控制数据目录，支持后续数据文件迁移、切换和管理。
+```
+
 ## 6. 默认初始化准则
 
 默认初始化可以为了跑通基础体验创建默认对象，但也必须遵循解耦模型。
@@ -296,6 +322,7 @@ agent-conversation-links/index.json 只列 link records
 5. Effect payload 是否携带了长期领域关系？
 6. 存储文件是否把多个独立对象混在一个文件或目录里？
 7. 是否为了未发布的旧格式写了兼容/迁移代码？如果没有发布，应该删除。
+8. 数据文件路径是否通过 getPaths() 获取，而不是直接使用 extension globalStorage/globalState/globalStatus？
 ```
 
 如果发现耦合，优先拆成：

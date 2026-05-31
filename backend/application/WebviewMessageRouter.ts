@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { World } from '../ecs/types';
 import type { WebviewCapability } from '../capabilities/types';
 import { ChatEventType } from '../world/modules/chat/events';
+import { ToolEventType } from '../world/modules/tools/events';
 import {
   BridgeMessageType,
   GLOBAL_CLIENT_STATE_STREAM_ID,
@@ -44,6 +45,10 @@ export class WebviewMessageRouter {
       case BridgeMessageType.ChatAbort:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ChatEventType.Abort, payload: message.payload });
+        break;
+      case BridgeMessageType.ToolExecute:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: ToolEventType.ExecuteRequested, payload: message.payload });
         break;
       case BridgeMessageType.ClientResync:
         this.subscribeRequestedStream(clientId, message.payload?.streamId, message.payload?.sessionId);

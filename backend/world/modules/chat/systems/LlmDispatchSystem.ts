@@ -77,10 +77,9 @@ export const LlmDispatchSystem = defineSystem({
         ? undefined
         : { provider: modelProfile.provider, model: modelProfile.model, temperature: modelProfile.temperature } satisfies LlmModelSettings;
       const toolPolicy = mode === undefined ? undefined : activeToolPolicyForMode(world, mode);
-      const allowedTools = toolPolicy?.allowedTools;
-      const tools = allowedTools && allowedTools.length > 0
-        ? allTools.filter((tool) => allowedTools.includes(tool.name))
-        : allTools;
+      const tools = toolPolicy
+        ? allTools.filter((tool) => toolPolicy.allowedTools.includes(tool.name))
+        : [];
 
       const contents = [
         ...sessionMessages(world, data.sessionEntity)

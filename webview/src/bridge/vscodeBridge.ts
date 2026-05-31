@@ -104,6 +104,7 @@ function channelForType(type: WebviewToExtensionMessage['type']): BridgeChannel 
   switch (type) {
     case BridgeMessageType.ChatSend:
     case BridgeMessageType.ChatAbort:
+    case BridgeMessageType.ToolExecute:
       return 'command';
     case BridgeMessageType.ClientResync:
       return 'state';

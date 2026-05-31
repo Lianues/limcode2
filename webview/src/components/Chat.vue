@@ -198,6 +198,20 @@ function toolDetailText(tool: ToolCallRecord): string {
   return lines.join('\n');
 }
 
+function canExecuteTool(tool: ToolCallRecord): boolean {
+  return tool.status === 'awaiting_approval' && !!currentAgent.value?.id && !!currentMode.value?.id && !!clientState.currentSessionId;
+}
+
+function executeTool(tool: ToolCallRecord): void {
+  if (!canExecuteTool(tool) || !currentAgent.value || !currentMode.value) return;
+  bridge.request(BridgeMessageType.ToolExecute, {
+    toolCallId: tool.id,
+    sessionId: clientState.currentSessionId,
+    executorAgentId: currentAgent.value.id,
+    executorModeId: currentMode.value.id
+  });
+}
+
 function send(): void {
   const text = input.value.trim();
   if (!text || !clientState.currentSessionId) return;
@@ -533,6 +547,7 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
             <div v-for="t in toolCallsForMessage(m.id)" :key="t.id" class="tool" :class="t.status">
               <span class="tool-name">⚙ {{ t.name }}</span>
               <span class="tool-status">{{ toolStatusLabel(t.status) }}</span>
+              <button v-if="canExecuteTool(t)" type="button" class="tool-action" @click="executeTool(t)">执行</button>
               <code class="tool-args">{{ t.args }}</code>
               <pre v-if="hasToolOutput(t)" class="tool-output" aria-live="polite"><span v-for="event in outputEventsForToolCall(t.id)" :key="event.id" class="tool-output-delta" :class="event.kind">{{ toolOutputDelta(event) }}</span></pre>
               <details v-if="hasToolDetails(t)" class="tool-details">
@@ -596,6 +611,7 @@ code { background: var(--vscode-textCodeBlock-background); padding: 1px 5px; bor
 .tools { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .tool { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--vscode-panel-border); }
 .tool .tool-status { text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px; }
+.tool-action { padding: 2px 8px; font-size: 11px; }
 .tool.streaming,
 .tool.queued,
 .tool.executing,

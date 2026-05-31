@@ -1,8 +1,16 @@
 import type { ToolCallEventKind, ToolCallStatus } from '../../../../shared/protocol';
 
 export const ToolEventType = {
-  State: 'tool:state'
+  State: 'tool:state',
+  ExecuteRequested: 'tool:executeRequested'
 } as const;
+
+export interface ToolExecuteRequestedPayload {
+  toolCallId: string;
+  sessionId: string;
+  executorAgentId: string;
+  executorModeId: string;
+}
 
 export interface ToolStatePayload {
   toolCallId: string;
@@ -18,5 +26,6 @@ export interface ToolStatePayload {
 declare module '@backend/world/events' {
   interface WorldEventPayloadMap {
     'tool:state': ToolStatePayload;
+    'tool:executeRequested': ToolExecuteRequestedPayload;
   }
 }

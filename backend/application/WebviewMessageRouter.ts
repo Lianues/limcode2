@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { World } from '../ecs/types';
 import type { WebviewCapability } from '../capabilities/types';
 import { ChatEventType } from '../world/modules/chat/events';
+import { AgentRunEventType } from '../world/modules/agentRun/events';
 import { ToolEventType } from '../world/modules/tools/events';
 import {
   BridgeMessageType,
@@ -45,6 +46,7 @@ export class WebviewMessageRouter {
       case BridgeMessageType.ChatAbort:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ChatEventType.Abort, payload: message.payload });
+        this.deps.world.enqueue({ type: AgentRunEventType.CancelConversation, payload: { conversationId: message.payload.conversationId, reason: 'chat_abort' } });
         break;
       case BridgeMessageType.MessageEdit:
         if (!this.deps.isHydrated() || !message.payload) return;
@@ -53,6 +55,30 @@ export class WebviewMessageRouter {
       case BridgeMessageType.ToolExecute:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ToolEventType.ExecuteRequested, payload: message.payload });
+        break;
+      case BridgeMessageType.AgentRunCancel:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentRunEventType.Cancel, payload: message.payload });
+        break;
+      case BridgeMessageType.AgentRunPause:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentRunEventType.Pause, payload: message.payload });
+        break;
+      case BridgeMessageType.AgentRunResume:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentRunEventType.Resume, payload: message.payload });
+        break;
+      case BridgeMessageType.AgentRunRetry:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentRunEventType.Retry, payload: message.payload });
+        break;
+      case BridgeMessageType.AgentRunRegenerate:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentRunEventType.Regenerate, payload: message.payload });
+        break;
+      case BridgeMessageType.AgentRunMarkStale:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentRunEventType.MarkStale, payload: message.payload });
         break;
       case BridgeMessageType.ClientResync:
         this.subscribeRequestedStream(clientId, message.payload?.streamId, message.payload?.conversationId);

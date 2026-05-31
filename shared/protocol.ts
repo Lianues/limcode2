@@ -65,6 +65,12 @@ export enum BridgeMessageType {
   ChatSend = 'chat.send',
   ChatAbort = 'chat.abort',
   MessageEdit = 'message.edit',
+  AgentRunCancel = 'agentRun.cancel',
+  AgentRunPause = 'agentRun.pause',
+  AgentRunResume = 'agentRun.resume',
+  AgentRunRetry = 'agentRun.retry',
+  AgentRunRegenerate = 'agentRun.regenerate',
+  AgentRunMarkStale = 'agentRun.markStale',
   ToolExecute = 'tool.execute',
   ClientResync = 'client.resync',
   ClientSnapshot = 'state.snapshot',
@@ -152,7 +158,9 @@ export interface AgentRecord {
 
 export type ApprovalMode = 'never' | 'onRisk' | 'always' | 'manualOnly';
 export type AgentRunKind = 'chat' | 'tool_invoked' | 'delegated' | 'review' | 'notification' | 'scheduled';
-export type AgentRunStatus = 'queued' | 'preparing' | 'running' | 'waiting_tool' | 'waiting_child_run' | 'delivering' | 'completed' | 'failed' | 'cancelled' | 'stale';
+export type AgentRunStatus = 'queued' | 'preparing' | 'running' | 'waiting_tool' | 'waiting_child_run' | 'delivering' | 'paused' | 'completed' | 'failed' | 'cancelled' | 'stale';
+export type AgentRunEndReason = 'completed' | 'failed' | 'cancelled_by_user' | 'cancelled_by_policy' | 'stale_source_edited' | 'retry_requested' | 'regenerate_requested';
+export type AgentRunErrorType = 'llm' | 'tool' | 'policy' | 'cancelled' | 'stale' | 'unknown';
 export type AgentRunSourceKind = 'user' | 'toolCall' | 'agentRun' | 'schedule' | 'system';
 export type AgentRunTargetRole = 'executor';
 export type MessageRunRole = 'input' | 'model' | 'tool_response' | 'notification';
@@ -434,7 +442,13 @@ export interface AgentRunRecord {
   status: AgentRunStatus;
   createdAt: number;
   updatedAt: number;
+  completedAt?: number;
+  endReason?: AgentRunEndReason;
+  errorType?: AgentRunErrorType;
   error?: string;
+  usageMetadata?: LlmUsageMetadataRecord;
+  retryOfRunId?: string;
+  attempt?: number;
 }
 
 export interface AgentRunSourceLinkRecord {
@@ -677,6 +691,11 @@ export interface MessageEditPayload {
   messageId: string;
   text: string;
 }
+export interface AgentRunControlPayload {
+  runId: string;
+  conversationId?: string;
+  reason?: string;
+}
 export interface ToolExecutePayload {
   toolCallId: string;
   conversationId?: string;
@@ -742,6 +761,12 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ChatSend, ChatSendPayload>
   | BridgeEnvelope<BridgeMessageType.ChatAbort, ChatAbortPayload>
   | BridgeEnvelope<BridgeMessageType.MessageEdit, MessageEditPayload>
+  | BridgeEnvelope<BridgeMessageType.AgentRunCancel, AgentRunControlPayload>
+  | BridgeEnvelope<BridgeMessageType.AgentRunPause, AgentRunControlPayload>
+  | BridgeEnvelope<BridgeMessageType.AgentRunResume, AgentRunControlPayload>
+  | BridgeEnvelope<BridgeMessageType.AgentRunRetry, AgentRunControlPayload>
+  | BridgeEnvelope<BridgeMessageType.AgentRunRegenerate, AgentRunControlPayload>
+  | BridgeEnvelope<BridgeMessageType.AgentRunMarkStale, AgentRunControlPayload>
   | BridgeEnvelope<BridgeMessageType.ToolExecute, ToolExecutePayload>
   | BridgeEnvelope<BridgeMessageType.ClientResync, ClientResyncPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsGet, GlobalSettingsGetPayload>

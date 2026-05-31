@@ -54,6 +54,8 @@ export interface SpawnAgentRunInput {
   inputMessage?: Entity;
   deliveryMode?: DeliveryMode;
   includeTranscript?: TranscriptInclusion;
+  retryOfRunId?: string;
+  attempt?: number;
   needsModel?: boolean;
 }
 
@@ -65,7 +67,9 @@ export function spawnAgentRun(cmd: CommandSink, input: SpawnAgentRunInput): Enti
     kind: input.kind,
     status: 'queued',
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    ...(input.retryOfRunId ? { retryOfRunId: input.retryOfRunId } : {}),
+    ...(input.attempt !== undefined ? { attempt: input.attempt } : {})
   });
   if (input.needsModel !== false) cmd.add(run, AgentRunNeedsModel, { since: now });
 

@@ -98,7 +98,7 @@ function cancelRuns(world: WorldReader, cmd: CommandSink, runs: Entity[]): void 
   for (const run of runs) {
     const data = world.get(run, AgentRun);
     if (!data || isTerminalRunStatus(data.status)) continue;
-    cmd.add(run, AgentRun, { ...data, status: 'cancelled', updatedAt: now });
+    cmd.add(run, AgentRun, { ...data, status: 'cancelled', updatedAt: now, completedAt: now, endReason: 'cancelled_by_policy', errorType: 'cancelled' });
     cmd.remove(run, AgentRunNeedsModel);
   }
 }

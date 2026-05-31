@@ -1,6 +1,8 @@
 import { defineComponent, type Entity } from '../../../ecs/types';
 import type {
   AgentRunKind,
+  AgentRunEndReason,
+  AgentRunErrorType,
   AgentRunSourceKind,
   AgentRunStatus,
   AgentRunTargetRole,
@@ -13,7 +15,8 @@ import type {
   PolicyBindingRole,
   SourceEditBehavior,
   ToolCallRunRole,
-  TranscriptInclusion
+  TranscriptInclusion,
+  LlmUsageMetadataRecord
 } from '../../../../shared/protocol';
 
 export interface AgentRunData {
@@ -22,7 +25,13 @@ export interface AgentRunData {
   status: AgentRunStatus;
   createdAt: number;
   updatedAt: number;
+  completedAt?: number;
+  endReason?: AgentRunEndReason;
+  errorType?: AgentRunErrorType;
   error?: string;
+  usageMetadata?: LlmUsageMetadataRecord;
+  retryOfRunId?: string;
+  attempt?: number;
 }
 export const AgentRun = defineComponent<AgentRunData>('AgentRun');
 

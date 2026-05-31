@@ -105,6 +105,12 @@ function channelForType(type: WebviewToExtensionMessage['type']): BridgeChannel 
     case BridgeMessageType.ChatSend:
     case BridgeMessageType.ChatAbort:
     case BridgeMessageType.MessageEdit:
+    case BridgeMessageType.AgentRunCancel:
+    case BridgeMessageType.AgentRunPause:
+    case BridgeMessageType.AgentRunResume:
+    case BridgeMessageType.AgentRunRetry:
+    case BridgeMessageType.AgentRunRegenerate:
+    case BridgeMessageType.AgentRunMarkStale:
     case BridgeMessageType.ToolExecute:
       return 'command';
     case BridgeMessageType.ClientResync:

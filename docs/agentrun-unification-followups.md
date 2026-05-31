@@ -1010,7 +1010,7 @@ npm run check
 
 ---
 
-### 11. AgentRun 生命周期还可以更精细
+### 11. AgentRun 生命周期还可以更精细（已完成）
 
 当前状态流已能跑通主路径，但后续应继续补齐：
 
@@ -1021,6 +1021,188 @@ npm run check
 - parent-child run 树查询。
 - 多个 child run 并行完成后的 notification 合并策略。
 - run 结束原因、错误分类、usage 统计。
+
+
+已完成第 11 部分「AgentRun 生命周期精细化」，并通过：
+npm run check
+完成内容
+
+1. AgentRun 状态与记录字段增强
+
+AgentRunStatus 新增：
+'paused'
+AgentRunRecord / AgentRunData 新增：
+completedAt?: number;
+endReason?: AgentRunEndReason;
+errorType?: AgentRunErrorType;
+usageMetadata?: LlmUsageMetadataRecord;
+retryOfRunId?: string;
+attempt?: number;
+新增结束原因：
+completed
+failed
+cancelled_by_user
+cancelled_by_policy
+stale_source_edited
+retry_requested
+regenerate_requested
+新增错误类型：
+llm
+tool
+policy
+cancelled
+stale
+unknown
+2. 新增 AgentRun lifecycle command
+
+新增 Webview/协议命令：
+agentRun.cancel
+agentRun.pause
+agentRun.resume
+agentRun.retry
+agentRun.regenerate
+agentRun.markStale
+payload：
+{
+  runId: string;
+  conversationId?: string;
+  reason?: string;
+}
+并已在 WebviewMessageRouter 中接入。
+3. 新增 AgentRun lifecycle world events/system
+
+新增：
+backend/world/modules/agentRun/events.ts
+backend/world/modules/agentRun/systems/AgentRunLifecycleSystem.ts
+支持：
+
+- cancel
+- cancel conversation active runs
+- pause
+- resume
+- retry
+- regenerate
+- mark stale
+4. ChatAbort 现在会真正取消 active runs
+
+之前 ChatAbort 只给 conversation 加 Aborted 标记。
+
+现在会额外触发：
+AgentRunEventType.CancelConversation
+因此当前 conversation 中 active run 会被标记：
+status = 'cancelled'
+endReason = 'cancelled_by_user'
+errorType = 'cancelled'
+completedAt = now
+并清理 active LLM request / streaming message / open tool calls。
+5. pause / resume
+
+实现语义：
+
+pause
+
+- run 标记为：
+status = 'paused'
+- 移除 AgentRunNeedsModel
+- 清理 active LLM request
+- 不设置 completedAt/endReason
+
+resume
+
+- paused run 恢复为：
+status = 'running'
+- 重新 markRunNeedsModel(run)
+6. retry / regenerate
+
+实现：
+
+- 根据旧 run 的 source / target 创建新 AgentRun。
+- 新 run 设置：
+retryOfRunId = oldRun.id
+attempt = oldRun.attempt + 1
+- 复制旧 run 的 active overrides：
+RunModeLink
+RunSystemPromptLink
+RunModelProfileLink
+RunToolPolicyLink
+RunApprovalPolicyLink
+RunConversationPolicyLink
+RunContextPolicyLink
+RunDeliveryPolicyLink
+RunEditPolicyLink
+7. cancelled / stale / paused run 不再继续被 LLM 流污染
+
+LlmPollSystem 现在会忽略：
+cancelled
+stale
+paused
+状态 run 的后续 LLM delta/toolcall。
+
+终止时会清理 request，并把 streaming model message 标记为 error。
+8. 核心路径写入 endReason / errorType / usage
+
+已补：
+
+LLM error
+status = 'failed'
+endReason = 'failed'
+errorType = 'llm'
+completedAt = now
+delivery complete
+status = 'completed'
+endReason = 'completed'
+completedAt = now
+usageMetadata = merged model usage
+policy cancel / stale
+cancelled_by_policy
+stale_source_edited
+user cancel
+cancelled_by_user
+9. parent-child run 树查询
+
+新增查询：
+parentRunForRun(world, run)
+childRunsForRun(world, run)
+runTree(world, root)
+基于：
+AgentRunSourceLink.sourceRun
+没有把 children 嵌进 AgentRun。
+10. notification 合并策略
+
+AgentRunDeliverySystem 现在处理 notification 时：
+
+- 如果 source conversation 已经有 active AgentRun(kind='notification')
+  - 不再创建新的 notification run
+  - 把新 notification message 通过 MessageRunLink(role='input') 绑定到已有 notification run
+  - 重新 markRunNeedsModel(existingNotificationRun)
+
+这样多个 child run 并行完成时，可以合并到已有 notification run。
+修改文件
+shared/protocol.ts
+
+backend/application/WebviewMessageRouter.ts
+
+backend/world/modules/agentRun/components.ts
+backend/world/modules/agentRun/bundles.ts
+backend/world/modules/agentRun/events.ts
+backend/world/modules/agentRun/index.ts
+backend/world/modules/agentRun/queries.ts
+backend/world/modules/agentRun/systems/AgentRunLifecycleSystem.ts
+backend/world/modules/agentRun/systems/AgentRunDeliverySystem.ts
+backend/world/modules/agentRun/systems/index.ts
+
+backend/world/modules/chat/systems/InputSystem.ts
+backend/world/modules/chat/systems/LlmPollSystem.ts
+backend/world/modules/chat/systems/MessageEditSystem.ts
+
+backend/world/modules/tools/systems/ToolResultSystem.ts
+
+webview/src/bridge/vscodeBridge.ts
+验证
+
+已通过：
+npm run check
+本轮仍然保持 AgentRun / Link / Policy 解耦，没有引入自动 workspace diff 或修改归因。
 
 ---
 

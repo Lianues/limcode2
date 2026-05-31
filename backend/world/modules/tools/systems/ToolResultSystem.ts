@@ -47,6 +47,8 @@ export const ToolResultSystem = defineSystem({
       const state = world.get(entity, ToolState);
       const run = world.get(entity, ToolCallRunLink)?.run;
       if (!call || !state || run === undefined || !isTerminalToolStatus(state.status)) continue;
+      const runData = world.get(run, AgentRun);
+      if (!runData || isTerminalRunStatus(runData.status)) continue;
       const target = runTarget(world, run);
       if (!target) continue;
 
@@ -67,7 +69,9 @@ export const ToolResultSystem = defineSystem({
     for (const run of touchedRuns) {
       if (!hasPendingToolWork(world, run, consumedThisPass)) {
         const runData = world.get(run, AgentRun);
-        if (runData) cmd.add(run, AgentRun, { ...runData, status: 'running', updatedAt: Date.now() });
+        if (runData) {
+          cmd.add(run, AgentRun, { ...runData, status: 'running', updatedAt: Date.now() });
+        }
         markRunNeedsModel(cmd, run);
       }
     }
@@ -82,4 +86,8 @@ function hasPendingToolWork(world: WorldReader, run: Entity, consumedThisPass: R
     const fullySettled = isTerminalToolStatus(state.status) && (world.has(entity, ToolResultConsumed) || consumedThisPass.has(entity));
     return !fullySettled;
   });
+}
+
+function isTerminalRunStatus(status: string): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'stale';
 }

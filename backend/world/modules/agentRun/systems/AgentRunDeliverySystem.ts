@@ -22,7 +22,7 @@ import { conversationMessages } from '../../chat/queries';
 import { ToolCall, ToolState } from '../../tools/components';
 import { spawnToolCallEvent, ToolCallEventBundle } from '../../tools/bundles';
 import { isTerminalToolStatus, transitionToolState } from '../../tools/state';
-import { AgentRunBundle, spawnAgentRun, spawnMessageRunLink } from '../bundles';
+import { AgentRunBundle, markRunNeedsModel, spawnAgentRun, spawnMessageRunLink } from '../bundles';
 import {
   AgentRun,
   AgentRunSourceLink,
@@ -117,7 +117,9 @@ export const AgentRunDeliverySystem = defineSystem({
         // Explicitly silent: no source message, no parent tool response, no notification run.
       }
 
-      cmd.add(runEntity, AgentRun, { ...run, status: 'completed', updatedAt: Date.now() });
+      const now = Date.now();
+      const usageMetadata = runUsageMetadata(world, runEntity);
+      cmd.add(runEntity, AgentRun, { ...run, status: 'completed', updatedAt: now, completedAt: now, endReason: 'completed', ...(usageMetadata ? { usageMetadata } : {}) });
     }
   }
 });
@@ -176,6 +178,13 @@ function deliverNotification(world: WorldReader, cmd: CommandSink, runEntity: En
 
   const agent = source.sourceAgent ?? defaultAgentForConversation(world, sourceConversation);
   if (agent !== undefined) {
+    const existingNotificationRun = activeNotificationRunForConversation(world, sourceConversation);
+    if (existingNotificationRun !== undefined) {
+      spawnMessageRunLink(cmd, { message, run: existingNotificationRun, role: 'input' });
+      markRunNeedsModel(cmd, existingNotificationRun);
+      return true;
+    }
+
     spawnAgentRun(cmd, {
       kind: 'notification',
       agent,
@@ -190,6 +199,14 @@ function deliverNotification(world: WorldReader, cmd: CommandSink, runEntity: En
     });
   }
   return true;
+}
+
+function activeNotificationRunForConversation(world: WorldReader, conversation: Entity): Entity | undefined {
+  return world.query(AgentRun).find((run) => {
+    const data = world.get(run, AgentRun);
+    const target = runTarget(world, run);
+    return data?.kind === 'notification' && !isTerminalRunStatus(data.status) && target?.conversation === conversation;
+  });
 }
 
 function buildDeliveryEnvelope(world: WorldReader, runEntity: Entity, includeTranscript: TranscriptInclusion): DeliveryEnvelope {
@@ -287,6 +304,12 @@ function finalModelText(world: WorldReader, runEntity: Entity): string {
     .filter(isDefined);
   const last = messages[messages.length - 1];
   return last ? visibleTextFromMessage(last).trim() : '';
+}
+
+function runUsageMetadata(world: WorldReader, runEntity: Entity): LlmUsageMetadataRecord | undefined {
+  return mergeUsageMetadata(runModelMessages(world, runEntity)
+    .map((entity) => world.get(entity, Message)?.usageMetadata)
+    .filter(isDefined));
 }
 
 function visibleTextFromMessage(message: MessageData): string {
@@ -438,4 +461,8 @@ function escapeXmlAttribute(text: string): string {
 
 function isDefined<T>(value: T | undefined): value is T {
   return value !== undefined;
+}
+
+function isTerminalRunStatus(status: string): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'stale';
 }

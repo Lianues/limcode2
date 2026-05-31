@@ -133,14 +133,15 @@ function affectedRunsForEdit(world: WorldReader, message: Entity, oldRevision: E
 }
 
 function cancelRun(world: WorldReader, cmd: CommandSink, run: Entity): void {
-  markRunStatus(world, cmd, run, 'cancelled');
+  markRunStatus(world, cmd, run, 'cancelled', 'cancelled_by_policy', 'cancelled');
   cmd.remove(run, AgentRunNeedsModel);
 }
 
-function markRunStatus(world: WorldReader, cmd: CommandSink, run: Entity, status: 'cancelled' | 'stale'): void {
+function markRunStatus(world: WorldReader, cmd: CommandSink, run: Entity, status: 'cancelled' | 'stale', endReason: 'cancelled_by_policy' | 'stale_source_edited' = 'stale_source_edited', errorType: 'cancelled' | 'stale' = 'stale'): void {
   const data = world.get(run, AgentRun);
   if (!data || isTerminalRunStatus(data.status)) return;
-  cmd.add(run, AgentRun, { ...data, status, updatedAt: Date.now() });
+  const now = Date.now();
+  cmd.add(run, AgentRun, { ...data, status, updatedAt: now, completedAt: now, endReason, errorType });
 }
 
 function restartRun(world: WorldReader, cmd: CommandSink, run: Entity, editedMessage: Entity): void {

@@ -247,3 +247,29 @@ function activeModelProfileForMode(world: WorldReader, mode: Entity): ModelProfi
 export function hasRun(world: WorldReader, run: Entity): boolean {
   return world.has(run, AgentRun);
 }
+
+export interface AgentRunTreeNode {
+  run: Entity;
+  children: AgentRunTreeNode[];
+}
+
+export function parentRunForRun(world: WorldReader, run: Entity): Entity | undefined {
+  return world
+    .query(AgentRunSourceLink)
+    .map((entity) => world.get(entity, AgentRunSourceLink))
+    .find((candidate) => candidate?.run === run)?.sourceRun;
+}
+
+export function childRunsForRun(world: WorldReader, run: Entity): Entity[] {
+  return world
+    .query(AgentRunSourceLink)
+    .map((entity) => world.get(entity, AgentRunSourceLink))
+    .filter((candidate): candidate is NonNullable<typeof candidate> => !!candidate && candidate.sourceRun === run)
+    .map((link) => link.run)
+    .filter((child) => world.has(child, AgentRun))
+    .sort((a, b) => (world.get(a, AgentRun)?.createdAt ?? 0) - (world.get(b, AgentRun)?.createdAt ?? 0) || a - b);
+}
+
+export function runTree(world: WorldReader, root: Entity): AgentRunTreeNode {
+  return { run: root, children: childRunsForRun(world, root).map((child) => runTree(world, child)) };
+}

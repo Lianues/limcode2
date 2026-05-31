@@ -137,6 +137,7 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
   let shouldFinish = false;
   let sawToolCall = false;
   let errorMessage: string | undefined;
+  let usageMetadata: MessageData['usageMetadata'] | undefined;
 
   for (const operation of update.operations) {
     switch (operation.kind) {
@@ -174,6 +175,7 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
         shouldFinish = true;
         break;
       case 'done':
+        usageMetadata = operation.payload.usageMetadata;
         next = withLlmTiming({ ...next, status: 'complete' }, operation.payload);
         shouldFinish = true;
         break;
@@ -190,11 +192,13 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
     const run = world.get(requestData.run, AgentRun);
     if (run) {
       const now = Date.now();
+      const nextStatus = errorMessage ? 'failed' : sawToolCall ? 'waiting_tool' : 'delivering';
       cmd.add(requestData.run, AgentRun, {
         ...run,
-        status: errorMessage ? 'failed' : sawToolCall ? 'waiting_tool' : 'delivering',
+        status: nextStatus,
         updatedAt: now,
-        ...(errorMessage ? { error: errorMessage } : {})
+        ...(errorMessage ? { error: errorMessage, completedAt: now, endReason: 'failed' as const, errorType: 'llm' as const } : {}),
+        ...(usageMetadata ? { usageMetadata: mergeUsageMetadata(run.usageMetadata, usageMetadata) } : {})
       });
     }
   }
@@ -297,7 +301,7 @@ function shortHash(input: string): string {
 
 function isRunCancelledOrStale(world: WorldReader, run: Entity): boolean {
   const data = world.get(run, AgentRun);
-  return data?.status === 'cancelled' || data?.status === 'stale';
+  return data?.status === 'cancelled' || data?.status === 'stale' || data?.status === 'paused';
 }
 
 function hasTerminalOperation(update: PendingRequestUpdate): boolean {
@@ -308,4 +312,15 @@ function cleanupCancelledRequest(cmd: CommandSink, request: Entity, modelMessage
   cmd.add(modelMessage, Message, { ...current, status: 'error' });
   cmd.remove(modelMessage, Streaming);
   cmd.despawn(request);
+}
+
+function mergeUsageMetadata(previous: MessageData['usageMetadata'], next: MessageData['usageMetadata']): MessageData['usageMetadata'] {
+  if (!previous) return next;
+  if (!next) return previous;
+  const merged: NonNullable<MessageData['usageMetadata']> = { ...previous };
+  for (const [key, value] of Object.entries(next)) {
+    const current = merged[key];
+    merged[key] = typeof current === 'number' && typeof value === 'number' ? current + value : value;
+  }
+  return merged;
 }

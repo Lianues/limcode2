@@ -34,7 +34,9 @@ export const subAgentTool: ToolDefinition = {
             branchFromRevisionId: { type: 'string' },
             revisionId: { type: 'string' },
             visibility: { type: 'string', description: 'visible | hidden | collapsed' },
-            selectedMessageIds: { type: 'array', items: { type: 'string' } }
+            selectedMessageIds: { type: 'array', items: { type: 'string' } },
+            includeSourceContext: { type: 'boolean', description: '是否把 source conversation 中按 history policy 选中的上下文作为文本块注入 child run。' },
+            includeSourceToolResult: { type: 'boolean', description: '是否把 source tool call 的状态/结果作为文本块注入 child run。' }
           }
         },
         mode: {

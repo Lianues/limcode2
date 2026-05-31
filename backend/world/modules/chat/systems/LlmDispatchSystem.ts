@@ -1,7 +1,19 @@
 import { defineQuery, defineSystem } from '../../../../ecs/types';
+import { AgentModeLink, ModeModelProfileLink, ModeSystemPromptLink, ModeToolPolicyLink, ModelProfile, SystemPrompt, ToolPolicy } from '../../mode/components';
+import {
+  AgentRunSourceLink,
+  AgentRunTargetLink,
+  MessageRunLink,
+  RunContextPolicy,
+  RunContextPolicyLink,
+  RunModelProfileLink,
+  RunModeLink,
+  RunSystemPromptLink,
+  RunToolPolicyLink
+} from '../../agentRun/components';
+import { ToolCall, ToolState } from '../../tools/components';
 import { ToolSchemasKey } from '../../tools/resources';
-import { conversationMessages } from '../queries';
-import { InFlight, LlmRequest, Message } from '../components';
+import { InFlight, LlmRequest, Message, PartOf } from '../components';
 import { textContent } from '../../../../../shared/protocol';
 import type { LlmModelSettings } from '../../llm/contracts';
 import {
@@ -10,6 +22,7 @@ import {
   activeSystemPromptForRun,
   activeToolPolicyForRun
 } from '../../agentRun/queries';
+import { buildRunContextContents } from '../../agentRun/contextPolicy';
 
 const PendingLlmRequestsQuery = defineQuery({
   name: 'PendingLlmRequests',
@@ -21,18 +34,35 @@ const PendingLlmRequestsQuery = defineQuery({
   role: 'work'
 });
 
-const MessageLookupQuery = defineQuery({
-  name: 'RunConversationMessages',
-  all: [Message],
-  read: [Message],
-  role: 'lookup'
-});
+const LlmContextLookupComponents = [
+  Message,
+  PartOf,
+  MessageRunLink,
+  AgentRunSourceLink,
+  AgentRunTargetLink,
+  RunContextPolicy,
+  RunContextPolicyLink,
+  RunModeLink,
+  RunSystemPromptLink,
+  RunModelProfileLink,
+  RunToolPolicyLink,
+  AgentModeLink,
+  ModeSystemPromptLink,
+  ModeModelProfileLink,
+  ModeToolPolicyLink,
+  SystemPrompt,
+  ModelProfile,
+  ToolPolicy,
+  ToolCall,
+  ToolState
+] as const;
 
 export const LlmDispatchSystem = defineSystem({
   name: 'LlmDispatchSystem',
   worker: { modulePath: '../world/modules/chat/systems/LlmDispatchSystem', exportName: 'LlmDispatchSystem' },
   access: {
-    queries: [PendingLlmRequestsQuery, MessageLookupQuery],
+    queries: [PendingLlmRequestsQuery],
+    reads: { components: LlmContextLookupComponents },
     resources: { read: [ToolSchemasKey] },
     effects: { emit: ['llm.start'] }
   },
@@ -57,12 +87,12 @@ export const LlmDispatchSystem = defineSystem({
         : [];
 
       const contextPolicy = activeContextPolicyForRun(world, data.run);
-      const messages = conversationMessages(world, data.conversation)
-        .filter((entity) => entity !== data.modelMessage)
-        .map((entity) => world.get(entity, Message))
-        .filter((message): message is NonNullable<typeof message> => !!message && message.status !== 'streaming');
-      const scopedMessages = applyContextPolicy(messages, contextPolicy?.historyMode ?? 'full', contextPolicy?.lastN);
-      const contents = scopedMessages.map((message) => message.content);
+      const contents = buildRunContextContents(world, {
+        run: data.run,
+        conversation: data.conversation,
+        modelMessage: data.modelMessage,
+        policy: contextPolicy
+      });
 
       cmd.effect({
         kind: 'llm.start',
@@ -78,15 +108,3 @@ export const LlmDispatchSystem = defineSystem({
     }
   }
 });
-
-function applyContextPolicy<T>(messages: T[], mode: string, lastN?: number): T[] {
-  switch (mode) {
-    case 'none':
-      return messages.slice(-1);
-    case 'last_n':
-      return messages.slice(-(lastN ?? 20));
-    case 'full':
-    default:
-      return messages;
-  }
-}

@@ -206,6 +206,8 @@ interface SubAgentArgs {
     branchFromRevisionId?: string;
     revisionId?: string;
     visibility?: ConversationVisibility;
+    includeSourceContext?: boolean;
+    includeSourceToolResult?: boolean;
   };
   delivery?: { mode?: string; includeTranscript?: string };
   mode?: { modeId?: string; systemPromptId?: string; modelProfileId?: string; toolPolicyId?: string; approvalPolicyId?: string };
@@ -282,7 +284,7 @@ function executeSubAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
   });
   applyRunModeOverrides(world, cmd, childRun, args.mode);
   applyRunConversationPolicy(cmd, childRun, resolved.value, args);
-  applyRunContextPolicy(cmd, childRun, args);
+  applyRunContextPolicy(cmd, childRun, args, resolved.value);
 
   const now = Date.now();
   if (deliveryMode === 'notification' || deliveryMode === 'silent') {
@@ -511,18 +513,27 @@ function applyRunConversationPolicy(cmd: CommandSink, run: Entity, resolved: Res
   cmd.add(link, RunConversationPolicyLink, { id: `run-conversation-policy-link:${run}`, run, policy, role: 'active', createdAt: now, updatedAt: now });
 }
 
-function applyRunContextPolicy(cmd: CommandSink, run: Entity, args: SubAgentArgs): void {
+function applyRunContextPolicy(cmd: CommandSink, run: Entity, args: SubAgentArgs, resolved: ResolvedConversation): void {
   const policy = cmd.spawn();
   cmd.add(policy, RunContextPolicy, {
     id: `run-context-policy:${run}`,
-    historyMode: normalizeHistoryMode(args.conversation?.history),
+    historyMode: contextHistoryModeForResolvedConversation(resolved, args),
     lastN: args.conversation?.lastN,
     sinceMessageId: args.conversation?.sinceMessageId,
-    selectedMessageIds: args.conversation?.selectedMessageIds
+    selectedMessageIds: args.conversation?.selectedMessageIds,
+    includeSourceContext: args.conversation?.includeSourceContext,
+    includeSourceToolResult: args.conversation?.includeSourceToolResult
   });
   const link = cmd.spawn();
   const now = Date.now();
   cmd.add(link, RunContextPolicyLink, { id: `run-context-policy-link:${run}`, run, policy, role: 'active', createdAt: now, updatedAt: now });
+}
+
+function contextHistoryModeForResolvedConversation(resolved: ResolvedConversation, args: SubAgentArgs): ContextHistoryMode {
+  // fork/branch 已经在目标 conversation 中投影出所需历史；LLM 上下文应读取完整目标投影，
+  // 避免 selected/since 使用源 message id 再过滤克隆后的 message 而丢失上下文。
+  if (resolved.policyMode === 'fork_conversation' || resolved.policyMode === 'branch_from_revision') return 'full';
+  return normalizeHistoryMode(args.conversation?.history);
 }
 
 function applyRunModeOverrides(world: WorldReader, cmd: CommandSink, run: Entity, mode?: SubAgentArgs['mode']): void {

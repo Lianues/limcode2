@@ -1,4 +1,4 @@
-import type { Entity, WorldReader } from '../../../ecs/types';
+import type { ComponentType, Entity, WorldReader } from '../../../ecs/types';
 import { Agent, AgentConversationLink } from '../agent/components';
 import {
   AgentMode,
@@ -164,19 +164,40 @@ export function activeModelProfileForRun(world: WorldReader, run: Entity): Model
 }
 
 export function activeContextPolicyForRun(world: WorldReader, run: Entity): RunContextPolicyData | undefined {
-  const link = world
-    .query(RunContextPolicyLink)
-    .map((entity) => world.get(entity, RunContextPolicyLink))
-    .find((candidate) => candidate?.run === run && candidate.role === 'active');
+  const link = latestActiveRunPolicyLink(world, run, RunContextPolicyLink);
   return link ? world.get(link.policy, RunContextPolicy) : undefined;
 }
 
 export function activeDeliveryPolicyForRun(world: WorldReader, run: Entity): RunDeliveryPolicyData | undefined {
-  const link = world
-    .query(RunDeliveryPolicyLink)
-    .map((entity) => world.get(entity, RunDeliveryPolicyLink))
-    .find((candidate) => candidate?.run === run && candidate.role === 'active');
+  const link = latestActiveRunPolicyLink(world, run, RunDeliveryPolicyLink);
   return link ? world.get(link.policy, RunDeliveryPolicy) : undefined;
+}
+
+function latestActiveRunPolicyLink<T extends { run: Entity; policy: Entity; role: 'active'; createdAt: number; updatedAt: number }>(
+  world: WorldReader,
+  run: Entity,
+  component: ComponentType<T>
+): T | undefined {
+  let selected: { entity: Entity; link: T } | undefined;
+  for (const entity of world.query(component)) {
+    const link = world.get(entity, component);
+    if (!link || link.run !== run || link.role !== 'active') continue;
+    if (!selected || isNewerRunPolicyLink(entity, link, selected.entity, selected.link)) {
+      selected = { entity, link };
+    }
+  }
+  return selected?.link;
+}
+
+function isNewerRunPolicyLink<T extends { createdAt: number; updatedAt: number }>(
+  entity: Entity,
+  link: T,
+  previousEntity: Entity,
+  previous: T
+): boolean {
+  const timestamp = link.updatedAt || link.createdAt;
+  const previousTimestamp = previous.updatedAt || previous.createdAt;
+  return timestamp > previousTimestamp || (timestamp === previousTimestamp && entity > previousEntity);
 }
 
 function activeToolPolicyForMode(world: WorldReader, mode: Entity): ToolPolicyData | undefined {

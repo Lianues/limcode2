@@ -91,7 +91,7 @@ RunConversationPolicy.mode:
 
 ---
 
-### 3. ContextPolicy 还只是基础版
+### 3. ContextPolicy 还只是基础版(已完成)
 
 当前 `RunContextPolicy` 已有结构：
 
@@ -115,6 +115,110 @@ historyMode: 'none' | 'full' | 'last_n' | 'since_message' | 'selected_messages' 
 - subagent 参数里的 `conversation.history='selected'` 等高级策略映射。
 
 后续应让 ContextAssembly 真正根据 policy 裁剪/组装上下文。
+
+
+
+已实现内容
+
+1. 新增 ContextPolicy 组装核心
+
+新增：
+backend/world/modules/agentRun/contextPolicy.ts
+用于统一构建 run-scoped LLM context，支持：
+
+- full
+- none
+- last_n
+- since_message
+- selected_messages
+- summary
+
+并且保证：
+
+- historyMode='none' 不再只是简单取最后一条消息；
+- 会始终保留当前 run 的必要消息：
+  - input message
+  - 已完成 model message
+  - tool response message
+- 所以工具调用后的 functionCall/functionResponse 链不会被 ContextPolicy 裁剪坏。
+
+2. summary 支持确定性文本投影
+
+summary 现在会生成临时 synthetic MessageContent：
+[Context summary]
+user m123: ...
+model m124: ...
+...
+特点：
+
+- 不落盘；
+- 不创建 Message 实体；
+- 不引入额外 LLM 摘要调用；
+- function call / function response 会转成安全文本描述，避免污染当前 run 的工具调用链。
+
+真正的 LLM 摘要模型仍保留为后续增强。
+
+3. 支持 source context / source tool result 注入
+
+RunContextPolicy 中已有的字段现在开始生效：
+includeSourceContext?: boolean;
+includeSourceToolResult?: boolean;
+对应能力：
+
+- includeSourceContext=true
+  - 把 source conversation 中按 history policy 选出的上下文作为文本块注入 child run。
+- includeSourceToolResult=true
+  - 把 source tool call 的 args/status/result/error/progress 注入 child run。
+
+4. 改造 LlmDispatchSystem
+
+修改：
+backend/world/modules/chat/systems/LlmDispatchSystem.ts
+现在不再使用本地简化版 applyContextPolicy()，而是调用新的：
+buildRunContextContents(...)
+同时补齐了 worker snapshot access 声明，避免 parallelWorkers: true 下读不到 run/mode/policy/link 组件。
+
+5. 修复 active Run policy override 不生效问题
+
+修改：
+backend/world/modules/agentRun/queries.ts
+现在：
+
+- activeContextPolicyForRun()
+- activeDeliveryPolicyForRun()
+
+会在多个 active policy link 中选择最新创建/最新实体的 link。
+
+这样 spawnAgentRun() 默认创建的 policy 不会覆盖后续 sub_agent 写入的 run override policy。
+
+6. 完善 sub_agent 参数映射
+
+修改：
+backend/world/modules/tools/definitions/subAgent/index.ts
+backend/world/modules/tools/systems/ToolDispatchSystem.ts
+新增 schema/type 支持：
+conversation: {
+  includeSourceContext?: boolean;
+  includeSourceToolResult?: boolean;
+}
+并写入 RunContextPolicy。
+
+同时处理了 fork_conversation / branch_from_revision 的上下文语义：  
+因为 fork/branch 已经把所需历史投影到了目标 conversation，child run 的 context policy 会使用 full 读取目标投影，避免 selectedMessageIds/sinceMessageId 使用源 message id 再过滤克隆 message 时丢失上下文。
+
+修改文件
+backend/world/modules/agentRun/contextPolicy.ts
+backend/world/modules/agentRun/index.ts
+backend/world/modules/agentRun/queries.ts
+backend/world/modules/chat/systems/LlmDispatchSystem.ts
+backend/world/modules/tools/definitions/subAgent/index.ts
+backend/world/modules/tools/systems/ToolDispatchSystem.ts
+验证结果
+
+已执行并通过：
+npm run check
+没有引入自动 diff、自动 workspace snapshot、自动修改归因，仍然保持文档要求的 AgentRun 核心边界。
+23:14  943.8s  ↑187,875(187,392)  ↓1,101   40.1 t/s
 
 ---
 

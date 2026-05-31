@@ -266,7 +266,7 @@ function executeSubAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     ? `Context:\n${args.context.trim()}\n\nTask:\n${prompt}`
     : prompt;
   const inputMessage = spawnUserMessage(cmd, resolved.value.conversation, fullPrompt);
-  const background = args.run_in_background === true || args.delivery?.mode === 'notification';
+  const background = args.run_in_background === true || isAsyncDeliveryMode(args.delivery?.mode);
   const deliveryMode = normalizeDeliveryMode(args.delivery?.mode, background);
   const includeTranscript = normalizeTranscript(args.delivery?.includeTranscript);
   const childRun = spawnAgentRun(cmd, {
@@ -481,6 +481,10 @@ function normalizeDeliveryMode(mode: string | undefined, background: boolean): D
     case 'tool_response': return 'tool_response';
     default: return background ? 'notification' : 'tool_response';
   }
+}
+
+function isAsyncDeliveryMode(mode: string | undefined): boolean {
+  return mode === 'notification' || mode === 'append_to_source_conversation' || mode === 'silent';
 }
 
 function normalizeTranscript(value: string | undefined): TranscriptInclusion {

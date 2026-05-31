@@ -257,7 +257,7 @@ mode: {
 
 ---
 
-### 5. DeliveryPolicy 只完成核心路径
+### 5. DeliveryPolicy 只完成核心路径(已完成)
 
 当前主要跑通：
 
@@ -274,6 +274,106 @@ mode: {
 - notification XML 的结构化增强，例如 summary、executor、conversationId、runId、usage 等。
 
 ---
+
+
+
+已继续完成第 5 部分 DeliveryPolicy 的后端实现，并通过：
+npm run check
+本轮完成内容
+
+1. 完善 includeTranscript 语义
+
+在 AgentRunDeliverySystem 中新增 delivery envelope / transcript 构建逻辑，支持：
+
+- none：不附带 transcript
+- summary：只附带摘要、messageCount、runId、conversationId
+- link：只附带可追踪链接信息：
+  - runId
+  - conversationId
+  - messageIds
+  - runMessageIds
+- selected：只内联当前 run 通过 MessageRunLink 关联的消息
+- full：内联 child target conversation 的全部非 streaming messages
+
+2. tool_response 增强
+
+现在同步 child run 完成后，父 tool call 的 result 不再只是：
+{ ok, result, runId }
+而是结构化 envelope：
+{
+  ok: true,
+  type: 'agent_run',
+  status: 'completed',
+  runId,
+  conversationId,
+  executor,
+  summary,
+  result,
+  usage,
+  transcript
+}
+并支持 RunDeliveryPolicy.targetToolCall 优先覆盖。
+
+3. append_to_source_conversation 完整化
+
+现在会向 source conversation 追加结构化 delivery message：
+<agent-run-delivery>
+  <type>agent_run</type>
+  <status>completed</status>
+  <run-id>...</run-id>
+  <conversation-id>...</conversation-id>
+  <executor>...</executor>
+  <summary>...</summary>
+  <result>...</result>
+  <usage>...</usage>
+  <transcript mode="...">...</transcript>
+</agent-run-delivery>
+并且会创建：
+MessageRunLink(role='notification')
+让这条追加消息可追踪到 child run。
+
+4. notification XML 增强
+
+notification 现在包含：
+
+- runId
+- child conversationId
+- executor agent id/name
+- summary
+- result
+- usage
+- transcript
+
+并继续保持原有行为：往 source conversation 写 notification message 后，再创建 AgentRun(kind='notification')。
+
+5. silent 显式实现
+
+现在 silent 是明确分支：
+
+- 不写 tool response
+- 不追加 conversation message
+- 不创建 notification run
+- 只把 child run 标记为 completed
+
+6. 修正 sub_agent async delivery 行为
+
+修改了 ToolDispatchSystem：
+notification
+append_to_source_conversation
+silent
+都会被视为 async delivery mode。
+
+因此 sub_agent 使用这些 delivery mode 时，父 tool call 会立即返回 async_launched，child run 后续按 delivery policy 回流，避免父 tool call 永久卡在 executing。
+
+修改文件
+backend/world/modules/agentRun/systems/AgentRunDeliverySystem.ts
+backend/world/modules/tools/systems/ToolDispatchSystem.ts
+验证
+
+已通过：
+npm run check
+本轮仍然没有引入自动 diff、workspace snapshot 或文件修改归因，保持 AgentRun 核心边界。
+
 
 ### 6. Message Revision / 编辑请求只完成数据结构
 

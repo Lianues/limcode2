@@ -3,7 +3,7 @@ import { AgentRun, AgentRunSourceLink, AgentRunTargetLink, RunDeliveryPolicy } f
 import { activeDeliveryPolicyForRun, defaultAgentForConversation, runFinalModelText, runSource } from '../queries';
 import { spawnAgentRun } from '../bundles';
 import { InFlight } from '../../chat/components';
-import { spawnUserMessage, UserMessageBundle } from '../../chat/bundles';
+import { spawnMessage, spawnUserMessage, UserMessageBundle } from '../../chat/bundles';
 import { ToolCall, ToolState } from '../../tools/components';
 import { spawnToolCallEvent, ToolCallEventBundle } from '../../tools/bundles';
 import { transitionToolState } from '../../tools/state';
@@ -36,6 +36,9 @@ export const AgentRunDeliverySystem = defineSystem({
         if (!delivered) continue;
       } else if (mode === 'notification') {
         deliverNotification(world, cmd, runEntity);
+      } else if (mode === 'append_to_source_conversation') {
+        const delivered = deliverAppendToSourceConversation(world, cmd, runEntity);
+        if (!delivered) continue;
       }
 
       cmd.add(runEntity, AgentRun, { ...run, status: 'completed', updatedAt: Date.now() });
@@ -65,6 +68,15 @@ function deliverToolResponse(world: WorldReader, cmd: CommandSink, runEntity: En
     durationMs: Math.max(0, now - call.createdAt),
     payload: result
   });
+  return true;
+}
+
+function deliverAppendToSourceConversation(world: WorldReader, cmd: CommandSink, runEntity: Entity): boolean {
+  const source = runSource(world, runEntity);
+  const sourceConversation = source?.sourceConversation;
+  if (sourceConversation === undefined) return false;
+  const text = runFinalModelText(world, runEntity);
+  spawnMessage(cmd, { parent: sourceConversation, role: 'model', parts: [{ text: text || `[AgentRun ${world.get(runEntity, AgentRun)?.id ?? runEntity} completed]` }], status: 'complete' });
   return true;
 }
 

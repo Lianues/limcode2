@@ -12,7 +12,7 @@ import {
   SystemPrompt,
   ToolPolicy
 } from '../world/modules/mode/components';
-import { Conversation, Message, MessageCurrentRevisionLink, MessageRevision, PartOf } from '../world/modules/chat/components';
+import { Conversation, ConversationBranchLink, ConversationReuseLink, Message, MessageCurrentRevisionLink, MessageRevision, PartOf } from '../world/modules/chat/components';
 import { ToolCall, ToolCallEvent, ToolResultConsumed, ToolState } from '../world/modules/tools/components';
 import { isTerminalToolStatus } from '../world/modules/tools/state';
 import {
@@ -104,6 +104,16 @@ export function hydrateClientState(world: World, state: ClientState): boolean {
     world.add(entity, Conversation, { id: conversation.id, title: conversation.title, visibility: conversation.visibility ?? 'visible' });
   }
 
+  for (const record of state.conversationReuseLinks ?? []) {
+    const conversation = conversationEntities.get(record.conversationId);
+    if (conversation === undefined) continue;
+    const agent = record.agentId ? agentEntities.get(record.agentId) : undefined;
+    const entity = world.spawn();
+    const now = Date.now();
+    world.add(entity, ConversationReuseLink, { id: record.id, key: record.key, conversation, ...(agent !== undefined ? { agent } : {}), createdAt: now, updatedAt: now });
+  }
+
+
   for (const link of state.agentConversationLinks) {
     const agent = agentEntities.get(link.agentId);
     const conversation = conversationEntities.get(link.conversationId);
@@ -137,6 +147,17 @@ export function hydrateClientState(world: World, state: ClientState): boolean {
     const entity = world.spawn();
     world.add(entity, MessageCurrentRevisionLink, { id: record.id, message, revision });
   }
+
+  for (const record of state.conversationBranchLinks ?? []) {
+    const sourceConversation = conversationEntities.get(record.sourceConversationId);
+    const targetConversation = conversationEntities.get(record.targetConversationId);
+    if (sourceConversation === undefined || targetConversation === undefined) continue;
+    const sourceRevision = record.sourceRevisionId ? revisionEntities.get(record.sourceRevisionId) : undefined;
+    const entity = world.spawn();
+    const now = Date.now();
+    world.add(entity, ConversationBranchLink, { id: record.id, sourceConversation, targetConversation, ...(sourceRevision !== undefined ? { sourceRevision } : {}), kind: record.kind, createdAt: now, updatedAt: now });
+  }
+
 
   const toolCallEntities = new Map<string, Entity>();
   for (const record of state.toolCalls) {

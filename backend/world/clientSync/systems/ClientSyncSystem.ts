@@ -104,6 +104,9 @@ function emptyClientState(): ClientState {
     modeSystemPromptLinks: [],
     modeModelProfileLinks: [],
     conversations: [],
+    conversationReuseLinks: [],
+    conversationBranchLinks: [],
+
     agentConversationLinks: [],
     messages: [],
     messageRevisions: [],
@@ -147,6 +150,8 @@ function globalClientState(state: ClientState): ClientState {
     modeSystemPromptLinks: state.modeSystemPromptLinks,
     modeModelProfileLinks: state.modeModelProfileLinks,
     conversations: state.conversations,
+    conversationReuseLinks: state.conversationReuseLinks,
+    conversationBranchLinks: state.conversationBranchLinks,
     agentConversationLinks: state.agentConversationLinks,
     agentRuns: state.agentRuns,
     agentRunSourceLinks: state.agentRunSourceLinks,
@@ -178,6 +183,8 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
   return {
     ...emptyClientState(),
     conversations: state.conversations.filter((conversation) => conversation.id === conversationId),
+    conversationReuseLinks: state.conversationReuseLinks.filter((link) => link.conversationId === conversationId),
+    conversationBranchLinks: state.conversationBranchLinks.filter((link) => link.sourceConversationId === conversationId || link.targetConversationId === conversationId),
     messages,
     messageRevisions: state.messageRevisions.filter((revision) => revision.conversationId === conversationId),
     messageCurrentRevisionLinks: state.messageCurrentRevisionLinks.filter((link) => messageIds.has(link.messageId)),

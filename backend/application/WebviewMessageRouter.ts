@@ -26,7 +26,7 @@ export interface WebviewMessageRouterDeps {
   globalSettingsBridge: GlobalSettingsBridge;
   conversationSettingsBridge: ConversationSettingsBridge;
   isHydrated: () => boolean;
-  requestSnapshot: (sessionId?: string) => void;
+  requestSnapshot: (conversationId?: string) => void;
 }
 
 /**
@@ -115,13 +115,13 @@ export class WebviewMessageRouter {
     }
   }
 
-  private subscribeRequestedStream(clientId: BridgeClientId, streamId: string | undefined, sessionId: string | undefined): void {
+  private subscribeRequestedStream(clientId: BridgeClientId, streamId: string | undefined, conversationId: string | undefined): void {
     if (streamId) {
       this.deps.webview.subscribe(clientId, streamId);
       return;
     }
-    if (sessionId) {
-      this.deps.webview.subscribe(clientId, conversationClientStateStreamId(sessionId));
+    if (conversationId) {
+      this.deps.webview.subscribe(clientId, conversationClientStateStreamId(conversationId));
       return;
     }
     this.deps.webview.subscribe(clientId, GLOBAL_CLIENT_STATE_STREAM_ID);

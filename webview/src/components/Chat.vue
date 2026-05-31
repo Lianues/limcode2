@@ -61,19 +61,25 @@ const conversationSettings = reactive<ConversationSettingsRecord>({
   name: ''
 });
 
-const currentSession = computed(() =>
-  clientState.sessions.find((session) => session.id === clientState.currentSessionId)
+const currentConversation = computed(() =>
+  clientState.conversations.find((conversation) => conversation.id === clientState.currentConversationId)
 );
 
-const sessionMessages = computed(() =>
+const visibleConversations = computed(() =>
+  clientState.conversations
+    .filter((conversation) => clientState.showHiddenConversations || (conversation.visibility ?? 'visible') !== 'hidden')
+    .sort((a, b) => a.id.localeCompare(b.id))
+);
+
+const conversationMessages = computed(() =>
   clientState.messages
-    .filter((message) => message.conversationId === clientState.currentSessionId && !isToolResponseMessage(message))
+    .filter((message) => message.conversationId === clientState.currentConversationId && !isToolResponseMessage(message))
     .sort((a, b) => a.seq - b.seq)
 );
 
 const activeAgentLink = computed(() =>
-  clientState.agentConversationLinks.find((link) => link.conversationId === clientState.currentSessionId && link.role === 'default')
-    ?? clientState.agentConversationLinks.find((link) => link.conversationId === clientState.currentSessionId)
+  clientState.agentConversationLinks.find((link) => link.conversationId === clientState.currentConversationId && link.role === 'default')
+    ?? clientState.agentConversationLinks.find((link) => link.conversationId === clientState.currentConversationId)
 );
 
 const currentAgent = computed(() =>
@@ -201,21 +207,21 @@ function toolDetailText(tool: ToolCallRecord): string {
 }
 
 function canExecuteTool(tool: ToolCallRecord): boolean {
-  return tool.status === 'awaiting_approval' && !!currentAgent.value?.id && !!currentMode.value?.id && !!clientState.currentSessionId;
+  return tool.status === 'awaiting_approval' && !!currentAgent.value?.id && !!currentMode.value?.id && !!clientState.currentConversationId;
 }
 
 function executeTool(tool: ToolCallRecord): void {
   if (!canExecuteTool(tool) || !currentAgent.value || !currentMode.value) return;
   bridge.request(BridgeMessageType.ToolExecute, {
     toolCallId: tool.id,
-    conversationId: clientState.currentSessionId
+    conversationId: clientState.currentConversationId
   });
 }
 
 function send(): void {
   const text = input.value.trim();
-  if (!text || !clientState.currentSessionId) return;
-  bridge.request(BridgeMessageType.ChatSend, { conversationId: clientState.currentSessionId, text });
+  if (!text || !clientState.currentConversationId) return;
+  bridge.request(BridgeMessageType.ChatSend, { conversationId: clientState.currentConversationId, text });
   input.value = '';
 }
 
@@ -227,31 +233,41 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 function resync(): void {
-  if (clientState.currentSessionId) {
-    const streamId = conversationClientStateStreamId(clientState.currentSessionId);
-    bridge.request(BridgeMessageType.ClientResync, { conversationId: clientState.currentSessionId, streamId });
+  if (clientState.currentConversationId) {
+    const streamId = conversationClientStateStreamId(clientState.currentConversationId);
+    bridge.request(BridgeMessageType.ClientResync, { conversationId: clientState.currentConversationId, streamId });
   } else {
     bridge.request(BridgeMessageType.ClientResync, {});
   }
 }
 
-function ensureConversationStream(sessionId: string): void {
-  const streamId = conversationClientStateStreamId(sessionId);
+function selectConversation(conversationId: string): void {
+  if (!conversationId || conversationId === clientState.currentConversationId) return;
+  clientState.currentConversationId = conversationId;
+  conversationSettings.conversationId = conversationId;
+  conversationSettings.name = clientState.conversations.find((conversation) => conversation.id === conversationId)?.title || conversationId;
+  ensureConversationStream(conversationId);
+  ensureConversationSettings(conversationId);
+}
+
+
+function ensureConversationStream(conversationId: string): void {
+  const streamId = conversationClientStateStreamId(conversationId);
   if (requestedConversationStreams.has(streamId)) return;
   requestedConversationStreams.add(streamId);
-  bridge.request(BridgeMessageType.ClientResync, { conversationId: sessionId, streamId });
+  bridge.request(BridgeMessageType.ClientResync, { conversationId: conversationId, streamId });
 }
 
-function ensureConversationSettings(sessionId: string): void {
-  if (!sessionId || requestedConversationSettings.has(sessionId)) return;
-  requestedConversationSettings.add(sessionId);
-  requestConversationSettings(sessionId);
+function ensureConversationSettings(conversationId: string): void {
+  if (!conversationId || requestedConversationSettings.has(conversationId)) return;
+  requestedConversationSettings.add(conversationId);
+  requestConversationSettings(conversationId);
 }
 
-function requestConversationSettings(sessionId = clientState.currentSessionId): void {
-  if (!sessionId) return;
+function requestConversationSettings(conversationId = clientState.currentConversationId): void {
+  if (!conversationId) return;
   conversationSettingsStatus.value = '正在读取对话设置...';
-  bridge.request(BridgeMessageType.ConversationSettingsGet, { conversationId: sessionId, section: 'common' });
+  bridge.request(BridgeMessageType.ConversationSettingsGet, { conversationId: conversationId, section: 'common' });
 }
 
 function saveConversationSettings(): void {
@@ -343,10 +359,10 @@ function scrollToBottom(): void {
   });
 }
 
-watch(() => sessionMessages.value.reduce((acc, message) => acc + messageDisplayText(message).length, sessionMessages.value.length), scrollToBottom);
+watch(() => conversationMessages.value.reduce((acc, message) => acc + messageDisplayText(message).length, conversationMessages.value.length), scrollToBottom);
 
 watch(() => {
-  const messageIds = new Set(sessionMessages.value.map((message) => message.id));
+  const messageIds = new Set(conversationMessages.value.map((message) => message.id));
   const toolCallIds = new Set(clientState.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId)).map((toolCall) => toolCall.id));
   return clientState.toolCallEvents
     .filter((event) => toolCallIds.has(event.toolCallId))
@@ -354,25 +370,25 @@ watch(() => {
 }, scrollToBottom);
 
 watch(
-  () => clientState.currentSessionId,
-  (sessionId) => {
-    if (viewKind.value !== 'chat' || !sessionId) return;
-    ensureConversationStream(sessionId);
-    ensureConversationSettings(sessionId);
+  () => clientState.currentConversationId,
+  (conversationId) => {
+    if (viewKind.value !== 'chat' || !conversationId) return;
+    ensureConversationStream(conversationId);
+    ensureConversationSettings(conversationId);
     if (!conversationSettings.conversationId) {
-      conversationSettings.conversationId = sessionId;
-      conversationSettings.name = currentSession.value?.title || sessionId;
+      conversationSettings.conversationId = conversationId;
+      conversationSettings.name = currentConversation.value?.title || conversationId;
     }
   }
 );
 
 watch(
-  () => currentSession.value?.title,
+  () => currentConversation.value?.title,
   (title) => {
-    if (viewKind.value !== 'chat' || !clientState.currentSessionId) return;
+    if (viewKind.value !== 'chat' || !clientState.currentConversationId) return;
     if (!conversationSettings.name || conversationSettings.name === conversationSettings.conversationId) {
-      conversationSettings.conversationId = clientState.currentSessionId;
-      conversationSettings.name = title || clientState.currentSessionId;
+      conversationSettings.conversationId = clientState.currentConversationId;
+      conversationSettings.name = title || clientState.currentConversationId;
     }
   }
 );
@@ -389,9 +405,9 @@ onMounted(() => {
 
       const conversationId = meta?.conversationId;
       if (!conversationId) return;
-      clientState.currentSessionId = conversationId;
+      clientState.currentConversationId = conversationId;
       conversationSettings.conversationId = conversationId;
-      conversationSettings.name = currentSession.value?.title || conversationId;
+      conversationSettings.name = currentConversation.value?.title || conversationId;
       ensureConversationStream(conversationId);
       ensureConversationSettings(conversationId);
     })
@@ -519,18 +535,38 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
       <div class="header-main">
         <span class="title">LimCode AI</span>
         <span class="hint">
-          <template v-if="clientState.currentSessionId">
-            当前会话：<code>{{ currentSession?.title || clientState.currentSessionId }}</code>
+          <template v-if="clientState.currentConversationId">
+            当前对话：<code>{{ currentConversation?.title || clientState.currentConversationId }}</code>
             <template v-if="currentMode?.name"> · 模式：<code>{{ currentMode.name }}</code></template>
             <template v-if="currentModelProfile?.model"> · 模型：<code>{{ currentModelProfile.model }}</code></template>
           </template>
-          <template v-else>正在初始化默认会话...</template>
+          <template v-else>正在初始化默认对话...</template>
         </span>
       </div>
       <button type="button" class="settings-toggle" @click="conversationSettingsOpen = !conversationSettingsOpen">
         {{ conversationSettingsOpen ? '收起对话设置' : '对话设置' }}
       </button>
     </header>
+
+    <section class="conversation-list">
+      <div class="conversation-list-header">
+        <strong>对话</strong>
+        <label class="hidden-toggle"><input v-model="clientState.showHiddenConversations" type="checkbox" /> 显示 hidden</label>
+      </div>
+      <div class="conversation-items">
+        <button
+          v-for="conversation in visibleConversations"
+          :key="conversation.id"
+          type="button"
+          class="conversation-item"
+          :class="{ active: conversation.id === clientState.currentConversationId }"
+          @click="selectConversation(conversation.id)"
+        >
+          <span class="conversation-title">{{ conversation.title || conversation.id }}</span>
+          <span class="conversation-badge">{{ conversation.visibility || 'visible' }}</span>
+        </button>
+      </div>
+    </section>
 
     <section v-if="conversationSettingsOpen" class="settings-panel">
       <h2>对话设置</h2>
@@ -542,14 +578,14 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
       </div>
       <div class="settings-actions">
         <button type="button" :disabled="!conversationSettings.conversationId" @click="saveConversationSettings">保存对话设置</button>
-        <button type="button" class="secondary" :disabled="!clientState.currentSessionId" @click="requestConversationSettings()">重新读取</button>
+        <button type="button" class="secondary" :disabled="!clientState.currentConversationId" @click="requestConversationSettings()">重新读取</button>
         <span class="settings-status">{{ conversationSettingsStatus }}</span>
       </div>
       <p class="settings-note">对话级 common 设置会保存到当前 conversation 目录下的 <code>settings/common.json</code>。</p>
     </section>
 
     <div ref="scroller" class="messages">
-      <div v-for="m in sessionMessages" :key="m.id" class="msg" :class="m.role">
+      <div v-for="m in conversationMessages" :key="m.id" class="msg" :class="m.role">
         <div class="meta">{{ roleLabel(m.role) }}</div>
         <div class="bubble">
           <details v-if="thoughtParts(m).length" class="thoughts">
@@ -575,16 +611,25 @@ onBeforeUnmount(() => disposers.forEach((dispose) => dispose()));
           </div>
         </div>
       </div>
-      <p v-if="!sessionMessages.length" class="empty">
-        {{ clientState.currentSessionId ? '还没有消息，发一条试试。' : '默认会话初始化中，请稍候。' }}
+      <p v-if="!conversationMessages.length" class="empty">
+        {{ clientState.currentConversationId ? '还没有消息，发一条试试。' : '默认对话初始化中，请稍候。' }}
       </p>
     </div>
 
     <footer class="composer">
-      <textarea v-model="input" rows="2" :placeholder="clientState.currentSessionId ? '输入消息，Enter 发送，Shift+Enter 换行' : '默认会话初始化中...'" @keydown="onKeydown"></textarea>
-      <button type="button" :disabled="!input.trim() || !clientState.currentSessionId" @click="send">发送</button>
+      <textarea v-model="input" rows="2" :placeholder="clientState.currentConversationId ? '输入消息，Enter 发送，Shift+Enter 换行' : '默认对话初始化中...'" @keydown="onKeydown"></textarea>
+      <button type="button" :disabled="!input.trim() || !clientState.currentConversationId" @click="send">发送</button>
     </footer>
   </div>
+.conversation-list { border-bottom: 1px solid var(--vscode-panel-border); padding: 8px 14px; display: flex; flex-direction: column; gap: 6px; }
+.conversation-list-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--vscode-descriptionForeground); font-size: 12px; }
+.hidden-toggle { display: inline-flex; align-items: center; gap: 4px; }
+.conversation-items { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.conversation-item { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; border: 1px solid var(--vscode-panel-border); border-radius: 999px; padding: 4px 9px; background: var(--vscode-editor-background); color: var(--vscode-foreground); cursor: pointer; font: inherit; font-size: 12px; }
+.conversation-item.active { border-color: var(--vscode-focusBorder); background: color-mix(in srgb, var(--vscode-editor-background) 75%, var(--vscode-focusBorder) 25%); }
+.conversation-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-badge { color: var(--vscode-descriptionForeground); font-size: 10px; text-transform: uppercase; }
+
 </template>
 
 <style scoped>

@@ -1,8 +1,9 @@
 import { defineBundle, type CommandSink, type Entity } from '../../../ecs/types';
 import type { ContentPart, ContentRole, MessageContent, MessageRevisionReason, MsgRole, MsgStatus } from '../../../../shared/protocol';
-import { Conversation, LlmRequest, Message, MessageCurrentRevisionLink, MessageRevision, PartOf, Streaming } from './components';
+import { Conversation, ConversationBranchLink, ConversationReuseLink, LlmRequest, Message, MessageCurrentRevisionLink, MessageRevision, PartOf, Streaming, type MessageData } from './components';
 
 export const ConversationBundle = defineBundle({ name: 'ConversationBundle', writes: [Conversation], mutationMode: 'create', spawns: true });
+export const ConversationLinkBundle = defineBundle({ name: 'ConversationLinkBundle', writes: [ConversationReuseLink, ConversationBranchLink], mutationMode: 'create', spawns: true });
 export const MessageBundle = defineBundle({ name: 'MessageBundle', writes: [Message, PartOf, MessageRevision, MessageCurrentRevisionLink], mutationMode: 'create', spawns: true });
 export const UserMessageBundle = MessageBundle;
 export const ModelMessageBundle = defineBundle({ name: 'ModelMessageBundle', writes: [Message, PartOf, Streaming, MessageRevision, MessageCurrentRevisionLink], mutationMode: 'create', spawns: true });
@@ -12,6 +13,20 @@ export const LlmRequestBundle = defineBundle({ name: 'LlmRequestBundle', writes:
 export function spawnConversation(cmd: CommandSink, input: { id: string; title?: string; visibility?: 'visible' | 'hidden' | 'collapsed' }): Entity {
   const entity = cmd.spawn();
   cmd.add(entity, Conversation, { id: input.id, title: input.title, visibility: input.visibility ?? 'visible' });
+  return entity;
+}
+
+export function spawnConversationReuseLink(cmd: CommandSink, input: { key: string; conversation: Entity; agent?: Entity }): Entity {
+  const entity = cmd.spawn();
+  const now = Date.now();
+  cmd.add(entity, ConversationReuseLink, { id: `crl${entity}`, key: input.key, conversation: input.conversation, ...(input.agent !== undefined ? { agent: input.agent } : {}), createdAt: now, updatedAt: now });
+  return entity;
+}
+
+export function spawnConversationBranchLink(cmd: CommandSink, input: { sourceConversation: Entity; targetConversation: Entity; sourceRevision?: Entity; kind: 'fork' | 'branch_from_revision' }): Entity {
+  const entity = cmd.spawn();
+  const now = Date.now();
+  cmd.add(entity, ConversationBranchLink, { id: `cbl${entity}`, sourceConversation: input.sourceConversation, targetConversation: input.targetConversation, ...(input.sourceRevision !== undefined ? { sourceRevision: input.sourceRevision } : {}), kind: input.kind, createdAt: now, updatedAt: now });
   return entity;
 }
 
@@ -58,6 +73,10 @@ export function spawnMessageRevision(cmd: CommandSink, message: Entity, content:
 
 export function spawnUserMessage(cmd: CommandSink, conversation: Entity, text: string): Entity {
   return spawnMessage(cmd, { parent: conversation, role: 'user', parts: [{ text }], status: 'complete' });
+}
+
+export function cloneMessageToConversation(cmd: CommandSink, conversation: Entity, message: MessageData, overrideContent?: MessageContent): Entity {
+  return spawnMessage(cmd, { parent: conversation, role: message.role, parts: overrideContent?.parts ?? message.content.parts, status: message.status === 'streaming' ? 'error' : message.status, revisionReason: 'created' });
 }
 
 export function spawnModelMessage(cmd: CommandSink, conversation: Entity): Entity {

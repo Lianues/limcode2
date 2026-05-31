@@ -236,6 +236,23 @@ export interface ConversationRecord {
   visibility?: 'visible' | 'hidden' | 'collapsed';
 }
 
+export interface ConversationReuseLinkRecord {
+  id: string;
+  key: string;
+  conversationId: string;
+  agentId?: string;
+}
+
+export type ConversationBranchKind = 'fork' | 'branch_from_revision';
+
+export interface ConversationBranchLinkRecord {
+  id: string;
+  sourceConversationId: string;
+  targetConversationId: string;
+  sourceRevisionId?: string;
+  kind: ConversationBranchKind;
+}
+
 
 export type AgentConversationRole = 'default' | 'participant' | 'reviewer';
 
@@ -535,6 +552,8 @@ export interface ClientState {
   modeSystemPromptLinks: ModeSystemPromptLinkRecord[];
   modeModelProfileLinks: ModeModelProfileLinkRecord[];
   conversations: ConversationRecord[];
+  conversationReuseLinks: ConversationReuseLinkRecord[];
+  conversationBranchLinks: ConversationBranchLinkRecord[];
   agentConversationLinks: AgentConversationLinkRecord[];
   messages: MessageRecord[];
   messageRevisions: MessageRevisionRecord[];
@@ -587,6 +606,10 @@ export type ClientPatchOp =
   | { kind: 'modeModelProfileLink.remove'; id: string }
   | { kind: 'conversation.upsert'; conversation: ConversationRecord }
   | { kind: 'conversation.remove'; id: string }
+  | { kind: 'conversationReuseLink.upsert'; link: ConversationReuseLinkRecord }
+  | { kind: 'conversationReuseLink.remove'; id: string }
+  | { kind: 'conversationBranchLink.upsert'; link: ConversationBranchLinkRecord }
+  | { kind: 'conversationBranchLink.remove'; id: string }
   | { kind: 'agentConversationLink.upsert'; link: AgentConversationLinkRecord }
   | { kind: 'agentConversationLink.remove'; id: string }
   | { kind: 'message.upsert'; message: MessageRecord }

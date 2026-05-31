@@ -1,8 +1,9 @@
-import { isTextPart, isVisibleTextPart, type ClientPatchOp, type ClientState, type ConversationRecord, type MessageCurrentRevisionLinkRecord, type MessageRecord, type MessageRevisionRecord, type TextPart } from '../../../../shared/protocol';
+import { isTextPart, isVisibleTextPart, type ClientPatchOp, type ClientState, type ConversationBranchLinkRecord, type ConversationRecord, type ConversationReuseLinkRecord, type MessageCurrentRevisionLinkRecord, type MessageRecord, type MessageRevisionRecord, type TextPart } from '../../../../shared/protocol';
 import type { WorldReader } from '../../../ecs/types';
 import { diffUpsertRemove } from '../../clientSync/diff';
 import { defineClientStateContributor, type ClientStateSlice } from '../../clientSync/contributors';
-import { Conversation, Message, MessageCurrentRevisionLink, MessageRevision, PartOf } from './components';
+import { Agent } from '../agent/components';
+import { Conversation, ConversationBranchLink, ConversationReuseLink, Message, MessageCurrentRevisionLink, MessageRevision, PartOf } from './components';
 
 export function projectChatClientState(world: WorldReader): ClientStateSlice {
   const conversations: ConversationRecord[] = world.query(Conversation).map((entity) => ({
@@ -10,6 +11,16 @@ export function projectChatClientState(world: WorldReader): ClientStateSlice {
     title: world.get(entity, Conversation)!.title,
     visibility: world.get(entity, Conversation)!.visibility
   }));
+
+  const conversationReuseLinks: ConversationReuseLinkRecord[] = world
+    .query(ConversationReuseLink)
+    .map((entity) => buildConversationReuseLinkRecord(world, entity))
+    .filter((item): item is ConversationReuseLinkRecord => item !== undefined);
+
+  const conversationBranchLinks: ConversationBranchLinkRecord[] = world
+    .query(ConversationBranchLink)
+    .map((entity) => buildConversationBranchLinkRecord(world, entity))
+    .filter((item): item is ConversationBranchLinkRecord => item !== undefined);
 
   const messages: MessageRecord[] = world
     .query(Message, PartOf)
@@ -41,7 +52,7 @@ export function projectChatClientState(world: WorldReader): ClientStateSlice {
     .map((entity) => buildMessageCurrentRevisionLinkRecord(world, entity))
     .filter((item): item is MessageCurrentRevisionLinkRecord => item !== undefined);
 
-  return { conversations, messages, messageRevisions, messageCurrentRevisionLinks };
+  return { conversations, conversationReuseLinks, conversationBranchLinks, messages, messageRevisions, messageCurrentRevisionLinks };
 }
 
 export function diffChatClientState(prev: ClientState, next: ClientState): ClientPatchOp[] {
@@ -54,6 +65,8 @@ export function diffChatClientState(prev: ClientState, next: ClientState): Clien
       (id): ClientPatchOp => ({ kind: 'conversation.remove', id })
     )
   );
+  patches.push(...diffUpsertRemove(prev.conversationReuseLinks, next.conversationReuseLinks, (link): ClientPatchOp => ({ kind: 'conversationReuseLink.upsert', link }), (id): ClientPatchOp => ({ kind: 'conversationReuseLink.remove', id })));
+  patches.push(...diffUpsertRemove(prev.conversationBranchLinks, next.conversationBranchLinks, (link): ClientPatchOp => ({ kind: 'conversationBranchLink.upsert', link }), (id): ClientPatchOp => ({ kind: 'conversationBranchLink.remove', id })));
   patches.push(...diffMessages(prev.messages, next.messages));
   patches.push(
     ...diffUpsertRemove(prev.messageRevisions, next.messageRevisions, (revision): ClientPatchOp => ({ kind: 'messageRevision.upsert', revision }), (id): ClientPatchOp => ({ kind: 'messageRevision.remove', id }))
@@ -66,7 +79,7 @@ export function diffChatClientState(prev: ClientState, next: ClientState): Clien
 
 export const chatClientSyncContributor = defineClientStateContributor({
   key: 'chat',
-  reads: { components: [Message, MessageRevision, MessageCurrentRevisionLink, PartOf, Conversation] },
+  reads: { components: [Agent, Message, MessageRevision, MessageCurrentRevisionLink, PartOf, Conversation, ConversationReuseLink, ConversationBranchLink] },
   project: projectChatClientState,
   diff: diffChatClientState,
   worker: {
@@ -75,6 +88,25 @@ export const chatClientSyncContributor = defineClientStateContributor({
     diffExport: 'diffChatClientState'
   }
 });
+
+function buildConversationReuseLinkRecord(world: WorldReader, entity: number): ConversationReuseLinkRecord | undefined {
+  const link = world.get(entity, ConversationReuseLink);
+  if (!link) return undefined;
+  const conversation = world.get(link.conversation, Conversation);
+  if (!conversation) return undefined;
+  const agent = link.agent !== undefined ? world.get(link.agent, Agent) : undefined;
+  return { id: link.id, key: link.key, conversationId: conversation.id, ...(agent ? { agentId: agent.id } : {}) };
+}
+
+function buildConversationBranchLinkRecord(world: WorldReader, entity: number): ConversationBranchLinkRecord | undefined {
+  const link = world.get(entity, ConversationBranchLink);
+  if (!link) return undefined;
+  const sourceConversation = world.get(link.sourceConversation, Conversation);
+  const targetConversation = world.get(link.targetConversation, Conversation);
+  const sourceRevision = link.sourceRevision !== undefined ? world.get(link.sourceRevision, MessageRevision) : undefined;
+  if (!sourceConversation || !targetConversation) return undefined;
+  return { id: link.id, sourceConversationId: sourceConversation.id, targetConversationId: targetConversation.id, ...(sourceRevision ? { sourceRevisionId: sourceRevision.id } : {}), kind: link.kind };
+}
 
 function buildMessageRevisionRecord(world: WorldReader, entity: number): MessageRevisionRecord | undefined {
   const revision = world.get(entity, MessageRevision);

@@ -66,7 +66,7 @@ export class BackendApplication {
       world: this.world,
       storage: this.env.storage,
       webview: this.env.webview,
-      requestSnapshot: (sessionId) => this.requestSnapshot(sessionId)
+      requestSnapshot: (conversationId) => this.requestSnapshot(conversationId)
     });
     this.webviewRouter = new WebviewMessageRouter({
       world: this.world,
@@ -75,7 +75,7 @@ export class BackendApplication {
       globalSettingsBridge: this.globalSettingsBridge,
       conversationSettingsBridge: this.conversationSettingsBridge,
       isHydrated: () => this.hydrated,
-      requestSnapshot: (sessionId) => this.requestSnapshot(sessionId)
+      requestSnapshot: (conversationId) => this.requestSnapshot(conversationId)
     });
 
     registerApplicationEffectHandlers(this.effectHandlers);
@@ -173,7 +173,7 @@ export class BackendApplication {
       console.log(`[LimCode] Data root: ${paths.globalStoragePath}`);
       console.log(`[LimCode] Storage roots: agents=${paths.agentsRootPath}, conversations=${paths.conversationsRootPath}, links=${paths.linksRootPath}`);
     } catch (error) {
-      console.warn('[LimCode] Failed to initialize stored chat state. Starting with a fresh session.', error);
+      console.warn('[LimCode] Failed to initialize stored chat state. Starting with a fresh conversation.', error);
       requestSpawnAgent(this.world, createDefaultAgentSpawnRequest());
     } finally {
       this.hydrated = true;

@@ -30,6 +30,10 @@ export const subAgentTool: ToolDefinition = {
             conversationId: { type: 'string' },
             history: { type: 'string', description: 'none | summary | last_n | full | selected' },
             lastN: { type: 'number' },
+            sinceMessageId: { type: 'string' },
+            branchFromRevisionId: { type: 'string' },
+            revisionId: { type: 'string' },
+            visibility: { type: 'string', description: 'visible | hidden | collapsed' },
             selectedMessageIds: { type: 'array', items: { type: 'string' } }
           }
         },

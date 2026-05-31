@@ -22,6 +22,22 @@ npm run check
 - 协议主线从 `Session/sessionId` 改为 `Conversation/conversationId`。
 - 不做自动 diff / 自动修改记录 / RunChangeSet，工作区变更由模型通过工具主动查询。
 
+## 本轮已补齐
+
+以下事项已在本轮补齐，并通过 `npm run check`：
+
+- 完成命名清理：公共协议与主要前后端内部变量改为 `conversation` 命名；前端 store 使用 `currentConversationId / conversations`。
+- 新增 `ConversationReuseLink` 与 `ConversationBranchLink`，用于持久表达复用 conversation 与 fork/branch 关系。
+- `sub_agent` 的 conversation policy resolver 已支持：
+  - `same` / `same_conversation`
+  - `fresh` / `new` / `new_conversation`
+  - `reuse` / `reuse_conversation`
+  - `fork` / `fork_conversation`
+  - `branch` / `branch_from_revision`
+- `fork_conversation` 已支持按历史策略投影消息：`full`、`none`、`last_n`、`selected_messages`、`since_message`、`summary`（summary 为确定性文本投影，不调用 LLM 总结）。
+- `branch_from_revision` 已支持从指定 `MessageRevision` 复制到该消息为止的历史，并使用指定 revision 内容替换对应消息。
+- Webview MVP 增加 conversation 列表、visibility badge、hidden 显示开关与 conversation 切换。
+
 ## 尚未完整做完的事项
 
 ### 1. 多 Agent 委派入口尚未实现
@@ -46,9 +62,9 @@ Reviewer/Planner/Coder 等 Agent 显式调度入口
 
 ---
 
-### 2. ConversationPolicy 只跑通了主要路径
+### 2. ConversationPolicy 后续增强
 
-当前结构上已经有：
+当前结构上已经有并已跑通主要 resolver：
 
 ```ts
 RunConversationPolicy.mode:
@@ -59,18 +75,19 @@ RunConversationPolicy.mode:
   | 'branch_from_revision'
 ```
 
-但 runtime 主要跑通的是：
+已实现：
 
-- 普通聊天：当前 conversation。
-- `sub_agent`：fresh/new child conversation。
-- `sub_agent conversation.mode='same'`：同 conversation 路径。
+- `reuse_conversation`：按 `reuseKey` 找到并复用长期 conversation；不存在时创建并写入 `ConversationReuseLink`。
+- `fork_conversation`：从父 conversation 按 history policy 复制/投影历史到新 conversation，并写入 `ConversationBranchLink(kind='fork')`。
+- `branch_from_revision`：从指定 message revision 创建分支，并写入 `ConversationBranchLink(kind='branch_from_revision')`。
+- conversation visibility MVP：对话列表展示 visibility badge，支持显示 hidden。
 
-尚未完整实现：
+后续仍可增强：
 
-- `reuse_conversation`：按 `reuseKey` 找到并复用长期 conversation。
-- `fork_conversation`：从父 conversation 复制/投影指定历史到新 conversation。
-- `branch_from_revision`：从某个 message revision/conversation revision 创建分支。
-- conversation visibility 的完整 UI 行为。
+- branch 支持 conversation-level revision，而不仅是 message revision。
+- fork/branch UI 更明确地展示来源链路和父子关系。
+- reuseKey 管理 UI，例如查看/解除某个 key 的绑定。
+- summary history 使用真正的摘要模型，而不是当前的确定性文本投影。
 
 ---
 
@@ -184,25 +201,16 @@ RunEditPolicy
 
 ---
 
-### 7. Webview UI 仍是最小适配
+### 7. Webview UI 仍是 MVP
 
 当前 Webview 已能通过类型检查，并适配 `conversationId` payload。
 
-但 UI 仍保留很多旧命名：
+已完成：
 
-```text
-currentSessionId
-sessions
-sessionMessages
-```
-
-这些只是前端 store 层内部变量名，后续应统一改成：
-
-```text
-currentConversationId
-conversations
-conversationMessages
-```
+- `currentConversationId / conversations / conversationMessages` 命名清理。
+- conversation 列表与 visibility badge。
+- hidden conversation 显示开关。
+- 点击切换 conversation 并拉取 conversation stream/settings。
 
 还需要补：
 
@@ -308,25 +316,9 @@ conversation: {
 
 ### 13. 命名清理
 
-后端公共协议已经改为 Conversation，但部分内部变量名仍叫：
+主要命名清理已完成。公共协议不再保留 `SessionRecord/sessionId/ToolApprovalMode` 旧别名；前端 store 与主要 UI 已使用 conversation 命名。
 
-```text
-sessionId
-currentSessionId
-sessions
-removeSession
-```
-
-这些不影响编译，但会影响长期可读性。后续应统一替换为：
-
-```text
-conversationId
-currentConversationId
-conversations
-removeConversation
-```
-
-建议单独做一轮命名清理，避免与旧模型混淆。
+后续如果发现注释或极少量局部变量仍沿用 session 语义，可随功能开发顺手清理。
 
 ---
 
@@ -352,13 +344,11 @@ RunChangeSet
 
 ## 建议后续推进顺序
 
-1. 完成命名清理：前端和后端内部变量从 session 改为 conversation。
-2. 完整实现 `ConversationPolicy` 的 reuse/fork/branch。
-3. 完整实现 `ContextPolicy` 的 selected/since/summary。
-4. 完善 `DeliveryPolicy` 的 append/silent/transcript link。
-5. 做 AgentRun UI 展示和 child conversation 跳转。
-6. 实现 message edit / revision / rerun / branch 交互。
-7. 增加 `delegate_to_agent` 入口，验证多 Agent 与 subagent 共用核心。
-8. 将存储从 `client-state.json` 拆回按领域对象分目录。
-9. 优化 ClientSync patch 粒度。
-10. 完善审批 UX 和 background run 的不可交互策略。
+1. 完善 `ContextPolicy` 的真正摘要模型和更细粒度 source context/source tool result 注入。
+2. 完善 `DeliveryPolicy` 的 transcript link/selected/full 展示和 notification 结构化展示。
+3. 做 AgentRun UI 展示、parent-child run 树和 child conversation 跳转。
+4. 实现 message edit / revision / rerun / branch 交互。
+5. 增加 `delegate_to_agent` 入口，验证多 Agent 与 subagent 共用核心。
+6. 将存储从 `client-state.json` 拆回按领域对象分目录。
+7. 优化 ClientSync patch 粒度。
+8. 完善审批 UX 和 background run 的不可交互策略。

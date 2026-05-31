@@ -62,10 +62,10 @@ export interface SpawnAgentFromBlueprintResult {
   link: Entity;
 }
 
-export function spawnAgentFromBlueprint(
+export function spawnAgentProfileFromBlueprint(
   cmd: CommandSink,
-  input: SpawnAgentFromBlueprintInput
-): SpawnAgentFromBlueprintResult {
+  input: { blueprint: AgentBlueprint; agentId: string; agentName?: string }
+): Entity {
   const agent = cmd.spawn();
   cmd.add(agent, Agent, { id: input.agentId, name: input.agentName ?? input.blueprint.name });
   cmd.add(agent, AgentKind, { kind: input.blueprint.kind });
@@ -79,6 +79,15 @@ export function spawnAgentFromBlueprint(
       isDefault: modeBlueprint.id === input.blueprint.defaultModeId
     });
   }
+
+  return agent;
+}
+
+export function spawnAgentFromBlueprint(
+  cmd: CommandSink,
+  input: SpawnAgentFromBlueprintInput
+): SpawnAgentFromBlueprintResult {
+  const agent = spawnAgentProfileFromBlueprint(cmd, input);
 
   const conversation = spawnConversation(cmd, { id: input.conversationId, title: input.conversationTitle });
   const link = linkAgentToConversation(cmd, { agent, conversation, role: 'default' });

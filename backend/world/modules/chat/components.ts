@@ -1,5 +1,5 @@
 import { defineComponent, type Entity } from '../../../ecs/types';
-import type { LlmUsageMetadataRecord, MessageContent, MessageRevisionReason, MsgRole, MsgStatus } from '../../../../shared/protocol';
+import type { ConversationBranchKind, LlmUsageMetadataRecord, MessageContent, MessageRevisionReason, MsgRole, MsgStatus } from '../../../../shared/protocol';
 
 export interface ConversationData {
   id: string;
@@ -7,6 +7,27 @@ export interface ConversationData {
   visibility?: 'visible' | 'hidden' | 'collapsed';
 }
 export const Conversation = defineComponent<ConversationData>('Conversation');
+
+export interface ConversationReuseLinkData {
+  id: string;
+  key: string;
+  conversation: Entity;
+  agent?: Entity;
+  createdAt: number;
+  updatedAt: number;
+}
+export const ConversationReuseLink = defineComponent<ConversationReuseLinkData>('ConversationReuseLink');
+
+export interface ConversationBranchLinkData {
+  id: string;
+  sourceConversation: Entity;
+  targetConversation: Entity;
+  sourceRevision?: Entity;
+  kind: ConversationBranchKind;
+  createdAt: number;
+  updatedAt: number;
+}
+export const ConversationBranchLink = defineComponent<ConversationBranchLinkData>('ConversationBranchLink');
 
 export const Aborted = defineComponent<true>('Aborted');
 

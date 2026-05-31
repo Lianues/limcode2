@@ -1,5 +1,5 @@
 import { defineComponent, Entity } from '../../../ecs/types';
-import type { MessageContent, MsgRole, MsgStatus } from '../../../../shared/protocol';
+import type { LlmUsageMetadataRecord, MessageContent, MsgRole, MsgStatus } from '../../../../shared/protocol';
 
 export interface SessionData {
   id: string;
@@ -17,6 +17,7 @@ export interface MessageData {
   seq: number;
   createdAt: number;
   streamOutputDurationMs?: number;
+  usageMetadata?: LlmUsageMetadataRecord;
 }
 export const Message = defineComponent<MessageData>('Message');
 export const PartOf = defineComponent<{ parent: Entity }>('PartOf');

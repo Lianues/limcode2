@@ -183,7 +183,8 @@ function withLlmTiming(message: MessageData, update: LlmDonePayload | LlmErrorPa
   return {
     ...message,
     ...(update.createdAt !== undefined ? { createdAt: update.createdAt } : {}),
-    ...(update.streamOutputDurationMs !== undefined ? { streamOutputDurationMs: update.streamOutputDurationMs } : {})
+    ...(update.streamOutputDurationMs !== undefined ? { streamOutputDurationMs: update.streamOutputDurationMs } : {}),
+    ...('usageMetadata' in update && update.usageMetadata !== undefined ? { usageMetadata: update.usageMetadata } : {})
   };
 }
 

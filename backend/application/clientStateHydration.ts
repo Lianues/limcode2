@@ -146,7 +146,8 @@ function spawnHydratedMessage(world: World, session: Entity, record: MessageReco
     status: record.status === 'streaming' ? 'error' : record.status,
     seq: record.seq,
     createdAt: record.createdAt,
-    streamOutputDurationMs: record.streamOutputDurationMs
+    streamOutputDurationMs: record.streamOutputDurationMs,
+    usageMetadata: record.usageMetadata
   });
   world.add(entity, PartOf, { parent: session });
   return entity;

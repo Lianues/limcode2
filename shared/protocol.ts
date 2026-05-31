@@ -122,6 +122,17 @@ export const TERMINAL_TOOL_CALL_STATUSES: ReadonlySet<ToolCallStatus> = new Set(
 
 export type LlmProviderKind = 'deepseek' | 'openai-compatible' | 'openai-responses' | 'claude' | 'gemini';
 
+export interface LlmUsageMetadataRecord {
+  promptTokenCount?: number;
+  cachedContentTokenCount?: number;
+  candidatesTokenCount?: number;
+  totalTokenCount?: number;
+  thoughtsTokenCount?: number;
+  cacheCreationInputTokenCount?: number;
+  cacheCreationInputTokensDetails?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 export interface LlmSettingsRecord {
   provider: LlmProviderKind;
   baseUrl: string;
@@ -281,6 +292,7 @@ export interface MessageRecord {
   status: MsgStatus;
   createdAt: number;
   streamOutputDurationMs?: number;
+  usageMetadata?: LlmUsageMetadataRecord;
   seq: number;
 }
 

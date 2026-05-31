@@ -8,7 +8,7 @@ import {
   isInlineDataPart,
   isTextPart
 } from '../../shared/protocol';
-import type { ContentPart, LlmProviderKind, LlmSettingsRecord, MessageContent } from '../../shared/protocol';
+import type { ContentPart, LlmProviderKind, LlmSettingsRecord, LlmUsageMetadataRecord, MessageContent } from '../../shared/protocol';
 
 export const DEFAULT_LLM_BASE_URL = 'https://api.deepseek.com/v1';
 export const DEFAULT_LLM_MODEL = 'deepseek-v4-flash';
@@ -66,7 +66,7 @@ export async function startLlmProvider(
       ...(proxy ? { proxy, fetch: proxyFetch } : {})
     }, registry.llmProviders);
 
-    let didEmitDone = false;
+    let latestUsageMetadata: LlmUsageMetadataRecord | undefined;
     let firstStreamChunkAt: number | undefined;
     let lastStreamChunkAt: number | undefined;
     let activeThoughtBlock: ActiveThoughtBlock | undefined;
@@ -77,18 +77,21 @@ export async function startLlmProvider(
       const chunkAt = Date.now();
       activeThoughtBlock = emitThoughtDeltas(request.id, activeThoughtBlock, chunk, chunkAt, emit);
       if (activeThoughtBlock && shouldCloseThoughtBlock(chunk)) activeThoughtBlock = finishThoughtBlock(request.id, activeThoughtBlock, chunkAt, emit);
+      const chunkUsageMetadata = usageMetadataFromChunk(chunk);
+      if (chunkUsageMetadata) latestUsageMetadata = mergeUsageMetadata(latestUsageMetadata, chunkUsageMetadata);
       if (hasStreamOutput(chunk)) {
         firstStreamChunkAt ??= chunkAt;
         lastStreamChunkAt = chunkAt;
       }
-      didEmitDone = emitUnifiedChunk(request.id, chunk, emit, createDoneTiming(firstStreamChunkAt, lastStreamChunkAt, chunkAt)) || didEmitDone;
+      emitUnifiedChunk(request.id, chunk, emit);
     }
 
-    if (!didEmitDone) {
-      const finishedAt = Date.now();
-      if (activeThoughtBlock) finishThoughtBlock(request.id, activeThoughtBlock, finishedAt, emit);
-      emit({ type: LlmEventType.Done, payload: { requestId: request.id, ...createDoneTiming(firstStreamChunkAt, lastStreamChunkAt, finishedAt) } });
-    }
+    const finishedAt = Date.now();
+    if (activeThoughtBlock) finishThoughtBlock(request.id, activeThoughtBlock, finishedAt, emit);
+    emit({
+      type: LlmEventType.Done,
+      payload: { requestId: request.id, ...createDoneTiming(firstStreamChunkAt, lastStreamChunkAt, finishedAt), ...(latestUsageMetadata ? { usageMetadata: latestUsageMetadata } : {}) }
+    });
   } catch (error) {
     emitLlmError(emit, request.id, error instanceof Error ? error.message : String(error));
   }
@@ -166,7 +169,7 @@ function toUnifiedFunctionDeclaration(tool: ToolSchema): UnifiedFunctionDeclarat
   };
 }
 
-function emitUnifiedChunk(requestId: string, chunk: UnifiedLLMStreamChunk, emit: Emit, doneTiming: LlmDoneTiming): boolean {
+function emitUnifiedChunk(requestId: string, chunk: UnifiedLLMStreamChunk, emit: Emit): void {
   const text = chunk.textDelta ?? visibleTextFromParts(chunk.partsDelta ?? []);
   if (text) emit({ type: LlmEventType.Delta, payload: { requestId, text } });
 
@@ -186,13 +189,6 @@ function emitUnifiedChunk(requestId: string, chunk: UnifiedLLMStreamChunk, emit:
   if (calls.length > 0) {
     emit({ type: LlmEventType.ToolCall, payload: { requestId, calls } });
   }
-
-  if (chunk.finishReason) {
-    emit({ type: LlmEventType.Done, payload: { requestId, ...doneTiming } });
-    return true;
-  }
-
-  return false;
 }
 
 interface LlmDoneTiming {
@@ -205,6 +201,37 @@ function createDoneTiming(firstChunkAt: number | undefined, lastChunkAt: number 
     createdAt: firstChunkAt ?? finishedAt,
     ...(firstChunkAt !== undefined && lastChunkAt !== undefined ? { streamOutputDurationMs: Math.max(0, lastChunkAt - firstChunkAt) } : {})
   };
+}
+
+function usageMetadataFromChunk(chunk: UnifiedLLMStreamChunk): LlmUsageMetadataRecord | undefined {
+  const cleaned = stripUndefined(chunk.usageMetadata);
+  return isRecord(cleaned) && Object.keys(cleaned).length > 0
+    ? cleaned as LlmUsageMetadataRecord
+    : undefined;
+}
+
+function mergeUsageMetadata(
+  previous: LlmUsageMetadataRecord | undefined,
+  next: LlmUsageMetadataRecord
+): LlmUsageMetadataRecord {
+  if (!previous) return next;
+  return { ...previous, ...next };
+}
+
+function stripUndefined(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripUndefined);
+  if (!isRecord(value)) return value;
+
+  const result: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (child === undefined) continue;
+    result[key] = stripUndefined(child);
+  }
+  return result;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function hasStreamOutput(chunk: UnifiedLLMStreamChunk): boolean {

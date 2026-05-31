@@ -339,6 +339,10 @@ function diffMessages(prev: MessageRecord[], next: MessageRecord[]): ClientPatch
     }
     const oldText = messageText(old);
     const nextText = messageText(item);
+    if (messageMetadataChanged(old, item)) {
+      patches.push({ kind: 'message.upsert', message: item });
+      continue;
+    }
     if (JSON.stringify(old.content) !== JSON.stringify(item.content)) {
       const thoughtPatch = thoughtAppendPatch(old, item);
       if (thoughtPatch) patches.push(thoughtPatch);
@@ -351,6 +355,12 @@ function diffMessages(prev: MessageRecord[], next: MessageRecord[]): ClientPatch
     if (!nextMap.has(id)) patches.push({ kind: 'message.remove', id });
   }
   return patches;
+}
+
+function messageMetadataChanged(prev: MessageRecord, next: MessageRecord): boolean {
+  return prev.createdAt !== next.createdAt
+    || prev.streamOutputDurationMs !== next.streamOutputDurationMs
+    || JSON.stringify(prev.usageMetadata) !== JSON.stringify(next.usageMetadata);
 }
 
 function messageText(message: MessageRecord): string {

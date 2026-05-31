@@ -88,6 +88,7 @@ type StoredMessageRecord = {
   status: MessageRecord['status'];
   createdAt: number;
   streamOutputDurationMs?: number;
+  usageMetadata?: MessageRecord['usageMetadata'];
 };
 
 interface MessageChunkFile {
@@ -733,7 +734,8 @@ function toStoredMessage(message: MessageRecord): StoredMessageRecord {
     parts: message.content.parts,
     status: message.status,
     createdAt: message.createdAt,
-    streamOutputDurationMs: message.streamOutputDurationMs
+    streamOutputDurationMs: message.streamOutputDurationMs,
+    usageMetadata: message.usageMetadata
   };
 }
 
@@ -746,6 +748,7 @@ function toRuntimeMessage(sessionId: string, message: StoredMessageRecord, seq: 
     status: message.status,
     createdAt: message.createdAt,
     streamOutputDurationMs: message.streamOutputDurationMs,
+    usageMetadata: message.usageMetadata,
     seq
   };
 }

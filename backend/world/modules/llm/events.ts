@@ -1,3 +1,5 @@
+import type { LlmUsageMetadataRecord } from '../../../../shared/protocol';
+
 export const LlmEventType = {
   Delta: 'llm:delta',
   ThoughtDelta: 'llm:thoughtDelta',
@@ -29,6 +31,7 @@ export interface LlmDonePayload {
   requestId: string;
   createdAt?: number;
   streamOutputDurationMs?: number;
+  usageMetadata?: LlmUsageMetadataRecord;
 }
 export interface LlmErrorPayload {
   requestId: string;

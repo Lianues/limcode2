@@ -1,4 +1,4 @@
-import type { CLIENT_STATE_TABLES } from './clientStateRegistry';
+import type { CLIENT_STATE_TABLES } from './clientStateSchema';
 
 export type MessageId = string;
 export type BridgeClientId = string;

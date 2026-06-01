@@ -1,4 +1,4 @@
-import { CLIENT_STATE_TABLES, type ClientStateTablePatchSpec } from '../../../shared/clientStateRegistry';
+import { CLIENT_STATE_TABLES, type ClientStateTablePatchSpec } from '../../../shared/clientStateSchema';
 import type { ClientPatchOp, ClientState, ClientStateTableKey } from '../../../shared/protocol';
 
 type RecordWithId = { id: string };

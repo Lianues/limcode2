@@ -1,5 +1,5 @@
 import type { WorldReader } from '../../ecs/types';
-import { createEmptyClientState } from '../../../shared/clientStateRegistry';
+import { createEmptyClientState } from '../../../shared/clientStateSchema';
 import { projectStateWithCache, type ProjectionCache, type ProjectionContributorState, type ProjectionResult } from '../projection/cache';
 import type { StorageState, StorageStateContributor, StorageStateSlice } from './contributors';
 

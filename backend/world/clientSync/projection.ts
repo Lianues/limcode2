@@ -1,5 +1,5 @@
 import type { ClientState } from '../../../shared/protocol';
-import { createEmptyClientState } from '../../../shared/clientStateRegistry';
+import { createEmptyClientState } from '../../../shared/clientStateSchema';
 import type { WorldReader } from '../../ecs/types';
 import type { ClientStateContributor, ClientStateSlice } from './contributors';
 import { projectStateWithCache, type ProjectionCache, type ProjectionContributorState, type ProjectionResult } from '../projection/cache';
@@ -8,7 +8,7 @@ export type ClientContributorProjectionState = ProjectionContributorState<Client
 export type ClientStateProjectionCache = ProjectionCache<ClientStateSlice>;
 export type ClientStateProjectionResult = ProjectionResult<ClientState, ClientStateSlice>;
 
-export { createEmptyClientState } from '../../../shared/clientStateRegistry';
+export { createEmptyClientState } from '../../../shared/clientStateSchema';
 
 export function projectClientStateWithCache(
   world: WorldReader,

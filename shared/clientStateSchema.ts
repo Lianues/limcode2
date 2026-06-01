@@ -26,21 +26,34 @@ export interface ClientStateSortSpec {
 
 export interface ClientStateCascadeRemoveSpec {
   readonly table: ClientStateTableKey;
-  readonly foreignKey: string;
+  readonly foreignKey?: string;
+  readonly foreignKeys?: readonly string[];
   /** true 时先按 child id 递归执行 child 表自己的 cascadeRemove，再删除 child 记录。 */
   readonly cascade?: boolean;
 }
 
+export type ClientStateScopeReplaceMode = 'replace' | 'upsertOnly' | 'removeOnly';
+export interface ClientStateScopeOptions {
+  readonly replace?: ClientStateScopeReplaceMode;
+}
+
 export type ClientStateScopeSpec =
-  | { readonly kind: 'global' }
-  | { readonly kind: 'conversation'; readonly field: string }
+  | ({ readonly kind: 'global' } & ClientStateScopeOptions)
+  | ({ readonly kind: 'conversation'; readonly field: string } & ClientStateScopeOptions)
+  | ({ readonly kind: 'conversationAny'; readonly fields: readonly string[] } & ClientStateScopeOptions)
   | {
       readonly kind: 'conversationVia';
       readonly table: ClientStateTableKey;
       readonly localField: string;
       readonly foreignField: string;
-      readonly scopeField: string;
-    };
+    } & ClientStateScopeOptions
+  | {
+      readonly kind: 'conversationReverseVia';
+      readonly table: ClientStateTableKey;
+      readonly localField: string;
+      readonly foreignField: string;
+    } & ClientStateScopeOptions
+  | ({ readonly kind: 'conversationAnyOf'; readonly scopes: readonly ClientStateScopeSpec[] } & ClientStateScopeOptions);
 
 export type ClientStateMutationPathSegment = string | { readonly fromField: string };
 
@@ -82,6 +95,8 @@ export interface ClientStateTableClientSyncSpec {
   readonly cascadeRemove?: readonly ClientStateCascadeRemoveSpec[];
   /** 预留给后续按 stream/scope 自动替换状态使用。 */
   readonly scope?: ClientStateScopeSpec;
+  /** 删除本表记录前，先按该记录 id 清理某类 scope 下的记录。 */
+  readonly removeScope?: { readonly kind: 'conversation' };
   /** global client state stream 的 snapshot 是否包含该表。 */
   readonly globalSnapshot: boolean;
 }
@@ -102,6 +117,7 @@ interface ClientSyncOverrides {
   readonly orderBy?: readonly ClientStateSortSpec[];
   readonly cascadeRemove?: readonly ClientStateCascadeRemoveSpec[];
   readonly scope?: ClientStateScopeSpec;
+  readonly removeScope?: { readonly kind: 'conversation' };
   readonly globalSnapshot?: boolean;
 }
 
@@ -139,6 +155,7 @@ function clientSyncSpec(defaultApply: Readonly<Partial<Record<ClientStatePatchOp
     ...(overrides.orderBy ? { orderBy: overrides.orderBy } : {}),
     ...(overrides.cascadeRemove ? { cascadeRemove: overrides.cascadeRemove } : {}),
     ...(overrides.scope ? { scope: overrides.scope } : {}),
+    ...(overrides.removeScope ? { removeScope: overrides.removeScope } : {}),
     globalSnapshot: overrides.globalSnapshot ?? true
   };
 }
@@ -222,13 +239,13 @@ const toolCallsTable: ClientSyncOverrides = {
     kind: 'conversationVia',
     table: 'messages',
     localField: 'messageId',
-    foreignField: 'id',
-    scopeField: 'conversationId'
+    foreignField: 'id'
   }
 };
 const toolCallEventsTable: ClientSyncOverrides = {
   orderBy: [{ field: 'seq' }, { field: 'id' }],
-  globalSnapshot: false
+  globalSnapshot: false,
+  scope: { kind: 'conversationVia', table: 'toolCalls', localField: 'toolCallId', foreignField: 'id' }
 };
 const agentRunsTable: ClientSyncOverrides = {
   cascadeRemove: [
@@ -246,7 +263,17 @@ const agentRunsTable: ClientSyncOverrides = {
     { table: 'runDeliveryPolicyLinks', foreignKey: 'runId' },
     { table: 'runEditPolicyLinks', foreignKey: 'runId' },
     { table: 'agentRunInputRevisions', foreignKey: 'runId' }
-  ]
+  ],
+  scope: {
+    kind: 'conversationAnyOf',
+    replace: 'upsertOnly',
+    scopes: [
+      { kind: 'conversationReverseVia', table: 'agentRunTargetLinks', localField: 'id', foreignField: 'runId' },
+      { kind: 'conversationReverseVia', table: 'agentRunSourceLinks', localField: 'id', foreignField: 'runId' },
+      { kind: 'conversationReverseVia', table: 'messageRunLinks', localField: 'id', foreignField: 'runId' },
+      { kind: 'conversationReverseVia', table: 'toolCallRunLinks', localField: 'id', foreignField: 'runId' }
+    ]
+  }
 };
 
 export const CLIENT_STATE_TABLES = {
@@ -261,10 +288,19 @@ export const CLIENT_STATE_TABLES = {
   modeApprovalPolicyLinks: upsertRemoveTable('modeApprovalPolicyLink', 'link'),
   modeSystemPromptLinks: upsertRemoveTable('modeSystemPromptLink', 'link'),
   modeModelProfileLinks: upsertRemoveTable('modeModelProfileLink', 'link'),
-  conversations: upsertRemoveTable('conversation', 'conversation', { apply: { remove: 'custom' } }),
-  conversationReuseLinks: upsertRemoveTable('conversationReuseLink', 'link'),
-  conversationBranchLinks: upsertRemoveTable('conversationBranchLink', 'link'),
-  agentConversationLinks: upsertRemoveTable('agentConversationLink', 'link'),
+  conversations: upsertRemoveTable('conversation', 'conversation', {
+    scope: { kind: 'conversation', field: 'id', replace: 'upsertOnly' },
+    removeScope: { kind: 'conversation' },
+    cascadeRemove: [
+      { table: 'conversationReuseLinks', foreignKey: 'conversationId' },
+      { table: 'conversationBranchLinks', foreignKeys: ['sourceConversationId', 'targetConversationId'] },
+      { table: 'agentConversationLinks', foreignKey: 'conversationId' },
+      { table: 'messages', foreignKey: 'conversationId', cascade: true }
+    ]
+  }),
+  conversationReuseLinks: upsertRemoveTable('conversationReuseLink', 'link', { scope: { kind: 'conversation', field: 'conversationId' } }),
+  conversationBranchLinks: upsertRemoveTable('conversationBranchLink', 'link', { scope: { kind: 'conversationAny', fields: ['sourceConversationId', 'targetConversationId'] } }),
+  agentConversationLinks: upsertRemoveTable('agentConversationLink', 'link', { scope: { kind: 'conversation', field: 'conversationId', replace: 'removeOnly' } }),
   messages: {
     patch: {
       upsert: { kind: 'message.upsert', payloadField: 'message' },
@@ -273,28 +309,28 @@ export const CLIENT_STATE_TABLES = {
     clientSync: messageTable
   },
   messageRevisions: upsertRemoveTable('messageRevision', 'revision', { ...conversationScopedTable, orderBy: [{ field: 'createdAt' }, { field: 'id' }] }),
-  messageCurrentRevisionLinks: upsertRemoveTable('messageCurrentRevisionLink', 'link', { ...conversationScopedTable, scope: { kind: 'conversationVia', table: 'messages', localField: 'messageId', foreignField: 'id', scopeField: 'conversationId' } }),
+  messageCurrentRevisionLinks: upsertRemoveTable('messageCurrentRevisionLink', 'link', { ...conversationScopedTable, scope: { kind: 'conversationVia', table: 'messages', localField: 'messageId', foreignField: 'id' } }),
   toolCalls: upsertRemoveTable('toolcall', 'toolCall', toolCallsTable),
   toolCallEvents: appendRemoveTable('toolcallEvent', 'event', toolCallEventsTable),
   agentRuns: upsertRemoveTable('agentRun', 'run', agentRunsTable),
-  agentRunSourceLinks: upsertRemoveTable('agentRunSourceLink', 'link'),
-  agentRunTargetLinks: upsertRemoveTable('agentRunTargetLink', 'link'),
-  messageRunLinks: upsertRemoveTable('messageRunLink', 'link'),
-  toolCallRunLinks: upsertRemoveTable('toolCallRunLink', 'link'),
-  runConversationPolicies: upsertRemoveTable('runConversationPolicy', 'policy'),
-  runContextPolicies: upsertRemoveTable('runContextPolicy', 'policy'),
-  runDeliveryPolicies: upsertRemoveTable('runDeliveryPolicy', 'policy'),
-  runEditPolicies: upsertRemoveTable('runEditPolicy', 'policy'),
-  runModeLinks: upsertRemoveTable('runModeLink', 'link'),
-  runSystemPromptLinks: upsertRemoveTable('runSystemPromptLink', 'link'),
-  runModelProfileLinks: upsertRemoveTable('runModelProfileLink', 'link'),
-  runToolPolicyLinks: upsertRemoveTable('runToolPolicyLink', 'link'),
-  runApprovalPolicyLinks: upsertRemoveTable('runApprovalPolicyLink', 'link'),
-  runConversationPolicyLinks: upsertRemoveTable('runConversationPolicyLink', 'link'),
-  runContextPolicyLinks: upsertRemoveTable('runContextPolicyLink', 'link'),
-  runDeliveryPolicyLinks: upsertRemoveTable('runDeliveryPolicyLink', 'link'),
-  runEditPolicyLinks: upsertRemoveTable('runEditPolicyLink', 'link'),
-  agentRunInputRevisions: upsertRemoveTable('agentRunInputRevision', 'inputRevision')
+  agentRunSourceLinks: upsertRemoveTable('agentRunSourceLink', 'link', { scope: { kind: 'conversationAnyOf', scopes: [{ kind: 'conversation', field: 'sourceConversationId' }, { kind: 'conversationVia', table: 'messages', localField: 'sourceMessageId', foreignField: 'id' }, { kind: 'conversationVia', table: 'toolCalls', localField: 'sourceToolCallId', foreignField: 'id' }, { kind: 'conversationVia', table: 'agentRuns', localField: 'sourceRunId', foreignField: 'id' }, { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' }] } }),
+  agentRunTargetLinks: upsertRemoveTable('agentRunTargetLink', 'link', { scope: { kind: 'conversationAnyOf', scopes: [{ kind: 'conversation', field: 'conversationId' }, { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' }] } }),
+  messageRunLinks: upsertRemoveTable('messageRunLink', 'link', { scope: { kind: 'conversationAnyOf', scopes: [{ kind: 'conversationVia', table: 'messages', localField: 'messageId', foreignField: 'id' }, { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' }] } }),
+  toolCallRunLinks: upsertRemoveTable('toolCallRunLink', 'link', { scope: { kind: 'conversationAnyOf', scopes: [{ kind: 'conversationVia', table: 'toolCalls', localField: 'toolCallId', foreignField: 'id' }, { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' }] } }),
+  runConversationPolicies: upsertRemoveTable('runConversationPolicy', 'policy', { scope: { kind: 'conversationReverseVia', table: 'runConversationPolicyLinks', localField: 'id', foreignField: 'policyId', replace: 'upsertOnly' } }),
+  runContextPolicies: upsertRemoveTable('runContextPolicy', 'policy', { scope: { kind: 'conversationReverseVia', table: 'runContextPolicyLinks', localField: 'id', foreignField: 'policyId', replace: 'upsertOnly' } }),
+  runDeliveryPolicies: upsertRemoveTable('runDeliveryPolicy', 'policy', { scope: { kind: 'conversationReverseVia', table: 'runDeliveryPolicyLinks', localField: 'id', foreignField: 'policyId', replace: 'upsertOnly' } }),
+  runEditPolicies: upsertRemoveTable('runEditPolicy', 'policy', { scope: { kind: 'conversationReverseVia', table: 'runEditPolicyLinks', localField: 'id', foreignField: 'policyId', replace: 'upsertOnly' } }),
+  runModeLinks: upsertRemoveTable('runModeLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
+  runSystemPromptLinks: upsertRemoveTable('runSystemPromptLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
+  runModelProfileLinks: upsertRemoveTable('runModelProfileLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
+  runToolPolicyLinks: upsertRemoveTable('runToolPolicyLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
+  runApprovalPolicyLinks: upsertRemoveTable('runApprovalPolicyLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
+  runConversationPolicyLinks: upsertRemoveTable('runConversationPolicyLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
+  runContextPolicyLinks: upsertRemoveTable('runContextPolicyLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
+  runDeliveryPolicyLinks: upsertRemoveTable('runDeliveryPolicyLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
+  runEditPolicyLinks: upsertRemoveTable('runEditPolicyLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
+  agentRunInputRevisions: upsertRemoveTable('agentRunInputRevision', 'inputRevision', { scope: { kind: 'conversationAnyOf', scopes: [{ kind: 'conversation', field: 'conversationId' }, { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' }] } })
 } as const satisfies ClientStateTableRegistry;
 
 export const CLIENT_STATE_TABLE_KEYS = Object.keys(CLIENT_STATE_TABLES) as ClientStateTableKey[];

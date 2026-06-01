@@ -1,6 +1,6 @@
 import * as path from 'path';
 import { GLOBAL_CLIENT_STATE_STREAM_ID, type ClientPatchOp, type ClientState } from '../../../shared/protocol';
-import { createEmptyClientState } from '../../../shared/clientStateRegistry';
+import { createEmptyClientState } from '../../../shared/clientStateSchema';
 import { CommandBuffer, type EntityAllocator } from '../../ecs/CommandBuffer';
 import { SnapshotWorldReader } from '../../ecs/SnapshotWorldReader';
 import type { SystemContext, WorldSnapshot } from '../../ecs/types';

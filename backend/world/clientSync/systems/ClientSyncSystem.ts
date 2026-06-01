@@ -5,7 +5,7 @@ import {
   type ClientPatchOp,
   type ClientState
 } from '../../../../shared/protocol';
-import { clientStateWithTables, createEmptyClientState, GLOBAL_CLIENT_STATE_TABLE_KEYS } from '../../../../shared/clientStateRegistry';
+import { clientStateWithTables, createEmptyClientState, GLOBAL_CLIENT_STATE_TABLE_KEYS } from '../../../../shared/clientStateSchema';
 import { defineSystem, type AccessDeclaration } from '../../../ecs/types';
 import { readEvents } from '../../events';
 import type { ClientStateContributor } from '../contributors';

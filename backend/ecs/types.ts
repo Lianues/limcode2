@@ -61,6 +61,10 @@ export interface WorldReader {
   tryGetResource<T>(key: ResourceKey<T>): T | undefined;
   /** 变更计数，供调度器判定是否到达不动点。 */
   version(): number;
+  /** 指定 component 类型自进程启动以来的结构/值写入版本。用于廉价 projection dirty 判断。 */
+  componentVersion(component: ComponentType<unknown>): number;
+  /** 指定 resource 自进程启动以来的写入版本。用于廉价 projection dirty 判断。 */
+  resourceVersion(resource: ResourceKey<unknown>): number;
 }
 
 /** 面向应用组合根/插件安装的可写 World 接口。System 内不要直接依赖它。 */
@@ -119,11 +123,18 @@ export interface WorldSnapshotResourceValue {
   readonly value: unknown;
 }
 
+export interface WorldSnapshotVersionValue {
+  readonly name: string;
+  readonly version: number;
+}
+
 export interface WorldSnapshot {
   readonly version: number;
   readonly entities: readonly Entity[];
   readonly components: readonly WorldSnapshotComponentStore[];
   readonly resources: readonly WorldSnapshotResourceValue[];
+  readonly componentVersions: readonly WorldSnapshotVersionValue[];
+  readonly resourceVersions: readonly WorldSnapshotVersionValue[];
 }
 
 export interface SystemContext {

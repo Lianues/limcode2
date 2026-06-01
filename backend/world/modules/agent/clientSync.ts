@@ -1,33 +1,9 @@
-import type { AgentConversationLinkRecord, AgentRecord, ClientPatchOp, ClientState } from '../../../../shared/protocol';
-import type { WorldReader } from '../../../ecs/types';
+import type { ClientPatchOp, ClientState } from '../../../../shared/protocol';
 import { diffUpsertRemove } from '../../clientSync/diff';
-import { defineClientStateContributor, type ClientStateSlice } from '../../clientSync/contributors';
-import { Conversation } from '../chat/components';
-import {
-  Agent,
-  AgentConversationLink,
-  AgentKind,
-  AgentStatus
-} from './components';
+import { defineClientStateContributor } from '../../clientSync/contributors';
+import { agentStateProjectionReads, projectAgentState } from './stateProjection';
 
-export function projectAgentClientState(world: WorldReader): ClientStateSlice {
-  const agents: AgentRecord[] = world.query(Agent).map((entity) => {
-    const agent = world.get(entity, Agent)!;
-    return {
-      id: agent.id,
-      name: agent.name,
-      kind: world.get(entity, AgentKind)?.kind ?? 'unknown',
-      status: world.get(entity, AgentStatus)?.status ?? 'idle'
-    };
-  });
-
-  const agentConversationLinks: AgentConversationLinkRecord[] = world
-    .query(AgentConversationLink)
-    .map((entity) => buildAgentConversationLinkRecord(world, entity))
-    .filter((item): item is AgentConversationLinkRecord => item !== undefined);
-
-  return { agents, agentConversationLinks };
-}
+export const projectAgentClientState = projectAgentState;
 
 export function diffAgentClientState(prev: ClientState, next: ClientState): ClientPatchOp[] {
   const patches: ClientPatchOp[] = [];
@@ -52,15 +28,7 @@ export function diffAgentClientState(prev: ClientState, next: ClientState): Clie
 
 export const agentClientSyncContributor = defineClientStateContributor({
   key: 'agents',
-  reads: {
-    components: [
-      Agent,
-      AgentConversationLink,
-      AgentKind,
-      AgentStatus,
-      Conversation
-    ]
-  },
+  reads: agentStateProjectionReads,
   project: projectAgentClientState,
   diff: diffAgentClientState,
   worker: {
@@ -69,19 +37,3 @@ export const agentClientSyncContributor = defineClientStateContributor({
     diffExport: 'diffAgentClientState'
   }
 });
-
-function buildAgentConversationLinkRecord(world: WorldReader, entity: number): AgentConversationLinkRecord | undefined {
-  const link = world.get(entity, AgentConversationLink);
-  if (!link) return undefined;
-
-  const agent = world.get(link.agent, Agent);
-  const conversation = world.get(link.conversation, Conversation);
-  if (!agent || !conversation) return undefined;
-
-  return {
-    id: link.id,
-    agentId: agent.id,
-    conversationId: conversation.id,
-    role: link.role
-  };
-}

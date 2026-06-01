@@ -5,11 +5,12 @@ import {
   type ClientPatchOp,
   type ClientState
 } from '../../../../shared/protocol';
-import { defineSystem, type AccessDeclaration, type WorldReader } from '../../../ecs/types';
+import { defineSystem, type AccessDeclaration } from '../../../ecs/types';
 import { readEvents } from '../../events';
 import type { ClientStateContributor } from '../contributors';
 import { ClientSyncEventType } from '../events';
 import { ClientStateContributorsKey, ClientSyncStateKey, type ClientStreamState } from '../resources';
+import { emptyClientState, projectClientStateWithCache } from '../projection';
 
 export const ClientSyncSystem = defineSystem({
   name: 'ClientSyncSystem',
@@ -31,9 +32,12 @@ export const ClientSyncSystem = defineSystem({
     const registry = world.getResource(ClientStateContributorsKey);
     const syncState = world.getResource(ClientSyncStateKey);
     const contributors = registry.list();
-    const nextFull = projectClientState(world, contributors);
+    const projection = projectClientStateWithCache(world, contributors, syncState);
+    const sourceChanged = syncState.lastState === null || projection.changed;
+    const nextFull = projection.state;
     const prevFull = syncState.lastState;
     const resyncRequests = readEvents(ctx, ClientSyncEventType.Resync);
+    const hasResyncRequests = resyncRequests.length > 0;
     const requestedConversationIds = new Set<string>();
     let wantsGlobalSnapshot = prevFull === null;
 
@@ -46,6 +50,8 @@ export const ClientSyncSystem = defineSystem({
       }
       if (!streamId || streamId === GLOBAL_CLIENT_STATE_STREAM_ID) wantsGlobalSnapshot = true;
     }
+
+    if (!sourceChanged && !hasResyncRequests) return;
 
     const streams: Record<string, ClientStreamState> = { ...syncState.streams };
     let didUpdateStreams = false;
@@ -81,8 +87,13 @@ export const ClientSyncSystem = defineSystem({
       }
     }
 
-    if (didUpdateStreams) {
-      cmd.setResource(ClientSyncStateKey, { lastState: nextFull, streams });
+    if (sourceChanged || didUpdateStreams) {
+      cmd.setResource(ClientSyncStateKey, {
+        lastState: nextFull,
+        projectionClock: projection.projectionClock,
+        contributorStates: projection.contributorStates,
+        streams
+      });
     }
   }
 });
@@ -105,7 +116,6 @@ function emitPatchIfChanged(
   next: ClientState
 ): ClientStreamState | undefined {
   if (!current.lastState) return emitSnapshot(cmd, streamId, current, next);
-  if (sameClientState(current.lastState, next)) return undefined;
   const patches = diffClientState(contributors, current.lastState, next);
   if (patches.length === 0) return undefined;
   const stream: ClientStreamState = { streamSeq: current.streamSeq + 1, lastState: next };
@@ -115,59 +125,6 @@ function emitPatchIfChanged(
 
 function diffClientState(contributors: ClientStateContributor[], prev: ClientState, next: ClientState): ClientPatchOp[] {
   return contributors.flatMap((contributor) => contributor.diff?.(prev, next) ?? []);
-}
-
-function projectClientState(world: WorldReader, contributors: ClientStateContributor[]): ClientState {
-  const state: ClientState = emptyClientState();
-  for (const contributor of contributors) {
-    if (!contributor.project) throw new Error(`ClientState contributor "${contributor.key}" does not provide a main-thread projector.`);
-    Object.assign(state, contributor.project(world));
-  }
-  return state;
-}
-
-function emptyClientState(): ClientState {
-  return {
-    agents: [],
-    agentModes: [],
-    toolPolicies: [],
-    approvalPolicies: [],
-    systemPrompts: [],
-    modelProfiles: [],
-    agentModeLinks: [],
-    modeToolPolicyLinks: [],
-    modeApprovalPolicyLinks: [],
-    modeSystemPromptLinks: [],
-    modeModelProfileLinks: [],
-    conversations: [],
-    conversationReuseLinks: [],
-    conversationBranchLinks: [],
-    agentConversationLinks: [],
-    messages: [],
-    messageRevisions: [],
-    messageCurrentRevisionLinks: [],
-    toolCalls: [],
-    toolCallEvents: [],
-    agentRuns: [],
-    agentRunSourceLinks: [],
-    agentRunTargetLinks: [],
-    messageRunLinks: [],
-    toolCallRunLinks: [],
-    runConversationPolicies: [],
-    runContextPolicies: [],
-    runDeliveryPolicies: [],
-    runEditPolicies: [],
-    runModeLinks: [],
-    runSystemPromptLinks: [],
-    runModelProfileLinks: [],
-    runToolPolicyLinks: [],
-    runApprovalPolicyLinks: [],
-    runConversationPolicyLinks: [],
-    runContextPolicyLinks: [],
-    runDeliveryPolicyLinks: [],
-    runEditPolicyLinks: [],
-    agentRunInputRevisions: []
-  };
 }
 
 function globalClientState(state: ClientState): ClientState {
@@ -311,17 +268,4 @@ function collectConversationIds(
     if (conversationId) ids.add(conversationId);
   }
   return [...ids];
-}
-
-
-function sameClientState(left: ClientState | null, right: ClientState | null): boolean {
-  if (left === right) return true;
-  if (left === null || right === null) return false;
-  for (const key of Object.keys(left) as (keyof ClientState)[]) {
-    const l = left[key];
-    const r = right[key];
-    if (l === r) continue;
-    if (l.length !== r.length) return false;
-  }
-  return JSON.stringify(left) === JSON.stringify(right);
 }

@@ -1,10 +1,15 @@
 import type { WorldReader } from '../ecs/types';
 import type { StorageCapability } from '../capabilities/types';
-import { ClientSyncStateKey } from '../world/clientSync/resources';
+import { StorageStateContributorsKey } from '../world/storageProjection/resources';
+import { projectStorageStateWithCache, type StorageContributorProjectionState } from '../world/storageProjection/projection';
 import type { ClientState } from '../../shared/protocol';
 
 const DEFAULT_PERSIST_DEBOUNCE_MS = 500;
 
+/**
+ * Storage 持久化使用自己的 ClientState projection cache/clock。
+ * 不再读取 ClientSyncState：ClientSync 只负责 webview stream，Persistence 独立决定何时落盘。
+ */
 export class ClientStatePersistence {
   private enabled = false;
   private lastPersistedGlobalJson = '';
@@ -18,6 +23,9 @@ export class ClientStatePersistence {
   private readonly persistedToolCallEventIds = new Set<string>();
   private incrementalPersistRunning = false;
   private incrementalPersistDirty = false;
+  private projectionClock = '';
+  private contributorStates: Record<string, StorageContributorProjectionState> = {};
+  private lastProjectedState: ClientState | undefined;
 
   public constructor(
     private readonly world: WorldReader,
@@ -30,12 +38,16 @@ export class ClientStatePersistence {
   public rememberPersistedState(state: ClientState): void {
     this.lastPersistedGlobalJson = JSON.stringify(globalPersistenceSlice(state));
     this.rememberIncrementalState(state);
+    this.lastProjectedState = state;
+    this.projectionClock = '';
+    this.contributorStates = {};
   }
 
   public queuePersist(): void {
     if (!this.enabled) return;
-    const state = this.world.tryGetResource(ClientSyncStateKey)?.lastState;
-    if (!state) return;
+    const projection = this.projectLatestState();
+    if (!projection || !projection.changed) return;
+    const state = projection.state;
 
     this.queueIncrementalPersist(state);
     const globalJson = JSON.stringify(globalPersistenceSlice(state));
@@ -53,7 +65,7 @@ export class ClientStatePersistence {
       this.persistTimer = undefined;
     }
 
-    const latestState = this.world.tryGetResource(ClientSyncStateKey)?.lastState;
+    const latestState = this.projectLatestState()?.state ?? this.lastProjectedState;
     const state = options.force ? (latestState ?? this.pendingPersistState) : (this.pendingPersistState ?? latestState);
     if (!this.enabled || !state) return;
 
@@ -89,10 +101,24 @@ export class ClientStatePersistence {
         this.incrementalPersistRunning = false;
         if (this.incrementalPersistDirty) {
           this.incrementalPersistDirty = false;
-          const latestState = this.world.tryGetResource(ClientSyncStateKey)?.lastState;
+          const latestState = this.projectLatestState()?.state ?? this.lastProjectedState;
           if (latestState) this.queueIncrementalPersist(latestState);
         }
       });
+  }
+
+  private projectLatestState(): { state: ClientState; changed: boolean } | undefined {
+    const registry = this.world.tryGetResource(StorageStateContributorsKey);
+    if (!registry) return this.lastProjectedState ? { state: this.lastProjectedState, changed: false } : undefined;
+
+    const projection = projectStorageStateWithCache(this.world, registry.list(), {
+      projectionClock: this.projectionClock,
+      contributorStates: this.contributorStates
+    });
+    this.projectionClock = projection.projectionClock;
+    this.contributorStates = projection.contributorStates;
+    this.lastProjectedState = projection.state;
+    return { state: projection.state, changed: projection.changed };
   }
 
   private collectIncrementalTasks(state: ClientState): { messages: Array<() => Promise<void>>; toolSnapshots: Array<() => Promise<void>>; toolEvents: Array<() => Promise<void>> } {

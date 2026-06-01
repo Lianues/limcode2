@@ -18,6 +18,7 @@ import type { AgentSpawnRequestData } from '../world/modules/agent/requests';
 import { Agent, AgentConversationLink } from '../world/modules/agent/components';
 import { Conversation } from '../world/modules/chat/components';
 import { clientSyncPlugin } from '../world/clientSync';
+import { storageProjectionPlugin } from '../world/storageProjection';
 import { EffectHandlerRegistry, registerApplicationEffectHandlers } from './effectHandlers';
 import { flushEffects, flushEffectsWhere } from './executeEffects';
 import type { RuntimeEnv } from './RuntimeEnv';
@@ -95,7 +96,7 @@ export class BackendApplication {
 
     installWorldPlugins(
       { world: this.world, scheduler: this.scheduler },
-      [commonPlugin(), clientSyncPlugin(), agentPlugin(), modePlugin(), toolsPlugin({ toolSchemas }), chatPlugin(), agentRunPlugin()]
+      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), modePlugin(), toolsPlugin({ toolSchemas }), chatPlugin(), agentRunPlugin()]
     );
 
     void this.initializeClientState();

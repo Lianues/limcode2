@@ -23,6 +23,8 @@ export function runClientSyncProjection(input: ClientSyncWorkerInput, cmd: Comma
     const streamSeq = input.streamSeq + 1;
     cmd.setResource(ClientSyncStateKey, {
       lastState: next,
+      projectionClock: '',
+      contributorStates: {},
       streams: { [GLOBAL_CLIENT_STATE_STREAM_ID]: { streamSeq, lastState: next } }
     });
     cmd.effect({ kind: 'client.snapshot', streamId: GLOBAL_CLIENT_STATE_STREAM_ID, streamSeq, state: next });
@@ -38,6 +40,8 @@ export function runClientSyncProjection(input: ClientSyncWorkerInput, cmd: Comma
     const streamSeq = input.streamSeq + 1;
     cmd.setResource(ClientSyncStateKey, {
       lastState: next,
+      projectionClock: '',
+      contributorStates: {},
       streams: { [GLOBAL_CLIENT_STATE_STREAM_ID]: { streamSeq, lastState: next } }
     });
     cmd.effect({ kind: 'client.patch', streamId: GLOBAL_CLIENT_STATE_STREAM_ID, streamSeq, patches });

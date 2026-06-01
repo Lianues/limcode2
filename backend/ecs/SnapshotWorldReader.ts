@@ -11,6 +11,8 @@ export class SnapshotWorldReader implements WorldReader {
   private readonly alive: Set<Entity>;
   private readonly stores = new Map<string, Map<Entity, unknown>>();
   private readonly resources = new Map<string, unknown>();
+  private readonly componentVersions = new Map<string, number>();
+  private readonly resourceVersions = new Map<string, number>();
 
   public constructor(private readonly snap: WorldSnapshot) {
     this.alive = new Set(snap.entities);
@@ -22,6 +24,9 @@ export class SnapshotWorldReader implements WorldReader {
     for (const item of snap.resources) {
       this.resources.set(item.name, item.value);
     }
+
+    for (const item of snap.componentVersions) this.componentVersions.set(item.name, item.version);
+    for (const item of snap.resourceVersions) this.resourceVersions.set(item.name, item.version);
   }
 
   public get<T>(entity: Entity, component: ComponentType<T>): T | undefined {
@@ -78,5 +83,13 @@ export class SnapshotWorldReader implements WorldReader {
 
   public version(): number {
     return this.snap.version;
+  }
+
+  public componentVersion(component: ComponentType<unknown>): number {
+    return this.componentVersions.get(component.name) ?? 0;
+  }
+
+  public resourceVersion(resource: ResourceKey<unknown>): number {
+    return this.resourceVersions.get(resource.name) ?? 0;
   }
 }

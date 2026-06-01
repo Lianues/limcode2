@@ -18,6 +18,8 @@ export class MapWorld implements SchedulerWorld {
   private readonly alive = new Set<Entity>();
   private readonly stores = new Map<symbol, Map<Entity, unknown>>();
   private readonly resources = new Map<symbol, unknown>();
+  private readonly componentVersions = new Map<symbol, number>();
+  private readonly resourceVersions = new Map<symbol, number>();
   private queue: WorldEvent[] = [];
   private _version = 0;
   private wake: () => void = () => undefined;
@@ -44,20 +46,24 @@ export class MapWorld implements SchedulerWorld {
     if (!this.alive.delete(entity)) {
       return;
     }
-    for (const store of this.stores.values()) {
-      store.delete(entity);
+    for (const [componentId, store] of this.stores) {
+      if (store.delete(entity)) {
+        this.bumpComponentId(componentId);
+      }
     }
     this._version++;
   }
 
   public add<T>(entity: Entity, component: ComponentType<T>, value: T): void {
     this.storeOf(component).set(entity, value);
+    this.bumpComponent(component);
     this._version++;
   }
 
   public remove<T>(entity: Entity, component: ComponentType<T>): void {
     const store = this.stores.get(component.id);
     if (store && store.delete(entity)) {
+      this.bumpComponent(component);
       this._version++;
     }
   }
@@ -140,11 +146,20 @@ export class MapWorld implements SchedulerWorld {
 
   public setResource<T>(key: ResourceKey<T>, value: T): void {
     this.resources.set(key.id, value);
+    this.bumpResource(key);
     this._version++;
   }
 
   public version(): number {
     return this._version;
+  }
+
+  public componentVersion(component: ComponentType<unknown>): number {
+    return this.componentVersions.get(component.id) ?? 0;
+  }
+
+  public resourceVersion(resource: ResourceKey<unknown>): number {
+    return this.resourceVersions.get(resource.id) ?? 0;
   }
 
   public commit(commands: readonly WorldCommand[], applyEffect: (effect: unknown) => void): void {
@@ -201,7 +216,15 @@ export class MapWorld implements SchedulerWorld {
       version: this._version,
       entities: [...this.alive],
       components,
-      resources
+      resources,
+      componentVersions: (filter.components ?? []).map((component) => ({
+        name: component.name,
+        version: this.componentVersion(component)
+      })),
+      resourceVersions: (filter.resources ?? []).map((resource) => ({
+        name: resource.name,
+        version: this.resourceVersion(resource)
+      }))
     };
   }
 
@@ -212,6 +235,18 @@ export class MapWorld implements SchedulerWorld {
       this.stores.set(component.id, store);
     }
     return store;
+  }
+
+  private bumpComponent(component: ComponentType<unknown>): void {
+    this.bumpComponentId(component.id);
+  }
+
+  private bumpComponentId(componentId: symbol): void {
+    this.componentVersions.set(componentId, (this.componentVersions.get(componentId) ?? 0) + 1);
+  }
+
+  private bumpResource(resource: ResourceKey<unknown>): void {
+    this.resourceVersions.set(resource.id, (this.resourceVersions.get(resource.id) ?? 0) + 1);
   }
 }
 

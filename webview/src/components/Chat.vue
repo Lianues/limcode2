@@ -19,8 +19,9 @@ import {
   type ToolCallRecord
 } from '@shared/protocol';
 import { bridge, BridgeMessageType } from '../bridge/vscodeBridge';
-import { applyClientPatch, applyClientSnapshot, clientState } from '../stores/clientStateStore';
+import { useClientStateStore } from '../stores/clientStateStore';
 
+const clientState = useClientStateStore();
 const input = ref('');
 const editingMessageId = ref('');
 const editingText = ref('');
@@ -446,13 +447,13 @@ onMounted(() => {
   disposers.push(
     bridge.on(BridgeMessageType.ClientSnapshot, (message) => {
       if (!message.payload) return;
-      applyClientSnapshot(message.payload.streamId, message.payload.streamSeq, message.payload.state);
+      clientState.applyClientSnapshot(message.payload.streamId, message.payload.streamSeq, message.payload.state);
     })
   );
   disposers.push(
     bridge.on(BridgeMessageType.ClientPatch, (message) => {
       if (!message.payload) return;
-      if (!applyClientPatch(message.payload.streamId, message.payload.streamSeq, message.payload.patches)) resync();
+      if (!clientState.applyClientPatch(message.payload.streamId, message.payload.streamSeq, message.payload.patches)) resync();
     })
   );
   disposers.push(

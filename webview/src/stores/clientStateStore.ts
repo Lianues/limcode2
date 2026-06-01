@@ -1,42 +1,53 @@
-import { reactive } from 'vue';
+import { defineStore } from 'pinia';
 import { createEmptyClientState } from '@shared/clientStateSchema';
 import type { ClientPatchOp, ClientState } from '@shared/protocol';
-import { createClientStateDb } from './clientStateDb';
+import { createClientStateDb, type ClientStateDb } from './clientStateDb';
 
-interface ClientStateStore extends ClientState {
+export interface ClientStateStoreState extends ClientState {
   /** 每个 state stream 当前已应用到的顺序号，用于判断 patch 是否断链。 */
   streamSeqs: Record<string, number>;
   currentConversationId: string;
   showHiddenConversations: boolean;
 }
 
-export const clientState = reactive<ClientStateStore>({
-  ...createEmptyClientState(),
-  streamSeqs: {},
-  currentConversationId: '',
-  showHiddenConversations: false
-});
+const dbByStore = new WeakMap<object, ClientStateDb>();
 
-const clientStateDb = createClientStateDb(clientState);
-
-export function applyClientSnapshot(streamId: string, streamSeq: number, state: ClientState): void {
-  clientState.streamSeqs[streamId] = streamSeq;
-  if (!clientStateDb.applySnapshot(streamId, state)) return;
-  ensureCurrentConversation();
-}
-
-export function applyClientPatch(streamId: string, streamSeq: number, patches: ClientPatchOp[]): boolean {
-  const currentStreamSeq = clientState.streamSeqs[streamId] ?? 0;
-  if (streamSeq !== currentStreamSeq + 1) return false;
-  clientStateDb.applyPatches(patches);
-  clientState.streamSeqs[streamId] = streamSeq;
-  ensureCurrentConversation();
-  return true;
-}
-
-function ensureCurrentConversation(): void {
-  const hasCurrent = !!clientState.currentConversationId && clientState.conversations.some((conversation) => conversation.id === clientState.currentConversationId);
-  if (!hasCurrent) {
-    clientState.currentConversationId = clientState.conversations.find((conversation) => conversation.id === 'default')?.id ?? clientState.conversations[0]?.id ?? '';
+function dbFor(store: ClientStateStoreState): ClientStateDb {
+  const key = store as object;
+  let db = dbByStore.get(key);
+  if (!db) {
+    db = createClientStateDb(store);
+    dbByStore.set(key, db);
   }
+  return db;
 }
+
+export const useClientStateStore = defineStore('clientState', {
+  state: (): ClientStateStoreState => ({
+    ...createEmptyClientState(),
+    streamSeqs: {},
+    currentConversationId: '',
+    showHiddenConversations: false
+  }),
+  actions: {
+    applyClientSnapshot(streamId: string, streamSeq: number, state: ClientState): void {
+      this.streamSeqs[streamId] = streamSeq;
+      if (!dbFor(this).applySnapshot(streamId, state)) return;
+      this.ensureCurrentConversation();
+    },
+    applyClientPatch(streamId: string, streamSeq: number, patches: ClientPatchOp[]): boolean {
+      const currentStreamSeq = this.streamSeqs[streamId] ?? 0;
+      if (streamSeq !== currentStreamSeq + 1) return false;
+      dbFor(this).applyPatches(patches);
+      this.streamSeqs[streamId] = streamSeq;
+      this.ensureCurrentConversation();
+      return true;
+    },
+    ensureCurrentConversation(): void {
+      const hasCurrent = !!this.currentConversationId && this.conversations.some((conversation) => conversation.id === this.currentConversationId);
+      if (!hasCurrent) {
+        this.currentConversationId = this.conversations.find((conversation) => conversation.id === 'default')?.id ?? this.conversations[0]?.id ?? '';
+      }
+    }
+  }
+});

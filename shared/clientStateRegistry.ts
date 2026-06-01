@@ -1,4 +1,4 @@
-import type { ClientState, ClientStateTableKey } from './protocol';
+import type { ClientState, ClientStateTableKey, ContentPart, MsgStatus } from './protocol';
 
 export type ClientStatePatchOperation = 'upsert' | 'append' | 'remove';
 export type ClientStatePatchMode = 'generic' | 'custom';
@@ -42,11 +42,40 @@ export type ClientStateScopeSpec =
       readonly scopeField: string;
     };
 
+export type ClientStateMutationPathSegment = string | { readonly fromField: string };
+
+export type ClientStateMutationApplySpec =
+  | {
+      readonly op: 'setPath';
+      readonly path: readonly ClientStateMutationPathSegment[];
+      readonly valueField: string;
+    }
+  | {
+      readonly op: 'appendStringAtPath';
+      readonly path: readonly ClientStateMutationPathSegment[];
+      readonly valueField: string;
+    }
+  | {
+      readonly op: 'insertArrayItem';
+      readonly path: readonly ClientStateMutationPathSegment[];
+      readonly indexField: string;
+      readonly itemField: string;
+    };
+
+export interface ClientStateMutationSpec<TKind extends string = string, TPayload extends { id: string } = { id: string }> {
+  readonly kind: TKind;
+  readonly apply: ClientStateMutationApplySpec;
+  /** 类型占位字段，不在运行时写入。用于从注册表推导 ClientPatchOp。 */
+  readonly __payload?: TPayload;
+}
+
 export interface ClientStateTableClientSyncSpec {
   /** 是否由 ClientSync 注册表自动生成 prev/next 的 patch diff。 */
   readonly diff: ClientStateDiffMode;
   /** 前端对应 patch 操作能否用通用 upsert/append/remove 处理。 */
   readonly apply: Readonly<Partial<Record<ClientStatePatchOperation, ClientStatePatchMode>>>;
+  /** 记录内部 mutation patch，由后端领域模块决定何时发，前端机械执行。 */
+  readonly mutations?: readonly ClientStateMutationSpec[];
   /** 通用 apply 后自动排序。 */
   readonly orderBy?: readonly ClientStateSortSpec[];
   /** 通用 remove 时按外键级联删除。 */
@@ -69,6 +98,7 @@ export type ClientStateTableRegistry = {
 interface ClientSyncOverrides {
   readonly diff?: ClientStateDiffMode;
   readonly apply?: Readonly<Partial<Record<ClientStatePatchOperation, ClientStatePatchMode>>>;
+  readonly mutations?: readonly ClientStateMutationSpec[];
   readonly orderBy?: readonly ClientStateSortSpec[];
   readonly cascadeRemove?: readonly ClientStateCascadeRemoveSpec[];
   readonly scope?: ClientStateScopeSpec;
@@ -105,6 +135,7 @@ function clientSyncSpec(defaultApply: Readonly<Partial<Record<ClientStatePatchOp
   return {
     diff: overrides.diff ?? 'generic',
     apply: { ...defaultApply, ...overrides.apply },
+    ...(overrides.mutations ? { mutations: overrides.mutations } : {}),
     ...(overrides.orderBy ? { orderBy: overrides.orderBy } : {}),
     ...(overrides.cascadeRemove ? { cascadeRemove: overrides.cascadeRemove } : {}),
     ...(overrides.scope ? { scope: overrides.scope } : {}),
@@ -140,9 +171,37 @@ function appendRemoveTable<const TPatchPrefix extends string, const TPayloadFiel
   };
 }
 
+function mutation<const TKind extends string, TPayload extends { id: string }>(
+  kind: TKind,
+  apply: ClientStateMutationApplySpec
+): ClientStateMutationSpec<TKind, TPayload> {
+  return { kind, apply } as ClientStateMutationSpec<TKind, TPayload>;
+}
+
+const messageMutations = [
+  mutation<'message.status', { id: string; status: MsgStatus }>('message.status', {
+    op: 'setPath',
+    path: ['status'],
+    valueField: 'status'
+  }),
+  mutation<'message.partText.append', { id: string; partIndex: number; delta: string }>('message.partText.append', {
+    op: 'appendStringAtPath',
+    path: ['content', 'parts', { fromField: 'partIndex' }, 'text'],
+    valueField: 'delta'
+  }),
+  mutation<'message.part.insert', { id: string; index: number; part: ContentPart }>('message.part.insert', {
+    op: 'insertArrayItem',
+    path: ['content', 'parts'],
+    indexField: 'index',
+    itemField: 'part'
+  })
+] as const;
+
 const conversationScopedTable: ClientSyncOverrides = { globalSnapshot: false, scope: { kind: 'conversation', field: 'conversationId' } };
-const messageTable: ClientSyncOverrides = {
-  diff: 'custom',
+const messageTable = {
+  diff: 'custom' as const,
+  apply: { upsert: 'generic' as const, remove: 'generic' as const },
+  mutations: messageMutations,
   orderBy: [{ field: 'seq' }],
   cascadeRemove: [
     { table: 'messageRevisions', foreignKey: 'messageId' },
@@ -151,8 +210,8 @@ const messageTable: ClientSyncOverrides = {
     { table: 'toolCalls', foreignKey: 'messageId', cascade: true }
   ],
   globalSnapshot: false,
-  scope: { kind: 'conversation', field: 'conversationId' }
-};
+  scope: { kind: 'conversation' as const, field: 'conversationId' }
+} as const satisfies ClientStateTableClientSyncSpec;
 const toolCallsTable: ClientSyncOverrides = {
   cascadeRemove: [
     { table: 'toolCallRunLinks', foreignKey: 'toolCallId' },
@@ -206,7 +265,13 @@ export const CLIENT_STATE_TABLES = {
   conversationReuseLinks: upsertRemoveTable('conversationReuseLink', 'link'),
   conversationBranchLinks: upsertRemoveTable('conversationBranchLink', 'link'),
   agentConversationLinks: upsertRemoveTable('agentConversationLink', 'link'),
-  messages: upsertRemoveTable('message', 'message', messageTable),
+  messages: {
+    patch: {
+      upsert: { kind: 'message.upsert', payloadField: 'message' },
+      remove: { kind: 'message.remove' }
+    },
+    clientSync: messageTable
+  },
   messageRevisions: upsertRemoveTable('messageRevision', 'revision', { ...conversationScopedTable, orderBy: [{ field: 'createdAt' }, { field: 'id' }] }),
   messageCurrentRevisionLinks: upsertRemoveTable('messageCurrentRevisionLink', 'link', { ...conversationScopedTable, scope: { kind: 'conversationVia', table: 'messages', localField: 'messageId', foreignField: 'id', scopeField: 'conversationId' } }),
   toolCalls: upsertRemoveTable('toolcall', 'toolCall', toolCallsTable),
@@ -244,7 +309,13 @@ export interface GenericClientPatchApplyOperation {
   readonly payloadField?: string;
 }
 
+export interface GenericClientMutationApplyOperation {
+  readonly tableKey: ClientStateTableKey;
+  readonly apply: ClientStateMutationApplySpec;
+}
+
 export const GENERIC_CLIENT_PATCH_APPLY_BY_KIND: Readonly<Record<string, GenericClientPatchApplyOperation>> = createGenericClientPatchApplyByKind();
+export const GENERIC_CLIENT_MUTATION_APPLY_BY_KIND: Readonly<Record<string, GenericClientMutationApplyOperation>> = createGenericClientMutationApplyByKind();
 
 export function createEmptyClientState(): ClientState {
   const state: Partial<Record<ClientStateTableKey, unknown[]>> = {};
@@ -272,7 +343,7 @@ function createGenericClientPatchApplyByKind(): Readonly<Record<string, GenericC
   for (const tableKey of CLIENT_STATE_TABLE_KEYS) {
     const spec = CLIENT_STATE_TABLES[tableKey];
     const patch = spec.patch as ClientStateTablePatchSpec;
-    const apply = spec.clientSync.apply;
+    const apply = spec.clientSync.apply as Readonly<Partial<Record<ClientStatePatchOperation, ClientStatePatchMode>>>;
     if (patch.upsert && apply.upsert === 'generic') {
       operations[patch.upsert.kind] = { tableKey, operation: 'upsert', payloadField: patch.upsert.payloadField };
     }
@@ -281,6 +352,16 @@ function createGenericClientPatchApplyByKind(): Readonly<Record<string, GenericC
     }
     if (patch.remove && apply.remove === 'generic') {
       operations[patch.remove.kind] = { tableKey, operation: 'remove' };
+    }
+  }
+  return operations;
+}
+
+function createGenericClientMutationApplyByKind(): Readonly<Record<string, GenericClientMutationApplyOperation>> {
+  const operations: Record<string, GenericClientMutationApplyOperation> = {};
+  for (const tableKey of CLIENT_STATE_TABLE_KEYS) {
+    for (const mutationSpec of CLIENT_STATE_TABLES[tableKey].clientSync.mutations ?? []) {
+      operations[mutationSpec.kind] = { tableKey, apply: mutationSpec.apply };
     }
   }
   return operations;

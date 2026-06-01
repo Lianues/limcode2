@@ -3,8 +3,11 @@ import {
   CLIENT_STATE_TABLES,
   copyClientStateTables,
   createEmptyClientState,
+  GENERIC_CLIENT_MUTATION_APPLY_BY_KIND,
   GENERIC_CLIENT_PATCH_APPLY_BY_KIND,
   GLOBAL_CLIENT_STATE_TABLE_KEYS,
+  type ClientStateMutationApplySpec,
+  type ClientStateMutationPathSegment,
   type ClientStateSortSpec
 } from '@shared/clientStateRegistry';
 import {
@@ -12,9 +15,7 @@ import {
   conversationIdFromClientStateStreamId,
   type ClientPatchOp,
   type ClientState,
-  type ClientStateTableKey,
-  isTextPart,
-  isVisibleTextPart
+  type ClientStateTableKey
 } from '@shared/protocol';
 
 interface ClientStateStore extends ClientState {
@@ -60,16 +61,10 @@ function applyGlobalSnapshot(state: ClientState): void {
 
 function applyClientPatchOp(patch: ClientPatchOp): void {
   if (applyGenericClientPatchOp(patch)) return;
+  if (applyGenericClientMutationPatchOp(patch)) return;
 
   switch (patch.kind) {
     case 'conversation.remove': removeConversation(patch.id); break;
-    case 'message.appendText': appendMessageText(patch.id, patch.delta); break;
-    case 'message.appendThought': appendMessageThought(patch.id, patch.partIndex, patch.delta, patch.thoughtSignature); break;
-    case 'message.status': {
-      const message = clientState.messages.find((item) => item.id === patch.id);
-      if (message) message.status = patch.status;
-      break;
-    }
   }
 }
 
@@ -91,6 +86,81 @@ function applyGenericClientPatchOp(patch: ClientPatchOp): boolean {
   sortRegisteredTable(operation.tableKey);
   return true;
 }
+
+function applyGenericClientMutationPatchOp(patch: ClientPatchOp): boolean {
+  const operation = GENERIC_CLIENT_MUTATION_APPLY_BY_KIND[patch.kind];
+  if (!operation) return false;
+
+  const record = (clientState[operation.tableKey] as ClientStateMutableRecord[]).find((item) => item.id === (patch as { id: string }).id);
+  if (!record) return true;
+
+  applyMutation(record, patch as unknown as Record<string, unknown>, operation.apply);
+  return true;
+}
+
+
+type ClientStatePathKey = string | number;
+
+function applyMutation(record: ClientStateMutableRecord, patch: Record<string, unknown>, apply: ClientStateMutationApplySpec): void {
+  if (apply.op === 'setPath') {
+    const path = resolveMutationPath(apply.path, patch);
+    if (!path) return;
+    setPathValue(record, path, patch[apply.valueField]);
+    return;
+  }
+
+  if (apply.op === 'appendStringAtPath') {
+    const path = resolveMutationPath(apply.path, patch);
+    if (!path) return;
+    const current = getPathValue(record, path);
+    const delta = patch[apply.valueField];
+    if (typeof current !== 'string' || typeof delta !== 'string') return;
+    setPathValue(record, path, current + delta);
+    return;
+  }
+
+  if (apply.op === 'insertArrayItem') {
+    const path = resolveMutationPath(apply.path, patch);
+    if (!path) return;
+    const list = getPathValue(record, path);
+    const index = patch[apply.indexField];
+    if (!Array.isArray(list) || typeof index !== 'number') return;
+    list.splice(index, 0, patch[apply.itemField]);
+  }
+}
+
+function resolveMutationPath(path: readonly ClientStateMutationPathSegment[], patch: Record<string, unknown>): ClientStatePathKey[] | undefined {
+  const resolved: ClientStatePathKey[] = [];
+  for (const segment of path) {
+    if (typeof segment === 'string') {
+      resolved.push(segment);
+      continue;
+    }
+    const value = patch[segment.fromField];
+    if (typeof value !== 'string' && typeof value !== 'number') return undefined;
+    resolved.push(value);
+  }
+  return resolved;
+}
+
+function getPathValue(root: unknown, path: readonly ClientStatePathKey[]): unknown {
+  let current = root;
+  for (const segment of path) {
+    if (current === null || current === undefined) return undefined;
+    current = (current as Record<ClientStatePathKey, unknown>)[segment];
+  }
+  return current;
+}
+
+function setPathValue(root: unknown, path: readonly ClientStatePathKey[], value: unknown): void {
+  if (path.length === 0) return;
+  const parent = getPathValue(root, path.slice(0, -1));
+  if (parent === null || parent === undefined) return;
+  (parent as Record<ClientStatePathKey, unknown>)[path[path.length - 1]] = value;
+}
+
+
+
 type ClientStateMutableRecord = { id: string; [key: string]: unknown };
 
 function removeRegisteredRecord(tableKey: ClientStateTableKey, id: string, visited = new Set<string>()): void {
@@ -105,7 +175,7 @@ function removeRegisteredRecord(tableKey: ClientStateTableKey, id: string, visit
       .filter((record) => record[cascade.foreignKey] === id)
       .map((record) => record.id);
 
-    if (cascade.cascade) {
+    if ('cascade' in cascade && cascade.cascade) {
       for (const childId of childIds) removeRegisteredRecord(cascade.table, childId, visited);
     } else {
       removeWhere(childRecords, (record) => record[cascade.foreignKey] === id);
@@ -214,30 +284,6 @@ function removeRunScopedState(runIds: ReadonlySet<string>): void {
   clientState.agentRunInputRevisions = clientState.agentRunInputRevisions.filter((inputRevision) => !runIds.has(inputRevision.runId));
 }
 
-function appendMessageText(messageId: string, delta: string): void {
-  const message = clientState.messages.find((item) => item.id === messageId);
-  if (!message) return;
-  const parts = [...message.content.parts];
-  const last = parts[parts.length - 1];
-  if (last && isVisibleTextPart(last)) parts[parts.length - 1] = { ...last, text: last.text + delta };
-  else parts.push({ text: delta });
-  message.content = { ...message.content, parts };
-}
-
-function appendMessageThought(messageId: string, partIndex: number, delta: string, thoughtSignature?: string): void {
-  const message = clientState.messages.find((item) => item.id === messageId);
-  if (!message) return;
-  const parts = [...message.content.parts];
-  const existing = parts[partIndex];
-  if (existing && isTextPart(existing) && existing.thought === true) {
-    parts[partIndex] = { ...existing, text: existing.text + delta, ...(thoughtSignature ? { thoughtSignature } : {}) };
-  } else {
-    const thoughtPart = { text: delta, thought: true as const, ...(thoughtSignature ? { thoughtSignature } : {}) };
-    if (partIndex >= 0 && partIndex <= parts.length) parts.splice(partIndex, 0, thoughtPart);
-    else parts.push(thoughtPart);
-  }
-  message.content = { ...message.content, parts };
-}
 
 function relatedRunIdsForConversation(conversationId: string): Set<string> {
   const messageIds = new Set(clientState.messages.filter((message) => message.conversationId === conversationId).map((message) => message.id));

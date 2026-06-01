@@ -620,14 +620,19 @@ type RemovePatchForTable<TKey extends ClientStateTableKey> = ClientStateTableReg
 } ? { kind: StringLiteral<TKind>; id: string } : never;
 
 export type ClientStateTablePatchOp = {
-  [TKey in ClientStateTableKey]: UpsertPatchForTable<TKey> | AppendPatchForTable<TKey> | RemovePatchForTable<TKey>;
+  [TKey in ClientStateTableKey]: UpsertPatchForTable<TKey> | AppendPatchForTable<TKey> | RemovePatchForTable<TKey> | MutationPatchForTable<TKey>;
 }[ClientStateTableKey];
 
-export type ClientPatchOp =
-  | ClientStateTablePatchOp
-  | { kind: 'message.appendText'; id: string; delta: string }
-  | { kind: 'message.appendThought'; id: string; partIndex: number; delta: string; thoughtSignature?: string }
-  | { kind: 'message.status'; id: string; status: MsgStatus };
+type MutationPatchForSpec<TSpec> = TSpec extends {
+  readonly kind: infer TKind;
+  readonly __payload?: infer TPayload;
+} ? { kind: StringLiteral<TKind> } & (TPayload extends object ? TPayload : never) : never;
+
+type MutationPatchForTable<TKey extends ClientStateTableKey> = ClientStateTableRegistrySpec[TKey] extends {
+  readonly clientSync: { readonly mutations: readonly (infer TMutationSpec)[] };
+} ? MutationPatchForSpec<TMutationSpec> : never;
+
+export type ClientPatchOp = ClientStateTablePatchOp;
 
 export interface ChatSendPayload {
   conversationId: string;

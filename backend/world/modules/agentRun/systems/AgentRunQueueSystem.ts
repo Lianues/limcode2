@@ -1,12 +1,13 @@
 import { defineQuery, defineSystem, type Entity, type WorldReader } from '../../../../ecs/types';
 import { AgentRun, AgentRunNeedsModel, AgentRunTargetLink } from '../components';
 import { markRunNeedsModel } from '../bundles';
+import { LlmRequest } from '../../chat/components';
 
 const QueuedRunsQuery = defineQuery({
   name: 'QueuedAgentRunsWithoutModelRequest',
   all: [AgentRun, AgentRunTargetLink],
   none: [AgentRunNeedsModel],
-  read: [AgentRun, AgentRunTargetLink, AgentRunNeedsModel],
+  read: [AgentRun, AgentRunTargetLink, AgentRunNeedsModel, LlmRequest],
   add: [AgentRunNeedsModel],
   mutationMode: 'update',
   role: 'work'
@@ -20,7 +21,7 @@ export const AgentRunQueueSystem = defineSystem({
   run({ world, cmd }) {
     const queued = world
       .query(AgentRun)
-      .filter((run) => world.get(run, AgentRun)?.status === 'queued' && !world.has(run, AgentRunNeedsModel))
+      .filter((run) => world.get(run, AgentRun)?.status === 'queued' && !world.has(run, AgentRunNeedsModel) && !hasActiveRequest(world, run))
       .sort((a, b) => (world.get(a, AgentRun)?.createdAt ?? 0) - (world.get(b, AgentRun)?.createdAt ?? 0) || a - b);
 
     const activatedConversations = new Set<Entity>();
@@ -44,6 +45,10 @@ function hasEarlierActiveRunInConversation(world: WorldReader, run: Entity, conv
     if (!data || !target || target.conversation !== conversation || isTerminalRunStatus(data.status)) return false;
     return data.createdAt < current.createdAt || (data.createdAt === current.createdAt && candidate < run);
   });
+}
+
+function hasActiveRequest(world: WorldReader, run: Entity): boolean {
+  return world.query(LlmRequest).some((request) => world.get(request, LlmRequest)?.run === run);
 }
 
 function targetForRun(world: WorldReader, run: Entity): { conversation: Entity } | undefined {

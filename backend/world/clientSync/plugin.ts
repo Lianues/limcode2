@@ -1,7 +1,6 @@
 import type { WorldPlugin } from '../plugin';
 import { ClientStateContributorRegistry } from './contributors';
 import { ClientStateContributorsKey, ClientSyncStateKey } from './resources';
-import { registerClientSyncSystems } from './systems';
 
 export function clientSyncPlugin(): WorldPlugin {
   return {
@@ -14,7 +13,6 @@ export function clientSyncPlugin(): WorldPlugin {
         contributorStates: {},
         streams: {}
       });
-      registerClientSyncSystems(ctx.scheduler);
     }
   };
 }

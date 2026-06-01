@@ -13,7 +13,7 @@ const ConversationsByIdQuery = defineQuery({
   all: [Conversation],
   read: [Conversation, Agent, AgentConversationLink, AgentRun, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink],
   write: [AgentRun],
-  role: 'lookup'
+  role: 'work'
 });
 
 export const InputSystem = defineSystem({

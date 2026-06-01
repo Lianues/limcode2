@@ -17,7 +17,7 @@ import {
 import type { AgentSpawnRequestData } from '../world/modules/agent/requests';
 import { Agent, AgentConversationLink } from '../world/modules/agent/components';
 import { Conversation } from '../world/modules/chat/components';
-import { clientSyncPlugin } from '../world/clientSync';
+import { clientSyncPlugin, registerClientSyncSystems } from '../world/clientSync';
 import { storageProjectionPlugin } from '../world/storageProjection';
 import { EffectHandlerRegistry, registerApplicationEffectHandlers } from './effectHandlers';
 import { flushEffects, flushEffectsWhere } from './executeEffects';
@@ -53,6 +53,9 @@ export class BackendApplication {
   private readonly webviewClients = new WebviewClientRegistry();
   private readonly webviewRouter: WebviewMessageRouter;
   private hydrated = false;
+  private pendingGlobalSnapshot = false;
+  private readonly pendingSnapshotConversationIds = new Set<string>();
+  private readonly pendingHydrationMessages: Array<{ clientId: BridgeClientId; message: WebviewToExtensionMessage }> = [];
 
   public constructor(context: vscode.ExtensionContext) {
     const { env, toolSchemas } = createRuntimeEnv(context);
@@ -98,6 +101,7 @@ export class BackendApplication {
       { world: this.world, scheduler: this.scheduler },
       [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), modePlugin(), toolsPlugin({ toolSchemas }), chatPlugin(), agentRunPlugin()]
     );
+    registerClientSyncSystems(this.scheduler);
 
     void this.initializeClientState();
   }
@@ -114,6 +118,7 @@ export class BackendApplication {
     const agent = this.findDefaultAgent();
     if (agent === undefined) {
       requestSpawnAgent(this.world, { ...createDefaultAgentSpawnRequest(), conversationId, initialMessage: undefined });
+      this.requestSnapshot(conversationId);
       return conversationId;
     }
 
@@ -152,6 +157,10 @@ export class BackendApplication {
   }
 
   public handleWebviewMessage(clientId: BridgeClientId, message: WebviewToExtensionMessage): void {
+    if (!this.hydrated && shouldDeferUntilHydrated(message)) {
+      this.pendingHydrationMessages.push({ clientId, message });
+      return;
+    }
     this.webviewRouter.handle(clientId, message);
   }
 
@@ -180,6 +189,8 @@ export class BackendApplication {
       this.hydrated = true;
       this.persistence.enable();
       this.requestSnapshot();
+      this.flushPendingSnapshots();
+      this.flushPendingHydrationMessages();
       for (const section of GLOBAL_SETTINGS_SECTIONS) {
         void this.globalSettingsBridge.postSnapshot(undefined, section);
       }
@@ -187,7 +198,28 @@ export class BackendApplication {
   }
 
   private requestSnapshot(conversationId?: string): void {
+    if (!this.hydrated) {
+      if (conversationId) this.pendingSnapshotConversationIds.add(conversationId);
+      else this.pendingGlobalSnapshot = true;
+      return;
+    }
     this.world.enqueue({ type: ClientSyncEventType.Resync, payload: conversationId ? { conversationId } : {} });
+  }
+
+  private flushPendingSnapshots(): void {
+    if (this.pendingGlobalSnapshot) {
+      this.pendingGlobalSnapshot = false;
+      this.requestSnapshot();
+    }
+
+    const conversationIds = [...this.pendingSnapshotConversationIds];
+    this.pendingSnapshotConversationIds.clear();
+    for (const conversationId of conversationIds) this.requestSnapshot(conversationId);
+  }
+
+  private flushPendingHydrationMessages(): void {
+    const pending = this.pendingHydrationMessages.splice(0);
+    for (const item of pending) this.webviewRouter.handle(item.clientId, item.message);
   }
 
   private findDefaultAgent(): Entity | undefined {
@@ -199,4 +231,22 @@ export class BackendApplication {
 function isRealtimeClientEffect(effect: WorldEffect): boolean {
   const kind = (effect as { kind?: string }).kind;
   return kind === 'client.patch' || kind === 'client.snapshot';
+}
+
+function shouldDeferUntilHydrated(message: WebviewToExtensionMessage): boolean {
+  switch (message.type) {
+    case 'chat.send':
+    case 'chat.abort':
+    case 'message.edit':
+    case 'tool.execute':
+    case 'agentRun.cancel':
+    case 'agentRun.pause':
+    case 'agentRun.resume':
+    case 'agentRun.retry':
+    case 'agentRun.regenerate':
+    case 'agentRun.markStale':
+      return true;
+    default:
+      return false;
+  }
 }

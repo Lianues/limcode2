@@ -26,7 +26,7 @@ export async function loadRecordStore<TRecord extends { id: string }, TKey exten
   recordKey: TKey
 ): Promise<TRecord[] | undefined> {
   const index = await readJson<RecordsIndexFile>(indexUri);
-  if (!index || index.schemaVersion !== STORAGE_VERSION) return undefined;
+  if (!isRecordsIndexFile(index)) return undefined;
 
   const records: TRecord[] = [];
   for (const record of index.records) {
@@ -47,7 +47,8 @@ export async function saveRecordStore<TRecord extends { id: string }, TKey exten
   const recordsRoot = vscode.Uri.joinPath(root, RECORDS_DIR);
   await vscode.workspace.fs.createDirectory(recordsRoot);
   const previousIndex = await readJson<RecordsIndexFile>(indexUri);
-  const previousById = new Map(previousIndex?.records.map((record) => [record.id, record]));
+  const previousRecords = isRecordsIndexFile(previousIndex) ? previousIndex.records : [];
+  const previousById = new Map(previousRecords.map((record) => [record.id, record]));
 
   const nextIndexRecords: RecordIndexRecord[] = [];
   for (const record of records) {
@@ -65,4 +66,14 @@ export async function saveRecordStore<TRecord extends { id: string }, TKey exten
     savedAt,
     records: nextIndexRecords
   } satisfies RecordsIndexFile);
+}
+
+function isRecordsIndexFile(value: RecordsIndexFile | undefined): value is RecordsIndexFile {
+  if (!value || value.schemaVersion !== STORAGE_VERSION || !Array.isArray(value.records)) return false;
+  return value.records.every((record) => {
+    return !!record
+      && typeof record.id === 'string'
+      && typeof record.file === 'string'
+      && typeof record.updatedAt === 'string';
+  });
 }

@@ -295,6 +295,10 @@ export class Scheduler {
     for (const producer of nodes) {
       for (const consumer of nodes) {
         if (producer === consumer) continue;
+        // 自动 write->read 依赖只把已注册在前的 producer 推到后续 consumer 之前。
+        // 如果 consumer 注册顺序更早，说明这是一个反馈读取；由固定注册顺序 + 不动点多 pass 在下一 pass 消化，
+        // 否则互相读写同一 component 的系统会形成无法拓扑排序的静态环。
+        if (producer.registered.order > consumer.registered.order) continue;
         if (intersects(producer.access.writes, consumer.access.topoReads)) {
           addEdge(producer, consumer, 'write->read');
         }

@@ -82,7 +82,7 @@ export class WebviewMessageRouter {
         break;
       case BridgeMessageType.ClientResync:
         this.subscribeRequestedStream(clientId, message.payload?.streamId, message.payload?.conversationId);
-        if (this.deps.isHydrated()) this.deps.requestSnapshot(message.payload?.conversationId ?? conversationIdFromClientStateStreamId(message.payload?.streamId ?? ''));
+        this.deps.requestSnapshot(message.payload?.conversationId ?? conversationIdFromClientStateStreamId(message.payload?.streamId ?? ''));
         break;
       case BridgeMessageType.GlobalSettingsGet:
         if (!message.payload) return;

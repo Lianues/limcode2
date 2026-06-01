@@ -8,19 +8,13 @@ export type WorldEffect = WorldEffectMap[keyof WorldEffectMap];
 
 export class EffectOutbox {
   private readonly queue: WorldEffect[] = [];
-  private readonly keys = new Set<string>();
 
   public push(effect: WorldEffect): void {
-    const key = JSON.stringify(effect);
-    if (this.keys.has(key)) return;
-    this.keys.add(key);
     this.queue.push(effect);
   }
 
   public drain(): WorldEffect[] {
-    const out = this.queue.splice(0, this.queue.length);
-    this.keys.clear();
-    return out;
+    return this.queue.splice(0, this.queue.length);
   }
 
   public drainWhere(predicate: (effect: WorldEffect) => boolean): WorldEffect[] {
@@ -28,12 +22,7 @@ export class EffectOutbox {
     const kept: WorldEffect[] = [];
 
     for (const effect of this.queue) {
-      if (predicate(effect)) {
-        out.push(effect);
-        this.keys.delete(JSON.stringify(effect));
-      } else {
-        kept.push(effect);
-      }
+      (predicate(effect) ? out : kept).push(effect);
     }
 
     this.queue.splice(0, this.queue.length, ...kept);

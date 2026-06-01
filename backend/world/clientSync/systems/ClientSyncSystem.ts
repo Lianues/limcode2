@@ -49,7 +49,6 @@ export const ClientSyncSystem = defineSystem({
 
     const streams: Record<string, ClientStreamState> = { ...syncState.streams };
     let didUpdateStreams = false;
-    const fullChanged = prevFull === null || !sameClientState(prevFull, nextFull);
 
     const globalNext = globalClientState(nextFull);
     const globalExisting = streams[GLOBAL_CLIENT_STATE_STREAM_ID];
@@ -82,7 +81,7 @@ export const ClientSyncSystem = defineSystem({
       }
     }
 
-    if (fullChanged || didUpdateStreams) {
+    if (didUpdateStreams) {
       cmd.setResource(ClientSyncStateKey, { lastState: nextFull, streams });
     }
   }
@@ -314,6 +313,15 @@ function collectConversationIds(
   return [...ids];
 }
 
+
 function sameClientState(left: ClientState | null, right: ClientState | null): boolean {
+  if (left === right) return true;
+  if (left === null || right === null) return false;
+  for (const key of Object.keys(left) as (keyof ClientState)[]) {
+    const l = left[key];
+    const r = right[key];
+    if (l === r) continue;
+    if (l.length !== r.length) return false;
+  }
   return JSON.stringify(left) === JSON.stringify(right);
 }

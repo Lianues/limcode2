@@ -64,11 +64,13 @@ watch(
 .conversation-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: var(--space-4);
+  /* 楼层模式：边缘直接贴合，使分割线与背景色能延伸至左右两侧边界，更具现代一体感 */
+  padding: 0;
 }
 
 .conversation-composer {
   border-top: 1px solid var(--vscode-panel-border);
   padding: var(--space-3) var(--space-4);
+  background-color: var(--vscode-editor-background);
 }
 </style>

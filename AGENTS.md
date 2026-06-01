@@ -292,6 +292,10 @@ function getPaths(): StoragePaths {
 通过 resolveDataRootUri(context) + createVscodeStoragePaths(...) 统一生成路径，才能集中控制数据目录，支持后续数据文件迁移、切换和管理。
 ```
 
+## 5.5. UI设计原则
+
+避免蓝紫色+大圆角
+
 ## 6. 默认初始化准则
 
 默认初始化可以为了跑通基础体验创建默认对象，但也必须遵循解耦模型。

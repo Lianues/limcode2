@@ -55,7 +55,7 @@
         "background": {
           "activeOnStart": true,
           "beginsPattern": ".*VITE.*",
-          "endsPattern": ".*Local:.*http://127\\.0\\.0\\.1:31773/.*"
+          "endsPattern": ".*Local:.*http://127\\.0\\.0\\.1:31819/.*"
         }
       },
       "presentation": {

@@ -14,12 +14,12 @@ export default defineConfig({
   },
   server: {
     host: '127.0.0.1',
-    port: 31773,
+    port: 31819,
     strictPort: true,
     cors: true,
     hmr: {
       host: 'localhost',
-      clientPort: 31773
+      clientPort: 31819
     }
   },
   build: {

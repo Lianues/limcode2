@@ -1,0 +1,24 @@
+/*
+ * 设计 token。
+ * 颜色一律走 VS Code 主题变量（--vscode-*），不在此引入硬编码蓝紫强调色。
+ * 圆角刻意收敛到小圆角，禁用大圆角 / pill 风格。
+ */
+:root {
+  /* 间距 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 32px;
+
+  /* 圆角：仅小圆角 */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+
+  /* 字号 */
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-md: 13px;
+  --font-size-lg: 14px;
+}

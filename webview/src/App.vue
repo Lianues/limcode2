@@ -1,7 +1,15 @@
 <script setup lang="ts">
-import Chat from './components/Chat.vue';
+import { useSessionStore } from '@webview/stores/useSessionStore';
+import { useBridgeBootstrap } from '@webview/composables/useBridgeBootstrap';
+import ChatView from '@webview/views/ChatView.vue';
+import GlobalSettingsView from '@webview/views/GlobalSettingsView.vue';
+
+// 在根组件挂载时接好桥接监听；视图按任务单元类型路由。
+useBridgeBootstrap();
+const session = useSessionStore();
 </script>
 
 <template>
-  <Chat />
+  <GlobalSettingsView v-if="session.isGlobalSettings" />
+  <ChatView v-else />
 </template>

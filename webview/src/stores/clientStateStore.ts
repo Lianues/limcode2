@@ -1,50 +1,17 @@
 import { reactive } from 'vue';
 import {
+  copyClientStateTables,
+  createEmptyClientState,
+  GENERIC_CLIENT_PATCH_APPLY_BY_KIND,
+  GLOBAL_CLIENT_STATE_TABLE_KEYS
+} from '@shared/clientStateRegistry';
+import {
   GLOBAL_CLIENT_STATE_STREAM_ID,
   conversationIdFromClientStateStreamId,
-  type AgentConversationLinkRecord,
-  type AgentModeLinkRecord,
-  type AgentModeRecord,
-  type AgentRecord,
-  type AgentRunInputRevisionRecord,
-  type AgentRunRecord,
-  type AgentRunSourceLinkRecord,
-  type AgentRunTargetLinkRecord,
-  type ApprovalPolicyRecord,
   type ClientPatchOp,
   type ClientState,
-  type ConversationBranchLinkRecord,
-  type ConversationRecord,
-  type ConversationReuseLinkRecord,
   isTextPart,
-  isVisibleTextPart,
-  type MessageCurrentRevisionLinkRecord,
-  type MessageRecord,
-  type MessageRevisionRecord,
-  type MessageRunLinkRecord,
-  type ModeApprovalPolicyLinkRecord,
-  type ModeModelProfileLinkRecord,
-  type ModeSystemPromptLinkRecord,
-  type ModeToolPolicyLinkRecord,
-  type ModelProfileRecord,
-  type RunApprovalPolicyLinkRecord,
-  type RunContextPolicyLinkRecord,
-  type RunContextPolicyRecord,
-  type RunConversationPolicyLinkRecord,
-  type RunConversationPolicyRecord,
-  type RunDeliveryPolicyLinkRecord,
-  type RunDeliveryPolicyRecord,
-  type RunEditPolicyLinkRecord,
-  type RunEditPolicyRecord,
-  type RunModeLinkRecord,
-  type RunModelProfileLinkRecord,
-  type RunSystemPromptLinkRecord,
-  type RunToolPolicyLinkRecord,
-  type SystemPromptRecord,
-  type ToolCallEventRecord,
-  type ToolCallRecord,
-  type ToolCallRunLinkRecord,
-  type ToolPolicyRecord
+  isVisibleTextPart
 } from '@shared/protocol';
 
 interface ClientStateStore extends ClientState {
@@ -55,7 +22,7 @@ interface ClientStateStore extends ClientState {
 }
 
 export const clientState = reactive<ClientStateStore>({
-  ...emptyClientState(),
+  ...createEmptyClientState(),
   streamSeqs: {},
   currentConversationId: '',
   showHiddenConversations: false
@@ -85,74 +52,14 @@ export function applyClientPatch(streamId: string, streamSeq: number, patches: C
 }
 
 function applyGlobalSnapshot(state: ClientState): void {
-  clientState.agents = state.agents;
-  clientState.agentModes = state.agentModes;
-  clientState.toolPolicies = state.toolPolicies;
-  clientState.approvalPolicies = state.approvalPolicies;
-  clientState.systemPrompts = state.systemPrompts;
-  clientState.modelProfiles = state.modelProfiles;
-  clientState.agentModeLinks = state.agentModeLinks;
-  clientState.modeToolPolicyLinks = state.modeToolPolicyLinks;
-  clientState.modeApprovalPolicyLinks = state.modeApprovalPolicyLinks;
-  clientState.modeSystemPromptLinks = state.modeSystemPromptLinks;
-  clientState.modeModelProfileLinks = state.modeModelProfileLinks;
-  clientState.conversations = state.conversations;
-  clientState.conversationReuseLinks = state.conversationReuseLinks;
-  clientState.conversationBranchLinks = state.conversationBranchLinks;
-  clientState.agentConversationLinks = state.agentConversationLinks;
-  clientState.agentRuns = state.agentRuns;
-  clientState.agentRunSourceLinks = state.agentRunSourceLinks;
-  clientState.agentRunTargetLinks = state.agentRunTargetLinks;
-  clientState.messageRunLinks = state.messageRunLinks;
-  clientState.toolCallRunLinks = state.toolCallRunLinks;
-  clientState.runConversationPolicies = state.runConversationPolicies;
-  clientState.runContextPolicies = state.runContextPolicies;
-  clientState.runDeliveryPolicies = state.runDeliveryPolicies;
-  clientState.runEditPolicies = state.runEditPolicies;
-  clientState.runModeLinks = state.runModeLinks;
-  clientState.runSystemPromptLinks = state.runSystemPromptLinks;
-  clientState.runModelProfileLinks = state.runModelProfileLinks;
-  clientState.runToolPolicyLinks = state.runToolPolicyLinks;
-  clientState.runApprovalPolicyLinks = state.runApprovalPolicyLinks;
-  clientState.runConversationPolicyLinks = state.runConversationPolicyLinks;
-  clientState.runContextPolicyLinks = state.runContextPolicyLinks;
-  clientState.runDeliveryPolicyLinks = state.runDeliveryPolicyLinks;
-  clientState.runEditPolicyLinks = state.runEditPolicyLinks;
-  clientState.agentRunInputRevisions = state.agentRunInputRevisions;
+  copyClientStateTables(clientState, state, GLOBAL_CLIENT_STATE_TABLE_KEYS);
 }
 
 function applyClientPatchOp(patch: ClientPatchOp): void {
+  if (applyGenericClientPatchOp(patch)) return;
+
   switch (patch.kind) {
-    case 'agent.upsert': upsert(clientState.agents, patch.agent); break;
-    case 'agent.remove': removeById(clientState.agents, patch.id); break;
-    case 'agentMode.upsert': upsert(clientState.agentModes, patch.agentMode); break;
-    case 'agentMode.remove': removeById(clientState.agentModes, patch.id); break;
-    case 'toolPolicy.upsert': upsert(clientState.toolPolicies, patch.toolPolicy); break;
-    case 'toolPolicy.remove': removeById(clientState.toolPolicies, patch.id); break;
-    case 'approvalPolicy.upsert': upsert(clientState.approvalPolicies, patch.approvalPolicy); break;
-    case 'approvalPolicy.remove': removeById(clientState.approvalPolicies, patch.id); break;
-    case 'systemPrompt.upsert': upsert(clientState.systemPrompts, patch.systemPrompt); break;
-    case 'systemPrompt.remove': removeById(clientState.systemPrompts, patch.id); break;
-    case 'modelProfile.upsert': upsert(clientState.modelProfiles, patch.modelProfile); break;
-    case 'modelProfile.remove': removeById(clientState.modelProfiles, patch.id); break;
-    case 'agentModeLink.upsert': upsert(clientState.agentModeLinks, patch.link); break;
-    case 'agentModeLink.remove': removeById(clientState.agentModeLinks, patch.id); break;
-    case 'modeToolPolicyLink.upsert': upsert(clientState.modeToolPolicyLinks, patch.link); break;
-    case 'modeToolPolicyLink.remove': removeById(clientState.modeToolPolicyLinks, patch.id); break;
-    case 'modeApprovalPolicyLink.upsert': upsert(clientState.modeApprovalPolicyLinks, patch.link); break;
-    case 'modeApprovalPolicyLink.remove': removeById(clientState.modeApprovalPolicyLinks, patch.id); break;
-    case 'modeSystemPromptLink.upsert': upsert(clientState.modeSystemPromptLinks, patch.link); break;
-    case 'modeSystemPromptLink.remove': removeById(clientState.modeSystemPromptLinks, patch.id); break;
-    case 'modeModelProfileLink.upsert': upsert(clientState.modeModelProfileLinks, patch.link); break;
-    case 'modeModelProfileLink.remove': removeById(clientState.modeModelProfileLinks, patch.id); break;
-    case 'conversation.upsert': upsert(clientState.conversations, patch.conversation); break;
     case 'conversation.remove': removeConversation(patch.id); break;
-    case 'conversationReuseLink.upsert': upsert(clientState.conversationReuseLinks, patch.link); break;
-    case 'conversationReuseLink.remove': removeById(clientState.conversationReuseLinks, patch.id); break;
-    case 'conversationBranchLink.upsert': upsert(clientState.conversationBranchLinks, patch.link); break;
-    case 'conversationBranchLink.remove': removeById(clientState.conversationBranchLinks, patch.id); break;
-    case 'agentConversationLink.upsert': upsert(clientState.agentConversationLinks, patch.link); break;
-    case 'agentConversationLink.remove': removeById(clientState.agentConversationLinks, patch.id); break;
     case 'message.upsert':
       upsert(clientState.messages, patch.message);
       clientState.messages.sort((a, b) => a.seq - b.seq);
@@ -165,57 +72,34 @@ function applyClientPatchOp(patch: ClientPatchOp): void {
       if (message) message.status = patch.status;
       break;
     }
-    case 'messageRevision.upsert': upsert(clientState.messageRevisions, patch.revision); break;
-    case 'messageRevision.remove': removeById(clientState.messageRevisions, patch.id); break;
-    case 'messageCurrentRevisionLink.upsert': upsert(clientState.messageCurrentRevisionLinks, patch.link); break;
-    case 'messageCurrentRevisionLink.remove': removeById(clientState.messageCurrentRevisionLinks, patch.id); break;
-    case 'toolcall.upsert': upsert(clientState.toolCalls, patch.toolCall); break;
     case 'toolcall.remove': removeToolCall(patch.id); break;
     case 'toolcallEvent.append':
       upsert(clientState.toolCallEvents, patch.event);
       clientState.toolCallEvents.sort((a, b) => a.seq - b.seq || a.id.localeCompare(b.id));
       break;
-    case 'toolcallEvent.remove': removeById(clientState.toolCallEvents, patch.id); break;
-    case 'agentRun.upsert': upsert(clientState.agentRuns, patch.run); break;
     case 'agentRun.remove': removeAgentRun(patch.id); break;
-    case 'agentRunSourceLink.upsert': upsert(clientState.agentRunSourceLinks, patch.link); break;
-    case 'agentRunSourceLink.remove': removeById(clientState.agentRunSourceLinks, patch.id); break;
-    case 'agentRunTargetLink.upsert': upsert(clientState.agentRunTargetLinks, patch.link); break;
-    case 'agentRunTargetLink.remove': removeById(clientState.agentRunTargetLinks, patch.id); break;
-    case 'messageRunLink.upsert': upsert(clientState.messageRunLinks, patch.link); break;
-    case 'messageRunLink.remove': removeById(clientState.messageRunLinks, patch.id); break;
-    case 'toolCallRunLink.upsert': upsert(clientState.toolCallRunLinks, patch.link); break;
-    case 'toolCallRunLink.remove': removeById(clientState.toolCallRunLinks, patch.id); break;
-    case 'runConversationPolicy.upsert': upsert(clientState.runConversationPolicies, patch.policy); break;
-    case 'runConversationPolicy.remove': removeById(clientState.runConversationPolicies, patch.id); break;
-    case 'runContextPolicy.upsert': upsert(clientState.runContextPolicies, patch.policy); break;
-    case 'runContextPolicy.remove': removeById(clientState.runContextPolicies, patch.id); break;
-    case 'runDeliveryPolicy.upsert': upsert(clientState.runDeliveryPolicies, patch.policy); break;
-    case 'runDeliveryPolicy.remove': removeById(clientState.runDeliveryPolicies, patch.id); break;
-    case 'runEditPolicy.upsert': upsert(clientState.runEditPolicies, patch.policy); break;
-    case 'runEditPolicy.remove': removeById(clientState.runEditPolicies, patch.id); break;
-    case 'runModeLink.upsert': upsert(clientState.runModeLinks, patch.link); break;
-    case 'runModeLink.remove': removeById(clientState.runModeLinks, patch.id); break;
-    case 'runSystemPromptLink.upsert': upsert(clientState.runSystemPromptLinks, patch.link); break;
-    case 'runSystemPromptLink.remove': removeById(clientState.runSystemPromptLinks, patch.id); break;
-    case 'runModelProfileLink.upsert': upsert(clientState.runModelProfileLinks, patch.link); break;
-    case 'runModelProfileLink.remove': removeById(clientState.runModelProfileLinks, patch.id); break;
-    case 'runToolPolicyLink.upsert': upsert(clientState.runToolPolicyLinks, patch.link); break;
-    case 'runToolPolicyLink.remove': removeById(clientState.runToolPolicyLinks, patch.id); break;
-    case 'runApprovalPolicyLink.upsert': upsert(clientState.runApprovalPolicyLinks, patch.link); break;
-    case 'runApprovalPolicyLink.remove': removeById(clientState.runApprovalPolicyLinks, patch.id); break;
-    case 'runConversationPolicyLink.upsert': upsert(clientState.runConversationPolicyLinks, patch.link); break;
-    case 'runConversationPolicyLink.remove': removeById(clientState.runConversationPolicyLinks, patch.id); break;
-    case 'runContextPolicyLink.upsert': upsert(clientState.runContextPolicyLinks, patch.link); break;
-    case 'runContextPolicyLink.remove': removeById(clientState.runContextPolicyLinks, patch.id); break;
-    case 'runDeliveryPolicyLink.upsert': upsert(clientState.runDeliveryPolicyLinks, patch.link); break;
-    case 'runDeliveryPolicyLink.remove': removeById(clientState.runDeliveryPolicyLinks, patch.id); break;
-    case 'runEditPolicyLink.upsert': upsert(clientState.runEditPolicyLinks, patch.link); break;
-    case 'runEditPolicyLink.remove': removeById(clientState.runEditPolicyLinks, patch.id); break;
-    case 'agentRunInputRevision.upsert': upsert(clientState.agentRunInputRevisions, patch.inputRevision); break;
-    case 'agentRunInputRevision.remove': removeById(clientState.agentRunInputRevisions, patch.id); break;
   }
 }
+
+function applyGenericClientPatchOp(patch: ClientPatchOp): boolean {
+  const operation = GENERIC_CLIENT_PATCH_APPLY_BY_KIND[patch.kind];
+  if (!operation) return false;
+
+  const list = clientState[operation.tableKey] as Array<{ id: string }>;
+  if (operation.operation === 'remove') {
+    removeById(list, (patch as { id: string }).id);
+    return true;
+  }
+
+  const payloadField = operation.payloadField;
+  if (!payloadField) return false;
+  const record = (patch as unknown as Record<string, unknown>)[payloadField] as { id: string } | undefined;
+  if (!record) return false;
+  upsert(list, record);
+  return true;
+}
+
+
 
 function replaceConversationState(conversationId: string, state: ClientState): void {
   const previousMessageIds = new Set(clientState.messages.filter((message) => message.conversationId === conversationId).map((message) => message.id));
@@ -376,16 +260,4 @@ function upsert<T extends { id: string }>(list: T[], item: T): void {
 function removeById<T extends { id: string }>(list: T[], id: string): void {
   const index = list.findIndex((candidate) => candidate.id === id);
   if (index >= 0) list.splice(index, 1);
-}
-
-function emptyClientState(): ClientState {
-  return {
-    agents: [], agentModes: [], toolPolicies: [], approvalPolicies: [], systemPrompts: [], modelProfiles: [],
-    agentModeLinks: [], modeToolPolicyLinks: [], modeApprovalPolicyLinks: [], modeSystemPromptLinks: [], modeModelProfileLinks: [],
-    conversations: [], conversationReuseLinks: [], conversationBranchLinks: [], agentConversationLinks: [], messages: [], messageRevisions: [], messageCurrentRevisionLinks: [],
-    toolCalls: [], toolCallEvents: [], agentRuns: [], agentRunSourceLinks: [], agentRunTargetLinks: [], messageRunLinks: [], toolCallRunLinks: [],
-    runConversationPolicies: [], runContextPolicies: [], runDeliveryPolicies: [], runEditPolicies: [],
-    runModeLinks: [], runSystemPromptLinks: [], runModelProfileLinks: [], runToolPolicyLinks: [], runApprovalPolicyLinks: [],
-    runConversationPolicyLinks: [], runContextPolicyLinks: [], runDeliveryPolicyLinks: [], runEditPolicyLinks: [], agentRunInputRevisions: []
-  };
 }

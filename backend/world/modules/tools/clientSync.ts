@@ -1,24 +1,16 @@
 import type { ClientPatchOp, ClientState, ToolCallEventRecord } from '../../../../shared/protocol';
-import { diffUpsertRemove } from '../../clientSync/diff';
 import { defineClientStateContributor } from '../../clientSync/contributors';
 import { projectToolsState, toolsStateProjectionReads } from './stateProjection';
 
 export const projectToolsClientState = projectToolsState;
 
 export function diffToolsClientState(prev: ClientState, next: ClientState): ClientPatchOp[] {
-  return [
-    ...diffUpsertRemove(
-      prev.toolCalls,
-      next.toolCalls,
-      (toolCall): ClientPatchOp => ({ kind: 'toolcall.upsert', toolCall }),
-      (id): ClientPatchOp => ({ kind: 'toolcall.remove', id })
-    ),
-    ...diffToolCallEvents(prev.toolCallEvents ?? [], next.toolCallEvents ?? [])
-  ];
+  return diffToolCallEvents(prev.toolCallEvents ?? [], next.toolCallEvents ?? []);
 }
 
 export const toolsClientSyncContributor = defineClientStateContributor({
   key: 'tools',
+  tables: ['toolCalls', 'toolCallEvents'],
   reads: toolsStateProjectionReads,
   project: projectToolsClientState,
   diff: diffToolsClientState,

@@ -1,9 +1,11 @@
 import * as path from 'path';
 import { GLOBAL_CLIENT_STATE_STREAM_ID, type ClientPatchOp, type ClientState } from '../../../shared/protocol';
+import { createEmptyClientState } from '../../../shared/clientStateRegistry';
 import { CommandBuffer, type EntityAllocator } from '../../ecs/CommandBuffer';
 import { SnapshotWorldReader } from '../../ecs/SnapshotWorldReader';
 import type { SystemContext, WorldSnapshot } from '../../ecs/types';
 import type { ClientStateContributorDescriptor, ClientStateDiffer, ClientStateProjector } from './contributors';
+import { diffClientStateTables } from './diff';
 import { ClientSyncStateKey } from './resources';
 
 export interface ClientSyncWorkerInput {
@@ -32,8 +34,9 @@ export function runClientSyncProjection(input: ClientSyncWorkerInput, cmd: Comma
   }
 
   const patches = input.contributors.flatMap((contributor) => {
+    const genericPatches = diffClientStateTables(input.previousState!, next, contributor.tables ?? []);
     const diff = loadDiffer(contributor);
-    return diff?.(input.previousState!, next) ?? [];
+    return [...genericPatches, ...(diff?.(input.previousState!, next) ?? [])];
   });
 
   if (patches.length > 0) {
@@ -49,23 +52,11 @@ export function runClientSyncProjection(input: ClientSyncWorkerInput, cmd: Comma
 }
 
 export function projectClientState(world: SnapshotWorldReader, contributors: readonly ClientStateContributorDescriptor[]): ClientState {
-  const state: ClientState = emptyClientState();
+  const state: ClientState = createEmptyClientState();
   for (const contributor of contributors) {
     Object.assign(state, loadProjector(contributor)(world));
   }
   return state;
-}
-
-function emptyClientState(): ClientState {
-  return {
-    agents: [], agentModes: [], toolPolicies: [], approvalPolicies: [], systemPrompts: [], modelProfiles: [],
-    agentModeLinks: [], modeToolPolicyLinks: [], modeApprovalPolicyLinks: [], modeSystemPromptLinks: [], modeModelProfileLinks: [],
-    conversations: [], conversationReuseLinks: [], conversationBranchLinks: [], agentConversationLinks: [], messages: [], messageRevisions: [], messageCurrentRevisionLinks: [],
-    toolCalls: [], toolCallEvents: [], agentRuns: [], agentRunSourceLinks: [], agentRunTargetLinks: [], messageRunLinks: [], toolCallRunLinks: [],
-    runConversationPolicies: [], runContextPolicies: [], runDeliveryPolicies: [], runEditPolicies: [],
-    runModeLinks: [], runSystemPromptLinks: [], runModelProfileLinks: [], runToolPolicyLinks: [], runApprovalPolicyLinks: [],
-    runConversationPolicyLinks: [], runContextPolicyLinks: [], runDeliveryPolicyLinks: [], runEditPolicyLinks: [], agentRunInputRevisions: []
-  };
 }
 
 function loadProjector(contributor: ClientStateContributorDescriptor): ClientStateProjector {

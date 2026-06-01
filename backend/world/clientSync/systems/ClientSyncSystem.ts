@@ -5,12 +5,14 @@ import {
   type ClientPatchOp,
   type ClientState
 } from '../../../../shared/protocol';
+import { clientStateWithTables, createEmptyClientState, GLOBAL_CLIENT_STATE_TABLE_KEYS } from '../../../../shared/clientStateRegistry';
 import { defineSystem, type AccessDeclaration } from '../../../ecs/types';
 import { readEvents } from '../../events';
 import type { ClientStateContributor } from '../contributors';
+import { diffClientStateTables } from '../diff';
 import { ClientSyncEventType } from '../events';
 import { ClientStateContributorsKey, ClientSyncStateKey, type ClientStreamState } from '../resources';
-import { emptyClientState, projectClientStateWithCache } from '../projection';
+import { projectClientStateWithCache } from '../projection';
 
 export const ClientSyncSystem = defineSystem({
   name: 'ClientSyncSystem',
@@ -124,47 +126,16 @@ function emitPatchIfChanged(
 }
 
 function diffClientState(contributors: ClientStateContributor[], prev: ClientState, next: ClientState): ClientPatchOp[] {
-  return contributors.flatMap((contributor) => contributor.diff?.(prev, next) ?? []);
+  const patches: ClientPatchOp[] = [];
+  for (const contributor of contributors) {
+    patches.push(...diffClientStateTables(prev, next, contributor.tables ?? []));
+    patches.push(...(contributor.diff?.(prev, next) ?? []));
+  }
+  return patches;
 }
 
 function globalClientState(state: ClientState): ClientState {
-  return {
-    ...emptyClientState(),
-    agents: state.agents,
-    agentModes: state.agentModes,
-    toolPolicies: state.toolPolicies,
-    approvalPolicies: state.approvalPolicies,
-    systemPrompts: state.systemPrompts,
-    modelProfiles: state.modelProfiles,
-    agentModeLinks: state.agentModeLinks,
-    modeToolPolicyLinks: state.modeToolPolicyLinks,
-    modeApprovalPolicyLinks: state.modeApprovalPolicyLinks,
-    modeSystemPromptLinks: state.modeSystemPromptLinks,
-    modeModelProfileLinks: state.modeModelProfileLinks,
-    conversations: state.conversations,
-    conversationReuseLinks: state.conversationReuseLinks,
-    conversationBranchLinks: state.conversationBranchLinks,
-    agentConversationLinks: state.agentConversationLinks,
-    agentRuns: state.agentRuns,
-    agentRunSourceLinks: state.agentRunSourceLinks,
-    agentRunTargetLinks: state.agentRunTargetLinks,
-    messageRunLinks: state.messageRunLinks,
-    toolCallRunLinks: state.toolCallRunLinks,
-    runConversationPolicies: state.runConversationPolicies,
-    runContextPolicies: state.runContextPolicies,
-    runDeliveryPolicies: state.runDeliveryPolicies,
-    runEditPolicies: state.runEditPolicies,
-    runModeLinks: state.runModeLinks,
-    runSystemPromptLinks: state.runSystemPromptLinks,
-    runModelProfileLinks: state.runModelProfileLinks,
-    runToolPolicyLinks: state.runToolPolicyLinks,
-    runApprovalPolicyLinks: state.runApprovalPolicyLinks,
-    runConversationPolicyLinks: state.runConversationPolicyLinks,
-    runContextPolicyLinks: state.runContextPolicyLinks,
-    runDeliveryPolicyLinks: state.runDeliveryPolicyLinks,
-    runEditPolicyLinks: state.runEditPolicyLinks,
-    agentRunInputRevisions: state.agentRunInputRevisions
-  };
+  return clientStateWithTables(state, GLOBAL_CLIENT_STATE_TABLE_KEYS);
 }
 
 function conversationClientState(state: ClientState, conversationId: string): ClientState {
@@ -176,7 +147,7 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
   const runPolicyIds = collectRunPolicyIds(state, runIds);
 
   return {
-    ...emptyClientState(),
+    ...createEmptyClientState(),
     conversations: state.conversations.filter((conversation) => conversation.id === conversationId || conversationReferencedByRuns(state, conversation.id, runIds)),
     conversationReuseLinks: state.conversationReuseLinks.filter((link) => link.conversationId === conversationId),
     conversationBranchLinks: state.conversationBranchLinks.filter((link) => link.sourceConversationId === conversationId || link.targetConversationId === conversationId),

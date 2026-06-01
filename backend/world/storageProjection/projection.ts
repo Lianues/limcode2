@@ -1,5 +1,5 @@
 import type { WorldReader } from '../../ecs/types';
-import { emptyClientState } from '../state/clientState';
+import { createEmptyClientState } from '../../../shared/clientStateRegistry';
 import { projectStateWithCache, type ProjectionCache, type ProjectionContributorState, type ProjectionResult } from '../projection/cache';
 import type { StorageState, StorageStateContributor, StorageStateSlice } from './contributors';
 
@@ -12,7 +12,7 @@ export function projectStorageStateWithCache(
   contributors: readonly StorageStateContributor[],
   previous: StorageProjectionCache
 ): StorageProjectionResult {
-  return projectStateWithCache<StorageState, StorageStateSlice>(world, contributors, previous, emptyClientState, 'StorageState');
+  return projectStateWithCache<StorageState, StorageStateSlice>(world, contributors, previous, createEmptyClientState, 'StorageState');
 }
 
 export function projectStorageState(world: WorldReader, contributors: readonly StorageStateContributor[]): StorageState {

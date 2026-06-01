@@ -1,3 +1,5 @@
+import type { CLIENT_STATE_TABLES } from './clientStateRegistry';
+
 export type MessageId = string;
 export type BridgeClientId = string;
 
@@ -554,130 +556,78 @@ export interface AgentRunInputRevisionRecord {
   revisionId: string;
 }
 
-export interface ClientState {
-  agents: AgentRecord[];
-  agentModes: AgentModeRecord[];
-  toolPolicies: ToolPolicyRecord[];
-  approvalPolicies: ApprovalPolicyRecord[];
-  systemPrompts: SystemPromptRecord[];
-  modelProfiles: ModelProfileRecord[];
-  agentModeLinks: AgentModeLinkRecord[];
-  modeToolPolicyLinks: ModeToolPolicyLinkRecord[];
-  modeApprovalPolicyLinks: ModeApprovalPolicyLinkRecord[];
-  modeSystemPromptLinks: ModeSystemPromptLinkRecord[];
-  modeModelProfileLinks: ModeModelProfileLinkRecord[];
-  conversations: ConversationRecord[];
-  conversationReuseLinks: ConversationReuseLinkRecord[];
-  conversationBranchLinks: ConversationBranchLinkRecord[];
-  agentConversationLinks: AgentConversationLinkRecord[];
-  messages: MessageRecord[];
-  messageRevisions: MessageRevisionRecord[];
-  messageCurrentRevisionLinks: MessageCurrentRevisionLinkRecord[];
-  toolCalls: ToolCallRecord[];
-  toolCallEvents: ToolCallEventRecord[];
-  agentRuns: AgentRunRecord[];
-  agentRunSourceLinks: AgentRunSourceLinkRecord[];
-  agentRunTargetLinks: AgentRunTargetLinkRecord[];
-  messageRunLinks: MessageRunLinkRecord[];
-  toolCallRunLinks: ToolCallRunLinkRecord[];
-  runConversationPolicies: RunConversationPolicyRecord[];
-  runContextPolicies: RunContextPolicyRecord[];
-  runDeliveryPolicies: RunDeliveryPolicyRecord[];
-  runEditPolicies: RunEditPolicyRecord[];
-  runModeLinks: RunModeLinkRecord[];
-  runSystemPromptLinks: RunSystemPromptLinkRecord[];
-  runModelProfileLinks: RunModelProfileLinkRecord[];
-  runToolPolicyLinks: RunToolPolicyLinkRecord[];
-  runApprovalPolicyLinks: RunApprovalPolicyLinkRecord[];
-  runConversationPolicyLinks: RunConversationPolicyLinkRecord[];
-  runContextPolicyLinks: RunContextPolicyLinkRecord[];
-  runDeliveryPolicyLinks: RunDeliveryPolicyLinkRecord[];
-  runEditPolicyLinks: RunEditPolicyLinkRecord[];
-  agentRunInputRevisions: AgentRunInputRevisionRecord[];
+export interface ClientStateRecordByTable {
+  agents: AgentRecord;
+  agentModes: AgentModeRecord;
+  toolPolicies: ToolPolicyRecord;
+  approvalPolicies: ApprovalPolicyRecord;
+  systemPrompts: SystemPromptRecord;
+  modelProfiles: ModelProfileRecord;
+  agentModeLinks: AgentModeLinkRecord;
+  modeToolPolicyLinks: ModeToolPolicyLinkRecord;
+  modeApprovalPolicyLinks: ModeApprovalPolicyLinkRecord;
+  modeSystemPromptLinks: ModeSystemPromptLinkRecord;
+  modeModelProfileLinks: ModeModelProfileLinkRecord;
+  conversations: ConversationRecord;
+  conversationReuseLinks: ConversationReuseLinkRecord;
+  conversationBranchLinks: ConversationBranchLinkRecord;
+  agentConversationLinks: AgentConversationLinkRecord;
+  messages: MessageRecord;
+  messageRevisions: MessageRevisionRecord;
+  messageCurrentRevisionLinks: MessageCurrentRevisionLinkRecord;
+  toolCalls: ToolCallRecord;
+  toolCallEvents: ToolCallEventRecord;
+  agentRuns: AgentRunRecord;
+  agentRunSourceLinks: AgentRunSourceLinkRecord;
+  agentRunTargetLinks: AgentRunTargetLinkRecord;
+  messageRunLinks: MessageRunLinkRecord;
+  toolCallRunLinks: ToolCallRunLinkRecord;
+  runConversationPolicies: RunConversationPolicyRecord;
+  runContextPolicies: RunContextPolicyRecord;
+  runDeliveryPolicies: RunDeliveryPolicyRecord;
+  runEditPolicies: RunEditPolicyRecord;
+  runModeLinks: RunModeLinkRecord;
+  runSystemPromptLinks: RunSystemPromptLinkRecord;
+  runModelProfileLinks: RunModelProfileLinkRecord;
+  runToolPolicyLinks: RunToolPolicyLinkRecord;
+  runApprovalPolicyLinks: RunApprovalPolicyLinkRecord;
+  runConversationPolicyLinks: RunConversationPolicyLinkRecord;
+  runContextPolicyLinks: RunContextPolicyLinkRecord;
+  runDeliveryPolicyLinks: RunDeliveryPolicyLinkRecord;
+  runEditPolicyLinks: RunEditPolicyLinkRecord;
+  agentRunInputRevisions: AgentRunInputRevisionRecord;
 }
 
+export type ClientStateTableKey = keyof ClientStateRecordByTable;
+export type ClientStateTableRecord<TKey extends ClientStateTableKey> = ClientStateRecordByTable[TKey] & { id: string };
+export type ClientState = {
+  [TKey in ClientStateTableKey]: ClientStateTableRecord<TKey>[];
+};
+
+type ClientStateTableRegistrySpec = typeof CLIENT_STATE_TABLES;
+type StringLiteral<T> = T extends string ? T : never;
+
+type UpsertPatchForTable<TKey extends ClientStateTableKey> = ClientStateTableRegistrySpec[TKey] extends {
+  readonly patch: { readonly upsert: { readonly kind: infer TKind; readonly payloadField: infer TField } };
+} ? { kind: StringLiteral<TKind> } & { [TFieldKey in StringLiteral<TField>]: ClientStateTableRecord<TKey> } : never;
+
+type AppendPatchForTable<TKey extends ClientStateTableKey> = ClientStateTableRegistrySpec[TKey] extends {
+  readonly patch: { readonly append: { readonly kind: infer TKind; readonly payloadField: infer TField } };
+} ? { kind: StringLiteral<TKind> } & { [TFieldKey in StringLiteral<TField>]: ClientStateTableRecord<TKey> } : never;
+
+type RemovePatchForTable<TKey extends ClientStateTableKey> = ClientStateTableRegistrySpec[TKey] extends {
+  readonly patch: { readonly remove: { readonly kind: infer TKind } };
+} ? { kind: StringLiteral<TKind>; id: string } : never;
+
+export type ClientStateTablePatchOp = {
+  [TKey in ClientStateTableKey]: UpsertPatchForTable<TKey> | AppendPatchForTable<TKey> | RemovePatchForTable<TKey>;
+}[ClientStateTableKey];
+
 export type ClientPatchOp =
-  | { kind: 'agent.upsert'; agent: AgentRecord }
-  | { kind: 'agent.remove'; id: string }
-  | { kind: 'agentMode.upsert'; agentMode: AgentModeRecord }
-  | { kind: 'agentMode.remove'; id: string }
-  | { kind: 'toolPolicy.upsert'; toolPolicy: ToolPolicyRecord }
-  | { kind: 'toolPolicy.remove'; id: string }
-  | { kind: 'approvalPolicy.upsert'; approvalPolicy: ApprovalPolicyRecord }
-  | { kind: 'approvalPolicy.remove'; id: string }
-  | { kind: 'systemPrompt.upsert'; systemPrompt: SystemPromptRecord }
-  | { kind: 'systemPrompt.remove'; id: string }
-  | { kind: 'modelProfile.upsert'; modelProfile: ModelProfileRecord }
-  | { kind: 'modelProfile.remove'; id: string }
-  | { kind: 'agentModeLink.upsert'; link: AgentModeLinkRecord }
-  | { kind: 'agentModeLink.remove'; id: string }
-  | { kind: 'modeToolPolicyLink.upsert'; link: ModeToolPolicyLinkRecord }
-  | { kind: 'modeToolPolicyLink.remove'; id: string }
-  | { kind: 'modeApprovalPolicyLink.upsert'; link: ModeApprovalPolicyLinkRecord }
-  | { kind: 'modeApprovalPolicyLink.remove'; id: string }
-  | { kind: 'modeSystemPromptLink.upsert'; link: ModeSystemPromptLinkRecord }
-  | { kind: 'modeSystemPromptLink.remove'; id: string }
-  | { kind: 'modeModelProfileLink.upsert'; link: ModeModelProfileLinkRecord }
-  | { kind: 'modeModelProfileLink.remove'; id: string }
-  | { kind: 'conversation.upsert'; conversation: ConversationRecord }
-  | { kind: 'conversation.remove'; id: string }
-  | { kind: 'conversationReuseLink.upsert'; link: ConversationReuseLinkRecord }
-  | { kind: 'conversationReuseLink.remove'; id: string }
-  | { kind: 'conversationBranchLink.upsert'; link: ConversationBranchLinkRecord }
-  | { kind: 'conversationBranchLink.remove'; id: string }
-  | { kind: 'agentConversationLink.upsert'; link: AgentConversationLinkRecord }
-  | { kind: 'agentConversationLink.remove'; id: string }
-  | { kind: 'message.upsert'; message: MessageRecord }
-  | { kind: 'message.remove'; id: string }
+  | ClientStateTablePatchOp
   | { kind: 'message.appendText'; id: string; delta: string }
   | { kind: 'message.appendThought'; id: string; partIndex: number; delta: string; thoughtSignature?: string }
-  | { kind: 'message.status'; id: string; status: MsgStatus }
-  | { kind: 'messageRevision.upsert'; revision: MessageRevisionRecord }
-  | { kind: 'messageRevision.remove'; id: string }
-  | { kind: 'messageCurrentRevisionLink.upsert'; link: MessageCurrentRevisionLinkRecord }
-  | { kind: 'messageCurrentRevisionLink.remove'; id: string }
-  | { kind: 'toolcall.upsert'; toolCall: ToolCallRecord }
-  | { kind: 'toolcall.remove'; id: string }
-  | { kind: 'toolcallEvent.append'; event: ToolCallEventRecord }
-  | { kind: 'toolcallEvent.remove'; id: string }
-  | { kind: 'agentRun.upsert'; run: AgentRunRecord }
-  | { kind: 'agentRun.remove'; id: string }
-  | { kind: 'agentRunSourceLink.upsert'; link: AgentRunSourceLinkRecord }
-  | { kind: 'agentRunSourceLink.remove'; id: string }
-  | { kind: 'agentRunTargetLink.upsert'; link: AgentRunTargetLinkRecord }
-  | { kind: 'agentRunTargetLink.remove'; id: string }
-  | { kind: 'messageRunLink.upsert'; link: MessageRunLinkRecord }
-  | { kind: 'messageRunLink.remove'; id: string }
-  | { kind: 'toolCallRunLink.upsert'; link: ToolCallRunLinkRecord }
-  | { kind: 'toolCallRunLink.remove'; id: string }
-  | { kind: 'runConversationPolicy.upsert'; policy: RunConversationPolicyRecord }
-  | { kind: 'runConversationPolicy.remove'; id: string }
-  | { kind: 'runContextPolicy.upsert'; policy: RunContextPolicyRecord }
-  | { kind: 'runContextPolicy.remove'; id: string }
-  | { kind: 'runDeliveryPolicy.upsert'; policy: RunDeliveryPolicyRecord }
-  | { kind: 'runDeliveryPolicy.remove'; id: string }
-  | { kind: 'runEditPolicy.upsert'; policy: RunEditPolicyRecord }
-  | { kind: 'runEditPolicy.remove'; id: string }
-  | { kind: 'runModeLink.upsert'; link: RunModeLinkRecord }
-  | { kind: 'runModeLink.remove'; id: string }
-  | { kind: 'runSystemPromptLink.upsert'; link: RunSystemPromptLinkRecord }
-  | { kind: 'runSystemPromptLink.remove'; id: string }
-  | { kind: 'runModelProfileLink.upsert'; link: RunModelProfileLinkRecord }
-  | { kind: 'runModelProfileLink.remove'; id: string }
-  | { kind: 'runToolPolicyLink.upsert'; link: RunToolPolicyLinkRecord }
-  | { kind: 'runToolPolicyLink.remove'; id: string }
-  | { kind: 'runApprovalPolicyLink.upsert'; link: RunApprovalPolicyLinkRecord }
-  | { kind: 'runApprovalPolicyLink.remove'; id: string }
-  | { kind: 'runConversationPolicyLink.upsert'; link: RunConversationPolicyLinkRecord }
-  | { kind: 'runConversationPolicyLink.remove'; id: string }
-  | { kind: 'runContextPolicyLink.upsert'; link: RunContextPolicyLinkRecord }
-  | { kind: 'runContextPolicyLink.remove'; id: string }
-  | { kind: 'runDeliveryPolicyLink.upsert'; link: RunDeliveryPolicyLinkRecord }
-  | { kind: 'runDeliveryPolicyLink.remove'; id: string }
-  | { kind: 'runEditPolicyLink.upsert'; link: RunEditPolicyLinkRecord }
-  | { kind: 'runEditPolicyLink.remove'; id: string }
-  | { kind: 'agentRunInputRevision.upsert'; inputRevision: AgentRunInputRevisionRecord }
-  | { kind: 'agentRunInputRevision.remove'; id: string };
+  | { kind: 'message.status'; id: string; status: MsgStatus };
 
 export interface ChatSendPayload {
   conversationId: string;

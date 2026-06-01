@@ -1,34 +1,23 @@
 import { isTextPart, isVisibleTextPart, type ClientPatchOp, type ClientState, type MessageRecord, type TextPart } from '../../../../shared/protocol';
-import { diffUpsertRemove } from '../../clientSync/diff';
 import { defineClientStateContributor } from '../../clientSync/contributors';
 import { chatStateProjectionReads, projectChatState } from './stateProjection';
 
 export const projectChatClientState = projectChatState;
 
 export function diffChatClientState(prev: ClientState, next: ClientState): ClientPatchOp[] {
-  const patches: ClientPatchOp[] = [];
-  patches.push(
-    ...diffUpsertRemove(
-      prev.conversations,
-      next.conversations,
-      (conversation): ClientPatchOp => ({ kind: 'conversation.upsert', conversation }),
-      (id): ClientPatchOp => ({ kind: 'conversation.remove', id })
-    )
-  );
-  patches.push(...diffUpsertRemove(prev.conversationReuseLinks, next.conversationReuseLinks, (link): ClientPatchOp => ({ kind: 'conversationReuseLink.upsert', link }), (id): ClientPatchOp => ({ kind: 'conversationReuseLink.remove', id })));
-  patches.push(...diffUpsertRemove(prev.conversationBranchLinks, next.conversationBranchLinks, (link): ClientPatchOp => ({ kind: 'conversationBranchLink.upsert', link }), (id): ClientPatchOp => ({ kind: 'conversationBranchLink.remove', id })));
-  patches.push(...diffMessages(prev.messages, next.messages));
-  patches.push(
-    ...diffUpsertRemove(prev.messageRevisions, next.messageRevisions, (revision): ClientPatchOp => ({ kind: 'messageRevision.upsert', revision }), (id): ClientPatchOp => ({ kind: 'messageRevision.remove', id }))
-  );
-  patches.push(
-    ...diffUpsertRemove(prev.messageCurrentRevisionLinks, next.messageCurrentRevisionLinks, (link): ClientPatchOp => ({ kind: 'messageCurrentRevisionLink.upsert', link }), (id): ClientPatchOp => ({ kind: 'messageCurrentRevisionLink.remove', id }))
-  );
-  return patches;
+  return diffMessages(prev.messages, next.messages);
 }
 
 export const chatClientSyncContributor = defineClientStateContributor({
   key: 'chat',
+  tables: [
+    'conversations',
+    'conversationReuseLinks',
+    'conversationBranchLinks',
+    'messages',
+    'messageRevisions',
+    'messageCurrentRevisionLinks'
+  ],
   reads: chatStateProjectionReads,
   project: projectChatClientState,
   diff: diffChatClientState,

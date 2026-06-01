@@ -1,4 +1,4 @@
-import type { ClientPatchOp, ClientState } from '../../../shared/protocol';
+import type { ClientPatchOp, ClientState, ClientStateTableKey } from '../../../shared/protocol';
 import type { AccessDeclaration, WorldReader } from '../../ecs/types';
 
 export type ClientStateSlice = Partial<ClientState>;
@@ -15,6 +15,8 @@ export interface ClientStateContributorWorkerSpec {
 
 export interface ClientStateContributor {
   readonly key: string;
+  /** 该 contributor 负责投影的 ClientState 表。通用 diff 由注册表根据这些表自动生成。 */
+  readonly tables?: readonly ClientStateTableKey[];
   /** 这个 projection 会读取哪些 ECS 数据；ClientSyncSystem 会聚合这些 reads 参与拓扑编排。 */
   readonly reads?: AccessDeclaration;
   /** 主线程 fallback；worker 模式下不传输函数，只传 worker descriptor。 */
@@ -27,6 +29,7 @@ export interface ClientStateContributor {
 /** 可 structured-clone 的 contributor 描述。注意：不包含 reads，reads 里有 ComponentType/ResourceKey 的 symbol。 */
 export interface ClientStateContributorDescriptor {
   readonly key: string;
+  readonly tables?: readonly ClientStateTableKey[];
   readonly worker: ClientStateContributorWorkerSpec;
 }
 
@@ -49,6 +52,7 @@ export class ClientStateContributorRegistry {
   public descriptors(): ClientStateContributorDescriptor[] {
     return this.list().map((contributor) => ({
       key: contributor.key,
+      tables: contributor.tables,
       worker: contributor.worker
     }));
   }

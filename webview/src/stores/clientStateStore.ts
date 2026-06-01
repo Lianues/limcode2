@@ -1,15 +1,18 @@
 import { reactive } from 'vue';
 import {
+  CLIENT_STATE_TABLES,
   copyClientStateTables,
   createEmptyClientState,
   GENERIC_CLIENT_PATCH_APPLY_BY_KIND,
-  GLOBAL_CLIENT_STATE_TABLE_KEYS
+  GLOBAL_CLIENT_STATE_TABLE_KEYS,
+  type ClientStateSortSpec
 } from '@shared/clientStateRegistry';
 import {
   GLOBAL_CLIENT_STATE_STREAM_ID,
   conversationIdFromClientStateStreamId,
   type ClientPatchOp,
   type ClientState,
+  type ClientStateTableKey,
   isTextPart,
   isVisibleTextPart
 } from '@shared/protocol';
@@ -60,11 +63,6 @@ function applyClientPatchOp(patch: ClientPatchOp): void {
 
   switch (patch.kind) {
     case 'conversation.remove': removeConversation(patch.id); break;
-    case 'message.upsert':
-      upsert(clientState.messages, patch.message);
-      clientState.messages.sort((a, b) => a.seq - b.seq);
-      break;
-    case 'message.remove': removeMessage(patch.id); break;
     case 'message.appendText': appendMessageText(patch.id, patch.delta); break;
     case 'message.appendThought': appendMessageThought(patch.id, patch.partIndex, patch.delta, patch.thoughtSignature); break;
     case 'message.status': {
@@ -72,12 +70,6 @@ function applyClientPatchOp(patch: ClientPatchOp): void {
       if (message) message.status = patch.status;
       break;
     }
-    case 'toolcall.remove': removeToolCall(patch.id); break;
-    case 'toolcallEvent.append':
-      upsert(clientState.toolCallEvents, patch.event);
-      clientState.toolCallEvents.sort((a, b) => a.seq - b.seq || a.id.localeCompare(b.id));
-      break;
-    case 'agentRun.remove': removeAgentRun(patch.id); break;
   }
 }
 
@@ -87,7 +79,7 @@ function applyGenericClientPatchOp(patch: ClientPatchOp): boolean {
 
   const list = clientState[operation.tableKey] as Array<{ id: string }>;
   if (operation.operation === 'remove') {
-    removeById(list, (patch as { id: string }).id);
+    removeRegisteredRecord(operation.tableKey, (patch as { id: string }).id);
     return true;
   }
 
@@ -96,8 +88,62 @@ function applyGenericClientPatchOp(patch: ClientPatchOp): boolean {
   const record = (patch as unknown as Record<string, unknown>)[payloadField] as { id: string } | undefined;
   if (!record) return false;
   upsert(list, record);
+  sortRegisteredTable(operation.tableKey);
   return true;
 }
+type ClientStateMutableRecord = { id: string; [key: string]: unknown };
+
+function removeRegisteredRecord(tableKey: ClientStateTableKey, id: string, visited = new Set<string>()): void {
+  const visitKey = `${tableKey}:${id}`;
+  if (visited.has(visitKey)) return;
+  visited.add(visitKey);
+
+  const spec = CLIENT_STATE_TABLES[tableKey].clientSync;
+  for (const cascade of spec.cascadeRemove ?? []) {
+    const childRecords = clientState[cascade.table] as ClientStateMutableRecord[];
+    const childIds = childRecords
+      .filter((record) => record[cascade.foreignKey] === id)
+      .map((record) => record.id);
+
+    if (cascade.cascade) {
+      for (const childId of childIds) removeRegisteredRecord(cascade.table, childId, visited);
+    } else {
+      removeWhere(childRecords, (record) => record[cascade.foreignKey] === id);
+    }
+  }
+
+  removeById(clientState[tableKey] as ClientStateMutableRecord[], id);
+}
+
+function sortRegisteredTable(tableKey: ClientStateTableKey): void {
+  const orderBy = CLIENT_STATE_TABLES[tableKey].clientSync.orderBy;
+  if (!orderBy || orderBy.length === 0) return;
+  (clientState[tableKey] as ClientStateMutableRecord[]).sort((left, right) => compareRecords(left, right, orderBy));
+}
+
+function compareRecords(left: ClientStateMutableRecord, right: ClientStateMutableRecord, orderBy: readonly ClientStateSortSpec[]): number {
+  for (const sort of orderBy) {
+    const result = compareValues(left[sort.field], right[sort.field]);
+    if (result !== 0) return sort.direction === 'desc' ? -result : result;
+  }
+  return 0;
+}
+
+function compareValues(left: unknown, right: unknown): number {
+  if (left === right) return 0;
+  if (left === undefined || left === null) return -1;
+  if (right === undefined || right === null) return 1;
+  if (typeof left === 'number' && typeof right === 'number') return left - right;
+  return String(left).localeCompare(String(right));
+}
+
+function removeWhere<T>(list: T[], predicate: (item: T) => boolean): void {
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    if (predicate(list[index])) list.splice(index, 1);
+  }
+}
+
+
 
 
 
@@ -138,42 +184,17 @@ function replaceConversationState(conversationId: string, state: ClientState): v
 }
 
 function removeConversation(conversationId: string): void {
-  const messageIds = new Set(clientState.messages.filter((message) => message.conversationId === conversationId).map((message) => message.id));
-  const toolCallIds = new Set(clientState.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId)).map((toolCall) => toolCall.id));
+  const messageIds = clientState.messages.filter((message) => message.conversationId === conversationId).map((message) => message.id);
   const runIds = relatedRunIdsForConversation(conversationId);
   removeById(clientState.conversations, conversationId);
   clientState.conversationReuseLinks = clientState.conversationReuseLinks.filter((link) => link.conversationId !== conversationId);
   clientState.conversationBranchLinks = clientState.conversationBranchLinks.filter((link) => link.sourceConversationId !== conversationId && link.targetConversationId !== conversationId);
   clientState.agentConversationLinks = clientState.agentConversationLinks.filter((item) => item.conversationId !== conversationId);
-  clientState.messages = clientState.messages.filter((message) => message.conversationId !== conversationId);
-  clientState.messageRevisions = clientState.messageRevisions.filter((revision) => revision.conversationId !== conversationId);
-  clientState.messageCurrentRevisionLinks = clientState.messageCurrentRevisionLinks.filter((link) => !messageIds.has(link.messageId));
-  clientState.toolCalls = clientState.toolCalls.filter((toolCall) => !toolCallIds.has(toolCall.id));
-  clientState.toolCallEvents = clientState.toolCallEvents.filter((event) => !toolCallIds.has(event.toolCallId));
+  for (const messageId of messageIds) removeRegisteredRecord('messages', messageId);
   removeRunScopedState(runIds);
   if (clientState.currentConversationId === conversationId) clientState.currentConversationId = clientState.conversations[0]?.id ?? '';
 }
 
-function removeMessage(messageId: string): void {
-  const toolCallIds = new Set(clientState.toolCalls.filter((toolCall) => toolCall.messageId === messageId).map((toolCall) => toolCall.id));
-  removeById(clientState.messages, messageId);
-  clientState.messageRevisions = clientState.messageRevisions.filter((revision) => revision.messageId !== messageId);
-  clientState.messageCurrentRevisionLinks = clientState.messageCurrentRevisionLinks.filter((link) => link.messageId !== messageId);
-  clientState.messageRunLinks = clientState.messageRunLinks.filter((link) => link.messageId !== messageId);
-  clientState.toolCalls = clientState.toolCalls.filter((toolCall) => toolCall.messageId !== messageId);
-  clientState.toolCallEvents = clientState.toolCallEvents.filter((event) => !toolCallIds.has(event.toolCallId));
-}
-
-function removeToolCall(toolCallId: string): void {
-  removeById(clientState.toolCalls, toolCallId);
-  clientState.toolCallRunLinks = clientState.toolCallRunLinks.filter((link) => link.toolCallId !== toolCallId);
-  clientState.toolCallEvents = clientState.toolCallEvents.filter((event) => event.toolCallId !== toolCallId);
-}
-
-function removeAgentRun(runId: string): void {
-  removeById(clientState.agentRuns, runId);
-  removeRunScopedState(new Set([runId]));
-}
 
 function removeRunScopedState(runIds: ReadonlySet<string>): void {
   if (runIds.size === 0) return;

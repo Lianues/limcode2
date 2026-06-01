@@ -19,11 +19,40 @@ export interface ClientStateTablePatchSpec {
   readonly remove?: ClientStateRemovePatchSpec;
 }
 
+export interface ClientStateSortSpec {
+  readonly field: string;
+  readonly direction?: 'asc' | 'desc';
+}
+
+export interface ClientStateCascadeRemoveSpec {
+  readonly table: ClientStateTableKey;
+  readonly foreignKey: string;
+  /** true 时先按 child id 递归执行 child 表自己的 cascadeRemove，再删除 child 记录。 */
+  readonly cascade?: boolean;
+}
+
+export type ClientStateScopeSpec =
+  | { readonly kind: 'global' }
+  | { readonly kind: 'conversation'; readonly field: string }
+  | {
+      readonly kind: 'conversationVia';
+      readonly table: ClientStateTableKey;
+      readonly localField: string;
+      readonly foreignField: string;
+      readonly scopeField: string;
+    };
+
 export interface ClientStateTableClientSyncSpec {
-  /** 是否由 ClientSync 注册表自动生成 prev/next 的 upsert/remove diff。 */
+  /** 是否由 ClientSync 注册表自动生成 prev/next 的 patch diff。 */
   readonly diff: ClientStateDiffMode;
-  /** 前端对应 patch 操作能否用通用 upsert/removeById 处理。 */
+  /** 前端对应 patch 操作能否用通用 upsert/append/remove 处理。 */
   readonly apply: Readonly<Partial<Record<ClientStatePatchOperation, ClientStatePatchMode>>>;
+  /** 通用 apply 后自动排序。 */
+  readonly orderBy?: readonly ClientStateSortSpec[];
+  /** 通用 remove 时按外键级联删除。 */
+  readonly cascadeRemove?: readonly ClientStateCascadeRemoveSpec[];
+  /** 预留给后续按 stream/scope 自动替换状态使用。 */
+  readonly scope?: ClientStateScopeSpec;
   /** global client state stream 的 snapshot 是否包含该表。 */
   readonly globalSnapshot: boolean;
 }
@@ -40,6 +69,9 @@ export type ClientStateTableRegistry = {
 interface ClientSyncOverrides {
   readonly diff?: ClientStateDiffMode;
   readonly apply?: Readonly<Partial<Record<ClientStatePatchOperation, ClientStatePatchMode>>>;
+  readonly orderBy?: readonly ClientStateSortSpec[];
+  readonly cascadeRemove?: readonly ClientStateCascadeRemoveSpec[];
+  readonly scope?: ClientStateScopeSpec;
   readonly globalSnapshot?: boolean;
 }
 
@@ -73,6 +105,9 @@ function clientSyncSpec(defaultApply: Readonly<Partial<Record<ClientStatePatchOp
   return {
     diff: overrides.diff ?? 'generic',
     apply: { ...defaultApply, ...overrides.apply },
+    ...(overrides.orderBy ? { orderBy: overrides.orderBy } : {}),
+    ...(overrides.cascadeRemove ? { cascadeRemove: overrides.cascadeRemove } : {}),
+    ...(overrides.scope ? { scope: overrides.scope } : {}),
     globalSnapshot: overrides.globalSnapshot ?? true
   };
 }
@@ -105,16 +140,54 @@ function appendRemoveTable<const TPatchPrefix extends string, const TPayloadFiel
   };
 }
 
-const conversationScopedTable: ClientSyncOverrides = { globalSnapshot: false };
+const conversationScopedTable: ClientSyncOverrides = { globalSnapshot: false, scope: { kind: 'conversation', field: 'conversationId' } };
 const messageTable: ClientSyncOverrides = {
   diff: 'custom',
-  apply: { upsert: 'custom', remove: 'custom' },
-  globalSnapshot: false
+  orderBy: [{ field: 'seq' }],
+  cascadeRemove: [
+    { table: 'messageRevisions', foreignKey: 'messageId' },
+    { table: 'messageCurrentRevisionLinks', foreignKey: 'messageId' },
+    { table: 'messageRunLinks', foreignKey: 'messageId' },
+    { table: 'toolCalls', foreignKey: 'messageId', cascade: true }
+  ],
+  globalSnapshot: false,
+  scope: { kind: 'conversation', field: 'conversationId' }
+};
+const toolCallsTable: ClientSyncOverrides = {
+  cascadeRemove: [
+    { table: 'toolCallRunLinks', foreignKey: 'toolCallId' },
+    { table: 'toolCallEvents', foreignKey: 'toolCallId' }
+  ],
+  globalSnapshot: false,
+  scope: {
+    kind: 'conversationVia',
+    table: 'messages',
+    localField: 'messageId',
+    foreignField: 'id',
+    scopeField: 'conversationId'
+  }
 };
 const toolCallEventsTable: ClientSyncOverrides = {
-  diff: 'custom',
-  apply: { append: 'custom' },
+  orderBy: [{ field: 'seq' }, { field: 'id' }],
   globalSnapshot: false
+};
+const agentRunsTable: ClientSyncOverrides = {
+  cascadeRemove: [
+    { table: 'agentRunSourceLinks', foreignKey: 'runId' },
+    { table: 'agentRunTargetLinks', foreignKey: 'runId' },
+    { table: 'messageRunLinks', foreignKey: 'runId' },
+    { table: 'toolCallRunLinks', foreignKey: 'runId' },
+    { table: 'runModeLinks', foreignKey: 'runId' },
+    { table: 'runSystemPromptLinks', foreignKey: 'runId' },
+    { table: 'runModelProfileLinks', foreignKey: 'runId' },
+    { table: 'runToolPolicyLinks', foreignKey: 'runId' },
+    { table: 'runApprovalPolicyLinks', foreignKey: 'runId' },
+    { table: 'runConversationPolicyLinks', foreignKey: 'runId' },
+    { table: 'runContextPolicyLinks', foreignKey: 'runId' },
+    { table: 'runDeliveryPolicyLinks', foreignKey: 'runId' },
+    { table: 'runEditPolicyLinks', foreignKey: 'runId' },
+    { table: 'agentRunInputRevisions', foreignKey: 'runId' }
+  ]
 };
 
 export const CLIENT_STATE_TABLES = {
@@ -134,11 +207,11 @@ export const CLIENT_STATE_TABLES = {
   conversationBranchLinks: upsertRemoveTable('conversationBranchLink', 'link'),
   agentConversationLinks: upsertRemoveTable('agentConversationLink', 'link'),
   messages: upsertRemoveTable('message', 'message', messageTable),
-  messageRevisions: upsertRemoveTable('messageRevision', 'revision', conversationScopedTable),
-  messageCurrentRevisionLinks: upsertRemoveTable('messageCurrentRevisionLink', 'link', conversationScopedTable),
-  toolCalls: upsertRemoveTable('toolcall', 'toolCall', { apply: { remove: 'custom' }, globalSnapshot: false }),
+  messageRevisions: upsertRemoveTable('messageRevision', 'revision', { ...conversationScopedTable, orderBy: [{ field: 'createdAt' }, { field: 'id' }] }),
+  messageCurrentRevisionLinks: upsertRemoveTable('messageCurrentRevisionLink', 'link', { ...conversationScopedTable, scope: { kind: 'conversationVia', table: 'messages', localField: 'messageId', foreignField: 'id', scopeField: 'conversationId' } }),
+  toolCalls: upsertRemoveTable('toolcall', 'toolCall', toolCallsTable),
   toolCallEvents: appendRemoveTable('toolcallEvent', 'event', toolCallEventsTable),
-  agentRuns: upsertRemoveTable('agentRun', 'run', { apply: { remove: 'custom' } }),
+  agentRuns: upsertRemoveTable('agentRun', 'run', agentRunsTable),
   agentRunSourceLinks: upsertRemoveTable('agentRunSourceLink', 'link'),
   agentRunTargetLinks: upsertRemoveTable('agentRunTargetLink', 'link'),
   messageRunLinks: upsertRemoveTable('messageRunLink', 'link'),

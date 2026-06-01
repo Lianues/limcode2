@@ -1,7 +1,9 @@
 import { CLIENT_STATE_TABLES, type ClientStateTablePatchSpec } from '../../../shared/clientStateRegistry';
 import type { ClientPatchOp, ClientState, ClientStateTableKey } from '../../../shared/protocol';
 
-export function diffUpsertRemove<T extends { id: string }, TUpsert extends ClientPatchOp, TRemove extends ClientPatchOp>(
+type RecordWithId = { id: string };
+
+export function diffUpsertRemove<T extends RecordWithId, TUpsert extends ClientPatchOp, TRemove extends ClientPatchOp>(
   prev: T[],
   next: T[],
   createUpsert: (item: T) => TUpsert,
@@ -32,17 +34,52 @@ export function diffClientStateTables(prev: ClientState, next: ClientState, tabl
   for (const tableKey of tableKeys) {
     const spec = CLIENT_STATE_TABLES[tableKey];
     if (spec.clientSync.diff !== 'generic') continue;
-    const patch = spec.patch as ClientStateTablePatchSpec;
-    const upsert = patch.upsert;
-    const remove = patch.remove;
-    if (!upsert || !remove) continue;
 
-    patches.push(...diffUpsertRemove(
-      prev[tableKey] as Array<{ id: string }>,
-      next[tableKey] as Array<{ id: string }>,
-      (record): ClientPatchOp => ({ kind: upsert.kind, [upsert.payloadField]: record } as unknown as ClientPatchOp),
-      (id): ClientPatchOp => ({ kind: remove.kind, id } as ClientPatchOp)
-    ));
+    const patch = spec.patch as ClientStateTablePatchSpec;
+    const prevRecords = prev[tableKey] as RecordWithId[];
+    const nextRecords = next[tableKey] as RecordWithId[];
+    const remove = patch.remove;
+    if (!remove) continue;
+
+    if (patch.upsert) {
+      patches.push(...diffUpsertRemove(
+        prevRecords,
+        nextRecords,
+        (record): ClientPatchOp => ({ kind: patch.upsert!.kind, [patch.upsert!.payloadField]: record } as unknown as ClientPatchOp),
+        (id): ClientPatchOp => ({ kind: remove.kind, id } as ClientPatchOp)
+      ));
+      continue;
+    }
+
+    if (patch.append) {
+      patches.push(...diffAppendRemove(
+        prevRecords,
+        nextRecords,
+        (record): ClientPatchOp => ({ kind: patch.append!.kind, [patch.append!.payloadField]: record } as unknown as ClientPatchOp),
+        (id): ClientPatchOp => ({ kind: remove.kind, id } as ClientPatchOp)
+      ));
+    }
   }
+  return patches;
+}
+
+function diffAppendRemove<T extends RecordWithId, TAppend extends ClientPatchOp, TRemove extends ClientPatchOp>(
+  prev: T[],
+  next: T[],
+  createAppend: (item: T) => TAppend,
+  createRemove: (id: string) => TRemove
+): ClientPatchOp[] {
+  const patches: ClientPatchOp[] = [];
+  const prevIds = new Set(prev.map((item) => item.id));
+  const nextIds = new Set(next.map((item) => item.id));
+
+  for (const item of next) {
+    if (!prevIds.has(item.id)) patches.push(createAppend(item));
+  }
+
+  for (const id of prevIds) {
+    if (!nextIds.has(id)) patches.push(createRemove(id));
+  }
+
   return patches;
 }

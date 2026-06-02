@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { MapWorld } from '../ecs/World';
 import { Scheduler } from '../ecs/Scheduler';
-import type { Entity } from '../ecs/types';
+import type { ComponentType, Entity } from '../ecs/types';
 import { ClientSyncEventType } from '../world/clientSync/events';
 import { EffectOutbox, type WorldEffect } from '../world/effects';
 import { installWorldPlugins } from '../world/plugin';
@@ -16,8 +16,39 @@ import {
 } from '../world/modules';
 import type { AgentSpawnRequestData } from '../world/modules/agent/requests';
 import { Agent, AgentConversationLink } from '../world/modules/agent/components';
-import { Conversation, Message, PartOf } from '../world/modules/chat/components';
+import {
+  Conversation,
+  ConversationBranchLink,
+  ConversationReuseLink,
+  LlmRequest,
+  Message,
+  MessageCurrentRevisionLink,
+  MessageRevision,
+  PartOf
+} from '../world/modules/chat/components';
 import type { ConversationData, MessageData } from '../world/modules/chat/components';
+import {
+  AgentRun,
+  AgentRunInputRevision,
+  AgentRunSourceLink,
+  AgentRunTargetLink,
+  MessageRunLink,
+  RunApprovalPolicyLink,
+  RunContextPolicy,
+  RunContextPolicyLink,
+  RunConversationPolicy,
+  RunConversationPolicyLink,
+  RunDeliveryPolicy,
+  RunDeliveryPolicyLink,
+  RunEditPolicy,
+  RunEditPolicyLink,
+  RunModeLink,
+  RunModelProfileLink,
+  RunSystemPromptLink,
+  RunToolPolicyLink,
+  ToolCallRunLink
+} from '../world/modules/agentRun/components';
+import { ToolCall, ToolCallEvent } from '../world/modules/tools/components';
 import { clientSyncPlugin, registerClientSyncSystems } from '../world/clientSync';
 import { storageProjectionPlugin } from '../world/storageProjection';
 import { EffectHandlerRegistry, registerApplicationEffectHandlers } from './effectHandlers';
@@ -182,6 +213,30 @@ export class BackendApplication {
     return entries.filter((entry) => entry.title).sort(compareConversationHistoryEntries);
   }
 
+  public renameConversationTitle(conversationId: string, title: string): boolean {
+    const entity = this.findConversationEntity(conversationId);
+    if (entity === undefined) return false;
+    const conversation = this.world.get(entity, Conversation);
+    if (!conversation) return false;
+
+    this.world.add(entity, Conversation, { ...conversation, title: normalizeConversationTitle(title) });
+    this.requestSnapshot();
+    this.requestSnapshot(conversationId);
+    return true;
+  }
+
+  public deleteConversation(conversationId: string): boolean {
+    const entity = this.findConversationEntity(conversationId);
+    if (entity === undefined) return false;
+
+    for (const target of this.collectConversationCascadeEntities(entity, conversationId)) {
+      this.world.despawn(target);
+    }
+    this.requestSnapshot();
+    this.requestSnapshot(conversationId);
+    return true;
+  }
+
   /** 当前 active data root；可能是 VS Code 默认 globalStorageUri，也可能是用户配置的自定义目录。 */
   public getStorageRootUri(): vscode.Uri {
     return this.env.storage.paths.globalStorageUri;
@@ -274,6 +329,227 @@ export class BackendApplication {
       ?? this.world.query(Agent)[0];
   }
 
+  private findConversationEntity(conversationId: string): Entity | undefined {
+    return this.world.query(Conversation).find((entity) => this.world.get(entity, Conversation)?.id === conversationId);
+  }
+
+  private collectConversationCascadeEntities(conversation: Entity, conversationId: string): Set<Entity> {
+    const entities = new Set<Entity>([conversation]);
+    const messages = this.collectMessagesForConversation(conversation);
+    const revisions = this.collectRevisionsForMessages(messages);
+    const toolCalls = this.collectToolCallsForMessages(messages);
+    const toolCallEvents = this.collectToolCallEventsForToolCalls(toolCalls);
+    const runPolicies = new Set<Entity>();
+    const runs = this.collectRunsForConversationCascade(conversation, conversationId, messages, revisions, toolCalls, runPolicies, entities);
+
+    addAll(entities, messages);
+    addAll(entities, revisions);
+    addAll(entities, toolCalls);
+    addAll(entities, toolCallEvents);
+
+    for (const entity of this.world.query(MessageCurrentRevisionLink)) {
+      const link = this.world.get(entity, MessageCurrentRevisionLink);
+      if (!link) continue;
+      if (messages.has(link.message) || revisions.has(link.revision)) {
+        entities.add(entity);
+        revisions.add(link.revision);
+        entities.add(link.revision);
+      }
+    }
+
+    for (const entity of this.world.query(AgentConversationLink)) {
+      const link = this.world.get(entity, AgentConversationLink);
+      if (link?.conversation === conversation) entities.add(entity);
+    }
+
+    for (const entity of this.world.query(ConversationReuseLink)) {
+      const link = this.world.get(entity, ConversationReuseLink);
+      if (link?.conversation === conversation) entities.add(entity);
+    }
+
+    for (const entity of this.world.query(ConversationBranchLink)) {
+      const link = this.world.get(entity, ConversationBranchLink);
+      if (!link) continue;
+      if (link.sourceConversation === conversation || link.targetConversation === conversation || (link.sourceRevision !== undefined && revisions.has(link.sourceRevision))) {
+        entities.add(entity);
+      }
+    }
+
+    this.collectRunOwnedEntities(runs, runPolicies, entities);
+    return entities;
+  }
+
+  private collectMessagesForConversation(conversation: Entity): Set<Entity> {
+    const messages = new Set<Entity>();
+    for (const entity of this.world.query(Message, PartOf)) {
+      if (this.world.get(entity, PartOf)?.parent === conversation) messages.add(entity);
+    }
+    return messages;
+  }
+
+  private collectRevisionsForMessages(messages: ReadonlySet<Entity>): Set<Entity> {
+    const revisions = new Set<Entity>();
+    for (const entity of this.world.query(MessageRevision, PartOf)) {
+      if (messages.has(this.world.get(entity, PartOf)?.parent ?? -1)) revisions.add(entity);
+    }
+    return revisions;
+  }
+
+  private collectToolCallsForMessages(messages: ReadonlySet<Entity>): Set<Entity> {
+    const toolCalls = new Set<Entity>();
+    for (const entity of this.world.query(ToolCall, PartOf)) {
+      if (messages.has(this.world.get(entity, PartOf)?.parent ?? -1)) toolCalls.add(entity);
+    }
+    return toolCalls;
+  }
+
+  private collectToolCallEventsForToolCalls(toolCalls: ReadonlySet<Entity>): Set<Entity> {
+    const events = new Set<Entity>();
+    for (const entity of this.world.query(ToolCallEvent, PartOf)) {
+      if (toolCalls.has(this.world.get(entity, PartOf)?.parent ?? -1)) events.add(entity);
+    }
+    return events;
+  }
+
+  private collectRunsForConversationCascade(
+    conversation: Entity,
+    conversationId: string,
+    messages: ReadonlySet<Entity>,
+    revisions: ReadonlySet<Entity>,
+    toolCalls: ReadonlySet<Entity>,
+    runPolicies: Set<Entity>,
+    entities: Set<Entity>
+  ): Set<Entity> {
+    const runs = new Set<Entity>();
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const addRun = (run: Entity | undefined): void => {
+        if (run === undefined || runs.has(run)) return;
+        runs.add(run);
+        changed = true;
+      };
+      const addRunPolicy = (policy: Entity | undefined): void => {
+        if (policy === undefined || runPolicies.has(policy)) return;
+        runPolicies.add(policy);
+        entities.add(policy);
+        changed = true;
+      };
+
+      for (const entity of this.world.query(LlmRequest)) {
+        const request = this.world.get(entity, LlmRequest);
+        if (!request) continue;
+        if (request.conversation === conversation || messages.has(request.modelMessage) || runs.has(request.run)) {
+          entities.add(entity);
+          addRun(request.run);
+        }
+      }
+
+      for (const entity of this.world.query(AgentRunSourceLink)) {
+        const link = this.world.get(entity, AgentRunSourceLink);
+        if (!link) continue;
+        const matches = link.sourceConversation === conversation
+          || (link.sourceMessage !== undefined && messages.has(link.sourceMessage))
+          || (link.sourceToolCall !== undefined && toolCalls.has(link.sourceToolCall))
+          || (link.sourceRun !== undefined && runs.has(link.sourceRun))
+          || runs.has(link.run);
+        if (matches) {
+          entities.add(entity);
+          addRun(link.run);
+        }
+      }
+
+      for (const entity of this.world.query(AgentRunTargetLink)) {
+        const link = this.world.get(entity, AgentRunTargetLink);
+        if (!link) continue;
+        if (link.conversation === conversation || runs.has(link.run)) {
+          entities.add(entity);
+          addRun(link.run);
+        }
+      }
+
+      for (const entity of this.world.query(MessageRunLink)) {
+        const link = this.world.get(entity, MessageRunLink);
+        if (!link) continue;
+        if (messages.has(link.message) || runs.has(link.run)) {
+          entities.add(entity);
+          addRun(link.run);
+        }
+      }
+
+      for (const entity of this.world.query(ToolCallRunLink)) {
+        const link = this.world.get(entity, ToolCallRunLink);
+        if (!link) continue;
+        if (toolCalls.has(link.toolCall) || runs.has(link.run)) {
+          entities.add(entity);
+          addRun(link.run);
+        }
+      }
+
+      for (const entity of this.world.query(AgentRunInputRevision)) {
+        const input = this.world.get(entity, AgentRunInputRevision);
+        if (!input) continue;
+        if (input.conversation === conversation || revisions.has(input.revision) || runs.has(input.run)) {
+          entities.add(entity);
+          addRun(input.run);
+        }
+      }
+
+      for (const entity of this.world.query(RunConversationPolicy)) {
+        const policy = this.world.get(entity, RunConversationPolicy);
+        if (!policy) continue;
+        if (policy.conversationId === conversationId || policy.branchFromConversationId === conversationId) addRunPolicy(entity);
+      }
+
+      for (const entity of this.world.query(RunDeliveryPolicy)) {
+        const policy = this.world.get(entity, RunDeliveryPolicy);
+        if (!policy) continue;
+        if (policy.targetConversation === conversation || (policy.targetToolCall !== undefined && toolCalls.has(policy.targetToolCall))) addRunPolicy(entity);
+      }
+
+      for (const entity of this.world.query(RunConversationPolicyLink)) this.collectRunPolicyLink(entity, RunConversationPolicyLink, runs, runPolicies, entities, addRun, addRunPolicy);
+      for (const entity of this.world.query(RunContextPolicyLink)) this.collectRunPolicyLink(entity, RunContextPolicyLink, runs, runPolicies, entities, addRun, addRunPolicy);
+      for (const entity of this.world.query(RunDeliveryPolicyLink)) this.collectRunPolicyLink(entity, RunDeliveryPolicyLink, runs, runPolicies, entities, addRun, addRunPolicy);
+      for (const entity of this.world.query(RunEditPolicyLink)) this.collectRunPolicyLink(entity, RunEditPolicyLink, runs, runPolicies, entities, addRun, addRunPolicy);
+    }
+    return runs;
+  }
+
+  private collectRunPolicyLink<T extends { run: Entity; policy: Entity }>(
+    entity: Entity,
+    component: ComponentType<T>,
+    runs: ReadonlySet<Entity>,
+    runPolicies: ReadonlySet<Entity>,
+    entities: Set<Entity>,
+    addRun: (run: Entity | undefined) => void,
+    addRunPolicy: (policy: Entity | undefined) => void
+  ): void {
+    const link = this.world.get(entity, component);
+    if (!link) return;
+    if (runs.has(link.run) || runPolicies.has(link.policy)) {
+      entities.add(entity);
+      addRun(link.run);
+      addRunPolicy(link.policy);
+    }
+  }
+
+  private collectRunOwnedEntities(runs: ReadonlySet<Entity>, runPolicies: ReadonlySet<Entity>, entities: Set<Entity>): void {
+    addAll(entities, runs);
+    addAll(entities, runPolicies);
+
+    for (const entity of this.world.query(AgentRun)) if (runs.has(entity)) entities.add(entity);
+    for (const entity of this.world.query(RunConversationPolicy)) if (runPolicies.has(entity)) entities.add(entity);
+    for (const entity of this.world.query(RunContextPolicy)) if (runPolicies.has(entity)) entities.add(entity);
+    for (const entity of this.world.query(RunDeliveryPolicy)) if (runPolicies.has(entity)) entities.add(entity);
+    for (const entity of this.world.query(RunEditPolicy)) if (runPolicies.has(entity)) entities.add(entity);
+
+    for (const entity of this.world.query(RunModeLink)) if (runs.has(this.world.get(entity, RunModeLink)?.run ?? -1)) entities.add(entity);
+    for (const entity of this.world.query(RunSystemPromptLink)) if (runs.has(this.world.get(entity, RunSystemPromptLink)?.run ?? -1)) entities.add(entity);
+    for (const entity of this.world.query(RunModelProfileLink)) if (runs.has(this.world.get(entity, RunModelProfileLink)?.run ?? -1)) entities.add(entity);
+    for (const entity of this.world.query(RunToolPolicyLink)) if (runs.has(this.world.get(entity, RunToolPolicyLink)?.run ?? -1)) entities.add(entity);
+    for (const entity of this.world.query(RunApprovalPolicyLink)) if (runs.has(this.world.get(entity, RunApprovalPolicyLink)?.run ?? -1)) entities.add(entity);
+  }
+
   private collectMessagesByConversation(): Map<Entity, MessageData[]> {
     const result = new Map<Entity, MessageData[]>();
     for (const messageEntity of this.world.query(Message)) {
@@ -352,6 +628,14 @@ function textPreview(content: MessageContent): string {
 
 function normalizeText(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
+}
+
+function normalizeConversationTitle(title: string): string {
+  return truncateText(normalizeText(title) || '新对话', 80);
+}
+
+function addAll<T>(target: Set<T>, source: Iterable<T>): void {
+  for (const item of source) target.add(item);
 }
 
 function truncateText(text: string, maxLength: number): string {

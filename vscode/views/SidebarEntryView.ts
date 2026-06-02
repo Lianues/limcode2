@@ -9,10 +9,13 @@ const OPEN_GLOBAL_SETTINGS_MESSAGE = 'openGlobalSettings';
 const REFRESH_HISTORY_MESSAGE = 'refreshConversationHistory';
 const HISTORY_UPDATE_MESSAGE = 'conversationHistory.update';
 const SIDEBAR_READY_MESSAGE = 'sidebar.ready';
+const RENAME_CONVERSATION_MESSAGE = 'renameConversation';
+const DELETE_CONVERSATION_MESSAGE = 'deleteConversation';
 
 interface SidebarWebviewMessage {
   type?: string;
   conversationId?: string;
+  title?: string;
 }
 
 export function registerSidebarEntryView(context: vscode.ExtensionContext, backendApp: BackendApplication): void {
@@ -60,6 +63,16 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
+      if (message.type === RENAME_CONVERSATION_MESSAGE && message.conversationId) {
+        this.renameConversationFromSidebar(webviewView.webview, message.conversationId);
+        return;
+      }
+
+      if (message.type === DELETE_CONVERSATION_MESSAGE && message.conversationId) {
+        this.deleteConversationFromSidebar(webviewView.webview, message.conversationId);
+        return;
+      }
+
       if (message.type === SIDEBAR_READY_MESSAGE || message.type === REFRESH_HISTORY_MESSAGE) {
         this.postConversationHistoryWhenReady(webviewView.webview);
       }
@@ -73,6 +86,52 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       .waitUntilHydrated()
       .then(() => this.postConversationHistory(webview))
       .catch((error) => console.warn('[LimCode] Failed to read sidebar conversation history.', error));
+  }
+
+  private renameConversationFromSidebar(webview: vscode.Webview, conversationId: string): void {
+    void this.backendApp
+      .waitUntilHydrated()
+      .then(async () => {
+        const current = this.backendApp.getConversationHistoryEntries().find((entry) => entry.id === conversationId);
+        const nextTitle = await vscode.window.showInputBox({
+          title: '重命名对话标题',
+          prompt: '输入新的对话标题。',
+          value: current?.title ?? '',
+          ignoreFocusOut: true,
+          validateInput(value) {
+            return value.trim() ? undefined : '标题不能为空';
+          }
+        });
+        if (nextTitle === undefined) return;
+        const renamed = this.backendApp.renameConversationTitle(conversationId, nextTitle);
+        if (!renamed) {
+          void vscode.window.showWarningMessage('未找到要重命名的对话。');
+          return;
+        }
+        this.postConversationHistory(webview);
+      })
+      .catch((error) => console.warn('[LimCode] Failed to rename sidebar conversation.', error));
+  }
+
+  private deleteConversationFromSidebar(webview: vscode.Webview, conversationId: string): void {
+    void this.backendApp
+      .waitUntilHydrated()
+      .then(async () => {
+        const current = this.backendApp.getConversationHistoryEntries().find((entry) => entry.id === conversationId);
+        const confirm = await vscode.window.showWarningMessage(
+          `删除对话「${current?.title ?? conversationId}」？`,
+          { modal: true, detail: '该操作会删除此对话以及关联消息、工具记录和运行记录，无法撤销。' },
+          '删除'
+        );
+        if (confirm !== '删除') return;
+        const deleted = this.backendApp.deleteConversation(conversationId);
+        if (!deleted) {
+          void vscode.window.showWarningMessage('未找到要删除的对话。');
+          return;
+        }
+        this.postConversationHistory(webview);
+      })
+      .catch((error) => console.warn('[LimCode] Failed to delete sidebar conversation.', error));
   }
 
   private postConversationHistory(webview: vscode.Webview): void {
@@ -220,6 +279,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
     .back-button:focus-visible,
     .secondary-button:focus-visible,
     .primary-button:focus-visible,
+    .history-action-button:focus-visible,
     .history-item:focus-visible {
       outline: 1px solid var(--vscode-focusBorder);
       outline-offset: -1px;
@@ -325,7 +385,8 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
     .history-list {
       flex: 1 1 auto;
       min-height: 0;
-      overflow: auto;
+      overflow-y: auto;
+      overflow-x: hidden;
       padding: 6px 0;
     }
 
@@ -338,7 +399,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       border-bottom: 1px solid var(--line);
       border-radius: 0;
       display: grid;
-      grid-template-columns: 26px 1fr;
+      grid-template-columns: 26px minmax(0, 1fr) auto;
       gap: 9px;
       color: var(--vscode-foreground);
       background: transparent;
@@ -347,6 +408,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       outline: none;
       transition: background 0.16s ease, transform 0.16s ease;
     }
+
 
     .history-item::before {
       content: '';
@@ -361,7 +423,6 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
 
     .history-item:hover {
       background: var(--vscode-list-hoverBackground);
-      transform: translateX(2px);
     }
 
     .history-item:hover::before {
@@ -458,6 +519,52 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+
+    .history-actions {
+      align-self: start;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      opacity: 0.55;
+      transition: opacity 0.16s ease;
+    }
+
+    .history-item:hover .history-actions,
+    .history-item:focus-within .history-actions {
+      opacity: 1;
+    }
+
+    .history-action-button {
+      width: 23px;
+      height: 23px;
+      padding: 0;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--vscode-descriptionForeground);
+      background: transparent;
+      cursor: pointer;
+      outline: none;
+      transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
+    }
+
+    .history-action-button:hover {
+      color: var(--vscode-foreground);
+      background: var(--vscode-list-hoverBackground);
+      border-color: var(--vscode-focusBorder);
+    }
+
+    .history-action-button:active {
+      transform: translateY(1px);
+    }
+
+    .history-action-button.danger:hover {
+      color: var(--vscode-errorForeground);
+      background: var(--vscode-inputValidation-errorBackground, var(--vscode-list-hoverBackground));
+      border-color: var(--vscode-inputValidation-errorBorder, var(--vscode-focusBorder));
     }
 
     .empty-state {
@@ -741,13 +848,22 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
     }
 
     function createHistoryItem(entry) {
-      const item = document.createElement('button');
-      item.type = 'button';
+      const item = document.createElement('div');
       item.className = 'history-item';
       item.title = '打开对话：' + (entry.title || entry.id);
-      item.addEventListener('click', () => {
-        vscode.postMessage({ type: '${OPEN_CONVERSATION_MESSAGE}', conversationId: entry.id });
+      item.tabIndex = 0;
+      item.setAttribute('role', 'button');
+      item.setAttribute('aria-label', '打开对话：' + (entry.title || entry.id));
+      item.addEventListener('click', () => openConversation(entry.id));
+      item.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        openConversation(entry.id);
       });
+
+      function openConversation(conversationId) {
+        vscode.postMessage({ type: '${OPEN_CONVERSATION_MESSAGE}', conversationId: entry.id });
+      }
 
       const avatar = document.createElement('div');
       avatar.className = 'history-avatar';
@@ -781,11 +897,42 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       metaText.textContent = (entry.agentName || '默认 Agent') + ' · ' + (entry.messageCount || 0) + ' 条消息 · ' + formatTime(entry.updatedAt);
       meta.appendChild(metaText);
 
+      const actions = document.createElement('div');
+      actions.className = 'history-actions';
+      actions.addEventListener('click', (event) => event.stopPropagation());
+      actions.addEventListener('keydown', (event) => event.stopPropagation());
+
+      const renameButton = document.createElement('button');
+      renameButton.type = 'button';
+      renameButton.className = 'history-action-button';
+      renameButton.title = '重命名对话标题';
+      renameButton.setAttribute('aria-label', '重命名对话标题');
+      renameButton.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>';
+      renameButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        vscode.postMessage({ type: '${RENAME_CONVERSATION_MESSAGE}', conversationId: entry.id });
+      });
+
+      const deleteButton = document.createElement('button');
+      deleteButton.type = 'button';
+      deleteButton.className = 'history-action-button danger';
+      deleteButton.title = '删除对话';
+      deleteButton.setAttribute('aria-label', '删除对话');
+      deleteButton.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>';
+      deleteButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        vscode.postMessage({ type: '${DELETE_CONVERSATION_MESSAGE}', conversationId: entry.id });
+      });
+
+      actions.appendChild(renameButton);
+      actions.appendChild(deleteButton);
+
       main.appendChild(titleRow);
       main.appendChild(preview);
       main.appendChild(meta);
       item.appendChild(avatar);
       item.appendChild(main);
+      item.appendChild(actions);
       return item;
     }
 

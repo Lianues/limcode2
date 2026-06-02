@@ -144,7 +144,7 @@ function markRunStatus(world: WorldReader, cmd: CommandSink, run: Entity, status
   const now = Date.now();
   cmd.add(run, AgentRun, { ...data, status, updatedAt: now, completedAt: now, endReason, errorType });
   cmd.remove(run, AgentRunNeedsModel);
-  cleanupRunLlmRequests(world, cmd, run, status === 'stale' ? 'Run marked stale by source edit.' : 'Run cancelled by source edit policy.');
+  cleanupRunLlmRequests(world, cmd, run, { kind: status === 'stale' ? 'source_edit_stale' : 'source_edit_cancelled' });
 }
 
 function restartRun(world: WorldReader, cmd: CommandSink, run: Entity, editedMessage: Entity): void {

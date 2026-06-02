@@ -115,6 +115,7 @@ export interface WorkspaceInfo {
 
 export type MsgRole = 'user' | 'model';
 export type MsgStatus = 'streaming' | 'complete' | 'error';
+export type MessageStopReason = 'paused' | 'cancelled' | 'replaced' | 'stale';
 
 export const TOOL_CALL_STATUSES = [
   'streaming',
@@ -336,6 +337,7 @@ export interface MessageRecord {
   createdAt: number;
   streamOutputDurationMs?: number;
   usageMetadata?: LlmUsageMetadataRecord;
+  stopReason?: MessageStopReason;
   seq: number;
 }
 

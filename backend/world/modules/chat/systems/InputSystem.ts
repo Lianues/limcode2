@@ -103,7 +103,7 @@ function cancelRuns(world: WorldReader, cmd: CommandSink, runs: Entity[]): void 
     if (!data || isTerminalRunStatus(data.status)) continue;
     cmd.add(run, AgentRun, { ...data, status: 'cancelled', updatedAt: now, completedAt: now, endReason: 'cancelled_by_policy', errorType: 'cancelled' });
     cmd.remove(run, AgentRunNeedsModel);
-    cleanupRunLlmRequests(world, cmd, run, 'Run cancelled by interrupt_current policy.');
+    cleanupRunLlmRequests(world, cmd, run, { kind: 'new_message_replaced' });
   }
 }
 

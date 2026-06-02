@@ -39,6 +39,7 @@ export function projectChatState(world: WorldReader): Partial<ClientState> {
         createdAt: message.createdAt,
         ...(message.streamOutputDurationMs !== undefined ? { streamOutputDurationMs: message.streamOutputDurationMs } : {}),
         ...(message.usageMetadata !== undefined ? { usageMetadata: message.usageMetadata } : {}),
+        ...(message.stopReason !== undefined ? { stopReason: message.stopReason } : {}),
         seq: message.seq
       };
     })

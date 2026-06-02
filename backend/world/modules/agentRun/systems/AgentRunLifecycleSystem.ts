@@ -6,7 +6,7 @@ import { spawnToolCallEvent, ToolCallEventBundle } from '../../tools/bundles';
 import { isTerminalToolStatus, transitionToolState } from '../../tools/state';
 import type { AgentRunEndReason, AgentRunErrorType, AgentRunKind } from '../../../../../shared/protocol';
 import { AgentRunBundle, markRunNeedsModel, spawnAgentRun } from '../bundles';
-import { cleanupRunLlmRequests } from '../llmRequestCleanup';
+import { cleanupRunLlmRequests, type RunLlmCleanupReason } from '../llmRequestCleanup';
 import {
   AgentRun,
   AgentRunNeedsModel,
@@ -122,7 +122,7 @@ function pauseRun(world: WorldReader, cmd: CommandSink, run: Entity): void {
   const data = world.get(run, AgentRun);
   if (!data || isTerminalRunStatus(data.status) || data.status === 'paused') return;
   cmd.add(run, AgentRun, { ...data, status: 'paused', updatedAt: Date.now() });
-  cleanupLlmRequests(world, cmd, run, 'Run paused.');
+  cleanupLlmRequests(world, cmd, run, { kind: 'paused' });
 }
 
 function resumeRun(world: WorldReader, cmd: CommandSink, run: Entity): void {
@@ -183,13 +183,28 @@ function terminateRun(
     errorType,
     error: message
   });
-  cleanupLlmRequests(world, cmd, run, message);
+  cleanupLlmRequests(world, cmd, run, cleanupReasonForEndReason(endReason));
   failOpenToolCalls(world, cmd, run, message);
 }
 
-function cleanupLlmRequests(world: WorldReader, cmd: CommandSink, run: Entity, message: string): void {
+function cleanupLlmRequests(world: WorldReader, cmd: CommandSink, run: Entity, reason: RunLlmCleanupReason): void {
   cmd.remove(run, AgentRunNeedsModel);
-  cleanupRunLlmRequests(world, cmd, run, message);
+  cleanupRunLlmRequests(world, cmd, run, reason);
+}
+
+function cleanupReasonForEndReason(endReason: AgentRunEndReason): RunLlmCleanupReason {
+  switch (endReason) {
+    case 'retry_requested':
+      return { kind: 'retry_replaced' };
+    case 'regenerate_requested':
+      return { kind: 'regenerate_replaced' };
+    case 'stale_source_edited':
+      return { kind: 'stale' };
+    case 'cancelled_by_user':
+    case 'cancelled_by_policy':
+    default:
+      return { kind: 'user_cancelled' };
+  }
 }
 
 function failOpenToolCalls(world: WorldReader, cmd: CommandSink, run: Entity, reason: string): void {

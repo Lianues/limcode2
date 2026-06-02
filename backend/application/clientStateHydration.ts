@@ -248,7 +248,8 @@ function spawnHydratedMessage(world: World, conversation: Entity, record: Messag
     seq: record.seq,
     createdAt: record.createdAt,
     streamOutputDurationMs: record.streamOutputDurationMs,
-    usageMetadata: record.usageMetadata
+    usageMetadata: record.usageMetadata,
+    stopReason: record.stopReason
   });
   rememberHydratedMessageSeq(conversation, record.seq);
   world.add(entity, PartOf, { parent: conversation });

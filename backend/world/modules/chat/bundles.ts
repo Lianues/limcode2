@@ -41,6 +41,7 @@ export interface SpawnMessageInput {
 export function spawnMessage(cmd: CommandSink, input: SpawnMessageInput): Entity {
   const entity = cmd.spawn();
   const createdAt = Date.now();
+  const seq = nextMessageSeq(input.parent);
   const content: MessageContent = {
     role: contentRoleForMessage(input.role),
     parts: input.parts ?? []
@@ -50,7 +51,7 @@ export function spawnMessage(cmd: CommandSink, input: SpawnMessageInput): Entity
     role: input.role,
     content,
     status: input.status ?? 'complete',
-    seq: nextMessageSeq(createdAt),
+    seq,
     createdAt
   });
   cmd.add(entity, PartOf, { parent: input.parent });
@@ -115,10 +116,21 @@ export function spawnLlmRequest(cmd: CommandSink, input: { run: Entity; conversa
   return entity;
 }
 
-let lastMessageSeq = 0;
+const MESSAGE_SEQ_STEP = 100_000;
+const conversationMaxMessageSeq = new Map<Entity, number>();
 
-function nextMessageSeq(createdAt: number): number {
-  const timeBasedFloor = createdAt * 1000;
-  lastMessageSeq = Math.max(lastMessageSeq + 1, timeBasedFloor);
-  return lastMessageSeq;
+export function rememberHydratedMessageSeq(conversation: Entity, seq: number): void {
+  const current = conversationMaxMessageSeq.get(conversation) ?? 0;
+  if (seq > current) conversationMaxMessageSeq.set(conversation, seq);
+}
+
+export function resetMessageSeqState(): void {
+  conversationMaxMessageSeq.clear();
+}
+
+function nextMessageSeq(conversation: Entity): number {
+  const current = conversationMaxMessageSeq.get(conversation) ?? 0;
+  const next = current > 0 ? current + MESSAGE_SEQ_STEP : MESSAGE_SEQ_STEP;
+  conversationMaxMessageSeq.set(conversation, next);
+  return next;
 }

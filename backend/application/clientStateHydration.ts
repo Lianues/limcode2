@@ -12,6 +12,7 @@ import {
   SystemPrompt,
   ToolPolicy
 } from '../world/modules/mode/components';
+import { rememberHydratedMessageSeq, resetMessageSeqState } from '../world/modules/chat/bundles';
 import { Conversation, ConversationBranchLink, ConversationReuseLink, Message, MessageCurrentRevisionLink, MessageRevision, PartOf } from '../world/modules/chat/components';
 import { ToolCall, ToolCallEvent, ToolResultConsumed, ToolState } from '../world/modules/tools/components';
 import { isTerminalToolStatus } from '../world/modules/tools/state';
@@ -40,6 +41,8 @@ import type { ClientState, MessageRecord, ToolCallEventRecord, ToolCallRecord } 
 import { createDefaultAgentRecord, DEFAULT_AGENT_NAME, DEFAULT_CONVERSATION_ID } from './defaults';
 
 export function hydrateClientState(world: World, state: ClientState): boolean {
+  resetMessageSeqState();
+
   const hasAnyState = state.agents.length > 0 || state.conversations.length > 0 || state.messages.length > 0 || state.agentModes.length > 0;
   if (!hasAnyState) return false;
 
@@ -247,6 +250,7 @@ function spawnHydratedMessage(world: World, conversation: Entity, record: Messag
     streamOutputDurationMs: record.streamOutputDurationMs,
     usageMetadata: record.usageMetadata
   });
+  rememberHydratedMessageSeq(conversation, record.seq);
   world.add(entity, PartOf, { parent: conversation });
   return entity;
 }

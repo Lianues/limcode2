@@ -16,7 +16,8 @@ import {
 } from '../world/modules';
 import type { AgentSpawnRequestData } from '../world/modules/agent/requests';
 import { Agent, AgentConversationLink } from '../world/modules/agent/components';
-import { Conversation } from '../world/modules/chat/components';
+import { Conversation, Message, PartOf } from '../world/modules/chat/components';
+import type { ConversationData, MessageData } from '../world/modules/chat/components';
 import { clientSyncPlugin, registerClientSyncSystems } from '../world/clientSync';
 import { storageProjectionPlugin } from '../world/storageProjection';
 import { EffectHandlerRegistry, registerApplicationEffectHandlers } from './effectHandlers';
@@ -25,17 +26,29 @@ import type { RuntimeEnv } from './RuntimeEnv';
 import { GLOBAL_SETTINGS_SECTIONS, createMessageId } from '../../shared/protocol';
 import type {
   BridgeClientId,
+  MessageContent,
+  MsgStatus,
   WebviewClientMeta,
   WebviewToExtensionMessage
 } from '../../shared/protocol';
 import { createRuntimeEnv } from './createRuntimeEnv';
-import { createDefaultAgentSpawnRequest, DEFAULT_AGENT_ID } from './defaults';
+import { createDefaultAgentSpawnRequest, DEFAULT_AGENT_ID, DEFAULT_CONVERSATION_ID } from './defaults';
 import { hydrateClientState } from './clientStateHydration';
 import { ClientStatePersistence } from './ClientStatePersistence';
 import { GlobalSettingsBridge } from './GlobalSettingsBridge';
 import { ConversationSettingsBridge } from './ConversationSettingsBridge';
 import { WebviewClientRegistry } from './WebviewClientRegistry';
 import { WebviewMessageRouter } from './WebviewMessageRouter';
+
+export interface SidebarConversationHistoryEntry {
+  id: string;
+  title: string;
+  preview: string;
+  messageCount: number;
+  status: MsgStatus | 'empty';
+  updatedAt?: number;
+  agentName?: string;
+}
 
 /**
  * 后端应用组合根（composition root）。
@@ -53,6 +66,8 @@ export class BackendApplication {
   private readonly webviewClients = new WebviewClientRegistry();
   private readonly webviewRouter: WebviewMessageRouter;
   private hydrated = false;
+  private resolveHydrated: () => void = () => undefined;
+  private readonly hydratedReady = new Promise<void>((resolve) => { this.resolveHydrated = resolve; });
   private pendingGlobalSnapshot = false;
   private readonly pendingSnapshotConversationIds = new Set<string>();
   private readonly pendingHydrationMessages: Array<{ clientId: BridgeClientId; message: WebviewToExtensionMessage }> = [];
@@ -140,6 +155,33 @@ export class BackendApplication {
     return conversationId;
   }
 
+  /** 侧边栏只读投影：按最近消息时间排序的对话历史列表。 */
+  public getConversationHistoryEntries(): SidebarConversationHistoryEntry[] {
+    const messagesByConversation = this.collectMessagesByConversation();
+    const agentNamesByConversation = this.collectAgentNamesByConversation();
+    const entries: SidebarConversationHistoryEntry[] = [];
+
+    for (const entity of this.world.query(Conversation)) {
+      const conversation = this.world.get(entity, Conversation);
+      if (!conversation?.id) continue;
+      const messages = messagesByConversation.get(entity) ?? [];
+      const latest = latestMessage(messages);
+      const agentName = agentNamesByConversation.get(entity);
+      const entry: SidebarConversationHistoryEntry = {
+        id: conversation.id,
+        title: conversationTitle(conversation, messages),
+        preview: latest ? messagePreview(latest) : '暂无消息，点击开始新的交流。',
+        messageCount: messages.length,
+        status: latest?.status ?? 'empty'
+      };
+      if (latest) entry.updatedAt = latest.createdAt;
+      if (agentName) entry.agentName = agentName;
+      entries.push(entry);
+    }
+
+    return entries.filter((entry) => entry.title).sort(compareConversationHistoryEntries);
+  }
+
   /** 当前 active data root；可能是 VS Code 默认 globalStorageUri，也可能是用户配置的自定义目录。 */
   public getStorageRootUri(): vscode.Uri {
     return this.env.storage.paths.globalStorageUri;
@@ -149,6 +191,10 @@ export class BackendApplication {
     const clientId = this.env.webview.attach(webview, meta);
     this.webviewClients.register(clientId, meta);
     return clientId;
+  }
+
+  public waitUntilHydrated(): Promise<void> {
+    return this.hydrated ? Promise.resolve() : this.hydratedReady;
   }
 
   public detachWebview(clientId: BridgeClientId): void {
@@ -194,6 +240,7 @@ export class BackendApplication {
       for (const section of GLOBAL_SETTINGS_SECTIONS) {
         void this.globalSettingsBridge.postSnapshot(undefined, section);
       }
+      this.resolveHydrated();
     }
   }
 
@@ -226,6 +273,89 @@ export class BackendApplication {
     return this.world.query(Agent).find((entity) => this.world.get(entity, Agent)?.id === DEFAULT_AGENT_ID)
       ?? this.world.query(Agent)[0];
   }
+
+  private collectMessagesByConversation(): Map<Entity, MessageData[]> {
+    const result = new Map<Entity, MessageData[]>();
+    for (const messageEntity of this.world.query(Message)) {
+      const message = this.world.get(messageEntity, Message);
+      const partOf = this.world.get(messageEntity, PartOf);
+      if (!message || !partOf) continue;
+      const list = result.get(partOf.parent) ?? [];
+      list.push(message);
+      result.set(partOf.parent, list);
+    }
+    for (const messages of result.values()) messages.sort(compareMessagesBySeq);
+    return result;
+  }
+
+  private collectAgentNamesByConversation(): Map<Entity, string> {
+    const result = new Map<Entity, string>();
+    for (const linkEntity of this.world.query(AgentConversationLink)) {
+      const link = this.world.get(linkEntity, AgentConversationLink);
+      if (!link) continue;
+      if (result.has(link.conversation) && link.role !== 'default') continue;
+      const agent = this.world.get(link.agent, Agent);
+      if (!agent?.name) continue;
+      result.set(link.conversation, agent.name);
+    }
+    return result;
+  }
+}
+
+function compareConversationHistoryEntries(left: SidebarConversationHistoryEntry, right: SidebarConversationHistoryEntry): number {
+  return (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
+    || left.title.localeCompare(right.title, 'zh-CN')
+    || left.id.localeCompare(right.id, 'zh-CN');
+}
+
+function compareMessagesBySeq(left: MessageData, right: MessageData): number {
+  return left.seq - right.seq || left.createdAt - right.createdAt;
+}
+
+function latestMessage(messages: MessageData[]): MessageData | undefined {
+  return messages.reduce<MessageData | undefined>((latest, message) => {
+    if (!latest) return message;
+    return message.createdAt > latest.createdAt || (message.createdAt === latest.createdAt && message.seq > latest.seq)
+      ? message
+      : latest;
+  }, undefined);
+}
+
+function conversationTitle(conversation: ConversationData, messages: MessageData[]): string {
+  const explicitTitle = normalizeText(conversation.title ?? '');
+  if (explicitTitle && explicitTitle !== '新对话') return truncateText(explicitTitle, 28);
+
+  const firstUserMessage = messages.find((message) => message.role === 'user');
+  const titleFromMessage = firstUserMessage ? normalizeText(textPreview(firstUserMessage.content)) : '';
+  if (titleFromMessage) return truncateText(titleFromMessage, 28);
+
+  if (conversation.id === DEFAULT_CONVERSATION_ID) return '默认对话';
+  return explicitTitle || '新对话';
+}
+
+function messagePreview(message: MessageData): string {
+  const text = normalizeText(textPreview(message.content));
+  if (text) return truncateText(text, 72);
+  return message.role === 'user' ? '用户消息' : '助手消息';
+}
+
+function textPreview(content: MessageContent): string {
+  for (const part of content.parts) {
+    if ('text' in part && part.thought !== true && part.text.trim()) return part.text;
+    if ('functionCall' in part) return `调用工具：${part.functionCall.name}`;
+    if ('functionResponse' in part) return `工具返回：${part.functionResponse.name}`;
+    if ('fileData' in part) return `文件：${part.fileData.uri}`;
+    if ('inlineData' in part) return `附件：${part.inlineData.mimeType}`;
+  }
+  return '';
+}
+
+function normalizeText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function truncateText(text: string, maxLength: number): string {
+  return text.length > maxLength ? `${text.slice(0, Math.max(0, maxLength - 1))}…` : text;
 }
 
 function isRealtimeClientEffect(effect: WorldEffect): boolean {

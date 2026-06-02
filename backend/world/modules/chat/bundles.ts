@@ -40,6 +40,7 @@ export interface SpawnMessageInput {
 
 export function spawnMessage(cmd: CommandSink, input: SpawnMessageInput): Entity {
   const entity = cmd.spawn();
+  const createdAt = Date.now();
   const content: MessageContent = {
     role: contentRoleForMessage(input.role),
     parts: input.parts ?? []
@@ -49,8 +50,8 @@ export function spawnMessage(cmd: CommandSink, input: SpawnMessageInput): Entity
     role: input.role,
     content,
     status: input.status ?? 'complete',
-    seq: entity,
-    createdAt: Date.now()
+    seq: nextMessageSeq(createdAt),
+    createdAt
   });
   cmd.add(entity, PartOf, { parent: input.parent });
   spawnMessageRevision(cmd, entity, content, input.revisionReason ?? 'created');
@@ -112,4 +113,12 @@ export function spawnLlmRequest(cmd: CommandSink, input: { run: Entity; conversa
     modelMessage: input.modelMessage
   });
   return entity;
+}
+
+let lastMessageSeq = 0;
+
+function nextMessageSeq(createdAt: number): number {
+  const timeBasedFloor = createdAt * 1000;
+  lastMessageSeq = Math.max(lastMessageSeq + 1, timeBasedFloor);
+  return lastMessageSeq;
 }

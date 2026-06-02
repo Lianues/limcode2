@@ -442,7 +442,14 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       bottom: 9px;
       width: 2px;
       background: transparent;
-      transition: background 0.16s ease;
+      opacity: 0;
+      transition: background 0.16s ease, opacity 0.16s ease;
+    }
+
+    .history-item.is-running::before {
+      background: var(--vscode-testing-iconQueued);
+      opacity: 0.95;
+      animation: pulse-edge 1.6s infinite ease-in-out;
     }
 
     .history-item:hover {
@@ -770,6 +777,21 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
         transform: scale(0.86);
         opacity: 0.55;
         box-shadow: 0 0 0 0 color-mix(in srgb, var(--vscode-testing-iconQueued) 38%, transparent);
+      }
+    }
+
+    @keyframes pulse-edge {
+      0% {
+        opacity: 0.45;
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--vscode-testing-iconQueued) 32%, transparent);
+      }
+      50% {
+        opacity: 1;
+        box-shadow: 0 0 8px 1px var(--vscode-testing-iconQueued);
+      }
+      100% {
+        opacity: 0.45;
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--vscode-testing-iconQueued) 32%, transparent);
       }
     }
   </style>

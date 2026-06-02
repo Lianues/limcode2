@@ -243,7 +243,12 @@ export class BackendApplication {
     const entity = this.findConversationEntity(conversationId);
     if (entity === undefined) return false;
 
-    for (const target of this.collectConversationCascadeEntities(entity, conversationId)) {
+    const cascade = this.collectConversationCascadeEntities(entity, conversationId);
+    for (const target of cascade) {
+      const request = this.world.get(target, LlmRequest);
+      if (request?.id) this.env.llm.abort(request.id);
+    }
+    for (const target of cascade) {
       this.world.despawn(target);
     }
     this.requestSnapshot();

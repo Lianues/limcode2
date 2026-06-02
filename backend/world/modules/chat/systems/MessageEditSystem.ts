@@ -14,6 +14,7 @@ import {
   RunEditPolicyLink
 } from '../../agentRun/components';
 import { AgentRunBundle, markRunNeedsModel, spawnAgentRun, spawnMessageRunLink } from '../../agentRun/bundles';
+import { cleanupRunLlmRequests } from '../../agentRun/llmRequestCleanup';
 import { activeDeliveryPolicyForRun, effectiveEditPolicyForRun, runSource, runTarget } from '../../agentRun/queries';
 import type { MessageContent } from '../../../../../shared/protocol';
 import {
@@ -29,7 +30,7 @@ import {
 } from '../bundles';
 import { ChatEventType } from '../events';
 import { conversationMessages } from '../queries';
-import { Conversation, LlmRequest, Message, MessageCurrentRevisionLink, MessageRevision, PartOf } from '../components';
+import { Conversation, LlmRequest, Message, MessageCurrentRevisionLink, MessageRevision, PartOf, Streaming } from '../components';
 
 const MessageEditQuery = defineQuery({
   name: 'MessageEditLookup',
@@ -52,7 +53,7 @@ const MessageEditQuery = defineQuery({
     LlmRequest
   ],
   write: [Message, AgentRun],
-  remove: [MessageCurrentRevisionLink, AgentRunNeedsModel],
+  remove: [MessageCurrentRevisionLink, AgentRunNeedsModel, Streaming, LlmRequest],
   mutationMode: 'update',
   role: 'work'
 });
@@ -61,6 +62,7 @@ export const MessageEditSystem = defineSystem({
   name: 'MessageEditSystem',
   access: {
     queries: [MessageEditQuery],
+    effects: { emit: ['llm.abort'] },
     events: { read: [ChatEventType.Edit] },
     bundles: [MessageBundle, UserMessageBundle, ConversationBundle, ConversationLinkBundle, AgentRunBundle, AgentFromBlueprintBundle]
   },
@@ -134,7 +136,6 @@ function affectedRunsForEdit(world: WorldReader, message: Entity, oldRevision: E
 
 function cancelRun(world: WorldReader, cmd: CommandSink, run: Entity): void {
   markRunStatus(world, cmd, run, 'cancelled', 'cancelled_by_policy', 'cancelled');
-  cmd.remove(run, AgentRunNeedsModel);
 }
 
 function markRunStatus(world: WorldReader, cmd: CommandSink, run: Entity, status: 'cancelled' | 'stale', endReason: 'cancelled_by_policy' | 'stale_source_edited' = 'stale_source_edited', errorType: 'cancelled' | 'stale' = 'stale'): void {
@@ -142,6 +143,8 @@ function markRunStatus(world: WorldReader, cmd: CommandSink, run: Entity, status
   if (!data || isTerminalRunStatus(data.status)) return;
   const now = Date.now();
   cmd.add(run, AgentRun, { ...data, status, updatedAt: now, completedAt: now, endReason, errorType });
+  cmd.remove(run, AgentRunNeedsModel);
+  cleanupRunLlmRequests(world, cmd, run, status === 'stale' ? 'Run marked stale by source edit.' : 'Run cancelled by source edit policy.');
 }
 
 function restartRun(world: WorldReader, cmd: CommandSink, run: Entity, editedMessage: Entity): void {

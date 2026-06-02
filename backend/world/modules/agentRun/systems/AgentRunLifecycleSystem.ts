@@ -6,6 +6,7 @@ import { spawnToolCallEvent, ToolCallEventBundle } from '../../tools/bundles';
 import { isTerminalToolStatus, transitionToolState } from '../../tools/state';
 import type { AgentRunEndReason, AgentRunErrorType, AgentRunKind } from '../../../../../shared/protocol';
 import { AgentRunBundle, markRunNeedsModel, spawnAgentRun } from '../bundles';
+import { cleanupRunLlmRequests } from '../llmRequestCleanup';
 import {
   AgentRun,
   AgentRunNeedsModel,
@@ -73,6 +74,7 @@ export const AgentRunLifecycleSystem = defineSystem({
         AgentRunEventType.MarkStale
       ]
     },
+    effects: { emit: ['llm.abort'] },
     bundles: [AgentRunBundle, ToolCallEventBundle]
   },
   run(ctx) {
@@ -120,7 +122,6 @@ function pauseRun(world: WorldReader, cmd: CommandSink, run: Entity): void {
   const data = world.get(run, AgentRun);
   if (!data || isTerminalRunStatus(data.status) || data.status === 'paused') return;
   cmd.add(run, AgentRun, { ...data, status: 'paused', updatedAt: Date.now() });
-  cmd.remove(run, AgentRunNeedsModel);
   cleanupLlmRequests(world, cmd, run, 'Run paused.');
 }
 
@@ -182,29 +183,13 @@ function terminateRun(
     errorType,
     error: message
   });
-  cmd.remove(run, AgentRunNeedsModel);
   cleanupLlmRequests(world, cmd, run, message);
   failOpenToolCalls(world, cmd, run, message);
 }
 
 function cleanupLlmRequests(world: WorldReader, cmd: CommandSink, run: Entity, message: string): void {
-  for (const request of world.query(LlmRequest)) {
-    const data = world.get(request, LlmRequest);
-    if (!data || data.run !== run) continue;
-    const modelMessage = world.get(data.modelMessage, Message);
-    if (modelMessage) {
-      cmd.add(data.modelMessage, Message, {
-        ...modelMessage,
-        status: 'error',
-        content: {
-          ...modelMessage.content,
-          parts: modelMessage.content.parts.length === 0 ? [{ text: `[run stopped] ${message}` }] : modelMessage.content.parts
-        }
-      });
-    }
-    cmd.remove(data.modelMessage, Streaming);
-    cmd.despawn(request);
-  }
+  cmd.remove(run, AgentRunNeedsModel);
+  cleanupRunLlmRequests(world, cmd, run, message);
 }
 
 function failOpenToolCalls(world: WorldReader, cmd: CommandSink, run: Entity, reason: string): void {

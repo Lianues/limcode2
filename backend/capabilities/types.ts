@@ -19,6 +19,7 @@ export type Emit = (event: WorldEvent) => void;
 /** LLM 能力：无状态函数根据 request 启动流式执行，并通过 emit 回灌事件。 */
 export interface LlmCapability {
   start(request: LlmStartRequest, emit: Emit): void;
+  abort(requestId: string): void;
 }
 
 /** 文件系统能力：隐藏 vscode.workspace.fs 等外部句柄。 */

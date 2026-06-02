@@ -33,9 +33,27 @@ export interface LlmProviderOptions {
  * provider 真实 wire format 交给 unified-llm-provider 的 provider/format registry 处理。
  */
 export function createLlmProviderCapability(options: LlmProviderOptions): LlmCapability {
+  const controllers = new Map<string, AbortController>();
+
   return {
     start(request, emit) {
-      void startLlmProvider(request, emit, options);
+      controllers.get(request.id)?.abort(createAbortError(`Superseded LLM request: ${request.id}`));
+
+      const controller = new AbortController();
+      controllers.set(request.id, controller);
+
+      void startLlmProvider(request, emit, options, controller.signal)
+        .finally(() => {
+          if (controllers.get(request.id) === controller) {
+            controllers.delete(request.id);
+          }
+        });
+    },
+    abort(requestId) {
+      const controller = controllers.get(requestId);
+      if (!controller) return;
+      controllers.delete(requestId);
+      controller.abort(createAbortError(`Aborted LLM request: ${requestId}`));
     }
   };
 }
@@ -43,7 +61,8 @@ export function createLlmProviderCapability(options: LlmProviderOptions): LlmCap
 export async function startLlmProvider(
   request: LlmStartRequest,
   emit: Emit,
-  options: LlmProviderOptions
+  options: LlmProviderOptions,
+  signal?: AbortSignal
 ): Promise<void> {
   try {
     const settings = normalizeSettings(await resolveMaybe(options.settings));
@@ -72,7 +91,8 @@ export async function startLlmProvider(
     let activeThoughtBlock: ActiveThoughtBlock | undefined;
     for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(toUnifiedRequest(request, request.model?.temperature ?? settings.temperature), {
       inputFormat: 'unified',
-      outputFormat: 'unified'
+      outputFormat: 'unified',
+      signal
     })) {
       const chunkAt = Date.now();
       activeThoughtBlock = emitThoughtDeltas(request.id, activeThoughtBlock, chunk, chunkAt, emit);
@@ -93,6 +113,7 @@ export async function startLlmProvider(
       payload: { requestId: request.id, ...createDoneTiming(firstStreamChunkAt, lastStreamChunkAt, finishedAt), ...(latestUsageMetadata ? { usageMetadata: latestUsageMetadata } : {}) }
     });
   } catch (error) {
+    if (isAbortError(error)) return;
     emitLlmError(emit, request.id, error instanceof Error ? error.message : String(error));
   }
 }
@@ -344,6 +365,15 @@ async function importUndici(): Promise<UndiciModule> {
   return dynamicImport('undici');
 }
 
+function createAbortError(message: string): Error {
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
 function emitLlmError(emit: Emit, requestId: string, message: string): void {
   emit({ type: LlmEventType.Error, payload: { requestId, message } });
 }

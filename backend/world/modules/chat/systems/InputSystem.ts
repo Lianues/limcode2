@@ -1,18 +1,20 @@
 import { defineQuery, defineSystem, type Entity, type WorldReader, type CommandSink } from '../../../../ecs/types';
 import { ChatEventType } from '../events';
 import { readEvents } from '../../../events';
-import { Aborted, Conversation } from '../components';
+import { Aborted, Conversation, LlmRequest, Message, Streaming } from '../components';
 import { spawnUserMessage, UserMessageBundle } from '../bundles';
 import { Agent, AgentConversationLink } from '../../agent/components';
 import { AgentRun, AgentRunNeedsModel, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink } from '../../agentRun/components';
 import { AgentRunBundle, spawnAgentRun, spawnMessageRunLink } from '../../agentRun/bundles';
+import { cleanupRunLlmRequests } from '../../agentRun/llmRequestCleanup';
 import { defaultAgentForConversation, effectiveEditPolicyForRun, runTarget } from '../../agentRun/queries';
 
 const ConversationsByIdQuery = defineQuery({
   name: 'ConversationsById',
   all: [Conversation],
-  read: [Conversation, Agent, AgentConversationLink, AgentRun, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink],
-  write: [AgentRun],
+  read: [Conversation, Agent, AgentConversationLink, AgentRun, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink, LlmRequest, Message],
+  write: [AgentRun, Message],
+  remove: [AgentRunNeedsModel, Streaming, LlmRequest],
   role: 'work'
 });
 
@@ -21,6 +23,7 @@ export const InputSystem = defineSystem({
   access: {
     queries: [ConversationsByIdQuery],
     events: { read: [ChatEventType.Send, ChatEventType.Abort] },
+    effects: { emit: ['llm.abort'] },
     writes: { components: [Aborted] },
     bundles: [UserMessageBundle, AgentRunBundle]
   },
@@ -100,6 +103,7 @@ function cancelRuns(world: WorldReader, cmd: CommandSink, runs: Entity[]): void 
     if (!data || isTerminalRunStatus(data.status)) continue;
     cmd.add(run, AgentRun, { ...data, status: 'cancelled', updatedAt: now, completedAt: now, endReason: 'cancelled_by_policy', errorType: 'cancelled' });
     cmd.remove(run, AgentRunNeedsModel);
+    cleanupRunLlmRequests(world, cmd, run, 'Run cancelled by interrupt_current policy.');
   }
 }
 

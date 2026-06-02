@@ -11,6 +11,7 @@ const HISTORY_UPDATE_MESSAGE = 'conversationHistory.update';
 const SIDEBAR_READY_MESSAGE = 'sidebar.ready';
 const RENAME_CONVERSATION_MESSAGE = 'renameConversation';
 const DELETE_CONVERSATION_MESSAGE = 'deleteConversation';
+const ABORT_CONVERSATION_MESSAGE = 'abortConversation';
 
 interface SidebarWebviewMessage {
   type?: string;
@@ -73,6 +74,11 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
+      if (message.type === ABORT_CONVERSATION_MESSAGE && message.conversationId) {
+        this.abortConversationFromSidebar(webviewView.webview, message.conversationId);
+        return;
+      }
+
       if (message.type === SIDEBAR_READY_MESSAGE || message.type === REFRESH_HISTORY_MESSAGE) {
         this.postConversationHistoryWhenReady(webviewView.webview);
       }
@@ -132,6 +138,24 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
         this.postConversationHistory(webview);
       })
       .catch((error) => console.warn('[LimCode] Failed to delete sidebar conversation.', error));
+  }
+
+  private abortConversationFromSidebar(webview: vscode.Webview, conversationId: string): void {
+    void this.backendApp
+      .waitUntilHydrated()
+      .then(async () => {
+        const current = this.backendApp.getConversationHistoryEntries().find((entry) => entry.id === conversationId);
+        const confirm = await vscode.window.showWarningMessage(
+          `终止对话「${current?.title ?? conversationId}」的后台任务？`,
+          { modal: false, detail: '仅终止当前后台运行任务，不删除对话记录。' },
+          '终止'
+        );
+        if (confirm !== '终止') return;
+        const aborted = this.backendApp.abortConversation(conversationId);
+        if (!aborted) return;
+        this.postConversationHistory(webview);
+      })
+      .catch((error) => console.warn('[LimCode] Failed to abort sidebar conversation.', error));
   }
 
   private postConversationHistory(webview: vscode.Webview): void {
@@ -482,6 +506,12 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       animation: pulse-glow 1.4s infinite ease-in-out;
     }
 
+    .status-running {
+      background: var(--vscode-testing-iconQueued);
+      opacity: 1;
+      animation: pulse-glow 1.4s infinite ease-in-out;
+    }
+
     .status-complete {
       background: var(--vscode-testing-iconPassed);
       opacity: 1;
@@ -519,6 +549,30 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+
+    .run-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      min-width: 0;
+      max-width: 100%;
+      padding: 1px 5px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      color: var(--vscode-foreground);
+      background: color-mix(in srgb, var(--vscode-sideBar-background) 86%, var(--vscode-foreground) 14%);
+      font-size: 10px;
+      line-height: 1.3;
+    }
+
+    .run-badge-dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--vscode-testing-iconQueued);
+      animation: pulse-glow 1.4s infinite ease-in-out;
+      flex: 0 0 auto;
     }
 
     .history-actions {
@@ -824,6 +878,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const initialEntries = ${initialEntries};
+    const HISTORY_REFRESH_INTERVAL_MS = 2500;
     let historyEntries = Array.isArray(initialEntries) ? initialEntries : [];
 
     const historyList = document.getElementById('historyList');
@@ -849,7 +904,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
 
     function createHistoryItem(entry) {
       const item = document.createElement('div');
-      item.className = 'history-item';
+      item.className = 'history-item' + (entry.isRunning ? ' is-running' : '');
       item.title = '打开对话：' + (entry.title || entry.id);
       item.tabIndex = 0;
       item.setAttribute('role', 'button');
@@ -881,8 +936,8 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       title.textContent = entry.title || entry.id;
 
       const dot = document.createElement('span');
-      dot.className = 'status-dot ' + statusClass(entry.status);
-      dot.title = statusText(entry.status);
+      dot.className = 'status-dot ' + statusClass(entry);
+      dot.title = statusText(entry);
 
       titleRow.appendChild(title);
       titleRow.appendChild(dot);
@@ -896,6 +951,20 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       const metaText = document.createElement('span');
       metaText.textContent = (entry.agentName || '默认 Agent') + ' · ' + (entry.messageCount || 0) + ' 条消息 · ' + formatTime(entry.updatedAt);
       meta.appendChild(metaText);
+
+      if (entry.isRunning) {
+        const badge = document.createElement('span');
+        badge.className = 'run-badge';
+        badge.title = '后台任务：' + (entry.runStatusLabel || '执行中');
+        const badgeDot = document.createElement('span');
+        badgeDot.className = 'run-badge-dot';
+        badgeDot.setAttribute('aria-hidden', 'true');
+        const badgeText = document.createElement('span');
+        badgeText.textContent = entry.runStatusLabel || '后台执行中';
+        badge.appendChild(badgeDot);
+        badge.appendChild(badgeText);
+        meta.appendChild(badge);
+      }
 
       const actions = document.createElement('div');
       actions.className = 'history-actions';
@@ -913,6 +982,17 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
         vscode.postMessage({ type: '${RENAME_CONVERSATION_MESSAGE}', conversationId: entry.id });
       });
 
+      const abortButton = document.createElement('button');
+      abortButton.type = 'button';
+      abortButton.className = 'history-action-button';
+      abortButton.title = '终止后台任务';
+      abortButton.setAttribute('aria-label', '终止后台任务');
+      abortButton.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"></rect></svg>';
+      abortButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        vscode.postMessage({ type: '${ABORT_CONVERSATION_MESSAGE}', conversationId: entry.id });
+      });
+
       const deleteButton = document.createElement('button');
       deleteButton.type = 'button';
       deleteButton.className = 'history-action-button danger';
@@ -924,6 +1004,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
         vscode.postMessage({ type: '${DELETE_CONVERSATION_MESSAGE}', conversationId: entry.id });
       });
 
+      if (entry.isRunning) actions.appendChild(abortButton);
       actions.appendChild(renameButton);
       actions.appendChild(deleteButton);
 
@@ -936,17 +1017,19 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       return item;
     }
 
-    function statusClass(status) {
-      if (status === 'streaming') return 'status-streaming';
-      if (status === 'complete') return 'status-complete';
-      if (status === 'error') return 'status-error';
+    function statusClass(entry) {
+      if (entry.isRunning) return 'status-running';
+      if (entry.status === 'streaming') return 'status-streaming';
+      if (entry.status === 'complete') return 'status-complete';
+      if (entry.status === 'error') return 'status-error';
       return 'status-empty';
     }
 
-    function statusText(status) {
-      if (status === 'streaming') return '正在响应';
-      if (status === 'complete') return '已完成';
-      if (status === 'error') return '出现错误';
+    function statusText(entry) {
+      if (entry.isRunning) return '后台任务：' + (entry.runStatusLabel || '执行中');
+      if (entry.status === 'streaming') return '正在响应';
+      if (entry.status === 'complete') return '已完成';
+      if (entry.status === 'error') return '出现错误';
       return '暂无消息';
     }
 
@@ -985,6 +1068,10 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
 
     renderHistory();
     vscode.postMessage({ type: '${SIDEBAR_READY_MESSAGE}' });
+    window.setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      vscode.postMessage({ type: '${REFRESH_HISTORY_MESSAGE}' });
+    }, HISTORY_REFRESH_INTERVAL_MS);
   </script>
 </body>
 </html>`;

@@ -27,6 +27,7 @@ import {
   PartOf
 } from '../world/modules/chat/components';
 import type { ConversationData, MessageData } from '../world/modules/chat/components';
+import { ChatEventType } from '../world/modules/chat/events';
 import {
   AgentRun,
   AgentRunInputRevision,
@@ -48,6 +49,7 @@ import {
   RunToolPolicyLink,
   ToolCallRunLink
 } from '../world/modules/agentRun/components';
+import { AgentRunEventType } from '../world/modules/agentRun/events';
 import { ToolCall, ToolCallEvent } from '../world/modules/tools/components';
 import { clientSyncPlugin, registerClientSyncSystems } from '../world/clientSync';
 import { storageProjectionPlugin } from '../world/storageProjection';
@@ -56,6 +58,7 @@ import { flushEffects, flushEffectsWhere } from './executeEffects';
 import type { RuntimeEnv } from './RuntimeEnv';
 import { GLOBAL_SETTINGS_SECTIONS, createMessageId } from '../../shared/protocol';
 import type {
+  AgentRunStatus,
   BridgeClientId,
   MessageContent,
   MsgStatus,
@@ -79,6 +82,9 @@ export interface SidebarConversationHistoryEntry {
   status: MsgStatus | 'empty';
   updatedAt?: number;
   agentName?: string;
+  isRunning: boolean;
+  runStatus?: AgentRunStatus;
+  runStatusLabel?: string;
 }
 
 /**
@@ -190,6 +196,7 @@ export class BackendApplication {
   public getConversationHistoryEntries(): SidebarConversationHistoryEntry[] {
     const messagesByConversation = this.collectMessagesByConversation();
     const agentNamesByConversation = this.collectAgentNamesByConversation();
+    const runSummariesByConversation = this.collectRunSummariesByConversation();
     const entries: SidebarConversationHistoryEntry[] = [];
 
     for (const entity of this.world.query(Conversation)) {
@@ -198,15 +205,22 @@ export class BackendApplication {
       const messages = messagesByConversation.get(entity) ?? [];
       const latest = latestMessage(messages);
       const agentName = agentNamesByConversation.get(entity);
+      const runSummary = runSummariesByConversation.get(entity);
       const entry: SidebarConversationHistoryEntry = {
         id: conversation.id,
         title: conversationTitle(conversation, messages),
         preview: latest ? messagePreview(latest) : '暂无消息，点击开始新的交流。',
         messageCount: messages.length,
-        status: latest?.status ?? 'empty'
+        status: latest?.status ?? 'empty',
+        isRunning: !!runSummary
       };
       if (latest) entry.updatedAt = latest.createdAt;
       if (agentName) entry.agentName = agentName;
+      if (runSummary) {
+        entry.runStatus = runSummary.status;
+        entry.runStatusLabel = runSummary.label;
+        entry.updatedAt = Math.max(entry.updatedAt ?? 0, runSummary.updatedAt);
+      }
       entries.push(entry);
     }
 
@@ -232,6 +246,17 @@ export class BackendApplication {
     for (const target of this.collectConversationCascadeEntities(entity, conversationId)) {
       this.world.despawn(target);
     }
+    this.requestSnapshot();
+    this.requestSnapshot(conversationId);
+    return true;
+  }
+
+  public abortConversation(conversationId: string): boolean {
+    const entity = this.findConversationEntity(conversationId);
+    if (entity === undefined) return false;
+
+    this.world.enqueue({ type: ChatEventType.Abort, payload: { conversationId } });
+    this.world.enqueue({ type: AgentRunEventType.CancelConversation, payload: { conversationId, reason: 'sidebar_abort' } });
     this.requestSnapshot();
     this.requestSnapshot(conversationId);
     return true;
@@ -576,6 +601,24 @@ export class BackendApplication {
     }
     return result;
   }
+
+  private collectRunSummariesByConversation(): Map<Entity, { status: AgentRunStatus; label: string; updatedAt: number }> {
+    const result = new Map<Entity, { status: AgentRunStatus; label: string; updatedAt: number }>();
+    for (const linkEntity of this.world.query(AgentRunTargetLink)) {
+      const link = this.world.get(linkEntity, AgentRunTargetLink);
+      if (!link) continue;
+      const run = this.world.get(link.run, AgentRun);
+      if (!run || !isActiveAgentRunStatus(run.status)) continue;
+      const existing = result.get(link.conversation);
+      if (existing && existing.updatedAt >= run.updatedAt) continue;
+      result.set(link.conversation, {
+        status: run.status,
+        label: labelForAgentRunStatus(run.status),
+        updatedAt: run.updatedAt
+      });
+    }
+    return result;
+  }
 }
 
 function compareConversationHistoryEntries(left: SidebarConversationHistoryEntry, right: SidebarConversationHistoryEntry): number {
@@ -640,6 +683,37 @@ function addAll<T>(target: Set<T>, source: Iterable<T>): void {
 
 function truncateText(text: string, maxLength: number): string {
   return text.length > maxLength ? `${text.slice(0, Math.max(0, maxLength - 1))}…` : text;
+}
+
+function isActiveAgentRunStatus(status: AgentRunStatus): boolean {
+  return status !== 'completed' && status !== 'failed' && status !== 'cancelled' && status !== 'stale';
+}
+
+function labelForAgentRunStatus(status: AgentRunStatus): string {
+  switch (status) {
+    case 'queued':
+      return '排队中';
+    case 'preparing':
+      return '准备中';
+    case 'running':
+      return '后台执行中';
+    case 'waiting_tool':
+      return '等待工具';
+    case 'waiting_child_run':
+      return '等待子任务';
+    case 'delivering':
+      return '整理回复';
+    case 'paused':
+      return '已暂停';
+    case 'completed':
+      return '已完成';
+    case 'failed':
+      return '失败';
+    case 'cancelled':
+      return '已终止';
+    case 'stale':
+      return '已过期';
+  }
 }
 
 function isRealtimeClientEffect(effect: WorldEffect): boolean {

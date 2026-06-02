@@ -13,5 +13,13 @@ export function useChat() {
     return true;
   }
 
-  return { sendMessage };
+  function abortCurrentConversation(reason = 'user_requested_abort'): boolean {
+    const conversationId = clientState.currentConversationId;
+    if (!conversationId) return false;
+    void reason;
+    bridge.request(BridgeMessageType.ChatAbort, { conversationId });
+    return true;
+  }
+
+  return { sendMessage, abortCurrentConversation };
 }

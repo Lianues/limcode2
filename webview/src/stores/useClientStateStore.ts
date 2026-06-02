@@ -2,6 +2,8 @@ import { defineStore } from 'pinia';
 import { createEmptyClientState } from '@shared/clientStateSchema';
 import {
   isFunctionResponsePart,
+  type AgentRunRecord,
+  type AgentRunStatus,
   type ClientPatchOp,
   type ClientState,
   type ConversationRecord,
@@ -20,6 +22,20 @@ export interface ClientStateStoreState extends ClientState {
 export interface CurrentModelSummary {
   modeName?: string;
   model?: string;
+}
+
+export interface CurrentRunSummary {
+  activeRuns: AgentRunRecord[];
+  primaryRun?: AgentRunRecord;
+  status?: AgentRunStatus;
+  label: string;
+  isRunning: boolean;
+}
+
+const TERMINAL_AGENT_RUN_STATUSES = new Set<AgentRunStatus>(['completed', 'failed', 'cancelled', 'stale']);
+
+export function isActiveAgentRunStatus(status: AgentRunStatus): boolean {
+  return !TERMINAL_AGENT_RUN_STATUSES.has(status);
 }
 
 const dbByStore = new WeakMap<object, ClientStateDb>();
@@ -59,6 +75,19 @@ export const useClientStateStore = defineStore('clientState', {
             !message.content.parts.some(isFunctionResponsePart)
         )
         .sort((left, right) => left.seq - right.seq);
+    },
+    currentActiveRuns(state): AgentRunRecord[] {
+      return activeRunsForConversation(state, state.currentConversationId);
+    },
+    currentRunSummary(state): CurrentRunSummary {
+      const activeRuns = activeRunsForConversation(state, state.currentConversationId);
+      const primaryRun = activeRuns[0];
+      return {
+        activeRuns,
+        ...(primaryRun ? { primaryRun, status: primaryRun.status } : {}),
+        label: primaryRun ? labelForRunStatus(primaryRun.status) : '空闲',
+        isRunning: activeRuns.length > 0
+      };
     },
     currentModelSummary(state): CurrentModelSummary {
       const agentLink =
@@ -112,3 +141,43 @@ export const useClientStateStore = defineStore('clientState', {
     }
   }
 });
+
+function activeRunsForConversation(state: ClientStateStoreState, conversationId: string): AgentRunRecord[] {
+  if (!conversationId) return [];
+  const runIds = new Set(
+    state.agentRunTargetLinks
+      .filter((link) => link.conversationId === conversationId)
+      .map((link) => link.runId)
+  );
+  if (runIds.size === 0) return [];
+  return state.agentRuns
+    .filter((run) => runIds.has(run.id) && isActiveAgentRunStatus(run.status))
+    .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt || right.id.localeCompare(left.id));
+}
+
+function labelForRunStatus(status: AgentRunStatus): string {
+  switch (status) {
+    case 'queued':
+      return '排队中';
+    case 'preparing':
+      return '准备中';
+    case 'running':
+      return '执行中';
+    case 'waiting_tool':
+      return '等待工具';
+    case 'waiting_child_run':
+      return '等待子任务';
+    case 'delivering':
+      return '整理回复';
+    case 'paused':
+      return '已暂停';
+    case 'completed':
+      return '已完成';
+    case 'failed':
+      return '失败';
+    case 'cancelled':
+      return '已终止';
+    case 'stale':
+      return '已过期';
+  }
+}

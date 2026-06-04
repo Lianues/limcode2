@@ -2,7 +2,9 @@
 import { computed, onBeforeUnmount, shallowRef, watch } from 'vue';
 import { renderMarkdown } from '../markdown/markdownRenderer';
 
-const STREAM_RENDER_INTERVAL_MS = 90;
+const STREAM_RENDER_INTERVAL_MS = 64;
+const STREAM_CATCHUP_FRAMES = 14;
+const STREAM_MAX_CHARS_PER_FRAME = 32;
 
 const props = withDefaults(
   defineProps<{
@@ -13,6 +15,7 @@ const props = withDefaults(
   { streaming: false, markdown: false }
 );
 
+const displayedText = shallowRef('');
 const renderedHtml = shallowRef('');
 const markdownReady = computed(() => props.markdown);
 
@@ -20,11 +23,19 @@ let renderVersion = 0;
 let lastRenderTime = 0;
 let timeoutId: number | undefined;
 let frameId: number | undefined;
+let streamFrameId: number | undefined;
+let lastStreamFrameTime = 0;
 let scheduled = false;
 let disposed = false;
 
 watch(
-  () => [props.text, props.streaming, props.markdown] as const,
+  () => [props.text, props.streaming] as const,
+  () => syncDisplayedText(),
+  { immediate: true }
+);
+
+watch(
+  () => [displayedText.value, props.streaming, props.markdown] as const,
   () => scheduleMarkdownRender(),
   { immediate: true }
 );
@@ -32,7 +43,70 @@ watch(
 onBeforeUnmount(() => {
   disposed = true;
   clearScheduledRender();
+  clearStreamFrame();
 });
+
+function syncDisplayedText(): void {
+  const target = props.text;
+
+  if (!props.streaming) {
+    clearStreamFrame();
+    displayedText.value = target;
+    return;
+  }
+
+  const current = displayedText.value;
+  if (!target.startsWith(current) || current.length > target.length) {
+    displayedText.value = target;
+    clearStreamFrame();
+    return;
+  }
+
+  scheduleStreamFrame();
+}
+
+function scheduleStreamFrame(): void {
+  if (streamFrameId !== undefined) return;
+  lastStreamFrameTime ||= performance.now();
+  streamFrameId = window.requestAnimationFrame(tickDisplayedText);
+}
+
+function tickDisplayedText(now: number): void {
+  streamFrameId = undefined;
+
+  if (disposed) return;
+  if (!props.streaming) {
+    displayedText.value = props.text;
+    return;
+  }
+
+  const current = displayedText.value;
+  const target = props.text;
+  if (!target.startsWith(current) || current.length > target.length) {
+    displayedText.value = target;
+    return;
+  }
+
+  const remaining = target.length - current.length;
+  if (remaining <= 0) return;
+
+  const elapsed = Math.max(16, now - lastStreamFrameTime);
+  lastStreamFrameTime = now;
+  const timeStep = Math.max(1, Math.floor(elapsed / 16));
+  const catchupStep = Math.ceil(remaining / STREAM_CATCHUP_FRAMES);
+  const step = Math.min(STREAM_MAX_CHARS_PER_FRAME, Math.max(timeStep, catchupStep));
+  displayedText.value = target.slice(0, current.length + step);
+
+  if (displayedText.value.length < target.length) scheduleStreamFrame();
+}
+
+function clearStreamFrame(): void {
+  if (streamFrameId !== undefined) {
+    window.cancelAnimationFrame(streamFrameId);
+    streamFrameId = undefined;
+  }
+  lastStreamFrameTime = 0;
+}
 
 function scheduleMarkdownRender(): void {
   renderVersion += 1;
@@ -62,7 +136,7 @@ function scheduleMarkdownRender(): void {
 }
 
 async function renderCurrentMarkdown(version: number): Promise<void> {
-  const source = props.text;
+  const source = displayedText.value;
   const streaming = props.streaming;
 
   try {
@@ -99,10 +173,10 @@ function clearScheduledRender(): void {
 <template>
   <div v-if="markdownReady" class="rc-markdown-shell" :class="{ streaming }">
     <div v-if="renderedHtml" class="rc-markdown" v-html="renderedHtml"></div>
-    <pre v-else class="rc-text">{{ text }}</pre>
+    <pre v-else class="rc-text">{{ displayedText }}</pre>
     <span v-if="streaming" class="rc-cursor">▋</span>
   </div>
-  <pre v-else class="rc-text">{{ text }}<span v-if="streaming" class="rc-cursor">▋</span></pre>
+  <pre v-else class="rc-text">{{ displayedText }}<span v-if="streaming" class="rc-cursor">▋</span></pre>
 </template>
 
 <style scoped>

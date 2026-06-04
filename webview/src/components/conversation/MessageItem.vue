@@ -4,17 +4,19 @@ import { IconCheck, IconCopy, IconTrash } from '@tabler/icons-vue';
 import { isVisibleTextPart, type MessageRecord, type MessageStopReason } from '@shared/protocol';
 import RichContentView from '@webview/components/content/RichContentView.vue';
 import ConfirmPanel from '@webview/components/ui/ConfirmPanel.vue';
-import { useChat } from '@webview/composables/useChat';
 
 const props = withDefaults(
   defineProps<{
     message: MessageRecord;
     deleteCount?: number;
+    deleting?: boolean;
   }>(),
-  { deleteCount: 1 }
+  { deleteCount: 1, deleting: false }
 );
 
-const { deleteMessagesFrom } = useChat();
+const emit = defineEmits<{
+  (event: 'delete-from', message: MessageRecord): void;
+}>();
 
 const roleLabel = computed(() => (props.message.role === 'user' ? '你' : 'AI'));
 const streaming = computed(() => props.message.status === 'streaming');
@@ -130,13 +132,13 @@ function cancelDelete(): void {
 }
 
 function confirmDelete(): void {
-  deleteMessagesFrom(props.message.conversationId, props.message.id);
+  emit('delete-from', props.message);
   confirmDeleteOpen.value = false;
 }
 </script>
 
 <template>
-  <article class="message-floor" :class="[message.role, { streaming }]" :data-scroll-marker-id="message.id">
+  <article class="message-floor" :class="[message.role, { streaming, 'is-deleting': deleting }]" :data-scroll-marker-id="message.id">
     <div class="floor-container">
       <div class="floor-content-column">
         <header class="floor-header">
@@ -208,13 +210,13 @@ function confirmDelete(): void {
   box-sizing: border-box;
   background-color: color-mix(in srgb, var(--vscode-editor-background) 97%, var(--vscode-foreground) 3%);
   transition: background-color 0.2s ease;
-  animation: slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: message-enter 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-@keyframes slide-up {
+@keyframes message-enter {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(10px) scale(0.992);
   }
   to {
     opacity: 1;
@@ -229,6 +231,22 @@ function confirmDelete(): void {
 .message-floor.model,
 .message-floor.assistant {
   background-color: color-mix(in srgb, var(--vscode-editor-background) 97%, var(--vscode-foreground) 3%);
+}
+
+.message-floor.is-deleting {
+  pointer-events: none;
+  animation: message-delete-out 0.18s ease-out forwards;
+}
+
+@keyframes message-delete-out {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(14px);
+  }
 }
 
 .floor-container {

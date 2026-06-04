@@ -39,6 +39,15 @@ const scrollMarkers = computed(() =>
     })
 );
 
+const messageMetrics = computed(() => ({
+  count: currentMessages.value.length,
+  visibleTextLength: currentMessages.value.reduce(
+    (acc, message) =>
+      acc + message.content.parts.reduce((sum, part) => sum + (isVisibleTextPart(part) ? part.text.length : 0), 0),
+    0
+  )
+}));
+
 function onSubmit(text: string): void {
   sendMessage(text);
 }
@@ -54,15 +63,20 @@ function scrollToBottom(): void {
   });
 }
 
-// 消息数量或可见文本长度变化（含流式增量）时滚动到底部。
+function isNearBottom(element: HTMLElement): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= 96;
+}
+
+// 只在消息新增/流式内容增长且用户接近底部时滚动到底部；删除/回退不触发滚动，避免列表抖动。
 watch(
-  () =>
-    currentMessages.value.reduce(
-      (acc, message) =>
-        acc + message.content.parts.reduce((sum, part) => sum + (isVisibleTextPart(part) ? part.text.length : 0), 0),
-      currentMessages.value.length
-    ),
-  scrollToBottom
+  messageMetrics,
+  (next, previous) => {
+    const grew = !previous || next.count > previous.count || next.visibleTextLength > previous.visibleTextLength;
+    if (!grew) return;
+
+    const element = scroller.value;
+    if (!element || isNearBottom(element)) scrollToBottom();
+  }
 );
 </script>
 

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
-import { isVisibleTextPart, type MessageRecord } from '@shared/protocol';
+import { isVisibleTextPart } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
 import { useChat } from '@webview/composables/useChat';
 import MessageList from './MessageList.vue';
 import Composer from '@webview/components/input/Composer.vue';
@@ -10,34 +11,18 @@ import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 
 const clientState = useClientStateStore();
+const conversationUi = useConversationUiStore();
 const { currentMessages, currentConversationId } = storeToRefs(clientState);
 const { sendMessage, editMessage } = useChat();
 
 const scroller = ref<HTMLElement | null>(null);
-const messageList = ref<{
-  playDeleteFrom: (messageId: string, action: () => void, delay?: number) => void;
-} | null>(null);
-
-interface EditingMessageState {
-  message: MessageRecord;
-  deleteCount: number;
-  originalText: string;
-}
-
-const editingMessage = ref<EditingMessageState>();
-const editKeySeed = ref(0);
-const editConfirmOpen = ref(false);
-const pendingEditText = ref('');
 
 const ready = computed(() => !!currentConversationId.value);
 const placeholder = computed(() =>
   ready.value ? '输入消息，Enter 发送，Shift+Enter 换行' : '默认对话初始化中...'
 );
 const emptyHint = computed(() => (ready.value ? '还没有消息，发一条试试。' : '默认对话初始化中，请稍候。'));
-const editMode = computed(() => (editingMessage.value ? 'edit' : 'chat'));
-const editKey = computed(() => editingMessage.value ? `${editingMessage.value.message.id}:${editKeySeed.value}` : '');
-const editText = computed(() => editingMessage.value?.originalText ?? '');
-const editFollowupCount = computed(() => Math.max(0, (editingMessage.value?.deleteCount ?? 1) - 1));
+const editFollowupCount = computed(() => Math.max(0, (conversationUi.editingMessage?.deleteCount ?? 1) - 1));
 const editConfirmDescriptionHtml = computed(
   () => `是否编辑此消息？将同时删除后续 ${editFollowupCount.value} 条消息，此操作<strong>不可撤销</strong>`
 );
@@ -75,35 +60,24 @@ const messageMetrics = computed(() => ({
   )
 }));
 
+watch(
+  currentMessages,
+  (messages) => conversationUi.syncMessages(messages),
+  { immediate: true }
+);
+
 function onSubmit(text: string): void {
-  if (editingMessage.value) {
-    pendingEditText.value = text;
-    editConfirmOpen.value = true;
+  if (conversationUi.isEditing) {
+    conversationUi.pendingEditText = text;
+    conversationUi.editConfirmOpen = true;
     return;
   }
   sendMessage(text);
 }
 
-function startEditMessage(payload: { message: MessageRecord; deleteCount: number }): void {
-  editingMessage.value = {
-    message: payload.message,
-    deleteCount: payload.deleteCount,
-    originalText: visibleMessageText(payload.message)
-  };
-  pendingEditText.value = '';
-  editConfirmOpen.value = false;
-  editKeySeed.value += 1;
-}
-
-function cancelEditMode(): void {
-  editingMessage.value = undefined;
-  pendingEditText.value = '';
-  editConfirmOpen.value = false;
-}
-
 function handleEditConfirmAction(action: ConfirmPanelAction): void {
   if (action.key === 'cancel') {
-    editConfirmOpen.value = false;
+    conversationUi.editConfirmOpen = false;
     return;
   }
 
@@ -113,37 +87,29 @@ function handleEditConfirmAction(action: ConfirmPanelAction): void {
 }
 
 function commitEditMessage(): void {
-  const editing = editingMessage.value;
-  const text = pendingEditText.value.trim();
+  const editing = conversationUi.editingMessage;
+  const text = conversationUi.pendingEditText.trim();
   if (!editing || !text) return;
 
-  editConfirmOpen.value = false;
+  conversationUi.editConfirmOpen = false;
 
   const commit = (): void => {
     editMessage(editing.message.conversationId, editing.message.id, text, { runAfterEdit: true, deleteFollowing: true });
-    cancelEditMode();
+    conversationUi.cancelEditMode();
   };
 
   const nextMessage = nextMessageAfter(editing.message.id);
   if (nextMessage) {
-    messageList.value?.playDeleteFrom(nextMessage.id, commit) ?? commit();
+    conversationUi.playExitFrom(nextMessage.id, commit);
     return;
   }
 
   commit();
 }
 
-function nextMessageAfter(messageId: string): MessageRecord | undefined {
+function nextMessageAfter(messageId: string) {
   const index = currentMessages.value.findIndex((message) => message.id === messageId);
   return index >= 0 ? currentMessages.value[index + 1] : undefined;
-}
-
-function visibleMessageText(message: MessageRecord): string {
-  return message.content.parts
-    .filter(isVisibleTextPart)
-    .map((part) => part.text)
-    .join('')
-    .trim();
 }
 
 function truncatePreview(text: string): string {
@@ -178,7 +144,7 @@ watch(
   <div class="conversation">
     <div class="conversation-body">
       <div ref="scroller" class="conversation-scroll">
-        <MessageList ref="messageList" :messages="currentMessages" :empty-hint="emptyHint" @edit-message="startEditMessage" />
+        <MessageList :empty-hint="emptyHint" />
       </div>
       <AdvancedScrollbar
         :scroller="scroller"
@@ -189,18 +155,10 @@ watch(
       />
     </div>
     <footer class="conversation-composer">
-      <Composer
-        :disabled="!ready"
-        :placeholder="placeholder"
-        :mode="editMode"
-        :edit-key="editKey"
-        :edit-text="editText"
-        @submit="onSubmit"
-        @cancel-edit="cancelEditMode"
-      />
+      <Composer :disabled="!ready" :placeholder="placeholder" @submit="onSubmit" />
     </footer>
     <ConfirmPanel
-      :open="editConfirmOpen"
+      :open="conversationUi.editConfirmOpen"
       title="编辑消息"
       :description-html="editConfirmDescriptionHtml"
       :actions="editConfirmActions"

@@ -1,78 +1,40 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { IconPencilExclamation, IconSend2 } from '@tabler/icons-vue';
+import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
 import RichContentEditor from '@webview/components/content/RichContentEditor.vue';
-
-type ComposerMode = 'chat' | 'edit';
-type ComposerZone = 'top' | 'left' | 'right' | 'bottom';
-type ComposerZoneSnapshot = Record<string, unknown>;
-
-interface ComposerSnapshot {
-  draft: string;
-  zones: Record<ComposerZone, ComposerZoneSnapshot>;
-}
 
 const props = withDefaults(
   defineProps<{
     disabled?: boolean;
     placeholder?: string;
-    mode?: ComposerMode;
-    editText?: string;
-    editKey?: string;
   }>(),
-  { disabled: false, placeholder: '', mode: 'chat', editText: '', editKey: '' }
+  { disabled: false, placeholder: '' }
 );
 
 const emit = defineEmits<{
   (event: 'submit', text: string): void;
-  (event: 'cancel-edit'): void;
 }>();
 
-/**
- * 输入框状态快照。
- * draft 是当前输入文字；zones 预留给顶部/左右/底部功能区（例如附件、引用、工具开关等），
- * 这样后续新增输入框功能时，可以按 chat/edit 等上下文隔离状态，避免互相污染。
- */
-const snapshots = ref<Record<ComposerMode, ComposerSnapshot>>({
-  chat: createSnapshot(),
-  edit: createSnapshot()
-});
-const activeMode = ref<ComposerMode>(props.mode);
+const ui = useConversationUiStore();
 const highlighted = ref(false);
 const editor = ref<{ focus: () => void } | null>(null);
 
-const isEditing = computed(() => activeMode.value === 'edit');
-const activeSnapshot = computed(() => snapshots.value[activeMode.value]);
 const draft = computed({
-  get: () => activeSnapshot.value.draft,
-  set: (next: string) => {
-    activeSnapshot.value.draft = next;
-  }
+  get: () => ui.composerDraft,
+  set: (next: string) => ui.setComposerDraft(next)
 });
-const sendTitle = computed(() => (isEditing.value ? '提交编辑' : '发送'));
+const sendTitle = computed(() => (ui.isEditing ? '提交编辑' : '发送'));
 
 let highlightTimer: number | undefined;
 
 watch(
-  () => [props.mode, props.editKey] as const,
-  ([mode, editKey], previous) => {
-    const previousMode = previous?.[0];
-    const previousEditKey = previous?.[1];
-
-    if (mode === 'edit') {
-      activeMode.value = 'edit';
-      if (previousMode !== 'edit' || editKey !== previousEditKey) {
-        snapshots.value.edit = createSnapshot(props.editText);
-        pulseHighlight();
-        void nextTick(() => editor.value?.focus());
-      }
-      return;
-    }
-
-    activeMode.value = 'chat';
-    snapshots.value.edit = createSnapshot();
-  },
-  { immediate: true }
+  () => ui.composerHighlightKey,
+  () => {
+    if (!ui.isEditing) return;
+    pulseHighlight();
+    void nextTick(() => editor.value?.focus());
+  }
 );
 
 onMounted(() => {
@@ -85,20 +47,16 @@ onBeforeUnmount(() => {
 });
 
 function onWindowKeydown(event: KeyboardEvent): void {
-  if (!isEditing.value || event.key !== 'Escape') return;
+  if (!ui.isEditing || event.key !== 'Escape') return;
   event.preventDefault();
-  cancelEdit();
+  ui.cancelEditMode();
 }
 
 function submit(): void {
   const text = draft.value.trim();
   if (!text || props.disabled) return;
   emit('submit', text);
-  if (!isEditing.value) snapshots.value.chat.draft = '';
-}
-
-function cancelEdit(): void {
-  emit('cancel-edit');
+  if (!ui.isEditing) ui.clearChatDraft();
 }
 
 function pulseHighlight(): void {
@@ -109,29 +67,17 @@ function pulseHighlight(): void {
     highlightTimer = undefined;
   }, 650);
 }
-
-function createSnapshot(draft = ''): ComposerSnapshot {
-  return {
-    draft,
-    zones: {
-      top: {},
-      left: {},
-      right: {},
-      bottom: {}
-    }
-  };
-}
 </script>
 
 <template>
-  <div class="composer" :class="{ 'is-editing': isEditing, 'is-highlighted': highlighted }">
+  <div class="composer" :class="{ 'is-editing': ui.isEditing, 'is-highlighted': highlighted }">
     <div class="composer-zone composer-zone-top" aria-label="输入框上方功能区">
-      <div v-if="isEditing" class="composer-edit-indicator">
+      <div v-if="ui.isEditing" class="composer-edit-indicator">
         <span class="composer-edit-indicator-icon" aria-hidden="true">
           <IconPencilExclamation stroke="2" />
         </span>
         <span class="composer-edit-text">正在编辑消息，发送前需要确认。</span>
-        <button type="button" class="composer-edit-cancel" @click="cancelEdit">取消编辑</button>
+        <button type="button" class="composer-edit-cancel" @click="ui.cancelEditMode">取消编辑</button>
       </div>
     </div>
 
@@ -141,9 +87,9 @@ function createSnapshot(draft = ''): ComposerSnapshot {
         ref="editor"
         v-model="draft"
         class="composer-editor"
-        :placeholder="isEditing ? '编辑消息内容...' : placeholder"
+        :placeholder="ui.isEditing ? '编辑消息内容...' : placeholder"
         :disabled="disabled"
-        :rows="isEditing ? 4 : 2"
+        :rows="ui.isEditing ? 4 : 2"
         @submit="submit"
       />
       <div class="composer-zone composer-zone-right" aria-label="输入框右侧功能区"></div>

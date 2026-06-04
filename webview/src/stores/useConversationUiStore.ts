@@ -1,0 +1,231 @@
+import { computed, ref, shallowRef } from 'vue';
+import { defineStore } from 'pinia';
+import { isVisibleTextPart, type MessageRecord } from '@shared/protocol';
+
+export type MessageViewPhase = 'stable' | 'entering' | 'exiting';
+export type ComposerMode = 'chat' | 'edit';
+export type ComposerZone = 'top' | 'left' | 'right' | 'bottom';
+export type ComposerZoneSnapshot = Record<string, unknown>;
+
+export interface MessageViewRow {
+  id: string;
+  message: MessageRecord;
+  deleteCount: number;
+  phase: MessageViewPhase;
+}
+
+export interface ComposerSnapshot {
+  draft: string;
+  zones: Record<ComposerZone, ComposerZoneSnapshot>;
+}
+
+export interface EditingMessageState {
+  message: MessageRecord;
+  deleteCount: number;
+  originalText: string;
+}
+
+const MESSAGE_ENTER_MS = 260;
+const MESSAGE_EXIT_MS = 180;
+const EXIT_CLEAR_MS = 2000;
+
+/**
+ * 当前标签页/会话 UI 状态。
+ *
+ * 后端同步数据仍以 useClientStateStore 为权威源；这里保存的是视图层状态：
+ * - 消息展示行与进入/退出动画 phase
+ * - 输入框不同模式下的快照（chat/edit，预留功能区 zone 快照）
+ * - 当前编辑消息与确认面板状态
+ */
+export const useConversationUiStore = defineStore('conversationUi', () => {
+  const messageRows = shallowRef<MessageViewRow[]>([]);
+  const enteringMessageIds = ref<Set<string>>(new Set());
+  const composerSnapshots = ref<Record<ComposerMode, ComposerSnapshot>>({
+    chat: createComposerSnapshot(),
+    edit: createComposerSnapshot()
+  });
+  const composerMode = ref<ComposerMode>('chat');
+  const composerHighlightKey = ref(0);
+  const editingMessage = shallowRef<EditingMessageState>();
+  const editConfirmOpen = ref(false);
+  const pendingEditText = ref('');
+
+  const seenMessageIds = new Set<string>();
+  const enterTimers = new Map<string, number>();
+  let initializedMessages = false;
+  let exitingFromId: string | undefined;
+  let exitActionTimer: number | undefined;
+  let exitClearTimer: number | undefined;
+
+  const isEditing = computed(() => composerMode.value === 'edit');
+  const activeComposerSnapshot = computed(() => composerSnapshots.value[composerMode.value]);
+  const composerDraft = computed(() => activeComposerSnapshot.value.draft);
+
+  function syncMessages(messages: readonly MessageRecord[]): void {
+    const currentIds = new Set(messages.map((message) => message.id));
+    for (const id of [...enterTimers.keys()]) {
+      if (!currentIds.has(id)) clearEntering(id);
+    }
+
+    if (!initializedMessages) {
+      for (const message of messages) seenMessageIds.add(message.id);
+      initializedMessages = true;
+    } else {
+      for (const message of messages) {
+        if (seenMessageIds.has(message.id)) continue;
+        if (!isReadyForEnterAnimation(message)) continue;
+        seenMessageIds.add(message.id);
+        markEntering(message.id);
+      }
+    }
+
+    if (exitingFromId && !currentIds.has(exitingFromId)) clearExitState();
+
+    messageRows.value = messages.map((message, index) => ({
+      id: message.id,
+      message,
+      deleteCount: messages.length - index,
+      phase: phaseForMessage(message.id, index, messages)
+    }));
+  }
+
+  function playExitFrom(messageId: string, action: () => void, delay = MESSAGE_EXIT_MS): void {
+    clearExitTimers();
+    exitingFromId = messageId;
+    refreshRowPhases();
+
+    exitActionTimer = window.setTimeout(() => {
+      action();
+      exitActionTimer = undefined;
+      exitClearTimer = window.setTimeout(clearExitState, EXIT_CLEAR_MS);
+    }, delay);
+  }
+
+  function startEditMessage(message: MessageRecord, deleteCount: number): void {
+    editingMessage.value = {
+      message,
+      deleteCount,
+      originalText: visibleMessageText(message)
+    };
+    pendingEditText.value = '';
+    editConfirmOpen.value = false;
+    composerMode.value = 'edit';
+    composerSnapshots.value.edit = createComposerSnapshot(visibleMessageText(message));
+    composerHighlightKey.value += 1;
+  }
+
+  function cancelEditMode(): void {
+    editingMessage.value = undefined;
+    pendingEditText.value = '';
+    editConfirmOpen.value = false;
+    composerMode.value = 'chat';
+    composerSnapshots.value.edit = createComposerSnapshot();
+  }
+
+  function setComposerDraft(value: string): void {
+    activeComposerSnapshot.value.draft = value;
+  }
+
+  function clearChatDraft(): void {
+    composerSnapshots.value.chat.draft = '';
+  }
+
+  function phaseForMessage(id: string, index: number, messages: readonly MessageRecord[]): MessageViewPhase {
+    const exitStart = exitingFromId ? messages.findIndex((message) => message.id === exitingFromId) : -1;
+    if (exitStart >= 0 && index >= exitStart) return 'exiting';
+    if (enteringMessageIds.value.has(id)) return 'entering';
+    return 'stable';
+  }
+
+  function refreshRowPhases(): void {
+    const rows = messageRows.value;
+    messageRows.value = rows.map((row, index) => ({
+      ...row,
+      phase: phaseForMessage(row.id, index, rows.map((item) => item.message))
+    }));
+  }
+
+  function markEntering(id: string): void {
+    const next = new Set(enteringMessageIds.value);
+    next.add(id);
+    enteringMessageIds.value = next;
+    enterTimers.set(id, window.setTimeout(() => clearEntering(id), MESSAGE_ENTER_MS));
+  }
+
+  function clearEntering(id: string): void {
+    const timer = enterTimers.get(id);
+    if (timer !== undefined) window.clearTimeout(timer);
+    enterTimers.delete(id);
+
+    const next = new Set(enteringMessageIds.value);
+    next.delete(id);
+    enteringMessageIds.value = next;
+    refreshRowPhases();
+  }
+
+  function clearExitState(): void {
+    exitingFromId = undefined;
+    clearExitTimers();
+    refreshRowPhases();
+  }
+
+  function clearExitTimers(): void {
+    if (exitActionTimer !== undefined) {
+      window.clearTimeout(exitActionTimer);
+      exitActionTimer = undefined;
+    }
+    if (exitClearTimer !== undefined) {
+      window.clearTimeout(exitClearTimer);
+      exitClearTimer = undefined;
+    }
+  }
+
+  return {
+    messageRows,
+    composerMode,
+    composerHighlightKey,
+    composerDraft,
+    editingMessage,
+    editConfirmOpen,
+    pendingEditText,
+    isEditing,
+    syncMessages,
+    playExitFrom,
+    startEditMessage,
+    cancelEditMode,
+    setComposerDraft,
+    clearChatDraft
+  };
+});
+
+function isReadyForEnterAnimation(message: MessageRecord): boolean {
+  if (message.role === 'user') return true;
+  return message.status !== 'streaming' || visibleTextLength(message) > 0;
+}
+
+function visibleTextLength(message: MessageRecord): number {
+  return message.content.parts.reduce(
+    (total, part) => total + (isVisibleTextPart(part) ? part.text.length : 0),
+    0
+  );
+}
+
+function visibleMessageText(message: MessageRecord): string {
+  return message.content.parts
+    .filter(isVisibleTextPart)
+    .map((part) => part.text)
+    .join('')
+    .trim();
+}
+
+function createComposerSnapshot(draft = ''): ComposerSnapshot {
+  return {
+    draft,
+    zones: {
+      top: {},
+      left: {},
+      right: {},
+      bottom: {}
+    }
+  };
+}

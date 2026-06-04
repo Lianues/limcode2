@@ -6,6 +6,7 @@ import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useChat } from '@webview/composables/useChat';
 import MessageList from './MessageList.vue';
 import Composer from '@webview/components/input/Composer.vue';
+import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 
 const clientState = useClientStateStore();
 const { currentMessages, currentConversationId } = storeToRefs(clientState);
@@ -19,8 +20,31 @@ const placeholder = computed(() =>
 );
 const emptyHint = computed(() => (ready.value ? '还没有消息，发一条试试。' : '默认对话初始化中，请稍候。'));
 
+const scrollMarkers = computed(() =>
+  currentMessages.value
+    .filter((message) => message.role === 'user')
+    .map((message, index) => {
+      const text = message.content.parts
+        .filter(isVisibleTextPart)
+        .map((part) => part.text)
+        .join('')
+        .trim()
+        .replace(/\s+/g, ' ');
+      return {
+        id: message.id,
+        label: `用户消息 · ${index + 1}`,
+        preview: text ? truncatePreview(text) : '',
+        kind: 'user'
+      };
+    })
+);
+
 function onSubmit(text: string): void {
   sendMessage(text);
+}
+
+function truncatePreview(text: string): string {
+  return text.length > 180 ? `${text.slice(0, 180)}...` : text;
 }
 
 function scrollToBottom(): void {
@@ -44,8 +68,17 @@ watch(
 
 <template>
   <div class="conversation">
-    <div ref="scroller" class="conversation-scroll">
-      <MessageList :messages="currentMessages" :empty-hint="emptyHint" />
+    <div class="conversation-body">
+      <div ref="scroller" class="conversation-scroll">
+        <MessageList :messages="currentMessages" :empty-hint="emptyHint" />
+      </div>
+      <AdvancedScrollbar
+        :scroller="scroller"
+        :markers="scrollMarkers"
+        show-markers
+        show-edge-buttons
+        show-marker-preview
+      />
     </div>
     <footer class="conversation-composer">
       <Composer :disabled="!ready" :placeholder="placeholder" @submit="onSubmit" />
@@ -61,11 +94,24 @@ watch(
   min-height: 0;
 }
 
-.conversation-scroll {
+.conversation-body {
+  position: relative;
   flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.conversation-scroll {
+  height: 100%;
   overflow-y: auto;
-  /* 楼层模式：边缘直接贴合，使分割线与背景色能延伸至左右两侧边界，更具现代一体感 */
   padding: 0;
+  scrollbar-width: none;
+}
+
+.conversation-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 .conversation-composer {

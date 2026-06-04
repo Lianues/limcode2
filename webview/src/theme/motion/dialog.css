@@ -1,0 +1,26 @@
+/* 弹窗/确认面板动效。 */
+:root {
+  --lc-dialog-backdrop-in-duration: 0.12s;
+  --lc-dialog-panel-in-duration: 0.14s;
+  --lc-dialog-panel-ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes lc-dialog-backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes lc-dialog-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

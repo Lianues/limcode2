@@ -1,0 +1,31 @@
+/* 消息列表/消息条目的动效。 */
+:root {
+  --lc-message-enter-duration: 0.22s;
+  --lc-message-exit-duration: 0.18s;
+  --lc-message-actions-fade-duration: 0.08s;
+  --lc-message-bg-transition-duration: 0.2s;
+  --lc-motion-enter-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
+  --lc-motion-exit-standard: ease-out;
+}
+
+@keyframes lc-message-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.992);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes lc-message-exit-right {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+}

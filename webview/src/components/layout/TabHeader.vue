@@ -126,7 +126,7 @@ function onAbort(): void {
 .run-status.is-active .run-status-dot {
   background: var(--vscode-testing-iconQueued);
   opacity: 1;
-  animation: pulse-glow 1.4s infinite ease-in-out;
+  animation: lc-status-pulse-glow var(--lc-status-pulse-duration) infinite ease-in-out;
 }
 
 .run-status-paused .run-status-dot {
@@ -161,23 +161,5 @@ function onAbort(): void {
 
 .tab-abort-button:hover {
   background: var(--vscode-inputValidation-errorBackground, var(--vscode-list-hoverBackground));
-}
-
-@keyframes pulse-glow {
-  0% {
-    transform: scale(0.86);
-    opacity: 0.55;
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--vscode-testing-iconQueued) 36%, transparent);
-  }
-  50% {
-    transform: scale(1.16);
-    opacity: 1;
-    box-shadow: 0 0 5px 1px var(--vscode-testing-iconQueued);
-  }
-  100% {
-    transform: scale(0.86);
-    opacity: 0.55;
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--vscode-testing-iconQueued) 36%, transparent);
-  }
 }
 </style>

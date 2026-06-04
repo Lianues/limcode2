@@ -10,8 +10,9 @@ const props = withDefaults(
     message: MessageRecord;
     deleteCount?: number;
     deleting?: boolean;
+    entering?: boolean;
   }>(),
-  { deleteCount: 1, deleting: false }
+  { deleteCount: 1, deleting: false, entering: false }
 );
 
 const emit = defineEmits<{
@@ -180,7 +181,7 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
 </script>
 
 <template>
-  <article class="message-floor" :class="[message.role, { streaming, 'is-deleting': deleting }]" :data-scroll-marker-id="message.id">
+  <article class="message-floor" :class="[message.role, { streaming, 'is-deleting': deleting, 'is-entering': entering }]" :data-scroll-marker-id="message.id">
     <div class="floor-container">
       <div class="floor-content-column">
         <header class="floor-header">
@@ -276,19 +277,7 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
     var(--space-4) var(--conversation-content-padding-left, var(--space-4));
   box-sizing: border-box;
   background-color: color-mix(in srgb, var(--vscode-editor-background) 97%, var(--vscode-foreground) 3%);
-  transition: background-color 0.2s ease;
-  animation: message-enter 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-@keyframes message-enter {
-  from {
-    opacity: 0;
-    transform: translateY(10px) scale(0.992);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  transition: background-color var(--lc-message-bg-transition-duration) ease;
 }
 
 .message-floor.user {
@@ -302,18 +291,11 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
 
 .message-floor.is-deleting {
   pointer-events: none;
-  animation: message-delete-out 0.18s ease-out forwards;
+  animation: lc-message-exit-right var(--lc-message-exit-duration) var(--lc-motion-exit-standard) forwards;
 }
 
-@keyframes message-delete-out {
-  from {
-    opacity: 1;
-    transform: translateX(0);
-  }
-  to {
-    opacity: 0;
-    transform: translateX(14px);
-  }
+.message-floor.is-entering {
+  animation: lc-message-enter var(--lc-message-enter-duration) var(--lc-motion-enter-emphasized) both;
 }
 
 .floor-container {
@@ -343,7 +325,7 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
   gap: var(--space-1);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.08s ease-out;
+  transition: opacity var(--lc-message-actions-fade-duration) ease-out;
 }
 
 .message-floor:hover .message-actions {
@@ -437,10 +419,11 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
   content: '';
   width: 6px;
   height: 6px;
+  --lc-status-pulse-color: var(--vscode-testing-iconPassedColor, #4caf50);
   background-color: var(--vscode-testing-iconPassedColor, #4caf50);
   border-radius: 50%;
   display: inline-block;
-  animation: pulse-glow 1.5s infinite ease-in-out;
+  animation: lc-status-pulse-glow var(--lc-status-pulse-duration) infinite ease-in-out;
 }
 
 .floor-status-badge.is-stop {
@@ -466,24 +449,6 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
 .floor-status-badge.stop-stale {
   color: var(--vscode-descriptionForeground);
   border-style: dashed;
-}
-
-@keyframes pulse-glow {
-  0% {
-    transform: scale(0.85);
-    opacity: 0.5;
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--vscode-testing-iconPassedColor, #4caf50) 40%, transparent);
-  }
-  50% {
-    transform: scale(1.15);
-    opacity: 1;
-    box-shadow: 0 0 4px 1px var(--vscode-testing-iconPassedColor, #4caf50);
-  }
-  100% {
-    transform: scale(0.85);
-    opacity: 0.5;
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--vscode-testing-iconPassedColor, #4caf50) 40%, transparent);
-  }
 }
 
 .floor-body {

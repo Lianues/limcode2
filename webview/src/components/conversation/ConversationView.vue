@@ -14,6 +14,9 @@ const { currentMessages, currentConversationId } = storeToRefs(clientState);
 const { sendMessage, editMessage } = useChat();
 
 const scroller = ref<HTMLElement | null>(null);
+const messageList = ref<{
+  playDeleteFrom: (messageId: string, action: () => void, delay?: number) => void;
+} | null>(null);
 
 interface EditingMessageState {
   message: MessageRecord;
@@ -114,9 +117,25 @@ function commitEditMessage(): void {
   const text = pendingEditText.value.trim();
   if (!editing || !text) return;
 
-  editMessage(editing.message.conversationId, editing.message.id, text, { runAfterEdit: true, deleteFollowing: true });
+  editConfirmOpen.value = false;
 
-  cancelEditMode();
+  const commit = (): void => {
+    editMessage(editing.message.conversationId, editing.message.id, text, { runAfterEdit: true, deleteFollowing: true });
+    cancelEditMode();
+  };
+
+  const nextMessage = nextMessageAfter(editing.message.id);
+  if (nextMessage) {
+    messageList.value?.playDeleteFrom(nextMessage.id, commit) ?? commit();
+    return;
+  }
+
+  commit();
+}
+
+function nextMessageAfter(messageId: string): MessageRecord | undefined {
+  const index = currentMessages.value.findIndex((message) => message.id === messageId);
+  return index >= 0 ? currentMessages.value[index + 1] : undefined;
 }
 
 function visibleMessageText(message: MessageRecord): string {
@@ -159,7 +178,7 @@ watch(
   <div class="conversation">
     <div class="conversation-body">
       <div ref="scroller" class="conversation-scroll">
-        <MessageList :messages="currentMessages" :empty-hint="emptyHint" @edit-message="startEditMessage" />
+        <MessageList ref="messageList" :messages="currentMessages" :empty-hint="emptyHint" @edit-message="startEditMessage" />
       </div>
       <AdvancedScrollbar
         :scroller="scroller"

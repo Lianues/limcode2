@@ -249,7 +249,7 @@ function createSnapshot(draft = ''): ComposerSnapshot {
 .composer-editor {
   flex: 1;
   min-width: 0;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+  transition: border-color var(--lc-composer-highlight-duration) ease, box-shadow var(--lc-composer-highlight-duration) ease;
 }
 
 .composer.is-highlighted .composer-editor {

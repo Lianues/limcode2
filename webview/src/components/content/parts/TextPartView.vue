@@ -231,7 +231,7 @@ function clearScheduledRender(): void {
 
 .rc-text,
 .rc-markdown {
-  transition: opacity 0.09s ease-out, transform 0.09s ease-out;
+  transition: opacity var(--lc-content-replace-duration) ease-out, transform var(--lc-content-replace-duration) ease-out;
 }
 
 .rc-text.replacing,
@@ -323,17 +323,11 @@ function clearScheduledRender(): void {
 }
 
 .rc-cursor {
-  animation: rc-blink 1s steps(2, start) infinite;
+  animation: lc-content-cursor-blink var(--lc-content-cursor-blink-duration) steps(2, start) infinite;
 }
 
 .rc-markdown-shell > .rc-cursor {
   display: inline-block;
   margin-left: 1px;
-}
-
-@keyframes rc-blink {
-  to {
-    opacity: 0;
-  }
 }
 </style>

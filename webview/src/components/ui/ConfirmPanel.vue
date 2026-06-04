@@ -99,7 +99,7 @@ function onAction(action: ConfirmPanelAction): void {
   justify-content: center;
   padding: 10px;
   background: rgba(0, 0, 0, 0.48);
-  animation: confirm-backdrop-in 0.12s ease-out;
+  animation: lc-dialog-backdrop-in var(--lc-dialog-backdrop-in-duration) ease-out;
 }
 
 .confirm-panel {
@@ -110,7 +110,7 @@ function onAction(action: ConfirmPanelAction): void {
   color: var(--vscode-foreground);
   background: var(--vscode-editor-background);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
-  animation: confirm-panel-in 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: lc-dialog-panel-in var(--lc-dialog-panel-in-duration) var(--lc-dialog-panel-ease);
 }
 
 .confirm-panel-head {
@@ -194,25 +194,5 @@ function onAction(action: ConfirmPanelAction): void {
 
 .confirm-panel-button.secondary {
   color: var(--vscode-descriptionForeground);
-}
-
-@keyframes confirm-backdrop-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes confirm-panel-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
 }
 </style>

@@ -1,0 +1,5 @@
+/* 输入框/Composer 区域动效。 */
+:root {
+  --lc-composer-highlight-duration: 0.18s;
+  --lc-composer-highlight-hold-ms: 650;
+}

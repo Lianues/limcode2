@@ -78,7 +78,8 @@ function titleForStopReason(reason: MessageStopReason | undefined): string | und
 .message-floor {
   width: 100%;
   border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.15));
-  padding: var(--space-4) calc(var(--space-4) + 24px) var(--space-4) var(--space-4);
+  padding: var(--space-4) var(--conversation-content-padding-right, calc(var(--space-4) + 24px))
+    var(--space-4) var(--conversation-content-padding-left, var(--space-4));
   box-sizing: border-box;
   background-color: color-mix(in srgb, var(--vscode-editor-background) 97%, var(--vscode-foreground) 3%);
   transition: background-color 0.2s ease;

@@ -92,6 +92,8 @@ watch(
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  --conversation-content-padding-left: var(--space-4);
+  --conversation-content-padding-right: calc(var(--space-4) + 24px);
 }
 
 .conversation-body {
@@ -116,7 +118,7 @@ watch(
 
 .conversation-composer {
   border-top: 1px solid var(--vscode-panel-border);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-3) 0;
   background-color: var(--vscode-editor-background);
 }
 </style>

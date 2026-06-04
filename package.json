@@ -65,6 +65,7 @@
     "vue-tsc": "^2.0.26"
   },
   "dependencies": {
+    "@tabler/icons-vue": "^3.44.0",
     "pinia": "^2.3.1",
     "undici": "^6.26.0",
     "unified-llm-provider": "^0.1.5"

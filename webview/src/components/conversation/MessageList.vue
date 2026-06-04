@@ -12,6 +12,10 @@ const props = withDefaults(
   { emptyHint: '还没有消息，发一条试试。' }
 );
 
+const emit = defineEmits<{
+  (event: 'edit-message', payload: { message: MessageRecord; deleteCount: number }): void;
+}>();
+
 const { deleteMessagesFrom } = useChat();
 const deletingFromId = ref<string>();
 const deletingStartIndex = computed(() => {
@@ -56,6 +60,10 @@ function clearDeletingState(): void {
     clearDeletingTimer = undefined;
   }
 }
+
+function onEditMessage(message: MessageRecord, index: number): void {
+  emit('edit-message', { message, deleteCount: props.messages.length - index });
+}
 </script>
 
 <template>
@@ -66,6 +74,7 @@ function clearDeletingState(): void {
       :message="message"
       :delete-count="messages.length - index"
       :deleting="isDeleting(index)"
+      @edit-message="onEditMessage(message, index)"
       @delete-from="onDeleteFrom"
     />
     <div v-if="!messages.length" class="message-empty-container">

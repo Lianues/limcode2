@@ -1,12 +1,22 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import { IconQuestionMark } from '@tabler/icons-vue';
 
-withDefaults(
+export interface ConfirmPanelAction {
+  key: string;
+  label: string;
+  variant?: 'default' | 'secondary' | 'danger';
+  disabled?: boolean;
+  title?: string;
+}
+
+const props = withDefaults(
   defineProps<{
     open: boolean;
     title: string;
     description?: string;
     descriptionHtml?: string;
+    actions?: ConfirmPanelAction[];
     cancelLabel?: string;
     confirmLabel?: string;
     danger?: boolean;
@@ -14,6 +24,7 @@ withDefaults(
   {
     description: '',
     descriptionHtml: '',
+    actions: undefined,
     cancelLabel: '取消',
     confirmLabel: '确认',
     danger: false
@@ -21,9 +32,28 @@ withDefaults(
 );
 
 const emit = defineEmits<{
+  (event: 'action', action: ConfirmPanelAction): void;
   (event: 'cancel'): void;
   (event: 'confirm'): void;
 }>();
+
+const panelActions = computed<ConfirmPanelAction[]>(() => {
+  if (props.actions?.length) return props.actions;
+  return [
+    { key: 'cancel', label: props.cancelLabel, variant: 'secondary' },
+    { key: 'confirm', label: props.confirmLabel, variant: props.danger ? 'danger' : 'default' }
+  ];
+});
+
+function actionVariant(action: ConfirmPanelAction): ConfirmPanelAction['variant'] {
+  return action.variant ?? 'default';
+}
+
+function onAction(action: ConfirmPanelAction): void {
+  emit('action', action);
+  if (action.key === 'cancel') emit('cancel');
+  if (action.key === 'confirm') emit('confirm');
+}
 </script>
 
 <template>
@@ -41,16 +71,17 @@ const emit = defineEmits<{
           <p v-else-if="description" class="confirm-panel-desc">{{ description }}</p>
         </header>
         <footer class="confirm-panel-actions">
-          <button type="button" class="confirm-panel-button secondary" @click="emit('cancel')">
-            {{ cancelLabel }}
-          </button>
           <button
+            v-for="action in panelActions"
+            :key="action.key"
             type="button"
-            class="confirm-panel-button confirm"
-            :class="{ danger }"
-            @click="emit('confirm')"
+            class="confirm-panel-button"
+            :class="actionVariant(action)"
+            :disabled="action.disabled"
+            :title="action.title"
+            @click="onAction(action)"
           >
-            {{ confirmLabel }}
+            {{ action.label }}
           </button>
         </footer>
       </section>
@@ -131,6 +162,7 @@ const emit = defineEmits<{
   justify-content: flex-end;
   gap: var(--space-2);
   margin-top: var(--space-4);
+  flex-wrap: wrap;
 }
 
 .confirm-panel-button {
@@ -150,9 +182,18 @@ const emit = defineEmits<{
   border-color: var(--vscode-panel-border, rgba(128, 128, 128, 0.4));
 }
 
-.confirm-panel-button.confirm.danger {
+.confirm-panel-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.confirm-panel-button.danger {
   color: var(--vscode-errorForeground);
   border-color: var(--vscode-inputValidation-errorBorder, var(--vscode-panel-border));
+}
+
+.confirm-panel-button.secondary {
+  color: var(--vscode-descriptionForeground);
 }
 
 @keyframes confirm-backdrop-in {

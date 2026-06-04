@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 
 const props = withDefaults(
   defineProps<{
@@ -18,6 +18,8 @@ const emit = defineEmits<{
   (event: 'submit'): void;
 }>();
 
+const textarea = ref<HTMLTextAreaElement | null>(null);
+
 const value = computed({
   get: () => props.modelValue,
   set: (next: string) => emit('update:modelValue', next)
@@ -29,10 +31,17 @@ function onKeydown(event: KeyboardEvent): void {
     emit('submit');
   }
 }
+
+function focus(): void {
+  textarea.value?.focus();
+}
+
+defineExpose({ focus });
 </script>
 
 <template>
   <textarea
+    ref="textarea"
     v-model="value"
     class="rich-editor"
     :rows="rows"

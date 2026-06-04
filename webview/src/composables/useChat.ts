@@ -13,6 +13,13 @@ export function useChat() {
     return true;
   }
 
+  function editMessage(conversationId: string, messageId: string, text: string): boolean {
+    const trimmed = text.trim();
+    if (!conversationId || !messageId || !trimmed) return false;
+    bridge.request(BridgeMessageType.MessageEdit, { conversationId, messageId, text: trimmed });
+    return true;
+  }
+
   function deleteMessagesFrom(conversationId: string, messageId: string): boolean {
     if (!conversationId || !messageId) return false;
     bridge.request(BridgeMessageType.MessageDeleteFrom, { conversationId, messageId });
@@ -27,5 +34,5 @@ export function useChat() {
     return true;
   }
 
-  return { sendMessage, deleteMessagesFrom, abortCurrentConversation };
+  return { sendMessage, editMessage, deleteMessagesFrom, abortCurrentConversation };
 }

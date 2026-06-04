@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue';
-import { IconCheck, IconCopy, IconTrash } from '@tabler/icons-vue';
+import { IconCheck, IconCopy, IconEdit, IconTrash } from '@tabler/icons-vue';
 import { isVisibleTextPart, type MessageRecord, type MessageStopReason } from '@shared/protocol';
 import RichContentView from '@webview/components/content/RichContentView.vue';
-import ConfirmPanel from '@webview/components/ui/ConfirmPanel.vue';
+import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -15,6 +15,7 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{
+  (event: 'edit-message', message: MessageRecord): void;
   (event: 'delete-from', message: MessageRecord): void;
 }>();
 
@@ -33,6 +34,11 @@ const messageText = computed(() =>
 );
 
 let copiedResetTimer: number | undefined;
+
+const deleteConfirmActions: ConfirmPanelAction[] = [
+  { key: 'cancel', label: '取消', variant: 'secondary' },
+  { key: 'confirm', label: '删除' }
+];
 
 onBeforeUnmount(() => {
   if (copiedResetTimer !== undefined) window.clearTimeout(copiedResetTimer);
@@ -127,6 +133,10 @@ function openDeleteConfirm(): void {
   confirmDeleteOpen.value = true;
 }
 
+function editMessage(): void {
+  emit('edit-message', props.message);
+}
+
 function cancelDelete(): void {
   confirmDeleteOpen.value = false;
 }
@@ -134,6 +144,11 @@ function cancelDelete(): void {
 function confirmDelete(): void {
   emit('delete-from', props.message);
   confirmDeleteOpen.value = false;
+}
+
+function onDeleteConfirmAction(action: ConfirmPanelAction): void {
+  if (action.key === 'cancel') cancelDelete();
+  if (action.key === 'confirm') confirmDelete();
 }
 </script>
 
@@ -169,6 +184,15 @@ function confirmDelete(): void {
       <button
         type="button"
         class="message-action-button"
+        aria-label="编辑消息"
+        title="编辑消息"
+        @click="editMessage"
+      >
+        <IconEdit class="message-action-icon" stroke="2" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        class="message-action-button"
         :class="{ 'is-copied': copied }"
         :disabled="!messageText"
         :aria-label="copied ? '已复制消息' : '复制消息'"
@@ -192,10 +216,8 @@ function confirmDelete(): void {
       :open="confirmDeleteOpen"
       title="删除消息？"
       :description-html="deleteDescriptionHtml"
-      cancel-label="取消"
-      confirm-label="删除"
-      @cancel="cancelDelete"
-      @confirm="confirmDelete"
+      :actions="deleteConfirmActions"
+      @action="onDeleteConfirmAction"
     />
   </article>
 </template>
@@ -263,7 +285,7 @@ function confirmDelete(): void {
   align-items: center;
   gap: var(--space-2);
   margin-bottom: var(--space-2);
-  padding-right: 60px;
+  padding-right: 88px;
   flex-wrap: wrap;
 }
 

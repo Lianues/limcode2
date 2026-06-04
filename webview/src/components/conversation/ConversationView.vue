@@ -11,7 +11,7 @@ import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/Co
 
 const clientState = useClientStateStore();
 const { currentMessages, currentConversationId } = storeToRefs(clientState);
-const { sendMessage, editMessage, deleteMessagesFrom } = useChat();
+const { sendMessage, editMessage } = useChat();
 
 const scroller = ref<HTMLElement | null>(null);
 
@@ -114,17 +114,9 @@ function commitEditMessage(): void {
   const text = pendingEditText.value.trim();
   if (!editing || !text) return;
 
-  editMessage(editing.message.conversationId, editing.message.id, text);
-
-  const nextMessage = nextMessageAfter(editing.message.id);
-  if (nextMessage) deleteMessagesFrom(nextMessage.conversationId, nextMessage.id);
+  editMessage(editing.message.conversationId, editing.message.id, text, { runAfterEdit: true, deleteFollowing: true });
 
   cancelEditMode();
-}
-
-function nextMessageAfter(messageId: string): MessageRecord | undefined {
-  const index = currentMessages.value.findIndex((message) => message.id === messageId);
-  return index >= 0 ? currentMessages.value[index + 1] : undefined;
 }
 
 function visibleMessageText(message: MessageRecord): string {

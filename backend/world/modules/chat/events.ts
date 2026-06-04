@@ -16,6 +16,8 @@ export interface ChatEditPayload {
   conversationId: string;
   messageId: string;
   text: string;
+  runAfterEdit?: boolean;
+  deleteFollowing?: boolean;
 }
 export interface ChatDeleteFromPayload {
   conversationId: string;

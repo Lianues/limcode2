@@ -648,6 +648,8 @@ export interface MessageEditPayload {
   conversationId: string;
   messageId: string;
   text: string;
+  runAfterEdit?: boolean;
+  deleteFollowing?: boolean;
 }
 export interface MessageDeleteFromPayload {
   conversationId: string;

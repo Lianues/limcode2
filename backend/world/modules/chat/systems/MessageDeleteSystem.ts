@@ -68,7 +68,7 @@ export const MessageDeleteSystem = defineSystem({
   }
 });
 
-function deleteMessagesFromIndex(world: WorldReader, cmd: CommandSink, messages: Entity[], startIndex: number): void {
+export function deleteMessagesFromIndex(world: WorldReader, cmd: CommandSink, messages: Entity[], startIndex: number): void {
   const deletedMessages = new Set(messages.slice(startIndex));
   if (deletedMessages.size === 0) return;
 

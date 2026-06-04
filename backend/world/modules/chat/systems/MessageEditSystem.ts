@@ -1,5 +1,6 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
 import { readEvents } from '../../../events';
+import { Agent, AgentConversationLink } from '../../agent/components';
 import { linkAgentToConversation, AgentFromBlueprintBundle } from '../../agent/bundles';
 import {
   AgentRun,
@@ -15,7 +16,7 @@ import {
 } from '../../agentRun/components';
 import { AgentRunBundle, markRunNeedsModel, spawnAgentRun, spawnMessageRunLink } from '../../agentRun/bundles';
 import { cleanupRunLlmRequests } from '../../agentRun/llmRequestCleanup';
-import { activeDeliveryPolicyForRun, effectiveEditPolicyForRun, runSource, runTarget } from '../../agentRun/queries';
+import { activeDeliveryPolicyForRun, defaultAgentForConversation, effectiveEditPolicyForRun, runSource, runTarget } from '../../agentRun/queries';
 import type { MessageContent } from '../../../../../shared/protocol';
 import {
   cloneMessageToConversation,
@@ -30,12 +31,15 @@ import {
 } from '../bundles';
 import { ChatEventType } from '../events';
 import { conversationMessages } from '../queries';
+import { deleteMessagesFromIndex } from './MessageDeleteSystem';
 import { Conversation, LlmRequest, Message, MessageCurrentRevisionLink, MessageRevision, PartOf, Streaming } from '../components';
 
 const MessageEditQuery = defineQuery({
   name: 'MessageEditLookup',
   all: [Message, PartOf],
   read: [
+    Agent,
+    AgentConversationLink,
     Conversation,
     Message,
     PartOf,
@@ -83,9 +87,35 @@ export const MessageEditSystem = defineSystem({
       cmd.add(message, Message, { ...current, content, status: 'complete' });
       const newRevision = spawnMessageRevision(cmd, message, content, 'edited');
       applySourceEditedPolicies(world, cmd, { message, conversation, oldRevision, newRevision, content });
+
+      if (payload.deleteFollowing) {
+        const messages = conversationMessages(world, conversation);
+        const editedIndex = messages.indexOf(message);
+        if (editedIndex >= 0) deleteMessagesFromIndex(world, cmd, messages, editedIndex + 1);
+      }
+
+      if (payload.runAfterEdit && current.role === 'user') {
+        spawnEditedMessageRun(world, cmd, conversation, message);
+      }
     }
   }
 });
+
+function spawnEditedMessageRun(world: WorldReader, cmd: CommandSink, conversation: Entity, message: Entity): void {
+  const agent = defaultAgentForConversation(world, conversation);
+  if (agent === undefined) return;
+  spawnAgentRun(cmd, {
+    kind: 'chat',
+    agent,
+    conversation,
+    sourceKind: 'user',
+    sourceConversation: conversation,
+    sourceMessage: message,
+    inputMessage: message,
+    deliveryMode: 'direct_reply',
+    includeTranscript: 'full'
+  });
+}
 
 function applySourceEditedPolicies(
   world: WorldReader,

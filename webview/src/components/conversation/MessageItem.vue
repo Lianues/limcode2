@@ -182,6 +182,7 @@ function onDeleteConfirmAction(action: ConfirmPanelAction): void {
     </div>
     <div class="message-actions" aria-label="消息操作">
       <button
+        v-if="message.role === 'user'"
         type="button"
         class="message-action-button"
         aria-label="编辑消息"

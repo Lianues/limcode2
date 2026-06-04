@@ -167,9 +167,6 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
 
   private getHtml(webview: vscode.Webview): string {
     const nonce = getNonce();
-    const iconUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.extensionUri, 'assets', 'icons', 'panel-entry.svg')
-    );
     const initialEntries = serializeForInlineScript(this.backendApp.getConversationHistoryEntries());
 
     return /* html */ `<!DOCTYPE html>
@@ -212,64 +209,6 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       display: flex;
       flex-direction: column;
       overflow: hidden;
-    }
-
-    .topbar {
-      flex: 0 0 auto;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      padding: 10px 10px 8px;
-      border-bottom: 1px solid var(--line);
-      background: color-mix(in srgb, var(--vscode-sideBar-background) 96%, var(--vscode-foreground) 4%);
-    }
-
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      min-width: 0;
-    }
-
-    .brand-mark {
-      width: 24px;
-      height: 24px;
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--line);
-      background: var(--surface-subtle);
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      flex: 0 0 auto;
-    }
-
-    .brand-mark img {
-      width: 15px;
-      height: 15px;
-      opacity: 0.92;
-    }
-
-    .brand-text {
-      min-width: 0;
-    }
-
-    .brand-title {
-      font-size: 12px;
-      font-weight: 650;
-      line-height: 1.2;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .brand-subtitle {
-      margin-top: 1px;
-      color: var(--vscode-descriptionForeground);
-      font-size: 10px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
     }
 
     .icon-button,
@@ -345,6 +284,14 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       flex-direction: column;
       gap: 8px;
       border-bottom: 1px solid var(--line);
+    }
+
+    .section-title-main {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
     }
 
     .section-title-row {
@@ -798,29 +745,19 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
 </head>
 <body data-view="history">
   <main class="shell">
-    <header class="topbar">
-      <div class="brand">
-        <div class="brand-mark" aria-hidden="true">
-          <img src="${iconUri}" alt="">
-        </div>
-        <div class="brand-text">
-          <div class="brand-title">LimCode</div>
-          <div class="brand-subtitle">AI 对话工作区</div>
-        </div>
-      </div>
-      <button id="settingsButton" type="button" class="icon-button" title="全局设置" aria-label="全局设置">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="3"></circle>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-        </svg>
-      </button>
-    </header>
-
     <section class="view history-view" aria-label="对话历史">
       <div class="section-head">
         <div class="section-title-row">
-          <div class="section-title">对话历史</div>
-          <div id="historyCount" class="section-count">0 个对话</div>
+          <div class="section-title-main">
+            <div class="section-title">对话历史</div>
+            <div id="historyCount" class="section-count">0 个对话</div>
+          </div>
+          <button id="settingsButton" type="button" class="icon-button" title="全局设置" aria-label="全局设置">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+          </button>
         </div>
         <div class="toolbar">
           <button id="newConversationButton" type="button" class="primary-button" title="新建对话">

@@ -11,8 +11,9 @@ const props = withDefaults(
     deleteCount?: number;
     deleting?: boolean;
     entering?: boolean;
+    editingHighlighted?: boolean;
   }>(),
-  { deleteCount: 1, deleting: false, entering: false }
+  { deleteCount: 1, deleting: false, entering: false, editingHighlighted: false }
 );
 
 const emit = defineEmits<{
@@ -181,7 +182,7 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
 </script>
 
 <template>
-  <article class="message-floor" :class="[message.role, { streaming, 'is-deleting': deleting, 'is-entering': entering }]" :data-scroll-marker-id="message.id">
+  <article class="message-floor" :class="[message.role, { streaming, 'is-deleting': deleting, 'is-entering': entering, 'is-edit-target': editingHighlighted }]" :data-scroll-marker-id="message.id">
     <div class="floor-container">
       <div class="floor-content-column">
         <header class="floor-header">
@@ -296,6 +297,10 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
 
 .message-floor.is-entering {
   animation: lc-message-enter var(--lc-message-enter-duration) var(--lc-motion-enter-emphasized) both;
+}
+
+.message-floor.is-edit-target {
+  box-shadow: inset 0 0 0 1px var(--vscode-editorWarning-foreground, #cca700);
 }
 
 .floor-container {

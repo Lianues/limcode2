@@ -588,6 +588,14 @@ onBeforeUnmount(() => {
   background: var(--vscode-editorWarning-foreground, #cca700);
 }
 
+.scroll-marker.editing {
+  height: 5px;
+  opacity: 1;
+  background: var(--vscode-editorWarning-foreground, #cca700);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 45%, transparent);
+  z-index: 2;
+}
+
 .scroll-marker:hover,
 .scroll-marker:focus-visible,
 .scroll-marker.is-active {
@@ -672,6 +680,14 @@ onBeforeUnmount(() => {
 
 .zoom-marker.model .zoom-marker-line,
 .zoom-marker.assistant .zoom-marker-line {
+  background: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.zoom-marker.editing {
+  box-shadow: inset 0 0 0 1px var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.zoom-marker.editing .zoom-marker-line {
   background: var(--vscode-editorWarning-foreground, #cca700);
 }
 

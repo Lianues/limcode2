@@ -25,6 +25,10 @@ function onEditMessage(row: MessageViewRow): void {
 function onRetryFrom(message: MessageRecord): void {
   ui.playExitFrom(message.id, () => retryMessageFrom(message.conversationId, message.id));
 }
+
+function isEditingTarget(row: MessageViewRow): boolean {
+  return ui.editingMessage?.message.id === row.message.id;
+}
 </script>
 
 <template>
@@ -36,6 +40,7 @@ function onRetryFrom(message: MessageRecord): void {
       :delete-count="row.deleteCount"
       :deleting="row.phase === 'exiting'"
       :entering="row.phase === 'entering'"
+      :editing-highlighted="isEditingTarget(row)"
       @edit-message="onEditMessage(row)"
       @retry-from="onRetryFrom"
       @delete-from="onDeleteFrom"

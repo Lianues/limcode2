@@ -36,6 +36,7 @@ const scrollMarkers = computed(() =>
   currentMessages.value
     .filter((message) => message.role === 'user')
     .map((message, index) => {
+      const editing = conversationUi.editingMessage?.message.id === message.id;
       const text = message.content.parts
         .filter(isVisibleTextPart)
         .map((part) => part.text)
@@ -46,7 +47,7 @@ const scrollMarkers = computed(() =>
         id: message.id,
         label: `用户消息 · ${index + 1}`,
         preview: text ? truncatePreview(text) : '',
-        kind: 'user'
+        kind: editing ? 'user editing' : 'user'
       };
     })
 );

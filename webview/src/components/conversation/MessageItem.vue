@@ -1,16 +1,28 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue';
-import { IconCheck, IconCopy } from '@tabler/icons-vue';
+import { IconCheck, IconCopy, IconTrash } from '@tabler/icons-vue';
 import { isVisibleTextPart, type MessageRecord, type MessageStopReason } from '@shared/protocol';
 import RichContentView from '@webview/components/content/RichContentView.vue';
+import ConfirmPanel from '@webview/components/ui/ConfirmPanel.vue';
+import { useChat } from '@webview/composables/useChat';
 
-const props = defineProps<{
-  message: MessageRecord;
-}>();
+const props = withDefaults(
+  defineProps<{
+    message: MessageRecord;
+    deleteCount?: number;
+  }>(),
+  { deleteCount: 1 }
+);
+
+const { deleteMessagesFrom } = useChat();
 
 const roleLabel = computed(() => (props.message.role === 'user' ? '你' : 'AI'));
 const streaming = computed(() => props.message.status === 'streaming');
 const copied = ref(false);
+const confirmDeleteOpen = ref(false);
+const deleteDescriptionHtml = computed(
+  () => `将删除这条消息以及它之后的所有共 ${props.deleteCount} 条消息，此操作<strong>无法撤销</strong>。`
+);
 const messageText = computed(() =>
   props.message.content.parts
     .filter(isVisibleTextPart)
@@ -108,6 +120,19 @@ function writeClipboardFallback(text: string): boolean {
     textarea.remove();
   }
 }
+
+function openDeleteConfirm(): void {
+  confirmDeleteOpen.value = true;
+}
+
+function cancelDelete(): void {
+  confirmDeleteOpen.value = false;
+}
+
+function confirmDelete(): void {
+  deleteMessagesFrom(props.message.conversationId, props.message.id);
+  confirmDeleteOpen.value = false;
+}
 </script>
 
 <template>
@@ -151,7 +176,25 @@ function writeClipboardFallback(text: string): boolean {
         <IconCheck v-if="copied" class="message-action-icon" stroke="2" aria-hidden="true" />
         <IconCopy v-else class="message-action-icon" stroke="2" aria-hidden="true" />
       </button>
+      <button
+        type="button"
+        class="message-action-button"
+        aria-label="删除到此消息"
+        title="删除到此消息"
+        @click="openDeleteConfirm"
+      >
+        <IconTrash class="message-action-icon" stroke="2" aria-hidden="true" />
+      </button>
     </div>
+    <ConfirmPanel
+      :open="confirmDeleteOpen"
+      title="删除消息？"
+      :description-html="deleteDescriptionHtml"
+      cancel-label="取消"
+      confirm-label="删除"
+      @cancel="cancelDelete"
+      @confirm="confirmDelete"
+    />
   </article>
 </template>
 
@@ -202,7 +245,7 @@ function writeClipboardFallback(text: string): boolean {
   align-items: center;
   gap: var(--space-2);
   margin-bottom: var(--space-2);
-  padding-right: 32px;
+  padding-right: 60px;
   flex-wrap: wrap;
 }
 
@@ -215,6 +258,7 @@ function writeClipboardFallback(text: string): boolean {
   gap: var(--space-1);
   opacity: 0;
   pointer-events: none;
+  transition: opacity 0.08s ease-out;
 }
 
 .message-floor:hover .message-actions {

@@ -13,6 +13,12 @@ export function useChat() {
     return true;
   }
 
+  function deleteMessagesFrom(conversationId: string, messageId: string): boolean {
+    if (!conversationId || !messageId) return false;
+    bridge.request(BridgeMessageType.MessageDeleteFrom, { conversationId, messageId });
+    return true;
+  }
+
   function abortCurrentConversation(reason = 'user_requested_abort'): boolean {
     const conversationId = clientState.currentConversationId;
     if (!conversationId) return false;
@@ -21,5 +27,5 @@ export function useChat() {
     return true;
   }
 
-  return { sendMessage, abortCurrentConversation };
+  return { sendMessage, deleteMessagesFrom, abortCurrentConversation };
 }

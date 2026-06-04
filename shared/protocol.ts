@@ -67,6 +67,7 @@ export enum BridgeMessageType {
   ChatSend = 'chat.send',
   ChatAbort = 'chat.abort',
   MessageEdit = 'message.edit',
+  MessageDeleteFrom = 'message.deleteFrom',
   AgentRunCancel = 'agentRun.cancel',
   AgentRunPause = 'agentRun.pause',
   AgentRunResume = 'agentRun.resume',
@@ -648,6 +649,10 @@ export interface MessageEditPayload {
   messageId: string;
   text: string;
 }
+export interface MessageDeleteFromPayload {
+  conversationId: string;
+  messageId: string;
+}
 export interface AgentRunControlPayload {
   runId: string;
   conversationId?: string;
@@ -718,6 +723,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ChatSend, ChatSendPayload>
   | BridgeEnvelope<BridgeMessageType.ChatAbort, ChatAbortPayload>
   | BridgeEnvelope<BridgeMessageType.MessageEdit, MessageEditPayload>
+  | BridgeEnvelope<BridgeMessageType.MessageDeleteFrom, MessageDeleteFromPayload>
   | BridgeEnvelope<BridgeMessageType.AgentRunCancel, AgentRunControlPayload>
   | BridgeEnvelope<BridgeMessageType.AgentRunPause, AgentRunControlPayload>
   | BridgeEnvelope<BridgeMessageType.AgentRunResume, AgentRunControlPayload>

@@ -13,7 +13,12 @@ withDefaults(
 
 <template>
   <div class="message-list">
-    <MessageItem v-for="message in messages" :key="message.id" :message="message" />
+    <MessageItem
+      v-for="(message, index) in messages"
+      :key="message.id"
+      :message="message"
+      :delete-count="messages.length - index"
+    />
     <div v-if="!messages.length" class="message-empty-container">
       <p class="message-empty">{{ emptyHint }}</p>
     </div>

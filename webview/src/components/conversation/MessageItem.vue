@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import type { MessageRecord, MessageStopReason } from '@shared/protocol';
+import { computed, onBeforeUnmount, ref } from 'vue';
+import { IconCheck, IconCopy } from '@tabler/icons-vue';
+import { isVisibleTextPart, type MessageRecord, type MessageStopReason } from '@shared/protocol';
 import RichContentView from '@webview/components/content/RichContentView.vue';
 
 const props = defineProps<{
@@ -9,6 +10,19 @@ const props = defineProps<{
 
 const roleLabel = computed(() => (props.message.role === 'user' ? '你' : 'AI'));
 const streaming = computed(() => props.message.status === 'streaming');
+const copied = ref(false);
+const messageText = computed(() =>
+  props.message.content.parts
+    .filter(isVisibleTextPart)
+    .map((part) => part.text)
+    .join('')
+);
+
+let copiedResetTimer: number | undefined;
+
+onBeforeUnmount(() => {
+  if (copiedResetTimer !== undefined) window.clearTimeout(copiedResetTimer);
+});
 
 const stopReasonLabel = computed<string | undefined>(() => {
   switch (props.message.stopReason) {
@@ -45,6 +59,55 @@ function titleForStopReason(reason: MessageStopReason | undefined): string | und
       return undefined;
   }
 }
+
+async function copyMessage(): Promise<void> {
+  const text = messageText.value;
+  if (!text) return;
+
+  const ok = await writeClipboard(text);
+  if (!ok) return;
+
+  copied.value = true;
+  if (copiedResetTimer !== undefined) window.clearTimeout(copiedResetTimer);
+  copiedResetTimer = window.setTimeout(() => {
+    copied.value = false;
+    copiedResetTimer = undefined;
+  }, 1400);
+}
+
+async function writeClipboard(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // VS Code Webview / 老环境可能拒绝 Clipboard API，继续尝试 textarea fallback。
+    }
+  }
+
+  return writeClipboardFallback(text);
+}
+
+function writeClipboardFallback(text: string): boolean {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.readOnly = true;
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '-9999px';
+  textarea.style.opacity = '0';
+
+  try {
+    document.body.appendChild(textarea);
+    textarea.select();
+    return document.execCommand('copy');
+  } catch (error) {
+    console.warn('[LimCode] Failed to copy message.', error);
+    return false;
+  } finally {
+    textarea.remove();
+  }
+}
 </script>
 
 <template>
@@ -75,11 +138,26 @@ function titleForStopReason(reason: MessageStopReason | undefined): string | und
         </div>
       </div>
     </div>
+    <div class="message-actions" aria-label="消息操作">
+      <button
+        type="button"
+        class="message-action-button"
+        :class="{ 'is-copied': copied }"
+        :disabled="!messageText"
+        :aria-label="copied ? '已复制消息' : '复制消息'"
+        :title="copied ? '已复制' : '复制消息'"
+        @click="copyMessage"
+      >
+        <IconCheck v-if="copied" class="message-action-icon" stroke="2" aria-hidden="true" />
+        <IconCopy v-else class="message-action-icon" stroke="2" aria-hidden="true" />
+      </button>
+    </div>
   </article>
 </template>
 
 <style scoped>
 .message-floor {
+  position: relative;
   width: 100%;
   border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.15));
   padding: var(--space-4) var(--conversation-content-padding-right, calc(var(--space-4) + 24px))
@@ -124,7 +202,63 @@ function titleForStopReason(reason: MessageStopReason | undefined): string | und
   align-items: center;
   gap: var(--space-2);
   margin-bottom: var(--space-2);
+  padding-right: 32px;
   flex-wrap: wrap;
+}
+
+.message-actions {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--conversation-content-padding-right, calc(var(--space-4) + 24px));
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.message-floor:hover .message-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.message-action-button {
+  width: 26px;
+  height: 26px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.message-action-button:hover:not(:disabled),
+.message-action-button:focus-visible {
+  color: var(--vscode-foreground);
+  background: transparent;
+  border-color: transparent;
+}
+
+.message-action-button:focus-visible {
+  outline: none;
+}
+
+.message-action-button:disabled {
+  opacity: 0.45;
+  border-color: transparent;
+  cursor: default;
+}
+
+.message-action-icon {
+  width: 15px;
+  height: 15px;
+  pointer-events: none;
 }
 
 .role-chip {

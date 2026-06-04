@@ -732,6 +732,7 @@ function shouldDeferUntilHydrated(message: WebviewToExtensionMessage): boolean {
     case 'chat.abort':
     case 'message.edit':
     case 'message.deleteFrom':
+    case 'message.retryFrom':
     case 'tool.execute':
     case 'agentRun.cancel':
     case 'agentRun.pause':

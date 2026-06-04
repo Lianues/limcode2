@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue';
-import { IconCheck, IconCopy, IconEdit, IconTrash } from '@tabler/icons-vue';
+import { IconCheck, IconCopy, IconEdit, IconRefresh, IconTrash } from '@tabler/icons-vue';
 import { isVisibleTextPart, type MessageRecord, type MessageStopReason } from '@shared/protocol';
 import RichContentView from '@webview/components/content/RichContentView.vue';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
@@ -16,15 +16,20 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   (event: 'edit-message', message: MessageRecord): void;
+  (event: 'retry-from', message: MessageRecord): void;
   (event: 'delete-from', message: MessageRecord): void;
 }>();
 
 const roleLabel = computed(() => (props.message.role === 'user' ? '你' : 'AI'));
 const streaming = computed(() => props.message.status === 'streaming');
 const copied = ref(false);
+const confirmRetryOpen = ref(false);
 const confirmDeleteOpen = ref(false);
 const deleteDescriptionHtml = computed(
   () => `将删除这条消息以及它之后的所有共 ${props.deleteCount} 条消息，此操作<strong>无法撤销</strong>。`
+);
+const retryDescriptionHtml = computed(
+  () => `确定要重试此消息吗？这将删除此消息及后续共 ${props.deleteCount} 条消息，然后重新请求 AI 响应。此操作<strong>不可撤销</strong>。`
 );
 const messageText = computed(() =>
   props.message.content.parts
@@ -38,6 +43,10 @@ let copiedResetTimer: number | undefined;
 const deleteConfirmActions: ConfirmPanelAction[] = [
   { key: 'cancel', label: '取消', variant: 'secondary' },
   { key: 'confirm', label: '删除' }
+];
+const retryConfirmActions: ConfirmPanelAction[] = [
+  { key: 'cancel', label: '取消', variant: 'secondary' },
+  { key: 'confirm', label: '确认' }
 ];
 
 onBeforeUnmount(() => {
@@ -137,6 +146,19 @@ function editMessage(): void {
   emit('edit-message', props.message);
 }
 
+function openRetryConfirm(): void {
+  confirmRetryOpen.value = true;
+}
+
+function cancelRetry(): void {
+  confirmRetryOpen.value = false;
+}
+
+function confirmRetry(): void {
+  emit('retry-from', props.message);
+  confirmRetryOpen.value = false;
+}
+
 function cancelDelete(): void {
   confirmDeleteOpen.value = false;
 }
@@ -149,6 +171,11 @@ function confirmDelete(): void {
 function onDeleteConfirmAction(action: ConfirmPanelAction): void {
   if (action.key === 'cancel') cancelDelete();
   if (action.key === 'confirm') confirmDelete();
+}
+
+function onRetryConfirmAction(action: ConfirmPanelAction): void {
+  if (action.key === 'cancel') cancelRetry();
+  if (action.key === 'confirm') confirmRetry();
 }
 </script>
 
@@ -192,6 +219,16 @@ function onDeleteConfirmAction(action: ConfirmPanelAction): void {
         <IconEdit class="message-action-icon" stroke="2" aria-hidden="true" />
       </button>
       <button
+        v-if="message.role !== 'user'"
+        type="button"
+        class="message-action-button"
+        aria-label="重试此消息"
+        title="重试此消息"
+        @click="openRetryConfirm"
+      >
+        <IconRefresh class="message-action-icon" stroke="2" aria-hidden="true" />
+      </button>
+      <button
         type="button"
         class="message-action-button"
         :class="{ 'is-copied': copied }"
@@ -213,6 +250,13 @@ function onDeleteConfirmAction(action: ConfirmPanelAction): void {
         <IconTrash class="message-action-icon" stroke="2" aria-hidden="true" />
       </button>
     </div>
+    <ConfirmPanel
+      :open="confirmRetryOpen"
+      title="重试消息？"
+      :description-html="retryDescriptionHtml"
+      :actions="retryConfirmActions"
+      @action="onRetryConfirmAction"
+    />
     <ConfirmPanel
       :open="confirmDeleteOpen"
       title="删除消息？"

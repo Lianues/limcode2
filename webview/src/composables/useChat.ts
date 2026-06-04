@@ -20,6 +20,12 @@ export function useChat() {
     return true;
   }
 
+  function retryMessageFrom(conversationId: string, messageId: string): boolean {
+    if (!conversationId || !messageId) return false;
+    bridge.request(BridgeMessageType.MessageRetryFrom, { conversationId, messageId });
+    return true;
+  }
+
   function deleteMessagesFrom(conversationId: string, messageId: string): boolean {
     if (!conversationId || !messageId) return false;
     bridge.request(BridgeMessageType.MessageDeleteFrom, { conversationId, messageId });
@@ -34,5 +40,5 @@ export function useChat() {
     return true;
   }
 
-  return { sendMessage, editMessage, deleteMessagesFrom, abortCurrentConversation };
+  return { sendMessage, editMessage, retryMessageFrom, deleteMessagesFrom, abortCurrentConversation };
 }

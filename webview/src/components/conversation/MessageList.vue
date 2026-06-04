@@ -16,7 +16,7 @@ const emit = defineEmits<{
   (event: 'edit-message', payload: { message: MessageRecord; deleteCount: number }): void;
 }>();
 
-const { deleteMessagesFrom } = useChat();
+const { retryMessageFrom, deleteMessagesFrom } = useChat();
 const deletingFromId = ref<string>();
 const deletingStartIndex = computed(() => {
   if (!deletingFromId.value) return -1;
@@ -64,6 +64,17 @@ function clearDeletingState(): void {
 function onEditMessage(message: MessageRecord, index: number): void {
   emit('edit-message', { message, deleteCount: props.messages.length - index });
 }
+
+function onRetryFrom(message: MessageRecord): void {
+  if (deleteTimer !== undefined) window.clearTimeout(deleteTimer);
+  if (clearDeletingTimer !== undefined) window.clearTimeout(clearDeletingTimer);
+  deletingFromId.value = message.id;
+  deleteTimer = window.setTimeout(() => {
+    retryMessageFrom(message.conversationId, message.id);
+    deleteTimer = undefined;
+    clearDeletingTimer = window.setTimeout(clearDeletingState, 2000);
+  }, 180);
+}
 </script>
 
 <template>
@@ -75,6 +86,7 @@ function onEditMessage(message: MessageRecord, index: number): void {
       :delete-count="messages.length - index"
       :deleting="isDeleting(index)"
       @edit-message="onEditMessage(message, index)"
+      @retry-from="onRetryFrom"
       @delete-from="onDeleteFrom"
     />
     <div v-if="!messages.length" class="message-empty-container">

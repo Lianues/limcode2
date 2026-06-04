@@ -68,6 +68,7 @@ export enum BridgeMessageType {
   ChatAbort = 'chat.abort',
   MessageEdit = 'message.edit',
   MessageDeleteFrom = 'message.deleteFrom',
+  MessageRetryFrom = 'message.retryFrom',
   AgentRunCancel = 'agentRun.cancel',
   AgentRunPause = 'agentRun.pause',
   AgentRunResume = 'agentRun.resume',
@@ -655,6 +656,10 @@ export interface MessageDeleteFromPayload {
   conversationId: string;
   messageId: string;
 }
+export interface MessageRetryFromPayload {
+  conversationId: string;
+  messageId: string;
+}
 export interface AgentRunControlPayload {
   runId: string;
   conversationId?: string;
@@ -726,6 +731,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ChatAbort, ChatAbortPayload>
   | BridgeEnvelope<BridgeMessageType.MessageEdit, MessageEditPayload>
   | BridgeEnvelope<BridgeMessageType.MessageDeleteFrom, MessageDeleteFromPayload>
+  | BridgeEnvelope<BridgeMessageType.MessageRetryFrom, MessageRetryFromPayload>
   | BridgeEnvelope<BridgeMessageType.AgentRunCancel, AgentRunControlPayload>
   | BridgeEnvelope<BridgeMessageType.AgentRunPause, AgentRunControlPayload>
   | BridgeEnvelope<BridgeMessageType.AgentRunResume, AgentRunControlPayload>

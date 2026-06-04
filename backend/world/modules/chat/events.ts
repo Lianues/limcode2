@@ -2,7 +2,8 @@ export const ChatEventType = {
   Send: 'chat:send',
   Abort: 'chat:abort',
   Edit: 'chat:edit',
-  DeleteFrom: 'chat:deleteFrom'
+  DeleteFrom: 'chat:deleteFrom',
+  RetryFrom: 'chat:retryFrom'
 } as const;
 
 export interface ChatSendPayload {
@@ -23,6 +24,10 @@ export interface ChatDeleteFromPayload {
   conversationId: string;
   messageId: string;
 }
+export interface ChatRetryFromPayload {
+  conversationId: string;
+  messageId: string;
+}
 
 declare module '@backend/world/events' {
   interface WorldEventPayloadMap {
@@ -30,5 +35,6 @@ declare module '@backend/world/events' {
     'chat:abort': ChatAbortPayload;
     'chat:edit': ChatEditPayload;
     'chat:deleteFrom': ChatDeleteFromPayload;
+    'chat:retryFrom': ChatRetryFromPayload;
   }
 }

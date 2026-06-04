@@ -6,6 +6,7 @@ import { partViewComponent, toRenderNodes } from './partRegistry';
 const props = defineProps<{
   parts: ContentPart[];
   streaming?: boolean;
+  markdown?: boolean;
 }>();
 
 const nodes = computed(() => toRenderNodes(props.parts));
@@ -19,11 +20,18 @@ const nodes = computed(() => toRenderNodes(props.parts));
         v-for="(node, index) in nodes"
         :key="node.key"
         v-bind="node.props"
+        :markdown="markdown"
         :streaming="streaming && index === nodes.length - 1"
       />
     </template>
     <!-- 流式中但还没有可见内容：渲染一个仅含光标的空文本节点。 -->
-    <component :is="partViewComponent('text')" v-else-if="streaming" :text="''" :streaming="true" />
+    <component
+      :is="partViewComponent('text')"
+      v-else-if="streaming"
+      :text="''"
+      :markdown="markdown"
+      :streaming="true"
+    />
   </div>
 </template>
 

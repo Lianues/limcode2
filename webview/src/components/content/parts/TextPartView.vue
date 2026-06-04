@@ -1,12 +1,108 @@
 <script setup lang="ts">
-defineProps<{
-  text: string;
-  streaming?: boolean;
-}>();
+import { computed, onBeforeUnmount, shallowRef, watch } from 'vue';
+import { renderMarkdown } from '../markdown/markdownRenderer';
+
+const STREAM_RENDER_INTERVAL_MS = 90;
+
+const props = withDefaults(
+  defineProps<{
+    text: string;
+    streaming?: boolean;
+    markdown?: boolean;
+  }>(),
+  { streaming: false, markdown: false }
+);
+
+const renderedHtml = shallowRef('');
+const markdownReady = computed(() => props.markdown);
+
+let renderVersion = 0;
+let lastRenderTime = 0;
+let timeoutId: number | undefined;
+let frameId: number | undefined;
+let scheduled = false;
+let disposed = false;
+
+watch(
+  () => [props.text, props.streaming, props.markdown] as const,
+  () => scheduleMarkdownRender(),
+  { immediate: true }
+);
+
+onBeforeUnmount(() => {
+  disposed = true;
+  clearScheduledRender();
+});
+
+function scheduleMarkdownRender(): void {
+  renderVersion += 1;
+
+  if (!markdownReady.value) {
+    clearScheduledRender();
+    renderedHtml.value = '';
+    return;
+  }
+
+  if (scheduled) return;
+
+  const now = performance.now();
+  const minDelay = props.streaming ? STREAM_RENDER_INTERVAL_MS : 0;
+  const delay = Math.max(0, minDelay - (now - lastRenderTime));
+
+  scheduled = true;
+  timeoutId = window.setTimeout(() => {
+    timeoutId = undefined;
+    frameId = window.requestAnimationFrame(() => {
+      frameId = undefined;
+      scheduled = false;
+      lastRenderTime = performance.now();
+      void renderCurrentMarkdown(renderVersion);
+    });
+  }, delay);
+}
+
+async function renderCurrentMarkdown(version: number): Promise<void> {
+  const source = props.text;
+  const streaming = props.streaming;
+
+  try {
+    const html = await renderMarkdown(source, { streaming });
+    if (disposed) return;
+
+    if (version === renderVersion) {
+      renderedHtml.value = html;
+      return;
+    }
+
+    scheduleMarkdownRender();
+  } catch (error) {
+    console.warn('[LimCode] Failed to render markdown.', error);
+    if (version === renderVersion) renderedHtml.value = '';
+  }
+}
+
+function clearScheduledRender(): void {
+  scheduled = false;
+
+  if (timeoutId !== undefined) {
+    window.clearTimeout(timeoutId);
+    timeoutId = undefined;
+  }
+
+  if (frameId !== undefined) {
+    window.cancelAnimationFrame(frameId);
+    frameId = undefined;
+  }
+}
 </script>
 
 <template>
-  <pre class="rc-text">{{ text }}<span v-if="streaming" class="rc-cursor">▋</span></pre>
+  <div v-if="markdownReady" class="rc-markdown-shell" :class="{ streaming }">
+    <div v-if="renderedHtml" class="rc-markdown" v-html="renderedHtml"></div>
+    <pre v-else class="rc-text">{{ text }}</pre>
+    <span v-if="streaming" class="rc-cursor">▋</span>
+  </div>
+  <pre v-else class="rc-text">{{ text }}<span v-if="streaming" class="rc-cursor">▋</span></pre>
 </template>
 
 <style scoped>
@@ -17,8 +113,94 @@ defineProps<{
   font-family: inherit;
 }
 
+.rc-markdown-shell {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.rc-markdown {
+  min-width: 0;
+}
+
+.rc-markdown :deep(p),
+.rc-markdown :deep(ul),
+.rc-markdown :deep(ol),
+.rc-markdown :deep(pre),
+.rc-markdown :deep(blockquote),
+.rc-markdown :deep(table) {
+  margin-top: 0;
+  margin-bottom: var(--space-2);
+}
+
+.rc-markdown :deep(:last-child) {
+  margin-bottom: 0;
+}
+
+.rc-markdown :deep(ul),
+.rc-markdown :deep(ol) {
+  padding-left: var(--space-5);
+}
+
+.rc-markdown :deep(li + li) {
+  margin-top: 2px;
+}
+
+.rc-markdown :deep(blockquote) {
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.28));
+  color: var(--vscode-descriptionForeground);
+}
+
+.rc-markdown :deep(pre) {
+  max-width: 100%;
+  overflow: auto;
+  padding: var(--space-2);
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.18));
+  border-radius: var(--radius-sm);
+  background: var(--vscode-textCodeBlock-background, color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%));
+}
+
+.rc-markdown :deep(code) {
+  font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Consolas, monospace);
+  font-size: 0.95em;
+}
+
+.rc-markdown :deep(pre code) {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.rc-markdown :deep(a) {
+  color: var(--vscode-textLink-foreground);
+}
+
+.rc-markdown :deep(table) {
+  display: block;
+  max-width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+}
+
+.rc-markdown :deep(th),
+.rc-markdown :deep(td) {
+  padding: 4px 7px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.22));
+}
+
+.rc-markdown :deep(img) {
+  max-width: 100%;
+  height: auto;
+}
+
 .rc-cursor {
   animation: rc-blink 1s steps(2, start) infinite;
+}
+
+.rc-markdown-shell > .rc-cursor {
+  display: inline-block;
+  margin-left: 1px;
 }
 
 @keyframes rc-blink {

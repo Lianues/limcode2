@@ -67,7 +67,11 @@ function titleForStopReason(reason: MessageStopReason | undefined): string | und
           </span>
         </header>
         <div class="floor-body">
-          <RichContentView :parts="message.content.parts" :streaming="streaming" />
+          <RichContentView
+            :parts="message.content.parts"
+            :markdown="message.role !== 'user'"
+            :streaming="streaming"
+          />
         </div>
       </div>
     </div>
@@ -135,21 +139,21 @@ function titleForStopReason(reason: MessageStopReason | undefined): string | und
   height: 7px;
   border-radius: 50%;
   flex: 0 0 auto;
-  background: var(--vscode-foreground);
+  background: currentColor;
 }
 
-.role-chip.user .role-dot {
-  background: var(--vscode-testing-iconPassed, #4caf50);
+.role-chip.user {
+  color: var(--vscode-testing-iconPassed, #4caf50);
 }
 
-.role-chip.assistant .role-dot {
-  background: var(--vscode-editorWarning-foreground, #cca700);
+.role-chip.assistant {
+  color: var(--vscode-editorWarning-foreground, #cca700);
 }
 
 .floor-role-name {
   font-weight: 600;
   font-size: var(--font-size-sm);
-  color: var(--vscode-foreground);
+  color: currentColor;
 }
 
 .floor-status-badge {

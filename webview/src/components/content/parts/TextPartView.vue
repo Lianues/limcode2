@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, shallowRef, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { renderMarkdown } from '../markdown/markdownRenderer';
 
 const STREAM_RENDER_INTERVAL_MS = 64;
 const STREAM_CATCHUP_FRAMES = 14;
 const STREAM_MAX_CHARS_PER_FRAME = 32;
+const REPLACE_OUT_MS = 90;
 
 const props = withDefaults(
   defineProps<{
@@ -17,6 +18,7 @@ const props = withDefaults(
 
 const displayedText = shallowRef('');
 const renderedHtml = shallowRef('');
+const replaceAnimating = ref(false);
 const markdownReady = computed(() => props.markdown);
 
 let renderVersion = 0;
@@ -25,12 +27,14 @@ let timeoutId: number | undefined;
 let frameId: number | undefined;
 let streamFrameId: number | undefined;
 let lastStreamFrameTime = 0;
+let replaceTimerId: number | undefined;
+let replaceFrameId: number | undefined;
 let scheduled = false;
 let disposed = false;
 
 watch(
   () => [props.text, props.streaming] as const,
-  () => syncDisplayedText(),
+  (_next, previous) => syncDisplayedText(previous?.[1] ?? false),
   { immediate: true }
 );
 
@@ -44,17 +48,19 @@ onBeforeUnmount(() => {
   disposed = true;
   clearScheduledRender();
   clearStreamFrame();
+  clearReplaceTransition();
 });
 
-function syncDisplayedText(): void {
+function syncDisplayedText(wasStreaming: boolean): void {
   const target = props.text;
 
   if (!props.streaming) {
     clearStreamFrame();
-    displayedText.value = target;
+    replaceDisplayedText(target, !wasStreaming);
     return;
   }
 
+  clearReplaceTransition();
   const current = displayedText.value;
   if (!target.startsWith(current) || current.length > target.length) {
     displayedText.value = target;
@@ -106,6 +112,42 @@ function clearStreamFrame(): void {
     streamFrameId = undefined;
   }
   lastStreamFrameTime = 0;
+}
+
+function replaceDisplayedText(target: string, animate: boolean): void {
+  clearReplaceTransition();
+
+  const current = displayedText.value;
+  if (current === target) return;
+
+  if (!animate || !current || !target) {
+    displayedText.value = target;
+    return;
+  }
+
+  replaceAnimating.value = true;
+  replaceTimerId = window.setTimeout(() => {
+    replaceTimerId = undefined;
+    displayedText.value = target;
+    replaceFrameId = window.requestAnimationFrame(() => {
+      replaceFrameId = undefined;
+      replaceAnimating.value = false;
+    });
+  }, REPLACE_OUT_MS);
+}
+
+function clearReplaceTransition(): void {
+  if (replaceTimerId !== undefined) {
+    window.clearTimeout(replaceTimerId);
+    replaceTimerId = undefined;
+  }
+
+  if (replaceFrameId !== undefined) {
+    window.cancelAnimationFrame(replaceFrameId);
+    replaceFrameId = undefined;
+  }
+
+  replaceAnimating.value = false;
 }
 
 function scheduleMarkdownRender(): void {
@@ -171,12 +213,12 @@ function clearScheduledRender(): void {
 </script>
 
 <template>
-  <div v-if="markdownReady" class="rc-markdown-shell" :class="{ streaming }">
+  <div v-if="markdownReady" class="rc-markdown-shell" :class="{ streaming, replacing: replaceAnimating }">
     <div v-if="renderedHtml" class="rc-markdown" v-html="renderedHtml"></div>
     <pre v-else class="rc-text">{{ displayedText }}</pre>
     <span v-if="streaming" class="rc-cursor">▋</span>
   </div>
-  <pre v-else class="rc-text">{{ displayedText }}<span v-if="streaming" class="rc-cursor">▋</span></pre>
+  <pre v-else class="rc-text" :class="{ replacing: replaceAnimating }">{{ displayedText }}<span v-if="streaming" class="rc-cursor">▋</span></pre>
 </template>
 
 <style scoped>
@@ -185,6 +227,18 @@ function clearScheduledRender(): void {
   white-space: pre-wrap;
   word-break: break-word;
   font-family: inherit;
+}
+
+.rc-text,
+.rc-markdown {
+  transition: opacity 0.09s ease-out, transform 0.09s ease-out;
+}
+
+.rc-text.replacing,
+.rc-markdown-shell.replacing .rc-text,
+.rc-markdown-shell.replacing .rc-markdown {
+  opacity: 0;
+  transform: translateY(-3px);
 }
 
 .rc-markdown-shell {

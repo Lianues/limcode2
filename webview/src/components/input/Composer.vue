@@ -8,8 +8,9 @@ const props = withDefaults(
   defineProps<{
     disabled?: boolean;
     placeholder?: string;
+    expandBoundary?: HTMLElement | null;
   }>(),
-  { disabled: false, placeholder: '' }
+  { disabled: false, placeholder: '', expandBoundary: null }
 );
 
 const emit = defineEmits<{
@@ -18,13 +19,24 @@ const emit = defineEmits<{
 
 const ui = useConversationUiStore();
 const highlighted = ref(false);
+const editorExpanded = ref(false);
 const editor = ref<{ focus: () => void } | null>(null);
+const editorShell = ref<HTMLElement | null>(null);
+const expandedEditorHeight = ref(0);
+const collapsedEditorHeight = ref(0);
 
 const draft = computed({
   get: () => ui.composerDraft,
   set: (next: string) => ui.setComposerDraft(next)
 });
+const expandTitle = computed(() => (editorExpanded.value ? '恢复输入框高度' : '扩大输入框'));
 const sendTitle = computed(() => (ui.isEditing ? '提交编辑' : '发送'));
+const editorShellStyle = computed(() => {
+  if (!editorExpanded.value || !expandedEditorHeight.value) return undefined;
+  return {
+    '--composer-expanded-editor-height': `${expandedEditorHeight.value}px`
+  };
+});
 
 let highlightTimer: number | undefined;
 
@@ -39,10 +51,12 @@ watch(
 
 onMounted(() => {
   window.addEventListener('keydown', onWindowKeydown);
+  window.addEventListener('resize', onWindowResize);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKeydown);
+  window.removeEventListener('resize', onWindowResize);
   if (highlightTimer !== undefined) window.clearTimeout(highlightTimer);
 });
 
@@ -52,11 +66,43 @@ function onWindowKeydown(event: KeyboardEvent): void {
   ui.cancelEditMode();
 }
 
+function onWindowResize(): void {
+  if (!editorExpanded.value) return;
+  updateExpandedEditorHeight();
+}
+
 function submit(): void {
   const text = draft.value.trim();
   if (!text || props.disabled) return;
   emit('submit', text);
   if (!ui.isEditing) ui.clearChatDraft();
+}
+
+function toggleEditorExpanded(): void {
+  if (!editorExpanded.value) {
+    collapsedEditorHeight.value = editorShell.value?.getBoundingClientRect().height ?? 0;
+    updateExpandedEditorHeight();
+  }
+
+  editorExpanded.value = !editorExpanded.value;
+  void nextTick(() => {
+    if (editorExpanded.value) updateExpandedEditorHeight();
+    editor.value?.focus();
+  });
+}
+
+function updateExpandedEditorHeight(): void {
+  const shell = editorShell.value;
+  if (!shell) return;
+
+  const shellRect = shell.getBoundingClientRect();
+  const boundaryRect = props.expandBoundary?.getBoundingClientRect();
+  const boundaryTop = boundaryRect?.top ?? 0;
+  const availableHeight = shellRect.bottom - boundaryTop;
+  if (!Number.isFinite(availableHeight) || availableHeight <= 0) return;
+
+  const minHeight = collapsedEditorHeight.value || shellRect.height;
+  expandedEditorHeight.value = Math.floor(Math.min(availableHeight, Math.max(minHeight, availableHeight * 0.9)));
 }
 
 function pulseHighlight(): void {
@@ -70,7 +116,7 @@ function pulseHighlight(): void {
 </script>
 
 <template>
-  <div class="composer" :class="{ 'is-editing': ui.isEditing, 'is-highlighted': highlighted }">
+  <div class="composer" :class="{ 'is-editing': ui.isEditing, 'is-highlighted': highlighted, 'is-editor-expanded': editorExpanded }">
     <div class="composer-zone composer-zone-top" aria-label="输入框上方功能区">
       <div v-if="ui.isEditing" class="composer-edit-indicator">
         <span class="composer-edit-indicator-icon" aria-hidden="true">
@@ -83,16 +129,64 @@ function pulseHighlight(): void {
 
     <div class="composer-input-row">
       <div class="composer-zone composer-zone-left" aria-label="输入框左侧功能区"></div>
-      <RichContentEditor
-        ref="editor"
-        v-model="draft"
-        class="composer-editor"
-        :placeholder="ui.isEditing ? '编辑消息内容...' : placeholder"
-        :disabled="disabled"
-        :rows="ui.isEditing ? 4 : 2"
-        @submit="submit"
-      />
-      <div class="composer-zone composer-zone-right" aria-label="输入框右侧功能区"></div>
+      <div ref="editorShell" class="composer-editor-shell" :style="editorShellStyle">
+        <RichContentEditor
+          ref="editor"
+          v-model="draft"
+          class="composer-editor"
+          :placeholder="ui.isEditing ? '编辑消息内容...' : placeholder"
+          :disabled="disabled"
+          :rows="5"
+          @submit="submit"
+        />
+      </div>
+      <div class="composer-zone composer-zone-right" aria-label="输入框右侧功能区">
+        <button
+          type="button"
+          class="composer-side-action"
+          :aria-label="expandTitle"
+          :aria-pressed="editorExpanded"
+          :title="expandTitle"
+          @click="toggleEditorExpanded"
+        >
+          <svg
+            v-if="!editorExpanded"
+            class="composer-side-action-icon"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+            <path d="M9 18l3 3l3 -3" />
+            <path d="M12 15v6" />
+            <path d="M15 6l-3 -3l-3 3" />
+            <path d="M12 3v6" />
+          </svg>
+          <svg
+            v-else
+            class="composer-side-action-icon"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+            <path d="M9 6l3 3l3 -3" />
+            <path d="M12 3v6" />
+            <path d="M15 18l-3 -3l-3 3" />
+            <path d="M12 15v6" />
+          </svg>
+        </button>
+      </div>
     </div>
 
     <div class="composer-zone composer-zone-bottom" aria-label="输入框下方功能区">
@@ -120,7 +214,7 @@ function pulseHighlight(): void {
 .composer-input-row {
   display: flex;
   align-items: flex-end;
-  gap: var(--space-2);
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -138,6 +232,14 @@ function pulseHighlight(): void {
 .composer-zone-left,
 .composer-zone-right {
   flex: 0 0 auto;
+}
+
+.composer-zone-right {
+  align-self: stretch;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-1);
 }
 
 .composer-zone-top {
@@ -192,15 +294,67 @@ function pulseHighlight(): void {
   border-color: transparent;
 }
 
+.composer-editor-shell {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+.composer.is-editor-expanded .composer-editor-shell {
+  height: var(--composer-expanded-editor-height);
+}
+
 .composer-editor {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   transition: border-color var(--lc-composer-highlight-duration) ease, box-shadow var(--lc-composer-highlight-duration) ease;
+}
+
+.composer.is-editor-expanded .composer-editor {
+  height: 100%;
 }
 
 .composer.is-highlighted .composer-editor {
   border-color: var(--vscode-editorWarning-foreground, #cca700);
   box-shadow: inset 0 0 0 1px var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.composer-side-action {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  border-color: transparent;
+}
+
+.composer-side-action:hover:not(:disabled),
+.composer-side-action[aria-pressed='true'] {
+  color: var(--vscode-foreground);
+  background: var(--vscode-list-hoverBackground, transparent);
+  border-color: var(--vscode-panel-border, transparent);
+}
+
+.composer-side-action:disabled {
+  color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
+  background: transparent;
+  border-color: transparent;
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.composer-side-action-icon {
+  width: 16px;
+  height: 16px;
+  color: currentColor;
+  pointer-events: none;
 }
 
 .composer-send {

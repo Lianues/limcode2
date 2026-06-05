@@ -17,6 +17,7 @@ const props = withDefaults(
   defineProps<{
     scroller: HTMLElement | null;
     markers?: AdvancedScrollMarker[];
+    refreshKey?: unknown;
     showMarkers?: boolean;
     showEdgeButtons?: boolean;
     showMarkerPreview?: boolean;
@@ -353,6 +354,7 @@ function attachScroller(element: HTMLElement | null): void {
 }
 
 watch(() => props.scroller, attachScroller, { immediate: true, flush: 'post' });
+watch(() => props.refreshKey, () => void nextTick(scheduleSync), { flush: 'post' });
 watch(
   () => props.markers.map((marker) => `${marker.id}:${marker.label}:${marker.preview}:${marker.kind ?? ''}`).join('\n'),
   () => void nextTick(scheduleSync),

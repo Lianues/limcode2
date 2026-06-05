@@ -16,6 +16,7 @@ const { currentMessages, currentConversationId } = storeToRefs(clientState);
 const { sendMessage, editMessage } = useChat();
 
 const scroller = ref<HTMLElement | null>(null);
+const conversationBody = ref<HTMLElement | null>(null);
 
 const ready = computed(() => !!currentConversationId.value);
 const placeholder = computed(() =>
@@ -143,7 +144,7 @@ watch(
 
 <template>
   <div class="conversation">
-    <div class="conversation-body">
+    <div ref="conversationBody" class="conversation-body">
       <div ref="scroller" class="conversation-scroll">
         <MessageList :empty-hint="emptyHint" />
       </div>
@@ -156,7 +157,7 @@ watch(
       />
     </div>
     <footer class="conversation-composer">
-      <Composer :disabled="!ready" :placeholder="placeholder" @submit="onSubmit" />
+      <Composer :disabled="!ready" :placeholder="placeholder" :expand-boundary="conversationBody" @submit="onSubmit" />
     </footer>
     <ConfirmPanel
       :open="conversationUi.editConfirmOpen"
@@ -199,6 +200,7 @@ watch(
 }
 
 .conversation-composer {
+  flex: 0 0 auto;
   border-top: 1px solid var(--vscode-panel-border);
   padding: var(--space-3) 0;
   background-color: var(--vscode-editor-background);

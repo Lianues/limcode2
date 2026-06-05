@@ -438,7 +438,8 @@ function updateTokenUsageTooltipPosition(): void {
   const fitsBelow = topWhenBelow + tooltipHeight <= viewport.height - margin;
   const spaceAbove = triggerRect.top - margin - gap;
   const spaceBelow = viewport.height - triggerRect.bottom - margin - gap;
-  const placeTop = fitsAbove || (!fitsBelow && spaceAbove >= spaceBelow);
+  // 默认优先显示在下方；只有下方放不下时，才尝试上方或选择空间更大的方向。
+  const placeTop = !fitsBelow && (fitsAbove || spaceAbove >= spaceBelow);
   const rawTop = placeTop ? topWhenAbove : topWhenBelow;
 
   const left = clamp(triggerRect.right - tooltipWidth, margin, viewport.width - tooltipWidth - margin);

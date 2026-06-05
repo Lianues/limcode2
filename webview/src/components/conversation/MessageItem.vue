@@ -1,7 +1,16 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue';
-import { IconCheck, IconCopy, IconEdit, IconRefresh, IconTrash } from '@tabler/icons-vue';
-import { isVisibleTextPart, type MessageRecord, type MessageStopReason } from '@shared/protocol';
+import { computed, nextTick, onBeforeUnmount, ref, type ComponentPublicInstance } from 'vue';
+import {
+  IconArrowNarrowDown,
+  IconArrowNarrowUp,
+  IconCheck,
+  IconCopy,
+  IconEdit,
+  IconHash,
+  IconRefresh,
+  IconTrash
+} from '@tabler/icons-vue';
+import { isVisibleTextPart, type LlmUsageMetadataRecord, type MessageRecord, type MessageStopReason } from '@shared/protocol';
 import RichContentView from '@webview/components/content/RichContentView.vue';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 
@@ -23,8 +32,29 @@ const emit = defineEmits<{
 }>();
 
 const roleLabel = computed(() => (props.message.role === 'user' ? '你' : 'AI'));
+type TokenUsageKind = 'total' | 'input' | 'output';
+interface TokenUsageDetailItem {
+  label: string;
+  value: string;
+  depth?: number;
+}
+interface TokenUsageItem {
+  key: TokenUsageKind;
+  label: string;
+  value: number;
+  compact: string;
+  exact: string;
+  suffix?: string;
+  details: TokenUsageDetailItem[];
+}
+
+const hasOwn = Object.prototype.hasOwnProperty;
+type TemplateRefElement = Element | ComponentPublicInstance | null;
 const streaming = computed(() => props.message.status === 'streaming');
 const copied = ref(false);
+const activeTokenUsageKey = ref<TokenUsageKind | undefined>();
+const tokenUsageTooltipStyle = ref<Record<string, string>>({});
+const tokenUsageTooltipPlacement = ref<'top' | 'bottom'>('top');
 const confirmRetryOpen = ref(false);
 const confirmDeleteOpen = ref(false);
 const deleteDescriptionHtml = computed(
@@ -40,7 +70,43 @@ const messageText = computed(() =>
     .join('')
 );
 
+const tokenUsageItems = computed<TokenUsageItem[]>(() => {
+  if (props.message.role === 'user') return [];
+  const usage = props.message.usageMetadata;
+  if (!usage) return [];
+
+  const input = usageNumber(usage, ['promptTokenCount', 'prompt_tokens', 'input_tokens', 'inputTokens']);
+  const output = usageNumber(usage, ['candidatesTokenCount', 'completion_tokens', 'output_tokens', 'outputTokens']);
+  const total = usageNumber(usage, ['totalTokenCount', 'total_tokens', 'totalTokens']);
+
+  return [
+    createTokenUsageItem('total', '总', total, usage),
+    createTokenUsageItem('input', '输入', input, usage),
+    createTokenUsageItem('output', '输出', output, usage)
+  ].filter((item): item is TokenUsageItem => item !== undefined);
+});
+
+function createTokenUsageItem(key: TokenUsageKind, label: string, value: number | undefined, usage: LlmUsageMetadataRecord): TokenUsageItem | undefined {
+  if (value === undefined) return undefined;
+  const exact = formatExactNumber(value);
+  const suffix = tokenUsageSuffix(key, usage);
+  return {
+    key,
+    label,
+    value,
+    compact: formatCompactNumber(value),
+    exact,
+    ...(suffix ? { suffix } : {}),
+    details: tokenUsageDetails(key, usage)
+  };
+}
+
 let copiedResetTimer: number | undefined;
+let tokenUsagePositionFrame: number | undefined;
+let tokenUsageHideTimer: number | undefined;
+let tokenUsagePositionListenersAttached = false;
+const tokenUsageTriggerRefs = new Map<TokenUsageKind, HTMLElement>();
+const tokenUsageTooltipRefs = new Map<TokenUsageKind, HTMLElement>();
 
 const deleteConfirmActions: ConfirmPanelAction[] = [
   { key: 'cancel', label: '取消', variant: 'secondary' },
@@ -53,6 +119,9 @@ const retryConfirmActions: ConfirmPanelAction[] = [
 
 onBeforeUnmount(() => {
   if (copiedResetTimer !== undefined) window.clearTimeout(copiedResetTimer);
+  if (tokenUsagePositionFrame !== undefined) window.cancelAnimationFrame(tokenUsagePositionFrame);
+  if (tokenUsageHideTimer !== undefined) window.clearTimeout(tokenUsageHideTimer);
+  detachTokenUsagePositionListeners();
 });
 
 const stopReasonLabel = computed<string | undefined>(() => {
@@ -89,6 +158,331 @@ function titleForStopReason(reason: MessageStopReason | undefined): string | und
     default:
       return undefined;
   }
+}
+
+function usageNumber(usage: LlmUsageMetadataRecord, keys: string[]): number | undefined {
+  for (const key of keys) {
+    if (!hasOwn.call(usage, key)) continue;
+    const value = usage[key];
+    const numeric = normalizeTokenNumber(value);
+    if (numeric !== undefined) return numeric;
+  }
+  return undefined;
+}
+
+function normalizeTokenNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const numeric = Number(trimmed);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function formatCompactNumber(value: number): string {
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000_000) return `${formatScaledNumber(value, 1_000_000_000)}b`;
+  if (abs >= 1_000_000) return `${formatScaledNumber(value, 1_000_000)}m`;
+  if (abs >= 1_000) return `${formatScaledNumber(value, 1_000)}k`;
+  return formatExactNumber(value);
+}
+
+function formatScaledNumber(value: number, divisor: number): string {
+  const scaled = value / divisor;
+  const fixed = scaled.toFixed(1);
+  return fixed.endsWith('.0') ? fixed.slice(0, -2) : fixed;
+}
+
+function formatExactNumber(value: number): string {
+  return Number.isInteger(value)
+    ? value.toLocaleString('en-US')
+    : value.toLocaleString('en-US', { maximumFractionDigits: 3 });
+}
+
+function tokenUsageSuffix(key: TokenUsageKind, usage: LlmUsageMetadataRecord): string | undefined {
+  if (key === 'input') {
+    const cached = usageNumber(usage, ['cachedContentTokenCount', 'cached_content_token_count', 'cached_tokens']);
+    return cached !== undefined ? `(${formatCompactNumber(cached)})` : undefined;
+  }
+
+  if (key === 'output') {
+    const thoughts = usageNumber(usage, ['thoughtsTokenCount', 'reasoning_tokens']);
+    return thoughts !== undefined ? `(${formatCompactNumber(thoughts)})` : undefined;
+  }
+
+  return undefined;
+}
+
+function tokenUsageDetails(key: TokenUsageKind, usage: LlmUsageMetadataRecord): TokenUsageDetailItem[] {
+  switch (key) {
+    case 'total':
+      return usageDetailItems(usage, ['promptTokenCount', 'candidatesTokenCount', 'thoughtsTokenCount']);
+    case 'input':
+      return [
+        ...usageDetailItems(usage, ['cachedContentTokenCount', 'cacheCreationInputTokenCount']),
+        ...recordUsageDetailItems(usage.cacheCreationInputTokensDetails, 0)
+      ];
+    case 'output':
+      return [
+        ...outputBodyTokenDetail(usage),
+        ...usageDetailItems(usage, ['thoughtsTokenCount', 'reasoning_tokens'])
+      ];
+  }
+  return [];
+}
+
+function usageDetailItems(usage: LlmUsageMetadataRecord, keys: string[]): TokenUsageDetailItem[] {
+  const details: TokenUsageDetailItem[] = [];
+  for (const key of keys) {
+    if (!hasOwn.call(usage, key)) continue;
+    const item = detailItemFromValue(key, usage[key], 0);
+    if (item) details.push(...item);
+  }
+  return details;
+}
+
+function outputBodyTokenDetail(usage: LlmUsageMetadataRecord): TokenUsageDetailItem[] {
+  const output = usageNumber(usage, ['candidatesTokenCount', 'completion_tokens', 'output_tokens', 'outputTokens']);
+  const thoughts = usageNumber(usage, ['thoughtsTokenCount', 'reasoning_tokens']);
+  if (output === undefined || thoughts === undefined) return [];
+  return [{
+    label: '正文 token',
+    value: formatExactNumber(output - thoughts)
+  }];
+}
+
+function recordUsageDetailItems(value: unknown, depth: number): TokenUsageDetailItem[] {
+  const record = recordValue(value);
+  if (!record) return [];
+  return Object.entries(record).flatMap(([key, child]) => detailItemFromValue(key, child, depth) ?? []);
+}
+
+function detailItemFromValue(key: string, value: unknown, depth: number): TokenUsageDetailItem[] | undefined {
+  const numeric = normalizeTokenNumber(value);
+  if (numeric !== undefined) {
+    return [{ label: usageLabel(key), value: formatExactNumber(numeric), depth }];
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    return [{ label: usageLabel(key), value, depth }];
+  }
+
+  const record = recordValue(value);
+  if (record) {
+    return Object.entries(record).flatMap(([childKey, childValue]) => detailItemFromValue(childKey, childValue, depth + 1) ?? []);
+  }
+
+  return undefined;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function usageLabel(key: string): string {
+  const labels: Record<string, string> = {
+    promptTokenCount: '输入 token',
+    prompt_tokens: '输入 token',
+    input_tokens: '输入 token',
+    inputTokens: '输入 token',
+    cachedContentTokenCount: '缓存命中 token',
+    cached_content_token_count: '缓存命中 token',
+    cached_tokens: '缓存命中 token',
+    cache_read_input_tokens: '缓存读取输入 token',
+    cacheCreationInputTokenCount: '缓存创建输入 token',
+    cache_creation_input_tokens: '缓存创建输入 token',
+    cacheCreationInputTokensDetails: '缓存创建输入明细',
+    ephemeral5mInputTokenCount: '5 分钟缓存创建输入 token',
+    ephemeral_5m_input_tokens: '5 分钟缓存创建输入 token',
+    ephemeral1hInputTokenCount: '1 小时缓存创建输入 token',
+    ephemeral_1h_input_tokens: '1 小时缓存创建输入 token',
+    candidatesTokenCount: '输出 token',
+    completion_tokens: '输出 token',
+    output_tokens: '输出 token',
+    outputTokens: '输出 token',
+    thoughtsTokenCount: '思考 token',
+    reasoning_tokens: '推理 token',
+    totalTokenCount: '总 token',
+    total_tokens: '总 token',
+    totalTokens: '总 token'
+  };
+  return labels[key] ?? humanizeUsageKey(key);
+}
+
+function humanizeUsageKey(key: string): string {
+  const normalized = key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .trim()
+    .toLowerCase();
+  const words = normalized.split(/\s+/).filter(Boolean).map((word) => usageWordLabel(word));
+  return words.length > 0 ? words.join(' ') : key;
+}
+
+function usageWordLabel(word: string): string {
+  const labels: Record<string, string> = {
+    prompt: '输入',
+    input: '输入',
+    output: '输出',
+    completion: '输出',
+    candidate: '候选输出',
+    candidates: '输出',
+    total: '总',
+    token: 'token',
+    tokens: 'token',
+    cached: '缓存命中',
+    cache: '缓存',
+    creation: '创建',
+    read: '读取',
+    reasoning: '推理',
+    thoughts: '思考',
+    ephemeral: '临时'
+  };
+  return labels[word] ?? word;
+}
+
+function setTokenUsageTriggerRef(key: TokenUsageKind, value: TemplateRefElement): void {
+  const element = templateRefHTMLElement(value);
+  if (element) {
+    tokenUsageTriggerRefs.set(key, element);
+    return;
+  }
+  tokenUsageTriggerRefs.delete(key);
+}
+
+function setTokenUsageTooltipRef(key: TokenUsageKind, value: TemplateRefElement): void {
+  const element = templateRefHTMLElement(value);
+  if (element) {
+    tokenUsageTooltipRefs.set(key, element);
+    return;
+  }
+  tokenUsageTooltipRefs.delete(key);
+}
+
+function templateRefHTMLElement(value: TemplateRefElement): HTMLElement | undefined {
+  if (value instanceof HTMLElement) return value;
+  if (value instanceof Element) return undefined;
+  const element = value?.$el;
+  return element instanceof HTMLElement ? element : undefined;
+}
+
+function showTokenUsageTooltip(key: TokenUsageKind): void {
+  cancelTokenUsageHideTimer();
+  activeTokenUsageKey.value = key;
+  tokenUsageTooltipStyle.value = initialTokenUsageTooltipStyle();
+  attachTokenUsagePositionListeners();
+  void nextTick(() => updateTokenUsageTooltipPosition());
+}
+
+function hideTokenUsageTooltip(key: TokenUsageKind): void {
+  if (activeTokenUsageKey.value !== key) return;
+  cancelTokenUsageHideTimer();
+  tokenUsageHideTimer = window.setTimeout(() => {
+    tokenUsageHideTimer = undefined;
+    if (activeTokenUsageKey.value !== key) return;
+    closeTokenUsageTooltip();
+  }, 120);
+}
+
+function closeTokenUsageTooltip(): void {
+  activeTokenUsageKey.value = undefined;
+  tokenUsageTooltipStyle.value = {};
+  detachTokenUsagePositionListeners();
+}
+
+function cancelTokenUsageHideTimer(): void {
+  if (tokenUsageHideTimer === undefined) return;
+  window.clearTimeout(tokenUsageHideTimer);
+  tokenUsageHideTimer = undefined;
+}
+
+function initialTokenUsageTooltipStyle(): Record<string, string> {
+  const viewportWidth = viewportSize().width;
+  return {
+    left: '-9999px',
+    top: '-9999px',
+    maxWidth: `${Math.max(160, viewportWidth - 16)}px`
+  };
+}
+
+function scheduleTokenUsageTooltipPosition(): void {
+  if (tokenUsagePositionFrame !== undefined) return;
+  tokenUsagePositionFrame = window.requestAnimationFrame(() => {
+    tokenUsagePositionFrame = undefined;
+    updateTokenUsageTooltipPosition();
+  });
+}
+
+function updateTokenUsageTooltipPosition(): void {
+  const key = activeTokenUsageKey.value;
+  if (!key) return;
+
+  const trigger = tokenUsageTriggerRefs.get(key);
+  const tooltip = tokenUsageTooltipRefs.get(key);
+  if (!trigger || !tooltip) return;
+
+  const margin = 8;
+  const gap = 8;
+  const viewport = viewportSize();
+  const maxWidth = Math.max(160, viewport.width - margin * 2);
+  const triggerRect = trigger.getBoundingClientRect();
+  const tooltipRect = tooltip.getBoundingClientRect();
+  const tooltipWidth = Math.min(tooltipRect.width, maxWidth);
+
+  const tooltipHeight = tooltipRect.height;
+  const topWhenAbove = triggerRect.top - gap - tooltipHeight;
+  const topWhenBelow = triggerRect.bottom + gap;
+  const fitsAbove = topWhenAbove >= margin;
+  const fitsBelow = topWhenBelow + tooltipHeight <= viewport.height - margin;
+  const spaceAbove = triggerRect.top - margin - gap;
+  const spaceBelow = viewport.height - triggerRect.bottom - margin - gap;
+  const placeTop = fitsAbove || (!fitsBelow && spaceAbove >= spaceBelow);
+  const rawTop = placeTop ? topWhenAbove : topWhenBelow;
+
+  const left = clamp(triggerRect.right - tooltipWidth, margin, viewport.width - tooltipWidth - margin);
+  const top = clamp(
+    rawTop,
+    margin,
+    viewport.height - tooltipHeight - margin
+  );
+  const triggerCenter = triggerRect.left + triggerRect.width / 2;
+  const arrowLeft = clamp(triggerCenter - left, 12, tooltipWidth - 12);
+
+  tokenUsageTooltipPlacement.value = placeTop ? 'top' : 'bottom';
+  tokenUsageTooltipStyle.value = {
+    left: `${Math.round(left)}px`,
+    top: `${Math.round(top)}px`,
+    maxWidth: `${Math.round(maxWidth)}px`,
+    '--token-usage-arrow-left': `${Math.round(arrowLeft)}px`
+  };
+}
+
+function attachTokenUsagePositionListeners(): void {
+  if (tokenUsagePositionListenersAttached) return;
+  window.addEventListener('resize', scheduleTokenUsageTooltipPosition);
+  window.addEventListener('scroll', scheduleTokenUsageTooltipPosition, true);
+  tokenUsagePositionListenersAttached = true;
+}
+
+function detachTokenUsagePositionListeners(): void {
+  if (!tokenUsagePositionListenersAttached) return;
+  window.removeEventListener('resize', scheduleTokenUsageTooltipPosition);
+  window.removeEventListener('scroll', scheduleTokenUsageTooltipPosition, true);
+  tokenUsagePositionListenersAttached = false;
+}
+
+function viewportSize(): { width: number; height: number } {
+  return {
+    width: document.documentElement.clientWidth || window.innerWidth,
+    height: document.documentElement.clientHeight || window.innerHeight
+  };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  if (max < min) return min;
+  return Math.min(max, Math.max(min, value));
 }
 
 async function copyMessage(): Promise<void> {
@@ -207,6 +601,62 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
             :streaming="streaming"
           />
         </div>
+        <footer v-if="tokenUsageItems.length > 0" class="token-usage-row" aria-label="Token 用量">
+          <span
+            v-for="item in tokenUsageItems"
+            :key="item.key"
+            class="token-usage-item"
+            :ref="(element) => setTokenUsageTriggerRef(item.key, element)"
+            :aria-label="`${item.label} token ${item.exact}`"
+            tabindex="0"
+            @mouseenter="showTokenUsageTooltip(item.key)"
+            @mouseleave="hideTokenUsageTooltip(item.key)"
+            @focus="showTokenUsageTooltip(item.key)"
+            @blur="hideTokenUsageTooltip(item.key)"
+          >
+            <IconHash v-if="item.key === 'total'" class="token-usage-icon" stroke="2" aria-hidden="true" />
+            <IconArrowNarrowUp
+              v-else-if="item.key === 'input'"
+              class="token-usage-icon"
+              stroke="2"
+              aria-hidden="true"
+            />
+            <IconArrowNarrowDown v-else class="token-usage-icon" stroke="2" aria-hidden="true" />
+            <span class="token-usage-value">{{ item.compact }}</span>
+            <span v-if="item.suffix" class="token-usage-suffix">{{ item.suffix }}</span>
+            <span
+              :ref="(element) => setTokenUsageTooltipRef(item.key, element)"
+              class="token-usage-tooltip"
+              :class="{
+                'is-active': activeTokenUsageKey === item.key,
+                'is-placement-top': activeTokenUsageKey === item.key && tokenUsageTooltipPlacement === 'top',
+                'is-placement-bottom': activeTokenUsageKey === item.key && tokenUsageTooltipPlacement === 'bottom'
+              }"
+              :style="activeTokenUsageKey === item.key ? tokenUsageTooltipStyle : undefined"
+              role="tooltip"
+              @mouseenter="showTokenUsageTooltip(item.key)"
+              @mouseleave="hideTokenUsageTooltip(item.key)"
+            >
+              <span class="token-usage-tooltip-title">{{ item.label }} token</span>
+              <span class="token-usage-tooltip-row">
+                <span class="token-usage-tooltip-label">精确值</span>
+                <span class="token-usage-tooltip-value">{{ item.exact }}</span>
+              </span>
+              <template v-if="item.details.length > 0">
+                <span class="token-usage-tooltip-divider" aria-hidden="true"></span>
+                <span
+                  v-for="(detail, index) in item.details"
+                  :key="`${detail.label}-${index}`"
+                  class="token-usage-tooltip-row"
+                  :class="{ 'is-nested': (detail.depth ?? 0) > 0 }"
+                >
+                  <span class="token-usage-tooltip-label">{{ detail.label }}</span>
+                  <span class="token-usage-tooltip-value">{{ detail.value }}</span>
+                </span>
+              </template>
+            </span>
+          </span>
+        </footer>
       </div>
     </div>
     <div class="message-actions" aria-label="消息操作">
@@ -459,5 +909,144 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
   font-size: var(--font-size-md);
   line-height: 1.6;
   color: var(--vscode-foreground);
+}
+
+.token-usage-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: var(--space-2);
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+  line-height: 1;
+  user-select: none;
+}
+
+.token-usage-item {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 132px;
+  color: var(--vscode-descriptionForeground);
+  opacity: 1;
+  cursor: default;
+  outline: none;
+}
+
+.token-usage-item:hover {
+  color: var(--vscode-foreground);
+}
+
+.token-usage-item:focus-visible {
+  color: var(--vscode-foreground);
+  outline: 1px solid var(--vscode-focusBorder, currentColor);
+  outline-offset: 2px;
+}
+
+.token-usage-icon {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+
+.token-usage-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.token-usage-suffix {
+  font-variant-numeric: tabular-nums;
+}
+
+.token-usage-tooltip {
+  position: fixed;
+  left: -9999px;
+  top: -9999px;
+  z-index: 1000;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 190px;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 28px));
+  padding: 8px 10px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.32));
+  border-radius: var(--radius-sm);
+  color: var(--vscode-foreground);
+  background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, var(--vscode-editor-background)));
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
+  font-size: var(--font-size-xs);
+  line-height: 1.35;
+  white-space: normal;
+  pointer-events: auto;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(3px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease,
+    visibility 120ms ease;
+}
+
+.token-usage-tooltip::after {
+  content: '';
+  position: absolute;
+  left: var(--token-usage-arrow-left, calc(100% - 14px));
+  width: 8px;
+  height: 8px;
+  background: inherit;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.token-usage-tooltip.is-active {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.token-usage-tooltip.is-placement-top::after {
+  bottom: -5px;
+  border-right: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.32));
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.32));
+}
+
+.token-usage-tooltip.is-placement-bottom::after {
+  top: -5px;
+  border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.32));
+  border-left: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.32));
+}
+
+.token-usage-tooltip-title {
+  font-weight: 600;
+  color: var(--vscode-foreground);
+}
+
+.token-usage-tooltip-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.token-usage-tooltip-row.is-nested {
+  padding-left: 10px;
+}
+
+.token-usage-tooltip-label {
+  color: var(--vscode-descriptionForeground);
+}
+
+.token-usage-tooltip-value {
+  flex: 0 0 auto;
+  color: var(--vscode-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.token-usage-tooltip-divider {
+  height: 1px;
+  margin: 2px 0;
+  background: var(--vscode-panel-border, rgba(128, 128, 128, 0.24));
 }
 </style>

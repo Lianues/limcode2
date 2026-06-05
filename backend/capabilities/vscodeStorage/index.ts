@@ -14,12 +14,19 @@ import { createVscodeStoragePaths, ensureStorageRoots } from './paths';
 import { readJson, writeJson } from './json';
 import {
   appendToolCallEventRecord,
-  loadClientStateFromStores,
+  loadClientStateSkeletonFromStores,
+  loadConversationDetailFromStores,
   removeMessageRecord,
-  saveClientStateToStores,
+  saveClientStateSkeletonToStores,
+  saveConversationDetailToStores,
   saveMessageRecord,
   saveToolCallRecord
 } from './clientStateStore';
+import {
+  loadConversationHistoryPageFromStore,
+  removeConversationHistoryEntryFromStore,
+  upsertConversationHistoryEntryInStore
+} from './conversationHistoryStore';
 
 type StoragePaths = ReturnType<typeof createVscodeStoragePaths>;
 
@@ -40,6 +47,7 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       paths.systemPromptsRootUri,
       paths.modelProfilesRootUri,
       paths.conversationsRootUri,
+      paths.conversationHistoryRootUri,
       paths.projectContextsRootUri,
       paths.conversationProjectLinksRootUri,
       paths.linksRootUri,
@@ -53,8 +61,7 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       paths.agentRunTargetLinksRootUri,
       paths.messageRunLinksRootUri,
       paths.toolCallRunLinksRootUri,
-      paths.runPoliciesRootUri,
-      paths.messageRevisionsRootUri
+      paths.runPoliciesRootUri
     ];
   }
 
@@ -62,6 +69,7 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     await ensureStorageRoots(...structuralRoots(paths), paths.settingsRootUri);
     await ensureGlobalSettingsFile(paths.settingsRootUri, 'llm');
   }
+
 
   async function loadCommonGlobalSettings(): Promise<{ section: 'common'; settings: GlobalSettingsRecord; filePath: string }> {
     return { section: 'common', settings: createGlobalSettingsRecord(context), filePath: LIMCODE_GLOBAL_STATUS_LABEL };
@@ -82,15 +90,40 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
   return {
     get paths() { return getPaths(); },
     async ensureReady() { await ensureReadyFor(getPaths()); },
-    async loadClientState() {
+    async loadClientStateSkeleton() {
       const paths = getPaths();
       await ensureReadyFor(paths);
-      return loadClientStateFromStores(paths);
+      return loadClientStateSkeletonFromStores(paths);
     },
-    async saveClientState(state) {
+    async loadConversationDetail(conversationId) {
       const paths = getPaths();
       await ensureReadyFor(paths);
-      await saveClientStateToStores(paths, state);
+      return loadConversationDetailFromStores(paths, conversationId);
+    },
+    async saveClientStateSkeleton(state) {
+      const paths = getPaths();
+      await ensureReadyFor(paths);
+      await saveClientStateSkeletonToStores(paths, state);
+    },
+    async saveConversationDetail(conversationId, state) {
+      const paths = getPaths();
+      await ensureReadyFor(paths);
+      await saveConversationDetailToStores(paths, conversationId, state);
+    },
+    async loadConversationHistoryPage(request) {
+      const paths = getPaths();
+      await ensureReadyFor(paths);
+      return loadConversationHistoryPageFromStore(paths, request);
+    },
+    async upsertConversationHistoryEntry(entry) {
+      const paths = getPaths();
+      await ensureReadyFor(paths);
+      await upsertConversationHistoryEntryInStore(paths, entry);
+    },
+    async removeConversationHistoryEntry(conversationId) {
+      const paths = getPaths();
+      await ensureReadyFor(paths);
+      await removeConversationHistoryEntryFromStore(paths, conversationId);
     },
     async saveMessageSnapshot(conversationId, message) {
       const paths = getPaths();
@@ -150,5 +183,3 @@ function conversationSettingsUri(paths: StoragePaths, conversationId: string, se
 function safeFileName(input: string): string {
   return input.replace(/[^a-zA-Z0-9_.-]+/g, '_');
 }
-
-

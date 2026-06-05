@@ -600,6 +600,7 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
             :parts="message.content.parts"
             :markdown="message.role !== 'user'"
             :streaming="streaming"
+            :message-id="message.id"
           />
         </div>
         <footer v-if="tokenUsageItems.length > 0" class="token-usage-row" aria-label="Token 用量">
@@ -905,6 +906,7 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
   color: var(--vscode-descriptionForeground);
   border-style: dashed;
 }
+
 
 .floor-body {
   font-size: var(--font-size-md);

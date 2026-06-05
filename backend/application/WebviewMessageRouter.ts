@@ -30,6 +30,7 @@ export interface WebviewMessageRouterDeps {
   conversationSettingsBridge: ConversationSettingsBridge;
   isHydrated: () => boolean;
   requestSnapshot: (conversationId?: string) => void;
+  ensureConversationDetailLoaded: (conversationId: string) => Promise<void>;
   getProjectFolderCandidates: () => ProjectFolderCandidateRecord[];
   setConversationProjectFolder: (input: SetConversationProjectFolderInput) => boolean;
 }
@@ -93,8 +94,7 @@ export class WebviewMessageRouter {
         this.deps.world.enqueue({ type: AgentRunEventType.MarkStale, payload: message.payload });
         break;
       case BridgeMessageType.ClientResync:
-        this.subscribeRequestedStream(clientId, message.payload?.streamId, message.payload?.conversationId);
-        this.deps.requestSnapshot(message.payload?.conversationId ?? conversationIdFromClientStateStreamId(message.payload?.streamId ?? ''));
+        this.handleClientResync(clientId, message.payload?.streamId, message.payload?.conversationId);
         break;
       case BridgeMessageType.GlobalSettingsGet:
         if (!message.payload) return;
@@ -177,6 +177,19 @@ export class WebviewMessageRouter {
         break;
     }
   }
+
+  private handleClientResync(clientId: BridgeClientId, streamId: string | undefined, conversationId: string | undefined): void {
+    this.subscribeRequestedStream(clientId, streamId, conversationId);
+    const requestedConversationId = conversationId ?? conversationIdFromClientStateStreamId(streamId ?? '');
+    if (!requestedConversationId) {
+      this.deps.requestSnapshot();
+      return;
+    }
+    void this.deps.ensureConversationDetailLoaded(requestedConversationId)
+      .then(() => this.deps.requestSnapshot(requestedConversationId))
+      .catch((error) => console.warn('[LimCode] Failed to lazy-load conversation detail.', error));
+  }
+
 
   private subscribeRequestedStream(clientId: BridgeClientId, streamId: string | undefined, conversationId: string | undefined): void {
     if (streamId) {

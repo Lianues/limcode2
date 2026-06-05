@@ -1,34 +1,109 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import type { ConversationHistoryPageInfo } from '@shared/protocol';
 import { onSidebarMessage, postSidebarMessage } from './sidebarHost';
-import { SIDEBAR_MESSAGE, type ProjectFolderCandidateRecord, type SidebarConversationHistoryEntry } from './types';
+import {
+  SIDEBAR_MESSAGE,
+  type ConversationHistoryScope,
+  type ProjectFolderCandidateRecord,
+  type SidebarHistoryScopeKind,
+  type SidebarConversationHistoryEntry
+} from './types';
 
 type SidebarView = 'history' | 'settings' | 'projectPicker';
+interface ScopeOption {
+  key: string;
+  label: string;
+  description?: string;
+  scopeKind: SidebarHistoryScopeKind;
+  projectFolderUri?: string;
+}
 
+const PAGE_SIZE = 50;
+const SCOPE_PAGE_SIZE = 3;
 const view = ref<SidebarView>('history');
 const entries = ref<SidebarConversationHistoryEntry[]>([]);
 const projectFolders = ref<ProjectFolderCandidateRecord[]>([]);
-const historyCountText = computed(() => `${entries.value.length} 个对话`);
+const activeScopeKind = ref<SidebarHistoryScopeKind>('currentProject');
+const activeProjectFolderUri = ref<string | undefined>();
+const currentProjectScope = ref<ConversationHistoryScope>({ kind: 'unbound' });
+const pageInfo = ref<ConversationHistoryPageInfo>();
+const scopePageIndex = ref(0);
+const historyCountText = computed(() => {
+  const total = pageInfo.value?.total ?? entries.value.length;
+  const page = pageInfo.value ? `第 ${pageInfo.value.pageIndex + 1} 页` : '当前页';
+  return `${total} 个对话 · ${page}`;
+});
+const currentScopeLabel = computed(() => currentProjectScope.value.kind === 'unbound' ? '未绑定' : '当前项目');
+const activeScopeKey = computed(() => scopeOptionKey(activeScopeKind.value, activeProjectFolderUri.value));
+const scopeOptions = computed<ScopeOption[]>(() => {
+  const options: ScopeOption[] = [
+    { key: 'currentProject', label: currentScopeLabel.value, scopeKind: 'currentProject' },
+    { key: 'all', label: '全部', scopeKind: 'all' }
+  ];
+
+  for (const folder of projectFolders.value) {
+    const path = displayProjectUri(folder.uri);
+    options.push({
+      key: scopeOptionKey('project', folder.uri),
+      label: folder.name || path,
+      description: middleEllipsis(path, 48),
+      scopeKind: 'project',
+      projectFolderUri: folder.uri
+    });
+  }
+
+  options.push({ key: 'unbound', label: '未绑定', scopeKind: 'unbound' });
+  return options;
+});
+const pagedScopeOptions = computed(() => {
+  const pages: ScopeOption[][] = [];
+  for (let index = 0; index < scopeOptions.value.length; index += SCOPE_PAGE_SIZE) {
+    pages.push(scopeOptions.value.slice(index, index + SCOPE_PAGE_SIZE));
+  }
+  return pages;
+});
+const scopePageCount = computed(() => Math.max(1, pagedScopeOptions.value.length));
+const safeScopePageIndex = computed(() => Math.min(scopePageIndex.value, scopePageCount.value - 1));
+const visibleScopeOptions = computed(() => {
+  const safeIndex = safeScopePageIndex.value;
+  return scopeOptions.value.slice(safeIndex * SCOPE_PAGE_SIZE, (safeIndex + 1) * SCOPE_PAGE_SIZE);
+});
+const activeVisibleScopeIndex = computed(() => visibleScopeOptions.value.findIndex((option) => option.key === activeScopeKey.value));
+const scopeTrackStyle = computed(() => ({
+  transform: `translateX(-${safeScopePageIndex.value * 100}%)`
+}));
+const scopeIndicatorStyle = computed(() => {
+  const index = activeVisibleScopeIndex.value;
+  return {
+    left: index >= 0 ? `calc(${(100 / SCOPE_PAGE_SIZE) * index}% + 8px)` : '8px',
+    width: `calc(${100 / SCOPE_PAGE_SIZE}% - 16px)`,
+    opacity: index >= 0 ? '1' : '0'
+  };
+});
+const canPreviousScopePage = computed(() => safeScopePageIndex.value > 0);
+const canNextScopePage = computed(() => safeScopePageIndex.value + 1 < scopePageCount.value);
 
 let disposeMessages: (() => void) | undefined;
-let refreshTimer: number | undefined;
 
 onMounted(() => {
   disposeMessages = onSidebarMessage((message) => {
     if (message.type !== SIDEBAR_MESSAGE.state) return;
-    entries.value = Array.isArray(message.entries) ? message.entries : [];
+    const nextScopeKind = message.activeScopeKind ?? activeScopeKind.value;
+    entries.value = Array.isArray(message.history?.entries) ? message.history.entries : [];
+    pageInfo.value = message.history?.pageInfo;
+    activeScopeKind.value = nextScopeKind;
+    if (message.activeProjectFolderUri !== undefined) activeProjectFolderUri.value = message.activeProjectFolderUri;
+    else if (nextScopeKind !== 'project') activeProjectFolderUri.value = undefined;
+    currentProjectScope.value = message.currentProjectScope ?? currentProjectScope.value;
     projectFolders.value = Array.isArray(message.projectFolders) ? message.projectFolders : [];
+    ensureActiveScopeVisible();
   });
   postSidebarMessage({ type: SIDEBAR_MESSAGE.ready });
-  refreshTimer = window.setInterval(() => {
-    if (document.visibilityState === 'hidden') return;
-    refreshHistory();
-  }, 2500);
 });
 
 onBeforeUnmount(() => {
   disposeMessages?.();
-  if (refreshTimer !== undefined) window.clearInterval(refreshTimer);
 });
 
 function setView(next: SidebarView): void {
@@ -39,8 +114,42 @@ function openConversation(conversationId: string): void {
   postSidebarMessage({ type: SIDEBAR_MESSAGE.openConversation, conversationId });
 }
 
+function requestHistoryPage(
+  scopeKind: SidebarHistoryScopeKind = activeScopeKind.value,
+  cursor?: string,
+  projectFolderUri = activeProjectFolderUri.value
+): void {
+  postSidebarMessage({ type: SIDEBAR_MESSAGE.historyPageGet, scopeKind, projectFolderUri, cursor, limit: PAGE_SIZE });
+}
+
 function refreshHistory(): void {
-  postSidebarMessage({ type: SIDEBAR_MESSAGE.refreshConversationHistory });
+  requestHistoryPage(activeScopeKind.value, pageInfo.value?.cursor, activeProjectFolderUri.value);
+}
+
+function switchScope(option: ScopeOption): void {
+  activeScopeKind.value = option.scopeKind;
+  activeProjectFolderUri.value = option.projectFolderUri;
+  requestHistoryPage(option.scopeKind, undefined, option.projectFolderUri);
+}
+
+function nextPage(): void {
+  if (!pageInfo.value?.nextCursor) return;
+  requestHistoryPage(activeScopeKind.value, pageInfo.value.nextCursor, activeProjectFolderUri.value);
+}
+
+function previousPage(): void {
+  if (!pageInfo.value?.previousCursor) return;
+  requestHistoryPage(activeScopeKind.value, pageInfo.value.previousCursor, activeProjectFolderUri.value);
+}
+
+function nextScopePage(): void {
+  if (!canNextScopePage.value) return;
+  scopePageIndex.value += 1;
+}
+
+function previousScopePage(): void {
+  if (!canPreviousScopePage.value) return;
+  scopePageIndex.value -= 1;
 }
 
 function startNewConversation(): void {
@@ -94,6 +203,11 @@ function statusText(entry: SidebarConversationHistoryEntry): string {
   return '暂无消息';
 }
 
+function historyMeta(entry: SidebarConversationHistoryEntry): string {
+  const project = activeScopeKind.value === 'all' && entry.projectName ? `${entry.projectName} · ` : '';
+  return `${project}${entry.agentName || '默认 Agent'} · ${entry.messageCount || 0} 条消息 · ${formatTime(entry.updatedAt)}`;
+}
+
 function formatTime(value: number | undefined): string {
   if (!value) return '未开始';
   const date = new Date(value);
@@ -128,6 +242,16 @@ function middleEllipsis(value: string, maxLength: number): string {
   if (!value || value.length <= maxLength) return value || '';
   const keep = Math.max(4, Math.floor((maxLength - 3) / 2));
   return `${value.slice(0, keep)}...${value.slice(value.length - keep)}`;
+}
+
+function scopeOptionKey(scopeKind: SidebarHistoryScopeKind, projectFolderUri?: string): string {
+  return scopeKind === 'project' ? `project:${projectFolderUri ?? ''}` : scopeKind;
+}
+
+function ensureActiveScopeVisible(): void {
+  const index = scopeOptions.value.findIndex((option) => option.key === activeScopeKey.value);
+  if (index < 0) return;
+  scopePageIndex.value = Math.floor(index / SCOPE_PAGE_SIZE);
 }
 </script>
 
@@ -164,6 +288,47 @@ function middleEllipsis(value: string, maxLength: number): string {
             </svg>
           </button>
         </div>
+        <div class="history-scope-pager" aria-label="对话历史范围分页列表">
+          <button
+            type="button"
+            class="scope-page-button"
+            :disabled="!canPreviousScopePage"
+            aria-label="上一组范围"
+            title="上一组范围"
+            @click="previousScopePage"
+          >
+            ‹
+          </button>
+          <div class="scope-viewport">
+            <div class="scope-track" :style="scopeTrackStyle" role="tablist" aria-label="对话历史范围">
+              <div v-for="(page, pageIndex) in pagedScopeOptions" :key="pageIndex" class="scope-list">
+                <button
+                  v-for="option in page"
+                  :key="option.key"
+                  type="button"
+                  class="scope-tab"
+                  :class="{ active: activeScopeKey === option.key }"
+                  :title="option.description || option.label"
+                  @click="switchScope(option)"
+                >
+                  <span class="scope-tab-label">{{ option.label }}</span>
+                  <span v-if="option.description" class="scope-tab-desc">{{ option.description }}</span>
+                </button>
+              </div>
+            </div>
+            <span class="scope-indicator" :style="scopeIndicatorStyle" aria-hidden="true"></span>
+          </div>
+          <button
+            type="button"
+            class="scope-page-button"
+            :disabled="!canNextScopePage"
+            aria-label="下一组范围"
+            title="下一组范围"
+            @click="nextScopePage"
+          >
+            ›
+          </button>
+        </div>
       </div>
 
       <div class="history-list">
@@ -191,7 +356,7 @@ function middleEllipsis(value: string, maxLength: number): string {
             </div>
             <div class="history-preview">{{ entry.preview || '暂无消息，点击继续对话。' }}</div>
             <div class="history-meta">
-              <span>{{ entry.agentName || '默认 Agent' }} · {{ entry.messageCount || 0 }} 条消息 · {{ formatTime(entry.updatedAt) }}</span>
+              <span>{{ historyMeta(entry) }}</span>
               <span v-if="entry.isRunning" class="run-badge" :title="`后台任务：${entry.runStatusLabel || '执行中'}`">
                 <span class="run-badge-dot" aria-hidden="true"></span>
                 <span>{{ entry.runStatusLabel || '后台执行中' }}</span>
@@ -215,6 +380,12 @@ function middleEllipsis(value: string, maxLength: number): string {
       <div v-if="!entries.length" class="empty-state">
         <p class="empty-state-title">暂无对话历史</p>
         <p class="empty-state-desc">点击“新对话”创建一个独立会话空间。</p>
+      </div>
+
+      <div class="history-pagination" aria-label="对话历史分页">
+        <button type="button" class="secondary-button" :disabled="!pageInfo?.hasPrevious" @click="previousPage">上一页</button>
+        <span>第 {{ (pageInfo?.pageIndex ?? 0) + 1 }} 页</span>
+        <button type="button" class="secondary-button" :disabled="!pageInfo?.hasNext" @click="nextPage">下一页</button>
       </div>
     </section>
 

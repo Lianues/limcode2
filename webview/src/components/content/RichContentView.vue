@@ -1,15 +1,22 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { ContentPart } from '@shared/protocol';
-import { partViewComponent, toRenderNodes } from './partRegistry';
+import { partViewComponent, toRenderNodes, type RichRenderNode } from './partRegistry';
 
 const props = defineProps<{
   parts: ContentPart[];
   streaming?: boolean;
   markdown?: boolean;
+  messageId?: string;
 }>();
 
 const nodes = computed(() => toRenderNodes(props.parts));
+
+function nodeStreaming(node: RichRenderNode, index: number): boolean {
+  if (!props.streaming || index !== nodes.value.length - 1) return false;
+  if (node.kind === 'thought') return node.props.thoughtOpen === true;
+  return node.kind === 'text';
+}
 </script>
 
 <template>
@@ -20,11 +27,12 @@ const nodes = computed(() => toRenderNodes(props.parts));
         v-for="(node, index) in nodes"
         :key="node.key"
         v-bind="node.props"
+        :message-id="messageId"
         :markdown="markdown"
-        :streaming="streaming && index === nodes.length - 1"
+        :streaming="nodeStreaming(node, index)"
       />
     </template>
-    <!-- 流式中但还没有可见内容：渲染一个仅含光标的空文本节点。 -->
+    <!-- 流式中但还没有任何内容块：渲染一个仅含光标的空文本节点。 -->
     <component
       :is="partViewComponent('text')"
       v-else-if="streaming"

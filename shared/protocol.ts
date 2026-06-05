@@ -129,6 +129,38 @@ export interface SidebarConversationHistoryEntry {
   isRunning: boolean;
   runStatus?: AgentRunStatus;
   runStatusLabel?: string;
+  projectFolderUri?: string;
+  projectName?: string;
+}
+
+export type ConversationHistoryScope =
+  | { kind: 'project'; folderUri: string }
+  | { kind: 'unbound' }
+  | { kind: 'all' };
+
+export type SidebarHistoryScopeKind = 'currentProject' | 'project' | 'unbound' | 'all';
+
+export interface ConversationHistoryPageRequest {
+  scope: ConversationHistoryScope;
+  cursor?: string;
+  limit?: number;
+}
+
+export interface ConversationHistoryPageInfo {
+  cursor?: string;
+  nextCursor?: string;
+  previousCursor?: string;
+  pageIndex: number;
+  pageSize: number;
+  total: number;
+  hasNext: boolean;
+  hasPrevious: boolean;
+}
+
+export interface ConversationHistoryPageRecord {
+  scope: ConversationHistoryScope;
+  entries: SidebarConversationHistoryEntry[];
+  pageInfo: ConversationHistoryPageInfo;
 }
 
 export type MsgRole = 'user' | 'model';

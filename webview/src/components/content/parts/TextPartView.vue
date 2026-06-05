@@ -1,11 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
+import { computed, onBeforeUnmount, shallowRef, watch } from 'vue';
+import { useSmoothStreamingText } from '../useSmoothStreamingText';
 import { renderMarkdown } from '../markdown/markdownRenderer';
 
 const STREAM_RENDER_INTERVAL_MS = 64;
-const STREAM_CATCHUP_FRAMES = 14;
-const STREAM_MAX_CHARS_PER_FRAME = 32;
-const REPLACE_OUT_MS = 90;
 
 const props = withDefaults(
   defineProps<{
@@ -16,27 +14,20 @@ const props = withDefaults(
   { streaming: false, markdown: false }
 );
 
-const displayedText = shallowRef('');
+const { displayedText, replacing: replaceAnimating } = useSmoothStreamingText(
+  () => props.text,
+  () => props.streaming,
+  { animateReplace: true }
+);
 const renderedHtml = shallowRef('');
-const replaceAnimating = ref(false);
 const markdownReady = computed(() => props.markdown);
 
 let renderVersion = 0;
 let lastRenderTime = 0;
 let timeoutId: number | undefined;
 let frameId: number | undefined;
-let streamFrameId: number | undefined;
-let lastStreamFrameTime = 0;
-let replaceTimerId: number | undefined;
-let replaceFrameId: number | undefined;
 let scheduled = false;
 let disposed = false;
-
-watch(
-  () => [props.text, props.streaming] as const,
-  (_next, previous) => syncDisplayedText(previous?.[1] ?? false),
-  { immediate: true }
-);
 
 watch(
   () => [displayedText.value, props.streaming, props.markdown] as const,
@@ -47,108 +38,7 @@ watch(
 onBeforeUnmount(() => {
   disposed = true;
   clearScheduledRender();
-  clearStreamFrame();
-  clearReplaceTransition();
 });
-
-function syncDisplayedText(wasStreaming: boolean): void {
-  const target = props.text;
-
-  if (!props.streaming) {
-    clearStreamFrame();
-    replaceDisplayedText(target, !wasStreaming);
-    return;
-  }
-
-  clearReplaceTransition();
-  const current = displayedText.value;
-  if (!target.startsWith(current) || current.length > target.length) {
-    displayedText.value = target;
-    clearStreamFrame();
-    return;
-  }
-
-  scheduleStreamFrame();
-}
-
-function scheduleStreamFrame(): void {
-  if (streamFrameId !== undefined) return;
-  lastStreamFrameTime ||= performance.now();
-  streamFrameId = window.requestAnimationFrame(tickDisplayedText);
-}
-
-function tickDisplayedText(now: number): void {
-  streamFrameId = undefined;
-
-  if (disposed) return;
-  if (!props.streaming) {
-    displayedText.value = props.text;
-    return;
-  }
-
-  const current = displayedText.value;
-  const target = props.text;
-  if (!target.startsWith(current) || current.length > target.length) {
-    displayedText.value = target;
-    return;
-  }
-
-  const remaining = target.length - current.length;
-  if (remaining <= 0) return;
-
-  const elapsed = Math.max(16, now - lastStreamFrameTime);
-  lastStreamFrameTime = now;
-  const timeStep = Math.max(1, Math.floor(elapsed / 16));
-  const catchupStep = Math.ceil(remaining / STREAM_CATCHUP_FRAMES);
-  const step = Math.min(STREAM_MAX_CHARS_PER_FRAME, Math.max(timeStep, catchupStep));
-  displayedText.value = target.slice(0, current.length + step);
-
-  if (displayedText.value.length < target.length) scheduleStreamFrame();
-}
-
-function clearStreamFrame(): void {
-  if (streamFrameId !== undefined) {
-    window.cancelAnimationFrame(streamFrameId);
-    streamFrameId = undefined;
-  }
-  lastStreamFrameTime = 0;
-}
-
-function replaceDisplayedText(target: string, animate: boolean): void {
-  clearReplaceTransition();
-
-  const current = displayedText.value;
-  if (current === target) return;
-
-  if (!animate || !current || !target) {
-    displayedText.value = target;
-    return;
-  }
-
-  replaceAnimating.value = true;
-  replaceTimerId = window.setTimeout(() => {
-    replaceTimerId = undefined;
-    displayedText.value = target;
-    replaceFrameId = window.requestAnimationFrame(() => {
-      replaceFrameId = undefined;
-      replaceAnimating.value = false;
-    });
-  }, REPLACE_OUT_MS);
-}
-
-function clearReplaceTransition(): void {
-  if (replaceTimerId !== undefined) {
-    window.clearTimeout(replaceTimerId);
-    replaceTimerId = undefined;
-  }
-
-  if (replaceFrameId !== undefined) {
-    window.cancelAnimationFrame(replaceFrameId);
-    replaceFrameId = undefined;
-  }
-
-  replaceAnimating.value = false;
-}
 
 function scheduleMarkdownRender(): void {
   renderVersion += 1;

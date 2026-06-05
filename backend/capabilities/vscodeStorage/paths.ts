@@ -9,11 +9,11 @@ import {
   AGENT_RUN_TARGET_LINKS_ROOT_DIR,
   AGENTS_ROOT_DIR,
   APPROVAL_POLICIES_ROOT_DIR,
+  CONVERSATION_HISTORY_ROOT_DIR,
   CONVERSATIONS_ROOT_DIR,
   CONVERSATION_PROJECT_LINKS_ROOT_DIR,
   INDEX_FILE,
   LLM_SETTINGS_FILE,
-  MESSAGE_REVISIONS_ROOT_DIR,
   MESSAGE_RUN_LINKS_ROOT_DIR,
   MODE_APPROVAL_POLICY_LINKS_ROOT_DIR,
   MODE_MODEL_PROFILE_LINKS_ROOT_DIR,
@@ -43,6 +43,8 @@ export interface VscodeStorageUris {
   modelProfilesIndexUri: vscode.Uri;
   conversationsRootUri: vscode.Uri;
   conversationsIndexUri: vscode.Uri;
+  conversationHistoryRootUri: vscode.Uri;
+  conversationHistoryIndexUri: vscode.Uri;
   projectContextsRootUri: vscode.Uri;
   projectContextsIndexUri: vscode.Uri;
   conversationProjectLinksRootUri: vscode.Uri;
@@ -71,8 +73,6 @@ export interface VscodeStorageUris {
   toolCallRunLinksIndexUri: vscode.Uri;
   runPoliciesRootUri: vscode.Uri;
   runPoliciesIndexUri: vscode.Uri;
-  messageRevisionsRootUri: vscode.Uri;
-  messageRevisionsIndexUri: vscode.Uri;
   settingsRootUri: vscode.Uri;
   llmSettingsUri: vscode.Uri;
 }
@@ -90,6 +90,7 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const systemPrompts = root(globalStorageUri, SYSTEM_PROMPTS_ROOT_DIR);
   const modelProfiles = root(globalStorageUri, MODEL_PROFILES_ROOT_DIR);
   const conversations = root(globalStorageUri, CONVERSATIONS_ROOT_DIR);
+  const conversationHistory = root(globalStorageUri, CONVERSATION_HISTORY_ROOT_DIR);
   const projectContexts = root(globalStorageUri, PROJECT_CONTEXTS_ROOT_DIR);
   const conversationProjectLinks = root(globalStorageUri, CONVERSATION_PROJECT_LINKS_ROOT_DIR);
   const links = root(globalStorageUri, AGENT_CONVERSATION_LINKS_ROOT_DIR);
@@ -104,7 +105,6 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const messageRunLinks = root(globalStorageUri, MESSAGE_RUN_LINKS_ROOT_DIR);
   const toolCallRunLinks = root(globalStorageUri, TOOL_CALL_RUN_LINKS_ROOT_DIR);
   const runPolicies = root(globalStorageUri, RUN_POLICIES_ROOT_DIR);
-  const messageRevisions = root(globalStorageUri, MESSAGE_REVISIONS_ROOT_DIR);
   const settingsRootUri = vscode.Uri.joinPath(globalStorageUri, SETTINGS_ROOT_DIR);
   const llmSettingsUri = vscode.Uri.joinPath(settingsRootUri, LLM_SETTINGS_FILE);
 
@@ -139,6 +139,10 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     conversationsRootPath: conversations.rootUri.fsPath,
     conversationsIndexUri: conversations.indexUri,
     conversationsIndexPath: conversations.indexUri.fsPath,
+    conversationHistoryRootUri: conversationHistory.rootUri,
+    conversationHistoryRootPath: conversationHistory.rootUri.fsPath,
+    conversationHistoryIndexUri: conversationHistory.indexUri,
+    conversationHistoryIndexPath: conversationHistory.indexUri.fsPath,
     projectContextsRootUri: projectContexts.rootUri,
     projectContextsRootPath: projectContexts.rootUri.fsPath,
     projectContextsIndexUri: projectContexts.indexUri,
@@ -195,10 +199,6 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     runPoliciesRootPath: runPolicies.rootUri.fsPath,
     runPoliciesIndexUri: runPolicies.indexUri,
     runPoliciesIndexPath: runPolicies.indexUri.fsPath,
-    messageRevisionsRootUri: messageRevisions.rootUri,
-    messageRevisionsRootPath: messageRevisions.rootUri.fsPath,
-    messageRevisionsIndexUri: messageRevisions.indexUri,
-    messageRevisionsIndexPath: messageRevisions.indexUri.fsPath,
     settingsRootUri,
     settingsRootPath: settingsRootUri.fsPath,
     llmSettingsUri,

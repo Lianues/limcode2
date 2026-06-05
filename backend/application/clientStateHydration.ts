@@ -41,10 +41,10 @@ import {
 import type { ClientState, MessageRecord, ToolCallEventRecord, ToolCallRecord } from '../../shared/protocol';
 import { createDefaultAgentRecord, DEFAULT_AGENT_NAME, DEFAULT_CONVERSATION_ID } from './defaults';
 
-export function hydrateClientState(world: World, state: ClientState): boolean {
+export function hydrateClientStateSkeleton(world: World, state: ClientState): boolean {
   resetMessageSeqState();
 
-  const hasAnyState = state.agents.length > 0 || state.conversations.length > 0 || state.messages.length > 0 || state.agentModes.length > 0;
+  const hasAnyState = state.agents.length > 0 || state.conversations.length > 0 || state.agentModes.length > 0;
   if (!hasAnyState) return false;
 
   const defaultAgent = createDefaultAgentRecord();
@@ -53,6 +53,7 @@ export function hydrateClientState(world: World, state: ClientState): boolean {
 
   const agentEntities = new Map<string, Entity>();
   for (const agent of agents) {
+    if (agentEntities.has(agent.id)) continue;
     const entity = world.spawn();
     agentEntities.set(agent.id, entity);
     world.add(entity, Agent, { id: agent.id, name: agent.name || DEFAULT_AGENT_NAME });
@@ -60,40 +61,11 @@ export function hydrateClientState(world: World, state: ClientState): boolean {
     world.add(entity, AgentStatus, { status: agent.status ?? 'idle' });
   }
 
-  const modeEntities = new Map<string, Entity>();
-  for (const record of state.agentModes) {
-    const entity = world.spawn();
-    modeEntities.set(record.id, entity);
-    world.add(entity, AgentMode, record);
-  }
-
-  const toolPolicyEntities = new Map<string, Entity>();
-  for (const record of state.toolPolicies) {
-    const entity = world.spawn();
-    toolPolicyEntities.set(record.id, entity);
-    world.add(entity, ToolPolicy, record);
-  }
-
-  const approvalPolicyEntities = new Map<string, Entity>();
-  for (const record of state.approvalPolicies) {
-    const entity = world.spawn();
-    approvalPolicyEntities.set(record.id, entity);
-    world.add(entity, ApprovalPolicy, record);
-  }
-
-  const systemPromptEntities = new Map<string, Entity>();
-  for (const record of state.systemPrompts) {
-    const entity = world.spawn();
-    systemPromptEntities.set(record.id, entity);
-    world.add(entity, SystemPrompt, record);
-  }
-
-  const modelProfileEntities = new Map<string, Entity>();
-  for (const record of state.modelProfiles) {
-    const entity = world.spawn();
-    modelProfileEntities.set(record.id, entity);
-    world.add(entity, ModelProfile, record);
-  }
+  const modeEntities = hydrateRecords(world, state.agentModes, AgentMode);
+  const toolPolicyEntities = hydrateRecords(world, state.toolPolicies, ToolPolicy);
+  const approvalPolicyEntities = hydrateRecords(world, state.approvalPolicies, ApprovalPolicy);
+  const systemPromptEntities = hydrateRecords(world, state.systemPrompts, SystemPrompt);
+  const modelProfileEntities = hydrateRecords(world, state.modelProfiles, ModelProfile);
 
   for (const link of state.agentModeLinks) spawnLink(world, agentEntities, modeEntities, link, AgentModeLink, 'agent', 'mode');
   for (const link of state.modeToolPolicyLinks) spawnLink(world, modeEntities, toolPolicyEntities, link, ModeToolPolicyLink, 'mode', 'toolPolicy');
@@ -117,13 +89,7 @@ export function hydrateClientState(world: World, state: ClientState): boolean {
     world.add(entity, ConversationReuseLink, { id: record.id, key: record.key, conversation, ...(agent !== undefined ? { agent } : {}), createdAt: now, updatedAt: now });
   }
 
-
-  const projectContextEntities = new Map<string, Entity>();
-  for (const record of state.projectContexts ?? []) {
-    const entity = world.spawn();
-    projectContextEntities.set(record.id, entity);
-    world.add(entity, ProjectContext, record);
-  }
+  const projectContextEntities = hydrateRecords(world, state.projectContexts ?? [], ProjectContext);
 
   for (const link of state.conversationProjectLinks ?? []) {
     const conversation = conversationEntities.get(link.conversationId);
@@ -149,71 +115,99 @@ export function hydrateClientState(world: World, state: ClientState): boolean {
     world.add(entity, AgentConversationLink, { id: link.id, agent, conversation, role: link.role, createdAt: now, updatedAt: now });
   }
 
-  const messageEntities = new Map<string, Entity>();
-  for (const record of state.messages) {
-    const conversation = conversationEntities.get(record.conversationId);
-    if (conversation === undefined) continue;
+  for (const record of state.conversationBranchLinks ?? []) {
+    const sourceConversation = conversationEntities.get(record.sourceConversationId);
+    const targetConversation = conversationEntities.get(record.targetConversationId);
+    if (sourceConversation === undefined || targetConversation === undefined) continue;
+    const entity = world.spawn();
+    const now = Date.now();
+    world.add(entity, ConversationBranchLink, { id: record.id, sourceConversation, targetConversation, kind: record.kind, createdAt: now, updatedAt: now });
+  }
+
+  return true;
+}
+
+
+export function hydrateConversationDetail(world: World, state: ClientState, conversationId: string): boolean {
+  const conversationEntities = existingRecords(world, Conversation);
+  const conversation = conversationEntities.get(conversationId);
+  if (conversation === undefined) return false;
+
+  const agentEntities = existingRecords(world, Agent);
+  const modeEntities = existingRecords(world, AgentMode);
+  const toolPolicyEntities = existingRecords(world, ToolPolicy);
+  const approvalPolicyEntities = existingRecords(world, ApprovalPolicy);
+  const systemPromptEntities = existingRecords(world, SystemPrompt);
+  const modelProfileEntities = existingRecords(world, ModelProfile);
+
+  const messageEntities = existingRecords(world, Message);
+  for (const record of state.messages.filter((message) => message.conversationId === conversationId)) {
+    if (messageEntities.has(record.id)) continue;
     const entity = spawnHydratedMessage(world, conversation, record);
     messageEntities.set(record.id, entity);
   }
 
-  const revisionEntities = new Map<string, Entity>();
+  const revisionEntities = existingRecords(world, MessageRevision);
   for (const record of state.messageRevisions ?? []) {
     const message = messageEntities.get(record.messageId);
-    if (message === undefined) continue;
+    if (message === undefined || revisionEntities.has(record.id)) continue;
     const entity = world.spawn();
     revisionEntities.set(record.id, entity);
     world.add(entity, MessageRevision, { id: record.id, content: record.content, createdAt: record.createdAt, reason: record.reason });
     world.add(entity, PartOf, { parent: message });
   }
+
+  const currentRevisionLinkIds = existingIds(world, MessageCurrentRevisionLink);
   for (const record of state.messageCurrentRevisionLinks ?? []) {
+    if (currentRevisionLinkIds.has(record.id)) continue;
     const message = messageEntities.get(record.messageId);
     const revision = revisionEntities.get(record.revisionId);
     if (message === undefined || revision === undefined) continue;
     const entity = world.spawn();
+    currentRevisionLinkIds.add(record.id);
     world.add(entity, MessageCurrentRevisionLink, { id: record.id, message, revision });
   }
 
-  for (const record of state.conversationBranchLinks ?? []) {
-    const sourceConversation = conversationEntities.get(record.sourceConversationId);
-    const targetConversation = conversationEntities.get(record.targetConversationId);
-    if (sourceConversation === undefined || targetConversation === undefined) continue;
-    const sourceRevision = record.sourceRevisionId ? revisionEntities.get(record.sourceRevisionId) : undefined;
-    const entity = world.spawn();
-    const now = Date.now();
-    world.add(entity, ConversationBranchLink, { id: record.id, sourceConversation, targetConversation, ...(sourceRevision !== undefined ? { sourceRevision } : {}), kind: record.kind, createdAt: now, updatedAt: now });
-  }
-
-
-  const toolCallEntities = new Map<string, Entity>();
+  const toolCallEntities = existingRecords(world, ToolCall);
   for (const record of state.toolCalls) {
+    if (toolCallEntities.has(record.id)) continue;
     const entity = spawnHydratedToolCall(world, messageEntities, record);
     if (entity !== undefined) toolCallEntities.set(record.id, entity);
   }
-  for (const record of state.toolCallEvents ?? []) spawnHydratedToolCallEvent(world, toolCallEntities, record);
 
-  const runEntities = new Map<string, Entity>();
-  for (const record of state.agentRuns ?? []) {
-    const entity = world.spawn();
-    runEntities.set(record.id, entity);
-    world.add(entity, AgentRun, record);
+  const toolCallEventIds = existingIds(world, ToolCallEvent);
+  for (const record of state.toolCallEvents ?? []) {
+    if (toolCallEventIds.has(record.id)) continue;
+    spawnHydratedToolCallEvent(world, toolCallEntities, record);
+    toolCallEventIds.add(record.id);
   }
 
-  const conversationPolicyEntities = hydrateRecords(world, state.runConversationPolicies, RunConversationPolicy);
-  const contextPolicyEntities = hydrateRecords(world, state.runContextPolicies, RunContextPolicy);
-  const deliveryPolicyEntities = new Map<string, Entity>();
+  const runEntities = hydrateRecordsUnique(world, state.agentRuns ?? [], AgentRun);
+  const conversationPolicyEntities = hydrateRecordsUnique(world, state.runConversationPolicies, RunConversationPolicy);
+  const contextPolicyEntities = hydrateRecordsUnique(world, state.runContextPolicies, RunContextPolicy);
+  const deliveryPolicyEntities = existingRecords(world, RunDeliveryPolicy);
   for (const record of state.runDeliveryPolicies ?? []) {
+    if (deliveryPolicyEntities.has(record.id)) continue;
     const entity = world.spawn();
     deliveryPolicyEntities.set(record.id, entity);
-    world.add(entity, RunDeliveryPolicy, { id: record.id, mode: record.mode, includeTranscript: record.includeTranscript, ...(record.targetConversationId ? { targetConversation: conversationEntities.get(record.targetConversationId) } : {}), ...(record.targetToolCallId ? { targetToolCall: toolCallEntities.get(record.targetToolCallId) } : {}) });
+    world.add(entity, RunDeliveryPolicy, {
+      id: record.id,
+      mode: record.mode,
+      includeTranscript: record.includeTranscript,
+      ...(record.targetConversationId ? { targetConversation: conversationEntities.get(record.targetConversationId) } : {}),
+      ...(record.targetToolCallId ? { targetToolCall: toolCallEntities.get(record.targetToolCallId) } : {})
+    });
   }
-  const editPolicyEntities = hydrateRecords(world, state.runEditPolicies, RunEditPolicy);
+  const editPolicyEntities = hydrateRecordsUnique(world, state.runEditPolicies, RunEditPolicy);
 
+  const sourceLinkIds = existingIds(world, AgentRunSourceLink);
   for (const link of state.agentRunSourceLinks ?? []) {
+    if (sourceLinkIds.has(link.id)) continue;
     const run = runEntities.get(link.runId);
     if (run === undefined) continue;
     const entity = world.spawn();
     const now = Date.now();
+    sourceLinkIds.add(link.id);
     world.add(entity, AgentRunSourceLink, {
       id: link.id,
       run,
@@ -227,14 +221,18 @@ export function hydrateClientState(world: World, state: ClientState): boolean {
       updatedAt: now
     });
   }
+
+  const targetLinkIds = existingIds(world, AgentRunTargetLink);
   for (const link of state.agentRunTargetLinks ?? []) {
+    if (targetLinkIds.has(link.id)) continue;
     const run = runEntities.get(link.runId);
     const agent = agentEntities.get(link.agentId);
-    const conversation = conversationEntities.get(link.conversationId);
-    if (run === undefined || agent === undefined || conversation === undefined) continue;
+    const targetConversation = conversationEntities.get(link.conversationId);
+    if (run === undefined || agent === undefined || targetConversation === undefined) continue;
     const entity = world.spawn();
     const now = Date.now();
-    world.add(entity, AgentRunTargetLink, { id: link.id, run, agent, conversation, role: link.role, createdAt: now, updatedAt: now });
+    targetLinkIds.add(link.id);
+    world.add(entity, AgentRunTargetLink, { id: link.id, run, agent, conversation: targetConversation, role: link.role, createdAt: now, updatedAt: now });
   }
 
   for (const link of state.messageRunLinks ?? []) spawnRunLink(world, messageEntities, runEntities, link, MessageRunLink, 'message', 'run');
@@ -249,13 +247,16 @@ export function hydrateClientState(world: World, state: ClientState): boolean {
   for (const link of state.runDeliveryPolicyLinks ?? []) spawnRunLink(world, runEntities, deliveryPolicyEntities, link, RunDeliveryPolicyLink, 'run', 'policy');
   for (const link of state.runEditPolicyLinks ?? []) spawnRunLink(world, runEntities, editPolicyEntities, link, RunEditPolicyLink, 'run', 'policy');
 
+  const inputRevisionIds = existingIds(world, AgentRunInputRevision);
   for (const record of state.agentRunInputRevisions ?? []) {
+    if (inputRevisionIds.has(record.id)) continue;
     const run = runEntities.get(record.runId);
-    const conversation = conversationEntities.get(record.conversationId);
+    const inputConversation = conversationEntities.get(record.conversationId);
     const revision = revisionEntities.get(record.revisionId);
-    if (run === undefined || conversation === undefined || revision === undefined) continue;
+    if (run === undefined || inputConversation === undefined || revision === undefined) continue;
     const entity = world.spawn();
-    world.add(entity, AgentRunInputRevision, { id: record.id, run, conversation, revision });
+    inputRevisionIds.add(record.id);
+    world.add(entity, AgentRunInputRevision, { id: record.id, run, conversation: inputConversation, revision });
   }
 
   return true;
@@ -321,7 +322,32 @@ function hydrateRecords<T extends { id: string }>(world: World, records: T[] | u
   return entities;
 }
 
+function hydrateRecordsUnique<T extends { id: string }>(world: World, records: T[] | undefined, component: { id: symbol }): Map<string, Entity> {
+  const entities = existingRecords<T>(world, component);
+  for (const record of records ?? []) {
+    if (entities.has(record.id)) continue;
+    const entity = world.spawn();
+    entities.set(record.id, entity);
+    world.add(entity, component as never, record as never);
+  }
+  return entities;
+}
+
+function existingRecords<T extends { id: string }>(world: World, component: { id: symbol }): Map<string, Entity> {
+  const entities = new Map<string, Entity>();
+  for (const entity of world.query(component as never)) {
+    const record = world.get(entity, component as never) as T | undefined;
+    if (record?.id) entities.set(record.id, entity);
+  }
+  return entities;
+}
+
+function existingIds<T extends { id: string }>(world: World, component: { id: symbol }): Set<string> {
+  return new Set([...existingRecords<T>(world, component).keys()]);
+}
+
 function spawnLink(world: World, left: Map<string, Entity>, right: Map<string, Entity>, record: any, component: { id: symbol }, leftKey: string, rightKey: string): void {
+  if (existingIds(world, component).has(record.id)) return;
   const leftId = record[`${leftKey}Id`] as string | undefined;
   const rightId = record[`${rightKey}Id`] as string | undefined;
   if (!leftId || !rightId) return;
@@ -334,6 +360,7 @@ function spawnLink(world: World, left: Map<string, Entity>, right: Map<string, E
 }
 
 function spawnRunLink(world: World, left: Map<string, Entity>, right: Map<string, Entity>, record: any, component: { id: symbol }, leftKey: string, rightKey: string): void {
+  if (existingIds(world, component).has(record.id)) return;
   const leftId = record[`${leftKey}Id`] as string | undefined;
   const rightId = record[`${rightKey}Id`] as string | undefined;
   if (!leftId || !rightId) return;

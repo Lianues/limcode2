@@ -4,6 +4,8 @@ import type { WorldEvent } from '../ecs/types';
 import type {
   BridgeClientId,
   ClientState,
+  ConversationHistoryPageRecord,
+  ConversationHistoryPageRequest,
   ConversationSettingsSection,
   ConversationSettingsSectionValue,
   ExtensionToWebviewMessage,
@@ -112,6 +114,11 @@ export interface RuntimePaths {
   conversationsRootPath: string;
   conversationsIndexUri: vscode.Uri;
   conversationsIndexPath: string;
+  /** 侧边栏历史列表读模型根目录：<dataRoot>/conversation-history */
+  conversationHistoryRootUri: vscode.Uri;
+  conversationHistoryRootPath: string;
+  conversationHistoryIndexUri: vscode.Uri;
+  conversationHistoryIndexPath: string;
   /** 项目路径上下文数据根目录：<dataRoot>/project-contexts */
   projectContextsRootUri: vscode.Uri;
   projectContextsRootPath: string;
@@ -175,10 +182,7 @@ export interface RuntimePaths {
   runPoliciesRootPath: string;
   runPoliciesIndexUri: vscode.Uri;
   runPoliciesIndexPath: string;
-  messageRevisionsRootUri: vscode.Uri;
-  messageRevisionsRootPath: string;
-  messageRevisionsIndexUri: vscode.Uri;
-  messageRevisionsIndexPath: string;
+
   /** 通用设置根目录：<dataRoot>/settings */
   settingsRootUri: vscode.Uri;
   settingsRootPath: string;
@@ -192,8 +196,13 @@ export interface StorageCapability {
   /** 当前 active data root 派生出的路径；数据目录切换后 getter 会返回新路径。 */
   readonly paths: RuntimePaths;
   ensureReady(): Promise<void>;
-  loadClientState(): Promise<ClientState | undefined>;
-  saveClientState(state: ClientState): Promise<void>;
+  loadClientStateSkeleton(): Promise<ClientState | undefined>;
+  loadConversationDetail(conversationId: string): Promise<ClientState | undefined>;
+  saveClientStateSkeleton(state: ClientState): Promise<void>;
+  saveConversationDetail(conversationId: string, state: ClientState): Promise<void>;
+  loadConversationHistoryPage(request: ConversationHistoryPageRequest): Promise<ConversationHistoryPageRecord>;
+  upsertConversationHistoryEntry(entry: import('../../shared/protocol').SidebarConversationHistoryEntry): Promise<void>;
+  removeConversationHistoryEntry(conversationId: string): Promise<void>;
   saveMessageSnapshot(conversationId: string, message: import('../../shared/protocol').MessageRecord): Promise<void>;
   removeMessage(conversationId: string, messageId: string): Promise<void>;
   saveToolCallSnapshot(conversationId: string, toolCall: ToolCallRecord): Promise<void>;

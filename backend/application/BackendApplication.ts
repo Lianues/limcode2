@@ -52,7 +52,7 @@ import {
 } from '../world/modules/agentRun/components';
 import { AgentRunEventType } from '../world/modules/agentRun/events';
 import { setConversationProject } from '../world/modules/project/bundles';
-import { ConversationProjectLink } from '../world/modules/project/components';
+import { ConversationProjectLink, ProjectContext } from '../world/modules/project/components';
 import { ToolCall, ToolCallEvent } from '../world/modules/tools/components';
 import { clientSyncPlugin, registerClientSyncSystems } from '../world/clientSync';
 import { storageProjectionPlugin } from '../world/storageProjection';
@@ -63,15 +63,18 @@ import { GLOBAL_SETTINGS_SECTIONS, createMessageId } from '../../shared/protocol
 import type {
   AgentRunStatus,
   BridgeClientId,
+  ConversationHistoryPageRecord,
+  ConversationHistoryScope,
   MessageContent,
   ProjectFolderCandidateRecord,
+  SidebarHistoryScopeKind,
   SidebarConversationHistoryEntry,
   WebviewClientMeta,
   WebviewToExtensionMessage
 } from '../../shared/protocol';
 import { createRuntimeEnv } from './createRuntimeEnv';
 import { createDefaultAgentSpawnRequest, DEFAULT_AGENT_ID, DEFAULT_CONVERSATION_ID } from './defaults';
-import { hydrateClientState } from './clientStateHydration';
+import { hydrateClientStateSkeleton, hydrateConversationDetail } from './clientStateHydration';
 import { ClientStatePersistence } from './ClientStatePersistence';
 import { GlobalSettingsBridge } from './GlobalSettingsBridge';
 import { ConversationSettingsBridge } from './ConversationSettingsBridge';
@@ -109,11 +112,15 @@ export class BackendApplication {
   private pendingGlobalSnapshot = false;
   private readonly pendingSnapshotConversationIds = new Set<string>();
   private readonly pendingHydrationMessages: Array<{ clientId: BridgeClientId; message: WebviewToExtensionMessage }> = [];
+  private readonly loadedConversationDetails = new Set<string>();
 
   public constructor(context: vscode.ExtensionContext) {
     const { env, toolSchemas } = createRuntimeEnv(context);
     this.env = env;
-    this.persistence = new ClientStatePersistence(this.world, this.env.storage);
+    this.persistence = new ClientStatePersistence(this.world, this.env.storage, {
+      isConversationDetailLoaded: (conversationId) => this.loadedConversationDetails.has(conversationId),
+      loadedConversationIds: () => this.loadedConversationDetails
+    });
     this.globalSettingsBridge = new GlobalSettingsBridge({
       storage: this.env.storage,
       webview: this.env.webview,
@@ -133,6 +140,7 @@ export class BackendApplication {
       conversationSettingsBridge: this.conversationSettingsBridge,
       isHydrated: () => this.hydrated,
       requestSnapshot: (conversationId) => this.requestSnapshot(conversationId),
+      ensureConversationDetailLoaded: (conversationId) => this.ensureConversationDetailLoaded(conversationId),
       getProjectFolderCandidates: () => this.getProjectFolderCandidates(),
       setConversationProjectFolder: (input) => this.setConversationProjectFolder(input)
     });
@@ -194,6 +202,8 @@ export class BackendApplication {
     const projectFolder = this.resolveProjectFolderForNewConversation(options.projectFolderUri);
     if (projectFolder) setConversationProject(this.world, { conversation, uri: projectFolder.uri, name: projectFolder.name });
 
+    this.loadedConversationDetails.add(conversationId);
+    void this.upsertConversationHistoryEntry(conversationId);
     this.requestSnapshot();
     return conversationId;
   }
@@ -203,6 +213,7 @@ export class BackendApplication {
     const messagesByConversation = this.collectMessagesByConversation();
     const agentNamesByConversation = this.collectAgentNamesByConversation();
     const runSummariesByConversation = this.collectRunSummariesByConversation();
+    const projectsByConversation = this.collectProjectsByConversation();
     const entries: SidebarConversationHistoryEntry[] = [];
 
     for (const entity of this.world.query(Conversation)) {
@@ -212,6 +223,7 @@ export class BackendApplication {
       const latest = latestMessage(messages);
       const agentName = agentNamesByConversation.get(entity);
       const runSummary = runSummariesByConversation.get(entity);
+      const project = projectsByConversation.get(entity);
       const entry: SidebarConversationHistoryEntry = {
         id: conversation.id,
         title: conversationTitle(conversation, messages),
@@ -222,6 +234,10 @@ export class BackendApplication {
       };
       if (latest) entry.updatedAt = latest.createdAt;
       if (agentName) entry.agentName = agentName;
+      if (project) {
+        entry.projectFolderUri = project.uri;
+        entry.projectName = project.name;
+      }
       if (runSummary) {
         entry.runStatus = runSummary.status;
         entry.runStatusLabel = runSummary.label;
@@ -240,6 +256,7 @@ export class BackendApplication {
     if (!conversation) return false;
 
     this.world.add(entity, Conversation, { ...conversation, title: normalizeConversationTitle(title) });
+    void this.upsertConversationHistoryEntry(conversationId);
     this.requestSnapshot();
     this.requestSnapshot(conversationId);
     return true;
@@ -257,6 +274,8 @@ export class BackendApplication {
     for (const target of cascade) {
       this.world.despawn(target);
     }
+    this.loadedConversationDetails.delete(conversationId);
+    void this.env.storage.removeConversationHistoryEntry(conversationId);
     this.requestSnapshot();
     this.requestSnapshot(conversationId);
     return true;
@@ -294,6 +313,7 @@ export class BackendApplication {
       uri,
       name: input.name ?? candidate?.name ?? projectFolderNameFromUri(uri)
     });
+    void this.upsertConversationHistoryEntry(input.conversationId);
     this.requestSnapshot();
     this.requestSnapshot(input.conversationId);
     return true;
@@ -309,6 +329,43 @@ export class BackendApplication {
     this.webviewClients.register(clientId, meta);
     return clientId;
   }
+
+  public async ensureConversationDetailLoaded(conversationId: string): Promise<void> {
+    if (!conversationId || this.loadedConversationDetails.has(conversationId)) return;
+    const detail = await this.env.storage.loadConversationDetail(conversationId);
+    if (detail) hydrateConversationDetail(this.world, detail, conversationId);
+    this.loadedConversationDetails.add(conversationId);
+  }
+
+  public getCurrentProjectHistoryScope(): ConversationHistoryScope {
+    const activeEditorUri = vscode.window.activeTextEditor?.document.uri;
+    const activeFolder = activeEditorUri ? vscode.workspace.getWorkspaceFolder(activeEditorUri) : undefined;
+    if (activeFolder) return { kind: 'project', folderUri: activeFolder.uri.toString() };
+
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (folders.length > 0) return { kind: 'project', folderUri: folders[0].uri.toString() };
+    return { kind: 'unbound' };
+  }
+
+  public async getConversationHistoryPage(input: { scopeKind: SidebarHistoryScopeKind; projectFolderUri?: string; cursor?: string; limit?: number }): Promise<ConversationHistoryPageRecord> {
+    const scope = this.resolveHistoryScope(input.scopeKind, input.projectFolderUri);
+    return this.env.storage.loadConversationHistoryPage({ scope, cursor: input.cursor, limit: input.limit });
+  }
+
+  private resolveHistoryScope(scopeKind: SidebarHistoryScopeKind, projectFolderUri: string | undefined): ConversationHistoryScope {
+    if (scopeKind === 'all') return { kind: 'all' };
+    if (scopeKind === 'unbound') return { kind: 'unbound' };
+    if (scopeKind === 'project' && projectFolderUri?.trim()) return { kind: 'project', folderUri: projectFolderUri.trim() };
+    return this.getCurrentProjectHistoryScope();
+  }
+
+
+  private async upsertConversationHistoryEntry(conversationId: string): Promise<void> {
+    const entry = this.getConversationHistoryEntries().find((candidate) => candidate.id === conversationId);
+    if (!entry) return;
+    await this.env.storage.upsertConversationHistoryEntry(entry);
+  }
+
 
   public waitUntilHydrated(): Promise<void> {
     return this.hydrated ? Promise.resolve() : this.hydratedReady;
@@ -336,8 +393,8 @@ export class BackendApplication {
   private async initializeClientState(): Promise<void> {
     try {
       await this.env.storage.ensureReady();
-      const restored = await this.env.storage.loadClientState();
-      if (restored && hydrateClientState(this.world, restored)) {
+      const restored = await this.env.storage.loadClientStateSkeleton();
+      if (restored && hydrateClientStateSkeleton(this.world, restored)) {
         this.persistence.rememberPersistedState(restored);
       } else {
         requestSpawnAgent(this.world, createDefaultAgentSpawnRequest());
@@ -632,7 +689,21 @@ export class BackendApplication {
     for (const entity of this.world.query(RunModelProfileLink)) if (runs.has(this.world.get(entity, RunModelProfileLink)?.run ?? -1)) entities.add(entity);
     for (const entity of this.world.query(RunToolPolicyLink)) if (runs.has(this.world.get(entity, RunToolPolicyLink)?.run ?? -1)) entities.add(entity);
     for (const entity of this.world.query(RunApprovalPolicyLink)) if (runs.has(this.world.get(entity, RunApprovalPolicyLink)?.run ?? -1)) entities.add(entity);
+
   }
+
+  private collectProjectsByConversation(): Map<Entity, { uri: string; name: string }> {
+    const result = new Map<Entity, { uri: string; name: string }>();
+    for (const linkEntity of this.world.query(ConversationProjectLink)) {
+      const link = this.world.get(linkEntity, ConversationProjectLink);
+      if (!link || link.role !== 'primary') continue;
+      const project = this.world.get(link.projectContext, ProjectContext);
+      if (!project) continue;
+      result.set(link.conversation, { uri: project.uri, name: project.name });
+    }
+    return result;
+  }
+
 
   private collectMessagesByConversation(): Map<Entity, MessageData[]> {
     const result = new Map<Entity, MessageData[]>();

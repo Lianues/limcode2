@@ -202,7 +202,7 @@ watch(
 .conversation-composer {
   flex: 0 0 auto;
   border-top: 1px solid var(--vscode-panel-border);
-  padding: var(--space-3) 0;
+  padding: var(--space-3) 0 0;
   background-color: var(--vscode-editor-background);
 }
 </style>

@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { IconSettings } from '@tabler/icons-vue';
+import type { ProjectFolderCandidateRecord } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useChat } from '@webview/composables/useChat';
+import { bridge, BridgeMessageType } from '@webview/transport';
 
 const props = defineProps<{
   settingsOpen: boolean;
@@ -15,22 +17,123 @@ const emit = defineEmits<{
 const clientState = useClientStateStore();
 const { abortCurrentConversation } = useChat();
 
+const headerRoot = ref<HTMLElement | null>(null);
+const projectDropdownOpen = ref(false);
+const projectFolders = ref<ProjectFolderCandidateRecord[]>([]);
+const projectFoldersLoaded = ref(false);
+
 const title = computed(
   () => clientState.currentConversation?.title || clientState.currentConversationId || '正在初始化默认对话...'
 );
 const runSummary = computed(() => clientState.currentRunSummary);
 const runStatusClass = computed(() => `run-status-${runSummary.value.status ?? 'idle'}`);
+const currentProject = computed(() => clientState.currentProjectContext);
+const projectPath = computed(() => currentProject.value ? displayProjectUri(currentProject.value.uri) : '未绑定项目');
+const compactProjectPath = computed(() => middleEllipsis(projectPath.value, 58));
+const activeProjectUri = computed(() => currentProject.value?.uri ?? '');
+
+let disposeProjectFolders: (() => void) | undefined;
+
+onMounted(() => {
+  disposeProjectFolders = bridge.on(BridgeMessageType.ProjectFoldersSnapshot, (message) => {
+    projectFolders.value = message.payload?.folders ?? [];
+    projectFoldersLoaded.value = true;
+  });
+  document.addEventListener('click', onDocumentClick);
+});
+
+onBeforeUnmount(() => {
+  disposeProjectFolders?.();
+  document.removeEventListener('click', onDocumentClick);
+});
 
 function onAbort(): void {
   abortCurrentConversation();
 }
+
+function toggleProjectDropdown(): void {
+  projectDropdownOpen.value = !projectDropdownOpen.value;
+  if (projectDropdownOpen.value) requestProjectFolders();
+}
+
+function requestProjectFolders(): void {
+  bridge.request(BridgeMessageType.ProjectFoldersGet, undefined, { channel: 'state' });
+}
+
+function setConversationProject(folder: ProjectFolderCandidateRecord): void {
+  const conversationId = clientState.currentConversationId;
+  if (!conversationId) return;
+  bridge.request(BridgeMessageType.ConversationProjectSet, {
+    conversationId,
+    folderUri: folder.uri,
+    name: folder.name
+  });
+  projectDropdownOpen.value = false;
+}
+
+function onDocumentClick(event: MouseEvent): void {
+  const target = event.target;
+  if (!(target instanceof Node)) return;
+  if (!headerRoot.value?.contains(target)) projectDropdownOpen.value = false;
+}
+
+function displayProjectUri(uri: string): string {
+  try {
+    const parsed = new URL(uri);
+    if (parsed.protocol === 'file:') {
+      const decoded = decodeURIComponent(parsed.pathname);
+      return decoded.replace(/^\/([A-Za-z]:)/, '$1');
+    }
+  } catch {
+    // ignore and use raw uri
+  }
+  return uri;
+}
+
+function middleEllipsis(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  const keep = Math.max(4, Math.floor((maxLength - 3) / 2));
+  const head = value.slice(0, keep);
+  const tail = value.slice(value.length - keep);
+  return `${head}...${tail}`;
+}
 </script>
 
 <template>
-  <header class="tab-header">
+  <header ref="headerRoot" class="tab-header">
     <div class="tab-header-main">
       <div class="tab-title-row">
         <span class="tab-title">{{ title }}</span>
+        <span class="project-path-wrap">
+          <button
+            type="button"
+            class="project-path-button"
+            :class="{ 'is-unbound': !currentProject }"
+            :title="projectPath"
+            :aria-expanded="projectDropdownOpen"
+            aria-haspopup="listbox"
+            @click.stop="toggleProjectDropdown"
+          >
+            {{ compactProjectPath }}
+          </button>
+          <section v-if="projectDropdownOpen" class="project-dropdown" @click.stop>
+            <div class="project-dropdown-title">切换对话归属</div>
+            <div v-if="!projectFoldersLoaded" class="project-dropdown-empty">正在读取工作区...</div>
+            <div v-else-if="!projectFolders.length" class="project-dropdown-empty">当前窗口没有可绑定的文件夹。</div>
+            <button
+              v-for="folder in projectFolders"
+              :key="folder.uri"
+              type="button"
+              class="project-option"
+              :class="{ 'is-active': folder.uri === activeProjectUri }"
+              :title="displayProjectUri(folder.uri)"
+              @click="setConversationProject(folder)"
+            >
+              <span class="project-option-name">{{ folder.name }}</span>
+              <span class="project-option-path">{{ middleEllipsis(displayProjectUri(folder.uri), 64) }}</span>
+            </button>
+          </section>
+        </span>
         <span
           class="run-status"
           :class="[runStatusClass, { 'is-active': runSummary.isRunning }]"
@@ -67,6 +170,7 @@ function onAbort(): void {
 
 <style scoped>
 .tab-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -89,11 +193,110 @@ function onAbort(): void {
 }
 
 .tab-title {
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: 34%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
+}
+
+.project-path-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 48px;
+  display: inline-flex;
+}
+
+.project-path-button {
+  width: 100%;
+  min-width: 0;
+  min-height: 22px;
+  padding: 0 var(--space-1);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  text-align: left;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.project-path-button:hover,
+.project-path-button[aria-expanded='true'] {
+  color: var(--vscode-foreground);
+  background: var(--vscode-list-hoverBackground, transparent);
+  border-color: var(--vscode-panel-border, transparent);
+}
+
+.project-path-button.is-unbound {
+  font-style: italic;
+}
+
+.project-dropdown {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  width: min(420px, 70vw);
+  max-height: 260px;
+  overflow: auto;
+  padding: var(--space-2);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: var(--radius-sm);
+  background: var(--vscode-editor-background);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+}
+
+.project-dropdown-title {
+  margin: 0 0 var(--space-1);
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+}
+
+.project-dropdown-empty {
+  padding: var(--space-2) 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-sm);
+}
+
+.project-option {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  min-height: 0;
+  padding: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--vscode-foreground);
+  background: transparent;
+  text-align: left;
+}
+
+.project-option:hover,
+.project-option.is-active {
+  background: var(--vscode-list-hoverBackground, transparent);
+  border-color: var(--vscode-panel-border, transparent);
+}
+
+.project-option-name {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.project-option-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .run-status {

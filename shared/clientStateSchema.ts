@@ -305,7 +305,14 @@ export const CLIENT_STATE_TABLES = {
   projectContexts: upsertRemoveTable('projectContext', 'projectContext', {
     cascadeRemove: [
       { table: 'conversationProjectLinks', foreignKey: 'projectContextId' }
-    ]
+    ],
+    scope: {
+      kind: 'conversationReverseVia',
+      table: 'conversationProjectLinks',
+      localField: 'id',
+      foreignField: 'projectContextId',
+      replace: 'upsertOnly'
+    }
   }),
   conversationProjectLinks: upsertRemoveTable('conversationProjectLink', 'link', { scope: { kind: 'conversation', field: 'conversationId' } }),
   messages: {

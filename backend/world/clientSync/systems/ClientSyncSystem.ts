@@ -145,12 +145,16 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
   const toolCallIds = new Set(toolCalls.map((toolCall) => toolCall.id));
   const runIds = collectConversationRunIds(state, conversationId, messageIds, toolCallIds);
   const runPolicyIds = collectRunPolicyIds(state, runIds);
+  const conversationProjectLinks = state.conversationProjectLinks.filter((link) => link.conversationId === conversationId);
+  const projectContextIds = new Set(conversationProjectLinks.map((link) => link.projectContextId));
 
   return {
     ...createEmptyClientState(),
     conversations: state.conversations.filter((conversation) => conversation.id === conversationId || conversationReferencedByRuns(state, conversation.id, runIds)),
     conversationReuseLinks: state.conversationReuseLinks.filter((link) => link.conversationId === conversationId),
     conversationBranchLinks: state.conversationBranchLinks.filter((link) => link.sourceConversationId === conversationId || link.targetConversationId === conversationId),
+    projectContexts: state.projectContexts.filter((projectContext) => projectContextIds.has(projectContext.id)),
+    conversationProjectLinks,
     messages,
     messageRevisions: state.messageRevisions.filter((revision) => revision.conversationId === conversationId),
     messageCurrentRevisionLinks: state.messageCurrentRevisionLinks.filter((link) => messageIds.has(link.messageId)),

@@ -17,6 +17,7 @@ interface SidebarWebviewMessage {
   type?: string;
   conversationId?: string;
   title?: string;
+  projectFolderUri?: string;
 }
 
 export function registerSidebarEntryView(context: vscode.ExtensionContext, backendApp: BackendApplication): void {
@@ -53,7 +54,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       }
 
       if (message.type === NEW_CONVERSATION_MESSAGE) {
-        const conversationId = this.backendApp.createConversation();
+        const conversationId = this.backendApp.createConversation({ projectFolderUri: message.projectFolderUri });
         MainPanel.createOrShow(this.extensionUri, this.backendApp, { conversationId });
         this.postConversationHistory(webviewView.webview);
         return;
@@ -168,6 +169,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
   private getHtml(webview: vscode.Webview): string {
     const nonce = getNonce();
     const initialEntries = serializeForInlineScript(this.backendApp.getConversationHistoryEntries());
+    const initialProjectFolders = serializeForInlineScript(this.backendApp.getProjectFolderCandidates());
 
     return /* html */ `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -272,7 +274,8 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
     }
 
     body[data-view='history'] .history-view,
-    body[data-view='settings'] .settings-view {
+    body[data-view='settings'] .settings-view,
+    body[data-view='projectPicker'] .project-picker-view {
       display: flex;
       flex-direction: column;
     }
@@ -596,6 +599,49 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       font-size: 11px;
     }
 
+    .project-picker-view {
+      background: var(--vscode-sideBar-background);
+    }
+
+    .project-picker-intro {
+      margin: 0;
+      color: var(--vscode-descriptionForeground);
+      font-size: 11px;
+    }
+
+    .project-folder-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .project-folder-button {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      color: var(--vscode-foreground);
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .project-folder-button:hover {
+      background: var(--vscode-list-hoverBackground);
+      border-color: var(--vscode-focusBorder);
+    }
+
+    .project-folder-path {
+      color: var(--vscode-descriptionForeground);
+      font-size: 10px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     .settings-view {
       background: var(--vscode-sideBar-background);
     }
@@ -784,6 +830,28 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       </div>
     </section>
 
+    <section class="view project-picker-view" aria-label="选择新对话归属项目">
+      <div class="settings-head">
+        <button id="backToHistoryFromProjectButton" type="button" class="back-button" title="返回对话历史" aria-label="返回对话历史">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="15 18 9 12 15 6"></polyline>
+          </svg>
+        </button>
+        <div class="settings-heading">
+          <div class="settings-title">选择项目</div>
+          <div class="settings-desc">新对话将绑定到所选根文件夹</div>
+        </div>
+      </div>
+      <div class="settings-content">
+        <p class="project-picker-intro">当前是多根工作区，请选择这个新对话属于哪个项目。</p>
+        <div id="projectFolderList" class="project-folder-list"></div>
+        <div id="projectFolderEmpty" class="empty-state" hidden>
+          <p class="empty-state-title">暂无可选项目</p>
+          <p class="empty-state-desc">当前窗口没有打开的工作区文件夹。</p>
+        </div>
+      </div>
+    </section>
+
     <section class="view settings-view" aria-label="全局设置">
       <div class="settings-head">
         <button id="backToHistoryButton" type="button" class="back-button" title="返回对话历史" aria-label="返回对话历史">
@@ -837,13 +905,17 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const initialEntries = ${initialEntries};
+    const initialProjectFolders = ${initialProjectFolders};
     const HISTORY_REFRESH_INTERVAL_MS = 2500;
     let historyEntries = Array.isArray(initialEntries) ? initialEntries : [];
+    let projectFolders = Array.isArray(initialProjectFolders) ? initialProjectFolders : [];
 
     const historyList = document.getElementById('historyList');
     const emptyState = document.getElementById('emptyState');
     const historyCount = document.getElementById('historyCount');
     const settingsButton = document.getElementById('settingsButton');
+    const projectFolderList = document.getElementById('projectFolderList');
+    const projectFolderEmpty = document.getElementById('projectFolderEmpty');
 
     function setView(view) {
       document.body.dataset.view = view;
@@ -976,6 +1048,72 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       return item;
     }
 
+    function startNewConversation() {
+      if (projectFolders.length > 1) {
+        renderProjectFolderChoices();
+        setView('projectPicker');
+        return;
+      }
+      createNewConversation();
+    }
+
+    function createNewConversation(projectFolderUri) {
+      const message = { type: '${NEW_CONVERSATION_MESSAGE}' };
+      if (projectFolderUri) message.projectFolderUri = projectFolderUri;
+      vscode.postMessage(message);
+      setView('history');
+    }
+
+    function renderProjectFolderChoices() {
+      projectFolderList.textContent = '';
+      projectFolderEmpty.hidden = projectFolders.length > 0;
+
+      for (const folder of projectFolders) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'project-folder-button';
+        button.title = displayProjectUri(folder.uri);
+        button.setAttribute('aria-label', '选择项目：' + folder.name);
+
+        const name = document.createElement('span');
+        name.textContent = folder.name || displayProjectUri(folder.uri);
+        const path = document.createElement('span');
+        path.className = 'project-folder-path';
+        path.textContent = middleEllipsis(displayProjectUri(folder.uri), 72);
+
+        button.appendChild(name);
+        button.appendChild(path);
+        button.addEventListener('click', () => createNewConversation(folder.uri));
+        projectFolderList.appendChild(button);
+      }
+    }
+
+    function displayProjectUri(uri) {
+      try {
+        const parsed = new URL(uri);
+        if (parsed.protocol === 'file:') return normalizeFilePath(decodeURIComponent(parsed.pathname));
+      } catch (error) {
+        void error;
+      }
+      return uri || '';
+    }
+
+    function normalizeFilePath(path) {
+      if (!path) return '';
+      const maybeDriveLetter = path.charAt(1);
+      const maybeDriveSeparator = path.charAt(2);
+      const hasWindowsDrivePrefix = path.charAt(0) === '/'
+        && maybeDriveSeparator === ':'
+        && maybeDriveLetter.toLowerCase() !== maybeDriveLetter.toUpperCase();
+      return hasWindowsDrivePrefix ? path.slice(1) : path;
+    }
+
+    function middleEllipsis(value, maxLength) {
+      if (!value || value.length <= maxLength) return value || '';
+      const keep = Math.max(4, Math.floor((maxLength - 3) / 2));
+      return value.slice(0, keep) + '...' + value.slice(value.length - keep);
+    }
+
     function statusClass(entry) {
       if (entry.isRunning) return 'status-running';
       if (entry.status === 'streaming') return 'status-streaming';
@@ -1007,11 +1145,12 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
     settingsButton.addEventListener('click', () => setView('settings'));
     document.getElementById('backToHistoryButton').addEventListener('click', () => setView('history'));
     document.getElementById('backToHistoryButtonBottom').addEventListener('click', () => setView('history'));
+    document.getElementById('backToHistoryFromProjectButton').addEventListener('click', () => setView('history'));
     document.getElementById('openFullSettingsButton').addEventListener('click', () => {
       vscode.postMessage({ type: '${OPEN_GLOBAL_SETTINGS_MESSAGE}' });
     });
     document.getElementById('newConversationButton').addEventListener('click', () => {
-      vscode.postMessage({ type: '${NEW_CONVERSATION_MESSAGE}' });
+      startNewConversation();
     });
     document.getElementById('refreshHistoryButton').addEventListener('click', () => {
       vscode.postMessage({ type: '${REFRESH_HISTORY_MESSAGE}' });
@@ -1037,8 +1176,8 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
   }
 }
 
-function serializeForInlineScript(entries: SidebarConversationHistoryEntry[]): string {
-  return JSON.stringify(entries).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
+function serializeForInlineScript(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
 }
 
 function getNonce(): string {

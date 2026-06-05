@@ -7,7 +7,8 @@ import {
   type ClientPatchOp,
   type ClientState,
   type ConversationRecord,
-  type MessageRecord
+  type MessageRecord,
+  type ProjectContextRecord
 } from '@shared/protocol';
 import { createClientStateDb, type ClientStateDb } from './clientStateDb';
 
@@ -65,6 +66,12 @@ export const useClientStateStore = defineStore('clientState', {
   getters: {
     currentConversation(state): ConversationRecord | undefined {
       return state.conversations.find((conversation) => conversation.id === state.currentConversationId);
+    },
+    currentProjectContext(state): ProjectContextRecord | undefined {
+      const link = state.conversationProjectLinks.find(
+        (candidate) => candidate.conversationId === state.currentConversationId && candidate.role === 'primary'
+      );
+      return state.projectContexts.find((candidate) => candidate.id === link?.projectContextId);
     },
     /** 当前对话下、按 seq 排序、剔除纯工具响应的消息（工具响应不直接展示）。 */
     currentMessages(state): MessageRecord[] {

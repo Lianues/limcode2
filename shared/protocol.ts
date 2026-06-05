@@ -118,6 +118,19 @@ export interface WorkspaceInfo {
   folders: string[];
 }
 
+export interface SidebarConversationHistoryEntry {
+  id: string;
+  title: string;
+  preview: string;
+  messageCount: number;
+  status: MsgStatus | 'empty';
+  updatedAt?: number;
+  agentName?: string;
+  isRunning: boolean;
+  runStatus?: AgentRunStatus;
+  runStatusLabel?: string;
+}
+
 export type MsgRole = 'user' | 'model';
 export type MsgStatus = 'streaming' | 'complete' | 'error';
 export type MessageStopReason = 'paused' | 'cancelled' | 'replaced' | 'stale';

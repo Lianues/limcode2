@@ -64,8 +64,8 @@ import type {
   AgentRunStatus,
   BridgeClientId,
   MessageContent,
-  MsgStatus,
   ProjectFolderCandidateRecord,
+  SidebarConversationHistoryEntry,
   WebviewClientMeta,
   WebviewToExtensionMessage
 } from '../../shared/protocol';
@@ -77,19 +77,6 @@ import { GlobalSettingsBridge } from './GlobalSettingsBridge';
 import { ConversationSettingsBridge } from './ConversationSettingsBridge';
 import { WebviewClientRegistry } from './WebviewClientRegistry';
 import { WebviewMessageRouter } from './WebviewMessageRouter';
-
-export interface SidebarConversationHistoryEntry {
-  id: string;
-  title: string;
-  preview: string;
-  messageCount: number;
-  status: MsgStatus | 'empty';
-  updatedAt?: number;
-  agentName?: string;
-  isRunning: boolean;
-  runStatus?: AgentRunStatus;
-  runStatusLabel?: string;
-}
 
 export interface CreateConversationOptions {
   projectFolderUri?: string;

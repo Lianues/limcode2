@@ -27,6 +27,10 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: true,
     rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, 'webview/index.html'),
+        sidebar: path.resolve(__dirname, 'webview/sidebar.html')
+      },
       output: {
         entryFileNames: 'assets/[name].js',
         chunkFileNames: 'assets/[name].js',

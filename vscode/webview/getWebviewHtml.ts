@@ -3,15 +3,26 @@ import * as vscode from 'vscode';
 
 const WEBVIEW_DEV_SERVER_ENV = 'VSCODE_WEBVIEW_DEV_SERVER';
 
-export function getWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
+export interface WebviewHtmlOptions {
+  htmlFileName?: string;
+  devEntry?: string;
+  title?: string;
+  rootId?: string;
+}
+
+export function getWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri, options: WebviewHtmlOptions = {}): string {
+  const htmlFileName = options.htmlFileName ?? 'index.html';
+  const devEntry = options.devEntry ?? '/src/main.ts';
+  const title = options.title ?? 'LimCode - HMR';
+  const rootId = options.rootId ?? 'app';
   const webviewDistUri = vscode.Uri.joinPath(extensionUri, 'dist', 'webview');
-  const indexUri = vscode.Uri.joinPath(webviewDistUri, 'index.html');
+  const indexUri = vscode.Uri.joinPath(webviewDistUri, htmlFileName);
   const nonce = getNonce();
   const devServerUrl = getWebviewDevServerUrl();
   const csp = createContentSecurityPolicy(webview, nonce, devServerUrl);
 
   if (devServerUrl) {
-    return getDevServerHtml(devServerUrl, csp, nonce);
+    return getDevServerHtml(devServerUrl, csp, nonce, { title, devEntry, rootId });
   }
 
   if (!fs.existsSync(indexUri.fsPath)) {
@@ -104,17 +115,23 @@ function toWebSocketOrigin(httpOrigin: string): string {
   return url.origin;
 }
 
-function getDevServerHtml(devServerUrl: string, csp: string, nonce: string): string {
+function getDevServerHtml(
+  devServerUrl: string,
+  csp: string,
+  nonce: string,
+  options: { title: string; devEntry: string; rootId: string }
+): string {
+  const devEntry = options.devEntry.startsWith('/') ? options.devEntry : `/${options.devEntry}`;
   return /* html */ `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="${csp}">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LimCode - HMR</title>
+  <title>${escapeHtml(options.title)}</title>
 </head>
 <body>
-  <div id="app">
+  <div id="${escapeHtml(options.rootId)}">
     <main style="padding: 24px; font-family: var(--vscode-font-family); color: var(--vscode-foreground);">
       <h2 style="margin-top: 0;">正在连接 LimCode Webview HMR...</h2>
       <p>如果这个提示一直存在，请确认 Vite dev server 已启动：</p>
@@ -123,7 +140,7 @@ function getDevServerHtml(devServerUrl: string, csp: string, nonce: string): str
     </main>
   </div>
   <script type="module" nonce="${nonce}" src="${devServerUrl}/@vite/client"></script>
-  <script type="module" nonce="${nonce}" src="${devServerUrl}/src/main.ts"></script>
+  <script type="module" nonce="${nonce}" src="${devServerUrl}${devEntry}"></script>
 </body>
 </html>`;
 }
@@ -160,4 +177,12 @@ function getNonce(): string {
   }
 
   return nonce;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }

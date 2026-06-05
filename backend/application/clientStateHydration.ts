@@ -14,6 +14,7 @@ import {
 } from '../world/modules/mode/components';
 import { rememberHydratedMessageSeq, resetMessageSeqState } from '../world/modules/chat/bundles';
 import { Conversation, ConversationBranchLink, ConversationReuseLink, Message, MessageCurrentRevisionLink, MessageRevision, PartOf } from '../world/modules/chat/components';
+import { ConversationProjectLink, ProjectContext } from '../world/modules/project/components';
 import { ToolCall, ToolCallEvent, ToolResultConsumed, ToolState } from '../world/modules/tools/components';
 import { isTerminalToolStatus } from '../world/modules/tools/state';
 import {
@@ -116,6 +117,28 @@ export function hydrateClientState(world: World, state: ClientState): boolean {
     world.add(entity, ConversationReuseLink, { id: record.id, key: record.key, conversation, ...(agent !== undefined ? { agent } : {}), createdAt: now, updatedAt: now });
   }
 
+
+  const projectContextEntities = new Map<string, Entity>();
+  for (const record of state.projectContexts ?? []) {
+    const entity = world.spawn();
+    projectContextEntities.set(record.id, entity);
+    world.add(entity, ProjectContext, record);
+  }
+
+  for (const link of state.conversationProjectLinks ?? []) {
+    const conversation = conversationEntities.get(link.conversationId);
+    const projectContext = projectContextEntities.get(link.projectContextId);
+    if (conversation === undefined || projectContext === undefined) continue;
+    const entity = world.spawn();
+    world.add(entity, ConversationProjectLink, {
+      id: link.id,
+      conversation,
+      projectContext,
+      role: link.role,
+      createdAt: link.createdAt,
+      updatedAt: link.updatedAt
+    });
+  }
 
   for (const link of state.agentConversationLinks) {
     const agent = agentEntities.get(link.agentId);

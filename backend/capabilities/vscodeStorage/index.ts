@@ -40,6 +40,8 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       paths.systemPromptsRootUri,
       paths.modelProfilesRootUri,
       paths.conversationsRootUri,
+      paths.projectContextsRootUri,
+      paths.conversationProjectLinksRootUri,
       paths.linksRootUri,
       paths.agentModeLinksRootUri,
       paths.modeToolPolicyLinksRootUri,

@@ -295,12 +295,19 @@ export const CLIENT_STATE_TABLES = {
       { table: 'conversationReuseLinks', foreignKey: 'conversationId' },
       { table: 'conversationBranchLinks', foreignKeys: ['sourceConversationId', 'targetConversationId'] },
       { table: 'agentConversationLinks', foreignKey: 'conversationId' },
+      { table: 'conversationProjectLinks', foreignKey: 'conversationId' },
       { table: 'messages', foreignKey: 'conversationId', cascade: true }
     ]
   }),
   conversationReuseLinks: upsertRemoveTable('conversationReuseLink', 'link', { scope: { kind: 'conversation', field: 'conversationId' } }),
   conversationBranchLinks: upsertRemoveTable('conversationBranchLink', 'link', { scope: { kind: 'conversationAny', fields: ['sourceConversationId', 'targetConversationId'] } }),
   agentConversationLinks: upsertRemoveTable('agentConversationLink', 'link', { scope: { kind: 'conversation', field: 'conversationId', replace: 'removeOnly' } }),
+  projectContexts: upsertRemoveTable('projectContext', 'projectContext', {
+    cascadeRemove: [
+      { table: 'conversationProjectLinks', foreignKey: 'projectContextId' }
+    ]
+  }),
+  conversationProjectLinks: upsertRemoveTable('conversationProjectLink', 'link', { scope: { kind: 'conversation', field: 'conversationId' } }),
   messages: {
     patch: {
       upsert: { kind: 'message.upsert', payloadField: 'message' },

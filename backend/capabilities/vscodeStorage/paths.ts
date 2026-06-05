@@ -10,6 +10,7 @@ import {
   AGENTS_ROOT_DIR,
   APPROVAL_POLICIES_ROOT_DIR,
   CONVERSATIONS_ROOT_DIR,
+  CONVERSATION_PROJECT_LINKS_ROOT_DIR,
   INDEX_FILE,
   LLM_SETTINGS_FILE,
   MESSAGE_REVISIONS_ROOT_DIR,
@@ -19,6 +20,7 @@ import {
   MODE_SYSTEM_PROMPT_LINKS_ROOT_DIR,
   MODE_TOOL_POLICY_LINKS_ROOT_DIR,
   MODEL_PROFILES_ROOT_DIR,
+  PROJECT_CONTEXTS_ROOT_DIR,
   RUN_POLICIES_ROOT_DIR,
   SETTINGS_ROOT_DIR,
   SYSTEM_PROMPTS_ROOT_DIR,
@@ -41,6 +43,10 @@ export interface VscodeStorageUris {
   modelProfilesIndexUri: vscode.Uri;
   conversationsRootUri: vscode.Uri;
   conversationsIndexUri: vscode.Uri;
+  projectContextsRootUri: vscode.Uri;
+  projectContextsIndexUri: vscode.Uri;
+  conversationProjectLinksRootUri: vscode.Uri;
+  conversationProjectLinksIndexUri: vscode.Uri;
   linksRootUri: vscode.Uri;
   linksIndexUri: vscode.Uri;
   agentModeLinksRootUri: vscode.Uri;
@@ -84,6 +90,8 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const systemPrompts = root(globalStorageUri, SYSTEM_PROMPTS_ROOT_DIR);
   const modelProfiles = root(globalStorageUri, MODEL_PROFILES_ROOT_DIR);
   const conversations = root(globalStorageUri, CONVERSATIONS_ROOT_DIR);
+  const projectContexts = root(globalStorageUri, PROJECT_CONTEXTS_ROOT_DIR);
+  const conversationProjectLinks = root(globalStorageUri, CONVERSATION_PROJECT_LINKS_ROOT_DIR);
   const links = root(globalStorageUri, AGENT_CONVERSATION_LINKS_ROOT_DIR);
   const agentModeLinks = root(globalStorageUri, AGENT_MODE_LINKS_ROOT_DIR);
   const modeToolPolicyLinks = root(globalStorageUri, MODE_TOOL_POLICY_LINKS_ROOT_DIR);
@@ -131,6 +139,14 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     conversationsRootPath: conversations.rootUri.fsPath,
     conversationsIndexUri: conversations.indexUri,
     conversationsIndexPath: conversations.indexUri.fsPath,
+    projectContextsRootUri: projectContexts.rootUri,
+    projectContextsRootPath: projectContexts.rootUri.fsPath,
+    projectContextsIndexUri: projectContexts.indexUri,
+    projectContextsIndexPath: projectContexts.indexUri.fsPath,
+    conversationProjectLinksRootUri: conversationProjectLinks.rootUri,
+    conversationProjectLinksRootPath: conversationProjectLinks.rootUri.fsPath,
+    conversationProjectLinksIndexUri: conversationProjectLinks.indexUri,
+    conversationProjectLinksIndexPath: conversationProjectLinks.indexUri.fsPath,
     linksRootUri: links.rootUri,
     linksRootPath: links.rootUri.fsPath,
     linksIndexUri: links.indexUri,

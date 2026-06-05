@@ -1,5 +1,10 @@
 import * as vscode from 'vscode';
-import { createMessageId, type BridgeClientId, type WebviewToExtensionMessage } from '../../shared/protocol';
+import {
+  createMessageId,
+  type BridgeClientId,
+  type WebviewClientMeta,
+  type WebviewToExtensionMessage
+} from '../../shared/protocol';
 import { getWebviewHtml } from '../webview/getWebviewHtml';
 import type { BackendApplication } from '../../backend/application/BackendApplication';
 
@@ -8,6 +13,8 @@ export interface MainPanelOptions {
   kind?: 'chat' | 'globalSettings';
   reuse?: boolean;
 }
+
+type MainPanelKind = 'chat' | 'globalSettings';
 
 export class MainPanel {
   public static readonly viewType = 'limcode.mainPanel';
@@ -19,7 +26,20 @@ export class MainPanel {
   private readonly backendApp: BackendApplication;
   private readonly panelId: string;
   private readonly clientId: BridgeClientId;
+  private readonly kind: MainPanelKind;
+  private readonly conversationId?: string;
   private readonly disposables: vscode.Disposable[] = [];
+
+  public static registerSerializer(context: vscode.ExtensionContext, backendApp: BackendApplication): void {
+    context.subscriptions.push(
+      vscode.window.registerWebviewPanelSerializer(MainPanel.viewType, {
+        async deserializeWebviewPanel(webviewPanel, state) {
+          const options = optionsFromSerializedState(state, webviewPanel.title);
+          MainPanel.revive(webviewPanel, context.extensionUri, backendApp, options);
+        }
+      })
+    );
+  }
 
   public static createOrShow(
     extensionUri: vscode.Uri,
@@ -40,16 +60,29 @@ export class MainPanel {
       MainPanel.viewType,
       panelTitle(options),
       column,
-      {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-        localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'dist', 'webview')],
-        portMapping: [{ webviewPort: 31819, extensionHostPort: 31819 }]
-      }
+      MainPanel.webviewPanelOptions(extensionUri)
     );
 
+    MainPanel.revive(panel, extensionUri, backendApp, options);
+  }
+
+  private static revive(
+    panel: vscode.WebviewPanel,
+    extensionUri: vscode.Uri,
+    backendApp: BackendApplication,
+    options: MainPanelOptions = {}
+  ): void {
     const instance = new MainPanel(panel, extensionUri, backendApp, options);
     MainPanel.panels.set(instance.panelId, instance);
+  }
+
+  private static webviewPanelOptions(extensionUri: vscode.Uri): vscode.WebviewPanelOptions & vscode.WebviewOptions {
+    return {
+      enableScripts: true,
+      retainContextWhenHidden: true,
+      localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'dist', 'webview')],
+      portMapping: [{ webviewPort: 31819, extensionHostPort: 31819 }]
+    };
   }
 
   private constructor(
@@ -62,11 +95,16 @@ export class MainPanel {
     this.extensionUri = extensionUri;
     this.backendApp = backendApp;
     this.panelId = createMessageId();
+    this.kind = panelKind(options);
+    this.conversationId = options.conversationId;
+
+    this.panel.title = panelTitle(options);
+    this.panel.webview.options = MainPanel.webviewPanelOptions(this.extensionUri);
     this.clientId = this.backendApp.attachWebview(panel.webview, {
-      kind: options.kind === 'globalSettings' ? 'globalSettings' : 'mainPanel',
+      kind: this.kind === 'globalSettings' ? 'globalSettings' : 'mainPanel',
       panelId: this.panelId,
-      title: panel.title,
-      conversationId: options.conversationId
+      title: this.panel.title,
+      conversationId: this.conversationId
     });
 
     this.panel.webview.html = getWebviewHtml(this.panel.webview, this.extensionUri);
@@ -92,13 +130,73 @@ export class MainPanel {
   }
 
   private matches(options: MainPanelOptions): boolean {
-    if (options.kind === 'globalSettings') return this.panel.title === panelTitle(options);
-    if (!options.conversationId) return this.panel.title === 'LimCode';
-    return this.panel.title.endsWith(options.conversationId);
+    const kind = panelKind(options);
+    if (kind !== this.kind) return false;
+    if (kind === 'globalSettings') return true;
+    return (options.conversationId ?? '') === (this.conversationId ?? '');
   }
+}
+
+function panelKind(options: MainPanelOptions): MainPanelKind {
+  return options.kind === 'globalSettings' ? 'globalSettings' : 'chat';
 }
 
 function panelTitle(options: MainPanelOptions): string {
   if (options.kind === 'globalSettings') return 'LimCode 设置';
   return options.conversationId ? `LimCode: ${options.conversationId}` : 'LimCode';
+}
+
+function optionsFromSerializedState(state: unknown, fallbackTitle: string): MainPanelOptions {
+  const record = asRecord(state);
+  const meta = record ? metaFromState(record.meta) : undefined;
+  const serializedKind = record ? stringValue(record.kind) : undefined;
+  const isGlobalSettings =
+    serializedKind === 'globalSettings' ||
+    meta?.kind === 'globalSettings' ||
+    fallbackTitle === 'LimCode 设置';
+
+  if (isGlobalSettings) {
+    return { kind: 'globalSettings', reuse: true };
+  }
+
+  const conversationId =
+    (record ? stringValue(record.conversationId) : undefined) ??
+    meta?.conversationId ??
+    conversationIdFromPanelTitle(fallbackTitle);
+
+  return { kind: 'chat', conversationId, reuse: true };
+}
+
+function conversationIdFromPanelTitle(title: string): string | undefined {
+  const prefix = 'LimCode: ';
+  return title.startsWith(prefix) ? title.slice(prefix.length).trim() || undefined : undefined;
+}
+
+function metaFromState(value: unknown): WebviewClientMeta | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+
+  const kind = stringValue(record.kind);
+  if (kind !== 'mainPanel' && kind !== 'globalSettings' && kind !== 'sidebar' && kind !== 'unknown') {
+    return undefined;
+  }
+
+  const meta: WebviewClientMeta = { kind };
+  const panelId = stringValue(record.panelId);
+  const title = stringValue(record.title);
+  const conversationId = stringValue(record.conversationId);
+  if (panelId) meta.panelId = panelId;
+  if (title) meta.title = title;
+  if (conversationId) meta.conversationId = conversationId;
+  return meta;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
 }

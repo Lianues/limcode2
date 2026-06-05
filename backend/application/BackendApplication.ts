@@ -12,6 +12,7 @@ import {
   modePlugin,
   agentRunPlugin,
   requestSpawnAgent,
+  projectPlugin,
   toolsPlugin
 } from '../world/modules';
 import type { AgentSpawnRequestData } from '../world/modules/agent/requests';
@@ -50,6 +51,8 @@ import {
   ToolCallRunLink
 } from '../world/modules/agentRun/components';
 import { AgentRunEventType } from '../world/modules/agentRun/events';
+import { setConversationProject } from '../world/modules/project/bundles';
+import { ConversationProjectLink } from '../world/modules/project/components';
 import { ToolCall, ToolCallEvent } from '../world/modules/tools/components';
 import { clientSyncPlugin, registerClientSyncSystems } from '../world/clientSync';
 import { storageProjectionPlugin } from '../world/storageProjection';
@@ -62,6 +65,7 @@ import type {
   BridgeClientId,
   MessageContent,
   MsgStatus,
+  ProjectFolderCandidateRecord,
   WebviewClientMeta,
   WebviewToExtensionMessage
 } from '../../shared/protocol';
@@ -85,6 +89,16 @@ export interface SidebarConversationHistoryEntry {
   isRunning: boolean;
   runStatus?: AgentRunStatus;
   runStatusLabel?: string;
+}
+
+export interface CreateConversationOptions {
+  projectFolderUri?: string;
+}
+
+export interface SetConversationProjectFolderInput {
+  conversationId: string;
+  folderUri: string;
+  name?: string;
 }
 
 /**
@@ -131,7 +145,9 @@ export class BackendApplication {
       globalSettingsBridge: this.globalSettingsBridge,
       conversationSettingsBridge: this.conversationSettingsBridge,
       isHydrated: () => this.hydrated,
-      requestSnapshot: (conversationId) => this.requestSnapshot(conversationId)
+      requestSnapshot: (conversationId) => this.requestSnapshot(conversationId),
+      getProjectFolderCandidates: () => this.getProjectFolderCandidates(),
+      setConversationProjectFolder: (input) => this.setConversationProjectFolder(input)
     });
 
     registerApplicationEffectHandlers(this.effectHandlers);
@@ -151,7 +167,7 @@ export class BackendApplication {
 
     installWorldPlugins(
       { world: this.world, scheduler: this.scheduler },
-      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), modePlugin(), toolsPlugin({ toolSchemas }), chatPlugin(), agentRunPlugin()]
+      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), modePlugin(), projectPlugin(), toolsPlugin({ toolSchemas }), chatPlugin(), agentRunPlugin()]
     );
     registerClientSyncSystems(this.scheduler);
 
@@ -164,7 +180,7 @@ export class BackendApplication {
   }
 
   /** 创建一个独立 conversation，并用独立 AgentConversationLink 绑定到默认 agent。 */
-  public createConversation(): string {
+  public createConversation(options: CreateConversationOptions = {}): string {
     const conversationId = `conversation-${createMessageId()}`;
     const title = '新对话';
     const agent = this.findDefaultAgent();
@@ -187,6 +203,9 @@ export class BackendApplication {
       createdAt: now,
       updatedAt: now
     });
+
+    const projectFolder = this.resolveProjectFolderForNewConversation(options.projectFolderUri);
+    if (projectFolder) setConversationProject(this.world, { conversation, uri: projectFolder.uri, name: projectFolder.name });
 
     this.requestSnapshot();
     return conversationId;
@@ -264,6 +283,32 @@ export class BackendApplication {
     this.world.enqueue({ type: AgentRunEventType.CancelConversation, payload: { conversationId, reason: 'sidebar_abort' } });
     this.requestSnapshot();
     this.requestSnapshot(conversationId);
+    return true;
+  }
+
+  public getProjectFolderCandidates(): ProjectFolderCandidateRecord[] {
+    return (vscode.workspace.workspaceFolders ?? []).map((folder, index) => ({
+      uri: folder.uri.toString(),
+      name: folder.name,
+      index
+    }));
+  }
+
+  public setConversationProjectFolder(input: SetConversationProjectFolderInput): boolean {
+    const conversation = this.findConversationEntity(input.conversationId);
+    if (conversation === undefined) return false;
+
+    const candidate = this.projectFolderCandidateForUri(input.folderUri);
+    const uri = candidate?.uri ?? input.folderUri.trim();
+    if (!uri) return false;
+
+    setConversationProject(this.world, {
+      conversation,
+      uri,
+      name: input.name ?? candidate?.name ?? projectFolderNameFromUri(uri)
+    });
+    this.requestSnapshot();
+    this.requestSnapshot(input.conversationId);
     return true;
   }
 
@@ -359,6 +404,23 @@ export class BackendApplication {
       ?? this.world.query(Agent)[0];
   }
 
+  private resolveProjectFolderForNewConversation(projectFolderUri: string | undefined): ProjectFolderCandidateRecord | undefined {
+    if (projectFolderUri) {
+      const normalizedUri = projectFolderUri.trim();
+      if (!normalizedUri) return undefined;
+      const candidate = this.projectFolderCandidateForUri(projectFolderUri);
+      return candidate ?? { uri: normalizedUri, name: projectFolderNameFromUri(normalizedUri), index: -1 };
+    }
+
+    const candidates = this.getProjectFolderCandidates();
+    return candidates.length === 1 ? candidates[0] : undefined;
+  }
+
+  private projectFolderCandidateForUri(folderUri: string): ProjectFolderCandidateRecord | undefined {
+    const normalized = folderUri.trim();
+    return this.getProjectFolderCandidates().find((candidate) => candidate.uri === normalized);
+  }
+
   private findConversationEntity(conversationId: string): Entity | undefined {
     return this.world.query(Conversation).find((entity) => this.world.get(entity, Conversation)?.id === conversationId);
   }
@@ -389,6 +451,11 @@ export class BackendApplication {
 
     for (const entity of this.world.query(AgentConversationLink)) {
       const link = this.world.get(entity, AgentConversationLink);
+      if (link?.conversation === conversation) entities.add(entity);
+    }
+
+    for (const entity of this.world.query(ConversationProjectLink)) {
+      const link = this.world.get(entity, ConversationProjectLink);
       if (link?.conversation === conversation) entities.add(entity);
     }
 
@@ -682,6 +749,19 @@ function normalizeConversationTitle(title: string): string {
   return truncateText(normalizeText(title) || '新对话', 80);
 }
 
+function projectFolderNameFromUri(uri: string): string {
+  try {
+    const parsed = vscode.Uri.parse(uri);
+    const normalizedPath = parsed.fsPath || parsed.path || uri;
+    const withoutTrailingSlash = normalizedPath.replace(/[\\/]+$/g, '');
+    const name = withoutTrailingSlash.split(/[\\/]/).pop()?.trim();
+    return name || uri;
+  } catch {
+    const withoutTrailingSlash = uri.replace(/[\\/]+$/g, '');
+    return withoutTrailingSlash.split(/[\\/]/).pop()?.trim() || uri;
+  }
+}
+
 function addAll<T>(target: Set<T>, source: Iterable<T>): void {
   for (const item of source) target.add(item);
 }
@@ -740,6 +820,7 @@ function shouldDeferUntilHydrated(message: WebviewToExtensionMessage): boolean {
     case 'agentRun.retry':
     case 'agentRun.regenerate':
     case 'agentRun.markStale':
+    case 'conversation.project.set':
       return true;
     default:
       return false;

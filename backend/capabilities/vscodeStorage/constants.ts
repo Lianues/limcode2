@@ -15,6 +15,8 @@ export const MODE_APPROVAL_POLICY_LINKS_ROOT_DIR = 'mode-approval-policy-links';
 export const MODE_SYSTEM_PROMPT_LINKS_ROOT_DIR = 'mode-system-prompt-links';
 export const MODE_MODEL_PROFILE_LINKS_ROOT_DIR = 'mode-model-profile-links';
 export const CONVERSATIONS_ROOT_DIR = 'conversations';
+export const PROJECT_CONTEXTS_ROOT_DIR = 'project-contexts';
+export const CONVERSATION_PROJECT_LINKS_ROOT_DIR = 'conversation-project-links';
 export const AGENT_RUNS_ROOT_DIR = 'agent-runs';
 export const AGENT_RUN_SOURCE_LINKS_ROOT_DIR = 'agent-run-source-links';
 export const AGENT_RUN_TARGET_LINKS_ROOT_DIR = 'agent-run-target-links';
@@ -42,6 +44,8 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
   MODE_SYSTEM_PROMPT_LINKS_ROOT_DIR,
   MODE_MODEL_PROFILE_LINKS_ROOT_DIR,
   CONVERSATIONS_ROOT_DIR,
+  PROJECT_CONTEXTS_ROOT_DIR,
+  CONVERSATION_PROJECT_LINKS_ROOT_DIR,
   AGENT_RUNS_ROOT_DIR,
   AGENT_RUN_SOURCE_LINKS_ROOT_DIR,
   AGENT_RUN_TARGET_LINKS_ROOT_DIR,

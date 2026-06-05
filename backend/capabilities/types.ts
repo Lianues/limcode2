@@ -112,6 +112,16 @@ export interface RuntimePaths {
   conversationsRootPath: string;
   conversationsIndexUri: vscode.Uri;
   conversationsIndexPath: string;
+  /** 项目路径上下文数据根目录：<dataRoot>/project-contexts */
+  projectContextsRootUri: vscode.Uri;
+  projectContextsRootPath: string;
+  projectContextsIndexUri: vscode.Uri;
+  projectContextsIndexPath: string;
+  /** Conversation 与项目路径的关系数据根目录：<dataRoot>/conversation-project-links */
+  conversationProjectLinksRootUri: vscode.Uri;
+  conversationProjectLinksRootPath: string;
+  conversationProjectLinksIndexUri: vscode.Uri;
+  conversationProjectLinksIndexPath: string;
   /** Agent 与 Conversation 的关系数据根目录：<dataRoot>/agent-conversation-links */
   linksRootUri: vscode.Uri;
   linksRootPath: string;

@@ -5,6 +5,7 @@ import {
   type BridgeClientId,
   type BridgeScope,
   type ExtensionToWebviewMessage,
+  type WebviewClientMeta,
   type WebviewToExtensionMessage
 } from '@shared/protocol';
 import type { HostApi } from '../platform/hostApi';
@@ -16,6 +17,7 @@ type ExtensionMessageListener<T extends ExtensionToWebviewMessage = ExtensionToW
 
 interface BridgePersistedState {
   clientId?: BridgeClientId;
+  meta?: WebviewClientMeta;
 }
 
 /**
@@ -88,12 +90,28 @@ export class Bridge {
   }
 
   private captureTransportState(message: ExtensionToWebviewMessage): void {
-    if (message.clientId && message.clientId !== this.clientId) {
-      this.clientId = message.clientId;
-      this.host.setState<BridgePersistedState>({
-        ...(this.host.getState<BridgePersistedState>() ?? {}),
-        clientId: message.clientId
-      });
+    const currentState = this.host.getState<BridgePersistedState>() ?? {};
+    const nextState: BridgePersistedState = { ...currentState };
+    let changed = false;
+
+    if (message.clientId) {
+      if (message.clientId !== this.clientId) {
+        this.clientId = message.clientId;
+      }
+      if (currentState.clientId !== message.clientId) {
+        nextState.clientId = message.clientId;
+        changed = true;
+      }
+    }
+
+    const meta = message.type === BridgeMessageType.Hello ? message.payload?.meta : undefined;
+    if (meta && !sameMeta(currentState.meta, meta)) {
+      nextState.meta = meta;
+      changed = true;
+    }
+
+    if (changed) {
+      this.host.setState<BridgePersistedState>(nextState);
     }
   }
 
@@ -101,4 +119,11 @@ export class Bridge {
     this.listeners.get(message.type)?.forEach((listener) => listener(message));
     this.listeners.get('*')?.forEach((listener) => listener(message));
   }
+}
+
+function sameMeta(left: WebviewClientMeta | undefined, right: WebviewClientMeta): boolean {
+  return left?.kind === right.kind &&
+    left?.panelId === right.panelId &&
+    left?.title === right.title &&
+    left?.conversationId === right.conversationId;
 }

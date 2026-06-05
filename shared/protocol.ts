@@ -84,7 +84,10 @@ export enum BridgeMessageType {
   GlobalSettingsSnapshot = 'settings.global.snapshot',
   ConversationSettingsGet = 'settings.conversation.get',
   ConversationSettingsUpdate = 'settings.conversation.update',
-  ConversationSettingsSnapshot = 'settings.conversation.snapshot'
+  ConversationSettingsSnapshot = 'settings.conversation.snapshot',
+  ProjectFoldersGet = 'projectFolders.get',
+  ProjectFoldersSnapshot = 'projectFolders.snapshot',
+  ConversationProjectSet = 'conversation.project.set'
 }
 
 export interface BridgeEnvelope<TType extends string = string, TPayload = unknown> {
@@ -269,6 +272,28 @@ export interface ConversationBranchLinkRecord {
 
 
 export type AgentConversationRole = 'default' | 'participant' | 'reviewer';
+
+export type ProjectContextKind = 'folder';
+
+export interface ProjectContextRecord {
+  id: string;
+  kind: ProjectContextKind;
+  uri: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type ConversationProjectRole = 'primary';
+
+export interface ConversationProjectLinkRecord {
+  id: string;
+  conversationId: string;
+  projectContextId: string;
+  role: ConversationProjectRole;
+  createdAt: number;
+  updatedAt: number;
+}
 
 export interface AgentConversationLinkRecord {
   id: string;
@@ -576,6 +601,8 @@ export interface ClientStateRecordByTable {
   conversationReuseLinks: ConversationReuseLinkRecord;
   conversationBranchLinks: ConversationBranchLinkRecord;
   agentConversationLinks: AgentConversationLinkRecord;
+  projectContexts: ProjectContextRecord;
+  conversationProjectLinks: ConversationProjectLinkRecord;
   messages: MessageRecord;
   messageRevisions: MessageRevisionRecord;
   messageCurrentRevisionLinks: MessageCurrentRevisionLinkRecord;
@@ -721,6 +748,22 @@ export interface ConversationSettingsUpdatePayload {
   settings: ConversationSettingsSectionValue;
 }
 
+export interface ProjectFolderCandidateRecord {
+  uri: string;
+  name: string;
+  index: number;
+}
+
+export interface ProjectFoldersSnapshotPayload {
+  folders: ProjectFolderCandidateRecord[];
+}
+
+export interface ConversationProjectSetPayload {
+  conversationId: string;
+  folderUri: string;
+  name?: string;
+}
+
 export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.Ready, undefined>
   | BridgeEnvelope<BridgeMessageType.Ack, BridgeAckPayload>
@@ -743,7 +786,9 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsGet, GlobalSettingsGetPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsUpdate, GlobalSettingsUpdatePayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsGet, ConversationSettingsGetPayload>
-  | BridgeEnvelope<BridgeMessageType.ConversationSettingsUpdate, ConversationSettingsUpdatePayload>;
+  | BridgeEnvelope<BridgeMessageType.ConversationSettingsUpdate, ConversationSettingsUpdatePayload>
+  | BridgeEnvelope<BridgeMessageType.ProjectFoldersGet, undefined>
+  | BridgeEnvelope<BridgeMessageType.ConversationProjectSet, ConversationProjectSetPayload>;
 
 export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.Hello, BridgeHelloPayload>
@@ -753,7 +798,8 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.ClientSnapshot, ClientSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ClientPatch, ClientPatchPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsSnapshot, GlobalSettingsSnapshotPayload>
-  | BridgeEnvelope<BridgeMessageType.ConversationSettingsSnapshot, ConversationSettingsSnapshotPayload>;
+  | BridgeEnvelope<BridgeMessageType.ConversationSettingsSnapshot, ConversationSettingsSnapshotPayload>
+  | BridgeEnvelope<BridgeMessageType.ProjectFoldersSnapshot, ProjectFoldersSnapshotPayload>;
 
 export function createMessageId(): MessageId {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;

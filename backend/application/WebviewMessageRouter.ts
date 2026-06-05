@@ -14,10 +14,12 @@ import {
   globalSettingsStreamId,
   createMessageId,
   type BridgeClientId,
+  type ProjectFolderCandidateRecord,
   type WebviewToExtensionMessage
 } from '../../shared/protocol';
 import type { GlobalSettingsBridge } from './GlobalSettingsBridge';
 import type { ConversationSettingsBridge } from './ConversationSettingsBridge';
+import type { SetConversationProjectFolderInput } from './BackendApplication';
 import type { WebviewClientRegistry } from './WebviewClientRegistry';
 
 export interface WebviewMessageRouterDeps {
@@ -28,6 +30,8 @@ export interface WebviewMessageRouterDeps {
   conversationSettingsBridge: ConversationSettingsBridge;
   isHydrated: () => boolean;
   requestSnapshot: (conversationId?: string) => void;
+  getProjectFolderCandidates: () => ProjectFolderCandidateRecord[];
+  setConversationProjectFolder: (input: SetConversationProjectFolderInput) => boolean;
 }
 
 /**
@@ -110,6 +114,27 @@ export class WebviewMessageRouter {
         if (!message.payload) return;
         this.deps.webview.subscribe(clientId, conversationSettingsStreamId(message.payload.settings.conversationId ?? '', message.payload.section));
         void this.deps.conversationSettingsBridge.update(message.payload, message.id);
+        break;
+      case BridgeMessageType.ProjectFoldersGet:
+        this.deps.webview.post(clientId, {
+          id: createMessageId(),
+          type: BridgeMessageType.ProjectFoldersSnapshot,
+          channel: 'state',
+          correlationId: message.id,
+          payload: { folders: this.deps.getProjectFolderCandidates() }
+        });
+        break;
+      case BridgeMessageType.ConversationProjectSet:
+        if (!message.payload) return;
+        if (!this.deps.setConversationProjectFolder(message.payload)) {
+          this.deps.webview.post(clientId, {
+            id: createMessageId(),
+            type: BridgeMessageType.Error,
+            channel: 'diagnostics',
+            correlationId: message.id,
+            payload: { requestType: message.type, message: '无法设置对话项目归属。' }
+          });
+        }
         break;
       case BridgeMessageType.Ready:
         this.sendBridgeHello(clientId, message.id);

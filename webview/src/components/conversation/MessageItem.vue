@@ -273,7 +273,6 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
 .message-floor {
   position: relative;
   width: 100%;
-  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.15));
   padding: var(--space-4) var(--conversation-content-padding-right, calc(var(--space-4) + 24px))
     var(--space-4) var(--conversation-content-padding-left, var(--space-4));
   box-sizing: border-box;

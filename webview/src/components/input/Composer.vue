@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { IconPencilExclamation, IconSend2 } from '@tabler/icons-vue';
+import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
 import RichContentEditor from '@webview/components/content/RichContentEditor.vue';
 
@@ -17,6 +18,7 @@ const emit = defineEmits<{
   (event: 'submit', text: string): void;
 }>();
 
+const clientState = useClientStateStore();
 const ui = useConversationUiStore();
 const highlighted = ref(false);
 const editorExpanded = ref(false);
@@ -31,6 +33,7 @@ const draft = computed({
 });
 const expandTitle = computed(() => (editorExpanded.value ? '恢复输入框高度' : '扩大输入框'));
 const sendTitle = computed(() => (ui.isEditing ? '提交编辑' : '发送'));
+const modelSummary = computed(() => clientState.currentModelSummary);
 const editorShellStyle = computed(() => {
   if (!editorExpanded.value || !expandedEditorHeight.value) return undefined;
   return {
@@ -190,6 +193,10 @@ function pulseHighlight(): void {
     </div>
 
     <div class="composer-zone composer-zone-bottom" aria-label="输入框下方功能区">
+      <span v-if="modelSummary.modeName || modelSummary.model" class="composer-meta">
+        <template v-if="modelSummary.modeName">模式：<code>{{ modelSummary.modeName }}</code></template>
+        <template v-if="modelSummary.model"> · 模型：<code>{{ modelSummary.model }}</code></template>
+      </span>
       <button
         type="button"
         class="composer-send"
@@ -248,6 +255,7 @@ function pulseHighlight(): void {
 
 .composer-zone-bottom {
   justify-content: flex-end;
+  align-items: center;
 }
 
 .composer-edit-indicator {
@@ -354,6 +362,22 @@ function pulseHighlight(): void {
   height: 16px;
   color: currentColor;
   pointer-events: none;
+}
+
+.composer-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-right: auto;
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-sm);
+  line-height: 1.4;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.composer-meta code {
+  font-size: inherit;
 }
 
 .composer-send {

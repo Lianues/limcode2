@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { IconSettings } from '@tabler/icons-vue';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useChat } from '@webview/composables/useChat';
 
@@ -17,7 +18,6 @@ const { abortCurrentConversation } = useChat();
 const title = computed(
   () => clientState.currentConversation?.title || clientState.currentConversationId || '正在初始化默认对话...'
 );
-const summary = computed(() => clientState.currentModelSummary);
 const runSummary = computed(() => clientState.currentRunSummary);
 const runStatusClass = computed(() => `run-status-${runSummary.value.status ?? 'idle'}`);
 
@@ -40,10 +40,6 @@ function onAbort(): void {
           <span>{{ runSummary.isRunning ? runSummary.label : '空闲' }}</span>
         </span>
       </div>
-      <span v-if="summary.modeName || summary.model" class="tab-meta">
-        <template v-if="summary.modeName">模式：<code>{{ summary.modeName }}</code></template>
-        <template v-if="summary.model"> · 模型：<code>{{ summary.model }}</code></template>
-      </span>
     </div>
     <div class="tab-actions">
       <button
@@ -55,8 +51,15 @@ function onAbort(): void {
       >
         终止
       </button>
-      <button type="button" class="tab-settings-toggle secondary" @click="emit('toggle-settings')">
-        {{ props.settingsOpen ? '收起对话设置' : '对话设置' }}
+      <button
+        type="button"
+        class="tab-settings-toggle secondary"
+        :aria-label="props.settingsOpen ? '收起对话设置' : '打开对话设置'"
+        :aria-pressed="props.settingsOpen"
+        :title="props.settingsOpen ? '收起对话设置' : '对话设置'"
+        @click="emit('toggle-settings')"
+      >
+        <IconSettings class="tab-settings-icon" stroke="2" aria-hidden="true" />
       </button>
     </div>
   </header>
@@ -68,15 +71,13 @@ function onAbort(): void {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
+  padding: 0;
   border-bottom: 1px solid var(--vscode-panel-border);
 }
 
 .tab-header-main {
+  flex: 1 1 auto;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
 }
 
 .tab-title-row {
@@ -84,19 +85,19 @@ function onAbort(): void {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .tab-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
 }
 
-.tab-meta {
-  color: var(--vscode-descriptionForeground);
-  font-size: var(--font-size-sm);
-}
-
 .run-status {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -141,14 +142,43 @@ function onAbort(): void {
 
 .tab-actions {
   flex: 0 0 auto;
+  margin-left: auto;
   display: flex;
   align-items: center;
   gap: var(--space-2);
 }
 
-.tab-settings-toggle,
 .tab-abort-button {
   flex: 0 0 auto;
+}
+
+.tab-settings-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  border-color: transparent;
+}
+
+.tab-settings-toggle:hover:not(:disabled),
+.tab-settings-toggle[aria-pressed='true'] {
+  color: var(--vscode-foreground);
+  background: var(--vscode-list-hoverBackground, transparent);
+  border-color: var(--vscode-panel-border, transparent);
+}
+
+.tab-settings-icon {
+  width: 16px;
+  height: 16px;
+  color: currentColor;
+  pointer-events: none;
 }
 
 .tab-abort-button {

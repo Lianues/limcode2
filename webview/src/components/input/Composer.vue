@@ -335,8 +335,7 @@ function pulseHighlight(): void {
   border-color: transparent;
 }
 
-.composer-side-action:hover:not(:disabled),
-.composer-side-action[aria-pressed='true'] {
+.composer-side-action:hover:not(:disabled) {
   color: var(--vscode-foreground);
   background: var(--vscode-list-hoverBackground, transparent);
   border-color: var(--vscode-panel-border, transparent);

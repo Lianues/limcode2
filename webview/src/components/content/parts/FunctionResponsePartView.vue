@@ -41,7 +41,7 @@ function stringifyValue(value: unknown): string {
 .part-card-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -59,7 +59,7 @@ function stringifyValue(value: unknown): string {
 }
 
 .part-card-code {
-  margin: 7px 0 0;
+  margin: 6px 0 0;
   max-height: 180px;
   overflow: auto;
   white-space: pre-wrap;

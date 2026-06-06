@@ -65,14 +65,19 @@ function formatThoughtDuration(durationMs: number): string {
       :aria-label="expanded ? '收起思考内容' : '展开思考内容'"
       @click="toggleExpanded"
     >
-      <IconChevronRight class="thought-chevron" :class="{ 'is-expanded': expanded }" stroke="2" aria-hidden="true" />
+      <IconChevronRight
+        class="thought-chevron lc-collapse-chevron"
+        :class="{ 'is-expanded': expanded }"
+        stroke="2"
+        aria-hidden="true"
+      />
       <IconBulb v-if="streaming" class="thought-icon is-active" stroke="2" aria-hidden="true" />
       <IconBulbOff v-else class="thought-icon" stroke="2" aria-hidden="true" />
       <span class="thought-preview">{{ preview }}</span>
       <span class="thought-tail">{{ tailText }}</span>
     </button>
-    <div class="thought-content-shell" :class="{ 'is-expanded': expanded }" :aria-hidden="!expanded">
-      <div class="thought-content-frame">
+    <div class="thought-content-shell lc-collapse-shell" :class="{ 'is-expanded': expanded }" :aria-hidden="!expanded">
+      <div class="thought-content-frame lc-collapse-frame">
         <pre class="thought-content">{{ displayedText }}<span v-if="streaming" class="thought-cursor">▋</span></pre>
       </div>
     </div>
@@ -99,6 +104,7 @@ function formatThoughtDuration(durationMs: number): string {
   background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground) 6%);
   cursor: pointer;
   text-align: left;
+  line-height: 1.6;
 }
 
 .thought-summary:hover,
@@ -117,14 +123,6 @@ function formatThoughtDuration(durationMs: number): string {
   width: 14px;
   height: 14px;
   flex: 0 0 auto;
-}
-
-.thought-chevron {
-  transition: transform 160ms ease;
-}
-
-.thought-chevron.is-expanded {
-  transform: rotate(90deg);
 }
 
 .thought-icon {
@@ -149,28 +147,6 @@ function formatThoughtDuration(durationMs: number): string {
   margin-left: auto;
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-xs);
-}
-
-.thought-content-shell {
-  display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transform: translateY(-3px);
-  transition:
-    grid-template-rows 180ms ease,
-    opacity 140ms ease,
-    transform 140ms ease;
-}
-
-.thought-content-shell.is-expanded {
-  grid-template-rows: 1fr;
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.thought-content-frame {
-  min-height: 0;
-  overflow: hidden;
 }
 
 .thought-content {

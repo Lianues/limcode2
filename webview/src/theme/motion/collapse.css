@@ -1,0 +1,44 @@
+/* 通用展开/折叠动效。
+ * 用法：
+ * <IconChevronRight class="lc-collapse-chevron" :class="{ 'is-expanded': expanded }" />
+ * <div class="lc-collapse-shell" :class="{ 'is-expanded': expanded }">
+ *   <div class="lc-collapse-frame">...</div>
+ * </div>
+ */
+:root {
+  --lc-collapse-grid-duration: 180ms;
+  --lc-collapse-opacity-duration: 140ms;
+  --lc-collapse-transform-duration: 140ms;
+  --lc-collapse-chevron-duration: 160ms;
+  --lc-collapse-offset-y: -3px;
+}
+
+.lc-collapse-chevron {
+  transition: transform var(--lc-collapse-chevron-duration) ease;
+}
+
+.lc-collapse-chevron.is-expanded {
+  transform: rotate(90deg);
+}
+
+.lc-collapse-shell {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translateY(var(--lc-collapse-offset-y));
+  transition:
+    grid-template-rows var(--lc-collapse-grid-duration) ease,
+    opacity var(--lc-collapse-opacity-duration) ease,
+    transform var(--lc-collapse-transform-duration) ease;
+}
+
+.lc-collapse-shell.is-expanded {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.lc-collapse-frame {
+  min-height: 0;
+  overflow: hidden;
+}

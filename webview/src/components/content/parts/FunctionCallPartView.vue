@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
+import { IconChevronRight, IconTool } from '@tabler/icons-vue';
 import type { FunctionCallPart, ToolCallRecord, ToolCallStatus } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 
@@ -9,6 +10,7 @@ const props = defineProps<{
 }>();
 
 const clientState = useClientStateStore();
+const expanded = ref(false);
 const toolCall = computed<ToolCallRecord | undefined>(() => {
   const partId = props.part.id;
   if (!props.messageId || !partId) return undefined;
@@ -17,12 +19,26 @@ const toolCall = computed<ToolCallRecord | undefined>(() => {
   );
 });
 const argsText = computed(() => stringifyValue(props.part.functionCall.args));
+const hasArgs = computed(() => {
+  const text = argsText.value.trim();
+  return Boolean(text && text !== '{}');
+});
+const hasDetails = computed(() => hasArgs.value || Boolean(toolCall.value?.error));
 const statusLabel = computed(() => toolCall.value ? labelForStatus(toolCall.value.status) : '已请求');
 const durationLabel = computed(() => {
   const duration = toolCall.value?.durationMs;
   if (duration === undefined) return undefined;
   return duration < 1000 ? `${Math.round(duration)}ms` : `${(duration / 1000).toFixed(duration < 10_000 ? 1 : 0)}s`;
 });
+const toggleLabel = computed(() => {
+  if (!hasDetails.value) return `工具调用 ${props.part.functionCall.name}`;
+  return expanded.value ? '收起工具调用内容' : '展开工具调用内容';
+});
+
+function toggleExpanded(): void {
+  if (!hasDetails.value) return;
+  expanded.value = !expanded.value;
+}
 
 function stringifyValue(value: unknown): string {
   if (typeof value === 'string') return value;
@@ -49,36 +65,88 @@ function labelForStatus(status: ToolCallStatus): string {
 </script>
 
 <template>
-  <section class="part-card tool-call-card" :class="toolCall ? `status-${toolCall.status}` : undefined">
-    <header class="part-card-header">
-      <span class="part-card-title">工具调用</span>
+  <section class="tool-call-card" :class="toolCall ? `status-${toolCall.status}` : undefined">
+    <button
+      type="button"
+      class="part-card-header"
+      :class="{ 'is-empty': !hasDetails }"
+      :aria-expanded="expanded"
+      :aria-label="toggleLabel"
+      @click="toggleExpanded"
+    >
+      <IconChevronRight
+        class="part-card-chevron lc-collapse-chevron"
+        :class="{ 'is-expanded': expanded }"
+        stroke="2"
+        aria-hidden="true"
+      />
+      <IconTool class="part-card-icon" stroke="2" aria-hidden="true" />
       <span class="part-card-name">{{ part.functionCall.name }}</span>
       <span class="part-card-status">{{ statusLabel }}</span>
       <span v-if="durationLabel" class="part-card-meta">{{ durationLabel }}</span>
-    </header>
-    <pre v-if="argsText && argsText !== '{}'" class="part-card-code">{{ argsText }}</pre>
-    <p v-if="toolCall?.error" class="part-card-error">{{ toolCall.error }}</p>
+    </button>
+    <div
+      v-if="hasDetails"
+      class="part-card-content-shell lc-collapse-shell"
+      :class="{ 'is-expanded': expanded }"
+      :aria-hidden="!expanded"
+    >
+      <div class="part-card-content-frame lc-collapse-frame">
+        <div class="part-card-details">
+          <pre v-if="hasArgs" class="part-card-code">{{ argsText }}</pre>
+          <p v-if="toolCall?.error" class="part-card-error">{{ toolCall.error }}</p>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
 <style scoped>
-.part-card {
-  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.24));
-  border-radius: var(--radius-sm);
-  padding: 8px 10px;
-  background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground) 6%);
+.tool-call-card {
   color: var(--vscode-foreground);
   font-size: var(--font-size-sm);
 }
 
 .part-card-header {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 4px 7px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.22));
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-width: 0;
+  gap: 6px;
+  color: inherit;
+  background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground) 6%);
+  cursor: pointer;
+  text-align: left;
+  line-height: 1.6;
 }
 
-.part-card-title {
+.part-card-header:hover,
+.part-card-header:focus-visible {
+  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-foreground) 10%);
+}
+
+.part-card-header:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, currentColor);
+  outline-offset: 2px;
+}
+
+.part-card-header.is-empty {
+  cursor: default;
+}
+
+.part-card-header.is-empty .part-card-chevron {
+  opacity: 0.45;
+}
+
+.part-card-chevron,
+.part-card-icon {
+  width: 14px;
+  height: 14px;
   color: var(--vscode-descriptionForeground);
   flex: 0 0 auto;
 }
@@ -103,8 +171,16 @@ function labelForStatus(status: ToolCallStatus): string {
   margin-left: 0;
 }
 
+.part-card-details {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-left: 2px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.32));
+  color: var(--vscode-descriptionForeground);
+  background: color-mix(in srgb, var(--vscode-editor-background) 96%, var(--vscode-foreground) 4%);
+}
+
 .part-card-code {
-  margin: 7px 0 0;
+  margin: 0;
   max-height: 180px;
   overflow: auto;
   white-space: pre-wrap;
@@ -115,8 +191,12 @@ function labelForStatus(status: ToolCallStatus): string {
 }
 
 .part-card-error {
-  margin: 7px 0 0;
+  margin: 6px 0 0;
   color: var(--vscode-errorForeground);
+}
+
+.part-card-error:first-child {
+  margin-top: 0;
 }
 
 .status-success .part-card-status {

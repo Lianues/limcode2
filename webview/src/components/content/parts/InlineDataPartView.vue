@@ -33,7 +33,8 @@ const kind = computed<'image' | 'audio' | 'video' | 'file'>(() => {
   margin: 0;
   border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.24));
   border-radius: var(--radius-sm);
-  padding: 8px;
+  padding: 8px 10px;
+  font-size: var(--font-size-sm);
   background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground) 6%);
   color: var(--vscode-foreground);
 }
@@ -54,7 +55,7 @@ const kind = computed<'image' | 'audio' | 'video' | 'file'>(() => {
 .attachment-caption {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin-top: 6px;
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-xs);

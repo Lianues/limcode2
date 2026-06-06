@@ -433,12 +433,12 @@ function ensureActiveScopeVisible(): void {
             <div class="history-title-row">
               <div class="history-title">{{ displayConversationTitle(entry) }}</div>
             </div>
-            <div class="history-preview">{{ entry.preview || '暂无消息，点击继续对话。' }}</div>
+            <div class="history-preview" :class="{ 'is-pending': entry.previewState === 'pending', 'is-empty': entry.previewState === 'empty' }">{{ entry.preview || '暂无消息，点击继续对话。' }}</div>
             <div class="history-meta">
               <span>{{ historyMeta(entry) }}</span>
               <span v-if="entry.isRunning" class="run-badge" :aria-label="`后台任务：${entry.runStatusLabel || '执行中'}`">
                 <span class="run-badge-dot" aria-hidden="true"></span>
-                <span>{{ entry.runStatusLabel || '后台执行中' }}</span>
+                <span>{{ entry.runStatusLabel || '执行中' }}</span>
               </span>
             </div>
           </div>

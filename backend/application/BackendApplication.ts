@@ -227,14 +227,17 @@ export class BackendApplication {
       const agentName = agentNamesByConversation.get(entity);
       const runSummary = runSummariesByConversation.get(entity);
       const project = projectsByConversation.get(entity);
+      const preview = latest ? messagePreview(latest) : '暂无消息，点击开始新的交流。';
       const entry: SidebarConversationHistoryEntry = {
         id: conversation.id,
         title: displayConversationTitle({ id: conversation.id, title: conversation.title, messages }),
-        preview: latest ? messagePreview(latest) : '暂无消息，点击开始新的交流。',
+        preview,
         messageCount: messages.length,
         status: latest?.status ?? 'empty',
         isRunning: !!runSummary
       };
+      const previewState = latest ? aiPreviewState(latest) : undefined;
+      if (previewState) entry.previewState = previewState;
       const fallbackUpdatedAt = conversationCreatedAtFromId(conversation.id);
       if (latest) entry.updatedAt = latest.createdAt; else if (fallbackUpdatedAt !== undefined) entry.updatedAt = fallbackUpdatedAt;
       if (agentName) entry.agentName = agentName;
@@ -792,7 +795,13 @@ function latestMessage(messages: MessageData[]): MessageData | undefined {
 function messagePreview(message: MessageData): string {
   const text = normalizeText(textPreview(message.content));
   if (text) return truncateText(text, 72);
-  return message.role === 'user' ? '用户消息' : '助手消息';
+  const state = aiPreviewState(message);
+  return message.role === 'user' ? '用户消息' : state === 'pending' ? '响应中' : '空响应';
+}
+
+function aiPreviewState(message: MessageData): 'pending' | 'empty' | undefined {
+  if (message.role !== 'model' || normalizeText(textPreview(message.content))) return undefined;
+  return message.status === 'streaming' ? 'pending' : 'empty';
 }
 
 function textPreview(content: MessageContent): string {
@@ -846,7 +855,7 @@ function labelForAgentRunStatus(status: AgentRunStatus): string {
     case 'preparing':
       return '准备中';
     case 'running':
-      return '后台执行中';
+      return '执行中';
     case 'waiting_tool':
       return '等待工具';
     case 'waiting_child_run':

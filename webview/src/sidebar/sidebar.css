@@ -475,6 +475,11 @@ button {
   text-overflow: ellipsis;
 }
 
+.history-preview.is-pending,
+.history-preview.is-empty {
+  font-style: italic;
+}
+
 .history-meta {
   margin-top: 1px;
   display: flex;

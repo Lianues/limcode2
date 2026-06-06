@@ -122,6 +122,7 @@ export interface SidebarConversationHistoryEntry {
   id: string;
   title: string;
   preview: string;
+  previewState?: 'pending' | 'empty';
   messageCount: number;
   status: MsgStatus | 'empty';
   updatedAt?: number;

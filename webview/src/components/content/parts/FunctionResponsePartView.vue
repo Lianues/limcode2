@@ -33,7 +33,7 @@ function stringifyValue(value: unknown): string {
   border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.24));
   border-radius: var(--radius-sm);
   padding: 8px 10px;
-  background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground) 6%);
+  background: var(--lc-content-output-background);
   color: var(--vscode-foreground);
   font-size: var(--font-size-sm);
 }

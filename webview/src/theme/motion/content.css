@@ -3,6 +3,9 @@
   /* 正文替换为两段式动画：50ms 淡出 + 50ms 淡入，总时长对齐消息进入动画。 */
   --lc-content-replace-duration: 0.05s;
   --lc-content-cursor-blink-duration: 1s;
+  --lc-content-input-background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-foreground) 8%);
+  --lc-content-output-background: color-mix(in srgb, var(--vscode-editor-background) 97%, var(--vscode-foreground) 3%);
+  --lc-content-icon-color: var(--vscode-descriptionForeground);
 }
 
 @keyframes lc-content-cursor-blink {

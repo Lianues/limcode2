@@ -103,8 +103,9 @@ function labelForStatus(status: ToolCallStatus): string {
 
 <style scoped>
 .tool-call-card {
-  color: var(--vscode-foreground);
+  color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-sm);
+  font-style: normal;
 }
 
 .part-card-header {
@@ -118,7 +119,7 @@ function labelForStatus(status: ToolCallStatus): string {
   align-items: center;
   gap: 6px;
   color: inherit;
-  background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground) 6%);
+  background: var(--lc-content-input-background);
   cursor: pointer;
   text-align: left;
   line-height: 1.6;
@@ -127,7 +128,7 @@ function labelForStatus(status: ToolCallStatus): string {
 .part-card-header:hover,
 .part-card-header:focus-visible {
   color: var(--vscode-foreground);
-  background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-foreground) 10%);
+  background: var(--lc-content-input-background);
 }
 
 .part-card-header:focus-visible {
@@ -147,7 +148,7 @@ function labelForStatus(status: ToolCallStatus): string {
 .part-card-icon {
   width: 14px;
   height: 14px;
-  color: var(--vscode-descriptionForeground);
+  color: var(--lc-content-icon-color);
   flex: 0 0 auto;
 }
 
@@ -176,7 +177,7 @@ function labelForStatus(status: ToolCallStatus): string {
   padding: 8px 10px;
   border-left: 2px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.32));
   color: var(--vscode-descriptionForeground);
-  background: color-mix(in srgb, var(--vscode-editor-background) 96%, var(--vscode-foreground) 4%);
+  background: var(--lc-content-input-background);
 }
 
 .part-card-code {

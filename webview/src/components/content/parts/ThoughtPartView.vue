@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { IconBulb, IconBulbOff, IconChevronRight } from '@tabler/icons-vue';
+import { IconBulb, IconChevronRight } from '@tabler/icons-vue';
 import { useSmoothStreamingText } from '../useSmoothStreamingText';
 
 const props = withDefaults(
@@ -71,8 +71,7 @@ function formatThoughtDuration(durationMs: number): string {
         stroke="2"
         aria-hidden="true"
       />
-      <IconBulb v-if="streaming" class="thought-icon is-active" stroke="2" aria-hidden="true" />
-      <IconBulbOff v-else class="thought-icon" stroke="2" aria-hidden="true" />
+      <IconBulb class="thought-icon" :class="{ 'is-active': streaming }" stroke="2" aria-hidden="true" />
       <span class="thought-preview">{{ preview }}</span>
       <span class="thought-tail">{{ tailText }}</span>
     </button>
@@ -101,7 +100,7 @@ function formatThoughtDuration(durationMs: number): string {
   align-items: center;
   gap: 6px;
   color: inherit;
-  background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground) 6%);
+  background: var(--lc-content-input-background);
   cursor: pointer;
   text-align: left;
   line-height: 1.6;
@@ -110,7 +109,7 @@ function formatThoughtDuration(durationMs: number): string {
 .thought-summary:hover,
 .thought-summary:focus-visible {
   color: var(--vscode-foreground);
-  background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-foreground) 10%);
+  background: var(--lc-content-input-background);
 }
 
 .thought-summary:focus-visible {
@@ -123,10 +122,7 @@ function formatThoughtDuration(durationMs: number): string {
   width: 14px;
   height: 14px;
   flex: 0 0 auto;
-}
-
-.thought-icon {
-  color: var(--vscode-descriptionForeground);
+  color: var(--lc-content-icon-color);
 }
 
 .thought-icon.is-active {
@@ -154,7 +150,7 @@ function formatThoughtDuration(durationMs: number): string {
   padding: 8px 10px;
   border-left: 2px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.32));
   color: var(--vscode-descriptionForeground);
-  background: color-mix(in srgb, var(--vscode-editor-background) 96%, var(--vscode-foreground) 4%);
+  background: var(--lc-content-input-background);
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;

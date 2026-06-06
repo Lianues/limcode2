@@ -437,10 +437,13 @@ button {
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
   line-height: 1.35;
+  min-height: calc(2 * 1.35em);
+  max-height: calc(2 * 1.35em);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .history-meta {

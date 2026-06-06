@@ -475,20 +475,25 @@ button {
 .history-actions {
   align-self: start;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 3px;
-  opacity: 0.55;
-  transition: opacity 0.16s ease;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--lc-message-actions-fade-duration, 0.08s) ease-out;
 }
 
 .history-item:hover .history-actions,
 .history-item:focus-within .history-actions {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .history-action-button {
-  width: 23px;
-  height: 23px;
+  width: 26px;
+  height: 26px;
+  min-width: 0;
+  min-height: 0;
   padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -501,16 +506,18 @@ button {
   outline: none;
 }
 
-.history-action-button:hover {
+.history-action-button:hover,
+.history-action-button:focus-visible {
   color: var(--vscode-foreground);
-  background: var(--vscode-list-hoverBackground);
-  border-color: var(--vscode-focusBorder);
+  background: transparent;
+  border-color: transparent;
+  outline: none;
 }
 
-.history-action-button.danger:hover {
-  color: var(--vscode-errorForeground);
-  background: var(--vscode-inputValidation-errorBackground, var(--vscode-list-hoverBackground));
-  border-color: var(--vscode-inputValidation-errorBorder, var(--vscode-focusBorder));
+.history-action-icon {
+  width: 15px;
+  height: 15px;
+  pointer-events: none;
 }
 
 .empty-state {

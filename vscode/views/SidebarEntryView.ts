@@ -91,8 +91,8 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
-      if (message.type === RENAME_CONVERSATION_MESSAGE && message.conversationId) {
-        this.renameConversationFromSidebar(webviewView.webview, message.conversationId);
+      if (message.type === RENAME_CONVERSATION_MESSAGE && message.conversationId && typeof message.title === 'string') {
+        this.renameConversationFromSidebar(webviewView.webview, message.conversationId, message.title);
         return;
       }
 
@@ -134,25 +134,15 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       .catch((error) => console.warn('[LimCode] Failed to read sidebar state.', error));
   }
 
-  private renameConversationFromSidebar(webview: vscode.Webview, conversationId: string): void {
+  private renameConversationFromSidebar(webview: vscode.Webview, conversationId: string, title: string): void {
+    const nextTitle = title.trim();
+    if (!nextTitle) return;
+
     void this.backendApp
       .waitUntilHydrated()
-      .then(async () => {
-        const nextTitle = await vscode.window.showInputBox({
-          title: '重命名对话标题',
-          prompt: '输入新的对话标题。',
-          value: '',
-          ignoreFocusOut: true,
-          validateInput(value) {
-            return value.trim() ? undefined : '标题不能为空';
-          }
-        });
-        if (nextTitle === undefined) return;
+      .then(() => {
         const renamed = this.backendApp.renameConversationTitle(conversationId, nextTitle);
-        if (!renamed) {
-          void vscode.window.showWarningMessage('未找到要重命名的对话。');
-          return;
-        }
+        if (!renamed) console.warn(`[LimCode] Sidebar rename target not found: ${conversationId}`);
         this.postSidebarStateWhenReady(webview, this.lastScopeKind, this.lastCursor, undefined, this.lastProjectFolderUri);
       })
       .catch((error) => console.warn('[LimCode] Failed to rename sidebar conversation.', error));
@@ -161,18 +151,9 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
   private deleteConversationFromSidebar(webview: vscode.Webview, conversationId: string): void {
     void this.backendApp
       .waitUntilHydrated()
-      .then(async () => {
-        const confirm = await vscode.window.showWarningMessage(
-          `删除对话「${conversationId}」？`,
-          { modal: true, detail: '该操作会删除此对话以及关联消息、工具记录和运行记录，无法撤销。' },
-          '删除'
-        );
-        if (confirm !== '删除') return;
+      .then(() => {
         const deleted = this.backendApp.deleteConversation(conversationId);
-        if (!deleted) {
-          void vscode.window.showWarningMessage('未找到要删除的对话。');
-          return;
-        }
+        if (!deleted) console.warn(`[LimCode] Sidebar delete target not found: ${conversationId}`);
         this.postSidebarStateWhenReady(webview, this.lastScopeKind, this.lastCursor, undefined, this.lastProjectFolderUri);
       })
       .catch((error) => console.warn('[LimCode] Failed to delete sidebar conversation.', error));
@@ -181,15 +162,9 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
   private abortConversationFromSidebar(webview: vscode.Webview, conversationId: string): void {
     void this.backendApp
       .waitUntilHydrated()
-      .then(async () => {
-        const confirm = await vscode.window.showWarningMessage(
-          `终止对话「${conversationId}」的后台任务？`,
-          { modal: false, detail: '仅终止当前后台运行任务，不删除对话记录。' },
-          '终止'
-        );
-        if (confirm !== '终止') return;
+      .then(() => {
         const aborted = this.backendApp.abortConversation(conversationId);
-        if (!aborted) return;
+        if (!aborted) console.warn(`[LimCode] Sidebar abort target not found: ${conversationId}`);
         this.postSidebarStateWhenReady(webview, this.lastScopeKind, this.lastCursor, undefined, this.lastProjectFolderUri);
       })
       .catch((error) => console.warn('[LimCode] Failed to abort sidebar conversation.', error));

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { IconEdit, IconSquare, IconTrash } from '@tabler/icons-vue';
 import type { ConversationHistoryPageInfo } from '@shared/protocol';
+import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 import { onSidebarMessage, postSidebarMessage } from './sidebarHost';
 import {
   SIDEBAR_MESSAGE,
@@ -9,6 +11,7 @@ import {
   type SidebarHistoryScopeKind,
   type SidebarConversationHistoryEntry
 } from './types';
+import SidebarInputDialog from './components/SidebarInputDialog.vue';
 
 type SidebarView = 'history' | 'settings' | 'projectPicker';
 interface ScopeOption {
@@ -29,6 +32,9 @@ const activeProjectFolderUri = ref<string | undefined>();
 const currentProjectScope = ref<ConversationHistoryScope>({ kind: 'unbound' });
 const pageInfo = ref<ConversationHistoryPageInfo>();
 const scopePageIndex = ref(0);
+const renameTarget = ref<SidebarConversationHistoryEntry>();
+const deleteTarget = ref<SidebarConversationHistoryEntry>();
+const abortTarget = ref<SidebarConversationHistoryEntry>();
 const historyCountText = computed(() => {
   const total = pageInfo.value?.total ?? entries.value.length;
   const page = pageInfo.value ? `第 ${pageInfo.value.pageIndex + 1} 页` : '当前页';
@@ -83,6 +89,32 @@ const scopeIndicatorStyle = computed(() => {
 });
 const canPreviousScopePage = computed(() => safeScopePageIndex.value > 0);
 const canNextScopePage = computed(() => safeScopePageIndex.value + 1 < scopePageCount.value);
+const isRenameDialogOpen = computed(() => !!renameTarget.value);
+const isDeleteDialogOpen = computed(() => !!deleteTarget.value);
+const isAbortDialogOpen = computed(() => !!abortTarget.value);
+const renameInitialTitle = computed(() => renameTarget.value?.title ?? '');
+const renameDialogDescription = computed(() => {
+  const title = displayConversationTitle(renameTarget.value);
+  return title ? `为「${middleEllipsis(title, 48)}」输入新的对话标题。` : '输入新的对话标题。';
+});
+const deleteDialogDescriptionHtml = computed(() => {
+  const title = displayConversationTitle(deleteTarget.value);
+  const target = title ? `「${escapeHtml(middleEllipsis(title, 48))}」` : '这个对话';
+  return `将删除${target}以及关联消息、工具记录和运行记录，此操作<strong>无法撤销</strong>。`;
+});
+const abortDialogDescriptionHtml = computed(() => {
+  const title = displayConversationTitle(abortTarget.value);
+  const target = title ? `「${escapeHtml(middleEllipsis(title, 48))}」` : '这个对话';
+  return `确定终止${target}的后台任务吗？只终止当前后台运行任务，<strong>不会删除对话记录</strong>。`;
+});
+const deleteConfirmActions: ConfirmPanelAction[] = [
+  { key: 'cancel', label: '取消', variant: 'secondary' },
+  { key: 'confirm', label: '删除' }
+];
+const abortConfirmActions: ConfirmPanelAction[] = [
+  { key: 'cancel', label: '取消', variant: 'secondary' },
+  { key: 'confirm', label: '终止' }
+];
 
 let disposeMessages: (() => void) | undefined;
 
@@ -169,16 +201,51 @@ function openGlobalSettings(): void {
   postSidebarMessage({ type: SIDEBAR_MESSAGE.openGlobalSettings });
 }
 
-function renameConversation(conversationId: string): void {
-  postSidebarMessage({ type: SIDEBAR_MESSAGE.renameConversation, conversationId });
+function renameConversation(entry: SidebarConversationHistoryEntry): void {
+  renameTarget.value = entry;
 }
 
-function deleteConversation(conversationId: string): void {
-  postSidebarMessage({ type: SIDEBAR_MESSAGE.deleteConversation, conversationId });
+function confirmRenameConversation(title: string): void {
+  const target = renameTarget.value;
+  renameTarget.value = undefined;
+  const nextTitle = title.trim();
+  if (!target || !nextTitle) return;
+  if (nextTitle === target.title.trim()) return;
+  postSidebarMessage({ type: SIDEBAR_MESSAGE.renameConversation, conversationId: target.id, title: nextTitle });
 }
 
-function abortConversation(conversationId: string): void {
-  postSidebarMessage({ type: SIDEBAR_MESSAGE.abortConversation, conversationId });
+function closeRenameDialog(): void {
+  renameTarget.value = undefined;
+}
+
+function deleteConversation(entry: SidebarConversationHistoryEntry): void {
+  deleteTarget.value = entry;
+}
+
+function confirmDeleteConversation(): void {
+  const target = deleteTarget.value;
+  deleteTarget.value = undefined;
+  if (!target) return;
+  postSidebarMessage({ type: SIDEBAR_MESSAGE.deleteConversation, conversationId: target.id });
+}
+
+function closeDeleteDialog(): void {
+  deleteTarget.value = undefined;
+}
+
+function abortConversation(entry: SidebarConversationHistoryEntry): void {
+  abortTarget.value = entry;
+}
+
+function confirmAbortConversation(): void {
+  const target = abortTarget.value;
+  abortTarget.value = undefined;
+  if (!target) return;
+  postSidebarMessage({ type: SIDEBAR_MESSAGE.abortConversation, conversationId: target.id });
+}
+
+function closeAbortDialog(): void {
+  abortTarget.value = undefined;
 }
 
 function onHistoryItemKeydown(event: KeyboardEvent, conversationId: string): void {
@@ -206,6 +273,19 @@ function statusText(entry: SidebarConversationHistoryEntry): string {
 function historyMeta(entry: SidebarConversationHistoryEntry): string {
   const project = activeScopeKind.value === 'all' && entry.projectName ? `${entry.projectName} · ` : '';
   return `${project}${entry.agentName || '默认 Agent'} · ${entry.messageCount || 0} 条消息 · ${formatTime(entry.updatedAt)}`;
+}
+
+function displayConversationTitle(entry: SidebarConversationHistoryEntry | undefined): string {
+  return entry?.title || entry?.id || '';
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function formatTime(value: number | undefined): string {
@@ -364,14 +444,14 @@ function ensureActiveScopeVisible(): void {
             </div>
           </div>
           <div class="history-actions" @click.stop @keydown.stop>
-            <button v-if="entry.isRunning" type="button" class="history-action-button" title="终止后台任务" aria-label="终止后台任务" @click="abortConversation(entry.id)">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"></rect></svg>
+            <button v-if="entry.isRunning" type="button" class="history-action-button" title="终止后台任务" aria-label="终止后台任务" @click="abortConversation(entry)">
+              <IconSquare class="history-action-icon" stroke="2" aria-hidden="true" />
             </button>
-            <button type="button" class="history-action-button" title="重命名对话标题" aria-label="重命名对话标题" @click="renameConversation(entry.id)">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>
+            <button type="button" class="history-action-button" title="重命名对话标题" aria-label="重命名对话标题" @click="renameConversation(entry)">
+              <IconEdit class="history-action-icon" stroke="2" aria-hidden="true" />
             </button>
-            <button type="button" class="history-action-button danger" title="删除对话" aria-label="删除对话" @click="deleteConversation(entry.id)">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            <button type="button" class="history-action-button" title="删除对话" aria-label="删除对话" @click="deleteConversation(entry)">
+              <IconTrash class="history-action-icon" stroke="2" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -472,5 +552,35 @@ function ensureActiveScopeVisible(): void {
         </div>
       </div>
     </section>
+
+    <SidebarInputDialog
+      :open="isRenameDialogOpen"
+      title="重命名对话"
+      :description="renameDialogDescription"
+      label="对话标题"
+      :initial-value="renameInitialTitle"
+      placeholder="输入新的对话标题"
+      confirm-label="保存"
+      @confirm="confirmRenameConversation"
+      @cancel="closeRenameDialog"
+    />
+
+    <ConfirmPanel
+      :open="isDeleteDialogOpen"
+      title="删除对话？"
+      :description-html="deleteDialogDescriptionHtml"
+      :actions="deleteConfirmActions"
+      @confirm="confirmDeleteConversation"
+      @cancel="closeDeleteDialog"
+    />
+
+    <ConfirmPanel
+      :open="isAbortDialogOpen"
+      title="终止后台任务？"
+      :description-html="abortDialogDescriptionHtml"
+      :actions="abortConfirmActions"
+      @confirm="confirmAbortConversation"
+      @cancel="closeAbortDialog"
+    />
   </main>
 </template>

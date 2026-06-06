@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { IconChevronRight, IconTool } from '@tabler/icons-vue';
+import { IconTool } from '@tabler/icons-vue';
 import type { FunctionCallPart, ToolCallRecord, ToolCallStatus } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import ContentBlockSection from '../ContentBlockSection.vue';
+import CollapsibleContentBlock from '../CollapsibleContentBlock.vue';
 
 const props = defineProps<{
   part: FunctionCallPart;
@@ -23,7 +25,14 @@ const hasArgs = computed(() => {
   const text = argsText.value.trim();
   return Boolean(text && text !== '{}');
 });
-const hasDetails = computed(() => hasArgs.value || Boolean(toolCall.value?.error));
+const outputText = computed(() => {
+  const result = toolCall.value?.result;
+  if (result !== undefined) return stringifyToolResult(result);
+  const progress = toolCall.value?.progress;
+  return progress !== undefined ? stringifyValue(progress) : '';
+});
+const hasOutput = computed(() => Boolean(outputText.value.trim()));
+const hasDetails = computed(() => hasArgs.value || hasOutput.value || Boolean(toolCall.value?.error));
 const statusLabel = computed(() => toolCall.value ? labelForStatus(toolCall.value.status) : '已请求');
 const durationLabel = computed(() => {
   const duration = toolCall.value?.durationMs;
@@ -35,11 +44,6 @@ const toggleLabel = computed(() => {
   return expanded.value ? '收起工具调用内容' : '展开工具调用内容';
 });
 
-function toggleExpanded(): void {
-  if (!hasDetails.value) return;
-  expanded.value = !expanded.value;
-}
-
 function stringifyValue(value: unknown): string {
   if (typeof value === 'string') return value;
   try {
@@ -47,6 +51,28 @@ function stringifyValue(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function stringifyToolResult(value: unknown): string {
+  if (isRecord(value) && typeof value.output === 'string') {
+    return stringifyPossiblyJson(value.output);
+  }
+  return stringifyValue(value);
+}
+
+function stringifyPossiblyJson(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return value;
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2);
+  } catch {
+    return value;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function labelForStatus(status: ToolCallStatus): string {
@@ -65,40 +91,31 @@ function labelForStatus(status: ToolCallStatus): string {
 </script>
 
 <template>
-  <section class="tool-call-card" :class="toolCall ? `status-${toolCall.status}` : undefined">
-    <button
-      type="button"
-      class="part-card-header"
-      :class="{ 'is-empty': !hasDetails }"
-      :aria-expanded="expanded"
-      :aria-label="toggleLabel"
-      @click="toggleExpanded"
-    >
-      <IconChevronRight
-        class="part-card-chevron lc-collapse-chevron"
-        :class="{ 'is-expanded': expanded }"
-        stroke="2"
-        aria-hidden="true"
-      />
-      <IconTool class="part-card-icon" stroke="2" aria-hidden="true" />
+  <CollapsibleContentBlock
+    v-model:expanded="expanded"
+    class="tool-call-card"
+    :class="toolCall ? `status-${toolCall.status}` : undefined"
+    kind="input"
+    :collapsible="hasDetails"
+    :aria-label="toggleLabel"
+  >
+    <template #icon>
+      <IconTool stroke="2" aria-hidden="true" />
+    </template>
+    <template #summary>
       <span class="part-card-name">{{ part.functionCall.name }}</span>
+    </template>
+    <template #trail>
       <span class="part-card-status">{{ statusLabel }}</span>
       <span v-if="durationLabel" class="part-card-meta">{{ durationLabel }}</span>
-    </button>
-    <div
-      v-if="hasDetails"
-      class="part-card-content-shell lc-collapse-shell"
-      :class="{ 'is-expanded': expanded }"
-      :aria-hidden="!expanded"
-    >
-      <div class="part-card-content-frame lc-collapse-frame">
-        <div class="part-card-details">
-          <pre v-if="hasArgs" class="part-card-code">{{ argsText }}</pre>
-          <p v-if="toolCall?.error" class="part-card-error">{{ toolCall.error }}</p>
-        </div>
-      </div>
+    </template>
+
+    <div class="part-card-details">
+      <ContentBlockSection v-if="hasArgs" kind="input" title="输入" :text="argsText" />
+      <ContentBlockSection v-if="hasOutput" kind="output" title="输出" :text="outputText" />
+      <p v-if="toolCall?.error" class="part-card-error">{{ toolCall.error }}</p>
     </div>
-  </section>
+  </CollapsibleContentBlock>
 </template>
 
 <style scoped>
@@ -106,57 +123,6 @@ function labelForStatus(status: ToolCallStatus): string {
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-sm);
   font-style: normal;
-}
-
-.part-card-header {
-  width: 100%;
-  min-width: 0;
-  min-height: 0;
-  padding: 4px 7px;
-  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.22));
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: inherit;
-  background: var(--lc-content-input-background);
-  cursor: pointer;
-  text-align: left;
-  line-height: 1.6;
-}
-
-.part-card-header:hover,
-.part-card-header:focus-visible {
-  color: var(--vscode-foreground);
-  background: var(--lc-content-input-background);
-}
-
-.part-card-header:focus-visible {
-  outline: 1px solid var(--vscode-focusBorder, currentColor);
-  outline-offset: 2px;
-}
-
-.part-card-header.is-empty {
-  cursor: default;
-}
-
-.part-card-header.is-empty .part-card-chevron {
-  opacity: 0.45;
-}
-
-.part-card-chevron,
-.part-card-icon {
-  width: 14px;
-  height: 14px;
-  color: var(--lc-content-icon-color);
-  flex: 0 0 auto;
-}
-
-.part-card-header:hover .part-card-chevron,
-.part-card-header:hover .part-card-icon,
-.part-card-header:focus-visible .part-card-chevron,
-.part-card-header:focus-visible .part-card-icon {
-  color: currentColor;
 }
 
 .part-card-name {
@@ -170,32 +136,15 @@ function labelForStatus(status: ToolCallStatus): string {
 .part-card-status,
 .part-card-meta {
   flex: 0 0 auto;
-  margin-left: auto;
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-xs);
-}
-
-.part-card-meta {
-  margin-left: 0;
 }
 
 .part-card-details {
   margin: 3px 0 0;
-  padding: 8px 10px;
-  border-left: 2px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.32));
-  color: var(--vscode-descriptionForeground);
-  background: var(--lc-content-input-background);
-}
-
-.part-card-code {
-  margin: 0;
-  max-height: 180px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Consolas, monospace);
-  font-size: var(--font-size-xs);
-  color: var(--vscode-descriptionForeground);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .part-card-error {

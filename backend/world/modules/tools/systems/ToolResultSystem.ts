@@ -1,15 +1,14 @@
 import { defineQuery, defineSystem, type Entity, type WorldReader } from '../../../../ecs/types';
-import { AgentRun, ToolCallRunLink } from '../../agentRun/components';
+import { AgentRun, AgentRunNeedsModel, MessageRunLink, ToolCallRunLink } from '../../agentRun/components';
 import { markRunNeedsModel, spawnMessageRunLink } from '../../agentRun/bundles';
-import { runTarget } from '../../agentRun/queries';
-import { PartOf } from '../../chat/components';
+import { runForToolCall, runTarget } from '../../agentRun/queries';
 import { spawnToolResponseMessage, ToolResultMessageBundle } from '../../chat/bundles';
 import { ToolCall, ToolResultConsumed, ToolState } from '../components';
 import { isTerminalToolStatus, toolStateToResponse } from '../state';
 
 const SettledToolCallsQuery = defineQuery({
   name: 'SettledToolCalls',
-  all: [ToolCall, ToolState, ToolCallRunLink],
+  all: [ToolCall, ToolState],
   none: [ToolResultConsumed],
   read: [ToolCall, ToolState, ToolCallRunLink, AgentRun],
   add: [ToolResultConsumed],
@@ -19,7 +18,7 @@ const SettledToolCallsQuery = defineQuery({
 
 const ActiveToolWorkLookupQuery = defineQuery({
   name: 'ActiveToolWorkLookup',
-  all: [ToolCall, ToolState, ToolCallRunLink],
+  all: [ToolCall, ToolState],
   read: [ToolCall, ToolState, ToolCallRunLink, ToolResultConsumed],
   role: 'lookup'
 });
@@ -29,14 +28,14 @@ export const ToolResultSystem = defineSystem({
   access: {
     queries: [SettledToolCallsQuery, ActiveToolWorkLookupQuery],
     bundles: [ToolResultMessageBundle],
-    writes: { components: [AgentRun] }
+    writes: { components: [AgentRun, AgentRunNeedsModel, MessageRunLink] }
   },
   run({ world, cmd }) {
     const settled = world
-      .query(ToolCall, ToolState, ToolCallRunLink)
+      .query(ToolCall, ToolState)
       .filter((entity) => {
         const state = world.get(entity, ToolState);
-        return !!state && isTerminalToolStatus(state.status) && !world.has(entity, ToolResultConsumed);
+        return !!state && isTerminalToolStatus(state.status) && !world.has(entity, ToolResultConsumed) && runForToolCall(world, entity) !== undefined;
       });
     if (settled.length === 0) return;
 
@@ -45,7 +44,7 @@ export const ToolResultSystem = defineSystem({
     for (const entity of settled) {
       const call = world.get(entity, ToolCall);
       const state = world.get(entity, ToolState);
-      const run = world.get(entity, ToolCallRunLink)?.run;
+      const run = runForToolCall(world, entity);
       if (!call || !state || run === undefined || !isTerminalToolStatus(state.status)) continue;
       const runData = world.get(run, AgentRun);
       if (!runData || isTerminalRunStatus(runData.status)) continue;
@@ -79,8 +78,8 @@ export const ToolResultSystem = defineSystem({
 });
 
 function hasPendingToolWork(world: WorldReader, run: Entity, consumedThisPass: ReadonlySet<Entity>): boolean {
-  return world.query(ToolCall, ToolState, ToolCallRunLink).some((entity) => {
-    if (world.get(entity, ToolCallRunLink)?.run !== run) return false;
+  return world.query(ToolCall, ToolState).some((entity) => {
+    if (runForToolCall(world, entity) !== run) return false;
     const state = world.get(entity, ToolState);
     if (!state) return false;
     const fullySettled = isTerminalToolStatus(state.status) && (world.has(entity, ToolResultConsumed) || consumedThisPass.has(entity));

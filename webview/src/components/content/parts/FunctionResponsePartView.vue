@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { FunctionResponsePart } from '@shared/protocol';
+import ContentBlockSection from '../ContentBlockSection.vue';
 
 const props = defineProps<{
   part: FunctionResponsePart;
@@ -24,17 +25,13 @@ function stringifyValue(value: unknown): string {
       <span class="part-card-title">工具响应</span>
       <span class="part-card-name">{{ part.functionResponse.name }}</span>
     </header>
-    <pre v-if="responseText" class="part-card-code">{{ responseText }}</pre>
+    <ContentBlockSection v-if="responseText" kind="output" title="输出" :text="responseText" />
   </section>
 </template>
 
 <style scoped>
 .part-card {
-  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.24));
-  border-radius: var(--radius-sm);
-  padding: 8px 10px;
-  background: var(--lc-content-output-background);
-  color: var(--vscode-foreground);
+  color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-sm);
 }
 
@@ -43,6 +40,7 @@ function stringifyValue(value: unknown): string {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  margin: 0 0 3px;
 }
 
 .part-card-title {
@@ -56,16 +54,5 @@ function stringifyValue(value: unknown): string {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
-}
-
-.part-card-code {
-  margin: 6px 0 0;
-  max-height: 180px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Consolas, monospace);
-  font-size: var(--font-size-xs);
-  color: var(--vscode-descriptionForeground);
 }
 </style>

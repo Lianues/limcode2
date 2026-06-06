@@ -192,7 +192,8 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
     const run = world.get(requestData.run, AgentRun);
     if (run) {
       const now = Date.now();
-      const nextStatus = errorMessage ? 'failed' : sawToolCall ? 'waiting_tool' : 'delivering';
+      const waitsForTool = sawToolCall || next.content.parts.some(isFunctionCallPart);
+      const nextStatus = errorMessage ? 'failed' : waitsForTool ? 'waiting_tool' : 'delivering';
       cmd.add(requestData.run, AgentRun, {
         ...run,
         status: nextStatus,

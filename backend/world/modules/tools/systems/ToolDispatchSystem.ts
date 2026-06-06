@@ -61,6 +61,7 @@ import { ToolEventType } from '../events';
 import { transitionToolState } from '../state';
 import { ToolSchemasKey } from '../resources';
 import type {
+  AgentRunStatus,
   ContextHistoryMode,
   ConversationPolicyMode,
   ConversationVisibility,
@@ -127,6 +128,7 @@ export const ToolDispatchSystem = defineSystem({
         rejectToolCall(cmd, entity, call, state, authorization.reason);
         continue;
       }
+      if (!isRunReadyForToolExecution(authorization)) continue;
       dispatchToolCall(world, cmd, entity, call, state, authorization);
     }
 
@@ -145,6 +147,7 @@ export const ToolDispatchSystem = defineSystem({
         rejectToolCall(cmd, entity, call, state, authorization.reason);
         continue;
       }
+      if (!isRunReadyForToolExecution(authorization)) continue;
 
       if (requiresApproval(authorization.approvalPolicy, call.name)) {
         awaitApproval(cmd, entity, call, state, authorization.agentId, authorization.runId);
@@ -157,7 +160,7 @@ export const ToolDispatchSystem = defineSystem({
 });
 
 type AuthorizationResult =
-  | { ok: true; run: Entity; runId: string; policy: ToolPolicyData; approvalPolicy: ApprovalPolicyData | undefined; agentId: string; conversationId: string }
+  | { ok: true; run: Entity; runId: string; runStatus: AgentRunStatus; policy: ToolPolicyData; approvalPolicy: ApprovalPolicyData | undefined; agentId: string; conversationId: string }
   | { ok: false; reason: string };
 
 function isSettledOrRunning(state: ToolStateData): boolean {
@@ -167,24 +170,31 @@ function isSettledOrRunning(state: ToolStateData): boolean {
 function authorizeRunToolExecution(world: WorldReader, toolCall: Entity, call: ToolCallData): AuthorizationResult {
   const run = runForToolCall(world, toolCall);
   if (run === undefined) return { ok: false, reason: '工具调用没有关联 AgentRun，无法执行。' };
+  const runData = world.get(run, AgentRun);
+  if (!runData) return { ok: false, reason: '工具调用关联的 AgentRun 不存在。' };
   const target = runTarget(world, run);
   if (!target) return { ok: false, reason: '工具调用所属 AgentRun 没有目标 Agent/Conversation。' };
   const agent = world.get(target.agent, Agent);
   const conversation = world.get(target.conversation, Conversation);
   const policy = activeToolPolicyForRun(world, run);
-  if (!policy) return { ok: false, reason: `AgentRun ${world.get(run, AgentRun)?.id ?? run} 没有 active ToolPolicy。` };
+  if (!policy) return { ok: false, reason: `AgentRun ${runData.id} 没有 active ToolPolicy。` };
   if (!policy.allowedTools.includes(call.name)) {
-    return { ok: false, reason: `AgentRun ${world.get(run, AgentRun)?.id ?? run} 不允许执行工具 ${call.name}。` };
+    return { ok: false, reason: `AgentRun ${runData.id} 不允许执行工具 ${call.name}。` };
   }
   return {
     ok: true,
     run,
-    runId: world.get(run, AgentRun)?.id ?? String(run),
+    runId: runData.id,
+    runStatus: runData.status,
     policy,
     approvalPolicy: activeApprovalPolicyForRun(world, run),
     agentId: agent?.id ?? String(target.agent),
     conversationId: conversation?.id ?? String(target.conversation)
   };
+}
+
+function isRunReadyForToolExecution(authorization: Extract<AuthorizationResult, { ok: true }>): boolean {
+  return authorization.runStatus === 'waiting_tool';
 }
 
 function dispatchToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {

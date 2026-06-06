@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { IconBulb, IconChevronRight } from '@tabler/icons-vue';
+import { IconBulb } from '@tabler/icons-vue';
 import { useSmoothStreamingText } from '../useSmoothStreamingText';
+import CollapsibleContentBlock from '../CollapsibleContentBlock.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -22,10 +23,6 @@ const tailText = computed(() => {
   if (props.streaming) return '思考中';
   return props.durationMs !== undefined ? `已思考 ${formatThoughtDuration(props.durationMs)}` : '思考完成';
 });
-
-function toggleExpanded(): void {
-  expanded.value = !expanded.value;
-}
 
 function lastNonEmptyLine(text: string): string {
   const lines = text.trimEnd().split(/\r?\n/);
@@ -57,83 +54,32 @@ function formatThoughtDuration(durationMs: number): string {
 </script>
 
 <template>
-  <section class="thought-panel" :class="{ 'is-expanded': expanded, 'is-streaming': streaming }">
-    <button
-      type="button"
-      class="thought-summary"
-      :aria-expanded="expanded"
-      :aria-label="expanded ? '收起思考内容' : '展开思考内容'"
-      @click="toggleExpanded"
-    >
-      <IconChevronRight
-        class="thought-chevron lc-collapse-chevron"
-        :class="{ 'is-expanded': expanded }"
-        stroke="2"
-        aria-hidden="true"
-      />
-      <IconBulb class="thought-icon" :class="{ 'is-active': streaming }" stroke="2" aria-hidden="true" />
+  <CollapsibleContentBlock
+    v-model:expanded="expanded"
+    class="thought-panel"
+    :class="{ 'is-streaming': streaming }"
+    kind="input"
+    :icon-active="streaming"
+    :aria-label="expanded ? '收起思考内容' : '展开思考内容'"
+  >
+    <template #icon>
+      <IconBulb stroke="2" aria-hidden="true" />
+    </template>
+    <template #summary>
       <span class="thought-preview">{{ preview }}</span>
+    </template>
+    <template #trail>
       <span class="thought-tail">{{ tailText }}</span>
-    </button>
-    <div class="thought-content-shell lc-collapse-shell" :class="{ 'is-expanded': expanded }" :aria-hidden="!expanded">
-      <div class="thought-content-frame lc-collapse-frame">
-        <pre class="thought-content">{{ displayedText }}<span v-if="streaming" class="thought-cursor">▋</span></pre>
-      </div>
-    </div>
-  </section>
+    </template>
+
+    <pre class="thought-content">{{ displayedText }}<span v-if="streaming" class="thought-cursor">▋</span></pre>
+  </CollapsibleContentBlock>
 </template>
 
 <style scoped>
 .thought-panel {
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-sm);
-}
-
-.thought-summary {
-  width: 100%;
-  min-width: 0;
-  min-height: 0;
-  padding: 4px 7px;
-  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.22));
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: inherit;
-  background: var(--lc-content-input-background);
-  cursor: pointer;
-  text-align: left;
-  line-height: 1.6;
-}
-
-.thought-summary:hover,
-.thought-summary:focus-visible {
-  color: var(--vscode-foreground);
-  background: var(--lc-content-input-background);
-}
-
-.thought-summary:focus-visible {
-  outline: 1px solid var(--vscode-focusBorder, currentColor);
-  outline-offset: 2px;
-}
-
-.thought-chevron,
-.thought-icon {
-  width: 14px;
-  height: 14px;
-  flex: 0 0 auto;
-  color: var(--lc-content-icon-color);
-}
-
-.thought-summary:hover .thought-chevron,
-.thought-summary:hover .thought-icon,
-.thought-summary:focus-visible .thought-chevron,
-.thought-summary:focus-visible .thought-icon {
-  color: currentColor;
-}
-
-.thought-icon.is-active {
-  color: var(--vscode-editorWarning-foreground, #cca700);
 }
 
 .thought-preview {

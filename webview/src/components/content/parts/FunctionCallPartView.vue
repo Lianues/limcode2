@@ -152,6 +152,13 @@ function labelForStatus(status: ToolCallStatus): string {
   flex: 0 0 auto;
 }
 
+.part-card-header:hover .part-card-chevron,
+.part-card-header:hover .part-card-icon,
+.part-card-header:focus-visible .part-card-chevron,
+.part-card-header:focus-visible .part-card-icon {
+  color: currentColor;
+}
+
 .part-card-name {
   min-width: 0;
   overflow: hidden;

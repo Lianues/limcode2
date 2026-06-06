@@ -125,6 +125,13 @@ function formatThoughtDuration(durationMs: number): string {
   color: var(--lc-content-icon-color);
 }
 
+.thought-summary:hover .thought-chevron,
+.thought-summary:hover .thought-icon,
+.thought-summary:focus-visible .thought-chevron,
+.thought-summary:focus-visible .thought-icon {
+  color: currentColor;
+}
+
 .thought-icon.is-active {
   color: var(--vscode-editorWarning-foreground, #cca700);
 }

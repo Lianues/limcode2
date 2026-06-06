@@ -52,6 +52,7 @@ export function registerSidebarEntryView(context: vscode.ExtensionContext, backe
     })
   );
   context.subscriptions.push(MainPanel.onDidChangeConversationPanelState(() => provider.refreshPanelStates()));
+  context.subscriptions.push(backendApp.onDidChangeConversationHistory(() => provider.refreshPanelStates()));
 }
 
 class SidebarEntryViewProvider implements vscode.WebviewViewProvider {

@@ -114,6 +114,8 @@ export class BackendApplication {
   private readonly pendingSnapshotConversationIds = new Set<string>();
   private readonly pendingHydrationMessages: Array<{ clientId: BridgeClientId; message: WebviewToExtensionMessage }> = [];
   private readonly loadedConversationDetails = new Set<string>();
+  private readonly conversationHistoryChangedEmitter = new vscode.EventEmitter<void>();
+  public readonly onDidChangeConversationHistory = this.conversationHistoryChangedEmitter.event;
 
   public constructor(context: vscode.ExtensionContext) {
     const { env, toolSchemas } = createRuntimeEnv(context);
@@ -155,6 +157,7 @@ export class BackendApplication {
       afterTick: () => {
         flushEffects(this.outbox, this.env, (event) => this.world.enqueue(event), this.effectHandlers);
         this.persistence.queuePersist();
+        this.conversationHistoryChangedEmitter.fire();
       }
     }, {
       parallelWorkers: true

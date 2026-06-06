@@ -7,6 +7,7 @@ import { conversationCreatedAtFromId, displayConversationTitle } from '../../sha
 import { conversationDetailSlice } from '../capabilities/vscodeStorage/clientStateStore';
 
 const DEFAULT_PERSIST_DEBOUNCE_MS = 500;
+const DEFAULT_HISTORY_PERSIST_DEBOUNCE_MS = 80;
 
 export interface ClientStatePersistenceOptions {
   isConversationDetailLoaded?: (conversationId: string) => boolean;
@@ -23,7 +24,10 @@ export class ClientStatePersistence {
   private pendingSkeletonState: ClientState | undefined;
   private readonly lastPersistedDetailJson = new Map<string, string>();
   private readonly pendingDetailStates = new Map<string, ClientState>();
+  private readonly pendingHistoryStates = new Map<string, ClientState>();
   private persistTimer: ReturnType<typeof setTimeout> | undefined;
+  private historyPersistTimer: ReturnType<typeof setTimeout> | undefined;
+  private historyPersistInFlight = false;
 
   private projectionClock = '';
   private contributorStates: Record<string, StorageContributorProjectionState> = {};
@@ -51,6 +55,7 @@ export class ClientStatePersistence {
     const projection = this.projectLatestState();
     if (!projection || !projection.changed) return;
     this.collectPendingStates(projection.state, false);
+    this.scheduleHistoryIfPending();
     this.scheduleIfPending();
   }
 
@@ -59,17 +64,24 @@ export class ClientStatePersistence {
       clearTimeout(this.persistTimer);
       this.persistTimer = undefined;
     }
+    if (this.historyPersistTimer) {
+      clearTimeout(this.historyPersistTimer);
+      this.historyPersistTimer = undefined;
+    }
 
     const latestState = this.projectLatestState()?.state ?? this.lastProjectedState;
     if (!this.enabled || !latestState) return;
 
     this.collectPendingStates(latestState, !!options.force);
-    if (!this.pendingSkeletonState && this.pendingDetailStates.size === 0) return;
+    if (!this.pendingSkeletonState && this.pendingDetailStates.size === 0 && this.pendingHistoryStates.size === 0) return;
 
     const skeletonState = this.pendingSkeletonState;
     const detailStates = [...this.pendingDetailStates.entries()];
+    const detailConversationIds = new Set(detailStates.map(([conversationId]) => conversationId));
+    const historyStates = [...this.pendingHistoryStates.entries()].filter(([conversationId]) => !detailConversationIds.has(conversationId));
     this.pendingSkeletonState = undefined;
     this.pendingDetailStates.clear();
+    this.pendingHistoryStates.clear();
 
     try {
       if (skeletonState) {
@@ -83,6 +95,7 @@ export class ClientStatePersistence {
         const entry = projectConversationHistoryEntry(state, conversationId);
         if (entry) await this.storage.upsertConversationHistoryEntry(entry);
       }
+      await this.persistHistoryEntries(historyStates);
     } catch (error) {
       console.warn('[LimCode] Failed to persist client state:', error);
       if (options.throwOnError) throw error;
@@ -100,6 +113,7 @@ export class ClientStatePersistence {
       const detailJson = JSON.stringify(detail);
       if (!force && detailJson === this.lastPersistedDetailJson.get(conversationId)) continue;
       this.pendingDetailStates.set(conversationId, state);
+      this.pendingHistoryStates.set(conversationId, state);
     }
   }
 
@@ -117,6 +131,42 @@ export class ClientStatePersistence {
     if (!this.pendingSkeletonState && this.pendingDetailStates.size === 0) return;
     if (this.persistTimer) clearTimeout(this.persistTimer);
     this.persistTimer = setTimeout(() => { void this.persistImmediately(); }, this.debounceMs);
+  }
+
+  private scheduleHistoryIfPending(): void {
+    if (this.pendingHistoryStates.size === 0) return;
+    if (this.historyPersistTimer || this.historyPersistInFlight) return;
+    this.historyPersistTimer = setTimeout(() => {
+      void this.persistHistoryImmediately();
+    }, DEFAULT_HISTORY_PERSIST_DEBOUNCE_MS);
+  }
+
+  private async persistHistoryImmediately(): Promise<void> {
+    if (this.historyPersistTimer) {
+      clearTimeout(this.historyPersistTimer);
+      this.historyPersistTimer = undefined;
+    }
+    if (this.historyPersistInFlight || this.pendingHistoryStates.size === 0) return;
+
+    const historyStates = [...this.pendingHistoryStates.entries()];
+    this.pendingHistoryStates.clear();
+    this.historyPersistInFlight = true;
+
+    try {
+      await this.persistHistoryEntries(historyStates);
+    } catch (error) {
+      console.warn('[LimCode] Failed to persist conversation history projection:', error);
+    } finally {
+      this.historyPersistInFlight = false;
+      this.scheduleHistoryIfPending();
+    }
+  }
+
+  private async persistHistoryEntries(historyStates: Array<[string, ClientState]>): Promise<void> {
+    for (const [conversationId, state] of historyStates) {
+      const entry = projectConversationHistoryEntry(state, conversationId);
+      if (entry) await this.storage.upsertConversationHistoryEntry(entry);
+    }
   }
 
   private projectLatestState(): { state: ClientState; changed: boolean } | undefined {

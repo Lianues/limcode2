@@ -73,10 +73,10 @@ export async function loadConversationHistoryPageFromStore(paths: StoragePaths, 
 }
 
 export async function upsertConversationHistoryEntryInStore(paths: StoragePaths, entry: SidebarConversationHistoryEntry): Promise<void> {
-  await removeConversationHistoryEntryFromStore(paths, entry.id);
-  await upsertIntoScope(paths, { kind: 'all' }, entry);
   const scoped = entry.projectFolderUri ? { kind: 'project' as const, folderUri: entry.projectFolderUri } : { kind: 'unbound' as const };
-  await upsertIntoScope(paths, scoped, entry);
+  const targetScopes: ConversationHistoryScope[] = [{ kind: 'all' }, scoped];
+  await Promise.all(targetScopes.map((scope) => upsertIntoScope(paths, scope, entry)));
+  await removeFromStaleScopes(paths, entry.id, targetScopes);
 }
 
 export async function removeConversationHistoryEntryFromStore(paths: StoragePaths, conversationId: string): Promise<void> {
@@ -99,6 +99,13 @@ async function removeFromScope(paths: StoragePaths, scope: ConversationHistorySc
   if (next.length === entries.length) return;
   await writeScopeEntries(paths, scope, next);
 }
+
+async function removeFromStaleScopes(paths: StoragePaths, conversationId: string, targetScopes: ConversationHistoryScope[]): Promise<void> {
+  const scopes = await existingScopes(paths);
+  const staleScopes = scopes.filter((scope) => !targetScopes.some((target) => sameScope(scope, target)));
+  await Promise.all(staleScopes.map((scope) => removeFromScope(paths, scope, conversationId)));
+}
+
 
 async function loadAllEntriesForScope(paths: StoragePaths, scope: ConversationHistoryScope): Promise<SidebarConversationHistoryEntry[]> {
   const root = scopeRoot(paths, scope);

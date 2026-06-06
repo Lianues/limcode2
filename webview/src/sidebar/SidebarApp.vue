@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { IconEdit, IconSquare, IconTrash } from '@tabler/icons-vue';
 import type { ConversationHistoryPageInfo } from '@shared/protocol';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
+import InputPanel from '@webview/components/ui/InputPanel.vue';
 import { onSidebarMessage, postSidebarMessage } from './sidebarHost';
 import {
   SIDEBAR_MESSAGE,
@@ -11,7 +12,6 @@ import {
   type SidebarHistoryScopeKind,
   type SidebarConversationHistoryEntry
 } from './types';
-import SidebarInputDialog from './components/SidebarInputDialog.vue';
 
 type SidebarView = 'history' | 'settings' | 'projectPicker';
 interface ScopeOption {
@@ -553,7 +553,7 @@ function ensureActiveScopeVisible(): void {
       </div>
     </section>
 
-    <SidebarInputDialog
+    <InputPanel
       :open="isRenameDialogOpen"
       title="重命名对话"
       :description="renameDialogDescription"

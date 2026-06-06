@@ -3,8 +3,6 @@ import { computed, onBeforeUnmount, shallowRef, watch } from 'vue';
 import { useSmoothStreamingText } from '../useSmoothStreamingText';
 import { renderMarkdown } from '../markdown/markdownRenderer';
 
-const STREAM_RENDER_INTERVAL_MS = 64;
-
 const props = withDefaults(
   defineProps<{
     text: string;
@@ -23,8 +21,6 @@ const renderedHtml = shallowRef('');
 const markdownReady = computed(() => props.markdown);
 
 let renderVersion = 0;
-let lastRenderTime = 0;
-let timeoutId: number | undefined;
 let frameId: number | undefined;
 let scheduled = false;
 let disposed = false;
@@ -51,20 +47,12 @@ function scheduleMarkdownRender(): void {
 
   if (scheduled) return;
 
-  const now = performance.now();
-  const minDelay = props.streaming ? STREAM_RENDER_INTERVAL_MS : 0;
-  const delay = Math.max(0, minDelay - (now - lastRenderTime));
-
   scheduled = true;
-  timeoutId = window.setTimeout(() => {
-    timeoutId = undefined;
-    frameId = window.requestAnimationFrame(() => {
-      frameId = undefined;
-      scheduled = false;
-      lastRenderTime = performance.now();
-      void renderCurrentMarkdown(renderVersion);
-    });
-  }, delay);
+  frameId = window.requestAnimationFrame(() => {
+    frameId = undefined;
+    scheduled = false;
+    void renderCurrentMarkdown(renderVersion);
+  });
 }
 
 async function renderCurrentMarkdown(version: number): Promise<void> {
@@ -89,11 +77,6 @@ async function renderCurrentMarkdown(version: number): Promise<void> {
 
 function clearScheduledRender(): void {
   scheduled = false;
-
-  if (timeoutId !== undefined) {
-    window.clearTimeout(timeoutId);
-    timeoutId = undefined;
-  }
 
   if (frameId !== undefined) {
     window.cancelAnimationFrame(frameId);

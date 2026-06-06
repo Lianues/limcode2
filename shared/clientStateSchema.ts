@@ -156,7 +156,7 @@ function clientSyncSpec(defaultApply: Readonly<Partial<Record<ClientStatePatchOp
     ...(overrides.cascadeRemove ? { cascadeRemove: overrides.cascadeRemove } : {}),
     ...(overrides.scope ? { scope: overrides.scope } : {}),
     ...(overrides.removeScope ? { removeScope: overrides.removeScope } : {}),
-    globalSnapshot: overrides.globalSnapshot ?? true
+    globalSnapshot: overrides.globalSnapshot ?? !overrides.scope
   };
 }
 
@@ -290,6 +290,7 @@ export const CLIENT_STATE_TABLES = {
   modeModelProfileLinks: upsertRemoveTable('modeModelProfileLink', 'link'),
   conversations: upsertRemoveTable('conversation', 'conversation', {
     scope: { kind: 'conversation', field: 'id', replace: 'upsertOnly' },
+    globalSnapshot: true,
     removeScope: { kind: 'conversation' },
     cascadeRemove: [
       { table: 'conversationReuseLinks', foreignKey: 'conversationId' },
@@ -299,13 +300,14 @@ export const CLIENT_STATE_TABLES = {
       { table: 'messages', foreignKey: 'conversationId', cascade: true }
     ]
   }),
-  conversationReuseLinks: upsertRemoveTable('conversationReuseLink', 'link', { scope: { kind: 'conversation', field: 'conversationId' } }),
-  conversationBranchLinks: upsertRemoveTable('conversationBranchLink', 'link', { scope: { kind: 'conversationAny', fields: ['sourceConversationId', 'targetConversationId'] } }),
-  agentConversationLinks: upsertRemoveTable('agentConversationLink', 'link', { scope: { kind: 'conversation', field: 'conversationId', replace: 'removeOnly' } }),
+  conversationReuseLinks: upsertRemoveTable('conversationReuseLink', 'link', { scope: { kind: 'conversation', field: 'conversationId' }, globalSnapshot: true }),
+  conversationBranchLinks: upsertRemoveTable('conversationBranchLink', 'link', { scope: { kind: 'conversationAny', fields: ['sourceConversationId', 'targetConversationId'] }, globalSnapshot: true }),
+  agentConversationLinks: upsertRemoveTable('agentConversationLink', 'link', { scope: { kind: 'conversation', field: 'conversationId', replace: 'removeOnly' }, globalSnapshot: true }),
   projectContexts: upsertRemoveTable('projectContext', 'projectContext', {
     cascadeRemove: [
       { table: 'conversationProjectLinks', foreignKey: 'projectContextId' }
     ],
+    globalSnapshot: true,
     scope: {
       kind: 'conversationReverseVia',
       table: 'conversationProjectLinks',
@@ -314,7 +316,7 @@ export const CLIENT_STATE_TABLES = {
       replace: 'upsertOnly'
     }
   }),
-  conversationProjectLinks: upsertRemoveTable('conversationProjectLink', 'link', { scope: { kind: 'conversation', field: 'conversationId' } }),
+  conversationProjectLinks: upsertRemoveTable('conversationProjectLink', 'link', { scope: { kind: 'conversation', field: 'conversationId' }, globalSnapshot: true }),
   messages: {
     patch: {
       upsert: { kind: 'message.upsert', payloadField: 'message' },

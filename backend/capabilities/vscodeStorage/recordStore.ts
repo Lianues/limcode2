@@ -29,9 +29,12 @@ export async function loadRecordStore<TRecord extends { id: string }, TKey exten
   if (!isRecordsIndexFile(index)) return undefined;
 
   const records: TRecord[] = [];
-  for (const record of index.records) {
+  const files = await Promise.all(index.records.map(async (record) => {
     const file = await readJson<RecordFile<TKey, TRecord>>(vscode.Uri.joinPath(root, ...record.file.split('/')));
-    if (file?.schemaVersion === STORAGE_VERSION) records.push(file[recordKey]);
+    return file?.schemaVersion === STORAGE_VERSION ? file[recordKey] : undefined;
+  }));
+  for (const record of files) {
+    if (record) records.push(record);
   }
   return records;
 }
@@ -49,11 +52,14 @@ export async function loadRecordStoreByIds<TRecord extends { id: string }, TKey 
   if (wanted.size === 0) return [];
   const indexById = new Map(index.records.map((record) => [record.id, record]));
   const records: TRecord[] = [];
-  for (const id of wanted) {
+  const files = await Promise.all([...wanted].map(async (id) => {
     const record = indexById.get(id);
-    if (!record) continue;
+    if (!record) return undefined;
     const file = await readJson<RecordFile<TKey, TRecord>>(vscode.Uri.joinPath(root, ...record.file.split('/')));
-    if (file?.schemaVersion === STORAGE_VERSION) records.push(file[recordKey]);
+    return file?.schemaVersion === STORAGE_VERSION ? file[recordKey] : undefined;
+  }));
+  for (const record of files) {
+    if (record) records.push(record);
   }
   return records;
 }

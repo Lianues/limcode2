@@ -50,6 +50,10 @@ import { loadRecordStore, loadRecordStoreByIds, saveRecordStore, upsertRecordSto
 
 export type StoragePaths = ReturnType<typeof createVscodeStoragePaths>;
 
+export interface LoadConversationDetailOptions {
+  includeRunHistory?: boolean;
+}
+
 type StoreKey = string;
 type StoreRecord = { id: string };
 
@@ -166,36 +170,96 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Pr
   return hasAnyState(state) ? state : undefined;
 }
 
-export async function loadConversationDetailFromStores(paths: StoragePaths, conversationId: string): Promise<ClientState | undefined> {
+export async function loadConversationDetailFromStores(
+  paths: StoragePaths,
+  conversationId: string,
+  options: LoadConversationDetailOptions = {}
+): Promise<ClientState | undefined> {
+  const includeRunHistory = options.includeRunHistory ?? true;
   const state = createEmptyClientState();
   const detailRoot = conversationDetailRoot(paths, conversationId);
-  state.messages = await loadRecords<MessageRecord>(...subStore(detailRoot, CONVERSATION_MESSAGES_DIR), 'message');
-  state.messageRevisions = await loadRecords<MessageRevisionRecord>(...subStore(detailRoot, CONVERSATION_MESSAGE_REVISIONS_DIR), 'revision');
-  state.messageCurrentRevisionLinks = await loadRecords<MessageCurrentRevisionLinkRecord>(...subStore(detailRoot, MESSAGE_CURRENT_REVISION_LINKS_DIR), 'link');
-  state.toolCalls = await loadRecords<ToolCallRecord>(...subStore(detailRoot, CONVERSATION_TOOL_CALLS_DIR), 'toolCall');
-  state.toolCallEvents = await loadRecords<ToolCallEventRecord>(...subStore(detailRoot, CONVERSATION_TOOL_CALL_EVENTS_DIR), 'event');
 
-  const runIndex = await loadConversationRunIndex(paths, conversationId);
-  if (runIndex) {
-    state.agentRuns = await loadRecordsByIds<AgentRunRecord>(paths.agentRunsRootUri, paths.agentRunsIndexUri, 'run', runIndex.agentRunIds);
-    state.agentRunSourceLinks = await loadRecordsByIds<AgentRunSourceLinkRecord>(paths.agentRunSourceLinksRootUri, paths.agentRunSourceLinksIndexUri, 'link', runIndex.agentRunSourceLinkIds);
-    state.agentRunTargetLinks = await loadRecordsByIds<AgentRunTargetLinkRecord>(paths.agentRunTargetLinksRootUri, paths.agentRunTargetLinksIndexUri, 'link', runIndex.agentRunTargetLinkIds);
-    state.messageRunLinks = await loadRecordsByIds<MessageRunLinkRecord>(paths.messageRunLinksRootUri, paths.messageRunLinksIndexUri, 'link', runIndex.messageRunLinkIds);
-    state.toolCallRunLinks = await loadRecordsByIds<ToolCallRunLinkRecord>(paths.toolCallRunLinksRootUri, paths.toolCallRunLinksIndexUri, 'link', runIndex.toolCallRunLinkIds);
-    state.runConversationPolicies = await loadRecordsByIds<RunConversationPolicyRecord>(...subStore(paths.runPoliciesRootUri, RUN_CONVERSATION_POLICIES_DIR), 'policy', runIndex.runConversationPolicyIds);
-    state.runContextPolicies = await loadRecordsByIds<RunContextPolicyRecord>(...subStore(paths.runPoliciesRootUri, RUN_CONTEXT_POLICIES_DIR), 'policy', runIndex.runContextPolicyIds);
-    state.runDeliveryPolicies = await loadRecordsByIds<RunDeliveryPolicyRecord>(...subStore(paths.runPoliciesRootUri, RUN_DELIVERY_POLICIES_DIR), 'policy', runIndex.runDeliveryPolicyIds);
-    state.runEditPolicies = await loadRecordsByIds<RunEditPolicyRecord>(...subStore(paths.runPoliciesRootUri, RUN_EDIT_POLICIES_DIR), 'policy', runIndex.runEditPolicyIds);
-    state.runModeLinks = await loadRecordsByIds<RunModeLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_MODE_LINKS_DIR), 'link', runIndex.runModeLinkIds);
-    state.runSystemPromptLinks = await loadRecordsByIds<RunSystemPromptLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_SYSTEM_PROMPT_LINKS_DIR), 'link', runIndex.runSystemPromptLinkIds);
-    state.runModelProfileLinks = await loadRecordsByIds<RunModelProfileLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_MODEL_PROFILE_LINKS_DIR), 'link', runIndex.runModelProfileLinkIds);
-    state.runToolPolicyLinks = await loadRecordsByIds<RunToolPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_TOOL_POLICY_LINKS_DIR), 'link', runIndex.runToolPolicyLinkIds);
-    state.runApprovalPolicyLinks = await loadRecordsByIds<RunApprovalPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_APPROVAL_POLICY_LINKS_DIR), 'link', runIndex.runApprovalPolicyLinkIds);
-    state.runConversationPolicyLinks = await loadRecordsByIds<RunConversationPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_CONVERSATION_POLICY_LINKS_DIR), 'link', runIndex.runConversationPolicyLinkIds);
-    state.runContextPolicyLinks = await loadRecordsByIds<RunContextPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_CONTEXT_POLICY_LINKS_DIR), 'link', runIndex.runContextPolicyLinkIds);
-    state.runDeliveryPolicyLinks = await loadRecordsByIds<RunDeliveryPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_DELIVERY_POLICY_LINKS_DIR), 'link', runIndex.runDeliveryPolicyLinkIds);
-    state.runEditPolicyLinks = await loadRecordsByIds<RunEditPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_EDIT_POLICY_LINKS_DIR), 'link', runIndex.runEditPolicyLinkIds);
-    state.agentRunInputRevisions = await loadRecordsByIds<AgentRunInputRevisionRecord>(...subStore(paths.runPoliciesRootUri, AGENT_RUN_INPUT_REVISIONS_DIR), 'inputRevision', runIndex.agentRunInputRevisionIds);
+  const [
+    messages,
+    messageRevisions,
+    messageCurrentRevisionLinks,
+    toolCalls,
+    toolCallEvents,
+    runIndex
+  ] = await Promise.all([
+    loadRecords<MessageRecord>(...subStore(detailRoot, CONVERSATION_MESSAGES_DIR), 'message'),
+    loadRecords<MessageRevisionRecord>(...subStore(detailRoot, CONVERSATION_MESSAGE_REVISIONS_DIR), 'revision'),
+    loadRecords<MessageCurrentRevisionLinkRecord>(...subStore(detailRoot, MESSAGE_CURRENT_REVISION_LINKS_DIR), 'link'),
+    loadRecords<ToolCallRecord>(...subStore(detailRoot, CONVERSATION_TOOL_CALLS_DIR), 'toolCall'),
+    loadRecords<ToolCallEventRecord>(...subStore(detailRoot, CONVERSATION_TOOL_CALL_EVENTS_DIR), 'event'),
+    loadConversationRunIndex(paths, conversationId)
+  ]);
+  state.messages = messages;
+  state.messageRevisions = messageRevisions;
+  state.messageCurrentRevisionLinks = messageCurrentRevisionLinks;
+  state.toolCalls = toolCalls;
+  state.toolCallEvents = toolCallEvents;
+  if (includeRunHistory && runIndex) {
+    const [
+      agentRuns,
+      agentRunSourceLinks,
+      agentRunTargetLinks,
+      messageRunLinks,
+      toolCallRunLinks,
+      runConversationPolicies,
+      runContextPolicies,
+      runDeliveryPolicies,
+      runEditPolicies,
+      runModeLinks,
+      runSystemPromptLinks,
+      runModelProfileLinks,
+      runToolPolicyLinks,
+      runApprovalPolicyLinks,
+      runConversationPolicyLinks,
+      runContextPolicyLinks,
+      runDeliveryPolicyLinks,
+      runEditPolicyLinks,
+      agentRunInputRevisions
+    ] = await Promise.all([
+      loadRecordsByIds<AgentRunRecord>(paths.agentRunsRootUri, paths.agentRunsIndexUri, 'run', runIndex.agentRunIds),
+      loadRecordsByIds<AgentRunSourceLinkRecord>(paths.agentRunSourceLinksRootUri, paths.agentRunSourceLinksIndexUri, 'link', runIndex.agentRunSourceLinkIds),
+      loadRecordsByIds<AgentRunTargetLinkRecord>(paths.agentRunTargetLinksRootUri, paths.agentRunTargetLinksIndexUri, 'link', runIndex.agentRunTargetLinkIds),
+      loadRecordsByIds<MessageRunLinkRecord>(paths.messageRunLinksRootUri, paths.messageRunLinksIndexUri, 'link', runIndex.messageRunLinkIds),
+      loadRecordsByIds<ToolCallRunLinkRecord>(paths.toolCallRunLinksRootUri, paths.toolCallRunLinksIndexUri, 'link', runIndex.toolCallRunLinkIds),
+      loadRecordsByIds<RunConversationPolicyRecord>(...subStore(paths.runPoliciesRootUri, RUN_CONVERSATION_POLICIES_DIR), 'policy', runIndex.runConversationPolicyIds),
+      loadRecordsByIds<RunContextPolicyRecord>(...subStore(paths.runPoliciesRootUri, RUN_CONTEXT_POLICIES_DIR), 'policy', runIndex.runContextPolicyIds),
+      loadRecordsByIds<RunDeliveryPolicyRecord>(...subStore(paths.runPoliciesRootUri, RUN_DELIVERY_POLICIES_DIR), 'policy', runIndex.runDeliveryPolicyIds),
+      loadRecordsByIds<RunEditPolicyRecord>(...subStore(paths.runPoliciesRootUri, RUN_EDIT_POLICIES_DIR), 'policy', runIndex.runEditPolicyIds),
+      loadRecordsByIds<RunModeLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_MODE_LINKS_DIR), 'link', runIndex.runModeLinkIds),
+      loadRecordsByIds<RunSystemPromptLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_SYSTEM_PROMPT_LINKS_DIR), 'link', runIndex.runSystemPromptLinkIds),
+      loadRecordsByIds<RunModelProfileLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_MODEL_PROFILE_LINKS_DIR), 'link', runIndex.runModelProfileLinkIds),
+      loadRecordsByIds<RunToolPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_TOOL_POLICY_LINKS_DIR), 'link', runIndex.runToolPolicyLinkIds),
+      loadRecordsByIds<RunApprovalPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_APPROVAL_POLICY_LINKS_DIR), 'link', runIndex.runApprovalPolicyLinkIds),
+      loadRecordsByIds<RunConversationPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_CONVERSATION_POLICY_LINKS_DIR), 'link', runIndex.runConversationPolicyLinkIds),
+      loadRecordsByIds<RunContextPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_CONTEXT_POLICY_LINKS_DIR), 'link', runIndex.runContextPolicyLinkIds),
+      loadRecordsByIds<RunDeliveryPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_DELIVERY_POLICY_LINKS_DIR), 'link', runIndex.runDeliveryPolicyLinkIds),
+      loadRecordsByIds<RunEditPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_EDIT_POLICY_LINKS_DIR), 'link', runIndex.runEditPolicyLinkIds),
+      loadRecordsByIds<AgentRunInputRevisionRecord>(...subStore(paths.runPoliciesRootUri, AGENT_RUN_INPUT_REVISIONS_DIR), 'inputRevision', runIndex.agentRunInputRevisionIds)
+    ]);
+    state.agentRuns = agentRuns;
+    state.agentRunSourceLinks = agentRunSourceLinks;
+    state.agentRunTargetLinks = agentRunTargetLinks;
+    state.messageRunLinks = messageRunLinks;
+    state.toolCallRunLinks = toolCallRunLinks;
+    state.runConversationPolicies = runConversationPolicies;
+    state.runContextPolicies = runContextPolicies;
+    state.runDeliveryPolicies = runDeliveryPolicies;
+    state.runEditPolicies = runEditPolicies;
+    state.runModeLinks = runModeLinks;
+    state.runSystemPromptLinks = runSystemPromptLinks;
+    state.runModelProfileLinks = runModelProfileLinks;
+    state.runToolPolicyLinks = runToolPolicyLinks;
+    state.runApprovalPolicyLinks = runApprovalPolicyLinks;
+    state.runConversationPolicyLinks = runConversationPolicyLinks;
+    state.runContextPolicyLinks = runContextPolicyLinks;
+    state.runDeliveryPolicyLinks = runDeliveryPolicyLinks;
+    state.runEditPolicyLinks = runEditPolicyLinks;
+    state.agentRunInputRevisions = agentRunInputRevisions;
   }
 
   return hasAnyState(state) ? state : undefined;
@@ -392,7 +456,7 @@ async function loadRecordsByIds<TRecord extends StoreRecord>(root: vscode.Uri, i
 }
 
 async function loadSkeletonRecords<TRecord extends StoreRecord>(
-  label: string,
+  _label: string,
   location: [vscode.Uri, vscode.Uri],
   recordKey: StoreKey
 ): Promise<TRecord[]> {

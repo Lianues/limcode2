@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { createEmptyClientState } from '@shared/clientStateSchema';
 import {
+  conversationClientStateStreamId,
   isFunctionResponsePart,
   type AgentRunRecord,
   type AgentRunStatus,
@@ -64,6 +65,10 @@ export const useClientStateStore = defineStore('clientState', {
     currentConversationId: ''
   }),
   getters: {
+    currentConversationDetailLoaded(state): boolean {
+      if (!state.currentConversationId) return false;
+      return (state.streamSeqs[conversationClientStateStreamId(state.currentConversationId)] ?? 0) > 0;
+    },
     currentConversation(state): ConversationRecord | undefined {
       return state.conversations.find((conversation) => conversation.id === state.currentConversationId);
     },

@@ -92,6 +92,8 @@ export interface SetConversationProjectFolderInput {
   name?: string;
 }
 
+const BACKGROUND_FULL_DETAIL_LOAD_DELAY_MS = 5_000;
+
 /**
  * 后端应用组合根（composition root）。
  * 只负责组装 ECS world、runtime capability、effect handlers 与 VS Code/Webview 对外门面。
@@ -114,6 +116,9 @@ export class BackendApplication {
   private readonly pendingSnapshotConversationIds = new Set<string>();
   private readonly pendingHydrationMessages: Array<{ clientId: BridgeClientId; message: WebviewToExtensionMessage }> = [];
   private readonly loadedConversationDetails = new Set<string>();
+  private readonly renderLoadedConversationDetails = new Set<string>();
+  private readonly loadingFullConversationDetails = new Set<string>();
+  private readonly scheduledFullConversationDetails = new Set<string>();
   private readonly conversationHistoryChangedEmitter = new vscode.EventEmitter<void>();
   public readonly onDidChangeConversationHistory = this.conversationHistoryChangedEmitter.event;
 
@@ -160,7 +165,7 @@ export class BackendApplication {
         this.conversationHistoryChangedEmitter.fire();
       }
     }, {
-      parallelWorkers: true
+      parallelWorkers: false
     });
 
     installWorldPlugins(
@@ -293,6 +298,9 @@ export class BackendApplication {
       this.world.despawn(target);
     }
     this.loadedConversationDetails.delete(conversationId);
+    this.renderLoadedConversationDetails.delete(conversationId);
+    this.loadingFullConversationDetails.delete(conversationId);
+    this.scheduledFullConversationDetails.delete(conversationId);
     void this.env.storage.removeConversationHistoryEntry(conversationId);
     this.requestSnapshot();
     this.requestSnapshot(conversationId);
@@ -353,10 +361,45 @@ export class BackendApplication {
   }
 
   public async ensureConversationDetailLoaded(conversationId: string): Promise<void> {
-    if (!conversationId || this.loadedConversationDetails.has(conversationId)) return;
-    const detail = await this.env.storage.loadConversationDetail(conversationId);
+    if (!conversationId) return;
+    if (this.loadedConversationDetails.has(conversationId)) {
+      this.renderLoadedConversationDetails.add(conversationId);
+      return;
+    }
+    if (this.renderLoadedConversationDetails.has(conversationId)) {
+      this.scheduleConversationDetailFullLoad(conversationId);
+      return;
+    }
+    const detail = await this.env.storage.loadConversationDetail(conversationId, { includeRunHistory: false });
     if (detail) hydrateConversationDetail(this.world, detail, conversationId);
-    this.loadedConversationDetails.add(conversationId);
+    this.renderLoadedConversationDetails.add(conversationId);
+    this.scheduleConversationDetailFullLoad(conversationId);
+  }
+
+  private scheduleConversationDetailFullLoad(conversationId: string): void {
+    if (this.loadedConversationDetails.has(conversationId) || this.loadingFullConversationDetails.has(conversationId) || this.scheduledFullConversationDetails.has(conversationId)) return;
+    this.scheduledFullConversationDetails.add(conversationId);
+    setTimeout(() => {
+      this.scheduledFullConversationDetails.delete(conversationId);
+      this.ensureConversationDetailFullyLoadedInBackground(conversationId);
+    }, BACKGROUND_FULL_DETAIL_LOAD_DELAY_MS);
+  }
+
+  private ensureConversationDetailFullyLoadedInBackground(conversationId: string): void {
+    if (this.loadedConversationDetails.has(conversationId) || this.loadingFullConversationDetails.has(conversationId)) return;
+    this.loadingFullConversationDetails.add(conversationId);
+    void this.env.storage.loadConversationDetail(conversationId, { includeRunHistory: true })
+      .then((detail) => {
+        if (this.findConversationEntity(conversationId) === undefined) {
+          return;
+        }
+        if (detail) hydrateConversationDetail(this.world, detail, conversationId);
+        this.loadedConversationDetails.add(conversationId);
+        this.renderLoadedConversationDetails.add(conversationId);
+        this.requestSnapshot(conversationId);
+      })
+      .catch((error) => console.warn('[LimCode] Failed to fully load conversation detail.', error))
+      .finally(() => this.loadingFullConversationDetails.delete(conversationId));
   }
 
   public getCurrentProjectHistoryScope(): ConversationHistoryScope {

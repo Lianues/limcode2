@@ -13,7 +13,7 @@ import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/Co
 
 const clientState = useClientStateStore();
 const conversationUi = useConversationUiStore();
-const { currentMessages, currentConversationId } = storeToRefs(clientState);
+const { currentMessages, currentConversationId, currentConversationDetailLoaded } = storeToRefs(clientState);
 const { sendMessage, editMessage } = useChat();
 
 const scroller = ref<HTMLElement | null>(null);
@@ -21,11 +21,16 @@ const conversationBody = ref<HTMLElement | null>(null);
 
 useBottomStickyScroller(scroller);
 
-const ready = computed(() => !!currentConversationId.value);
+const loadingDetail = computed(() => !!currentConversationId.value && !currentConversationDetailLoaded.value);
+const ready = computed(() => !!currentConversationId.value && currentConversationDetailLoaded.value);
 const placeholder = computed(() =>
-  ready.value ? '输入消息，Enter 发送，Shift+Enter 换行' : '默认对话初始化中...'
+  ready.value
+    ? '输入消息，Enter 发送，Shift+Enter 换行'
+    : loadingDetail.value ? '对话内容加载中...' : '默认对话初始化中...'
 );
-const emptyHint = computed(() => (ready.value ? '还没有消息，发一条试试。' : '默认对话初始化中，请稍候。'));
+const emptyHint = computed(() =>
+  ready.value ? '还没有消息，发一条试试。' : loadingDetail.value ? '正在加载对话内容，请稍候。' : '默认对话初始化中，请稍候。'
+);
 const editFollowupCount = computed(() => Math.max(0, (conversationUi.editingMessage?.deleteCount ?? 1) - 1));
 const editConfirmDescriptionHtml = computed(
   () => `是否编辑此消息？将同时删除后续 ${editFollowupCount.value} 条消息，此操作<strong>不可撤销</strong>`

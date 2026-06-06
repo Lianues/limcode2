@@ -197,7 +197,10 @@ export interface StorageCapability {
   readonly paths: RuntimePaths;
   ensureReady(): Promise<void>;
   loadClientStateSkeleton(): Promise<ClientState | undefined>;
-  loadConversationDetail(conversationId: string): Promise<ClientState | undefined>;
+  loadConversationDetail(
+    conversationId: string,
+    options?: { includeRunHistory?: boolean }
+  ): Promise<ClientState | undefined>;
   saveClientStateSkeleton(state: ClientState): Promise<void>;
   saveConversationDetail(conversationId: string, state: ClientState): Promise<void>;
   loadConversationHistoryPage(request: ConversationHistoryPageRequest): Promise<ConversationHistoryPageRecord>;

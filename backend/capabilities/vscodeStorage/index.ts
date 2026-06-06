@@ -66,9 +66,10 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       const paths = getPaths();
       return loadClientStateSkeletonFromStores(paths);
     },
-    async loadConversationDetail(conversationId) {
+    async loadConversationDetail(conversationId, options) {
       const paths = getPaths();
-      return loadConversationDetailFromStores(paths, conversationId);
+      const includeRunHistory = options?.includeRunHistory ?? true;
+      return loadConversationDetailFromStores(paths, conversationId, { includeRunHistory });
     },
     async saveClientStateSkeleton(state) {
       const paths = getPaths();

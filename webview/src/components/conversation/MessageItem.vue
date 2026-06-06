@@ -548,7 +548,7 @@ function editMessage(): void {
 }
 
 function viewRunDetail(): void {
-  if (props.runId) emit('view-run-detail', props.message);
+  emit('view-run-detail', props.message);
 }
 
 function openRetryConfirm(): void {
@@ -716,9 +716,9 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
         type="button"
         class="message-action-button"
         :class="{ 'is-loading': runDetailLoading }"
-        :disabled="!runId || runDetailLoading"
-        :aria-label="runId ? '查看本次 LLM 调用详情' : '暂无本次 LLM 调用详情'"
-        :title="runId ? '查看本次 LLM 调用详情' : '暂无本次 LLM 调用详情'"
+        :disabled="runDetailLoading"
+        aria-label="查看本次 LLM 调用详情"
+        title="查看本次 LLM 调用详情"
         @click="viewRunDetail"
       >
         <IconEye class="message-action-icon" stroke="2" aria-hidden="true" />

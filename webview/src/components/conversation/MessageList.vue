@@ -44,7 +44,7 @@ function isRunDetailLoading(message: MessageRecord): boolean {
 
 function onViewRunDetail(message: MessageRecord): void {
   const runId = runIdForMessage(message);
-  if (runId) runHistory.openDetail(message.conversationId, runId);
+  runHistory.openDetail(message.conversationId, runId, message.id);
 }
 
 function isEditingTarget(row: MessageViewRow): boolean {

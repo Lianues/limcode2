@@ -65,7 +65,7 @@ function ensureDryRun(): void {
   if (dryRunLoading.value) return;
   if (dryRun.value) return;
   // 提前获取包含真实 key + maskedCurl 的 dry-run；显示/隐藏只在前端本地切换，避免重复请求造成抖动。
-  runHistory.requestDryRun(active.conversationId, active.runId, true);
+  runHistory.requestDryRun(active.conversationId, active.runId, true, active.messageId);
 }
 
 async function copyCurl(): Promise<void> {

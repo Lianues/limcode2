@@ -252,8 +252,32 @@ export async function loadConversationRunHistoryPageFromStores(paths: StoragePat
   };
 }
 
-export async function loadConversationRunDetailFromStores(paths: StoragePaths, request: { conversationId: string; runId: string }): Promise<ConversationRunDetailRecord | undefined> {
-  return loadRunDetail(paths, request.conversationId, request.runId);
+export async function loadConversationRunDetailFromStores(paths: StoragePaths, request: { conversationId: string; runId?: string; messageId?: string }): Promise<ConversationRunDetailRecord | undefined> {
+  const runId = request.runId ?? (request.messageId ? await resolveConversationRunIdForMessageFromStores(paths, request.conversationId, request.messageId) : undefined);
+  if (!runId) return undefined;
+  return loadRunDetail(paths, request.conversationId, runId);
+}
+
+export async function resolveConversationRunIdForMessageFromStores(paths: StoragePaths, conversationId: string, messageId: string): Promise<string | undefined> {
+  const index = await loadRunHistoryIndex(paths, conversationId);
+  if (!index) return undefined;
+
+  const summary = index.runs.find((run) => summaryReferencesMessage(run, messageId));
+  if (summary) return summary.id;
+
+  for (const run of index.runs) {
+    const detail = await loadRunDetail(paths, conversationId, run.id);
+    if (!detail) continue;
+    if (detail.state.messageRunLinks.some((link) => link.messageId === messageId)) return run.id;
+    if (detail.state.messages.some((message) => message.id === messageId)) return run.id;
+  }
+  return undefined;
+}
+
+function summaryReferencesMessage(summary: ConversationRunSummaryRecord, messageId: string): boolean {
+  return summary.sourceMessageId === messageId
+    || summary.inputMessageIds?.includes(messageId) === true
+    || summary.outputMessageIds?.includes(messageId) === true;
 }
 
 async function loadConversationRunHistoryFromStores(paths: StoragePaths, conversationId: string): Promise<ClientState | undefined> {
@@ -498,6 +522,7 @@ function conversationRunSummaryFromDetail(conversationId: string, detail: Client
 
   const inputMessageIds = new Set(detail.messageRunLinks.filter((link) => link.role === 'input').map((link) => link.messageId));
   const outputMessageIds = new Set(detail.messageRunLinks.filter((link) => link.role !== 'input').map((link) => link.messageId));
+  const toolCallIds = new Set([...detail.toolCallRunLinks.map((link) => link.toolCallId), ...detail.toolCalls.map((toolCall) => toolCall.id)]);
   const inputMessages = detail.messages.filter((message) => inputMessageIds.has(message.id)).sort(compareMessagesBySeq);
   const outputMessages = detail.messages.filter((message) => outputMessageIds.has(message.id)).sort(compareMessagesBySeq);
 
@@ -522,7 +547,10 @@ function conversationRunSummaryFromDetail(conversationId: string, detail: Client
     ...(target?.conversationId !== undefined ? { targetConversationId: target.conversationId } : {}),
     inputMessageCount: inputMessageIds.size,
     outputMessageCount: outputMessageIds.size,
-    toolCallCount: new Set([...detail.toolCallRunLinks.map((link) => link.toolCallId), ...detail.toolCalls.map((toolCall) => toolCall.id)]).size,
+    ...(inputMessageIds.size > 0 ? { inputMessageIds: [...inputMessageIds] } : {}),
+    ...(outputMessageIds.size > 0 ? { outputMessageIds: [...outputMessageIds] } : {}),
+    ...(toolCallIds.size > 0 ? { toolCallIds: [...toolCallIds] } : {}),
+    toolCallCount: toolCallIds.size,
     ...(messagePreview(inputMessages[0]) ? { inputPreview: messagePreview(inputMessages[0]) } : {}),
     ...(messagePreview(outputMessages[outputMessages.length - 1]) ? { outputPreview: messagePreview(outputMessages[outputMessages.length - 1]) } : {})
   };

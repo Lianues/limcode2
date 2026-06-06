@@ -19,6 +19,8 @@ import {
   type ProjectFolderCandidateRecord,
   type WebviewToExtensionMessage
 } from '../../shared/protocol';
+import { hydrateConversationDetail } from './clientStateHydration';
+
 import type { GlobalSettingsBridge } from './GlobalSettingsBridge';
 import type { ConversationSettingsBridge } from './ConversationSettingsBridge';
 import type { SetConversationProjectFolderInput } from './BackendApplication';
@@ -223,7 +225,7 @@ export class WebviewMessageRouter {
     }
   }
 
-  private async postRunHistoryDetail(clientId: BridgeClientId, payload: { conversationId: string; runId: string }, correlationId?: string): Promise<void> {
+  private async postRunHistoryDetail(clientId: BridgeClientId, payload: { conversationId: string; runId?: string; messageId?: string }, correlationId?: string): Promise<void> {
     try {
       const detail = await this.deps.storage.loadConversationRunDetail(payload);
       if (!detail) {
@@ -237,15 +239,22 @@ export class WebviewMessageRouter {
     }
   }
 
-  private async postLlmDryRun(clientId: BridgeClientId, payload: { conversationId: string; runId: string; includeApiKey?: boolean }, correlationId?: string): Promise<void> {
+  private async postLlmDryRun(clientId: BridgeClientId, payload: { conversationId: string; runId?: string; messageId?: string; includeApiKey?: boolean }, correlationId?: string): Promise<void> {
     try {
-      const run = this.findRunEntity(payload.runId);
+      const runId = payload.runId ?? (payload.messageId ? await this.deps.storage.resolveConversationRunIdForMessage(payload.conversationId, payload.messageId) : undefined);
+      if (!runId) {
+        this.postRequestError(clientId, BridgeMessageType.LlmDryRunGet, '无法根据这条消息找到对应的 run。', correlationId);
+        return;
+      }
+
+      await this.ensureRunDetailHydrated(payload.conversationId, runId);
+      const run = this.findRunEntity(runId);
       if (run === undefined) {
         this.postRequestError(clientId, BridgeMessageType.LlmDryRunGet, '当前会话中无法找到该 run，不能构建 dry-run 请求。', correlationId);
         return;
       }
 
-      const request = buildLlmStartRequestForRun(this.deps.world, { run, requestId: `dryrun-${payload.runId}-${Date.now()}` });
+      const request = buildLlmStartRequestForRun(this.deps.world, { run, requestId: `dryrun-${runId}-${Date.now()}` });
       if (!request) {
         this.postRequestError(clientId, BridgeMessageType.LlmDryRunGet, '无法从当前 ECS 状态构建本次 LLM 请求。', correlationId);
         return;
@@ -257,12 +266,19 @@ export class WebviewMessageRouter {
         type: BridgeMessageType.LlmDryRunSnapshot,
         channel: 'state',
         correlationId,
-        payload: { conversationId: payload.conversationId, runId: payload.runId, ...dryRun }
+        payload: { conversationId: payload.conversationId, runId, ...dryRun }
       });
     } catch (error) {
       console.warn('[LimCode] Failed to dry-run LLM request.', error);
       this.postRequestError(clientId, BridgeMessageType.LlmDryRunGet, error instanceof Error ? error.message : '无法生成 LLM dry-run curl。', correlationId);
     }
+  }
+
+  private async ensureRunDetailHydrated(conversationId: string, runId: string): Promise<void> {
+    if (this.findRunEntity(runId) !== undefined) return;
+    const detail = await this.deps.storage.loadConversationRunDetail({ conversationId, runId });
+    if (!detail) return;
+    hydrateConversationDetail(this.deps.world, detail.state, conversationId);
   }
 
   private findRunEntity(runId: string): number | undefined {

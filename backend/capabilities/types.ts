@@ -193,6 +193,7 @@ export interface StorageCapability {
   saveConversationRunHistory(conversationId: string, state: ClientState, options: { mode: ConversationRunHistorySaveMode }): Promise<void>;
   loadConversationRunHistoryPage(request: ConversationRunHistoryPageRequest): Promise<ConversationRunHistoryPageRecord>;
   loadConversationRunDetail(request: ConversationRunDetailRequest): Promise<ConversationRunDetailRecord | undefined>;
+  resolveConversationRunIdForMessage(conversationId: string, messageId: string): Promise<string | undefined>;
   loadConversationHistoryPage(request: ConversationHistoryPageRequest): Promise<ConversationHistoryPageRecord>;
   upsertConversationHistoryEntry(entry: import('../../shared/protocol').SidebarConversationHistoryEntry): Promise<void>;
   removeConversationHistoryEntry(conversationId: string): Promise<void>;

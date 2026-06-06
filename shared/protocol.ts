@@ -796,6 +796,9 @@ export interface ConversationRunSummaryRecord {
   targetConversationId?: string;
   inputMessageCount: number;
   outputMessageCount: number;
+  inputMessageIds?: string[];
+  outputMessageIds?: string[];
+  toolCallIds?: string[];
   toolCallCount: number;
   inputPreview?: string;
   outputPreview?: string;
@@ -820,7 +823,8 @@ export interface ConversationRunHistoryPageRecord {
 
 export interface ConversationRunDetailRequest {
   conversationId: string;
-  runId: string;
+  runId?: string;
+  messageId?: string;
 }
 
 export interface ConversationRunDetailRecord {
@@ -832,7 +836,8 @@ export interface ConversationRunDetailRecord {
 
 export interface LlmDryRunGetPayload {
   conversationId: string;
-  runId: string;
+  runId?: string;
+  messageId?: string;
   /** true 时 curl 中显示 API Key；默认 false，避免泄漏密钥。 */
   includeApiKey?: boolean;
 }

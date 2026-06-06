@@ -22,7 +22,12 @@ interface ConversationRunHistoryUiState {
 
 interface ActiveRunDetailSelection {
   conversationId: string;
-  runId: string;
+  runId?: string;
+  messageId?: string;
+}
+
+function activeRequestKey(active: ActiveRunDetailSelection): string | undefined {
+  return active.runId ?? active.messageId;
 }
 
 interface RunHistoryStoreState {
@@ -61,23 +66,25 @@ export const useRunHistoryStore = defineStore('runHistory', {
     },
     activeDetailRecord(state): ConversationRunDetailRecord | undefined {
       const active = state.activeDetail;
-      return active ? state.byConversationId[active.conversationId]?.detailByRunId[active.runId] : undefined;
+      return active?.runId ? state.byConversationId[active.conversationId]?.detailByRunId[active.runId] : undefined;
     },
     activeDetailSummary(state): ConversationRunSummaryRecord | undefined {
       const active = state.activeDetail;
-      return active ? state.byConversationId[active.conversationId]?.runById[active.runId] : undefined;
+      return active?.runId ? state.byConversationId[active.conversationId]?.runById[active.runId] : undefined;
     },
     activeDryRun(state): LlmDryRunSnapshotPayload | undefined {
       const active = state.activeDetail;
-      return active ? state.byConversationId[active.conversationId]?.dryRunByRunId[active.runId] : undefined;
+      return active?.runId ? state.byConversationId[active.conversationId]?.dryRunByRunId[active.runId] : undefined;
     },
     activeDryRunLoading(state): boolean {
       const active = state.activeDetail;
-      return active ? !!state.byConversationId[active.conversationId]?.dryRunLoadingByRunId[active.runId] : false;
+      const key = active ? activeRequestKey(active) : undefined;
+      return active && key ? !!state.byConversationId[active.conversationId]?.dryRunLoadingByRunId[key] : false;
     },
     activeDryRunError(state): string | undefined {
       const active = state.activeDetail;
-      return active ? state.byConversationId[active.conversationId]?.dryRunErrorByRunId[active.runId] : undefined;
+      const key = active ? activeRequestKey(active) : undefined;
+      return active && key ? state.byConversationId[active.conversationId]?.dryRunErrorByRunId[key] : undefined;
     }
   },
   actions: {
@@ -88,25 +95,26 @@ export const useRunHistoryStore = defineStore('runHistory', {
       target.error = undefined;
       bridge.request(BridgeMessageType.RunHistoryPageGet, { conversationId, cursor, limit }, { channel: 'state' });
     },
-    requestDetail(conversationId: string, runId: string): void {
-      if (!conversationId || !runId) return;
+    requestDetail(conversationId: string, runId: string | undefined, messageId?: string): void {
+      if (!conversationId || (!runId && !messageId)) return;
       const target = this.ensureConversationState(conversationId);
       target.status = 'loadingDetail';
       target.error = undefined;
-      bridge.request(BridgeMessageType.RunHistoryDetailGet, { conversationId, runId }, { channel: 'state' });
+      bridge.request(BridgeMessageType.RunHistoryDetailGet, { conversationId, ...(runId ? { runId } : {}), ...(messageId ? { messageId } : {}) }, { channel: 'state' });
     },
-    openDetail(conversationId: string, runId: string): void {
-      if (!conversationId || !runId) return;
-      this.activeDetail = { conversationId, runId };
+    openDetail(conversationId: string, runId: string | undefined, messageId?: string): void {
+      if (!conversationId || (!runId && !messageId)) return;
+      this.activeDetail = { conversationId, ...(runId ? { runId } : {}), ...(messageId ? { messageId } : {}) };
       this.detailPanelOpen = true;
-      this.requestDetail(conversationId, runId);
+      this.requestDetail(conversationId, runId, messageId);
     },
-    requestDryRun(conversationId: string, runId: string, includeApiKey = false): void {
-      if (!conversationId || !runId) return;
+    requestDryRun(conversationId: string, runId: string | undefined, includeApiKey = false, messageId?: string): void {
+      if (!conversationId || (!runId && !messageId)) return;
+      const key = runId ?? messageId!;
       const target = this.ensureConversationState(conversationId);
-      target.dryRunLoadingByRunId[runId] = true;
-      target.dryRunErrorByRunId[runId] = undefined;
-      bridge.request(BridgeMessageType.LlmDryRunGet, { conversationId, runId, includeApiKey }, { channel: 'state' });
+      target.dryRunLoadingByRunId[key] = true;
+      target.dryRunErrorByRunId[key] = undefined;
+      bridge.request(BridgeMessageType.LlmDryRunGet, { conversationId, ...(runId ? { runId } : {}), ...(messageId ? { messageId } : {}), includeApiKey }, { channel: 'state' });
     },
     applyPageSnapshot(payload: { conversationId: string; runs: ConversationRunSummaryRecord[]; pageInfo: ConversationRunHistoryPageInfo }): void {
       const target = this.ensureConversationState(payload.conversationId);
@@ -126,9 +134,13 @@ export const useRunHistoryStore = defineStore('runHistory', {
     },
     applyDryRunSnapshot(payload: LlmDryRunSnapshotPayload): void {
       const target = this.ensureConversationState(payload.conversationId);
+      const previousKey = this.activeDetail?.conversationId === payload.conversationId ? activeRequestKey(this.activeDetail) : undefined;
+      if (previousKey) target.dryRunLoadingByRunId[previousKey] = false;
       target.dryRunByRunId[payload.runId] = payload;
       target.dryRunLoadingByRunId[payload.runId] = false;
       target.dryRunErrorByRunId[payload.runId] = undefined;
+      this.activeDetail = { conversationId: payload.conversationId, runId: payload.runId, ...(this.activeDetail?.messageId ? { messageId: this.activeDetail.messageId } : {}) };
+      if (!target.detailByRunId[payload.runId]) this.requestDetail(payload.conversationId, payload.runId);
     },
     setError(message: string): void {
       for (const target of Object.values(this.byConversationId)) {
@@ -139,10 +151,11 @@ export const useRunHistoryStore = defineStore('runHistory', {
       }
       const active = this.activeDetail;
       if (active) {
+        const key = activeRequestKey(active);
         const target = this.byConversationId[active.conversationId];
-        if (target?.dryRunLoadingByRunId[active.runId]) {
-          target.dryRunLoadingByRunId[active.runId] = false;
-          target.dryRunErrorByRunId[active.runId] = message;
+        if (target && key && target.dryRunLoadingByRunId[key]) {
+          target.dryRunLoadingByRunId[key] = false;
+          target.dryRunErrorByRunId[key] = message;
         }
       }
     },

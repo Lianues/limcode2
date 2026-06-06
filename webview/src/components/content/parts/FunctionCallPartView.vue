@@ -173,7 +173,7 @@ function labelForStatus(status: ToolCallStatus): string {
 }
 
 .part-card-details {
-  margin: 6px 0 0;
+  margin: 3px 0 0;
   padding: 8px 10px;
   border-left: 2px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.32));
   color: var(--vscode-descriptionForeground);

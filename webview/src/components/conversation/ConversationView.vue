@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { isVisibleTextPart } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
 import { useChat } from '@webview/composables/useChat';
+import { useBottomStickyScroller } from '@webview/composables/useBottomStickyScroller';
 import MessageList from './MessageList.vue';
 import Composer from '@webview/components/input/Composer.vue';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
@@ -17,6 +18,8 @@ const { sendMessage, editMessage } = useChat();
 
 const scroller = ref<HTMLElement | null>(null);
 const conversationBody = ref<HTMLElement | null>(null);
+
+useBottomStickyScroller(scroller);
 
 const ready = computed(() => !!currentConversationId.value);
 const placeholder = computed(() =>
@@ -52,15 +55,6 @@ const scrollMarkers = computed(() =>
       };
     })
 );
-
-const messageMetrics = computed(() => ({
-  count: currentMessages.value.length,
-  visibleTextLength: currentMessages.value.reduce(
-    (acc, message) =>
-      acc + message.content.parts.reduce((sum, part) => sum + (isVisibleTextPart(part) ? part.text.length : 0), 0),
-    0
-  )
-}));
 
 watch(
   currentMessages,
@@ -117,29 +111,6 @@ function nextMessageAfter(messageId: string) {
 function truncatePreview(text: string): string {
   return text.length > 180 ? `${text.slice(0, 180)}...` : text;
 }
-
-function scrollToBottom(): void {
-  void nextTick(() => {
-    const element = scroller.value;
-    if (element) element.scrollTop = element.scrollHeight;
-  });
-}
-
-function isNearBottom(element: HTMLElement): boolean {
-  return element.scrollHeight - element.scrollTop - element.clientHeight <= 96;
-}
-
-// 只在消息新增/流式内容增长且用户接近底部时滚动到底部；删除/回退不触发滚动，避免列表抖动。
-watch(
-  messageMetrics,
-  (next, previous) => {
-    const grew = !previous || next.count > previous.count || next.visibleTextLength > previous.visibleTextLength;
-    if (!grew) return;
-
-    const element = scroller.value;
-    if (!element || isNearBottom(element)) scrollToBottom();
-  }
-);
 </script>
 
 <template>

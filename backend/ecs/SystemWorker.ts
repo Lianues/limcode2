@@ -2,31 +2,17 @@ import { parentPort, workerData } from 'worker_threads';
 import * as path from 'path';
 import { CommandBuffer, type EntityAllocator } from './CommandBuffer';
 import { SnapshotWorldReader } from './SnapshotWorldReader';
-import { serializeWorldCommands, type WireWorldCommand } from './WireCommand';
+import { serializeWorldCommands } from './WireCommand';
 import { runClientSyncProjection, type ClientSyncWorkerInput } from '../world/clientSync/worker';
-import type { System, SystemContext, WorldSnapshot } from './types';
-
-interface WorkerInput {
-  readonly modulePath: string;
-  readonly exportName: string;
-  readonly events?: SystemContext['events'];
-  readonly entityBase?: number;
-  readonly entityLimit?: number;
-  readonly payload?: unknown;
-}
-
-interface WorkerSuccess {
-  readonly ok: true;
-  readonly commands: readonly WireWorldCommand[];
-}
-
-interface WorkerFailure {
-  readonly ok: false;
-  readonly error: string;
-  readonly stack?: string;
-}
-
-type WorkerOutput = WorkerSuccess | WorkerFailure;
+import type { System } from './types';
+import type {
+  DefaultSystemWorkerPayload,
+  SystemWorkerFailure,
+  SystemWorkerInput,
+  SystemWorkerOutput,
+  SystemWorkerRunRequest,
+  SystemWorkerRunResponse
+} from './SystemWorkerProtocol';
 
 class WorkerEntityAllocator implements EntityAllocator {
   private next = 0;
@@ -47,11 +33,28 @@ class WorkerEntityAllocator implements EntityAllocator {
   }
 }
 
-void run(workerData as WorkerInput)
-  .then((message) => parentPort?.postMessage(message))
-  .catch((error) => parentPort?.postMessage(serializeError(error)));
+if (workerData !== undefined) {
+  void run(workerData as SystemWorkerInput)
+    .then((message) => parentPort?.postMessage(message))
+    .catch((error) => parentPort?.postMessage(serializeError(error)));
+} else {
+  parentPort?.on('message', (message: unknown) => {
+    if (!isRunRequest(message)) {
+      parentPort?.postMessage({ type: 'result', id: -1, result: serializeError(new Error('Invalid system worker request.')) } satisfies SystemWorkerRunResponse);
+      return;
+    }
 
-async function run(input: WorkerInput): Promise<WorkerOutput> {
+    void run(message.input)
+      .then((result) => {
+        parentPort?.postMessage({ type: 'result', id: message.id, result } satisfies SystemWorkerRunResponse);
+      })
+      .catch((error) => {
+        parentPort?.postMessage({ type: 'result', id: message.id, result: serializeError(error) } satisfies SystemWorkerRunResponse);
+      });
+  });
+}
+
+async function run(input: SystemWorkerInput): Promise<SystemWorkerOutput> {
   if (input.modulePath === '@clientSync') {
     const buffer = new CommandBuffer(new WorkerEntityAllocator(input.entityBase ?? 0, input.entityLimit ?? 0));
     runClientSyncProjection(input.payload as ClientSyncWorkerInput, buffer);
@@ -59,7 +62,7 @@ async function run(input: WorkerInput): Promise<WorkerOutput> {
   }
 
   const system = loadSystem(input.modulePath, input.exportName);
-  const payload = input.payload as { snapshot: WorldSnapshot; events: SystemContext['events'] };
+  const payload = input.payload as DefaultSystemWorkerPayload;
   const world = new SnapshotWorldReader(payload.snapshot);
   const allocator = new WorkerEntityAllocator(input.entityBase ?? 0, input.entityLimit ?? 0);
   const buffer = new CommandBuffer(allocator);
@@ -83,9 +86,18 @@ function isSystem(value: unknown): value is System {
   return typeof value === 'object' && value !== null && typeof (value as { run?: unknown }).run === 'function';
 }
 
-function serializeError(error: unknown): WorkerFailure {
+function serializeError(error: unknown): SystemWorkerFailure {
   if (error instanceof Error) {
     return { ok: false, error: error.message, stack: error.stack };
   }
   return { ok: false, error: String(error) };
+}
+
+function isRunRequest(value: unknown): value is SystemWorkerRunRequest {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return record.type === 'run'
+    && typeof record.id === 'number'
+    && typeof record.input === 'object'
+    && record.input !== null;
 }

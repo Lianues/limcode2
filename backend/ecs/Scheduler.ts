@@ -1,7 +1,6 @@
 import { CommandBuffer } from './CommandBuffer';
-import { Worker } from 'worker_threads';
-import * as path from 'path';
-import { deserializeWorldCommands, type WireWorldCommand } from './WireCommand';
+import { deserializeWorldCommands } from './WireCommand';
+import { SystemWorkerPool } from './SystemWorkerPool';
 import {
   ComponentType,
   MutationMode,
@@ -35,6 +34,8 @@ export interface SchedulerOptions {
   readonly parallelWorkers?: boolean;
   /** 每个会 spawn 的 worker system 预留的 entity id 段大小；system 内 spawn 数超过该值会抛错。 */
   readonly workerEntityBlockSize?: number;
+  /** worker pool 最大并发数；未配置时按 CPU 数保守推导。 */
+  readonly workerPoolSize?: number;
 }
 
 interface RegisteredSystem {
@@ -68,19 +69,6 @@ interface SystemRunResult {
   readonly commands?: readonly WorldCommand[];
 }
 
-interface WorkerSuccessMessage {
-  readonly ok: true;
-  readonly commands: readonly WireWorldCommand[];
-}
-
-interface WorkerFailureMessage {
-  readonly ok: false;
-  readonly error: string;
-  readonly stack?: string;
-}
-
-type WorkerMessage = WorkerSuccessMessage | WorkerFailureMessage;
-
 interface CompiledSchedule {
   readonly order: readonly SystemNode[];
   readonly waves: readonly SystemNode[][];
@@ -99,6 +87,7 @@ export class Scheduler {
   private running = false;
   private scheduled = false;
   private nextOrder = 0;
+  private readonly workerPool?: SystemWorkerPool;
 
   public constructor(
     private readonly world: SchedulerWorld,
@@ -106,6 +95,9 @@ export class Scheduler {
     private readonly options: SchedulerOptions = {}
   ) {
     world.setWake(() => this.wake());
+    if (options.parallelWorkers) {
+      this.workerPool = new SystemWorkerPool({ size: options.workerPoolSize });
+    }
   }
 
   public add(system: System): this {
@@ -121,6 +113,10 @@ export class Scheduler {
       this.add(system);
     }
     return this;
+  }
+
+  public dispose(): void {
+    this.workerPool?.dispose();
   }
 
   /** 供调试/测试查看当前拓扑结果。 */
@@ -207,6 +203,10 @@ export class Scheduler {
 
   private async runSystemNode(node: SystemNode, ctx: SystemContext): Promise<SystemRunResult | undefined> {
     const { system, order } = node.registered;
+    if (!this.shouldRunSystem(system, ctx)) {
+      return undefined;
+    }
+
     if (this.options.parallelWorkers && system.worker) {
       return this.runSystemInWorker(node, ctx);
     }
@@ -222,9 +222,23 @@ export class Scheduler {
     }
   }
 
+  private shouldRunSystem(system: System, ctx: SystemContext): boolean {
+    if (!system.shouldRun) return true;
+    try {
+      return system.shouldRun({ ...ctx, world: this.world });
+    } catch (error) {
+      console.error(`[ECS] system "${system.name}" shouldRun threw:`, error);
+      return false;
+    }
+  }
+
   private async runSystemInWorker(node: SystemNode, ctx: SystemContext): Promise<SystemRunResult | undefined> {
     const { system, order } = node.registered;
     if (!system.worker) return undefined;
+    if (!this.workerPool) {
+      console.error(`[ECS] worker system "${system.name}" cannot run because worker pool is not configured.`);
+      return undefined;
+    }
 
     const blockSize = node.access.maySpawn ? (this.options.workerEntityBlockSize ?? 1_000) : 0;
     const entityBase = this.reserveEntityBlock(blockSize);
@@ -233,7 +247,7 @@ export class Scheduler {
     const payload = system.worker.payload?.({ world: this.world, events: ctx.events, snapshot }) ?? { snapshot, events: ctx.events };
 
     try {
-      const message = await runWorker({
+      const message = await this.workerPool.run({
         modulePath: system.worker.modulePath,
         exportName: system.worker.exportName,
         events: ctx.events,
@@ -532,25 +546,4 @@ function snapshotFilter(access: AccessSummary): WorldSnapshotFilter {
     components: [...access.snapshotComponents],
     resources: [...access.snapshotResources]
   };
-}
-
-function runWorker(input: {
-  modulePath: string;
-  exportName: string;
-  events?: SystemContext['events'];
-  entityBase?: number;
-  entityLimit?: number;
-  payload?: unknown;
-}): Promise<WorkerMessage> {
-  const workerPath = path.join(__dirname, 'SystemWorker.js');
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(workerPath, { workerData: input });
-    worker.once('message', (message: WorkerMessage) => resolve(message));
-    worker.once('error', reject);
-    worker.once('exit', (code) => {
-      if (code !== 0) {
-        reject(new Error(`Worker exited with code ${code}`));
-      }
-    });
-  });
 }

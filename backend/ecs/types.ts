@@ -142,6 +142,11 @@ export interface SystemContext {
   readonly events: ReadonlyArray<WorldEvent>;
 }
 
+export interface SystemShouldRunContext extends SystemContext {
+  /** 用于在真正运行 system 前做廉价只读工作量判断。 */
+  readonly world: WorldReader;
+}
+
 export interface SystemRunContext extends SystemContext {
   /** System 的只读 World 视图。 */
   readonly world: WorldReader;
@@ -244,6 +249,8 @@ export interface System {
   readonly access?: SystemAccessProvider;
   /** 可选：允许 Scheduler 把该 system 放到 Node worker_threads 中真正并行执行。 */
   readonly worker?: SystemWorkerSpec;
+  /** 可选：在创建 CommandBuffer/snapshot/worker task 前判断本 pass 是否有真实工作。 */
+  shouldRun?(ctx: SystemShouldRunContext): boolean;
   run(ctx: SystemRunContext): void;
 }
 

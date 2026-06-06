@@ -64,6 +64,9 @@ const LlmContextLookupComponents = [
 export const LlmDispatchSystem = defineSystem({
   name: 'LlmDispatchSystem',
   worker: { modulePath: '../world/modules/chat/systems/LlmDispatchSystem', exportName: 'LlmDispatchSystem' },
+  shouldRun({ world }) {
+    return world.query(LlmRequest).some((request) => !world.has(request, InFlight));
+  },
   access: {
     queries: [PendingLlmRequestsQuery],
     reads: { components: LlmContextLookupComponents },

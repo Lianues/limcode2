@@ -14,7 +14,9 @@ const SpawnRequestsQuery = defineQuery({
 
 export const AgentSpawnSystem = defineSystem({
   name: 'AgentSpawnSystem',
-  worker: { modulePath: '../world/modules/agent/systems/AgentSpawnSystem', exportName: 'AgentSpawnSystem' },
+  shouldRun({ world }) {
+    return world.query(AgentSpawnRequest).length > 0;
+  },
   access: {
     queries: [SpawnRequestsQuery],
     resources: { read: [AgentBlueprintsKey] },

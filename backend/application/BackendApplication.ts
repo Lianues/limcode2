@@ -165,7 +165,8 @@ export class BackendApplication {
         this.conversationHistoryChangedEmitter.fire();
       }
     }, {
-      parallelWorkers: false
+      parallelWorkers: true,
+      workerPoolSize: 2
     });
 
     installWorldPlugins(
@@ -450,6 +451,7 @@ export class BackendApplication {
   }
 
   public dispose(): void {
+    this.scheduler.dispose();
     this.env.webview.detachAll();
     this.webviewClients.clear();
     void this.persistence.persistImmediately();

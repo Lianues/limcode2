@@ -19,7 +19,9 @@ const ToolCallsByIdQuery = defineQuery({
 
 export const ToolPollSystem = defineSystem({
   name: 'ToolPollSystem',
-  worker: { modulePath: '../world/modules/tools/systems/ToolPollSystem', exportName: 'ToolPollSystem' },
+  shouldRun(ctx) {
+    return readEvents(ctx, ToolEventType.State).length > 0;
+  },
   access: {
     queries: [ToolCallsByIdQuery],
     bundles: [ToolCallEventBundle],

@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
 import type { World } from '../ecs/types';
-import type { WebviewCapability } from '../capabilities/types';
+import type { LlmCapability, StorageCapability, WebviewCapability } from '../capabilities/types';
 import { ChatEventType } from '../world/modules/chat/events';
 import { AgentRunEventType } from '../world/modules/agentRun/events';
+import { AgentRun } from '../world/modules/agentRun/components';
+import { buildLlmStartRequestForRun } from '../world/modules/chat/systems/LlmDispatchSystem';
 import { ToolEventType } from '../world/modules/tools/events';
 import {
   BridgeMessageType,
@@ -26,6 +28,8 @@ export interface WebviewMessageRouterDeps {
   world: World;
   webview: WebviewCapability;
   clients: WebviewClientRegistry;
+  storage: StorageCapability;
+  llm: LlmCapability;
   globalSettingsBridge: GlobalSettingsBridge;
   conversationSettingsBridge: ConversationSettingsBridge;
   isHydrated: () => boolean;
@@ -95,6 +99,15 @@ export class WebviewMessageRouter {
         break;
       case BridgeMessageType.ClientResync:
         this.handleClientResync(clientId, message.payload?.streamId, message.payload?.conversationId);
+        break;
+      case BridgeMessageType.RunHistoryPageGet:
+        if (message.payload) void this.postRunHistoryPage(clientId, message.payload, message.id);
+        break;
+      case BridgeMessageType.RunHistoryDetailGet:
+        if (message.payload) void this.postRunHistoryDetail(clientId, message.payload, message.id);
+        break;
+      case BridgeMessageType.LlmDryRunGet:
+        if (message.payload) void this.postLlmDryRun(clientId, message.payload, message.id);
         break;
       case BridgeMessageType.GlobalSettingsGet:
         if (!message.payload) return;
@@ -190,6 +203,72 @@ export class WebviewMessageRouter {
       .catch((error) => console.warn('[LimCode] Failed to lazy-load conversation detail.', error));
   }
 
+  private async postRunHistoryPage(
+    clientId: BridgeClientId,
+    payload: { conversationId: string; cursor?: string; limit?: number },
+    correlationId?: string
+  ): Promise<void> {
+    try {
+      const page = await this.deps.storage.loadConversationRunHistoryPage(payload);
+      this.deps.webview.post(clientId, {
+        id: createMessageId(),
+        type: BridgeMessageType.RunHistoryPageSnapshot,
+        channel: 'state',
+        correlationId,
+        payload: page
+      });
+    } catch (error) {
+      console.warn('[LimCode] Failed to load run history page.', error);
+      this.postRequestError(clientId, BridgeMessageType.RunHistoryPageGet, '无法加载运行历史列表。', correlationId);
+    }
+  }
+
+  private async postRunHistoryDetail(clientId: BridgeClientId, payload: { conversationId: string; runId: string }, correlationId?: string): Promise<void> {
+    try {
+      const detail = await this.deps.storage.loadConversationRunDetail(payload);
+      if (!detail) {
+        this.postRequestError(clientId, BridgeMessageType.RunHistoryDetailGet, '无法找到该运行详情。', correlationId);
+        return;
+      }
+      this.deps.webview.post(clientId, { id: createMessageId(), type: BridgeMessageType.RunHistoryDetailSnapshot, channel: 'state', correlationId, payload: detail });
+    } catch (error) {
+      console.warn('[LimCode] Failed to load run history detail.', error);
+      this.postRequestError(clientId, BridgeMessageType.RunHistoryDetailGet, '无法加载运行详情。', correlationId);
+    }
+  }
+
+  private async postLlmDryRun(clientId: BridgeClientId, payload: { conversationId: string; runId: string; includeApiKey?: boolean }, correlationId?: string): Promise<void> {
+    try {
+      const run = this.findRunEntity(payload.runId);
+      if (run === undefined) {
+        this.postRequestError(clientId, BridgeMessageType.LlmDryRunGet, '当前会话中无法找到该 run，不能构建 dry-run 请求。', correlationId);
+        return;
+      }
+
+      const request = buildLlmStartRequestForRun(this.deps.world, { run, requestId: `dryrun-${payload.runId}-${Date.now()}` });
+      if (!request) {
+        this.postRequestError(clientId, BridgeMessageType.LlmDryRunGet, '无法从当前 ECS 状态构建本次 LLM 请求。', correlationId);
+        return;
+      }
+
+      const dryRun = await this.deps.llm.dryRun(request, { includeApiKey: payload.includeApiKey === true });
+      this.deps.webview.post(clientId, {
+        id: createMessageId(),
+        type: BridgeMessageType.LlmDryRunSnapshot,
+        channel: 'state',
+        correlationId,
+        payload: { conversationId: payload.conversationId, runId: payload.runId, ...dryRun }
+      });
+    } catch (error) {
+      console.warn('[LimCode] Failed to dry-run LLM request.', error);
+      this.postRequestError(clientId, BridgeMessageType.LlmDryRunGet, error instanceof Error ? error.message : '无法生成 LLM dry-run curl。', correlationId);
+    }
+  }
+
+  private findRunEntity(runId: string): number | undefined {
+    return this.deps.world.query(AgentRun).find((entity) => this.deps.world.get(entity, AgentRun)?.id === runId);
+  }
+
 
   private subscribeRequestedStream(clientId: BridgeClientId, streamId: string | undefined, conversationId: string | undefined): void {
     if (streamId) {
@@ -215,6 +294,16 @@ export class WebviewMessageRouter {
         attachedAt: client.attachedAt,
         meta: client.meta
       }
+    });
+  }
+
+  private postRequestError(clientId: BridgeClientId, requestType: string, message: string, correlationId?: string): void {
+    this.deps.webview.post(clientId, {
+      id: createMessageId(),
+      type: BridgeMessageType.Error,
+      channel: 'diagnostics',
+      correlationId,
+      payload: { requestType, message }
     });
   }
 }

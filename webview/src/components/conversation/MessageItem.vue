@@ -6,6 +6,7 @@ import {
   IconCheck,
   IconCopy,
   IconEdit,
+  IconEye,
   IconHash,
   IconRefresh,
   IconTrash
@@ -17,18 +18,21 @@ import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/Co
 const props = withDefaults(
   defineProps<{
     message: MessageRecord;
+    runId?: string;
+    runDetailLoading?: boolean;
     deleteCount?: number;
     deleting?: boolean;
     entering?: boolean;
     editingHighlighted?: boolean;
   }>(),
-  { deleteCount: 1, deleting: false, entering: false, editingHighlighted: false }
+  { runId: undefined, runDetailLoading: false, deleteCount: 1, deleting: false, entering: false, editingHighlighted: false }
 );
 
 const emit = defineEmits<{
   (event: 'edit-message', message: MessageRecord): void;
   (event: 'retry-from', message: MessageRecord): void;
   (event: 'delete-from', message: MessageRecord): void;
+  (event: 'view-run-detail', message: MessageRecord): void;
 }>();
 
 const roleLabel = computed(() => (props.message.role === 'user' ? '你' : 'AI'));
@@ -543,6 +547,10 @@ function editMessage(): void {
   emit('edit-message', props.message);
 }
 
+function viewRunDetail(): void {
+  if (props.runId) emit('view-run-detail', props.message);
+}
+
 function openRetryConfirm(): void {
   confirmRetryOpen.value = true;
 }
@@ -703,6 +711,18 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
       >
         <IconTrash class="message-action-icon" stroke="2" aria-hidden="true" />
       </button>
+      <button
+        v-if="message.role !== 'user'"
+        type="button"
+        class="message-action-button"
+        :class="{ 'is-loading': runDetailLoading }"
+        :disabled="!runId || runDetailLoading"
+        :aria-label="runId ? '查看本次 LLM 调用详情' : '暂无本次 LLM 调用详情'"
+        :title="runId ? '查看本次 LLM 调用详情' : '暂无本次 LLM 调用详情'"
+        @click="viewRunDetail"
+      >
+        <IconEye class="message-action-icon" stroke="2" aria-hidden="true" />
+      </button>
     </div>
     <ConfirmPanel
       :open="confirmRetryOpen"
@@ -774,7 +794,7 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
   align-items: center;
   gap: var(--space-2);
   margin-bottom: var(--space-2);
-  padding-right: 88px;
+  padding-right: 118px;
   flex-wrap: wrap;
 }
 
@@ -826,6 +846,10 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
   opacity: 0.45;
   border-color: transparent;
   cursor: default;
+}
+
+.message-action-button.is-loading .message-action-icon {
+  opacity: 0.55;
 }
 
 .message-action-icon {

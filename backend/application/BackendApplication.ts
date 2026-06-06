@@ -140,6 +140,8 @@ export class BackendApplication {
       world: this.world,
       webview: this.env.webview,
       clients: this.webviewClients,
+      storage: this.env.storage,
+      llm: this.env.llm,
       globalSettingsBridge: this.globalSettingsBridge,
       conversationSettingsBridge: this.conversationSettingsBridge,
       isHydrated: () => this.hydrated,

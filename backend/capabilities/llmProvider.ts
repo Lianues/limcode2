@@ -1,5 +1,5 @@
 import { LlmEventType } from '../world/modules/llm/events';
-import type { LlmStartRequest, ToolSchema } from '../world/modules/llm/contracts';
+import type { LlmDryRunOptions, LlmDryRunResult, LlmStartRequest, ToolSchema } from '../world/modules/llm/contracts';
 import type { Emit, LlmCapability } from './types';
 import {
   isFileDataPart,
@@ -22,6 +22,24 @@ type UnifiedLLMRequest = import('unified-llm-provider').LLMRequest;
 type UnifiedLLMStreamChunk = import('unified-llm-provider').LLMStreamChunk;
 type UnifiedFunctionDeclaration = import('unified-llm-provider').FunctionDeclaration;
 type UndiciModule = typeof import('undici');
+
+interface UnifiedDryRunResult {
+  url: string;
+  method: 'POST';
+  stream: boolean;
+  headers: Record<string, string>;
+  body: unknown;
+  bodyText: string;
+  curl: string;
+  providerName: string;
+  inputFormat: string;
+  outputFormat: string;
+  timestamp: number;
+}
+
+interface UnifiedDryRunCapable {
+  dryRun(request: unknown, options?: { inputFormat?: string; outputFormat?: string; stream?: boolean; curl?: { includeApiKey?: boolean; prettyBody?: boolean } }): Promise<UnifiedDryRunResult>;
+}
 
 export interface LlmProviderOptions {
   settings: MaybeProvider<LlmSettingsRecord>;
@@ -48,6 +66,9 @@ export function createLlmProviderCapability(options: LlmProviderOptions): LlmCap
             controllers.delete(request.id);
           }
         });
+    },
+    dryRun(request, dryRunOptions) {
+      return dryRunLlmProvider(request, options, dryRunOptions);
     },
     abort(requestId) {
       const controller = controllers.get(requestId);
@@ -116,6 +137,55 @@ export async function startLlmProvider(
     if (isAbortError(error)) return;
     emitLlmError(emit, request.id, error instanceof Error ? error.message : String(error));
   }
+}
+
+export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmProviderOptions, dryRunOptions: LlmDryRunOptions = {}): Promise<LlmDryRunResult> {
+  const settings = normalizeSettings(await resolveMaybe(options.settings));
+  if (!settings.apiKey) {
+    throw new Error('缺少 LLM API Key，无法构建真实 provider 请求。');
+  }
+
+  const unified = await importUnifiedLlmProvider();
+  const registry = unified.createBootstrapExtensionRegistry();
+  const proxy = normalizeOptionalString(settings.proxy);
+  const provider = unified.createLLMFromConfig({
+    provider: settings.provider,
+    model: settings.model,
+    apiKey: settings.apiKey,
+    baseUrl: settings.baseUrl,
+    headers: await resolveMaybe(options.headers),
+    ...(proxy ? { proxy } : {})
+  }, registry.llmProviders);
+
+  const dryRun = (provider as unknown as Partial<UnifiedDryRunCapable>).dryRun;
+  if (typeof dryRun !== 'function') {
+    throw new Error('当前 unified-llm-provider 版本不支持 provider.dryRun，请更新依赖。');
+  }
+
+  const result = await dryRun.call(provider, toUnifiedRequest(request, request.model?.temperature ?? settings.temperature), {
+    inputFormat: 'unified',
+    outputFormat: 'unified',
+    stream: true,
+    curl: { includeApiKey: dryRunOptions.includeApiKey === true, prettyBody: true }
+  });
+
+  return {
+    provider: settings.provider,
+    model: settings.model,
+    providerName: result.providerName,
+    url: result.url,
+    method: result.method,
+    stream: result.stream,
+    headers: result.headers,
+    body: result.body,
+    bodyText: result.bodyText,
+    curl: result.curl,
+    maskedCurl: unified.formatRequestAsCurl(result.url, result.headers, result.body, { includeApiKey: false, prettyBody: true }),
+    inputFormat: result.inputFormat,
+    outputFormat: result.outputFormat,
+    generatedAt: result.timestamp,
+    maskedSecrets: dryRunOptions.includeApiKey !== true
+  };
 }
 
 function normalizeSettings(settings: LlmSettingsRecord | undefined): LlmSettingsRecord {

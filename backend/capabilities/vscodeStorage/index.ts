@@ -20,6 +20,8 @@ import {
   appendToolCallEventRecord,
   loadClientStateSkeletonFromStores,
   loadConversationDetailFromStores,
+  loadConversationRunDetailFromStores,
+  loadConversationRunHistoryPageFromStores,
   removeMessageRecord,
   saveClientStateSkeletonToStores,
   saveConversationRenderDetailToStores,
@@ -83,6 +85,14 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     async saveConversationRunHistory(conversationId, state, options) {
       const paths = getPaths();
       await saveConversationRunHistoryToStores(paths, conversationId, state, options);
+    },
+    async loadConversationRunHistoryPage(request) {
+      const paths = getPaths();
+      return loadConversationRunHistoryPageFromStores(paths, request);
+    },
+    async loadConversationRunDetail(request) {
+      const paths = getPaths();
+      return loadConversationRunDetailFromStores(paths, request);
     },
     async loadConversationHistoryPage(request) {
       const paths = getPaths();

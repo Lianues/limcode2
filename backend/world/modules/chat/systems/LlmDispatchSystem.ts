@@ -16,7 +16,7 @@ import { ToolCall, ToolState } from '../../tools/components';
 import { ToolSchemasKey } from '../../tools/resources';
 import { InFlight, LlmRequest, Message, MessageCurrentRevisionLink, PartOf } from '../components';
 import { textContent } from '../../../../../shared/protocol';
-import type { LlmModelSettings } from '../../llm/contracts';
+import type { LlmModelSettings, LlmStartRequest, ToolSchema } from '../../llm/contracts';
 import {
   activeContextPolicyForRun,
   activeModelProfileForRun,
@@ -61,6 +61,14 @@ const LlmContextLookupComponents = [
   ToolState
 ] as const;
 
+export interface BuildLlmStartRequestForRunInput {
+  run: Entity;
+  conversation?: Entity;
+  modelMessage?: Entity;
+  requestId?: string;
+  tools?: ToolSchema[];
+}
+
 export const LlmDispatchSystem = defineSystem({
   name: 'LlmDispatchSystem',
   worker: { modulePath: '../world/modules/chat/systems/LlmDispatchSystem', exportName: 'LlmDispatchSystem' },
@@ -84,16 +92,6 @@ export const LlmDispatchSystem = defineSystem({
       const data = world.get(request, LlmRequest);
       if (!data) continue;
 
-      const systemPrompt = activeSystemPromptForRun(world, data.run)?.text;
-      const modelProfile = activeModelProfileForRun(world, data.run);
-      const model = modelProfile === undefined
-        ? undefined
-        : { provider: modelProfile.provider, model: modelProfile.model, temperature: modelProfile.temperature } satisfies LlmModelSettings;
-      const toolPolicy = activeToolPolicyForRun(world, data.run);
-      const tools = toolPolicy
-        ? allTools.filter((tool) => toolPolicy.allowedTools.includes(tool.name))
-        : [];
-
       const contextPolicy = activeContextPolicyForRun(world, data.run);
       const contextInput = {
         run: data.run,
@@ -102,22 +100,60 @@ export const LlmDispatchSystem = defineSystem({
         policy: contextPolicy
       };
       recordInputRevisions(world, cmd, contextInput.run, selectRunContextMessageEntities(world, contextInput));
-      const contents = buildRunContextContents(world, contextInput);
+      const llmRequest = buildLlmStartRequestForRun(world, { run: data.run, conversation: data.conversation, modelMessage: data.modelMessage, requestId: data.id, tools: allTools });
+      if (!llmRequest) continue;
 
       cmd.effect({
         kind: 'llm.start',
-        request: {
-          id: data.id,
-          systemInstruction: systemPrompt ? textContent('user', systemPrompt) : undefined,
-          contents,
-          tools,
-          model
-        }
+        request: llmRequest
       });
       cmd.add(request, InFlight, { kind: 'llm', startedAt: Date.now() });
     }
   }
 });
+
+export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmStartRequestForRunInput): LlmStartRequest | undefined {
+  const context = resolveLlmContext(world, input);
+  if (!context) return undefined;
+
+  const systemPrompt = activeSystemPromptForRun(world, input.run)?.text;
+  const modelProfile = activeModelProfileForRun(world, input.run);
+  const model = modelProfile === undefined
+    ? undefined
+    : { provider: modelProfile.provider, model: modelProfile.model, temperature: modelProfile.temperature } satisfies LlmModelSettings;
+  const toolPolicy = activeToolPolicyForRun(world, input.run);
+  const allTools = input.tools ?? world.tryGetResource(ToolSchemasKey) ?? [];
+  const tools = toolPolicy
+    ? allTools.filter((tool) => toolPolicy.allowedTools.includes(tool.name))
+    : [];
+  const contextPolicy = activeContextPolicyForRun(world, input.run);
+  const contents = buildRunContextContents(world, { ...context, policy: contextPolicy });
+
+  return {
+    id: input.requestId ?? `dryrun-${input.run}-${Date.now()}`,
+    systemInstruction: systemPrompt ? textContent('user', systemPrompt) : undefined,
+    contents,
+    tools,
+    model
+  };
+}
+
+function resolveLlmContext(world: WorldReader, input: BuildLlmStartRequestForRunInput): { run: Entity; conversation: Entity; modelMessage: Entity } | undefined {
+  const modelMessage = input.modelMessage ?? latestModelMessageForRun(world, input.run);
+  if (modelMessage === undefined) return undefined;
+  const conversation = input.conversation ?? world.get(modelMessage, PartOf)?.parent;
+  if (conversation === undefined) return undefined;
+  return { run: input.run, conversation, modelMessage };
+}
+
+function latestModelMessageForRun(world: WorldReader, run: Entity): Entity | undefined {
+  return world
+    .query(MessageRunLink)
+    .map((entity) => world.get(entity, MessageRunLink))
+    .filter((link): link is NonNullable<typeof link> => !!link && link.run === run && link.role === 'model')
+    .sort((left, right) => (world.get(right.message, Message)?.seq ?? 0) - (world.get(left.message, Message)?.seq ?? 0))
+    [0]?.message;
+}
 
 function recordInputRevisions(world: WorldReader, cmd: CommandSink, run: Entity, messages: Entity[]): void {
   const existingRevisionIds = new Set(

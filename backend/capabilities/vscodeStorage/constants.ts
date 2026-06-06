@@ -18,12 +18,7 @@ export const CONVERSATIONS_ROOT_DIR = 'conversations';
 export const CONVERSATION_HISTORY_ROOT_DIR = 'conversation-history';
 export const PROJECT_CONTEXTS_ROOT_DIR = 'project-contexts';
 export const CONVERSATION_PROJECT_LINKS_ROOT_DIR = 'conversation-project-links';
-export const AGENT_RUNS_ROOT_DIR = 'agent-runs';
-export const AGENT_RUN_SOURCE_LINKS_ROOT_DIR = 'agent-run-source-links';
-export const AGENT_RUN_TARGET_LINKS_ROOT_DIR = 'agent-run-target-links';
-export const MESSAGE_RUN_LINKS_ROOT_DIR = 'message-run-links';
-export const TOOL_CALL_RUN_LINKS_ROOT_DIR = 'tool-call-run-links';
-export const RUN_POLICIES_ROOT_DIR = 'run-policies';
+export const RUN_HISTORY_ROOT_DIR = 'run-history';
 export const SETTINGS_ROOT_DIR = 'settings';
 
 /**
@@ -47,12 +42,7 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
   CONVERSATION_HISTORY_ROOT_DIR,
   PROJECT_CONTEXTS_ROOT_DIR,
   CONVERSATION_PROJECT_LINKS_ROOT_DIR,
-  AGENT_RUNS_ROOT_DIR,
-  AGENT_RUN_SOURCE_LINKS_ROOT_DIR,
-  AGENT_RUN_TARGET_LINKS_ROOT_DIR,
-  MESSAGE_RUN_LINKS_ROOT_DIR,
-  TOOL_CALL_RUN_LINKS_ROOT_DIR,
-  RUN_POLICIES_ROOT_DIR,
+  RUN_HISTORY_ROOT_DIR,
   SETTINGS_ROOT_DIR
 ] as const;
 

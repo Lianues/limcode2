@@ -10,6 +10,7 @@ import MessageList from './MessageList.vue';
 import Composer from '@webview/components/input/Composer.vue';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
+import RunHistoryDetailPanel from './RunHistoryDetailPanel.vue';
 
 const clientState = useClientStateStore();
 const conversationUi = useConversationUiStore();
@@ -142,6 +143,7 @@ function truncatePreview(text: string): string {
       :actions="editConfirmActions"
       @action="handleEditConfirmAction"
     />
+    <RunHistoryDetailPanel />
   </div>
 </template>
 

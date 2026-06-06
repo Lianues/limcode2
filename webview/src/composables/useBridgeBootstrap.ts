@@ -5,6 +5,7 @@ import { useSessionStore } from '@webview/stores/useSessionStore';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
+import { useRunHistoryStore } from '@webview/stores/useRunHistoryStore';
 
 /**
  * 在 App 根组件挂载时调用一次：集中注册所有入站桥接监听并接入对应 store，
@@ -15,6 +16,7 @@ export function useBridgeBootstrap(): void {
   const clientState = useClientStateStore();
   const globalSettings = useGlobalSettingsStore();
   const conversationSettings = useConversationSettingsStore();
+  const runHistory = useRunHistoryStore();
 
   const disposers: Array<() => void> = [];
   const requestedConversationStreams = new Set<string>();
@@ -85,9 +87,29 @@ export function useBridgeBootstrap(): void {
     );
 
     disposers.push(
+      bridge.on(BridgeMessageType.RunHistoryPageSnapshot, (message) => {
+        if (message.payload) runHistory.applyPageSnapshot(message.payload);
+      })
+    );
+
+    disposers.push(
+      bridge.on(BridgeMessageType.RunHistoryDetailSnapshot, (message) => {
+        if (message.payload) runHistory.applyDetailSnapshot(message.payload);
+      })
+    );
+
+    disposers.push(
+      bridge.on(BridgeMessageType.LlmDryRunSnapshot, (message) => {
+        if (message.payload) runHistory.applyDryRunSnapshot(message.payload);
+      })
+    );
+
+    disposers.push(
       bridge.on(BridgeMessageType.Error, (message) => {
         if (message.payload?.requestType === BridgeMessageType.GlobalSettingsUpdate) {
           globalSettings.setError(message.payload.message);
+        } else if (message.payload?.requestType === BridgeMessageType.RunHistoryPageGet || message.payload?.requestType === BridgeMessageType.RunHistoryDetailGet || message.payload?.requestType === BridgeMessageType.LlmDryRunGet) {
+          runHistory.setError(message.payload.message);
         }
       })
     );

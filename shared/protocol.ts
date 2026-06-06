@@ -79,6 +79,12 @@ export enum BridgeMessageType {
   ClientResync = 'client.resync',
   ClientSnapshot = 'state.snapshot',
   ClientPatch = 'state.patch',
+  RunHistoryPageGet = 'runHistory.page.get',
+  RunHistoryPageSnapshot = 'runHistory.page.snapshot',
+  RunHistoryDetailGet = 'runHistory.detail.get',
+  RunHistoryDetailSnapshot = 'runHistory.detail.snapshot',
+  LlmDryRunGet = 'llm.dryRun.get',
+  LlmDryRunSnapshot = 'llm.dryRun.snapshot',
   GlobalSettingsGet = 'settings.global.get',
   GlobalSettingsUpdate = 'settings.global.update',
   GlobalSettingsSnapshot = 'settings.global.snapshot',
@@ -762,6 +768,97 @@ export interface ClientPatchPayload {
   streamSeq: number;
   patches: ClientPatchOp[];
 }
+
+export interface ConversationRunHistoryPageRequest {
+  conversationId: string;
+  cursor?: string;
+  limit?: number;
+}
+
+export interface ConversationRunSummaryRecord {
+  id: string;
+  conversationId: string;
+  kind: AgentRunKind;
+  status: AgentRunStatus;
+  createdAt: number;
+  updatedAt: number;
+  completedAt?: number;
+  endReason?: AgentRunEndReason;
+  errorType?: AgentRunErrorType;
+  error?: string;
+  retryOfRunId?: string;
+  attempt?: number;
+  sourceKind?: AgentRunSourceKind;
+  sourceMessageId?: string;
+  sourceToolCallId?: string;
+  sourceRunId?: string;
+  targetAgentId?: string;
+  targetConversationId?: string;
+  inputMessageCount: number;
+  outputMessageCount: number;
+  toolCallCount: number;
+  inputPreview?: string;
+  outputPreview?: string;
+}
+
+export interface ConversationRunHistoryPageInfo {
+  cursor?: string;
+  nextCursor?: string;
+  previousCursor?: string;
+  pageIndex: number;
+  pageSize: number;
+  total: number;
+  hasNext: boolean;
+  hasPrevious: boolean;
+}
+
+export interface ConversationRunHistoryPageRecord {
+  conversationId: string;
+  runs: ConversationRunSummaryRecord[];
+  pageInfo: ConversationRunHistoryPageInfo;
+}
+
+export interface ConversationRunDetailRequest {
+  conversationId: string;
+  runId: string;
+}
+
+export interface ConversationRunDetailRecord {
+  conversationId: string;
+  runId: string;
+  summary?: ConversationRunSummaryRecord;
+  state: ClientState;
+}
+
+export interface LlmDryRunGetPayload {
+  conversationId: string;
+  runId: string;
+  /** true 时 curl 中显示 API Key；默认 false，避免泄漏密钥。 */
+  includeApiKey?: boolean;
+}
+
+export interface LlmDryRunSnapshotPayload {
+  conversationId: string;
+  runId: string;
+  provider?: LlmProviderKind;
+  model?: string;
+  providerName?: string;
+  url: string;
+  method: 'POST';
+  stream: boolean;
+  headers: Record<string, string>;
+  body: unknown;
+  bodyText: string;
+  curl: string;
+  /** 始终隐藏敏感 header 的 curl，用于前端本地显示/隐藏切换，避免重复 dry-run。 */
+  maskedCurl: string;
+  inputFormat?: string;
+  outputFormat?: string;
+  generatedAt: number;
+  maskedSecrets: boolean;
+}
+
+
 export interface GlobalSettingsRecord {
   dataFilePath: string;
   activeDataRootPath: string;
@@ -835,6 +932,9 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.AgentRunMarkStale, AgentRunControlPayload>
   | BridgeEnvelope<BridgeMessageType.ToolExecute, ToolExecutePayload>
   | BridgeEnvelope<BridgeMessageType.ClientResync, ClientResyncPayload>
+  | BridgeEnvelope<BridgeMessageType.RunHistoryPageGet, ConversationRunHistoryPageRequest>
+  | BridgeEnvelope<BridgeMessageType.RunHistoryDetailGet, ConversationRunDetailRequest>
+  | BridgeEnvelope<BridgeMessageType.LlmDryRunGet, LlmDryRunGetPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsGet, GlobalSettingsGetPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsUpdate, GlobalSettingsUpdatePayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsGet, ConversationSettingsGetPayload>
@@ -849,6 +949,9 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.Error, { requestType?: string; message: string }>
   | BridgeEnvelope<BridgeMessageType.ClientSnapshot, ClientSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ClientPatch, ClientPatchPayload>
+  | BridgeEnvelope<BridgeMessageType.RunHistoryPageSnapshot, ConversationRunHistoryPageRecord>
+  | BridgeEnvelope<BridgeMessageType.RunHistoryDetailSnapshot, ConversationRunDetailRecord>
+  | BridgeEnvelope<BridgeMessageType.LlmDryRunSnapshot, LlmDryRunSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsSnapshot, GlobalSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsSnapshot, ConversationSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ProjectFoldersSnapshot, ProjectFoldersSnapshotPayload>;

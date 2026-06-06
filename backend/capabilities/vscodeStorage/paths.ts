@@ -4,9 +4,6 @@ import {
   AGENT_CONVERSATION_LINKS_ROOT_DIR,
   AGENT_MODE_LINKS_ROOT_DIR,
   AGENT_MODES_ROOT_DIR,
-  AGENT_RUNS_ROOT_DIR,
-  AGENT_RUN_SOURCE_LINKS_ROOT_DIR,
-  AGENT_RUN_TARGET_LINKS_ROOT_DIR,
   AGENTS_ROOT_DIR,
   APPROVAL_POLICIES_ROOT_DIR,
   CONVERSATION_HISTORY_ROOT_DIR,
@@ -14,17 +11,15 @@ import {
   CONVERSATION_PROJECT_LINKS_ROOT_DIR,
   INDEX_FILE,
   LLM_SETTINGS_FILE,
-  MESSAGE_RUN_LINKS_ROOT_DIR,
   MODE_APPROVAL_POLICY_LINKS_ROOT_DIR,
   MODE_MODEL_PROFILE_LINKS_ROOT_DIR,
   MODE_SYSTEM_PROMPT_LINKS_ROOT_DIR,
   MODE_TOOL_POLICY_LINKS_ROOT_DIR,
   MODEL_PROFILES_ROOT_DIR,
   PROJECT_CONTEXTS_ROOT_DIR,
-  RUN_POLICIES_ROOT_DIR,
+  RUN_HISTORY_ROOT_DIR,
   SETTINGS_ROOT_DIR,
   SYSTEM_PROMPTS_ROOT_DIR,
-  TOOL_CALL_RUN_LINKS_ROOT_DIR,
   TOOL_POLICIES_ROOT_DIR
 } from './constants';
 
@@ -61,18 +56,8 @@ export interface VscodeStorageUris {
   modeSystemPromptLinksIndexUri: vscode.Uri;
   modeModelProfileLinksRootUri: vscode.Uri;
   modeModelProfileLinksIndexUri: vscode.Uri;
-  agentRunsRootUri: vscode.Uri;
-  agentRunsIndexUri: vscode.Uri;
-  agentRunSourceLinksRootUri: vscode.Uri;
-  agentRunSourceLinksIndexUri: vscode.Uri;
-  agentRunTargetLinksRootUri: vscode.Uri;
-  agentRunTargetLinksIndexUri: vscode.Uri;
-  messageRunLinksRootUri: vscode.Uri;
-  messageRunLinksIndexUri: vscode.Uri;
-  toolCallRunLinksRootUri: vscode.Uri;
-  toolCallRunLinksIndexUri: vscode.Uri;
-  runPoliciesRootUri: vscode.Uri;
-  runPoliciesIndexUri: vscode.Uri;
+  runHistoryRootUri: vscode.Uri;
+  runHistoryIndexUri: vscode.Uri;
   settingsRootUri: vscode.Uri;
   llmSettingsUri: vscode.Uri;
 }
@@ -99,12 +84,7 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const modeApprovalPolicyLinks = root(globalStorageUri, MODE_APPROVAL_POLICY_LINKS_ROOT_DIR);
   const modeSystemPromptLinks = root(globalStorageUri, MODE_SYSTEM_PROMPT_LINKS_ROOT_DIR);
   const modeModelProfileLinks = root(globalStorageUri, MODE_MODEL_PROFILE_LINKS_ROOT_DIR);
-  const agentRuns = root(globalStorageUri, AGENT_RUNS_ROOT_DIR);
-  const agentRunSourceLinks = root(globalStorageUri, AGENT_RUN_SOURCE_LINKS_ROOT_DIR);
-  const agentRunTargetLinks = root(globalStorageUri, AGENT_RUN_TARGET_LINKS_ROOT_DIR);
-  const messageRunLinks = root(globalStorageUri, MESSAGE_RUN_LINKS_ROOT_DIR);
-  const toolCallRunLinks = root(globalStorageUri, TOOL_CALL_RUN_LINKS_ROOT_DIR);
-  const runPolicies = root(globalStorageUri, RUN_POLICIES_ROOT_DIR);
+  const runHistory = root(globalStorageUri, RUN_HISTORY_ROOT_DIR);
   const settingsRootUri = vscode.Uri.joinPath(globalStorageUri, SETTINGS_ROOT_DIR);
   const llmSettingsUri = vscode.Uri.joinPath(settingsRootUri, LLM_SETTINGS_FILE);
 
@@ -175,30 +155,10 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     modeModelProfileLinksRootPath: modeModelProfileLinks.rootUri.fsPath,
     modeModelProfileLinksIndexUri: modeModelProfileLinks.indexUri,
     modeModelProfileLinksIndexPath: modeModelProfileLinks.indexUri.fsPath,
-    agentRunsRootUri: agentRuns.rootUri,
-    agentRunsRootPath: agentRuns.rootUri.fsPath,
-    agentRunsIndexUri: agentRuns.indexUri,
-    agentRunsIndexPath: agentRuns.indexUri.fsPath,
-    agentRunSourceLinksRootUri: agentRunSourceLinks.rootUri,
-    agentRunSourceLinksRootPath: agentRunSourceLinks.rootUri.fsPath,
-    agentRunSourceLinksIndexUri: agentRunSourceLinks.indexUri,
-    agentRunSourceLinksIndexPath: agentRunSourceLinks.indexUri.fsPath,
-    agentRunTargetLinksRootUri: agentRunTargetLinks.rootUri,
-    agentRunTargetLinksRootPath: agentRunTargetLinks.rootUri.fsPath,
-    agentRunTargetLinksIndexUri: agentRunTargetLinks.indexUri,
-    agentRunTargetLinksIndexPath: agentRunTargetLinks.indexUri.fsPath,
-    messageRunLinksRootUri: messageRunLinks.rootUri,
-    messageRunLinksRootPath: messageRunLinks.rootUri.fsPath,
-    messageRunLinksIndexUri: messageRunLinks.indexUri,
-    messageRunLinksIndexPath: messageRunLinks.indexUri.fsPath,
-    toolCallRunLinksRootUri: toolCallRunLinks.rootUri,
-    toolCallRunLinksRootPath: toolCallRunLinks.rootUri.fsPath,
-    toolCallRunLinksIndexUri: toolCallRunLinks.indexUri,
-    toolCallRunLinksIndexPath: toolCallRunLinks.indexUri.fsPath,
-    runPoliciesRootUri: runPolicies.rootUri,
-    runPoliciesRootPath: runPolicies.rootUri.fsPath,
-    runPoliciesIndexUri: runPolicies.indexUri,
-    runPoliciesIndexPath: runPolicies.indexUri.fsPath,
+    runHistoryRootUri: runHistory.rootUri,
+    runHistoryRootPath: runHistory.rootUri.fsPath,
+    runHistoryIndexUri: runHistory.indexUri,
+    runHistoryIndexPath: runHistory.indexUri.fsPath,
     settingsRootUri,
     settingsRootPath: settingsRootUri.fsPath,
     llmSettingsUri,

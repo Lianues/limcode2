@@ -19,6 +19,9 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
       return 'command';
     case BridgeMessageType.ClientResync:
     case BridgeMessageType.ProjectFoldersGet:
+    case BridgeMessageType.RunHistoryPageGet:
+    case BridgeMessageType.RunHistoryDetailGet:
+    case BridgeMessageType.LlmDryRunGet:
       return 'state';
     case BridgeMessageType.GlobalSettingsGet:
     case BridgeMessageType.GlobalSettingsUpdate:

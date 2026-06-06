@@ -1,11 +1,15 @@
 import type * as vscode from 'vscode';
-import type { LlmStartRequest } from '../world/modules/llm/contracts';
+import type { LlmDryRunOptions, LlmDryRunResult, LlmStartRequest } from '../world/modules/llm/contracts';
 import type { WorldEvent } from '../ecs/types';
 import type {
   BridgeClientId,
   ClientState,
   ConversationHistoryPageRecord,
   ConversationHistoryPageRequest,
+  ConversationRunDetailRecord,
+  ConversationRunDetailRequest,
+  ConversationRunHistoryPageRecord,
+  ConversationRunHistoryPageRequest,
   ConversationSettingsSection,
   ConversationSettingsSectionValue,
   ExtensionToWebviewMessage,
@@ -21,6 +25,7 @@ export type Emit = (event: WorldEvent) => void;
 /** LLM 能力：无状态函数根据 request 启动流式执行，并通过 emit 回灌事件。 */
 export interface LlmCapability {
   start(request: LlmStartRequest, emit: Emit): void;
+  dryRun(request: LlmStartRequest, options?: LlmDryRunOptions): Promise<LlmDryRunResult>;
   abort(requestId: string): void;
 }
 
@@ -158,30 +163,10 @@ export interface RuntimePaths {
   modeModelProfileLinksRootPath: string;
   modeModelProfileLinksIndexUri: vscode.Uri;
   modeModelProfileLinksIndexPath: string;
-  agentRunsRootUri: vscode.Uri;
-  agentRunsRootPath: string;
-  agentRunsIndexUri: vscode.Uri;
-  agentRunsIndexPath: string;
-  agentRunSourceLinksRootUri: vscode.Uri;
-  agentRunSourceLinksRootPath: string;
-  agentRunSourceLinksIndexUri: vscode.Uri;
-  agentRunSourceLinksIndexPath: string;
-  agentRunTargetLinksRootUri: vscode.Uri;
-  agentRunTargetLinksRootPath: string;
-  agentRunTargetLinksIndexUri: vscode.Uri;
-  agentRunTargetLinksIndexPath: string;
-  messageRunLinksRootUri: vscode.Uri;
-  messageRunLinksRootPath: string;
-  messageRunLinksIndexUri: vscode.Uri;
-  messageRunLinksIndexPath: string;
-  toolCallRunLinksRootUri: vscode.Uri;
-  toolCallRunLinksRootPath: string;
-  toolCallRunLinksIndexUri: vscode.Uri;
-  toolCallRunLinksIndexPath: string;
-  runPoliciesRootUri: vscode.Uri;
-  runPoliciesRootPath: string;
-  runPoliciesIndexUri: vscode.Uri;
-  runPoliciesIndexPath: string;
+  runHistoryRootUri: vscode.Uri;
+  runHistoryRootPath: string;
+  runHistoryIndexUri: vscode.Uri;
+  runHistoryIndexPath: string;
 
   /** 通用设置根目录：<dataRoot>/settings */
   settingsRootUri: vscode.Uri;
@@ -206,6 +191,8 @@ export interface StorageCapability {
   saveClientStateSkeleton(state: ClientState): Promise<void>;
   saveConversationRenderDetail(conversationId: string, state: ClientState): Promise<void>;
   saveConversationRunHistory(conversationId: string, state: ClientState, options: { mode: ConversationRunHistorySaveMode }): Promise<void>;
+  loadConversationRunHistoryPage(request: ConversationRunHistoryPageRequest): Promise<ConversationRunHistoryPageRecord>;
+  loadConversationRunDetail(request: ConversationRunDetailRequest): Promise<ConversationRunDetailRecord | undefined>;
   loadConversationHistoryPage(request: ConversationHistoryPageRequest): Promise<ConversationHistoryPageRecord>;
   upsertConversationHistoryEntry(entry: import('../../shared/protocol').SidebarConversationHistoryEntry): Promise<void>;
   removeConversationHistoryEntry(conversationId: string): Promise<void>;

@@ -180,6 +180,7 @@ function middleEllipsis(value: string, maxLength: number): string {
   gap: var(--space-3);
   padding: 0;
   border-bottom: 1px solid var(--vscode-panel-border);
+  --tab-header-row-height: 24px;
 }
 
 .tab-header-main {
@@ -193,6 +194,7 @@ function middleEllipsis(value: string, maxLength: number): string {
   align-items: center;
   gap: var(--space-2);
   flex-wrap: nowrap;
+  min-height: var(--tab-header-row-height);
 }
 
 .tab-title {
@@ -352,10 +354,19 @@ function middleEllipsis(value: string, maxLength: number): string {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  height: var(--tab-header-row-height);
 }
 
 .tab-abort-button {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--tab-header-row-height);
+  min-height: var(--tab-header-row-height);
+  padding: 0 var(--space-2);
+  font-size: var(--font-size-xs);
+  line-height: 1;
 }
 
 .tab-settings-toggle {
@@ -363,10 +374,10 @@ function middleEllipsis(value: string, maxLength: number): string {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
-  min-height: 28px;
+  width: var(--tab-header-row-height);
+  height: var(--tab-header-row-height);
+  min-width: var(--tab-header-row-height);
+  min-height: var(--tab-header-row-height);
   padding: 0;
   color: var(--vscode-descriptionForeground);
   background: transparent;

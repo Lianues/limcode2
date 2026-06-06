@@ -744,10 +744,16 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
 .message-floor.is-deleting {
   pointer-events: none;
   animation: lc-message-exit-right var(--lc-message-exit-duration) var(--lc-motion-exit-standard) forwards;
+  will-change: opacity, transform;
 }
 
 .message-floor.is-entering {
   animation: lc-message-enter var(--lc-message-enter-duration) var(--lc-motion-enter-emphasized) both;
+  will-change: opacity, transform;
+}
+
+.message-floor.is-deleting .message-actions {
+  opacity: 0;
 }
 
 .message-floor.is-edit-target {
@@ -912,6 +918,10 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
   font-size: var(--font-size-md);
   line-height: 1.6;
   color: var(--vscode-foreground);
+}
+
+.message-floor.streaming .floor-body {
+  min-height: 1.6em;
 }
 
 .token-usage-row {

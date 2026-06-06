@@ -1,6 +1,7 @@
 /* 富文本/正文内容动效。 */
 :root {
-  --lc-content-replace-duration: 0.09s;
+  /* 正文替换为两段式动画：50ms 淡出 + 50ms 淡入，总时长对齐消息进入动画。 */
+  --lc-content-replace-duration: 0.05s;
   --lc-content-cursor-blink-duration: 1s;
 }
 

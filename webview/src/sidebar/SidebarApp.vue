@@ -5,6 +5,7 @@ import type { ConversationHistoryPageInfo, OpenConversationPanelRecord } from '@
 import { displayConversationTitle as formatConversationTitle } from '@shared/conversationTitle';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
+import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import { onSidebarMessage, postSidebarMessage } from './sidebarHost';
 import {
   SIDEBAR_MESSAGE,
@@ -37,6 +38,7 @@ const scopePageIndex = ref(0);
 const renameTarget = ref<SidebarConversationHistoryEntry>();
 const deleteTarget = ref<SidebarConversationHistoryEntry>();
 const abortTarget = ref<SidebarConversationHistoryEntry>();
+const historyList = ref<HTMLElement | null>(null);
 const historyCountText = computed(() => {
   const total = pageInfo.value?.total ?? entries.value.length;
   const page = pageInfo.value ? `第 ${pageInfo.value.pageIndex + 1} 页` : '当前页';
@@ -412,48 +414,58 @@ function ensureActiveScopeVisible(): void {
         </div>
       </div>
 
-      <div class="history-list">
-        <div
-          v-for="entry in entries"
-          :key="entry.id"
-          class="history-item"
-          :class="[{ 'is-running': entry.isRunning }, openConversationClass(entry)]"
-          role="button"
-          tabindex="0"
-          :aria-label="`打开对话：${displayConversationTitle(entry)}`"
-          @click="openConversation(entry)"
-          @keydown="onHistoryItemKeydown($event, entry)"
-        >
-          <span class="history-open-strip" aria-hidden="true"></span>
-          <div class="history-status" :aria-label="statusText(entry)">
-            <span class="status-dot" :class="statusClass(entry)" aria-hidden="true"></span>
-            <span class="history-status-tooltip" role="tooltip">{{ statusText(entry) }}</span>
-          </div>
-          <div class="history-main">
-            <div class="history-title-row">
-              <div class="history-title">{{ displayConversationTitle(entry) }}</div>
+      <div class="history-list-shell">
+        <div ref="historyList" class="history-list">
+          <div
+            v-for="entry in entries"
+            :key="entry.id"
+            class="history-item"
+            :class="[{ 'is-running': entry.isRunning }, openConversationClass(entry)]"
+            role="button"
+            tabindex="0"
+            :aria-label="`打开对话：${displayConversationTitle(entry)}`"
+            @click="openConversation(entry)"
+            @keydown="onHistoryItemKeydown($event, entry)"
+          >
+            <span class="history-open-strip" aria-hidden="true"></span>
+            <div class="history-status" :aria-label="statusText(entry)">
+              <span class="status-dot" :class="statusClass(entry)" aria-hidden="true"></span>
+              <span class="history-status-tooltip" role="tooltip">{{ statusText(entry) }}</span>
             </div>
-            <div class="history-preview" :class="{ 'is-pending': entry.previewState === 'pending', 'is-empty': entry.previewState === 'empty' }">{{ entry.preview || '暂无消息，点击继续对话。' }}</div>
-            <div class="history-meta">
-              <span>{{ historyMeta(entry) }}</span>
-              <span v-if="entry.isRunning" class="run-badge" :aria-label="`后台任务：${entry.runStatusLabel || '执行中'}`">
-                <span class="run-badge-dot" aria-hidden="true"></span>
-                <span>{{ entry.runStatusLabel || '执行中' }}</span>
-              </span>
+            <div class="history-main">
+              <div class="history-title-row">
+                <div class="history-title">{{ displayConversationTitle(entry) }}</div>
+              </div>
+              <div class="history-preview" :class="{ 'is-pending': entry.previewState === 'pending', 'is-empty': entry.previewState === 'empty' }">{{ entry.preview || '暂无消息，点击继续对话。' }}</div>
+              <div class="history-meta">
+                <span>{{ historyMeta(entry) }}</span>
+                <span v-if="entry.isRunning" class="run-badge" :aria-label="`后台任务：${entry.runStatusLabel || '执行中'}`">
+                  <span class="run-badge-dot" aria-hidden="true"></span>
+                  <span>{{ entry.runStatusLabel || '执行中' }}</span>
+                </span>
+              </div>
             </div>
-          </div>
-          <div class="history-actions" @click.stop @keydown.stop>
-            <button v-if="entry.isRunning" type="button" class="history-action-button" title="终止后台任务" aria-label="终止后台任务" @click="abortConversation(entry)">
-              <IconSquare class="history-action-icon" stroke="2" aria-hidden="true" />
-            </button>
-            <button type="button" class="history-action-button" title="重命名对话标题" aria-label="重命名对话标题" @click="renameConversation(entry)">
-              <IconEdit class="history-action-icon" stroke="2" aria-hidden="true" />
-            </button>
-            <button type="button" class="history-action-button" title="删除对话" aria-label="删除对话" @click="deleteConversation(entry)">
-              <IconTrash class="history-action-icon" stroke="2" aria-hidden="true" />
-            </button>
+            <div class="history-actions" @click.stop @keydown.stop>
+              <button v-if="entry.isRunning" type="button" class="history-action-button" title="终止后台任务" aria-label="终止后台任务" @click="abortConversation(entry)">
+                <IconSquare class="history-action-icon" stroke="2" aria-hidden="true" />
+              </button>
+              <button type="button" class="history-action-button" title="重命名对话标题" aria-label="重命名对话标题" @click="renameConversation(entry)">
+                <IconEdit class="history-action-icon" stroke="2" aria-hidden="true" />
+              </button>
+              <button type="button" class="history-action-button" title="删除对话" aria-label="删除对话" @click="deleteConversation(entry)">
+                <IconTrash class="history-action-icon" stroke="2" aria-hidden="true" />
+              </button>
+            </div>
           </div>
         </div>
+        <AdvancedScrollbar
+          class="history-edge-scrollbar"
+          :scroller="historyList"
+          :refresh-key="entries.length"
+          show-edge-buttons
+          :show-markers="false"
+          :show-marker-preview="false"
+        />
       </div>
 
       <div v-if="!entries.length" class="empty-state">

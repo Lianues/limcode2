@@ -7,7 +7,9 @@ export interface SmoothStreamingTextOptions {
   maxCharsPerFrame?: number;
 }
 
-const DEFAULT_REPLACE_OUT_MS = 90;
+// 正文替换是“淡出旧内容 + 淡入新内容”的两段式动画。
+// 每段 50ms，总体约 100ms，与消息进入动画保持同样节奏。
+const DEFAULT_REPLACE_OUT_MS = 50;
 const DEFAULT_CATCHUP_FRAMES = 14;
 const DEFAULT_MAX_CHARS_PER_FRAME = 32;
 

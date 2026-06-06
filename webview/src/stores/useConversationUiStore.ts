@@ -25,9 +25,12 @@ export interface EditingMessageState {
   originalText: string;
 }
 
-const MESSAGE_ENTER_MS = 260;
-const MESSAGE_EXIT_MS = 180;
+// CSS 动画是 100ms；JS 计时保持一致，让新增/删除节奏更利落。
+const MESSAGE_ANIMATION_SETTLE_MS = 100;
+const MESSAGE_ENTER_MS = MESSAGE_ANIMATION_SETTLE_MS;
+const MESSAGE_EXIT_MS = MESSAGE_ANIMATION_SETTLE_MS;
 const EXIT_CLEAR_MS = 2000;
+const MESSAGE_EXIT_ACTION_DELAY_MS = MESSAGE_EXIT_MS;
 
 /**
  * 当前标签页/会话 UI 状态。
@@ -73,7 +76,8 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     } else {
       for (const message of messages) {
         if (seenMessageIds.has(message.id)) continue;
-        if (!isReadyForEnterAnimation(message)) continue;
+        // 新消息一出现就标记进入态。AI/model 消息通常会先以「streaming + 空内容」占位创建，
+        // 如果等到首个 token 再开动画，元素会先稳定渲染再突然补动画，重试时会表现为“顿一下”。
         seenMessageIds.add(message.id);
         markEntering(message.id);
       }
@@ -89,7 +93,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     }));
   }
 
-  function playExitFrom(messageId: string, action: () => void, delay = MESSAGE_EXIT_MS): void {
+  function playExitFrom(messageId: string, action: () => void, delay = MESSAGE_EXIT_ACTION_DELAY_MS): void {
     clearExitTimers();
     exitingFromId = messageId;
     refreshRowPhases();
@@ -197,18 +201,6 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     clearChatDraft
   };
 });
-
-function isReadyForEnterAnimation(message: MessageRecord): boolean {
-  if (message.role === 'user') return true;
-  return message.status !== 'streaming' || visibleTextLength(message) > 0;
-}
-
-function visibleTextLength(message: MessageRecord): number {
-  return message.content.parts.reduce(
-    (total, part) => total + (isVisibleTextPart(part) ? part.text.length : 0),
-    0
-  );
-}
 
 function visibleMessageText(message: MessageRecord): string {
   return message.content.parts

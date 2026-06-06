@@ -15,7 +15,6 @@ const PROJECTS_DIR = 'projects';
 const ALL_DIR = 'all';
 const UNBOUND_DIR = 'unbound';
 const SCOPE_FILE = 'scope.json';
-
 interface ConversationHistoryScopeIndexFile {
   schemaVersion: typeof STORAGE_VERSION;
   savedAt: string;
@@ -241,3 +240,4 @@ function isFileNotFound(error: unknown): boolean {
     .join('\n');
   return /FileNotFound|EntryNotFound|ENOENT|ENOTDIR|not found|no such file|不存在|无法解析不存在的文件/i.test(text);
 }
+

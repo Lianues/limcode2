@@ -146,7 +146,6 @@ export class BackendApplication {
     });
 
     registerApplicationEffectHandlers(this.effectHandlers);
-
     this.scheduler = new Scheduler(this.world, {
       applyEffect: (effect) => this.outbox.push(effect as WorldEffect),
       afterPass: () => {

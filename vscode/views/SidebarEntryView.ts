@@ -130,9 +130,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
   }
 
   private postSidebarStateWhenReady(webview: vscode.Webview, scopeKind: SidebarHistoryScopeKind = 'currentProject', cursor?: string, limit?: number, projectFolderUri?: string): void {
-    void this.backendApp
-      .waitUntilHydrated()
-      .then(() => this.postSidebarState(webview, scopeKind, cursor, limit, projectFolderUri))
+    void this.postSidebarState(webview, scopeKind, cursor, limit, projectFolderUri)
       .catch((error) => console.warn('[LimCode] Failed to read sidebar state.', error));
   }
 

@@ -105,26 +105,64 @@ const RUN_CONVERSATION_POLICY_LINKS_DIR = 'conversation-policy-links';
 const RUN_CONTEXT_POLICY_LINKS_DIR = 'context-policy-links';
 const RUN_DELIVERY_POLICY_LINKS_DIR = 'delivery-policy-links';
 const RUN_EDIT_POLICY_LINKS_DIR = 'edit-policy-links';
-
 export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Promise<ClientState | undefined> {
   const state = createEmptyClientState();
-  state.agents = await loadRecords<AgentRecord>(paths.agentsRootUri, paths.agentsIndexUri, 'agent');
-  state.agentModes = await loadRecords<AgentModeRecord>(paths.agentModesRootUri, paths.agentModesIndexUri, 'agentMode');
-  state.toolPolicies = await loadRecords<ToolPolicyRecord>(paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri, 'toolPolicy');
-  state.approvalPolicies = await loadRecords<ApprovalPolicyRecord>(paths.approvalPoliciesRootUri, paths.approvalPoliciesIndexUri, 'approvalPolicy');
-  state.systemPrompts = await loadRecords<SystemPromptRecord>(paths.systemPromptsRootUri, paths.systemPromptsIndexUri, 'systemPrompt');
-  state.modelProfiles = await loadRecords<ModelProfileRecord>(paths.modelProfilesRootUri, paths.modelProfilesIndexUri, 'modelProfile');
-  state.agentModeLinks = await loadRecords<AgentModeLinkRecord>(paths.agentModeLinksRootUri, paths.agentModeLinksIndexUri, 'link');
-  state.modeToolPolicyLinks = await loadRecords<ModeToolPolicyLinkRecord>(paths.modeToolPolicyLinksRootUri, paths.modeToolPolicyLinksIndexUri, 'link');
-  state.modeApprovalPolicyLinks = await loadRecords<ModeApprovalPolicyLinkRecord>(paths.modeApprovalPolicyLinksRootUri, paths.modeApprovalPolicyLinksIndexUri, 'link');
-  state.modeSystemPromptLinks = await loadRecords<ModeSystemPromptLinkRecord>(paths.modeSystemPromptLinksRootUri, paths.modeSystemPromptLinksIndexUri, 'link');
-  state.modeModelProfileLinks = await loadRecords<ModeModelProfileLinkRecord>(paths.modeModelProfileLinksRootUri, paths.modeModelProfileLinksIndexUri, 'link');
-  state.conversations = await loadRecords<ConversationRecord>(paths.conversationsRootUri, paths.conversationsIndexUri, 'conversation');
-  state.conversationReuseLinks = await loadRecords<ConversationReuseLinkRecord>(...subStore(paths.conversationsRootUri, CONVERSATION_REUSE_LINKS_DIR), 'link');
-  state.conversationBranchLinks = await loadRecords<ConversationBranchLinkRecord>(...subStore(paths.conversationsRootUri, CONVERSATION_BRANCH_LINKS_DIR), 'link');
-  state.agentConversationLinks = await loadRecords<AgentConversationLinkRecord>(paths.linksRootUri, paths.linksIndexUri, 'link');
-  state.projectContexts = await loadRecords<ProjectContextRecord>(paths.projectContextsRootUri, paths.projectContextsIndexUri, 'projectContext');
-  state.conversationProjectLinks = await loadRecords<ConversationProjectLinkRecord>(paths.conversationProjectLinksRootUri, paths.conversationProjectLinksIndexUri, 'link');
+  const [
+    agents,
+    agentModes,
+    toolPolicies,
+    approvalPolicies,
+    systemPrompts,
+    modelProfiles,
+    agentModeLinks,
+    modeToolPolicyLinks,
+    modeApprovalPolicyLinks,
+    modeSystemPromptLinks,
+    modeModelProfileLinks,
+    conversations,
+    conversationReuseLinks,
+    conversationBranchLinks,
+    agentConversationLinks,
+    projectContexts,
+    conversationProjectLinks
+  ] = await Promise.all([
+    loadSkeletonRecords<AgentRecord>('agents', [paths.agentsRootUri, paths.agentsIndexUri], 'agent'),
+    loadSkeletonRecords<AgentModeRecord>('agentModes', [paths.agentModesRootUri, paths.agentModesIndexUri], 'agentMode'),
+    loadSkeletonRecords<ToolPolicyRecord>('toolPolicies', [paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri], 'toolPolicy'),
+    loadSkeletonRecords<ApprovalPolicyRecord>('approvalPolicies', [paths.approvalPoliciesRootUri, paths.approvalPoliciesIndexUri], 'approvalPolicy'),
+    loadSkeletonRecords<SystemPromptRecord>('systemPrompts', [paths.systemPromptsRootUri, paths.systemPromptsIndexUri], 'systemPrompt'),
+    loadSkeletonRecords<ModelProfileRecord>('modelProfiles', [paths.modelProfilesRootUri, paths.modelProfilesIndexUri], 'modelProfile'),
+    loadSkeletonRecords<AgentModeLinkRecord>('agentModeLinks', [paths.agentModeLinksRootUri, paths.agentModeLinksIndexUri], 'link'),
+    loadSkeletonRecords<ModeToolPolicyLinkRecord>('modeToolPolicyLinks', [paths.modeToolPolicyLinksRootUri, paths.modeToolPolicyLinksIndexUri], 'link'),
+    loadSkeletonRecords<ModeApprovalPolicyLinkRecord>('modeApprovalPolicyLinks', [paths.modeApprovalPolicyLinksRootUri, paths.modeApprovalPolicyLinksIndexUri], 'link'),
+    loadSkeletonRecords<ModeSystemPromptLinkRecord>('modeSystemPromptLinks', [paths.modeSystemPromptLinksRootUri, paths.modeSystemPromptLinksIndexUri], 'link'),
+    loadSkeletonRecords<ModeModelProfileLinkRecord>('modeModelProfileLinks', [paths.modeModelProfileLinksRootUri, paths.modeModelProfileLinksIndexUri], 'link'),
+    loadSkeletonRecords<ConversationRecord>('conversations', [paths.conversationsRootUri, paths.conversationsIndexUri], 'conversation'),
+    loadSkeletonRecords<ConversationReuseLinkRecord>('conversationReuseLinks', subStore(paths.conversationsRootUri, CONVERSATION_REUSE_LINKS_DIR), 'link'),
+    loadSkeletonRecords<ConversationBranchLinkRecord>('conversationBranchLinks', subStore(paths.conversationsRootUri, CONVERSATION_BRANCH_LINKS_DIR), 'link'),
+    loadSkeletonRecords<AgentConversationLinkRecord>('agentConversationLinks', [paths.linksRootUri, paths.linksIndexUri], 'link'),
+    loadSkeletonRecords<ProjectContextRecord>('projectContexts', [paths.projectContextsRootUri, paths.projectContextsIndexUri], 'projectContext'),
+    loadSkeletonRecords<ConversationProjectLinkRecord>('conversationProjectLinks', [paths.conversationProjectLinksRootUri, paths.conversationProjectLinksIndexUri], 'link')
+  ]);
+
+  state.agents = agents;
+  state.agentModes = agentModes;
+  state.toolPolicies = toolPolicies;
+  state.approvalPolicies = approvalPolicies;
+  state.systemPrompts = systemPrompts;
+  state.modelProfiles = modelProfiles;
+  state.agentModeLinks = agentModeLinks;
+  state.modeToolPolicyLinks = modeToolPolicyLinks;
+  state.modeApprovalPolicyLinks = modeApprovalPolicyLinks;
+  state.modeSystemPromptLinks = modeSystemPromptLinks;
+  state.modeModelProfileLinks = modeModelProfileLinks;
+  state.conversations = conversations;
+  state.conversationReuseLinks = conversationReuseLinks;
+  state.conversationBranchLinks = conversationBranchLinks;
+  state.agentConversationLinks = agentConversationLinks;
+  state.projectContexts = projectContexts;
+  state.conversationProjectLinks = conversationProjectLinks;
+
   return hasAnyState(state) ? state : undefined;
 }
 
@@ -352,6 +390,16 @@ async function loadRecords<TRecord extends StoreRecord>(root: vscode.Uri, indexU
 async function loadRecordsByIds<TRecord extends StoreRecord>(root: vscode.Uri, indexUri: vscode.Uri, recordKey: StoreKey, ids: Iterable<string>): Promise<TRecord[]> {
   return loadRecordStoreByIds<TRecord, string>(root, indexUri, recordKey, ids);
 }
+
+async function loadSkeletonRecords<TRecord extends StoreRecord>(
+  label: string,
+  location: [vscode.Uri, vscode.Uri],
+  recordKey: StoreKey
+): Promise<TRecord[]> {
+  const [root, indexUri] = location;
+  return loadRecords<TRecord>(root, indexUri, recordKey);
+}
+
 
 async function saveRecords<TRecord extends StoreRecord>(
   root: vscode.Uri,

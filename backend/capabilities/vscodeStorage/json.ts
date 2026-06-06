@@ -1,8 +1,12 @@
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 export async function readJson<T>(uri: vscode.Uri): Promise<T | undefined> {
   try {
-    const raw = await vscode.workspace.fs.readFile(uri);
+    const raw = uri.scheme === 'file'
+      ? await fs.readFile(uri.fsPath)
+      : await vscode.workspace.fs.readFile(uri);
     const text = Buffer.from(raw).toString('utf8').trim();
     return text ? JSON.parse(text) as T : undefined;
   } catch (error) {
@@ -13,7 +17,13 @@ export async function readJson<T>(uri: vscode.Uri): Promise<T | undefined> {
 }
 
 export async function writeJson(uri: vscode.Uri, value: unknown): Promise<void> {
-  await vscode.workspace.fs.writeFile(uri, Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8'));
+  const data = Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  if (uri.scheme === 'file') {
+    await fs.mkdir(path.dirname(uri.fsPath), { recursive: true });
+    await fs.writeFile(uri.fsPath, data);
+    return;
+  }
+  await vscode.workspace.fs.writeFile(uri, data);
 }
 
 interface FileSystemLikeError {

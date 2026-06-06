@@ -1,7 +1,11 @@
 import * as vscode from 'vscode';
-import type { ConversationSettingsRecord, GlobalSettingsRecord, GlobalSettingsSectionValue } from '../../../shared/protocol';
+import type {
+  ConversationSettingsRecord,
+  GlobalSettingsRecord,
+  GlobalSettingsSectionValue
+} from '../../../shared/protocol';
 import type { StorageCapability } from '../types';
-import { ensureGlobalSettingsFile, loadGlobalSettingsFile, writeGlobalSettingsFile } from './globalSettings';
+import { loadGlobalSettingsFile, writeGlobalSettingsFile } from './globalSettings';
 import {
   createGlobalSettingsRecord,
   LIMCODE_GLOBAL_STATUS_LABEL,
@@ -10,7 +14,7 @@ import {
   saveGlobalStatus
 } from './globalStatus';
 import { migrateStorageRoot } from './migration';
-import { createVscodeStoragePaths, ensureStorageRoots } from './paths';
+import { createVscodeStoragePaths } from './paths';
 import { readJson, writeJson } from './json';
 import {
   appendToolCallEventRecord,
@@ -38,38 +42,6 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     return currentPaths;
   }
 
-  function structuralRoots(paths: StoragePaths): vscode.Uri[] {
-    return [
-      paths.agentsRootUri,
-      paths.agentModesRootUri,
-      paths.toolPoliciesRootUri,
-      paths.approvalPoliciesRootUri,
-      paths.systemPromptsRootUri,
-      paths.modelProfilesRootUri,
-      paths.conversationsRootUri,
-      paths.conversationHistoryRootUri,
-      paths.projectContextsRootUri,
-      paths.conversationProjectLinksRootUri,
-      paths.linksRootUri,
-      paths.agentModeLinksRootUri,
-      paths.modeToolPolicyLinksRootUri,
-      paths.modeApprovalPolicyLinksRootUri,
-      paths.modeSystemPromptLinksRootUri,
-      paths.modeModelProfileLinksRootUri,
-      paths.agentRunsRootUri,
-      paths.agentRunSourceLinksRootUri,
-      paths.agentRunTargetLinksRootUri,
-      paths.messageRunLinksRootUri,
-      paths.toolCallRunLinksRootUri,
-      paths.runPoliciesRootUri
-    ];
-  }
-
-  async function ensureReadyFor(paths: StoragePaths): Promise<void> {
-    await ensureStorageRoots(...structuralRoots(paths), paths.settingsRootUri);
-    await ensureGlobalSettingsFile(paths.settingsRootUri, 'llm');
-  }
-
 
   async function loadCommonGlobalSettings(): Promise<{ section: 'common'; settings: GlobalSettingsRecord; filePath: string }> {
     return { section: 'common', settings: createGlobalSettingsRecord(context), filePath: LIMCODE_GLOBAL_STATUS_LABEL };
@@ -82,67 +54,56 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     const targetRootUri = resolveDataRootUri(context, targetDataRootPath);
     const migration = await migrateStorageRoot(previousPaths.globalStorageUri, targetRootUri);
     await saveGlobalStatus(context, targetDataRootPath, migration.skipped ? undefined : { fromPath: migration.fromPath, toPath: migration.toPath, migratedAt: migration.migratedAt });
-    const nextPaths = getPaths();
-    await ensureReadyFor(nextPaths);
     return loadCommonGlobalSettings();
   }
 
   return {
     get paths() { return getPaths(); },
-    async ensureReady() { await ensureReadyFor(getPaths()); },
+    async ensureReady() {
+      // 读路径懒加载：启动阶段不预创建/读取 settings，避免阻塞侧边栏首屏。
+    },
     async loadClientStateSkeleton() {
       const paths = getPaths();
-      await ensureReadyFor(paths);
       return loadClientStateSkeletonFromStores(paths);
     },
     async loadConversationDetail(conversationId) {
       const paths = getPaths();
-      await ensureReadyFor(paths);
       return loadConversationDetailFromStores(paths, conversationId);
     },
     async saveClientStateSkeleton(state) {
       const paths = getPaths();
-      await ensureReadyFor(paths);
       await saveClientStateSkeletonToStores(paths, state);
     },
     async saveConversationDetail(conversationId, state) {
       const paths = getPaths();
-      await ensureReadyFor(paths);
       await saveConversationDetailToStores(paths, conversationId, state);
     },
     async loadConversationHistoryPage(request) {
       const paths = getPaths();
-      await ensureReadyFor(paths);
       return loadConversationHistoryPageFromStore(paths, request);
     },
     async upsertConversationHistoryEntry(entry) {
       const paths = getPaths();
-      await ensureReadyFor(paths);
       await upsertConversationHistoryEntryInStore(paths, entry);
     },
     async removeConversationHistoryEntry(conversationId) {
       const paths = getPaths();
-      await ensureReadyFor(paths);
       await removeConversationHistoryEntryFromStore(paths, conversationId);
     },
     async saveMessageSnapshot(conversationId, message) {
       const paths = getPaths();
-      await ensureReadyFor(paths);
       await saveMessageRecord(paths, conversationId, message);
     },
     async removeMessage(_conversationId, messageId) {
       const paths = getPaths();
-      await ensureReadyFor(paths);
       await removeMessageRecord(paths, _conversationId, messageId);
     },
     async saveToolCallSnapshot(_conversationId, toolCall) {
       const paths = getPaths();
-      await ensureReadyFor(paths);
       await saveToolCallRecord(paths, _conversationId, toolCall);
     },
     async appendToolCallEvent(_conversationId, event) {
       const paths = getPaths();
-      await ensureReadyFor(paths);
       await appendToolCallEventRecord(paths, _conversationId, event);
     },
     async loadGlobalSettings(section) {

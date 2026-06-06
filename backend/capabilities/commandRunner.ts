@@ -21,7 +21,7 @@ type StaticClassification = 'allow' | 'deny' | 'unknown';
 interface CommandProfile {
   readonly kind: ShellKind;
   readonly toolName: 'shell' | 'bash';
-  readonly executable: string;
+  readonly executable?: string;
   readonly description: string;
   readonly commandPrefix?: string;
 }
@@ -48,7 +48,6 @@ function detectCommandProfile(): CommandProfile {
     return {
       kind: 'powershell',
       toolName: 'shell',
-      executable: resolvePowerShell(),
       commandPrefix: PS_UTF8_PREFIX,
       description: `在项目目录下通过 PowerShell 后台执行非交互命令。返回 stdout、stderr 和退出码。
 内置安全检查：只读命令自动放行；危险命令拒绝；未知命令需用户确认后使用 force。
@@ -106,7 +105,7 @@ function executeCommand(profile: CommandProfile, command: string, cwd: string, t
     let killed = false;
     let settled = false;
 
-    const child = spawn(profile.executable, commandArgs(profile, wrappedCommand), {
+    const child = spawn(commandExecutable(profile), commandArgs(profile, wrappedCommand), {
       cwd,
       windowsHide: true,
       detached: profile.kind === 'bash' && process.platform !== 'win32',
@@ -162,6 +161,10 @@ function commandArgs(profile: CommandProfile, wrappedCommand: string): string[] 
   return profile.kind === 'powershell'
     ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', wrappedCommand]
     : ['-lc', wrappedCommand];
+}
+
+function commandExecutable(profile: CommandProfile): string {
+  return profile.executable ?? resolvePowerShell();
 }
 
 class OutputAccumulator {

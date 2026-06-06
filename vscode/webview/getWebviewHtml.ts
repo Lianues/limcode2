@@ -32,6 +32,7 @@ export function getWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri
   let html = fs.readFileSync(indexUri.fsPath, 'utf8');
 
   html = html.replace(/<script\s/g, `<script nonce="${nonce}" `);
+  html = html.replace(/<link\s+([^>]*rel="modulepreload"[^>]*)>/g, `<link nonce="${nonce}" $1>`);
   html = html.replace(/(src|href)="(.+?)"/g, (_, attr: string, source: string) => {
     if (/^(https?:|data:|vscode-resource:|vscode-webview-resource:)/.test(source)) {
       return `${attr}="${source}"`;
@@ -69,7 +70,7 @@ function createContentSecurityPolicy(
     `img-src ${webview.cspSource} https: data:${devHttpSourceList};`,
     `font-src ${webview.cspSource}${devHttpSourceList};`,
     `style-src ${webview.cspSource}${devHttpSourceList} 'unsafe-inline';`,
-    `script-src 'nonce-${nonce}'${devHttpSourceList};`,
+    `script-src 'nonce-${nonce}' ${webview.cspSource}${devHttpSourceList};`,
     devConnectSourceList ? `connect-src ${webview.cspSource} ${devConnectSourceList};` : ''
   ]
     .filter(Boolean)

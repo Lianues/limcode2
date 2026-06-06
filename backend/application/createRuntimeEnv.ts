@@ -23,22 +23,26 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
   const command = createCommandCapability();
   const registry = createToolRegistry(command);
   const storage = createVsCodeStorageCapability(context);
+  const llm = createLlmProviderCapability({
+    settings: async () => {
+      const stored = await storage.loadGlobalSettings('llm');
+      return stored.settings as import('../../shared/protocol').LlmSettingsRecord;
+    }
+  });
+  const fs = createVsCodeFsCapability();
+  const webview = createWebviewCapability();
+  const toolSchemas = registry.schemas();
 
   return {
     env: {
-      llm: createLlmProviderCapability({
-        settings: async () => {
-          const stored = await storage.loadGlobalSettings('llm');
-          return stored.settings as import('../../shared/protocol').LlmSettingsRecord;
-        }
-      }),
-      fs: createVsCodeFsCapability(),
+      llm,
+      fs,
       command,
-      webview: createWebviewCapability(),
+      webview,
       storage,
       get paths() { return storage.paths; },
       tools: { registry: registry.list() }
     },
-    toolSchemas: registry.schemas()
+    toolSchemas
   };
 }

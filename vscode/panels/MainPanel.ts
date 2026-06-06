@@ -3,6 +3,7 @@ import {
   BridgeMessageType,
   createMessageId,
   type BridgeClientId,
+  type OpenConversationPanelRecord,
   type WebviewClientMeta,
   type WebviewToExtensionMessage
 } from '../../shared/protocol';
@@ -23,6 +24,8 @@ export class MainPanel {
   public static readonly viewType = 'limcode.mainPanel';
 
   private static readonly panels = new Map<string, MainPanel>();
+  private static readonly conversationPanelStateEmitter = new vscode.EventEmitter<void>();
+  public static readonly onDidChangeConversationPanelState = MainPanel.conversationPanelStateEmitter.event;
 
   private readonly panel: vscode.WebviewPanel;
   private readonly extensionUri: vscode.Uri;
@@ -56,6 +59,7 @@ export class MainPanel {
       if (existing) {
         existing.refreshTitle(options.title);
         existing.panel.reveal(column);
+        MainPanel.notifyConversationPanelStateChanged();
         return;
       }
     }
@@ -78,6 +82,7 @@ export class MainPanel {
   ): void {
     const instance = new MainPanel(panel, extensionUri, backendApp, options);
     MainPanel.panels.set(instance.panelId, instance);
+    MainPanel.notifyConversationPanelStateChanged();
   }
 
   private static webviewPanelOptions(extensionUri: vscode.Uri): vscode.WebviewPanelOptions & vscode.WebviewOptions {
@@ -114,6 +119,7 @@ export class MainPanel {
     this.panel.webview.html = getWebviewHtml(this.panel.webview, this.extensionUri);
 
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+    this.panel.onDidChangeViewState(() => MainPanel.notifyConversationPanelStateChanged(), null, this.disposables);
     this.panel.webview.onDidReceiveMessage(
       (message: WebviewToExtensionMessage) => {
         this.backendApp.handleWebviewMessage(this.clientId, message);
@@ -126,6 +132,7 @@ export class MainPanel {
 
   public dispose(): void {
     MainPanel.panels.delete(this.panelId);
+    MainPanel.notifyConversationPanelStateChanged();
     this.backendApp.detachWebview(this.clientId);
 
     while (this.disposables.length) {
@@ -157,6 +164,24 @@ export class MainPanel {
     for (const panel of MainPanel.panels.values()) {
       if (panel.conversationId === conversationId) panel.refreshTitle();
     }
+  }
+
+  public static getOpenConversationPanelStates(): OpenConversationPanelRecord[] {
+    const byConversation = new Map<string, OpenConversationPanelRecord>();
+    for (const item of MainPanel.panels.values()) {
+      if (item.kind !== 'chat' || !item.conversationId) continue;
+      const existing = byConversation.get(item.conversationId);
+      byConversation.set(item.conversationId, {
+        conversationId: item.conversationId,
+        visible: (existing?.visible ?? false) || item.panel.visible,
+        active: (existing?.active ?? false) || item.panel.active
+      });
+    }
+    return [...byConversation.values()].sort((left, right) => left.conversationId.localeCompare(right.conversationId));
+  }
+
+  private static notifyConversationPanelStateChanged(): void {
+    MainPanel.conversationPanelStateEmitter.fire();
   }
 }
 

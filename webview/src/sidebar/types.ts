@@ -1,6 +1,7 @@
 import type {
   ConversationHistoryPageRecord,
   ConversationHistoryScope,
+  OpenConversationPanelRecord,
   ProjectFolderCandidateRecord,
   SidebarHistoryScopeKind,
   SidebarConversationHistoryEntry
@@ -10,7 +11,6 @@ export const SIDEBAR_MESSAGE = {
   openConversation: 'openConversation',
   newConversation: 'newConversation',
   openGlobalSettings: 'openGlobalSettings',
-  refreshConversationHistory: 'refreshConversationHistory',
   historyPageGet: 'sidebar.historyPage.get',
   state: 'sidebar.state',
   ready: 'sidebar.ready',
@@ -24,7 +24,6 @@ export type SidebarToExtensionMessage =
   | { type: typeof SIDEBAR_MESSAGE.openConversation; conversationId: string; title?: string }
   | { type: typeof SIDEBAR_MESSAGE.newConversation; projectFolderUri?: string }
   | { type: typeof SIDEBAR_MESSAGE.openGlobalSettings }
-  | { type: typeof SIDEBAR_MESSAGE.refreshConversationHistory }
   | { type: typeof SIDEBAR_MESSAGE.historyPageGet; scopeKind: SidebarHistoryScopeKind; projectFolderUri?: string; cursor?: string; limit?: number }
   | { type: typeof SIDEBAR_MESSAGE.renameConversation; conversationId: string; title: string }
   | { type: typeof SIDEBAR_MESSAGE.deleteConversation; conversationId: string }
@@ -38,6 +37,7 @@ export type ExtensionToSidebarMessage =
       activeProjectFolderUri?: string;
       currentProjectScope: ConversationHistoryScope;
       projectFolders: ProjectFolderCandidateRecord[];
+      openConversations: OpenConversationPanelRecord[];
     };
 
 export type {

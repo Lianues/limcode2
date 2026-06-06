@@ -5,6 +5,7 @@ import type { BackendApplication } from '../../backend/application/BackendApplic
 import type {
   ConversationHistoryPageRecord,
   ConversationHistoryScope,
+  OpenConversationPanelRecord,
   ProjectFolderCandidateRecord,
   SidebarHistoryScopeKind
 } from '../../shared/protocol';
@@ -13,7 +14,6 @@ const SIDEBAR_ENTRY_VIEW_ID = 'limcode-entry-view';
 const OPEN_CONVERSATION_MESSAGE = 'openConversation';
 const NEW_CONVERSATION_MESSAGE = 'newConversation';
 const OPEN_GLOBAL_SETTINGS_MESSAGE = 'openGlobalSettings';
-const REFRESH_HISTORY_MESSAGE = 'refreshConversationHistory';
 const HISTORY_PAGE_GET_MESSAGE = 'sidebar.historyPage.get';
 const SIDEBAR_STATE_MESSAGE = 'sidebar.state';
 const SIDEBAR_READY_MESSAGE = 'sidebar.ready';
@@ -38,6 +38,7 @@ interface SidebarStateMessage {
   activeProjectFolderUri?: string;
   currentProjectScope: ConversationHistoryScope;
   projectFolders: ProjectFolderCandidateRecord[];
+  openConversations: OpenConversationPanelRecord[];
 }
 
 export function registerSidebarEntryView(context: vscode.ExtensionContext, backendApp: BackendApplication): void {
@@ -50,6 +51,7 @@ export function registerSidebarEntryView(context: vscode.ExtensionContext, backe
       }
     })
   );
+  context.subscriptions.push(MainPanel.onDidChangeConversationPanelState(() => provider.refreshPanelStates()));
 }
 
 class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
@@ -121,11 +123,6 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
-      if (message.type === REFRESH_HISTORY_MESSAGE) {
-        this.postSidebarStateWhenReady(webviewView.webview, this.lastScopeKind, this.lastCursor, undefined, this.lastProjectFolderUri);
-        return;
-      }
-
       if (message.type === HISTORY_PAGE_GET_MESSAGE) {
         this.postSidebarStateWhenReady(webviewView.webview, message.scopeKind ?? 'currentProject', message.cursor, message.limit, message.projectFolderUri);
       }
@@ -137,6 +134,10 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       title: 'LimCode Sidebar',
       rootId: 'sidebar-app'
     });
+  }
+
+  public refreshPanelStates(): void {
+    this.scheduleConversationHistoryRefresh();
   }
 
   private postSidebarStateWhenReady(webview: vscode.Webview, scopeKind: SidebarHistoryScopeKind = 'currentProject', cursor?: string, limit?: number, projectFolderUri?: string): void {
@@ -235,7 +236,8 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       activeScopeKind: scopeKind,
       ...(activeProjectFolderUri ? { activeProjectFolderUri } : {}),
       currentProjectScope: this.backendApp.getCurrentProjectHistoryScope(),
-      projectFolders: this.backendApp.getProjectFolderCandidates()
+      projectFolders: this.backendApp.getProjectFolderCandidates(),
+      openConversations: MainPanel.getOpenConversationPanelStates()
     };
     void webview.postMessage(message);
   }

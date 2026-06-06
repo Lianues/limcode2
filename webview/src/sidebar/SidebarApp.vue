@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { IconEdit, IconSquare, IconTrash } from '@tabler/icons-vue';
-import type { ConversationHistoryPageInfo } from '@shared/protocol';
+import type { ConversationHistoryPageInfo, OpenConversationPanelRecord } from '@shared/protocol';
 import { displayConversationTitle as formatConversationTitle } from '@shared/conversationTitle';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
@@ -31,6 +31,7 @@ const projectFolders = ref<ProjectFolderCandidateRecord[]>([]);
 const activeScopeKind = ref<SidebarHistoryScopeKind>('currentProject');
 const activeProjectFolderUri = ref<string | undefined>();
 const currentProjectScope = ref<ConversationHistoryScope>({ kind: 'unbound' });
+const openConversations = ref<OpenConversationPanelRecord[]>([]);
 const pageInfo = ref<ConversationHistoryPageInfo>();
 const scopePageIndex = ref(0);
 const renameTarget = ref<SidebarConversationHistoryEntry>();
@@ -130,6 +131,7 @@ onMounted(() => {
     else if (nextScopeKind !== 'project') activeProjectFolderUri.value = undefined;
     currentProjectScope.value = message.currentProjectScope ?? currentProjectScope.value;
     projectFolders.value = Array.isArray(message.projectFolders) ? message.projectFolders : [];
+    openConversations.value = Array.isArray(message.openConversations) ? message.openConversations : [];
     ensureActiveScopeVisible();
   });
   postSidebarMessage({ type: SIDEBAR_MESSAGE.ready });
@@ -153,10 +155,6 @@ function requestHistoryPage(
   projectFolderUri = activeProjectFolderUri.value
 ): void {
   postSidebarMessage({ type: SIDEBAR_MESSAGE.historyPageGet, scopeKind, projectFolderUri, cursor, limit: PAGE_SIZE });
-}
-
-function refreshHistory(): void {
-  requestHistoryPage(activeScopeKind.value, pageInfo.value?.cursor, activeProjectFolderUri.value);
 }
 
 function switchScope(option: ScopeOption): void {
@@ -280,6 +278,16 @@ function displayConversationTitle(entry: SidebarConversationHistoryEntry | undef
   return entry ? formatConversationTitle({ id: entry.id, title: entry.title }) : '';
 }
 
+function openConversationState(entry: SidebarConversationHistoryEntry): OpenConversationPanelRecord | undefined {
+  return openConversations.value.find((item) => item.conversationId === entry.id);
+}
+
+function openConversationClass(entry: SidebarConversationHistoryEntry): string | undefined {
+  const state = openConversationState(entry);
+  if (!state) return undefined;
+  return state.visible || state.active ? 'is-open-visible' : 'is-open-hidden';
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -360,14 +368,6 @@ function ensureActiveScopeVisible(): void {
             </svg>
             新对话
           </button>
-          <button type="button" class="secondary-button" title="刷新对话历史" aria-label="刷新对话历史" @click="refreshHistory">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <polyline points="23 4 23 10 17 10"></polyline>
-              <polyline points="1 20 1 14 7 14"></polyline>
-              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path>
-              <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"></path>
-            </svg>
-          </button>
         </div>
         <div class="history-scope-pager" aria-label="对话历史范围分页列表">
           <button
@@ -417,7 +417,7 @@ function ensureActiveScopeVisible(): void {
           v-for="entry in entries"
           :key="entry.id"
           class="history-item"
-          :class="{ 'is-running': entry.isRunning }"
+          :class="[{ 'is-running': entry.isRunning }, openConversationClass(entry)]"
           role="button"
           tabindex="0"
           :title="`打开对话：${displayConversationTitle(entry)}`"
@@ -425,15 +425,13 @@ function ensureActiveScopeVisible(): void {
           @click="openConversation(entry)"
           @keydown="onHistoryItemKeydown($event, entry)"
         >
-          <div class="history-avatar" aria-hidden="true">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-            </svg>
+          <span class="history-open-strip" aria-hidden="true"></span>
+          <div class="history-status" :title="statusText(entry)" aria-hidden="true">
+            <span class="status-dot" :class="statusClass(entry)"></span>
           </div>
           <div class="history-main">
             <div class="history-title-row">
               <div class="history-title">{{ displayConversationTitle(entry) }}</div>
-              <span class="status-dot" :class="statusClass(entry)" :title="statusText(entry)"></span>
             </div>
             <div class="history-preview">{{ entry.preview || '暂无消息，点击继续对话。' }}</div>
             <div class="history-meta">

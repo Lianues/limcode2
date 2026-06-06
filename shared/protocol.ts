@@ -133,6 +133,12 @@ export interface SidebarConversationHistoryEntry {
   projectName?: string;
 }
 
+export interface OpenConversationPanelRecord {
+  conversationId: string;
+  visible: boolean;
+  active: boolean;
+}
+
 export type ConversationHistoryScope =
   | { kind: 'project'; folderUri: string }
   | { kind: 'unbound' }

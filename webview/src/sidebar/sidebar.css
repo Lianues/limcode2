@@ -139,7 +139,7 @@ button {
 
 .toolbar {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr;
   gap: 8px;
   align-items: center;
 }
@@ -320,7 +320,7 @@ button {
   border: 0;
   border-bottom: 1px solid var(--line);
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) auto;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
   gap: 9px;
   color: var(--vscode-foreground);
   background: transparent;
@@ -329,43 +329,57 @@ button {
   outline: none;
 }
 
-.history-item::before {
-  content: '';
+.history-open-strip {
   position: absolute;
-  left: 0;
-  top: 9px;
-  bottom: 9px;
-  width: 2px;
-  background: transparent;
+  left: 3px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--vscode-charts-blue, #38bdf8);
   opacity: 0;
+  transform: scaleY(0.35);
+  transform-origin: center;
+  pointer-events: none;
+  transition:
+    opacity 0.09s ease,
+    transform 0.12s cubic-bezier(0.2, 0, 0, 1),
+    background-color 0.12s ease,
+    box-shadow 0.12s ease;
+  will-change: opacity, transform, background-color;
 }
 
-.history-item.is-running::before {
-  background: var(--vscode-testing-iconQueued);
+.history-item.is-open-hidden .history-open-strip {
+  opacity: 0.88;
+  transform: scaleY(1);
+  background: var(--vscode-charts-blue, #38bdf8);
+  animation: history-strip-enter 0.12s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.history-item.is-open-visible .history-open-strip {
+  background: var(--vscode-testing-iconPassed, #4caf50);
   opacity: 0.95;
-  animation: pulse-edge 1.6s infinite ease-in-out;
+  transform: scaleY(1);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--vscode-testing-iconPassed, #4caf50) 42%, transparent);
+  animation: history-strip-enter 0.12s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .history-item:hover {
   background: var(--vscode-list-hoverBackground);
 }
 
-.history-item:hover::before {
-  background: var(--vscode-focusBorder);
-  opacity: 1;
+@keyframes history-strip-enter {
+  from { opacity: 0; transform: scaleY(0.35); }
+  to { opacity: 1; transform: scaleY(1); }
 }
 
-.history-avatar {
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line);
-  background: var(--surface-subtle);
+.history-status {
+  width: 10px;
+  min-height: 26px;
   color: var(--vscode-descriptionForeground);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-top: 1px;
 }
 
 .history-main {
@@ -394,8 +408,8 @@ button {
 }
 
 .status-dot {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   flex: 0 0 auto;
   background: var(--vscode-descriptionForeground);

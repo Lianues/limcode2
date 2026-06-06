@@ -316,11 +316,11 @@ button {
   position: relative;
   width: 100%;
   margin: 0;
-  padding: 9px 10px 9px 12px;
+  padding: 9px 42px 9px 12px;
   border: 0;
   border-bottom: 1px solid var(--line);
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto;
+  grid-template-columns: 10px minmax(0, 1fr);
   gap: 9px;
   color: var(--vscode-foreground);
   background: transparent;
@@ -374,12 +374,41 @@ button {
 }
 
 .history-status {
+  position: relative;
   width: 10px;
   min-height: 26px;
   color: var(--vscode-descriptionForeground);
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+.history-status-tooltip {
+  position: absolute;
+  left: calc(100% + 4px);
+  top: 2px;
+  z-index: 10;
+  max-width: 180px;
+  padding: 4px 7px;
+  border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-panel-border));
+  border-radius: var(--radius-sm);
+  color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
+  background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, var(--vscode-sideBar-background)));
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.24);
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transform: translateY(2px);
+  pointer-events: none;
+  transition: opacity 0.08s ease, transform 0.08s ease;
+}
+
+.history-status:hover .history-status-tooltip {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .history-main {
@@ -394,6 +423,7 @@ button {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  height: 16px;
 }
 
 .history-title {
@@ -401,7 +431,7 @@ button {
   flex: 1;
   font-size: 12px;
   font-weight: 600;
-  line-height: 1.35;
+  line-height: 16px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -420,7 +450,6 @@ button {
 .status-running {
   background: var(--vscode-testing-iconQueued);
   opacity: 1;
-  animation: pulse-glow 1.4s infinite ease-in-out;
 }
 
 .status-complete {
@@ -449,6 +478,8 @@ button {
 .history-meta {
   margin-top: 1px;
   display: flex;
+  height: 14px;
+  line-height: 14px;
   align-items: center;
   gap: 5px;
   min-width: 0;
@@ -466,31 +497,35 @@ button {
 }
 
 .run-badge {
+  flex: 0 1 auto;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  min-width: 0;
+  gap: 3px;
   max-width: 100%;
-  padding: 1px 5px;
+  height: 14px;
+  min-height: 0;
+  padding: 0 4px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   color: var(--vscode-foreground);
-  background: color-mix(in srgb, var(--vscode-sideBar-background) 86%, var(--vscode-foreground) 14%);
+  background: color-mix(in srgb, var(--vscode-sideBar-background) 88%, var(--vscode-foreground) 12%);
   font-size: 10px;
-  line-height: 1.3;
+  line-height: 12px;
+  box-sizing: border-box;
 }
 
 .run-badge-dot {
-  width: 5px;
-  height: 5px;
+  width: 4px;
+  height: 4px;
   border-radius: 50%;
   background: var(--vscode-testing-iconQueued);
-  animation: pulse-glow 1.4s infinite ease-in-out;
   flex: 0 0 auto;
 }
 
 .history-actions {
-  align-self: start;
+  position: absolute;
+  top: 6px;
+  right: 6px;
   display: flex;
   flex-direction: column;
   align-items: center;

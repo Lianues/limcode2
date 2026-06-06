@@ -420,14 +420,14 @@ function ensureActiveScopeVisible(): void {
           :class="[{ 'is-running': entry.isRunning }, openConversationClass(entry)]"
           role="button"
           tabindex="0"
-          :title="`打开对话：${displayConversationTitle(entry)}`"
           :aria-label="`打开对话：${displayConversationTitle(entry)}`"
           @click="openConversation(entry)"
           @keydown="onHistoryItemKeydown($event, entry)"
         >
           <span class="history-open-strip" aria-hidden="true"></span>
-          <div class="history-status" :title="statusText(entry)" aria-hidden="true">
-            <span class="status-dot" :class="statusClass(entry)"></span>
+          <div class="history-status" :aria-label="statusText(entry)">
+            <span class="status-dot" :class="statusClass(entry)" aria-hidden="true"></span>
+            <span class="history-status-tooltip" role="tooltip">{{ statusText(entry) }}</span>
           </div>
           <div class="history-main">
             <div class="history-title-row">
@@ -436,7 +436,7 @@ function ensureActiveScopeVisible(): void {
             <div class="history-preview">{{ entry.preview || '暂无消息，点击继续对话。' }}</div>
             <div class="history-meta">
               <span>{{ historyMeta(entry) }}</span>
-              <span v-if="entry.isRunning" class="run-badge" :title="`后台任务：${entry.runStatusLabel || '执行中'}`">
+              <span v-if="entry.isRunning" class="run-badge" :aria-label="`后台任务：${entry.runStatusLabel || '执行中'}`">
                 <span class="run-badge-dot" aria-hidden="true"></span>
                 <span>{{ entry.runStatusLabel || '后台执行中' }}</span>
               </span>

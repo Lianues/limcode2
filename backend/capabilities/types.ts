@@ -192,6 +192,8 @@ export interface RuntimePaths {
 }
 
 /** VS Code 存储能力：通过 workspace.fs/globalState 读写插件全局数据。 */
+export type ConversationRunHistorySaveMode = 'merge' | 'replace';
+
 export interface StorageCapability {
   /** 当前 active data root 派生出的路径；数据目录切换后 getter 会返回新路径。 */
   readonly paths: RuntimePaths;
@@ -202,7 +204,8 @@ export interface StorageCapability {
     options?: { includeRunHistory?: boolean }
   ): Promise<ClientState | undefined>;
   saveClientStateSkeleton(state: ClientState): Promise<void>;
-  saveConversationDetail(conversationId: string, state: ClientState): Promise<void>;
+  saveConversationRenderDetail(conversationId: string, state: ClientState): Promise<void>;
+  saveConversationRunHistory(conversationId: string, state: ClientState, options: { mode: ConversationRunHistorySaveMode }): Promise<void>;
   loadConversationHistoryPage(request: ConversationHistoryPageRequest): Promise<ConversationHistoryPageRecord>;
   upsertConversationHistoryEntry(entry: import('../../shared/protocol').SidebarConversationHistoryEntry): Promise<void>;
   removeConversationHistoryEntry(conversationId: string): Promise<void>;

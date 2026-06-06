@@ -92,8 +92,6 @@ export interface SetConversationProjectFolderInput {
   name?: string;
 }
 
-const BACKGROUND_FULL_DETAIL_LOAD_DELAY_MS = 5_000;
-
 /**
  * 后端应用组合根（composition root）。
  * 只负责组装 ECS world、runtime capability、effect handlers 与 VS Code/Webview 对外门面。
@@ -115,10 +113,8 @@ export class BackendApplication {
   private pendingGlobalSnapshot = false;
   private readonly pendingSnapshotConversationIds = new Set<string>();
   private readonly pendingHydrationMessages: Array<{ clientId: BridgeClientId; message: WebviewToExtensionMessage }> = [];
-  private readonly loadedConversationDetails = new Set<string>();
   private readonly renderLoadedConversationDetails = new Set<string>();
-  private readonly loadingFullConversationDetails = new Set<string>();
-  private readonly scheduledFullConversationDetails = new Set<string>();
+  private readonly runHistoryLoadedConversationDetails = new Set<string>();
   private readonly conversationHistoryChangedEmitter = new vscode.EventEmitter<void>();
   public readonly onDidChangeConversationHistory = this.conversationHistoryChangedEmitter.event;
 
@@ -126,8 +122,8 @@ export class BackendApplication {
     const { env, toolSchemas } = createRuntimeEnv(context);
     this.env = env;
     this.persistence = new ClientStatePersistence(this.world, this.env.storage, {
-      isConversationDetailLoaded: (conversationId) => this.loadedConversationDetails.has(conversationId),
-      loadedConversationIds: () => this.loadedConversationDetails
+      renderLoadedConversationIds: () => this.renderLoadedConversationDetails,
+      runHistoryLoadedConversationIds: () => this.runHistoryLoadedConversationDetails
     });
     this.globalSettingsBridge = new GlobalSettingsBridge({
       storage: this.env.storage,
@@ -211,7 +207,8 @@ export class BackendApplication {
     const projectFolder = this.resolveProjectFolderForNewConversation(options.projectFolderUri);
     if (projectFolder) setConversationProject(this.world, { conversation, uri: projectFolder.uri, name: projectFolder.name });
 
-    this.loadedConversationDetails.add(conversationId);
+    this.renderLoadedConversationDetails.add(conversationId);
+    this.runHistoryLoadedConversationDetails.add(conversationId);
     await this.upsertConversationHistoryEntry(conversationId);
     this.requestSnapshot();
     return conversationId;
@@ -298,10 +295,8 @@ export class BackendApplication {
     for (const target of cascade) {
       this.world.despawn(target);
     }
-    this.loadedConversationDetails.delete(conversationId);
     this.renderLoadedConversationDetails.delete(conversationId);
-    this.loadingFullConversationDetails.delete(conversationId);
-    this.scheduledFullConversationDetails.delete(conversationId);
+    this.runHistoryLoadedConversationDetails.delete(conversationId);
     void this.env.storage.removeConversationHistoryEntry(conversationId);
     this.requestSnapshot();
     this.requestSnapshot(conversationId);
@@ -363,44 +358,10 @@ export class BackendApplication {
 
   public async ensureConversationDetailLoaded(conversationId: string): Promise<void> {
     if (!conversationId) return;
-    if (this.loadedConversationDetails.has(conversationId)) {
-      this.renderLoadedConversationDetails.add(conversationId);
-      return;
-    }
-    if (this.renderLoadedConversationDetails.has(conversationId)) {
-      this.scheduleConversationDetailFullLoad(conversationId);
-      return;
-    }
+    if (this.renderLoadedConversationDetails.has(conversationId)) return;
     const detail = await this.env.storage.loadConversationDetail(conversationId, { includeRunHistory: false });
     if (detail) hydrateConversationDetail(this.world, detail, conversationId);
     this.renderLoadedConversationDetails.add(conversationId);
-    this.scheduleConversationDetailFullLoad(conversationId);
-  }
-
-  private scheduleConversationDetailFullLoad(conversationId: string): void {
-    if (this.loadedConversationDetails.has(conversationId) || this.loadingFullConversationDetails.has(conversationId) || this.scheduledFullConversationDetails.has(conversationId)) return;
-    this.scheduledFullConversationDetails.add(conversationId);
-    setTimeout(() => {
-      this.scheduledFullConversationDetails.delete(conversationId);
-      this.ensureConversationDetailFullyLoadedInBackground(conversationId);
-    }, BACKGROUND_FULL_DETAIL_LOAD_DELAY_MS);
-  }
-
-  private ensureConversationDetailFullyLoadedInBackground(conversationId: string): void {
-    if (this.loadedConversationDetails.has(conversationId) || this.loadingFullConversationDetails.has(conversationId)) return;
-    this.loadingFullConversationDetails.add(conversationId);
-    void this.env.storage.loadConversationDetail(conversationId, { includeRunHistory: true })
-      .then((detail) => {
-        if (this.findConversationEntity(conversationId) === undefined) {
-          return;
-        }
-        if (detail) hydrateConversationDetail(this.world, detail, conversationId);
-        this.loadedConversationDetails.add(conversationId);
-        this.renderLoadedConversationDetails.add(conversationId);
-        this.requestSnapshot(conversationId);
-      })
-      .catch((error) => console.warn('[LimCode] Failed to fully load conversation detail.', error))
-      .finally(() => this.loadingFullConversationDetails.delete(conversationId));
   }
 
   public getCurrentProjectHistoryScope(): ConversationHistoryScope {

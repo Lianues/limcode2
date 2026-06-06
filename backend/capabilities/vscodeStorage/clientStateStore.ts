@@ -54,6 +54,10 @@ export interface LoadConversationDetailOptions {
   includeRunHistory?: boolean;
 }
 
+export interface SaveConversationRunHistoryOptions {
+  mode: 'merge' | 'replace';
+}
+
 type StoreKey = string;
 type StoreRecord = { id: string };
 
@@ -109,6 +113,29 @@ const RUN_CONVERSATION_POLICY_LINKS_DIR = 'conversation-policy-links';
 const RUN_CONTEXT_POLICY_LINKS_DIR = 'context-policy-links';
 const RUN_DELIVERY_POLICY_LINKS_DIR = 'delivery-policy-links';
 const RUN_EDIT_POLICY_LINKS_DIR = 'edit-policy-links';
+
+const RUN_HISTORY_TABLE_KEYS = [
+  'agentRuns',
+  'agentRunSourceLinks',
+  'agentRunTargetLinks',
+  'messageRunLinks',
+  'toolCallRunLinks',
+  'runConversationPolicies',
+  'runContextPolicies',
+  'runDeliveryPolicies',
+  'runEditPolicies',
+  'runModeLinks',
+  'runSystemPromptLinks',
+  'runModelProfileLinks',
+  'runToolPolicyLinks',
+  'runApprovalPolicyLinks',
+  'runConversationPolicyLinks',
+  'runContextPolicyLinks',
+  'runDeliveryPolicyLinks',
+  'runEditPolicyLinks',
+  'agentRunInputRevisions'
+] as const;
+
 export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Promise<ClientState | undefined> {
   const state = createEmptyClientState();
   const [
@@ -175,7 +202,7 @@ export async function loadConversationDetailFromStores(
   conversationId: string,
   options: LoadConversationDetailOptions = {}
 ): Promise<ClientState | undefined> {
-  const includeRunHistory = options.includeRunHistory ?? true;
+  const includeRunHistory = options.includeRunHistory ?? false;
   const state = createEmptyClientState();
   const detailRoot = conversationDetailRoot(paths, conversationId);
 
@@ -184,85 +211,94 @@ export async function loadConversationDetailFromStores(
     messageRevisions,
     messageCurrentRevisionLinks,
     toolCalls,
-    toolCallEvents,
-    runIndex
+    toolCallEvents
   ] = await Promise.all([
     loadRecords<MessageRecord>(...subStore(detailRoot, CONVERSATION_MESSAGES_DIR), 'message'),
     loadRecords<MessageRevisionRecord>(...subStore(detailRoot, CONVERSATION_MESSAGE_REVISIONS_DIR), 'revision'),
     loadRecords<MessageCurrentRevisionLinkRecord>(...subStore(detailRoot, MESSAGE_CURRENT_REVISION_LINKS_DIR), 'link'),
     loadRecords<ToolCallRecord>(...subStore(detailRoot, CONVERSATION_TOOL_CALLS_DIR), 'toolCall'),
-    loadRecords<ToolCallEventRecord>(...subStore(detailRoot, CONVERSATION_TOOL_CALL_EVENTS_DIR), 'event'),
-    loadConversationRunIndex(paths, conversationId)
+    loadRecords<ToolCallEventRecord>(...subStore(detailRoot, CONVERSATION_TOOL_CALL_EVENTS_DIR), 'event')
   ]);
   state.messages = messages;
   state.messageRevisions = messageRevisions;
   state.messageCurrentRevisionLinks = messageCurrentRevisionLinks;
   state.toolCalls = toolCalls;
   state.toolCallEvents = toolCallEvents;
-  if (includeRunHistory && runIndex) {
-    const [
-      agentRuns,
-      agentRunSourceLinks,
-      agentRunTargetLinks,
-      messageRunLinks,
-      toolCallRunLinks,
-      runConversationPolicies,
-      runContextPolicies,
-      runDeliveryPolicies,
-      runEditPolicies,
-      runModeLinks,
-      runSystemPromptLinks,
-      runModelProfileLinks,
-      runToolPolicyLinks,
-      runApprovalPolicyLinks,
-      runConversationPolicyLinks,
-      runContextPolicyLinks,
-      runDeliveryPolicyLinks,
-      runEditPolicyLinks,
-      agentRunInputRevisions
-    ] = await Promise.all([
-      loadRecordsByIds<AgentRunRecord>(paths.agentRunsRootUri, paths.agentRunsIndexUri, 'run', runIndex.agentRunIds),
-      loadRecordsByIds<AgentRunSourceLinkRecord>(paths.agentRunSourceLinksRootUri, paths.agentRunSourceLinksIndexUri, 'link', runIndex.agentRunSourceLinkIds),
-      loadRecordsByIds<AgentRunTargetLinkRecord>(paths.agentRunTargetLinksRootUri, paths.agentRunTargetLinksIndexUri, 'link', runIndex.agentRunTargetLinkIds),
-      loadRecordsByIds<MessageRunLinkRecord>(paths.messageRunLinksRootUri, paths.messageRunLinksIndexUri, 'link', runIndex.messageRunLinkIds),
-      loadRecordsByIds<ToolCallRunLinkRecord>(paths.toolCallRunLinksRootUri, paths.toolCallRunLinksIndexUri, 'link', runIndex.toolCallRunLinkIds),
-      loadRecordsByIds<RunConversationPolicyRecord>(...subStore(paths.runPoliciesRootUri, RUN_CONVERSATION_POLICIES_DIR), 'policy', runIndex.runConversationPolicyIds),
-      loadRecordsByIds<RunContextPolicyRecord>(...subStore(paths.runPoliciesRootUri, RUN_CONTEXT_POLICIES_DIR), 'policy', runIndex.runContextPolicyIds),
-      loadRecordsByIds<RunDeliveryPolicyRecord>(...subStore(paths.runPoliciesRootUri, RUN_DELIVERY_POLICIES_DIR), 'policy', runIndex.runDeliveryPolicyIds),
-      loadRecordsByIds<RunEditPolicyRecord>(...subStore(paths.runPoliciesRootUri, RUN_EDIT_POLICIES_DIR), 'policy', runIndex.runEditPolicyIds),
-      loadRecordsByIds<RunModeLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_MODE_LINKS_DIR), 'link', runIndex.runModeLinkIds),
-      loadRecordsByIds<RunSystemPromptLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_SYSTEM_PROMPT_LINKS_DIR), 'link', runIndex.runSystemPromptLinkIds),
-      loadRecordsByIds<RunModelProfileLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_MODEL_PROFILE_LINKS_DIR), 'link', runIndex.runModelProfileLinkIds),
-      loadRecordsByIds<RunToolPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_TOOL_POLICY_LINKS_DIR), 'link', runIndex.runToolPolicyLinkIds),
-      loadRecordsByIds<RunApprovalPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_APPROVAL_POLICY_LINKS_DIR), 'link', runIndex.runApprovalPolicyLinkIds),
-      loadRecordsByIds<RunConversationPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_CONVERSATION_POLICY_LINKS_DIR), 'link', runIndex.runConversationPolicyLinkIds),
-      loadRecordsByIds<RunContextPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_CONTEXT_POLICY_LINKS_DIR), 'link', runIndex.runContextPolicyLinkIds),
-      loadRecordsByIds<RunDeliveryPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_DELIVERY_POLICY_LINKS_DIR), 'link', runIndex.runDeliveryPolicyLinkIds),
-      loadRecordsByIds<RunEditPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_EDIT_POLICY_LINKS_DIR), 'link', runIndex.runEditPolicyLinkIds),
-      loadRecordsByIds<AgentRunInputRevisionRecord>(...subStore(paths.runPoliciesRootUri, AGENT_RUN_INPUT_REVISIONS_DIR), 'inputRevision', runIndex.agentRunInputRevisionIds)
-    ]);
-    state.agentRuns = agentRuns;
-    state.agentRunSourceLinks = agentRunSourceLinks;
-    state.agentRunTargetLinks = agentRunTargetLinks;
-    state.messageRunLinks = messageRunLinks;
-    state.toolCallRunLinks = toolCallRunLinks;
-    state.runConversationPolicies = runConversationPolicies;
-    state.runContextPolicies = runContextPolicies;
-    state.runDeliveryPolicies = runDeliveryPolicies;
-    state.runEditPolicies = runEditPolicies;
-    state.runModeLinks = runModeLinks;
-    state.runSystemPromptLinks = runSystemPromptLinks;
-    state.runModelProfileLinks = runModelProfileLinks;
-    state.runToolPolicyLinks = runToolPolicyLinks;
-    state.runApprovalPolicyLinks = runApprovalPolicyLinks;
-    state.runConversationPolicyLinks = runConversationPolicyLinks;
-    state.runContextPolicyLinks = runContextPolicyLinks;
-    state.runDeliveryPolicyLinks = runDeliveryPolicyLinks;
-    state.runEditPolicyLinks = runEditPolicyLinks;
-    state.agentRunInputRevisions = agentRunInputRevisions;
+
+  if (includeRunHistory) {
+    const runHistory = await loadConversationRunHistoryFromStores(paths, conversationId);
+    if (runHistory) copyRunHistoryTables(state, runHistory);
   }
 
   return hasAnyState(state) ? state : undefined;
+}
+
+async function loadConversationRunHistoryFromStores(paths: StoragePaths, conversationId: string): Promise<ClientState | undefined> {
+  const runIndex = await loadConversationRunIndex(paths, conversationId);
+  if (!runIndex) return undefined;
+
+  const state = createEmptyClientState();
+  const [
+    agentRuns,
+    agentRunSourceLinks,
+    agentRunTargetLinks,
+    messageRunLinks,
+    toolCallRunLinks,
+    runConversationPolicies,
+    runContextPolicies,
+    runDeliveryPolicies,
+    runEditPolicies,
+    runModeLinks,
+    runSystemPromptLinks,
+    runModelProfileLinks,
+    runToolPolicyLinks,
+    runApprovalPolicyLinks,
+    runConversationPolicyLinks,
+    runContextPolicyLinks,
+    runDeliveryPolicyLinks,
+    runEditPolicyLinks,
+    agentRunInputRevisions
+  ] = await Promise.all([
+    loadRecordsByIds<AgentRunRecord>(paths.agentRunsRootUri, paths.agentRunsIndexUri, 'run', runIndex.agentRunIds),
+    loadRecordsByIds<AgentRunSourceLinkRecord>(paths.agentRunSourceLinksRootUri, paths.agentRunSourceLinksIndexUri, 'link', runIndex.agentRunSourceLinkIds),
+    loadRecordsByIds<AgentRunTargetLinkRecord>(paths.agentRunTargetLinksRootUri, paths.agentRunTargetLinksIndexUri, 'link', runIndex.agentRunTargetLinkIds),
+    loadRecordsByIds<MessageRunLinkRecord>(paths.messageRunLinksRootUri, paths.messageRunLinksIndexUri, 'link', runIndex.messageRunLinkIds),
+    loadRecordsByIds<ToolCallRunLinkRecord>(paths.toolCallRunLinksRootUri, paths.toolCallRunLinksIndexUri, 'link', runIndex.toolCallRunLinkIds),
+    loadRecordsByIds<RunConversationPolicyRecord>(...subStore(paths.runPoliciesRootUri, RUN_CONVERSATION_POLICIES_DIR), 'policy', runIndex.runConversationPolicyIds),
+    loadRecordsByIds<RunContextPolicyRecord>(...subStore(paths.runPoliciesRootUri, RUN_CONTEXT_POLICIES_DIR), 'policy', runIndex.runContextPolicyIds),
+    loadRecordsByIds<RunDeliveryPolicyRecord>(...subStore(paths.runPoliciesRootUri, RUN_DELIVERY_POLICIES_DIR), 'policy', runIndex.runDeliveryPolicyIds),
+    loadRecordsByIds<RunEditPolicyRecord>(...subStore(paths.runPoliciesRootUri, RUN_EDIT_POLICIES_DIR), 'policy', runIndex.runEditPolicyIds),
+    loadRecordsByIds<RunModeLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_MODE_LINKS_DIR), 'link', runIndex.runModeLinkIds),
+    loadRecordsByIds<RunSystemPromptLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_SYSTEM_PROMPT_LINKS_DIR), 'link', runIndex.runSystemPromptLinkIds),
+    loadRecordsByIds<RunModelProfileLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_MODEL_PROFILE_LINKS_DIR), 'link', runIndex.runModelProfileLinkIds),
+    loadRecordsByIds<RunToolPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_TOOL_POLICY_LINKS_DIR), 'link', runIndex.runToolPolicyLinkIds),
+    loadRecordsByIds<RunApprovalPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_APPROVAL_POLICY_LINKS_DIR), 'link', runIndex.runApprovalPolicyLinkIds),
+    loadRecordsByIds<RunConversationPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_CONVERSATION_POLICY_LINKS_DIR), 'link', runIndex.runConversationPolicyLinkIds),
+    loadRecordsByIds<RunContextPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_CONTEXT_POLICY_LINKS_DIR), 'link', runIndex.runContextPolicyLinkIds),
+    loadRecordsByIds<RunDeliveryPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_DELIVERY_POLICY_LINKS_DIR), 'link', runIndex.runDeliveryPolicyLinkIds),
+    loadRecordsByIds<RunEditPolicyLinkRecord>(...subStore(paths.runPoliciesRootUri, RUN_EDIT_POLICY_LINKS_DIR), 'link', runIndex.runEditPolicyLinkIds),
+    loadRecordsByIds<AgentRunInputRevisionRecord>(...subStore(paths.runPoliciesRootUri, AGENT_RUN_INPUT_REVISIONS_DIR), 'inputRevision', runIndex.agentRunInputRevisionIds)
+  ]);
+  state.agentRuns = agentRuns;
+  state.agentRunSourceLinks = agentRunSourceLinks;
+  state.agentRunTargetLinks = agentRunTargetLinks;
+  state.messageRunLinks = messageRunLinks;
+  state.toolCallRunLinks = toolCallRunLinks;
+  state.runConversationPolicies = runConversationPolicies;
+  state.runContextPolicies = runContextPolicies;
+  state.runDeliveryPolicies = runDeliveryPolicies;
+  state.runEditPolicies = runEditPolicies;
+  state.runModeLinks = runModeLinks;
+  state.runSystemPromptLinks = runSystemPromptLinks;
+  state.runModelProfileLinks = runModelProfileLinks;
+  state.runToolPolicyLinks = runToolPolicyLinks;
+  state.runApprovalPolicyLinks = runApprovalPolicyLinks;
+  state.runConversationPolicyLinks = runConversationPolicyLinks;
+  state.runContextPolicyLinks = runContextPolicyLinks;
+  state.runDeliveryPolicyLinks = runDeliveryPolicyLinks;
+  state.runEditPolicyLinks = runEditPolicyLinks;
+  state.agentRunInputRevisions = agentRunInputRevisions;
+  return state;
 }
 
 export async function saveClientStateSkeletonToStores(paths: StoragePaths, state: ClientState): Promise<void> {
@@ -287,16 +323,33 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
   ]);
 }
 
-export async function saveConversationDetailToStores(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
-  const detail = conversationDetailSlice(state, conversationId);
+export async function saveConversationRenderDetailToStores(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
+  const detail = conversationRenderDetailSlice(state, conversationId);
   const detailRoot = conversationDetailRoot(paths, conversationId);
-  const runIndex = conversationRunIndex(conversationId, detail);
   await Promise.all([
     saveRecords(...subStore(detailRoot, CONVERSATION_MESSAGES_DIR), detail.messages, 'message'),
     saveRecords(...subStore(detailRoot, CONVERSATION_MESSAGE_REVISIONS_DIR), detail.messageRevisions, 'revision'),
     saveRecords(...subStore(detailRoot, MESSAGE_CURRENT_REVISION_LINKS_DIR), detail.messageCurrentRevisionLinks, 'link'),
     saveRecords(...subStore(detailRoot, CONVERSATION_TOOL_CALLS_DIR), detail.toolCalls, 'toolCall'),
-    saveRecords(...subStore(detailRoot, CONVERSATION_TOOL_CALL_EVENTS_DIR), detail.toolCallEvents, 'event'),
+    saveRecords(...subStore(detailRoot, CONVERSATION_TOOL_CALL_EVENTS_DIR), detail.toolCallEvents, 'event')
+  ]);
+}
+
+export async function saveConversationRunHistoryToStores(
+  paths: StoragePaths,
+  conversationId: string,
+  state: ClientState,
+  options: SaveConversationRunHistoryOptions
+): Promise<void> {
+  const detail = conversationRunHistorySlice(state, conversationId);
+  if (options.mode === 'merge' && !hasRunHistoryRecords(detail)) return;
+
+  const nextRunIndex = conversationRunIndex(conversationId, detail);
+  const runIndex = options.mode === 'replace'
+    ? nextRunIndex
+    : mergeConversationRunIndex(await loadConversationRunIndex(paths, conversationId), nextRunIndex);
+
+  await Promise.all([
     upsertRecords(paths.agentRunsRootUri, paths.agentRunsIndexUri, detail.agentRuns, 'run'),
     upsertRecords(paths.agentRunSourceLinksRootUri, paths.agentRunSourceLinksIndexUri, detail.agentRunSourceLinks, 'link'),
     upsertRecords(paths.agentRunTargetLinksRootUri, paths.agentRunTargetLinksIndexUri, detail.agentRunTargetLinks, 'link'),
@@ -344,9 +397,8 @@ export async function appendToolCallEventRecord(paths: StoragePaths, conversatio
   await saveRecords(location.root, location.indexUri, upsertById(events, event), 'event');
 }
 
-export function conversationDetailSlice(state: ClientState, conversationId: string): ClientState {
+export function conversationRenderDetailSlice(state: ClientState, conversationId: string): ClientState {
   const detail = createEmptyClientState();
-  detail.conversations = state.conversations.filter((conversation) => conversation.id === conversationId);
   detail.messages = state.messages.filter((message) => message.conversationId === conversationId);
   const messageIds = new Set(detail.messages.map((message) => message.id));
   detail.messageRevisions = state.messageRevisions.filter((revision) => revision.conversationId === conversationId || messageIds.has(revision.messageId));
@@ -355,6 +407,20 @@ export function conversationDetailSlice(state: ClientState, conversationId: stri
   detail.toolCalls = state.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId));
   const toolCallIds = new Set(detail.toolCalls.map((toolCall) => toolCall.id));
   detail.toolCallEvents = state.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId));
+  return detail;
+}
+
+export function conversationRunHistorySlice(state: ClientState, conversationId: string): ClientState {
+  const detail = createEmptyClientState();
+  const messages = state.messages.filter((message) => message.conversationId === conversationId);
+  const messageIds = new Set(messages.map((message) => message.id));
+  const toolCalls = state.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId));
+  const toolCallIds = new Set(toolCalls.map((toolCall) => toolCall.id));
+  const revisionIds = new Set(
+    state.messageRevisions
+      .filter((revision) => revision.conversationId === conversationId || messageIds.has(revision.messageId))
+      .map((revision) => revision.id)
+  );
 
   const runIds = collectConversationRunIds(state, conversationId, messageIds, toolCallIds);
   detail.agentRuns = state.agentRuns.filter((run) => runIds.has(run.id));
@@ -378,6 +444,34 @@ export function conversationDetailSlice(state: ClientState, conversationId: stri
   detail.runEditPolicyLinks = state.runEditPolicyLinks.filter((link) => runIds.has(link.runId));
   detail.agentRunInputRevisions = state.agentRunInputRevisions.filter((input) => runIds.has(input.runId) || input.conversationId === conversationId || revisionIds.has(input.revisionId));
   return detail;
+}
+
+export function conversationDetailSlice(state: ClientState, conversationId: string): ClientState {
+  const detail = conversationRenderDetailSlice(state, conversationId);
+  copyRunHistoryTables(detail, conversationRunHistorySlice(state, conversationId));
+  return detail;
+}
+
+function copyRunHistoryTables(target: ClientState, source: ClientState): void {
+  target.agentRuns = source.agentRuns;
+  target.agentRunSourceLinks = source.agentRunSourceLinks;
+  target.agentRunTargetLinks = source.agentRunTargetLinks;
+  target.messageRunLinks = source.messageRunLinks;
+  target.toolCallRunLinks = source.toolCallRunLinks;
+  target.runConversationPolicies = source.runConversationPolicies;
+  target.runContextPolicies = source.runContextPolicies;
+  target.runDeliveryPolicies = source.runDeliveryPolicies;
+  target.runEditPolicies = source.runEditPolicies;
+  target.runModeLinks = source.runModeLinks;
+  target.runSystemPromptLinks = source.runSystemPromptLinks;
+  target.runModelProfileLinks = source.runModelProfileLinks;
+  target.runToolPolicyLinks = source.runToolPolicyLinks;
+  target.runApprovalPolicyLinks = source.runApprovalPolicyLinks;
+  target.runConversationPolicyLinks = source.runConversationPolicyLinks;
+  target.runContextPolicyLinks = source.runContextPolicyLinks;
+  target.runDeliveryPolicyLinks = source.runDeliveryPolicyLinks;
+  target.runEditPolicyLinks = source.runEditPolicyLinks;
+  target.agentRunInputRevisions = source.agentRunInputRevisions;
 }
 
 function conversationRunIndex(conversationId: string, detail: ClientState): ConversationRunIndexRecord {
@@ -405,6 +499,45 @@ function conversationRunIndex(conversationId: string, detail: ClientState): Conv
     agentRunInputRevisionIds: detail.agentRunInputRevisions.map((record) => record.id),
     updatedAt: Date.now()
   };
+}
+
+function mergeConversationRunIndex(previous: ConversationRunIndexRecord | undefined, next: ConversationRunIndexRecord): ConversationRunIndexRecord {
+  if (!previous) return next;
+  return {
+    id: next.id,
+    conversationId: next.conversationId,
+    agentRunIds: mergeIds(previous.agentRunIds, next.agentRunIds),
+    agentRunSourceLinkIds: mergeIds(previous.agentRunSourceLinkIds, next.agentRunSourceLinkIds),
+    agentRunTargetLinkIds: mergeIds(previous.agentRunTargetLinkIds, next.agentRunTargetLinkIds),
+    messageRunLinkIds: mergeIds(previous.messageRunLinkIds, next.messageRunLinkIds),
+    toolCallRunLinkIds: mergeIds(previous.toolCallRunLinkIds, next.toolCallRunLinkIds),
+    runConversationPolicyIds: mergeIds(previous.runConversationPolicyIds, next.runConversationPolicyIds),
+    runContextPolicyIds: mergeIds(previous.runContextPolicyIds, next.runContextPolicyIds),
+    runDeliveryPolicyIds: mergeIds(previous.runDeliveryPolicyIds, next.runDeliveryPolicyIds),
+    runEditPolicyIds: mergeIds(previous.runEditPolicyIds, next.runEditPolicyIds),
+    runModeLinkIds: mergeIds(previous.runModeLinkIds, next.runModeLinkIds),
+    runSystemPromptLinkIds: mergeIds(previous.runSystemPromptLinkIds, next.runSystemPromptLinkIds),
+    runModelProfileLinkIds: mergeIds(previous.runModelProfileLinkIds, next.runModelProfileLinkIds),
+    runToolPolicyLinkIds: mergeIds(previous.runToolPolicyLinkIds, next.runToolPolicyLinkIds),
+    runApprovalPolicyLinkIds: mergeIds(previous.runApprovalPolicyLinkIds, next.runApprovalPolicyLinkIds),
+    runConversationPolicyLinkIds: mergeIds(previous.runConversationPolicyLinkIds, next.runConversationPolicyLinkIds),
+    runContextPolicyLinkIds: mergeIds(previous.runContextPolicyLinkIds, next.runContextPolicyLinkIds),
+    runDeliveryPolicyLinkIds: mergeIds(previous.runDeliveryPolicyLinkIds, next.runDeliveryPolicyLinkIds),
+    runEditPolicyLinkIds: mergeIds(previous.runEditPolicyLinkIds, next.runEditPolicyLinkIds),
+    agentRunInputRevisionIds: mergeIds(previous.agentRunInputRevisionIds, next.agentRunInputRevisionIds),
+    updatedAt: Date.now()
+  };
+}
+
+function mergeIds(previous: readonly string[], next: readonly string[]): string[] {
+  const result = [...previous];
+  const seen = new Set(result);
+  for (const id of next) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    result.push(id);
+  }
+  return result;
 }
 
 async function loadConversationRunIndex(paths: StoragePaths, conversationId: string): Promise<ConversationRunIndexRecord | undefined> {
@@ -510,6 +643,10 @@ function upsertById<T extends StoreRecord>(items: T[], item: T): T[] {
 
 function hasAnyState(state: ClientState): boolean {
   return (Object.values(state) as unknown[]).some((value) => Array.isArray(value) && value.length > 0);
+}
+
+function hasRunHistoryRecords(state: ClientState): boolean {
+  return RUN_HISTORY_TABLE_KEYS.some((key) => state[key].length > 0);
 }
 
 function safeShardName(id: string): string {

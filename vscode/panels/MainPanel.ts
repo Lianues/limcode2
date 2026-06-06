@@ -1,15 +1,18 @@
 import * as vscode from 'vscode';
 import {
+  BridgeMessageType,
   createMessageId,
   type BridgeClientId,
   type WebviewClientMeta,
   type WebviewToExtensionMessage
 } from '../../shared/protocol';
+import { displayConversationTitle, displayConversationTitleFromText } from '../../shared/conversationTitle';
 import { getWebviewHtml } from '../webview/getWebviewHtml';
 import type { BackendApplication } from '../../backend/application/BackendApplication';
 
 export interface MainPanelOptions {
   conversationId?: string;
+  title?: string;
   kind?: 'chat' | 'globalSettings';
   reuse?: boolean;
 }
@@ -51,6 +54,7 @@ export class MainPanel {
     if (options.reuse) {
       const existing = [...MainPanel.panels.values()].find((candidate) => candidate.matches(options));
       if (existing) {
+        existing.refreshTitle(options.title);
         existing.panel.reveal(column);
         return;
       }
@@ -58,7 +62,7 @@ export class MainPanel {
 
     const panel = vscode.window.createWebviewPanel(
       MainPanel.viewType,
-      panelTitle(options),
+      panelTitle(options, backendApp),
       column,
       MainPanel.webviewPanelOptions(extensionUri)
     );
@@ -98,7 +102,7 @@ export class MainPanel {
     this.kind = panelKind(options);
     this.conversationId = options.conversationId;
 
-    this.panel.title = panelTitle(options);
+    this.refreshTitle(options.title);
     this.panel.webview.options = MainPanel.webviewPanelOptions(this.extensionUri);
     this.clientId = this.backendApp.attachWebview(panel.webview, {
       kind: this.kind === 'globalSettings' ? 'globalSettings' : 'mainPanel',
@@ -113,6 +117,7 @@ export class MainPanel {
     this.panel.webview.onDidReceiveMessage(
       (message: WebviewToExtensionMessage) => {
         this.backendApp.handleWebviewMessage(this.clientId, message);
+        this.refreshTitleFromOutgoingMessage(message);
       },
       null,
       this.disposables
@@ -135,15 +140,40 @@ export class MainPanel {
     if (kind === 'globalSettings') return true;
     return (options.conversationId ?? '') === (this.conversationId ?? '');
   }
+
+  private refreshTitle(title?: string): void {
+    this.panel.title = panelTitle({ kind: this.kind, conversationId: this.conversationId, title }, this.backendApp);
+  }
+
+  private refreshTitleFromOutgoingMessage(message: WebviewToExtensionMessage): void {
+    if (message.type !== BridgeMessageType.ChatSend) return;
+    const payload = message.payload;
+    if (!this.conversationId || !payload || payload.conversationId !== this.conversationId) return;
+    if (!isDefaultConversationTitle(this.panel.title)) return;
+    this.panel.title = displayConversationTitleFromText(payload.text);
+  }
+
+  public static refreshConversationTitle(conversationId: string): void {
+    for (const panel of MainPanel.panels.values()) {
+      if (panel.conversationId === conversationId) panel.refreshTitle();
+    }
+  }
 }
 
 function panelKind(options: MainPanelOptions): MainPanelKind {
   return options.kind === 'globalSettings' ? 'globalSettings' : 'chat';
 }
 
-function panelTitle(options: MainPanelOptions): string {
+function panelTitle(options: MainPanelOptions, backendApp: BackendApplication): string {
   if (options.kind === 'globalSettings') return 'LimCode 设置';
-  return options.conversationId ? `LimCode: ${options.conversationId}` : 'LimCode';
+  if (!options.conversationId) return 'LimCode';
+  return options.title
+    ? displayConversationTitle({ id: options.conversationId, title: options.title })
+    : backendApp.getConversationDisplayTitle(options.conversationId);
+}
+
+function isDefaultConversationTitle(title: string): boolean {
+  return title === '新对话' || title === '默认对话' || title === 'LimCode' || title.startsWith('LimCode: ');
 }
 
 function optionsFromSerializedState(state: unknown, fallbackTitle: string): MainPanelOptions {

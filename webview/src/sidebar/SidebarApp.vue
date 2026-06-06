@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { IconEdit, IconSquare, IconTrash } from '@tabler/icons-vue';
 import type { ConversationHistoryPageInfo } from '@shared/protocol';
+import { displayConversationTitle as formatConversationTitle } from '@shared/conversationTitle';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
 import { onSidebarMessage, postSidebarMessage } from './sidebarHost';
@@ -142,8 +143,8 @@ function setView(next: SidebarView): void {
   view.value = next;
 }
 
-function openConversation(conversationId: string): void {
-  postSidebarMessage({ type: SIDEBAR_MESSAGE.openConversation, conversationId });
+function openConversation(entry: SidebarConversationHistoryEntry): void {
+  postSidebarMessage({ type: SIDEBAR_MESSAGE.openConversation, conversationId: entry.id, title: displayConversationTitle(entry) });
 }
 
 function requestHistoryPage(
@@ -248,10 +249,10 @@ function closeAbortDialog(): void {
   abortTarget.value = undefined;
 }
 
-function onHistoryItemKeydown(event: KeyboardEvent, conversationId: string): void {
+function onHistoryItemKeydown(event: KeyboardEvent, entry: SidebarConversationHistoryEntry): void {
   if (event.key !== 'Enter' && event.key !== ' ') return;
   event.preventDefault();
-  openConversation(conversationId);
+  openConversation(entry);
 }
 
 function statusClass(entry: SidebarConversationHistoryEntry): string {
@@ -276,7 +277,7 @@ function historyMeta(entry: SidebarConversationHistoryEntry): string {
 }
 
 function displayConversationTitle(entry: SidebarConversationHistoryEntry | undefined): string {
-  return entry?.title || entry?.id || '';
+  return entry ? formatConversationTitle({ id: entry.id, title: entry.title }) : '';
 }
 
 function escapeHtml(value: string): string {
@@ -419,10 +420,10 @@ function ensureActiveScopeVisible(): void {
           :class="{ 'is-running': entry.isRunning }"
           role="button"
           tabindex="0"
-          :title="`打开对话：${entry.title || entry.id}`"
-          :aria-label="`打开对话：${entry.title || entry.id}`"
-          @click="openConversation(entry.id)"
-          @keydown="onHistoryItemKeydown($event, entry.id)"
+          :title="`打开对话：${displayConversationTitle(entry)}`"
+          :aria-label="`打开对话：${displayConversationTitle(entry)}`"
+          @click="openConversation(entry)"
+          @keydown="onHistoryItemKeydown($event, entry)"
         >
           <div class="history-avatar" aria-hidden="true">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
@@ -431,7 +432,7 @@ function ensureActiveScopeVisible(): void {
           </div>
           <div class="history-main">
             <div class="history-title-row">
-              <div class="history-title">{{ entry.title || entry.id }}</div>
+              <div class="history-title">{{ displayConversationTitle(entry) }}</div>
               <span class="status-dot" :class="statusClass(entry)" :title="statusText(entry)"></span>
             </div>
             <div class="history-preview">{{ entry.preview || '暂无消息，点击继续对话。' }}</div>

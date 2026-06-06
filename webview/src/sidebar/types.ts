@@ -21,7 +21,7 @@ export const SIDEBAR_MESSAGE = {
 
 export type SidebarToExtensionMessage =
   | { type: typeof SIDEBAR_MESSAGE.ready }
-  | { type: typeof SIDEBAR_MESSAGE.openConversation; conversationId: string }
+  | { type: typeof SIDEBAR_MESSAGE.openConversation; conversationId: string; title?: string }
   | { type: typeof SIDEBAR_MESSAGE.newConversation; projectFolderUri?: string }
   | { type: typeof SIDEBAR_MESSAGE.openGlobalSettings }
   | { type: typeof SIDEBAR_MESSAGE.refreshConversationHistory }

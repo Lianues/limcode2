@@ -27,7 +27,7 @@ import {
   MessageRevision,
   PartOf
 } from '../world/modules/chat/components';
-import type { ConversationData, MessageData } from '../world/modules/chat/components';
+import type { MessageData } from '../world/modules/chat/components';
 import { ChatEventType } from '../world/modules/chat/events';
 import {
   AgentRun,
@@ -73,13 +73,14 @@ import type {
   WebviewToExtensionMessage
 } from '../../shared/protocol';
 import { createRuntimeEnv } from './createRuntimeEnv';
-import { createDefaultAgentSpawnRequest, DEFAULT_AGENT_ID, DEFAULT_CONVERSATION_ID } from './defaults';
+import { createDefaultAgentSpawnRequest, DEFAULT_AGENT_ID } from './defaults';
 import { hydrateClientStateSkeleton, hydrateConversationDetail } from './clientStateHydration';
 import { ClientStatePersistence } from './ClientStatePersistence';
 import { GlobalSettingsBridge } from './GlobalSettingsBridge';
 import { ConversationSettingsBridge } from './ConversationSettingsBridge';
 import { WebviewClientRegistry } from './WebviewClientRegistry';
 import { WebviewMessageRouter } from './WebviewMessageRouter';
+import { conversationCreatedAtFromId, createNewConversationTitle, displayConversationTitle } from '../../shared/conversationTitle';
 
 export interface CreateConversationOptions {
   projectFolderUri?: string;
@@ -174,12 +175,12 @@ export class BackendApplication {
   }
 
   /** 创建一个独立 conversation，并用独立 AgentConversationLink 绑定到默认 agent。 */
-  public createConversation(options: CreateConversationOptions = {}): string {
+  public async createConversation(options: CreateConversationOptions = {}): Promise<string> {
     const conversationId = `conversation-${createMessageId()}`;
-    const title = '新对话';
+    const title = createNewConversationTitle();
     const agent = this.findDefaultAgent();
     if (agent === undefined) {
-      requestSpawnAgent(this.world, { ...createDefaultAgentSpawnRequest(), conversationId, initialMessage: undefined });
+      requestSpawnAgent(this.world, { ...createDefaultAgentSpawnRequest(), conversationId, conversationTitle: title, initialMessage: undefined });
       this.requestSnapshot(conversationId);
       return conversationId;
     }
@@ -202,7 +203,7 @@ export class BackendApplication {
     if (projectFolder) setConversationProject(this.world, { conversation, uri: projectFolder.uri, name: projectFolder.name });
 
     this.loadedConversationDetails.add(conversationId);
-    void this.upsertConversationHistoryEntry(conversationId);
+    await this.upsertConversationHistoryEntry(conversationId);
     this.requestSnapshot();
     return conversationId;
   }
@@ -225,13 +226,14 @@ export class BackendApplication {
       const project = projectsByConversation.get(entity);
       const entry: SidebarConversationHistoryEntry = {
         id: conversation.id,
-        title: conversationTitle(conversation, messages),
+        title: displayConversationTitle({ id: conversation.id, title: conversation.title, messages }),
         preview: latest ? messagePreview(latest) : '暂无消息，点击开始新的交流。',
         messageCount: messages.length,
         status: latest?.status ?? 'empty',
         isRunning: !!runSummary
       };
-      if (latest) entry.updatedAt = latest.createdAt;
+      const fallbackUpdatedAt = conversationCreatedAtFromId(conversation.id);
+      if (latest) entry.updatedAt = latest.createdAt; else if (fallbackUpdatedAt !== undefined) entry.updatedAt = fallbackUpdatedAt;
       if (agentName) entry.agentName = agentName;
       if (project) {
         entry.projectFolderUri = project.uri;
@@ -246,6 +248,17 @@ export class BackendApplication {
     }
 
     return entries.filter((entry) => entry.title).sort(compareConversationHistoryEntries);
+  }
+
+  public getConversationDisplayTitle(conversationId: string | undefined): string {
+    if (!conversationId) return 'LimCode';
+    const entity = this.findConversationEntity(conversationId);
+    if (entity === undefined) return displayConversationTitle({ id: conversationId });
+    const conversation = this.world.get(entity, Conversation);
+    if (!conversation) return displayConversationTitle({ id: conversationId });
+
+    const messages = this.collectMessagesByConversation().get(entity) ?? [];
+    return displayConversationTitle({ id: conversation.id, title: conversation.title, messages });
   }
 
   public renameConversationTitle(conversationId: string, title: string): boolean {
@@ -321,6 +334,10 @@ export class BackendApplication {
   /** 当前 active data root；可能是 VS Code 默认 globalStorageUri，也可能是用户配置的自定义目录。 */
   public getStorageRootUri(): vscode.Uri {
     return this.env.storage.paths.globalStorageUri;
+  }
+
+  public getConversationHistoryRootUri(): vscode.Uri {
+    return this.env.storage.paths.conversationHistoryRootUri;
   }
 
   public attachWebview(webview: vscode.Webview, meta: WebviewClientMeta = { kind: 'unknown' }): BridgeClientId {
@@ -767,18 +784,6 @@ function latestMessage(messages: MessageData[]): MessageData | undefined {
       ? message
       : latest;
   }, undefined);
-}
-
-function conversationTitle(conversation: ConversationData, messages: MessageData[]): string {
-  const explicitTitle = normalizeText(conversation.title ?? '');
-  if (explicitTitle && explicitTitle !== '新对话') return truncateText(explicitTitle, 28);
-
-  const firstUserMessage = messages.find((message) => message.role === 'user');
-  const titleFromMessage = firstUserMessage ? normalizeText(textPreview(firstUserMessage.content)) : '';
-  if (titleFromMessage) return truncateText(titleFromMessage, 28);
-
-  if (conversation.id === DEFAULT_CONVERSATION_ID) return '默认对话';
-  return explicitTitle || '新对话';
 }
 
 function messagePreview(message: MessageData): string {

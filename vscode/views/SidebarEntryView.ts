@@ -56,6 +56,10 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
   private lastScopeKind: SidebarHistoryScopeKind = 'currentProject';
   private lastProjectFolderUri: string | undefined;
   private lastCursor: string | undefined;
+  private activeWebview: vscode.Webview | undefined;
+  private historyWatcher: vscode.FileSystemWatcher | undefined;
+  private historyWatcherRoot: string | undefined;
+  private historyRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 
   public constructor(
     private readonly extensionUri: vscode.Uri,
@@ -63,6 +67,11 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
   ) {}
 
   public resolveWebviewView(webviewView: vscode.WebviewView): void {
+    this.activeWebview = webviewView.webview;
+    webviewView.onDidDispose(() => {
+      if (this.activeWebview === webviewView.webview) this.activeWebview = undefined;
+    });
+
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [
@@ -70,19 +79,20 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       ]
     };
 
+    this.ensureConversationHistoryWatcher();
+
     webviewView.webview.onDidReceiveMessage((message: SidebarWebviewMessage) => {
       if (message.type === OPEN_CONVERSATION_MESSAGE && message.conversationId) {
         MainPanel.createOrShow(this.extensionUri, this.backendApp, {
           conversationId: message.conversationId,
+          title: message.title,
           reuse: true
         });
         return;
       }
 
       if (message.type === NEW_CONVERSATION_MESSAGE) {
-        const conversationId = this.backendApp.createConversation({ projectFolderUri: message.projectFolderUri });
-        MainPanel.createOrShow(this.extensionUri, this.backendApp, { conversationId });
-        this.postSidebarStateWhenReady(webviewView.webview, this.lastScopeKind, this.lastCursor, undefined, this.lastProjectFolderUri);
+        this.createConversationFromSidebar(webviewView.webview, message.projectFolderUri);
         return;
       }
 
@@ -130,8 +140,49 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
   }
 
   private postSidebarStateWhenReady(webview: vscode.Webview, scopeKind: SidebarHistoryScopeKind = 'currentProject', cursor?: string, limit?: number, projectFolderUri?: string): void {
+    this.activeWebview = webview;
+    this.ensureConversationHistoryWatcher();
     void this.postSidebarState(webview, scopeKind, cursor, limit, projectFolderUri)
       .catch((error) => console.warn('[LimCode] Failed to read sidebar state.', error));
+  }
+
+  private ensureConversationHistoryWatcher(): void {
+    const root = this.backendApp.getConversationHistoryRootUri();
+    const rootKey = root.toString();
+    if (this.historyWatcher && this.historyWatcherRoot === rootKey) return;
+
+    this.historyWatcher?.dispose();
+    this.historyWatcherRoot = rootKey;
+    void Promise.resolve(vscode.workspace.fs.createDirectory(root)).catch((error: unknown) => {
+      console.warn('[LimCode] Failed to ensure conversation history watcher root.', error);
+    });
+
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, '**/*.json'));
+    const schedule = () => this.scheduleConversationHistoryRefresh();
+    watcher.onDidCreate(schedule);
+    watcher.onDidChange(schedule);
+    watcher.onDidDelete(schedule);
+    this.historyWatcher = watcher;
+  }
+
+  private scheduleConversationHistoryRefresh(): void {
+    if (this.historyRefreshTimer !== undefined) clearTimeout(this.historyRefreshTimer);
+    this.historyRefreshTimer = setTimeout(() => {
+      this.historyRefreshTimer = undefined;
+      const target = this.activeWebview;
+      if (!target) return;
+      this.postSidebarStateWhenReady(target, this.lastScopeKind, this.lastCursor, undefined, this.lastProjectFolderUri);
+    }, 180);
+  }
+
+  private createConversationFromSidebar(webview: vscode.Webview, projectFolderUri?: string): void {
+    void this.backendApp
+      .createConversation({ projectFolderUri })
+      .then((conversationId) => {
+        MainPanel.createOrShow(this.extensionUri, this.backendApp, { conversationId });
+        this.postSidebarStateWhenReady(webview, this.lastScopeKind, this.lastCursor, undefined, this.lastProjectFolderUri);
+      })
+      .catch((error) => console.warn('[LimCode] Failed to create sidebar conversation.', error));
   }
 
   private renameConversationFromSidebar(webview: vscode.Webview, conversationId: string, title: string): void {
@@ -143,6 +194,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       .then(() => {
         const renamed = this.backendApp.renameConversationTitle(conversationId, nextTitle);
         if (!renamed) console.warn(`[LimCode] Sidebar rename target not found: ${conversationId}`);
+        else MainPanel.refreshConversationTitle(conversationId);
         this.postSidebarStateWhenReady(webview, this.lastScopeKind, this.lastCursor, undefined, this.lastProjectFolderUri);
       })
       .catch((error) => console.warn('[LimCode] Failed to rename sidebar conversation.', error));

@@ -12,6 +12,7 @@ import {
   type ConversationSettingsUpdatePayload,
   type ExtensionToWebviewMessage
 } from '../../shared/protocol';
+import { DEFAULT_CONVERSATION_TITLE, displayConversationTitle } from '../../shared/conversationTitle';
 
 export interface ConversationSettingsBridgeDeps {
   world: World;
@@ -42,13 +43,13 @@ export class ConversationSettingsBridge {
 
   private async readSettings(conversationId: string, section: ConversationSettingsSection): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }> {
     const stored = await this.deps.storage.loadConversationSettings(conversationId, section);
-    if (section !== 'common') return stored ?? { conversationId, section, settings: { conversationId, name: conversationId }, filePath: '' };
+    if (section !== 'common') return stored ?? { conversationId, section, settings: { conversationId, name: DEFAULT_CONVERSATION_TITLE }, filePath: '' };
 
     const entity = this.findConversation(conversationId);
     const conversation = entity === undefined ? undefined : this.deps.world.get(entity, Conversation);
     const settings = conversation
-      ? { conversationId, name: conversation.title?.trim() || conversation.id }
-      : (stored?.settings as ConversationSettingsRecord | undefined) ?? { conversationId, name: conversationId };
+      ? { conversationId, name: displayConversationTitle({ id: conversationId, title: conversation.title }) }
+      : (stored?.settings as ConversationSettingsRecord | undefined) ?? { conversationId, name: DEFAULT_CONVERSATION_TITLE };
     return { conversationId, section, settings, filePath: stored?.filePath ?? '' };
   }
 
@@ -79,6 +80,6 @@ export class ConversationSettingsBridge {
 function normalizeConversationSettings(section: ConversationSettingsSection, settings: ConversationSettingsSectionValue): ConversationSettingsRecord {
   void section;
   const id = settings.conversationId;
-  const name = settings.name.trim() || id;
+  const name = settings.name.trim() || DEFAULT_CONVERSATION_TITLE;
   return { conversationId: id, name };
 }

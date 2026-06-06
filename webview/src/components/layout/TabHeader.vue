@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { IconSettings } from '@tabler/icons-vue';
 import type { ProjectFolderCandidateRecord } from '@shared/protocol';
+import { displayConversationTitle } from '@shared/conversationTitle';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useChat } from '@webview/composables/useChat';
 import { bridge, BridgeMessageType } from '@webview/transport';
@@ -22,9 +23,11 @@ const projectDropdownOpen = ref(false);
 const projectFolders = ref<ProjectFolderCandidateRecord[]>([]);
 const projectFoldersLoaded = ref(false);
 
-const title = computed(
-  () => clientState.currentConversation?.title || clientState.currentConversationId || '正在初始化默认对话...'
-);
+const title = computed(() => {
+  const conversationId = clientState.currentConversation?.id ?? clientState.currentConversationId;
+  if (!conversationId) return '正在初始化默认对话...';
+  return displayConversationTitle({ id: conversationId, title: clientState.currentConversation?.title, messages: clientState.currentMessages });
+});
 const runSummary = computed(() => clientState.currentRunSummary);
 const runStatusClass = computed(() => `run-status-${runSummary.value.status ?? 'idle'}`);
 const currentProject = computed(() => clientState.currentProjectContext);

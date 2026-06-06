@@ -3,7 +3,7 @@ import type { StorageCapability } from '../capabilities/types';
 import { StorageStateContributorsKey } from '../world/storageProjection/resources';
 import { projectStorageStateWithCache, type StorageContributorProjectionState } from '../world/storageProjection/projection';
 import type { AgentRunStatus, ClientState, MessageContent, MessageRecord, SidebarConversationHistoryEntry } from '../../shared/protocol';
-import { DEFAULT_CONVERSATION_ID } from './defaults';
+import { conversationCreatedAtFromId, displayConversationTitle } from '../../shared/conversationTitle';
 import { conversationDetailSlice } from '../capabilities/vscodeStorage/clientStateStore';
 
 const DEFAULT_PERSIST_DEBOUNCE_MS = 500;
@@ -173,7 +173,8 @@ function projectConversationHistoryEntry(state: ClientState, conversationId: str
   const latest = latestMessage(messages);
   const runSummary = activeRunSummary(state, conversationId);
   const project = projectInfoForConversation(state, conversationId);
-  const title = conversationTitle(conversation.id, conversation.title, messages);
+  const title = displayConversationTitle({ id: conversation.id, title: conversation.title, messages });
+  const fallbackUpdatedAt = conversationCreatedAtFromId(conversation.id);
   const entry: SidebarConversationHistoryEntry = {
     id: conversation.id,
     title,
@@ -181,7 +182,7 @@ function projectConversationHistoryEntry(state: ClientState, conversationId: str
     messageCount: messages.length,
     status: latest?.status ?? 'empty',
     isRunning: !!runSummary,
-    ...(latest ? { updatedAt: latest.createdAt } : {}),
+    ...(latest ? { updatedAt: latest.createdAt } : fallbackUpdatedAt !== undefined ? { updatedAt: fallbackUpdatedAt } : {}),
     ...(agentNameForConversation(state, conversationId) ? { agentName: agentNameForConversation(state, conversationId) } : {}),
     ...(project?.uri ? { projectFolderUri: project.uri } : {}),
     ...(project?.name ? { projectName: project.name } : {})
@@ -199,16 +200,6 @@ function latestMessage(messages: MessageRecord[]): MessageRecord | undefined {
     if (!latest) return message;
     return message.createdAt > latest.createdAt || (message.createdAt === latest.createdAt && message.seq > latest.seq) ? message : latest;
   }, undefined);
-}
-
-function conversationTitle(conversationId: string, title: string | undefined, messages: MessageRecord[]): string {
-  const explicitTitle = normalizeText(title ?? '');
-  if (explicitTitle && explicitTitle !== '新对话') return truncateText(explicitTitle, 28);
-  const firstUserMessage = messages.find((message) => message.role === 'user');
-  const titleFromMessage = firstUserMessage ? normalizeText(textPreview(firstUserMessage.content)) : '';
-  if (titleFromMessage) return truncateText(titleFromMessage, 28);
-  if (conversationId === DEFAULT_CONVERSATION_ID) return '默认对话';
-  return explicitTitle || '新对话';
 }
 
 function messagePreview(message: MessageRecord): string {

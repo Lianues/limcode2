@@ -119,23 +119,25 @@ function middleEllipsis(value: string, maxLength: number): string {
           >
             {{ compactProjectPath }}
           </button>
-          <section v-if="projectDropdownOpen" class="project-dropdown" @click.stop>
-            <div class="project-dropdown-title">切换对话归属</div>
-            <div v-if="!projectFoldersLoaded" class="project-dropdown-empty">正在读取工作区...</div>
-            <div v-else-if="!projectFolders.length" class="project-dropdown-empty">当前窗口没有可绑定的文件夹。</div>
-            <button
-              v-for="folder in projectFolders"
-              :key="folder.uri"
-              type="button"
-              class="project-option"
-              :class="{ 'is-active': folder.uri === activeProjectUri }"
-              :title="displayProjectUri(folder.uri)"
-              @click="setConversationProject(folder)"
-            >
-              <span class="project-option-name">{{ folder.name }}</span>
-              <span class="project-option-path">{{ middleEllipsis(displayProjectUri(folder.uri), 64) }}</span>
-            </button>
-          </section>
+          <Transition name="lc-dropdown">
+            <section v-if="projectDropdownOpen" class="project-dropdown lc-dropdown-panel" @click.stop>
+              <div class="project-dropdown-title">切换对话归属</div>
+              <div v-if="!projectFoldersLoaded" class="project-dropdown-empty">正在读取工作区...</div>
+              <div v-else-if="!projectFolders.length" class="project-dropdown-empty">当前窗口没有可绑定的文件夹。</div>
+              <button
+                v-for="folder in projectFolders"
+                :key="folder.uri"
+                type="button"
+                class="project-option"
+                :class="{ 'is-active': folder.uri === activeProjectUri }"
+                :title="displayProjectUri(folder.uri)"
+                @click="setConversationProject(folder)"
+              >
+                <span class="project-option-name">{{ folder.name }}</span>
+                <span class="project-option-path">{{ middleEllipsis(displayProjectUri(folder.uri), 64) }}</span>
+              </button>
+            </section>
+          </Transition>
         </span>
         <span
           class="run-status"
@@ -247,7 +249,7 @@ function middleEllipsis(value: string, maxLength: number): string {
   left: 0;
   top: calc(100% + 4px);
   z-index: 20;
-  width: min(420px, 70vw);
+  width: 100%;
   max-height: 260px;
   overflow: auto;
   padding: var(--space-2);

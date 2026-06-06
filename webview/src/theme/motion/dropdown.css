@@ -1,0 +1,45 @@
+/* 通用下拉列表动效。
+ * 用法：
+ * <Transition name="lc-dropdown">
+ *   <section v-if="open" class="lc-dropdown-panel your-dropdown">...</section>
+ * </Transition>
+ * 可按需在下拉元素上覆盖 --lc-dropdown-transform-origin / --lc-dropdown-offset-y。
+ */
+:root {
+  --lc-dropdown-in-duration: 0.12s;
+  --lc-dropdown-out-duration: 0.08s;
+  --lc-dropdown-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --lc-dropdown-ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --lc-dropdown-offset-y: -4px;
+  --lc-dropdown-scale-from: 0.985;
+  --lc-dropdown-transform-origin: top left;
+}
+
+.lc-dropdown-panel {
+  transform-origin: var(--lc-dropdown-transform-origin);
+  will-change: opacity, transform;
+}
+
+.lc-dropdown-enter-active {
+  transition:
+    opacity var(--lc-dropdown-in-duration) var(--lc-dropdown-ease-out),
+    transform var(--lc-dropdown-in-duration) var(--lc-dropdown-ease-out);
+}
+
+.lc-dropdown-leave-active {
+  transition:
+    opacity var(--lc-dropdown-out-duration) var(--lc-dropdown-ease-in),
+    transform var(--lc-dropdown-out-duration) var(--lc-dropdown-ease-in);
+}
+
+.lc-dropdown-enter-from,
+.lc-dropdown-leave-to {
+  opacity: 0;
+  transform: translateY(var(--lc-dropdown-offset-y)) scale(var(--lc-dropdown-scale-from));
+}
+
+.lc-dropdown-enter-to,
+.lc-dropdown-leave-from {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}

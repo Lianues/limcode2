@@ -5,6 +5,8 @@ export interface BottomStickyScrollerOptions {
   thresholdPx?: number;
   /** 内容高度变化后继续贴底的时间，用于覆盖折叠/流式动画。 */
   settleMs?: number;
+  /** 折叠/展开等显式内容高度交互前，允许稍大的预吸附误差。 */
+  interactionThresholdPx?: number;
 }
 
 export interface BottomStickyScroller {
@@ -14,7 +16,8 @@ export interface BottomStickyScroller {
   isStickyToBottom: () => boolean;
 }
 
-const DEFAULT_THRESHOLD_PX = 96;
+const DEFAULT_THRESHOLD_PX = 1;
+const DEFAULT_INTERACTION_THRESHOLD_PX = 5;
 const DEFAULT_SETTLE_MS = 260;
 
 /**
@@ -34,6 +37,10 @@ export function useBottomStickyScroller(
 ): BottomStickyScroller {
   const thresholdPx = options.thresholdPx ?? DEFAULT_THRESHOLD_PX;
   const settleMs = options.settleMs ?? DEFAULT_SETTLE_MS;
+  const interactionThresholdPx = Math.max(
+    thresholdPx,
+    options.interactionThresholdPx ?? DEFAULT_INTERACTION_THRESHOLD_PX
+  );
 
   let observedScroller: HTMLElement | null = null;
   let observedContent: HTMLElement | null = null;
@@ -44,8 +51,8 @@ export function useBottomStickyScroller(
   let contentCheckFrame: number | undefined;
   let stickyUntil = 0;
 
-  function isNearBottomElement(element: HTMLElement): boolean {
-    return element.scrollHeight - element.scrollTop - element.clientHeight <= thresholdPx;
+  function isNearBottomElement(element: HTMLElement, threshold = thresholdPx): boolean {
+    return element.scrollHeight - element.scrollTop - element.clientHeight <= threshold;
   }
 
   function isNearBottom(): boolean {
@@ -68,11 +75,33 @@ export function useBottomStickyScroller(
 
   function updateStickyFromUserScroll(): void {
     const element = scroller.value;
+    if (stickyToBottom && performance.now() < stickyUntil) {
+      return;
+    }
+
     stickyToBottom = !element || isNearBottomElement(element);
+  }
+
+  function primeStickyFromBottomInteraction(event: Event): void {
+    const target = event.target;
+    if (!(target instanceof Element) || !target.closest('[aria-expanded]')) return;
+
+    const element = scroller.value;
+    if (!element || !isNearBottomElement(element, interactionThresholdPx)) return;
+
+    stickyToBottom = true;
+    scrollToBottomNow();
+    keepStickyDuringContentSettle();
+  }
+
+  function primeStickyFromKeyboardInteraction(event: KeyboardEvent): void {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    primeStickyFromBottomInteraction(event);
   }
 
   function keepStickyDuringContentSettle(): void {
     if (!stickyToBottom) return;
+    scrollToBottomNow();
 
     stickyUntil = Math.max(stickyUntil, performance.now() + settleMs);
     if (stickyFrame !== undefined) return;
@@ -140,6 +169,8 @@ export function useBottomStickyScroller(
     observedScroller = element;
     stickyToBottom = isNearBottomElement(element);
     element.addEventListener('scroll', updateStickyFromUserScroll, { passive: true });
+    element.addEventListener('pointerdown', primeStickyFromBottomInteraction, { capture: true });
+    element.addEventListener('keydown', primeStickyFromKeyboardInteraction, { capture: true });
 
     resizeObserver = new ResizeObserver(scheduleContentCheck);
     resizeObserver.observe(element);
@@ -160,7 +191,11 @@ export function useBottomStickyScroller(
   }
 
   function detachScroller(): void {
-    if (observedScroller) observedScroller.removeEventListener('scroll', updateStickyFromUserScroll);
+    if (observedScroller) {
+      observedScroller.removeEventListener('scroll', updateStickyFromUserScroll);
+      observedScroller.removeEventListener('pointerdown', primeStickyFromBottomInteraction, { capture: true });
+      observedScroller.removeEventListener('keydown', primeStickyFromKeyboardInteraction, { capture: true });
+    }
     observedScroller = null;
     observedContent = null;
 

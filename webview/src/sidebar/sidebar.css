@@ -319,7 +319,7 @@ button {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 6px 24px 6px 0;
+  padding: 6px 0;
   scrollbar-width: none;
 }
 
@@ -331,21 +331,28 @@ button {
 
 .history-edge-scrollbar.advanced-scrollbar {
   top: 6px;
-  right: 3px;
+  right: 0;
   bottom: 6px;
-  width: 18px;
+  width: 9px;
   z-index: 4;
   opacity: 0.72;
 }
 
-.history-edge-scrollbar.advanced-scrollbar .edge-button {
-  border-color: var(--line);
-  color: var(--vscode-sideBar-foreground, var(--vscode-foreground));
-  background: color-mix(in srgb, var(--vscode-sideBar-background) 88%, var(--vscode-foreground) 12%);
+.history-edge-scrollbar.advanced-scrollbar .scroll-track {
+  border-color: transparent;
+  background: transparent;
 }
 
-.history-edge-scrollbar.advanced-scrollbar .edge-button:hover:not(:disabled) {
-  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-sideBar-background) 82%, var(--vscode-foreground) 18%));
+.history-edge-scrollbar.advanced-scrollbar .scroll-thumb {
+  left: 2px;
+  right: 2px;
+  border: 0;
+  background: color-mix(in srgb, var(--vscode-sideBar-foreground, var(--vscode-foreground)) 42%, transparent);
+}
+
+.history-edge-scrollbar.advanced-scrollbar .scroll-thumb:hover,
+.history-edge-scrollbar.advanced-scrollbar.is-dragging .scroll-thumb {
+  background: color-mix(in srgb, var(--vscode-sideBar-foreground, var(--vscode-foreground)) 62%, transparent);
 }
 
 .history-item {

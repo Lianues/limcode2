@@ -462,9 +462,6 @@ function ensureActiveScopeVisible(): void {
           class="history-edge-scrollbar"
           :scroller="historyList"
           :refresh-key="entries.length"
-          show-edge-buttons
-          :show-markers="false"
-          :show-marker-preview="false"
         />
       </div>
 

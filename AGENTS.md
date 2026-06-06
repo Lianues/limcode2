@@ -296,6 +296,10 @@ function getPaths(): StoragePaths {
 
 避免蓝紫色+大圆角
 
+如果前端需要使用滚动条，请使用
+webview\src\components\navigation\AdvancedScrollbar.vue
+里面的自定义滚动条
+
 ## 6. 默认初始化准则
 
 默认初始化可以为了跑通基础体验创建默认对象，但也必须遵循解耦模型。

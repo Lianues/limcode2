@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { IconEdit, IconSquare, IconTrash } from '@tabler/icons-vue';
+import { IconEdit, IconPlayerStop, IconTrash } from '@tabler/icons-vue';
 import type { ConversationHistoryPageInfo, OpenConversationPanelRecord } from '@shared/protocol';
 import { displayConversationTitle as formatConversationTitle } from '@shared/conversationTitle';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
@@ -446,14 +446,24 @@ function ensureActiveScopeVisible(): void {
               </div>
             </div>
             <div class="history-actions" @click.stop @keydown.stop>
-              <button v-if="entry.isRunning" type="button" class="history-action-button" title="终止后台任务" aria-label="终止后台任务" @click="abortConversation(entry)">
-                <IconSquare class="history-action-icon" stroke="2" aria-hidden="true" />
-              </button>
               <button type="button" class="history-action-button" title="重命名对话标题" aria-label="重命名对话标题" @click="renameConversation(entry)">
                 <IconEdit class="history-action-icon" stroke="2" aria-hidden="true" />
               </button>
               <button type="button" class="history-action-button" title="删除对话" aria-label="删除对话" @click="deleteConversation(entry)">
                 <IconTrash class="history-action-icon" stroke="2" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                class="history-action-button"
+                :class="{ 'is-hidden': !entry.isRunning }"
+                :disabled="!entry.isRunning"
+                :aria-hidden="!entry.isRunning"
+                :tabindex="entry.isRunning ? 0 : -1"
+                title="终止后台任务"
+                aria-label="终止后台任务"
+                @click="entry.isRunning && abortConversation(entry)"
+              >
+                <IconPlayerStop class="history-action-icon" stroke="2" aria-hidden="true" />
               </button>
             </div>
           </div>

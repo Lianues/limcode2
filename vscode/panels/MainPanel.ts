@@ -20,6 +20,9 @@ export interface MainPanelOptions {
 
 type MainPanelKind = 'chat' | 'globalSettings';
 
+const PANEL_TAB_TITLE_MAX_DISPLAY_UNITS = 20;
+const PANEL_TAB_TITLE_ELLIPSIS = '...';
+
 export class MainPanel {
   public static readonly viewType = 'limcode.mainPanel';
 
@@ -157,7 +160,7 @@ export class MainPanel {
     const payload = message.payload;
     if (!this.conversationId || !payload || payload.conversationId !== this.conversationId) return;
     if (!isDefaultConversationTitle(this.panel.title)) return;
-    this.panel.title = displayConversationTitleFromText(payload.text);
+    this.panel.title = panelTabTitle(displayConversationTitleFromText(payload.text));
   }
 
   public static refreshConversationTitle(conversationId: string): void {
@@ -191,10 +194,11 @@ function panelKind(options: MainPanelOptions): MainPanelKind {
 
 function panelTitle(options: MainPanelOptions, backendApp: BackendApplication): string {
   if (options.kind === 'globalSettings') return 'LimCode 设置';
-  if (!options.conversationId) return 'LimCode';
-  return options.title
+  if (!options.conversationId) return panelTabTitle('LimCode');
+  const title = options.title
     ? displayConversationTitle({ id: options.conversationId, title: options.title })
     : backendApp.getConversationDisplayTitle(options.conversationId);
+  return panelTabTitle(title);
 }
 
 function isDefaultConversationTitle(title: string): boolean {
@@ -254,4 +258,43 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function panelTabTitle(title: string): string {
+  return ellipsizeDisplayText(
+    title,
+    PANEL_TAB_TITLE_MAX_DISPLAY_UNITS,
+    PANEL_TAB_TITLE_ELLIPSIS
+  );
+}
+
+function ellipsizeDisplayText(title: string, maxDisplayUnits: number, ellipsis: string): string {
+  const normalized = title.replace(/\s+/g, ' ').trim();
+  if (!normalized) return title;
+  if (displayUnits(normalized) <= maxDisplayUnits) return normalized;
+
+  const ellipsisUnits = displayUnits(ellipsis);
+  const contentMaxUnits = Math.max(1, maxDisplayUnits - ellipsisUnits);
+  let currentUnits = 0;
+  let result = '';
+
+  for (const char of normalized) {
+    const nextUnits = currentUnits + displayUnits(char);
+    if (nextUnits > contentMaxUnits) break;
+    currentUnits = nextUnits;
+    result += char;
+  }
+
+  return `${result.trimEnd()}${ellipsis}`;
+}
+
+function displayUnits(text: string): number {
+  let units = 0;
+  for (const char of text) units += isWideCharacter(char) ? 2 : 1;
+  return units;
+}
+
+function isWideCharacter(char: string): boolean {
+  const codePoint = char.codePointAt(0) ?? 0;
+  return codePoint >= 0x1f300 || /[\u1100-\u115f\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/u.test(char);
 }

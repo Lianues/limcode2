@@ -49,7 +49,8 @@ const activeScopeKey = computed(() => scopeOptionKey(activeScopeKind.value, acti
 const scopeOptions = computed<ScopeOption[]>(() => {
   const options: ScopeOption[] = [
     { key: 'currentProject', label: currentScopeLabel.value, scopeKind: 'currentProject' },
-    { key: 'all', label: '全部', scopeKind: 'all' }
+    { key: 'all', label: '全部', scopeKind: 'all' },
+    { key: 'unbound', label: '未绑定', scopeKind: 'unbound' }
   ];
 
   for (const folder of projectFolders.value) {
@@ -63,7 +64,6 @@ const scopeOptions = computed<ScopeOption[]>(() => {
     });
   }
 
-  options.push({ key: 'unbound', label: '未绑定', scopeKind: 'unbound' });
   return options;
 });
 const pagedScopeOptions = computed(() => {

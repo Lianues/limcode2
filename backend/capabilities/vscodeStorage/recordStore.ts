@@ -130,6 +130,35 @@ export async function upsertRecordStoreRecords<TRecord extends { id: string }, T
 }
 
 
+export async function removeRecordStoreRecord(
+  root: vscode.Uri,
+  indexUri: vscode.Uri,
+  id: string
+): Promise<void> {
+  const savedAt = new Date().toISOString();
+  const previousIndex = await readJson<RecordsIndexFile>(indexUri);
+  if (!isRecordsIndexFile(previousIndex)) return;
+
+  const removed = previousIndex.records.find((record) => record.id === id);
+  const nextRecords = previousIndex.records.filter((record) => record.id !== id);
+  if (nextRecords.length === previousIndex.records.length) return;
+
+  if (removed) {
+    try {
+      await vscode.workspace.fs.delete(vscode.Uri.joinPath(root, ...removed.file.split('/')));
+    } catch (error) {
+      if (!isFileNotFound(error)) console.warn(`[LimCode] Failed to delete record file: ${removed.file}`, error);
+    }
+  }
+
+  await writeJson(indexUri, {
+    schemaVersion: STORAGE_VERSION,
+    savedAt,
+    records: nextRecords
+  } satisfies RecordsIndexFile);
+}
+
+
 
 function isRecordsIndexFile(value: RecordsIndexFile | undefined): value is RecordsIndexFile {
   if (!value || value.schemaVersion !== STORAGE_VERSION || !Array.isArray(value.records)) return false;
@@ -139,4 +168,11 @@ function isRecordsIndexFile(value: RecordsIndexFile | undefined): value is Recor
       && typeof record.file === 'string'
       && typeof record.updatedAt === 'string';
   });
+}
+
+function isFileNotFound(error: unknown): boolean {
+  const candidate = error as { name?: unknown; code?: unknown; message?: unknown; stack?: unknown };
+  const text = [candidate.name, candidate.code, candidate.message, candidate.stack, String(error)]
+    .filter((part): part is string => typeof part === 'string').join('\n');
+  return /FileNotFound|EntryNotFound|ENOENT|ENOTDIR|not found|no such file|不存在|无法解析不存在的文件/i.test(text);
 }

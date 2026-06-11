@@ -6,7 +6,7 @@ import GlobalSettingsPanel from '@webview/components/settings/GlobalSettingsPane
   <div class="global-settings-view">
     <header class="view-header">
       <span class="view-title">LimCode 全局设置</span>
-      <span class="view-hint">LLM 设置属于全局配置，会同步给全局设置订阅者。</span>
+      <span class="view-hint">渠道配置会作为后端默认 LLM 连接配置同步给全局设置订阅者。</span>
     </header>
     <div class="view-body">
       <GlobalSettingsPanel />
@@ -23,6 +23,7 @@ import GlobalSettingsPanel from '@webview/components/settings/GlobalSettingsPane
 }
 
 .view-header {
+  flex: 0 0 auto;
   display: flex;
   align-items: baseline;
   gap: var(--space-3);
@@ -42,7 +43,8 @@ import GlobalSettingsPanel from '@webview/components/settings/GlobalSettingsPane
 
 .view-body {
   flex: 1;
-  overflow-y: auto;
+  min-height: 0;
+  overflow: hidden;
   padding: var(--space-4);
 }
 </style>

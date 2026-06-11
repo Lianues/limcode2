@@ -1,6 +1,7 @@
 import type { StorageCapability, WebviewCapability } from '../capabilities/types';
 import {
   BridgeMessageType,
+  GLOBAL_SETTINGS_SECTIONS,
   globalSettingsStreamId,
   createMessageId,
   type BridgeClientId,
@@ -18,7 +19,7 @@ export interface GlobalSettingsBridgeDeps {
 
 /**
  * 全局设置桥接。
- * common 属于扩展级配置，保存于 VS Code globalState；llm 属于可迁移数据，保存于当前 dataRoot/settings/llm.json。
+ * common 属于扩展级配置，保存于 VS Code globalState；llm 只保存当前激活的可复用渠道配置 id。
  */
 export class GlobalSettingsBridge {
   public constructor(private readonly deps: GlobalSettingsBridgeDeps) {}
@@ -49,11 +50,14 @@ export class GlobalSettingsBridge {
         this.createSnapshotMessage(stored, correlationId)
       );
       if (dataRootPathChanged) {
-        const llmSettings = await this.deps.storage.loadGlobalSettings('llm');
-        this.deps.webview.broadcastToStream(
-          globalSettingsStreamId('llm'),
-          this.createSnapshotMessage(llmSettings, correlationId)
-        );
+        for (const section of GLOBAL_SETTINGS_SECTIONS) {
+          if (section === 'common') continue;
+          const nextStored = await this.deps.storage.loadGlobalSettings(section);
+          this.deps.webview.broadcastToStream(
+            globalSettingsStreamId(section),
+            this.createSnapshotMessage(nextStored, correlationId)
+          );
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

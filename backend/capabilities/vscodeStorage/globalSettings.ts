@@ -14,7 +14,7 @@ interface GlobalSettingsFile<T> {
   settings: T;
 }
 
-type FileBackedGlobalSettingsSection = Exclude<GlobalSettingsSection, 'common'>;
+type FileBackedGlobalSettingsSection = Exclude<GlobalSettingsSection, 'common' | 'llmProviderConfigs'>;
 
 const GLOBAL_SETTINGS_SECTION_SPECS: Record<FileBackedGlobalSettingsSection, {
   fileName: string;
@@ -79,8 +79,8 @@ function sameSettings(section: GlobalSettingsSection, a: GlobalSettingsSectionVa
 }
 
 function getFileBackedSpec(section: GlobalSettingsSection): (typeof GLOBAL_SETTINGS_SECTION_SPECS)[FileBackedGlobalSettingsSection] {
-  if (section === 'common') {
-    throw new Error('Global settings section "common" is stored in VS Code globalState, not in the data directory.');
+  if (section === 'common' || section === 'llmProviderConfigs') {
+    throw new Error(`Global settings section "${section}" is not stored by the generic file-backed settings handler.`);
   }
   return GLOBAL_SETTINGS_SECTION_SPECS[section];
 }

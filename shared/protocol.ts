@@ -20,7 +20,7 @@ export interface WebviewClientMeta {
 
 export const GLOBAL_CLIENT_STATE_STREAM_ID = 'global:state';
 export const GLOBAL_SETTINGS_STREAM_PREFIX = 'settings:global:';
-export const GLOBAL_SETTINGS_SECTIONS = ['common', 'llm'] as const;
+export const GLOBAL_SETTINGS_SECTIONS = ['common', 'llm', 'llmProviderConfigs'] as const;
 export type GlobalSettingsSection = typeof GLOBAL_SETTINGS_SECTIONS[number];
 
 export function globalSettingsStreamId(section: GlobalSettingsSection): string {
@@ -194,6 +194,7 @@ export type ToolCallStatus = typeof TOOL_CALL_STATUSES[number];
 export const TERMINAL_TOOL_CALL_STATUSES: ReadonlySet<ToolCallStatus> = new Set(['success', 'warning', 'error']);
 
 export type LlmProviderKind = 'deepseek' | 'openai-compatible' | 'openai-responses' | 'claude' | 'gemini';
+export type LlmToolCallFormat = 'function-call';
 
 export interface LlmUsageMetadataRecord {
   promptTokenCount?: number;
@@ -207,12 +208,25 @@ export interface LlmUsageMetadataRecord {
 }
 
 export interface LlmSettingsRecord {
+  activeProviderConfigId: string;
+}
+
+export interface LlmProviderConfigsRecord {
+  configs: LlmProviderConfigRecord[];
+}
+
+export interface LlmProviderConfigRecord {
+  id: string;
+  name: string;
   provider: LlmProviderKind;
   baseUrl: string;
   model: string;
   apiKey: string;
+  toolCallFormat: LlmToolCallFormat;
   proxy?: string;
   temperature?: number;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface AgentRecord {
@@ -869,7 +883,7 @@ export interface GlobalSettingsRecord {
   activeDataRootPath: string;
   defaultDataRootPath: string;
 }
-export type GlobalSettingsSectionValue = GlobalSettingsRecord | LlmSettingsRecord;
+export type GlobalSettingsSectionValue = GlobalSettingsRecord | LlmSettingsRecord | LlmProviderConfigsRecord;
 export interface GlobalSettingsGetPayload {
   section: GlobalSettingsSection;
 }

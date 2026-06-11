@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
-import type { LlmProviderKind, LlmSettingsRecord } from '../../../shared/protocol';
-import { DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL } from '../llmProvider';
+import type { LlmSettingsRecord } from '../../../shared/protocol';
 import { STORAGE_VERSION } from './constants';
 import { readJson, writeJson } from './json';
 
@@ -34,52 +33,20 @@ export async function writeLlmSettingsFile(uri: vscode.Uri, settings: LlmSetting
   await writeJson(uri, {
     schemaVersion: STORAGE_VERSION,
     savedAt: new Date().toISOString(),
-    ...settings
+    ...normalizeLlmSettings(settings)
   } satisfies LlmSettingsFile);
 }
 
 export function createDefaultLlmSettings(): LlmSettingsRecord {
-  return {
-    provider: 'deepseek',
-    baseUrl: DEFAULT_LLM_BASE_URL,
-    model: DEFAULT_LLM_MODEL,
-    apiKey: '',
-    proxy: undefined,
-    temperature: 0.2
-  };
+  return { activeProviderConfigId: '' };
 }
 
 export function normalizeLlmSettings(input: Partial<LlmSettingsRecord> | undefined): LlmSettingsRecord {
-  const defaults = createDefaultLlmSettings();
-  const temperature = Number(input?.temperature ?? defaults.temperature);
   return {
-    provider: isKnownProvider(input?.provider) ? input.provider : defaults.provider,
-    baseUrl: stringOrDefault(input?.baseUrl, defaults.baseUrl),
-    model: stringOrDefault(input?.model, defaults.model),
-    apiKey: typeof input?.apiKey === 'string' ? input.apiKey.trim() : defaults.apiKey,
-    ...(optionalString(input?.proxy) ? { proxy: optionalString(input?.proxy) } : {}),
-    temperature: Number.isFinite(temperature) ? temperature : defaults.temperature
+    activeProviderConfigId: typeof input?.activeProviderConfigId === 'string' ? input.activeProviderConfigId.trim() : ''
   };
 }
 
 function sameLlmSettings(a: LlmSettingsRecord, b: Partial<LlmSettingsRecord>): boolean {
-  return a.provider === b.provider &&
-    a.baseUrl === b.baseUrl &&
-    a.model === b.model &&
-    a.apiKey === b.apiKey &&
-    a.temperature === b.temperature &&
-    a.proxy === optionalString(b.proxy);
-}
-
-function isKnownProvider(provider: unknown): provider is LlmProviderKind {
-  return provider === 'deepseek' || provider === 'openai-compatible' || provider === 'openai-responses' || provider === 'claude' || provider === 'gemini';
-}
-
-function stringOrDefault(value: unknown, fallback: string): string {
-  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
-}
-
-function optionalString(value: unknown): string | undefined {
-  const trimmed = typeof value === 'string' ? value.trim() : '';
-  return trimmed || undefined;
+  return a.activeProviderConfigId === b.activeProviderConfigId;
 }

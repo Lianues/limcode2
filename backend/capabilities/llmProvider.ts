@@ -8,7 +8,14 @@ import {
   isInlineDataPart,
   isTextPart
 } from '../../shared/protocol';
-import type { ContentPart, LlmProviderKind, LlmSettingsRecord, LlmUsageMetadataRecord, MessageContent } from '../../shared/protocol';
+import type {
+  ContentPart,
+  LlmProviderConfigRecord,
+  LlmProviderKind,
+  LlmToolCallFormat,
+  LlmUsageMetadataRecord,
+  MessageContent
+} from '../../shared/protocol';
 
 export const DEFAULT_LLM_BASE_URL = 'https://api.deepseek.com/v1';
 export const DEFAULT_LLM_MODEL = 'deepseek-v4-flash';
@@ -42,7 +49,7 @@ interface UnifiedDryRunCapable {
 }
 
 export interface LlmProviderOptions {
-  settings: MaybeProvider<LlmSettingsRecord>;
+  settings: MaybeProvider<LlmProviderConfigRecord>;
   headers?: MaybeProvider<Record<string, string>>;
 }
 
@@ -88,7 +95,7 @@ export async function startLlmProvider(
   try {
     const settings = normalizeSettings(await resolveMaybe(options.settings));
     if (!settings.apiKey) {
-      emitLlmError(emit, request.id, '缺少 LLM API Key。请在 Webview 顶部“LLM 设置”里填写并保存。');
+      emitLlmError(emit, request.id, '缺少 LLM API Key。请在全局设置的“渠道”页签里填写并保存。');
       return;
     }
 
@@ -188,14 +195,19 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
   };
 }
 
-function normalizeSettings(settings: LlmSettingsRecord | undefined): LlmSettingsRecord {
+function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmProviderConfigRecord {
   return {
+    id: settings?.id?.trim() || 'llm-provider-config-default',
+    name: settings?.name?.trim() || '默认渠道',
     provider: normalizeProvider(settings?.provider),
     baseUrl: settings?.baseUrl?.trim() || DEFAULT_LLM_BASE_URL,
     model: settings?.model?.trim() || DEFAULT_LLM_MODEL,
     apiKey: settings?.apiKey?.trim() ?? '',
+    toolCallFormat: normalizeToolCallFormat(settings?.toolCallFormat),
     temperature: settings?.temperature,
-    ...(normalizeOptionalString(settings?.proxy) ? { proxy: normalizeOptionalString(settings?.proxy) } : {})
+    ...(normalizeOptionalString(settings?.proxy) ? { proxy: normalizeOptionalString(settings?.proxy) } : {}),
+    createdAt: settings?.createdAt ?? 0,
+    updatedAt: settings?.updatedAt ?? 0
   };
 }
 
@@ -203,6 +215,10 @@ function normalizeProvider(provider: LlmProviderKind | undefined): LlmProviderKi
   return provider === 'gemini' || provider === 'claude' || provider === 'openai-compatible' || provider === 'openai-responses' || provider === 'deepseek'
     ? provider
     : 'deepseek';
+}
+
+function normalizeToolCallFormat(format: LlmToolCallFormat | undefined): LlmToolCallFormat {
+  return format === 'function-call' ? format : 'function-call';
 }
 
 function toUnifiedRequest(request: LlmStartRequest, temperature?: number): UnifiedLLMRequest {

@@ -2,10 +2,13 @@ import * as vscode from 'vscode';
 import type {
   ConversationSettingsRecord,
   GlobalSettingsRecord,
-  GlobalSettingsSectionValue
+  GlobalSettingsSectionValue,
+  LlmProviderConfigsRecord,
+  LlmSettingsRecord
 } from '../../../shared/protocol';
 import type { StorageCapability } from '../types';
 import { loadGlobalSettingsFile, writeGlobalSettingsFile } from './globalSettings';
+import { loadLlmProviderConfigsSettings, saveLlmProviderConfigsSettings } from './llmProviderConfigs';
 import {
   createGlobalSettingsRecord,
   LIMCODE_GLOBAL_STATUS_LABEL,
@@ -59,6 +62,33 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     const migration = await migrateStorageRoot(previousPaths.globalStorageUri, targetRootUri);
     await saveGlobalStatus(context, targetDataRootPath, migration.skipped ? undefined : { fromPath: migration.fromPath, toPath: migration.toPath, migratedAt: migration.migratedAt });
     return loadCommonGlobalSettings();
+  }
+
+  async function loadNormalizedLlmGlobalSettings(paths: StoragePaths): Promise<{ section: 'llm'; settings: LlmSettingsRecord; filePath: string }> {
+    await ensureLlmSettingsRoots(paths);
+    const configs = (await loadLlmProviderConfigsSettings(paths)).settings.configs;
+    const stored = await loadGlobalSettingsFile(paths.settingsRootUri, 'llm');
+    const settings = stored.settings as LlmSettingsRecord;
+    const activeConfig = configs.find((config) => config.id === settings.activeProviderConfigId) ?? configs[0];
+    const normalized: LlmSettingsRecord = { activeProviderConfigId: activeConfig?.id ?? '' };
+    if (settings.activeProviderConfigId !== normalized.activeProviderConfigId) {
+      await writeGlobalSettingsFile(paths.settingsRootUri, 'llm', normalized);
+      return loadGlobalSettingsFile(paths.settingsRootUri, 'llm') as Promise<{ section: 'llm'; settings: LlmSettingsRecord; filePath: string }>;
+    }
+    return stored as { section: 'llm'; settings: LlmSettingsRecord; filePath: string };
+  }
+
+  async function saveNormalizedLlmGlobalSettings(paths: StoragePaths, settings: GlobalSettingsSectionValue): Promise<{ section: 'llm'; settings: LlmSettingsRecord; filePath: string }> {
+    await ensureLlmSettingsRoots(paths);
+    const configs = (await loadLlmProviderConfigsSettings(paths)).settings.configs;
+    const input = settings as Partial<LlmSettingsRecord> | undefined;
+    const activeConfig = configs.find((config) => config.id === input?.activeProviderConfigId) ?? configs[0];
+    await writeGlobalSettingsFile(paths.settingsRootUri, 'llm', { activeProviderConfigId: activeConfig?.id ?? '' });
+    return loadNormalizedLlmGlobalSettings(paths);
+  }
+
+  async function ensureLlmSettingsRoots(paths: StoragePaths): Promise<void> {
+    await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
   }
 
   return {
@@ -130,15 +160,35 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     async loadGlobalSettings(section) {
       if (section === 'common') return loadCommonGlobalSettings();
       const paths = getPaths();
+      if (section === 'llm') return loadNormalizedLlmGlobalSettings(paths);
+      if (section === 'llmProviderConfigs') {
+        const stored = await loadLlmProviderConfigsSettings(paths);
+        await loadNormalizedLlmGlobalSettings(paths);
+        return { section, settings: stored.settings, filePath: stored.filePath };
+      }
       await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
       return loadGlobalSettingsFile(paths.settingsRootUri, section);
     },
     async saveGlobalSettings(section, settings) {
       if (section === 'common') return saveCommonGlobalSettings(settings);
       const paths = getPaths();
+      if (section === 'llm') return saveNormalizedLlmGlobalSettings(paths, settings);
+      if (section === 'llmProviderConfigs') {
+        const stored = await saveLlmProviderConfigsSettings(paths, settings as Partial<LlmProviderConfigsRecord> | undefined);
+        await loadNormalizedLlmGlobalSettings(paths);
+        return { section, settings: stored.settings, filePath: stored.filePath };
+      }
       await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
       await writeGlobalSettingsFile(paths.settingsRootUri, section, settings);
       return loadGlobalSettingsFile(paths.settingsRootUri, section);
+    },
+    async loadActiveLlmProviderConfig() {
+      const paths = getPaths();
+      await ensureLlmSettingsRoots(paths);
+      const configs = (await loadLlmProviderConfigsSettings(paths)).settings.configs;
+      const stored = await loadNormalizedLlmGlobalSettings(paths);
+      const activeConfigId = (stored.settings as LlmSettingsRecord).activeProviderConfigId;
+      return configs.find((config) => config.id === activeConfigId) ?? configs[0]!;
     },
     async loadConversationSettings(conversationId, section) {
       const paths = getPaths();

@@ -9,8 +9,16 @@
   border-bottom: 1px solid var(--vscode-panel-border);
 }
 
-.global-settings-section-header h2 {
+.channel-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   margin: 0 0 var(--space-1);
+  flex-wrap: wrap;
+}
+
+.global-settings-section-header h2 {
+  margin: 0;
   font-size: var(--font-size-lg);
 }
 
@@ -20,6 +28,55 @@
   font-size: var(--font-size-sm);
   line-height: 1.5;
 }
+
+.channel-content-shell {
+  position: relative;
+  min-height: 360px;
+}
+
+.channel-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.channel-loading-inline {
+  min-height: 20px;
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--vscode-descriptionForeground);
+  background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-foreground) 10%);
+  font-size: var(--font-size-xs);
+}
+
+.channel-loading-fade-enter-active,
+.channel-loading-fade-leave-active {
+  transition: opacity 0.16s ease;
+}
+
+.channel-loading-fade-enter-from,
+.channel-loading-fade-leave-to {
+  opacity: 0;
+}
+
+.channel-loading-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
+  border-top-color: currentColor;
+  animation: channel-loading-spin 0.8s linear infinite;
+}
+
+@keyframes channel-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 
 .global-settings-grid {
   display: grid;
@@ -252,21 +309,27 @@
 }
 
 .model-id,
-.model-name {
+.model-name,
+.model-time {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.model-id {
+.model-name {
   font-size: var(--font-size-sm);
   font-weight: 600;
 }
 
-.model-name {
+.model-id,
+.model-time {
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-xs);
+}
+
+.model-time {
+  opacity: 0.86;
 }
 
 .model-remove-btn {

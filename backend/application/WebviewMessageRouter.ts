@@ -16,6 +16,7 @@ import {
   globalSettingsStreamId,
   createMessageId,
   type BridgeClientId,
+  type LlmProviderModelsGetPayload,
   type ProjectFolderCandidateRecord,
   type WebviewToExtensionMessage
 } from '../../shared/protocol';
@@ -110,6 +111,9 @@ export class WebviewMessageRouter {
         break;
       case BridgeMessageType.LlmDryRunGet:
         if (message.payload) void this.postLlmDryRun(clientId, message.payload, message.id);
+        break;
+      case BridgeMessageType.LlmProviderModelsGet:
+        if (message.payload) void this.postLlmProviderModels(clientId, message.payload, message.id);
         break;
       case BridgeMessageType.GlobalSettingsGet:
         if (!message.payload) return;
@@ -274,6 +278,27 @@ export class WebviewMessageRouter {
     }
   }
 
+  private async postLlmProviderModels(clientId: BridgeClientId, payload: LlmProviderModelsGetPayload, correlationId?: string): Promise<void> {
+    try {
+      const models = await withTimeout(this.deps.llm.listModels(payload.config), 60_000, '获取模型列表超时，请检查 Base URL、API Key 或网络代理设置。');
+      this.deps.webview.post(clientId, {
+        id: createMessageId(),
+        type: BridgeMessageType.LlmProviderModelsSnapshot,
+        channel: 'state',
+        correlationId,
+        payload: {
+          configId: payload.config.id,
+          provider: payload.config.provider,
+          baseUrl: payload.config.baseUrl,
+          models
+        }
+      });
+    } catch (error) {
+      console.warn('[LimCode] Failed to fetch LLM provider models.', error);
+      this.postRequestError(clientId, BridgeMessageType.LlmProviderModelsGet, error instanceof Error ? error.message : '无法获取模型列表。', correlationId);
+    }
+  }
+
   private async ensureRunDetailHydrated(conversationId: string, runId: string): Promise<void> {
     if (this.findRunEntity(runId) !== undefined) return;
     const detail = await this.deps.storage.loadConversationRunDetail({ conversationId, runId });
@@ -322,4 +347,14 @@ export class WebviewMessageRouter {
       payload: { requestType, message }
     });
   }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }

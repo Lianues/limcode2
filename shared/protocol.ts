@@ -85,6 +85,8 @@ export enum BridgeMessageType {
   RunHistoryDetailSnapshot = 'runHistory.detail.snapshot',
   LlmDryRunGet = 'llm.dryRun.get',
   LlmDryRunSnapshot = 'llm.dryRun.snapshot',
+  LlmProviderModelsGet = 'llm.providerModels.get',
+  LlmProviderModelsSnapshot = 'llm.providerModels.snapshot',
   GlobalSettingsGet = 'settings.global.get',
   GlobalSettingsUpdate = 'settings.global.update',
   GlobalSettingsSnapshot = 'settings.global.snapshot',
@@ -218,6 +220,7 @@ export interface LlmProviderConfigsRecord {
 export interface LlmProviderModelRecord {
   id: string;
   name: string;
+  createdAt?: string;
 }
 
 export interface LlmProviderConfigRecord {
@@ -881,6 +884,17 @@ export interface LlmDryRunSnapshotPayload {
   maskedSecrets: boolean;
 }
 
+export interface LlmProviderModelsGetPayload {
+  config: LlmProviderConfigRecord;
+}
+
+export interface LlmProviderModelsSnapshotPayload {
+  configId: string;
+  provider: LlmProviderKind;
+  baseUrl: string;
+  models: LlmProviderModelRecord[];
+}
+
 
 export interface GlobalSettingsRecord {
   dataFilePath: string;
@@ -958,6 +972,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.RunHistoryPageGet, ConversationRunHistoryPageRequest>
   | BridgeEnvelope<BridgeMessageType.RunHistoryDetailGet, ConversationRunDetailRequest>
   | BridgeEnvelope<BridgeMessageType.LlmDryRunGet, LlmDryRunGetPayload>
+  | BridgeEnvelope<BridgeMessageType.LlmProviderModelsGet, LlmProviderModelsGetPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsGet, GlobalSettingsGetPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsUpdate, GlobalSettingsUpdatePayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsGet, ConversationSettingsGetPayload>
@@ -975,6 +990,7 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.RunHistoryPageSnapshot, ConversationRunHistoryPageRecord>
   | BridgeEnvelope<BridgeMessageType.RunHistoryDetailSnapshot, ConversationRunDetailRecord>
   | BridgeEnvelope<BridgeMessageType.LlmDryRunSnapshot, LlmDryRunSnapshotPayload>
+  | BridgeEnvelope<BridgeMessageType.LlmProviderModelsSnapshot, LlmProviderModelsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsSnapshot, GlobalSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsSnapshot, ConversationSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ProjectFoldersSnapshot, ProjectFoldersSnapshotPayload>;

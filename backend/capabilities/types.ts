@@ -16,6 +16,7 @@ import type {
   GlobalSettingsSection,
   GlobalSettingsSectionValue,
   LlmProviderConfigRecord,
+  LlmProviderModelRecord,
   ToolCallEventRecord,
   ToolCallRecord,
   WebviewClientMeta
@@ -27,6 +28,7 @@ export type Emit = (event: WorldEvent) => void;
 export interface LlmCapability {
   start(request: LlmStartRequest, emit: Emit): void;
   dryRun(request: LlmStartRequest, options?: LlmDryRunOptions): Promise<LlmDryRunResult>;
+  listModels(config: LlmProviderConfigRecord): Promise<LlmProviderModelRecord[]>;
   abort(requestId: string): void;
 }
 

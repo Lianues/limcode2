@@ -135,7 +135,8 @@ function normalizeProviderModels(input: LlmProviderModelRecord[] | undefined, ac
     const id = typeof item?.id === 'string' ? item.id.trim() : '';
     if (!id) continue;
     const name = typeof item.name === 'string' && item.name.trim() ? item.name.trim() : id;
-    byId.set(id, { id, name });
+    const createdAt = typeof item.createdAt === 'string' && item.createdAt.trim() ? item.createdAt.trim() : undefined;
+    byId.set(id, { id, name, ...(createdAt ? { createdAt } : {}) });
   }
 
   if (activeModel && !byId.has(activeModel)) {

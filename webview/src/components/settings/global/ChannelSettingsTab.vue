@@ -6,6 +6,7 @@ import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.
 import ConfirmPanel from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
+import ModelFetchDialog from './ModelFetchDialog.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from './SettingsDropdown.vue';
 
 const settings = useGlobalSettingsStore();
@@ -50,6 +51,18 @@ const filteredModels = computed<LlmProviderModelRecord[]>(() => {
 });
 const hasModels = computed(() => (activeConfig.value?.models.length ?? 0) > 0);
 const canClearModels = computed(() => !!activeConfig.value && hasModels.value);
+
+function formatModelTime(value: string | undefined): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+}
+
 
 function updateActiveConfigField<K extends keyof LlmProviderConfigRecord>(key: K, value: LlmProviderConfigRecord[K]): void {
   settings.updateActiveLlmProviderConfig({ [key]: value } as Partial<LlmProviderConfigRecord>);
@@ -101,10 +114,6 @@ function updateNewModelName(event: Event): void {
   newModelName.value = (event.target as HTMLInputElement).value;
 }
 
-function fetchModelsPlaceholder(): void {
-  settings.status = '获取模型功能暂未接入';
-}
-
 function openClearModelsConfirm(): void {
   if (!canClearModels.value) return;
   clearModelsConfirmOpen.value = true;
@@ -151,6 +160,10 @@ function confirmDelete(): void {
   settings.deleteLlmProviderConfig(config.id);
 }
 
+function addFetchedModels(models: LlmProviderModelRecord[]): void {
+  settings.addFetchedModelsToConfig(models);
+}
+
 function cancelDelete(): void {
   deleteConfirmOpen.value = false;
 }
@@ -160,12 +173,22 @@ function cancelDelete(): void {
   <section class="global-settings-tab-section" aria-label="渠道设置">
     <header class="global-settings-section-header">
       <div>
-        <h2>渠道</h2>
+        <div class="channel-title-row">
+          <h2>渠道</h2>
+          <Transition name="channel-loading-fade">
+            <span v-if="settings.isChannelSettingsLoading" class="channel-loading-inline" role="status" aria-live="polite">
+              <span class="channel-loading-spinner" aria-hidden="true"></span>
+              <span>{{ settings.channelSettingsLoadingText }}</span>
+            </span>
+          </Transition>
+        </div>
         <p>配置全局范围内可复用的 LLM 渠道。后续 Agent、Mode 或其他对象可通过关系数据复用这些配置。</p>
       </div>
     </header>
 
-    <div class="channel-config-picker">
+    <div class="channel-content-shell">
+      <div class="channel-content" :aria-busy="settings.isChannelSettingsLoading">
+        <div class="channel-config-picker">
       <label class="global-settings-field channel-config-select">
         <span>配置页</span>
         <SettingsDropdown
@@ -223,7 +246,7 @@ function cancelDelete(): void {
               <IconPlus stroke="2" aria-hidden="true" />
               <span>新建模型</span>
             </button>
-            <button type="button" class="model-manager-button" @click="fetchModelsPlaceholder">
+            <button type="button" class="model-manager-button" @click="settings.requestModelsForActiveConfig()">
               <IconCloudDown stroke="2" aria-hidden="true" />
               <span>获取模型</span>
             </button>
@@ -258,8 +281,9 @@ function cancelDelete(): void {
                 >
                   <span class="model-status" aria-hidden="true"></span>
                   <span class="model-info">
-                    <span class="model-id">{{ model.id }}</span>
                     <span class="model-name">{{ model.name }}</span>
+                    <span class="model-id">ID: {{ model.id }}</span>
+                    <span v-if="model.createdAt" class="model-time">时间: {{ formatModelTime(model.createdAt) }}</span>
                   </span>
                   <button
                     type="button"
@@ -293,6 +317,8 @@ function cancelDelete(): void {
       <p class="global-settings-path">
         渠道配置页：<code>{{ settings.filePaths.llmProviderConfigs || '等待后端返回 settings/llm-provider-configs/index.json 路径...' }}</code>
       </p>
+    </div>
+      </div>
     </div>
 
     <InputPanel
@@ -358,6 +384,14 @@ function cancelDelete(): void {
       cancel-label="取消"
       @confirm="confirmDelete"
       @cancel="cancelDelete"
+    />
+
+    <ModelFetchDialog
+      :open="settings.fetchedModelsDialog.open"
+      :loading="settings.fetchedModelsDialog.loading"
+      :models="settings.fetchedModelsDialog.models"
+      @add="addFetchedModels"
+      @close="settings.closeFetchedModelsDialog()"
     />
   </section>
 </template>

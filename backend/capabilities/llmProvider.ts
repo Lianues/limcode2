@@ -12,6 +12,7 @@ import type {
   ContentPart,
   LlmProviderConfigRecord,
   LlmProviderKind,
+  LlmProviderModelRecord,
   LlmToolCallFormat,
   LlmUsageMetadataRecord,
   MessageContent
@@ -28,6 +29,7 @@ type UnifiedPart = import('unified-llm-provider').Part;
 type UnifiedLLMRequest = import('unified-llm-provider').LLMRequest;
 type UnifiedLLMStreamChunk = import('unified-llm-provider').LLMStreamChunk;
 type UnifiedFunctionDeclaration = import('unified-llm-provider').FunctionDeclaration;
+type UnifiedModelCatalogEntry = import('unified-llm-provider').ModelCatalogEntry;
 type UndiciModule = typeof import('undici');
 
 interface UnifiedDryRunResult {
@@ -76,6 +78,9 @@ export function createLlmProviderCapability(options: LlmProviderOptions): LlmCap
     },
     dryRun(request, dryRunOptions) {
       return dryRunLlmProvider(request, options, dryRunOptions);
+    },
+    listModels(config) {
+      return listLlmProviderModels(config, options);
     },
     abort(requestId) {
       const controller = controllers.get(requestId);
@@ -192,6 +197,32 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
     outputFormat: result.outputFormat,
     generatedAt: result.timestamp,
     maskedSecrets: dryRunOptions.includeApiKey !== true
+  };
+}
+
+export async function listLlmProviderModels(config: LlmProviderConfigRecord, options: LlmProviderOptions): Promise<LlmProviderModelRecord[]> {
+  const settings = normalizeSettings(config);
+  if (!settings.apiKey) {
+    throw new Error('缺少 LLM API Key，无法获取模型列表。');
+  }
+
+  const unified = await importUnifiedLlmProvider();
+  const result = await unified.listAvailableModels({
+    provider: settings.provider,
+    apiKey: settings.apiKey,
+    baseUrl: settings.baseUrl,
+    headers: await resolveMaybe(options.headers),
+    outputFormat: 'unified'
+  });
+
+  return result.models.map(modelCatalogEntryToRecord);
+}
+
+function modelCatalogEntryToRecord(model: UnifiedModelCatalogEntry): LlmProviderModelRecord {
+  return {
+    id: model.id,
+    name: model.displayName || model.label || model.name || model.id,
+    ...(model.createdAt ? { createdAt: model.createdAt } : {})
   };
 }
 

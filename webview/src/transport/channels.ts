@@ -22,6 +22,7 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
     case BridgeMessageType.RunHistoryPageGet:
     case BridgeMessageType.RunHistoryDetailGet:
     case BridgeMessageType.LlmDryRunGet:
+    case BridgeMessageType.LlmProviderModelsGet:
       return 'state';
     case BridgeMessageType.GlobalSettingsGet:
     case BridgeMessageType.GlobalSettingsUpdate:

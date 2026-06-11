@@ -105,8 +105,14 @@ export function useBridgeBootstrap(): void {
     );
 
     disposers.push(
+      bridge.on(BridgeMessageType.LlmProviderModelsSnapshot, (message) => {
+        if (message.payload) globalSettings.applyLlmProviderModelsSnapshot(message.payload);
+      })
+    );
+
+    disposers.push(
       bridge.on(BridgeMessageType.Error, (message) => {
-        if (message.payload?.requestType === BridgeMessageType.GlobalSettingsUpdate) {
+        if (message.payload?.requestType === BridgeMessageType.GlobalSettingsUpdate || message.payload?.requestType === BridgeMessageType.LlmProviderModelsGet) {
           globalSettings.setError(message.payload.message);
         } else if (message.payload?.requestType === BridgeMessageType.RunHistoryPageGet || message.payload?.requestType === BridgeMessageType.RunHistoryDetailGet || message.payload?.requestType === BridgeMessageType.LlmDryRunGet) {
           runHistory.setError(message.payload.message);

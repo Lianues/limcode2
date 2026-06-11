@@ -7,6 +7,7 @@ import {
   type GlobalSettingsSnapshotPayload,
   type LlmProviderKind,
   type LlmProviderConfigRecord,
+  type LlmProviderModelRecord,
   type LlmProviderConfigsRecord,
   type LlmSettingsRecord
 } from '@shared/protocol';
@@ -43,6 +44,7 @@ function createDefaultProviderConfig(name = '新渠道配置', provider: LlmProv
     provider,
     baseUrl: 'https://api.openai.com/v1',
     model: 'gpt-5.5',
+    models: [{ id: 'gpt-5.5', name: 'gpt-5.5' }],
     apiKey: '',
     toolCallFormat: 'function-call',
     proxy: '',
@@ -52,7 +54,31 @@ function createDefaultProviderConfig(name = '新渠道配置', provider: LlmProv
 }
 
 function normalizeProviderConfigForUi(config: LlmProviderConfigRecord): LlmProviderConfigRecord {
-  return { ...config, proxy: config.proxy ?? '' };
+  const model = config.model?.trim() ?? '';
+  return { ...config, model, models: normalizeModelsForUi(config.models, model), proxy: config.proxy ?? '' };
+}
+
+function normalizeModelsForUi(models: LlmProviderModelRecord[] | undefined, activeModel: string): LlmProviderModelRecord[] {
+  const byId = new Map<string, LlmProviderModelRecord>();
+  for (const item of models ?? []) {
+    const id = item.id.trim();
+    if (!id) continue;
+    const name = item.name.trim() || id;
+    byId.set(id, { id, name });
+  }
+  if (activeModel && !byId.has(activeModel)) byId.set(activeModel, { id: activeModel, name: activeModel });
+  return [...byId.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function sanitizeModels(models: LlmProviderModelRecord[]): LlmProviderModelRecord[] {
+  const byId = new Map<string, LlmProviderModelRecord>();
+  for (const item of models) {
+    const id = item.id.trim();
+    if (!id) continue;
+    const name = item.name.trim() || id;
+    byId.set(id, { id, name });
+  }
+  return [...byId.values()].sort((left, right) => left.id.localeCompare(right.id));
 }
 
 /** 全局设置（数据目录 + LLM 渠道配置）表单 store。组件只读 state + 调 action，传输细节收口在此。 */
@@ -107,6 +133,7 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
             name: config.name.trim() || '未命名渠道',
             apiKey: config.apiKey.trim(),
             baseUrl: config.baseUrl.trim(),
+            models: sanitizeModels(config.models),
             model: config.model.trim(),
             ...(config.proxy?.trim() ? { proxy: config.proxy.trim() } : { proxy: undefined }),
             updatedAt: Date.now()
@@ -137,6 +164,40 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       const config = this.activeLlmProviderConfig;
       if (!config) return;
       Object.assign(config, patch, { updatedAt: Date.now() });
+    },
+    addModelToActiveConfig(modelId: string, modelName?: string): void {
+      const config = this.activeLlmProviderConfig;
+      const id = modelId.trim();
+      if (!config || !id) return;
+      const name = modelName?.trim() || id;
+      const models = sanitizeModels([...config.models.filter((model) => model.id !== id), { id, name }]);
+      config.models = models;
+      config.model = id;
+      config.updatedAt = Date.now();
+      this.saveLlmProviderConfigs();
+    },
+    selectActiveConfigModel(modelId: string): void {
+      const config = this.activeLlmProviderConfig;
+      if (!config || !config.models.some((model) => model.id === modelId)) return;
+      config.model = modelId;
+      config.updatedAt = Date.now();
+      this.saveLlmProviderConfigs();
+    },
+    removeModelFromActiveConfig(modelId: string): void {
+      const config = this.activeLlmProviderConfig;
+      if (!config) return;
+      config.models = config.models.filter((model) => model.id !== modelId);
+      if (config.model === modelId) config.model = config.models[0]?.id ?? '';
+      config.updatedAt = Date.now();
+      this.saveLlmProviderConfigs();
+    },
+    clearModelsFromActiveConfig(): void {
+      const config = this.activeLlmProviderConfig;
+      if (!config) return;
+      config.models = [];
+      config.model = '';
+      config.updatedAt = Date.now();
+      this.saveLlmProviderConfigs();
     },
     deleteLlmProviderConfig(configId: string): void {
       if (this.llmProviderConfigs.configs.length <= 1) {

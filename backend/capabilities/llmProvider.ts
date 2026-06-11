@@ -202,6 +202,7 @@ function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmPr
     provider: normalizeProvider(settings?.provider),
     baseUrl: settings?.baseUrl?.trim() || DEFAULT_LLM_BASE_URL,
     model: settings?.model?.trim() || DEFAULT_LLM_MODEL,
+    models: settings?.models ?? [],
     apiKey: settings?.apiKey?.trim() ?? '',
     toolCallFormat: normalizeToolCallFormat(settings?.toolCallFormat),
     ...(normalizeOptionalString(settings?.proxy) ? { proxy: normalizeOptionalString(settings?.proxy) } : {}),

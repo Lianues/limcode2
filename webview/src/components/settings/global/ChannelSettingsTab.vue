@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { IconPencil, IconPlus, IconTrash } from '@tabler/icons-vue';
-import type { LlmProviderConfigRecord, LlmProviderKind, LlmToolCallFormat } from '@shared/protocol';
+import { IconCloudDown, IconPencil, IconPlus, IconSearch, IconTrash } from '@tabler/icons-vue';
+import type { LlmProviderConfigRecord, LlmProviderKind, LlmProviderModelRecord, LlmToolCallFormat } from '@shared/protocol';
+import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import ConfirmPanel from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
@@ -12,6 +13,11 @@ const createOpen = ref(false);
 const createProvider = ref<LlmProviderKind>('openai-compatible');
 const renameOpen = ref(false);
 const deleteConfirmOpen = ref(false);
+const newModelOpen = ref(false);
+const newModelName = ref('');
+const modelFilter = ref('');
+const modelListScroller = ref<HTMLElement | null>(null);
+const clearModelsConfirmOpen = ref(false);
 
 const providerOptions: SettingsDropdownOption[] = [
   { value: 'openai-compatible', label: 'OpenAI Compatible' },
@@ -34,6 +40,16 @@ const configPageOptions = computed<SettingsDropdownOption[]>(() =>
   settings.llmProviderConfigs.configs.map((config) => ({ value: config.id, label: config.name, description: providerLabel(config.provider) }))
 );
 const activeProviderLabel = computed(() => providerLabel(activeConfig.value?.provider));
+const filteredModels = computed<LlmProviderModelRecord[]>(() => {
+  const keyword = modelFilter.value.trim().toLowerCase();
+  const models = activeConfig.value?.models ?? [];
+  if (!keyword) return models;
+  return models.filter((model) => {
+    return model.id.toLowerCase().includes(keyword) || model.name.toLowerCase().includes(keyword);
+  });
+});
+const hasModels = computed(() => (activeConfig.value?.models.length ?? 0) > 0);
+const canClearModels = computed(() => !!activeConfig.value && hasModels.value);
 
 function updateActiveConfigField<K extends keyof LlmProviderConfigRecord>(key: K, value: LlmProviderConfigRecord[K]): void {
   settings.updateActiveLlmProviderConfig({ [key]: value } as Partial<LlmProviderConfigRecord>);
@@ -63,6 +79,48 @@ function cancelCreate(): void {
 
 function updateCreateProvider(value: string): void {
   createProvider.value = value as LlmProviderKind;
+}
+
+function openNewModel(): void {
+  newModelName.value = '';
+  newModelOpen.value = true;
+}
+
+function confirmNewModel(modelId: string): void {
+  newModelOpen.value = false;
+  settings.addModelToActiveConfig(modelId, newModelName.value);
+  newModelName.value = '';
+}
+
+function cancelNewModel(): void {
+  newModelOpen.value = false;
+  newModelName.value = '';
+}
+
+function updateNewModelName(event: Event): void {
+  newModelName.value = (event.target as HTMLInputElement).value;
+}
+
+function fetchModelsPlaceholder(): void {
+  settings.status = '获取模型功能暂未接入';
+}
+
+function openClearModelsConfirm(): void {
+  if (!canClearModels.value) return;
+  clearModelsConfirmOpen.value = true;
+}
+
+function confirmClearModels(): void {
+  clearModelsConfirmOpen.value = false;
+  settings.clearModelsFromActiveConfig();
+}
+
+function cancelClearModels(): void {
+  clearModelsConfirmOpen.value = false;
+}
+
+function removeModel(modelId: string): void {
+  settings.removeModelFromActiveConfig(modelId);
 }
 
 function openRename(): void {
@@ -157,10 +215,67 @@ function cancelDelete(): void {
         <input :value="activeConfig.apiKey" type="text" placeholder="sk-..." autocomplete="off" spellcheck="false" @input="updateActiveConfigField('apiKey', inputValue($event))" />
       </label>
 
-      <label class="global-settings-field">
-        <span>模型名称</span>
-        <input :value="activeConfig.model" type="text" placeholder="gpt-5.5" @input="updateActiveConfigField('model', inputValue($event))" />
-      </label>
+      <section class="model-manager global-settings-field-wide" aria-label="模型列表">
+        <header class="model-manager-header">
+          <label>模型列表</label>
+          <div class="model-manager-actions">
+            <button type="button" class="model-manager-button" @click="openNewModel">
+              <IconPlus stroke="2" aria-hidden="true" />
+              <span>新建模型</span>
+            </button>
+            <button type="button" class="model-manager-button" @click="fetchModelsPlaceholder">
+              <IconCloudDown stroke="2" aria-hidden="true" />
+              <span>获取模型</span>
+            </button>
+            <button type="button" class="model-manager-button" :disabled="!canClearModels" @click="openClearModelsConfirm">
+              <IconTrash stroke="2" aria-hidden="true" />
+              <span>清除全部</span>
+            </button>
+          </div>
+        </header>
+
+        <div class="model-list-container">
+          <label class="model-filter-box" aria-label="筛选模型">
+            <IconSearch stroke="2" aria-hidden="true" />
+            <input v-model="modelFilter" type="text" placeholder="筛选模型..." />
+          </label>
+
+          <div class="model-list-shell">
+            <div ref="modelListScroller" class="model-list-scroll">
+              <div class="model-list">
+                <div v-if="!hasModels" class="model-list-empty">暂无模型，请新建模型。</div>
+                <div v-else-if="!filteredModels.length" class="model-list-empty">没有匹配的模型。</div>
+                <div
+                  v-for="model in filteredModels"
+                  :key="model.id"
+                  class="model-item"
+                  :class="{ enabled: model.id === activeConfig.model }"
+                  role="button"
+                  tabindex="0"
+                  @click="settings.selectActiveConfigModel(model.id)"
+                  @keydown.enter.prevent="settings.selectActiveConfigModel(model.id)"
+                  @keydown.space.prevent="settings.selectActiveConfigModel(model.id)"
+                >
+                  <span class="model-status" aria-hidden="true"></span>
+                  <span class="model-info">
+                    <span class="model-id">{{ model.id }}</span>
+                    <span class="model-name">{{ model.name }}</span>
+                  </span>
+                  <button
+                    type="button"
+                    class="model-remove-btn"
+                    aria-label="移除模型"
+                    @click.stop="removeModel(model.id)"
+                    @keydown.enter.stop.prevent="removeModel(model.id)"
+                    @keydown.space.stop.prevent="removeModel(model.id)"
+                  ><IconTrash stroke="2" aria-hidden="true" /></button>
+                </div>
+              </div>
+            </div>
+            <AdvancedScrollbar :scroller="modelListScroller" variant="minimal" />
+          </div>
+        </div>
+      </section>
     </div>
 
     <div v-else class="global-settings-empty">暂无渠道配置，请新建一个配置页。</div>
@@ -197,6 +312,23 @@ function cancelDelete(): void {
     </InputPanel>
 
     <InputPanel
+      :open="newModelOpen"
+      title="新建模型"
+      label="模型 ID"
+      initial-value=""
+      placeholder="输入模型 ID"
+      confirm-label="添加模型"
+      @confirm="confirmNewModel"
+      @cancel="cancelNewModel"
+    >
+      <label class="global-settings-field create-model-name-field">
+        <span>模型名称（可选）</span>
+        <input :value="newModelName" type="text" placeholder="不填则与模型 ID 相同" @input="updateNewModelName" />
+      </label>
+    </InputPanel>
+
+
+    <InputPanel
       :open="renameOpen"
       title="重命名配置页"
       label="配置页名称"
@@ -206,6 +338,17 @@ function cancelDelete(): void {
       @confirm="confirmRename"
       @cancel="cancelRename"
     />
+
+    <ConfirmPanel
+      :open="clearModelsConfirmOpen"
+      title="清除全部模型？"
+      description-html="将清除当前配置页下的所有模型，并取消当前使用模型，此操作<strong>无法撤销</strong>。"
+      confirm-label="清除全部"
+      cancel-label="取消"
+      @confirm="confirmClearModels"
+      @cancel="cancelClearModels"
+    />
+
 
     <ConfirmPanel
       :open="deleteConfirmOpen"

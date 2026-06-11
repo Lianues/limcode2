@@ -1,5 +1,11 @@
 import * as vscode from 'vscode';
-import type { LlmProviderConfigRecord, LlmProviderConfigsRecord, LlmProviderKind, LlmToolCallFormat } from '../../../shared/protocol';
+import type {
+  LlmProviderConfigRecord,
+  LlmProviderConfigsRecord,
+  LlmProviderKind,
+  LlmProviderModelRecord,
+  LlmToolCallFormat
+} from '../../../shared/protocol';
 import { createMessageId } from '../../../shared/protocol';
 import { DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL } from '../llmProvider';
 import type { StoragePaths } from './clientStateStore';
@@ -50,6 +56,7 @@ export function createDefaultLlmProviderConfig(input: { name?: string } = {}): L
     provider: 'openai-compatible',
     baseUrl: DEFAULT_LLM_BASE_URL,
     model: DEFAULT_LLM_MODEL,
+    models: [{ id: DEFAULT_LLM_MODEL, name: DEFAULT_LLM_MODEL }],
     apiKey: '',
     toolCallFormat: 'function-call',
     createdAt: now,
@@ -61,12 +68,15 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
   const fallback = createDefaultLlmProviderConfig();
   const createdAt = finiteTimestamp(input?.createdAt, fallback.createdAt);
   const updatedAt = finiteTimestamp(input?.updatedAt, createdAt);
+  const model = typeof input?.model === 'string' ? input.model.trim() : fallback.model;
+  const models = normalizeProviderModels(input?.models, model);
   return {
     id: stringOrDefault(input?.id, fallback.id),
     name: stringOrDefault(input?.name, fallback.name),
     provider: isKnownProvider(input?.provider) ? input.provider : fallback.provider,
     baseUrl: stringOrDefault(input?.baseUrl, fallback.baseUrl),
-    model: stringOrDefault(input?.model, fallback.model),
+    model,
+    models,
     apiKey: typeof input?.apiKey === 'string' ? input.apiKey.trim() : fallback.apiKey,
     toolCallFormat: isKnownToolCallFormat(input?.toolCallFormat) ? input.toolCallFormat : fallback.toolCallFormat,
     ...(optionalString(input?.proxy) ? { proxy: optionalString(input?.proxy) } : {}),
@@ -117,6 +127,22 @@ function createConfigId(): string {
 
 function sortConfigs(records: LlmProviderConfigRecord[]): LlmProviderConfigRecord[] {
   return [...records].sort((left, right) => left.createdAt - right.createdAt || left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
+}
+
+function normalizeProviderModels(input: LlmProviderModelRecord[] | undefined, activeModel: string): LlmProviderModelRecord[] {
+  const byId = new Map<string, LlmProviderModelRecord>();
+  for (const item of input ?? []) {
+    const id = typeof item?.id === 'string' ? item.id.trim() : '';
+    if (!id) continue;
+    const name = typeof item.name === 'string' && item.name.trim() ? item.name.trim() : id;
+    byId.set(id, { id, name });
+  }
+
+  if (activeModel && !byId.has(activeModel)) {
+    byId.set(activeModel, { id: activeModel, name: activeModel });
+  }
+
+  return [...byId.values()].sort((left, right) => left.id.localeCompare(right.id));
 }
 
 function isKnownProvider(provider: unknown): provider is LlmProviderKind {

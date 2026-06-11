@@ -215,12 +215,18 @@ export interface LlmProviderConfigsRecord {
   configs: LlmProviderConfigRecord[];
 }
 
+export interface LlmProviderModelRecord {
+  id: string;
+  name: string;
+}
+
 export interface LlmProviderConfigRecord {
   id: string;
   name: string;
   provider: LlmProviderKind;
   baseUrl: string;
   model: string;
+  models: LlmProviderModelRecord[];
   apiKey: string;
   toolCallFormat: LlmToolCallFormat;
   proxy?: string;

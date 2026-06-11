@@ -55,16 +55,6 @@ function normalizeProviderConfigForUi(config: LlmProviderConfigRecord): LlmProvi
   return { ...config, proxy: config.proxy ?? '' };
 }
 
-function uniqueConfigName(baseName: string, configs: LlmProviderConfigRecord[]): string {
-  const used = new Set(configs.map((config) => config.name.trim()));
-  if (!used.has(baseName)) return baseName;
-  for (let index = 2; index < 1000; index += 1) {
-    const candidate = `${baseName} ${index}`;
-    if (!used.has(candidate)) return candidate;
-  }
-  return `${baseName} ${Date.now()}`;
-}
-
 /** 全局设置（数据目录 + LLM 渠道配置）表单 store。组件只读 state + 调 action，传输细节收口在此。 */
 export const useGlobalSettingsStore = defineStore('globalSettings', {
   state: (): GlobalSettingsState => ({
@@ -130,7 +120,7 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       this.saveLlm();
     },
     createLlmProviderConfig(name = '新渠道配置', provider: LlmProviderKind = 'openai-compatible'): void {
-      const config = createDefaultProviderConfig(uniqueConfigName(name.trim() || '新渠道配置', this.llmProviderConfigs.configs), provider);
+      const config = createDefaultProviderConfig(name.trim() || '新渠道配置', provider);
       this.llmProviderConfigs.configs.push(config);
       this.llm.activeProviderConfigId = config.id;
       this.saveLlmProviderConfigs();

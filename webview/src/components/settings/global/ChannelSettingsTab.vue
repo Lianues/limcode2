@@ -31,7 +31,7 @@ const activeConfigId = computed({
   set: (configId: string) => settings.selectLlmProviderConfig(configId)
 });
 const configPageOptions = computed<SettingsDropdownOption[]>(() =>
-  settings.llmProviderConfigs.configs.map((config) => ({ value: config.id, label: config.name }))
+  settings.llmProviderConfigs.configs.map((config) => ({ value: config.id, label: config.name, description: providerLabel(config.provider) }))
 );
 const activeProviderLabel = computed(() => providerLabel(activeConfig.value?.provider));
 

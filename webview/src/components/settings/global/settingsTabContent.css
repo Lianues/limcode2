@@ -55,6 +55,11 @@
   opacity: 0.75;
 }
 
+.global-settings-field input[readonly] {
+  color: var(--vscode-descriptionForeground);
+  cursor: default;
+}
+
 .global-settings-api-key-field input {
   font-family: var(--vscode-editor-font-family, monospace);
 }
@@ -77,6 +82,10 @@
   gap: var(--space-1);
   align-items: center;
   padding-bottom: 0;
+}
+
+.create-channel-provider-field {
+  margin-top: 0;
 }
 
 .icon-action {

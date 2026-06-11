@@ -121,6 +121,10 @@ function onKeydown(event: KeyboardEvent): void {
           <p v-if="errorText" :id="errorId" class="input-panel-error">{{ errorText }}</p>
         </div>
 
+        <div v-if="$slots.default" class="input-panel-extra">
+          <slot />
+        </div>
+
         <footer class="input-panel-actions">
           <button type="button" class="input-panel-button secondary" @click="cancel">{{ cancelLabel }}</button>
           <button type="button" class="input-panel-button primary" :disabled="!canConfirm" @click="confirm">{{ confirmLabel }}</button>
@@ -231,6 +235,13 @@ function onKeydown(event: KeyboardEvent): void {
   color: var(--vscode-errorForeground);
   font-size: var(--font-size-sm);
   line-height: 1.35;
+}
+
+.input-panel-extra {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
 }
 
 .input-panel-actions {

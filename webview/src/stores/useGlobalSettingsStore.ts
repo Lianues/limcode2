@@ -5,6 +5,7 @@ import {
   type GlobalSettingsRecord,
   type GlobalSettingsSection,
   type GlobalSettingsSnapshotPayload,
+  type LlmProviderKind,
   type LlmProviderConfigRecord,
   type LlmProviderConfigsRecord,
   type LlmSettingsRecord
@@ -34,12 +35,12 @@ function emptyLlmProviderConfigs(): LlmProviderConfigsRecord {
   return { configs: [] };
 }
 
-function createDefaultProviderConfig(name = '新渠道配置'): LlmProviderConfigRecord {
+function createDefaultProviderConfig(name = '新渠道配置', provider: LlmProviderKind = 'deepseek'): LlmProviderConfigRecord {
   const now = Date.now();
   return {
     id: `llm-provider-config-${createMessageId()}`,
     name,
-    provider: 'deepseek',
+    provider,
     baseUrl: 'https://api.deepseek.com/v1',
     model: 'deepseek-v4-flash',
     apiKey: '',
@@ -129,8 +130,8 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       this.llm.activeProviderConfigId = configId;
       this.saveLlm();
     },
-    createLlmProviderConfig(): void {
-      const config = createDefaultProviderConfig(uniqueConfigName('新渠道配置', this.llmProviderConfigs.configs));
+    createLlmProviderConfig(name = '新渠道配置', provider: LlmProviderKind = 'deepseek'): void {
+      const config = createDefaultProviderConfig(uniqueConfigName(name.trim() || '新渠道配置', this.llmProviderConfigs.configs), provider);
       this.llmProviderConfigs.configs.push(config);
       this.llm.activeProviderConfigId = config.id;
       this.saveLlmProviderConfigs();

@@ -8,6 +8,8 @@ import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import SettingsDropdown, { type SettingsDropdownOption } from './SettingsDropdown.vue';
 
 const settings = useGlobalSettingsStore();
+const createOpen = ref(false);
+const createProvider = ref<LlmProviderKind>('deepseek');
 const renameOpen = ref(false);
 const deleteConfirmOpen = ref(false);
 
@@ -32,6 +34,7 @@ const activeConfigId = computed({
 const configPageOptions = computed<SettingsDropdownOption[]>(() =>
   settings.llmProviderConfigs.configs.map((config) => ({ value: config.id, label: config.name }))
 );
+const activeProviderLabel = computed(() => providerLabel(activeConfig.value?.provider));
 
 function updateActiveConfigField<K extends keyof LlmProviderConfigRecord>(key: K, value: LlmProviderConfigRecord[K]): void {
   settings.updateActiveLlmProviderConfig({ [key]: value } as Partial<LlmProviderConfigRecord>);
@@ -39,6 +42,28 @@ function updateActiveConfigField<K extends keyof LlmProviderConfigRecord>(key: K
 
 function inputValue(event: Event): string {
   return (event.target as HTMLInputElement).value;
+}
+
+function providerLabel(provider: LlmProviderKind | undefined): string {
+  return providerOptions.find((option) => option.value === provider)?.label ?? '未知渠道';
+}
+
+function openCreate(): void {
+  createProvider.value = 'deepseek';
+  createOpen.value = true;
+}
+
+function confirmCreate(name: string): void {
+  createOpen.value = false;
+  settings.createLlmProviderConfig(name, createProvider.value);
+}
+
+function cancelCreate(): void {
+  createOpen.value = false;
+}
+
+function updateCreateProvider(value: string): void {
+  createProvider.value = value as LlmProviderKind;
 }
 
 function openRename(): void {
@@ -95,7 +120,7 @@ function cancelDelete(): void {
       </label>
 
       <div class="channel-config-actions" aria-label="渠道配置页操作">
-        <button type="button" class="icon-action" aria-label="新建配置页" @click="settings.createLlmProviderConfig()">
+        <button type="button" class="icon-action" aria-label="新建配置页" @click="openCreate">
           <IconPlus stroke="2" aria-hidden="true" />
         </button>
         <button type="button" class="icon-action" aria-label="重命名配置页" :disabled="!activeConfig" @click="openRename">
@@ -110,12 +135,7 @@ function cancelDelete(): void {
     <div v-if="activeConfig" class="global-settings-grid">
       <label class="global-settings-field">
         <span>渠道类型</span>
-        <SettingsDropdown
-          :model-value="activeConfig.provider"
-          :options="providerOptions"
-          title="选择渠道类型"
-          @update:model-value="updateActiveConfigField('provider', $event as LlmProviderKind)"
-        />
+        <input :value="activeProviderLabel" type="text" readonly />
       </label>
 
       <label class="global-settings-field">
@@ -160,6 +180,22 @@ function cancelDelete(): void {
         渠道配置页：<code>{{ settings.filePaths.llmProviderConfigs || '等待后端返回 settings/llm-provider-configs/index.json 路径...' }}</code>
       </p>
     </div>
+
+    <InputPanel
+      :open="createOpen"
+      title="新建配置页"
+      label="配置页名称"
+      initial-value="新渠道配置"
+      placeholder="输入配置页名称"
+      confirm-label="新建"
+      @confirm="confirmCreate"
+      @cancel="cancelCreate"
+    >
+      <label class="global-settings-field create-channel-provider-field">
+        <span>渠道类型</span>
+        <SettingsDropdown :model-value="createProvider" :options="providerOptions" title="选择渠道类型" @update:model-value="updateCreateProvider" />
+      </label>
+    </InputPanel>
 
     <InputPanel
       :open="renameOpen"

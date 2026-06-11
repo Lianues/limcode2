@@ -21,12 +21,14 @@ const props = withDefaults(
     showMarkers?: boolean;
     showEdgeButtons?: boolean;
     showMarkerPreview?: boolean;
+    variant?: 'default' | 'minimal';
   }>(),
   {
     markers: () => [],
     showMarkers: false,
     showEdgeButtons: false,
-    showMarkerPreview: false
+    showMarkerPreview: false,
+    variant: 'default'
   }
 );
 
@@ -373,7 +375,14 @@ onBeforeUnmount(() => {
   <div
     ref="scrollbarRootRef"
     class="advanced-scrollbar"
-    :class="{ 'is-hidden': !canScroll, 'is-dragging': dragging, 'is-expanded': panelOpen, 'has-edge-buttons': showEdgeButtons, 'has-markers': showMarkers }"
+    :class="{
+      'is-hidden': !canScroll,
+      'is-dragging': dragging,
+      'is-expanded': panelOpen,
+      'has-edge-buttons': showEdgeButtons,
+      'has-markers': showMarkers,
+      'is-minimal': variant === 'minimal'
+    }"
     aria-hidden="false"
     @pointerenter="openPanel"
     @pointerleave="scheduleClosePanel"
@@ -579,6 +588,43 @@ onBeforeUnmount(() => {
   opacity: 0.58;
   transform: translateY(-1px);
   transition: height 0.12s ease, opacity 0.12s ease, background 0.12s ease;
+}
+
+.advanced-scrollbar.is-minimal {
+  top: 4px;
+  right: 2px;
+  bottom: 4px;
+  width: 8px;
+  opacity: 0.72;
+}
+
+.advanced-scrollbar.is-minimal:hover,
+.advanced-scrollbar.is-minimal.is-dragging {
+  opacity: 1;
+}
+
+.advanced-scrollbar.is-minimal .scroll-track {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.advanced-scrollbar.is-minimal .scroll-thumb {
+  left: 2px;
+  right: 2px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--vscode-foreground) 45%, transparent);
+}
+
+.advanced-scrollbar.is-minimal .scroll-thumb:hover,
+.advanced-scrollbar.is-minimal.is-dragging .scroll-thumb {
+  background: color-mix(in srgb, var(--vscode-foreground) 68%, transparent);
+}
+
+.advanced-scrollbar.is-minimal.is-hidden {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .scroll-marker.user {

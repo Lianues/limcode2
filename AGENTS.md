@@ -296,9 +296,58 @@ function getPaths(): StoragePaths {
 
 避免蓝紫色+大圆角
 
-如果前端需要使用滚动条，请使用
-webview\src\components\navigation\AdvancedScrollbar.vue
-里面的自定义滚动条
+如果前端需要使用滚动条，优先使用自定义滚动条组件，不要直接依赖浏览器默认滚动条：
+
+```text
+webview/src/components/navigation/AdvancedScrollbar.vue
+```
+
+要求：
+
+```text
+1. 普通内容区域需要滚动条时，使用 AdvancedScrollbar。
+2. 下拉面板、浮层、小区域滚动条优先使用 AdvancedScrollbar 的基础样式 variant="minimal"：无可见导轨，仅悬浮显示滑块，不占用布局空间。
+3. 如确实不能使用 AdvancedScrollbar，需说明原因，并保持视觉风格与现有自定义滚动条一致。
+```
+
+
+### 5.6 设置页组件使用标准
+
+设置页内的通用交互组件必须保持一致：
+
+```text
+1. 下拉选择不要直接使用浏览器原生 select；优先复用 webview/src/components/settings/global/SettingsDropdown.vue。该组件基于 project-dropdown + lc-dropdown-panel + IconCaretUp。
+2. 下拉按钮右侧使用 IconCaretUp，并用旋转动画表达展开 / 收起。
+3. 下拉面板内容可能超过高度时，必须复用 webview/src/components/navigation/AdvancedScrollbar.vue；最基础样式使用 variant="minimal"，无可见导轨，仅显示滑块。SettingsDropdown 已内置该规则，并支持 maxHeight / height 以适配最大高度或固定高度场景。
+4. 需要删除、危险操作或二次确认时，必须复用 webview/src/components/ui/ConfirmPanel.vue，不要临时写新的确认弹窗。
+5. 需要输入名称、重命名等简单文本输入弹窗时，优先复用 webview/src/components/ui/InputPanel.vue。
+6. 设置页签内容较多时按页签拆分 Vue 组件，主面板只负责布局与页签切换。
+```
+
+### 5.7 配置项数据对接标准
+
+新增任何设置项 / 配置页 / 可复用配置记录前，必须先阅读：
+
+```text
+docs/global-settings-data-integration.md
+```
+
+开发时必须先区分两个 scope：
+
+```text
+1. 配置管理 scope：这个配置入口属于 global / conversation / agent 哪一级设置。
+2. 配置数据 scope：这个配置是简单 section，还是该 settings scope 下的可复用 record 集合，还是独立 ECS 领域对象。
+```
+
+要求：
+
+```text
+1. 如果入口属于全局设置，优先新增 GLOBAL_SETTINGS_SECTIONS section，并复用 settings.global.get/update/snapshot。
+2. 不要为了全局设置页里的 CRUD 新建独立 BridgeMessageType / Bridge / 顶层 storage root。
+3. 如果全局设置下有多个可复用配置页，每个配置仍可作为独立 record 存在，但应放在 settingsRootUri 对应 section 下，通过 index + records 管理。
+4. 当前激活 id / 默认选择这类状态应单独作为 settings section 保存，不要塞进每个配置 record。
+5. 如果某配置未来要被 Agent / Mode / Conversation 复用，应通过 Link/关系数据引用配置 id，不要把配置对象嵌入主体对象。
+```
 
 ## 6. 默认初始化准则
 
@@ -332,6 +381,7 @@ webview\src\components\navigation\AdvancedScrollbar.vue
 6. 存储文件是否把多个独立对象混在一个文件或目录里？
 7. 是否为了未发布的旧格式写了兼容/迁移代码？如果没有发布，应该删除。
 8. 数据文件路径是否通过 getPaths() 获取，而不是直接使用 extension globalStorage/globalState/globalStatus？
+9. 新增配置项前是否已阅读 docs/global-settings-data-integration.md，并区分配置管理 scope 与配置数据 scope？
 ```
 
 如果发现耦合，优先拆成：

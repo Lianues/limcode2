@@ -1,0 +1,268 @@
+<script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { IconCaretUp } from '@tabler/icons-vue';
+import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
+
+export interface SettingsDropdownOption {
+  value: string;
+  label: string;
+  description?: string;
+  disabled?: boolean;
+}
+
+const props = withDefaults(
+  defineProps<{
+    modelValue: string;
+    options: SettingsDropdownOption[];
+    placeholder?: string;
+    title?: string;
+    disabled?: boolean;
+    emptyText?: string;
+    maxHeight?: number | string;
+    height?: number | string;
+  }>(),
+  {
+    placeholder: '请选择',
+    title: '',
+    disabled: false,
+    emptyText: '暂无可选项',
+    maxHeight: 260,
+    height: ''
+  }
+);
+
+const emit = defineEmits<{
+  (event: 'update:modelValue', value: string): void;
+  (event: 'change', option: SettingsDropdownOption): void;
+}>();
+
+const root = ref<HTMLElement | null>(null);
+const scroller = ref<HTMLElement | null>(null);
+const open = ref(false);
+
+const selectedOption = computed(() => props.options.find((option) => option.value === props.modelValue));
+const displayLabel = computed(() => selectedOption.value?.label ?? props.placeholder);
+const panelStyle = computed<Record<string, string>>(() => ({
+  '--settings-dropdown-panel-max-height': cssLength(props.maxHeight),
+  ...(props.height === '' || props.height === undefined ? {} : { '--settings-dropdown-panel-height': cssLength(props.height) })
+}));
+
+onMounted(() => {
+  document.addEventListener('click', onDocumentClick);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', onDocumentClick);
+});
+
+function toggle(): void {
+  if (props.disabled) return;
+  open.value = !open.value;
+}
+
+function select(option: SettingsDropdownOption): void {
+  if (option.disabled) return;
+  emit('update:modelValue', option.value);
+  emit('change', option);
+  open.value = false;
+}
+
+function onDocumentClick(event: MouseEvent): void {
+  const target = event.target;
+  if (!(target instanceof Node)) return;
+  if (!root.value?.contains(target)) open.value = false;
+}
+
+function compactLabel(label: string): string {
+  return label.length > 64 ? `${label.slice(0, 61)}...` : label;
+}
+
+function cssLength(value: number | string): string {
+  if (typeof value === 'number') return `${value}px`;
+  return value || '260px';
+}
+</script>
+
+<template>
+  <div ref="root" class="settings-dropdown">
+    <button
+      type="button"
+      class="settings-dropdown-button"
+      :class="{ 'is-placeholder': !selectedOption }"
+      :disabled="disabled"
+      :aria-expanded="open"
+      aria-haspopup="listbox"
+      @click.stop="toggle"
+    >
+      <span class="settings-dropdown-label">{{ displayLabel }}</span>
+      <IconCaretUp class="settings-dropdown-caret" :class="{ 'is-open': open }" stroke="2" aria-hidden="true" />
+    </button>
+
+    <Transition name="lc-dropdown">
+      <section v-if="open" class="project-dropdown settings-dropdown-panel lc-dropdown-panel" :style="panelStyle" role="listbox" @click.stop>
+        <div ref="scroller" class="settings-dropdown-scroll">
+          <div v-if="title" class="project-dropdown-title">{{ title }}</div>
+          <div v-if="!options.length" class="project-dropdown-empty">{{ emptyText }}</div>
+          <button
+            v-for="option in options"
+            :key="option.value"
+            type="button"
+            class="project-option"
+            :class="{ 'is-active': option.value === modelValue }"
+            :disabled="option.disabled"
+            role="option"
+            :aria-selected="option.value === modelValue"
+            @click="select(option)"
+          >
+            <span class="project-option-name">{{ compactLabel(option.label) }}</span>
+            <span v-if="option.description" class="project-option-path">{{ option.description }}</span>
+          </button>
+        </div>
+        <AdvancedScrollbar :scroller="scroller" variant="minimal" />
+      </section>
+    </Transition>
+  </div>
+</template>
+
+<style scoped>
+.settings-dropdown {
+  position: relative;
+  min-width: 0;
+  width: 100%;
+}
+
+button.settings-dropdown-button {
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  padding: var(--space-2);
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  font: inherit;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+button.settings-dropdown-button:hover:not(:disabled),
+button.settings-dropdown-button[aria-expanded='true'],
+button.settings-dropdown-button:focus-visible,
+button.settings-dropdown-button:active {
+  border-color: var(--vscode-panel-border, transparent);
+  background: color-mix(in srgb, var(--vscode-editor-background) 86%, var(--vscode-foreground) 14%);
+  outline: none;
+}
+
+.settings-dropdown-button.is-placeholder {
+  color: var(--vscode-descriptionForeground);
+}
+
+.settings-dropdown-label {
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.settings-dropdown-caret {
+  width: 16px;
+  height: 16px;
+  justify-self: end;
+  color: var(--vscode-foreground);
+  transform: rotate(180deg);
+  transition: transform 0.16s ease;
+}
+
+.settings-dropdown-caret.is-open {
+  transform: rotate(0deg);
+}
+
+.settings-dropdown-panel {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+  width: 100%;
+  max-height: var(--settings-dropdown-panel-max-height, 260px);
+  height: var(--settings-dropdown-panel-height, auto);
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: var(--radius-sm);
+  background: var(--vscode-editor-background);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+}
+
+.settings-dropdown-scroll {
+  max-height: var(--settings-dropdown-panel-max-height, 260px);
+  height: var(--settings-dropdown-panel-height, auto);
+  overflow-y: auto;
+  padding: var(--space-2);
+  scrollbar-width: none;
+}
+
+.settings-dropdown-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.settings-dropdown-panel .project-dropdown-title {
+  margin: 0 0 var(--space-1);
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+}
+
+.settings-dropdown-panel .project-dropdown-empty {
+  padding: var(--space-2) 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-sm);
+}
+
+.settings-dropdown-panel .project-option {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  min-height: 0;
+  padding: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--vscode-foreground);
+  background: transparent;
+  text-align: left;
+}
+
+.settings-dropdown-panel .project-option:hover:not(:disabled),
+.settings-dropdown-panel .project-option.is-active {
+  background: var(--vscode-list-hoverBackground, transparent);
+  border-color: var(--vscode-panel-border, transparent);
+}
+
+.settings-dropdown-panel .project-option:disabled {
+  opacity: 0.5;
+}
+
+.settings-dropdown-panel .project-option-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.settings-dropdown-panel .project-option-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+</style>

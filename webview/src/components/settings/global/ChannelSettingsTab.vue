@@ -1,28 +1,27 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { IconCaretUp, IconPencil, IconPlus, IconTrash } from '@tabler/icons-vue';
-import type { LlmProviderConfigRecord, LlmProviderKind } from '@shared/protocol';
+import { computed, ref } from 'vue';
+import { IconPencil, IconPlus, IconTrash } from '@tabler/icons-vue';
+import type { LlmProviderConfigRecord, LlmProviderKind, LlmToolCallFormat } from '@shared/protocol';
 import ConfirmPanel from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
+import SettingsDropdown, { type SettingsDropdownOption } from './SettingsDropdown.vue';
 
 const settings = useGlobalSettingsStore();
 const renameOpen = ref(false);
 const deleteConfirmOpen = ref(false);
-const configDropdownRoot = ref<HTMLElement | null>(null);
-const configDropdownOpen = ref(false);
 
-const providerOptions: Array<{ value: LlmProviderKind; label: string }> = [
+const providerOptions: SettingsDropdownOption[] = [
   { value: 'deepseek', label: 'DeepSeek' },
-  { value: 'openai-compatible', label: 'OAI 兼容' },
-  { value: 'openai-responses', label: 'OAI Response' },
+  { value: 'openai-compatible', label: 'OpenAI Compatible' },
+  { value: 'openai-responses', label: 'OpenAI Responses' },
   { value: 'claude', label: 'Claude' },
   { value: 'gemini', label: 'Gemini' }
 ];
 
-const toolCallFormatOptions = [
+const toolCallFormatOptions: SettingsDropdownOption[] = [
   { value: 'function-call', label: 'Function Call' }
-] as const;
+];
 
 const activeConfig = computed(() => settings.activeLlmProviderConfig);
 const canDeleteActiveConfig = computed(() => !!activeConfig.value && settings.llmProviderConfigs.configs.length > 1);
@@ -30,16 +29,9 @@ const activeConfigId = computed({
   get: () => settings.llm.activeProviderConfigId || activeConfig.value?.id || '',
   set: (configId: string) => settings.selectLlmProviderConfig(configId)
 });
-
-onMounted(() => {
-  document.addEventListener('click', onDocumentClick);
-});
-
-onBeforeUnmount(() => {
-  document.removeEventListener('click', onDocumentClick);
-});
-
-const activeConfigName = computed(() => activeConfig.value?.name ?? '选择配置页');
+const configPageOptions = computed<SettingsDropdownOption[]>(() =>
+  settings.llmProviderConfigs.configs.map((config) => ({ value: config.id, label: config.name }))
+);
 
 function updateActiveConfigField<K extends keyof LlmProviderConfigRecord>(key: K, value: LlmProviderConfigRecord[K]): void {
   settings.updateActiveLlmProviderConfig({ [key]: value } as Partial<LlmProviderConfigRecord>);
@@ -47,29 +39,6 @@ function updateActiveConfigField<K extends keyof LlmProviderConfigRecord>(key: K
 
 function inputValue(event: Event): string {
   return (event.target as HTMLInputElement).value;
-}
-
-function selectValue(event: Event): string {
-  return (event.target as HTMLSelectElement).value;
-}
-
-function toggleConfigDropdown(): void {
-  configDropdownOpen.value = !configDropdownOpen.value;
-}
-
-function selectConfigPage(configId: string): void {
-  activeConfigId.value = configId;
-  configDropdownOpen.value = false;
-}
-
-function onDocumentClick(event: MouseEvent): void {
-  const target = event.target;
-  if (!(target instanceof Node)) return;
-  if (!configDropdownRoot.value?.contains(target)) configDropdownOpen.value = false;
-}
-
-function compactConfigName(name: string): string {
-  return name.length > 64 ? `${name.slice(0, 61)}...` : name;
 }
 
 function openRename(): void {
@@ -115,37 +84,15 @@ function cancelDelete(): void {
     </header>
 
     <div class="channel-config-picker">
-      <div ref="configDropdownRoot" class="global-settings-field channel-config-select">
+      <label class="global-settings-field channel-config-select">
         <span>配置页</span>
-        <button
-          type="button"
-          class="channel-config-dropdown-button"
-          :aria-expanded="configDropdownOpen"
-          aria-haspopup="listbox"
-          @click.stop="toggleConfigDropdown"
-        >
-          <span class="channel-config-dropdown-label">{{ activeConfigName }}</span>
-          <IconCaretUp class="channel-config-dropdown-caret" :class="{ 'is-open': configDropdownOpen }" stroke="2" aria-hidden="true" />
-        </button>
-        <Transition name="lc-dropdown">
-          <section v-if="configDropdownOpen" class="project-dropdown channel-config-dropdown lc-dropdown-panel" role="listbox" @click.stop>
-            <div class="project-dropdown-title">切换配置页</div>
-            <div v-if="!settings.llmProviderConfigs.configs.length" class="project-dropdown-empty">暂无渠道配置。</div>
-            <button
-              v-for="config in settings.llmProviderConfigs.configs"
-              :key="config.id"
-              type="button"
-              class="project-option"
-              :class="{ 'is-active': config.id === activeConfigId }"
-              role="option"
-              :aria-selected="config.id === activeConfigId"
-              @click="selectConfigPage(config.id)"
-            >
-              <span class="project-option-name">{{ compactConfigName(config.name) }}</span>
-            </button>
-          </section>
-        </Transition>
-      </div>
+        <SettingsDropdown
+          v-model="activeConfigId"
+          :options="configPageOptions"
+          title="切换配置页"
+          empty-text="暂无渠道配置。"
+        />
+      </label>
 
       <div class="channel-config-actions" aria-label="渠道配置页操作">
         <button type="button" class="icon-action" aria-label="新建配置页" @click="settings.createLlmProviderConfig()">
@@ -163,16 +110,22 @@ function cancelDelete(): void {
     <div v-if="activeConfig" class="global-settings-grid">
       <label class="global-settings-field">
         <span>渠道类型</span>
-        <select :value="activeConfig.provider" @change="updateActiveConfigField('provider', selectValue($event) as LlmProviderKind)">
-          <option v-for="option in providerOptions" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
+        <SettingsDropdown
+          :model-value="activeConfig.provider"
+          :options="providerOptions"
+          title="选择渠道类型"
+          @update:model-value="updateActiveConfigField('provider', $event as LlmProviderKind)"
+        />
       </label>
 
       <label class="global-settings-field">
-        <span>模型名称</span>
-        <input :value="activeConfig.model" type="text" placeholder="deepseek-v4-flash" @input="updateActiveConfigField('model', inputValue($event))" />
+        <span>工具调用格式</span>
+        <SettingsDropdown
+          :model-value="activeConfig.toolCallFormat"
+          :options="toolCallFormatOptions"
+          title="选择工具调用格式"
+          @update:model-value="updateActiveConfigField('toolCallFormat', $event as LlmToolCallFormat)"
+        />
       </label>
 
       <label class="global-settings-field global-settings-field-wide">
@@ -186,12 +139,8 @@ function cancelDelete(): void {
       </label>
 
       <label class="global-settings-field">
-        <span>工具调用格式</span>
-        <select :value="activeConfig.toolCallFormat" disabled>
-          <option v-for="option in toolCallFormatOptions" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
+        <span>模型名称</span>
+        <input :value="activeConfig.model" type="text" placeholder="deepseek-v4-flash" @input="updateActiveConfigField('model', inputValue($event))" />
       </label>
     </div>
 

@@ -193,7 +193,7 @@ export const TOOL_CALL_STATUSES = [
 export type ToolCallStatus = typeof TOOL_CALL_STATUSES[number];
 export const TERMINAL_TOOL_CALL_STATUSES: ReadonlySet<ToolCallStatus> = new Set(['success', 'warning', 'error']);
 
-export type LlmProviderKind = 'deepseek' | 'openai-compatible' | 'openai-responses' | 'claude' | 'gemini';
+export type LlmProviderKind = 'openai-compatible' | 'openai-responses' | 'claude' | 'gemini';
 export type LlmToolCallFormat = 'function-call';
 
 export interface LlmUsageMetadataRecord {
@@ -224,7 +224,6 @@ export interface LlmProviderConfigRecord {
   apiKey: string;
   toolCallFormat: LlmToolCallFormat;
   proxy?: string;
-  temperature?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -278,7 +277,6 @@ export interface ModelProfileRecord {
   name: string;
   provider: LlmProviderKind;
   model: string;
-  temperature?: number;
 }
 
 export type AgentModeRole = 'active' | 'available' | 'default';

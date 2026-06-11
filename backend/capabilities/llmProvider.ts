@@ -17,8 +17,8 @@ import type {
   MessageContent
 } from '../../shared/protocol';
 
-export const DEFAULT_LLM_BASE_URL = 'https://api.deepseek.com/v1';
-export const DEFAULT_LLM_MODEL = 'deepseek-v4-flash';
+export const DEFAULT_LLM_BASE_URL = 'https://api.openai.com/v1';
+export const DEFAULT_LLM_MODEL = 'gpt-5.5';
 
 type MaybeProvider<T> = T | undefined | (() => T | undefined | Promise<T | undefined>);
 
@@ -117,7 +117,7 @@ export async function startLlmProvider(
     let firstStreamChunkAt: number | undefined;
     let lastStreamChunkAt: number | undefined;
     let activeThoughtBlock: ActiveThoughtBlock | undefined;
-    for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(toUnifiedRequest(request, request.model?.temperature ?? settings.temperature), {
+    for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(toUnifiedRequest(request), {
       inputFormat: 'unified',
       outputFormat: 'unified',
       signal
@@ -169,7 +169,7 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
     throw new Error('当前 unified-llm-provider 版本不支持 provider.dryRun，请更新依赖。');
   }
 
-  const result = await dryRun.call(provider, toUnifiedRequest(request, request.model?.temperature ?? settings.temperature), {
+  const result = await dryRun.call(provider, toUnifiedRequest(request), {
     inputFormat: 'unified',
     outputFormat: 'unified',
     stream: true,
@@ -204,7 +204,6 @@ function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmPr
     model: settings?.model?.trim() || DEFAULT_LLM_MODEL,
     apiKey: settings?.apiKey?.trim() ?? '',
     toolCallFormat: normalizeToolCallFormat(settings?.toolCallFormat),
-    temperature: settings?.temperature,
     ...(normalizeOptionalString(settings?.proxy) ? { proxy: normalizeOptionalString(settings?.proxy) } : {}),
     createdAt: settings?.createdAt ?? 0,
     updatedAt: settings?.updatedAt ?? 0
@@ -212,21 +211,20 @@ function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmPr
 }
 
 function normalizeProvider(provider: LlmProviderKind | undefined): LlmProviderKind {
-  return provider === 'gemini' || provider === 'claude' || provider === 'openai-compatible' || provider === 'openai-responses' || provider === 'deepseek'
+  return provider === 'gemini' || provider === 'claude' || provider === 'openai-compatible' || provider === 'openai-responses'
     ? provider
-    : 'deepseek';
+    : 'openai-compatible';
 }
 
 function normalizeToolCallFormat(format: LlmToolCallFormat | undefined): LlmToolCallFormat {
   return format === 'function-call' ? format : 'function-call';
 }
 
-function toUnifiedRequest(request: LlmStartRequest, temperature?: number): UnifiedLLMRequest {
+function toUnifiedRequest(request: LlmStartRequest): UnifiedLLMRequest {
   return {
     contents: request.contents.map(toUnifiedContent),
     ...(request.systemInstruction ? { systemInstruction: { parts: request.systemInstruction.parts.map(toUnifiedPart) } } : {}),
-    ...(request.tools.length === 0 ? {} : { tools: [{ functionDeclarations: request.tools.map(toUnifiedFunctionDeclaration) }] }),
-    ...(temperature === undefined ? {} : { generationConfig: { temperature } })
+    ...(request.tools.length === 0 ? {} : { tools: [{ functionDeclarations: request.tools.map(toUnifiedFunctionDeclaration) }] })
   };
 }
 

@@ -200,8 +200,7 @@ function spawnModeFromBlueprint(
     id: modelProfileId,
     name: input.blueprint.model.name ?? `${input.blueprint.name} Model`,
     provider: input.blueprint.model.provider,
-    model: input.blueprint.model.model,
-    temperature: input.blueprint.model.temperature
+    model: input.blueprint.model.model
   });
   const modelProfileLink = cmd.spawn();
   cmd.add(modelProfileLink, ModeModelProfileLink, {

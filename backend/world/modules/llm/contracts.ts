@@ -5,7 +5,6 @@ export type { LlmProviderKind };
 export interface LlmModelSettings {
   provider: LlmProviderKind;
   model: string;
-  temperature?: number;
 }
 
 export interface ToolSchema {

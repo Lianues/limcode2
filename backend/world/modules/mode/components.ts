@@ -35,7 +35,6 @@ export interface ModelProfileData {
   name: string;
   provider: LlmProviderKind;
   model: string;
-  temperature?: number;
 }
 export const ModelProfile = defineComponent<ModelProfileData>('ModelProfile');
 

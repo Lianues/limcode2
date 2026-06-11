@@ -15,7 +15,6 @@ export interface ModeModelProfileBlueprint {
   name?: string;
   provider: LlmProviderKind;
   model: string;
-  temperature?: number;
 }
 
 export interface ModeToolPolicyBlueprint {
@@ -85,7 +84,7 @@ export type AgentBlueprintRegistry = Record<string, AgentBlueprint>;
 export const AgentBlueprintsKey = defineResource<AgentBlueprintRegistry>('AgentBlueprints');
 
 const DEFAULT_SYSTEM_PROMPT = 'You are LimCode, a concise and helpful AI coding assistant running inside VS Code. Reply in the user\'s language unless asked otherwise.';
-const DEFAULT_MODEL = 'deepseek-v4-flash';
+const DEFAULT_MODEL = 'gpt-5.5';
 const DEFAULT_TOOLS = ['read_file', 'shell', 'bash', 'run_agent'];
 const READONLY_TOOLS = ['read_file', 'shell', 'bash'];
 const DEFAULT_CONTEXT_POLICY: RunContextPolicyBlueprint = { historyMode: 'full' };
@@ -107,7 +106,7 @@ export function createDefaultAgentBlueprints(): AgentBlueprintRegistry {
           name: 'Default',
           description: '默认开发助手模式',
           systemPrompt: DEFAULT_SYSTEM_PROMPT,
-          model: { name: 'Default Model', provider: 'deepseek', model: DEFAULT_MODEL, temperature: 0.2 },
+          model: { name: 'Default Model', provider: 'openai-compatible', model: DEFAULT_MODEL },
           toolPolicy: { name: 'Default Tools', allowedTools: DEFAULT_TOOLS },
           approvalPolicy: { name: 'Default Approval', mode: 'never', allowInteractiveApproval: true }
         }
@@ -127,7 +126,7 @@ export function createDefaultAgentBlueprints(): AgentBlueprintRegistry {
           name: 'Review',
           description: '代码审查模式',
           systemPrompt: 'Review code and point out risks, bugs, and maintainability issues. Do not modify files unless explicitly requested.',
-          model: { name: 'Reviewer Model', provider: 'deepseek', model: DEFAULT_MODEL, temperature: 0.2 },
+          model: { name: 'Reviewer Model', provider: 'openai-compatible', model: DEFAULT_MODEL },
           toolPolicy: { name: 'Reviewer Tools', allowedTools: READONLY_TOOLS },
           approvalPolicy: { name: 'Reviewer Approval', mode: 'never', allowInteractiveApproval: false }
         }
@@ -147,7 +146,7 @@ export function createDefaultAgentBlueprints(): AgentBlueprintRegistry {
           name: 'General Purpose',
           description: '可执行多步工具操作的通用子任务执行者',
           systemPrompt: 'You are an autonomous agent running in the same LimCode execution system. Complete the delegated task independently, use tools when useful, and return a concise result with important findings. You are not lower priority than any other agent; you are a peer execution subject.',
-          model: { name: 'General Purpose Model', provider: 'deepseek', model: DEFAULT_MODEL, temperature: 0.2 },
+          model: { name: 'General Purpose Model', provider: 'openai-compatible', model: DEFAULT_MODEL },
           toolPolicy: { name: 'General Purpose Tools', allowedTools: DEFAULT_TOOLS },
           approvalPolicy: { name: 'General Purpose Approval', mode: 'never', allowInteractiveApproval: false }
         }
@@ -167,7 +166,7 @@ export function createDefaultAgentBlueprints(): AgentBlueprintRegistry {
           name: 'Explore',
           description: '只读搜索、阅读和分析代码的执行者',
           systemPrompt: 'You are a read-only exploration agent. Inspect code, run safe read-only commands, and report findings. Do not modify files.',
-          model: { name: 'Explore Model', provider: 'deepseek', model: DEFAULT_MODEL, temperature: 0.1 },
+          model: { name: 'Explore Model', provider: 'openai-compatible', model: DEFAULT_MODEL },
           toolPolicy: { name: 'Explore Tools', allowedTools: READONLY_TOOLS },
           approvalPolicy: { name: 'Explore Approval', mode: 'never', allowInteractiveApproval: false }
         }

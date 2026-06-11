@@ -9,12 +9,11 @@ import SettingsDropdown, { type SettingsDropdownOption } from './SettingsDropdow
 
 const settings = useGlobalSettingsStore();
 const createOpen = ref(false);
-const createProvider = ref<LlmProviderKind>('deepseek');
+const createProvider = ref<LlmProviderKind>('openai-compatible');
 const renameOpen = ref(false);
 const deleteConfirmOpen = ref(false);
 
 const providerOptions: SettingsDropdownOption[] = [
-  { value: 'deepseek', label: 'DeepSeek' },
   { value: 'openai-compatible', label: 'OpenAI Compatible' },
   { value: 'openai-responses', label: 'OpenAI Responses' },
   { value: 'claude', label: 'Claude' },
@@ -49,7 +48,7 @@ function providerLabel(provider: LlmProviderKind | undefined): string {
 }
 
 function openCreate(): void {
-  createProvider.value = 'deepseek';
+  createProvider.value = 'openai-compatible';
   createOpen.value = true;
 }
 
@@ -150,7 +149,7 @@ function cancelDelete(): void {
 
       <label class="global-settings-field global-settings-field-wide">
         <span>Base URL</span>
-        <input :value="activeConfig.baseUrl" type="text" placeholder="https://api.deepseek.com/v1" @input="updateActiveConfigField('baseUrl', inputValue($event))" />
+        <input :value="activeConfig.baseUrl" type="text" placeholder="https://api.openai.com/v1" @input="updateActiveConfigField('baseUrl', inputValue($event))" />
       </label>
 
       <label class="global-settings-field global-settings-api-key-field global-settings-field-wide">
@@ -160,7 +159,7 @@ function cancelDelete(): void {
 
       <label class="global-settings-field">
         <span>模型名称</span>
-        <input :value="activeConfig.model" type="text" placeholder="deepseek-v4-flash" @input="updateActiveConfigField('model', inputValue($event))" />
+        <input :value="activeConfig.model" type="text" placeholder="gpt-5.5" @input="updateActiveConfigField('model', inputValue($event))" />
       </label>
     </div>
 

@@ -47,12 +47,11 @@ export function createDefaultLlmProviderConfig(input: { name?: string } = {}): L
   return {
     id: createConfigId(),
     name: input.name?.trim() || DEFAULT_CONFIG_NAME,
-    provider: 'deepseek',
+    provider: 'openai-compatible',
     baseUrl: DEFAULT_LLM_BASE_URL,
     model: DEFAULT_LLM_MODEL,
     apiKey: '',
     toolCallFormat: 'function-call',
-    temperature: 0.2,
     createdAt: now,
     updatedAt: now
   };
@@ -62,7 +61,6 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
   const fallback = createDefaultLlmProviderConfig();
   const createdAt = finiteTimestamp(input?.createdAt, fallback.createdAt);
   const updatedAt = finiteTimestamp(input?.updatedAt, createdAt);
-  const temperature = Number(input?.temperature ?? fallback.temperature);
   return {
     id: stringOrDefault(input?.id, fallback.id),
     name: stringOrDefault(input?.name, fallback.name),
@@ -72,7 +70,6 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
     apiKey: typeof input?.apiKey === 'string' ? input.apiKey.trim() : fallback.apiKey,
     toolCallFormat: isKnownToolCallFormat(input?.toolCallFormat) ? input.toolCallFormat : fallback.toolCallFormat,
     ...(optionalString(input?.proxy) ? { proxy: optionalString(input?.proxy) } : {}),
-    temperature: Number.isFinite(temperature) ? temperature : fallback.temperature,
     createdAt,
     updatedAt
   };
@@ -123,7 +120,7 @@ function sortConfigs(records: LlmProviderConfigRecord[]): LlmProviderConfigRecor
 }
 
 function isKnownProvider(provider: unknown): provider is LlmProviderKind {
-  return provider === 'deepseek' || provider === 'openai-compatible' || provider === 'openai-responses' || provider === 'claude' || provider === 'gemini';
+  return provider === 'openai-compatible' || provider === 'openai-responses' || provider === 'claude' || provider === 'gemini';
 }
 
 function isKnownToolCallFormat(format: unknown): format is LlmToolCallFormat {

@@ -120,7 +120,7 @@ export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmSt
   const modelProfile = activeModelProfileForRun(world, input.run);
   const model = modelProfile === undefined
     ? undefined
-    : { provider: modelProfile.provider, model: modelProfile.model, temperature: modelProfile.temperature } satisfies LlmModelSettings;
+    : { provider: modelProfile.provider, model: modelProfile.model } satisfies LlmModelSettings;
   const toolPolicy = activeToolPolicyForRun(world, input.run);
   const allTools = input.tools ?? world.tryGetResource(ToolSchemasKey) ?? [];
   const tools = toolPolicy

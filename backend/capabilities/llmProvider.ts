@@ -10,6 +10,7 @@ import {
 } from '../../shared/protocol';
 import type {
   ContentPart,
+  LlmGenerationConfigRecord,
   LlmProviderConfigRecord,
   LlmProviderKind,
   LlmProviderModelRecord,
@@ -115,6 +116,7 @@ export async function startLlmProvider(
       apiKey: settings.apiKey,
       baseUrl: settings.baseUrl,
       headers: await resolveMaybe(options.headers),
+      ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
       ...(proxy ? { proxy, fetch: proxyFetch } : {})
     }, registry.llmProviders);
 
@@ -122,7 +124,7 @@ export async function startLlmProvider(
     let firstStreamChunkAt: number | undefined;
     let lastStreamChunkAt: number | undefined;
     let activeThoughtBlock: ActiveThoughtBlock | undefined;
-    for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(toUnifiedRequest(request), {
+    for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(toUnifiedRequest(request, settings.generationConfig), {
       inputFormat: 'unified',
       outputFormat: 'unified',
       signal
@@ -166,6 +168,7 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
     apiKey: settings.apiKey,
     baseUrl: settings.baseUrl,
     headers: await resolveMaybe(options.headers),
+    ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
     ...(proxy ? { proxy } : {})
   }, registry.llmProviders);
 
@@ -174,7 +177,7 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
     throw new Error('当前 unified-llm-provider 版本不支持 provider.dryRun，请更新依赖。');
   }
 
-  const result = await dryRun.call(provider, toUnifiedRequest(request), {
+  const result = await dryRun.call(provider, toUnifiedRequest(request, settings.generationConfig), {
     inputFormat: 'unified',
     outputFormat: 'unified',
     stream: true,
@@ -227,6 +230,9 @@ function modelCatalogEntryToRecord(model: UnifiedModelCatalogEntry): LlmProvider
 }
 
 function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmProviderConfigRecord {
+  const proxy = normalizeOptionalString(settings?.proxy);
+  const generationConfig = settings?.generationConfig;
+  const requestBody = settings?.requestBody;
   return {
     id: settings?.id?.trim() || 'llm-provider-config-default',
     name: settings?.name?.trim() || '默认渠道',
@@ -236,14 +242,16 @@ function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmPr
     models: settings?.models ?? [],
     apiKey: settings?.apiKey?.trim() ?? '',
     toolCallFormat: normalizeToolCallFormat(settings?.toolCallFormat),
-    ...(normalizeOptionalString(settings?.proxy) ? { proxy: normalizeOptionalString(settings?.proxy) } : {}),
+    ...(proxy ? { proxy } : {}),
+    ...(nonEmptyRecord(generationConfig) ? { generationConfig } : {}),
+    ...(nonEmptyRecord(requestBody) ? { requestBody } : {}),
     createdAt: settings?.createdAt ?? 0,
     updatedAt: settings?.updatedAt ?? 0
   };
 }
 
 function normalizeProvider(provider: LlmProviderKind | undefined): LlmProviderKind {
-  return provider === 'gemini' || provider === 'claude' || provider === 'openai-compatible' || provider === 'openai-responses'
+  return provider === 'gemini' || provider === 'claude' || provider === 'openai-compatible' || provider === 'openai-responses' || provider === 'deepseek'
     ? provider
     : 'openai-compatible';
 }
@@ -252,11 +260,16 @@ function normalizeToolCallFormat(format: LlmToolCallFormat | undefined): LlmTool
   return format === 'function-call' ? format : 'function-call';
 }
 
-function toUnifiedRequest(request: LlmStartRequest): UnifiedLLMRequest {
+function nonEmptyRecord(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && Object.keys(value).length > 0;
+}
+
+function toUnifiedRequest(request: LlmStartRequest, generationConfig?: LlmGenerationConfigRecord): UnifiedLLMRequest {
   return {
     contents: request.contents.map(toUnifiedContent),
     ...(request.systemInstruction ? { systemInstruction: { parts: request.systemInstruction.parts.map(toUnifiedPart) } } : {}),
-    ...(request.tools.length === 0 ? {} : { tools: [{ functionDeclarations: request.tools.map(toUnifiedFunctionDeclaration) }] })
+    ...(request.tools.length === 0 ? {} : { tools: [{ functionDeclarations: request.tools.map(toUnifiedFunctionDeclaration) }] }),
+    ...(nonEmptyRecord(generationConfig) ? { generationConfig } : {})
   };
 }
 

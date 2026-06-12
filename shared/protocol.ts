@@ -195,8 +195,33 @@ export const TOOL_CALL_STATUSES = [
 export type ToolCallStatus = typeof TOOL_CALL_STATUSES[number];
 export const TERMINAL_TOOL_CALL_STATUSES: ReadonlySet<ToolCallStatus> = new Set(['success', 'warning', 'error']);
 
-export type LlmProviderKind = 'openai-compatible' | 'openai-responses' | 'claude' | 'gemini';
+export type LlmProviderKind = 'openai-compatible' | 'openai-responses' | 'claude' | 'gemini' | 'deepseek';
 export type LlmToolCallFormat = 'function-call';
+export type LlmThinkingLevel = 'not-set' | 'non-set' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+export interface LlmThinkingConfigRecord {
+  includeThoughts?: boolean;
+  thinkingBudget?: number;
+  thinkingLevel?: LlmThinkingLevel;
+}
+
+export interface LlmGenerationConfigRecord {
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+  maxOutputTokens?: number;
+  thinkingConfig?: LlmThinkingConfigRecord;
+}
+
+export type LlmRequestBodyJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | LlmRequestBodyJsonValue[]
+  | { [key: string]: LlmRequestBodyJsonValue };
+
+export type LlmRequestBodyRecord = Record<string, LlmRequestBodyJsonValue>;
 
 export interface LlmUsageMetadataRecord {
   promptTokenCount?: number;
@@ -233,6 +258,8 @@ export interface LlmProviderConfigRecord {
   apiKey: string;
   toolCallFormat: LlmToolCallFormat;
   proxy?: string;
+  generationConfig?: LlmGenerationConfigRecord;
+  requestBody?: LlmRequestBodyRecord;
   createdAt: number;
   updatedAt: number;
 }

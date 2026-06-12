@@ -1,9 +1,14 @@
 import * as vscode from 'vscode';
 import type {
+  LlmGenerationConfigRecord,
   LlmProviderConfigRecord,
   LlmProviderConfigsRecord,
   LlmProviderKind,
   LlmProviderModelRecord,
+  LlmRequestBodyJsonValue,
+  LlmRequestBodyRecord,
+  LlmThinkingConfigRecord,
+  LlmThinkingLevel,
   LlmToolCallFormat
 } from '../../../shared/protocol';
 import { createMessageId } from '../../../shared/protocol';
@@ -70,6 +75,8 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
   const updatedAt = finiteTimestamp(input?.updatedAt, createdAt);
   const model = typeof input?.model === 'string' ? input.model.trim() : fallback.model;
   const models = normalizeProviderModels(input?.models, model);
+  const generationConfig = normalizeGenerationConfig(input?.generationConfig);
+  const requestBody = normalizeRequestBody(input?.requestBody);
   return {
     id: stringOrDefault(input?.id, fallback.id),
     name: stringOrDefault(input?.name, fallback.name),
@@ -80,6 +87,8 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
     apiKey: typeof input?.apiKey === 'string' ? input.apiKey.trim() : fallback.apiKey,
     toolCallFormat: isKnownToolCallFormat(input?.toolCallFormat) ? input.toolCallFormat : fallback.toolCallFormat,
     ...(optionalString(input?.proxy) ? { proxy: optionalString(input?.proxy) } : {}),
+    ...(generationConfig ? { generationConfig } : {}),
+    ...(requestBody ? { requestBody } : {}),
     createdAt,
     updatedAt
   };
@@ -147,7 +156,7 @@ function normalizeProviderModels(input: LlmProviderModelRecord[] | undefined, ac
 }
 
 function isKnownProvider(provider: unknown): provider is LlmProviderKind {
-  return provider === 'openai-compatible' || provider === 'openai-responses' || provider === 'claude' || provider === 'gemini';
+  return provider === 'openai-compatible' || provider === 'openai-responses' || provider === 'claude' || provider === 'gemini' || provider === 'deepseek';
 }
 
 function isKnownToolCallFormat(format: unknown): format is LlmToolCallFormat {
@@ -166,4 +175,85 @@ function optionalString(value: unknown): string | undefined {
 function finiteTimestamp(value: unknown, fallback: number): number {
   const timestamp = Number(value);
   return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : fallback;
+}
+
+function normalizeGenerationConfig(input: unknown): LlmGenerationConfigRecord | undefined {
+  if (!isPlainObject(input)) return undefined;
+  const config: LlmGenerationConfigRecord = {};
+  assignFiniteNumber(config, 'temperature', input.temperature);
+  assignFiniteNumber(config, 'topP', input.topP);
+  assignFiniteNumber(config, 'topK', input.topK);
+  assignFiniteNumber(config, 'maxOutputTokens', input.maxOutputTokens);
+
+  const thinkingConfig = normalizeThinkingConfig(input.thinkingConfig);
+  if (thinkingConfig) config.thinkingConfig = thinkingConfig;
+
+  return Object.keys(config).length > 0 ? config : undefined;
+}
+
+function normalizeThinkingConfig(input: unknown): LlmThinkingConfigRecord | undefined {
+  if (!isPlainObject(input)) return undefined;
+  const config: LlmThinkingConfigRecord = {};
+  if (typeof input.includeThoughts === 'boolean') config.includeThoughts = input.includeThoughts;
+  assignFiniteNumber(config, 'thinkingBudget', input.thinkingBudget);
+  if (isKnownThinkingLevel(input.thinkingLevel)) config.thinkingLevel = input.thinkingLevel;
+  return Object.keys(config).length > 0 ? config : undefined;
+}
+
+function assignFiniteNumber(target: object, key: string, value: unknown): void {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return;
+  (target as Record<string, unknown>)[key] = value;
+}
+
+function isKnownThinkingLevel(value: unknown): value is LlmThinkingLevel {
+  return value === 'not-set'
+    || value === 'non-set'
+    || value === 'none'
+    || value === 'minimal'
+    || value === 'low'
+    || value === 'medium'
+    || value === 'high'
+    || value === 'xhigh'
+    || value === 'max';
+}
+
+function normalizeRequestBody(input: unknown): LlmRequestBodyRecord | undefined {
+  if (!isPlainObject(input)) return undefined;
+  const record: LlmRequestBodyRecord = {};
+  for (const [rawKey, rawValue] of Object.entries(input)) {
+    const key = rawKey.trim();
+    if (!key) continue;
+    const value = normalizeJsonValue(rawValue);
+    if (value !== undefined) record[key] = value;
+  }
+  return Object.keys(record).length > 0 ? record : undefined;
+}
+
+function normalizeJsonValue(value: unknown): LlmRequestBodyJsonValue | undefined {
+  if (value === null) return null;
+  if (typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (Array.isArray(value)) {
+    const items: LlmRequestBodyJsonValue[] = [];
+    for (const item of value) {
+      const normalized = normalizeJsonValue(item);
+      if (normalized !== undefined) items.push(normalized);
+    }
+    return items;
+  }
+  if (isPlainObject(value)) {
+    const record: Record<string, LlmRequestBodyJsonValue> = {};
+    for (const [rawKey, rawChild] of Object.entries(value)) {
+      const key = rawKey.trim();
+      if (!key) continue;
+      const child = normalizeJsonValue(rawChild);
+      if (child !== undefined) record[key] = child;
+    }
+    return record;
+  }
+  return undefined;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

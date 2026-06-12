@@ -1,13 +1,21 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { IconCloudDown, IconPencil, IconPlus, IconSearch, IconTrash } from '@tabler/icons-vue';
-import type { LlmProviderConfigRecord, LlmProviderKind, LlmProviderModelRecord, LlmToolCallFormat } from '@shared/protocol';
+import type {
+  LlmGenerationConfigRecord,
+  LlmProviderConfigRecord,
+  LlmProviderKind,
+  LlmProviderModelRecord,
+  LlmRequestBodyRecord,
+  LlmToolCallFormat
+} from '@shared/protocol';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import ConfirmPanel from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import ModelFetchDialog from './ModelFetchDialog.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from './SettingsDropdown.vue';
+import LlmParameterSettings from './parameters/LlmParameterSettings.vue';
 
 const settings = useGlobalSettingsStore();
 const createOpen = ref(false);
@@ -24,7 +32,8 @@ const providerOptions: SettingsDropdownOption[] = [
   { value: 'openai-compatible', label: 'OpenAI Compatible' },
   { value: 'openai-responses', label: 'OpenAI Responses' },
   { value: 'claude', label: 'Claude' },
-  { value: 'gemini', label: 'Gemini' }
+  { value: 'gemini', label: 'Gemini' },
+  { value: 'deepseek', label: 'DeepSeek' }
 ];
 
 const toolCallFormatOptions: SettingsDropdownOption[] = [
@@ -70,6 +79,14 @@ function updateActiveConfigField<K extends keyof LlmProviderConfigRecord>(key: K
 
 function inputValue(event: Event): string {
   return (event.target as HTMLInputElement).value;
+}
+
+function updateGenerationConfig(value: LlmGenerationConfigRecord | undefined): void {
+  settings.updateActiveLlmGenerationConfig(value);
+}
+
+function updateRequestBody(value: LlmRequestBodyRecord | undefined): void {
+  settings.updateActiveLlmRequestBody(value);
 }
 
 function providerLabel(provider: LlmProviderKind | undefined): string {
@@ -237,6 +254,13 @@ function cancelDelete(): void {
         <span>API Key</span>
         <input :value="activeConfig.apiKey" type="text" placeholder="sk-..." autocomplete="off" spellcheck="false" @input="updateActiveConfigField('apiKey', inputValue($event))" />
       </label>
+
+      <LlmParameterSettings
+        class="global-settings-field-wide"
+        :config="activeConfig"
+        @update-generation-config="updateGenerationConfig"
+        @update-request-body="updateRequestBody"
+      />
 
       <section class="model-manager global-settings-field-wide" aria-label="模型列表">
         <header class="model-manager-header">

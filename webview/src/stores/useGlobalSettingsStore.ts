@@ -5,9 +5,12 @@ import {
   type GlobalSettingsRecord,
   type GlobalSettingsSection,
   type GlobalSettingsSnapshotPayload,
+  type LlmGenerationConfigRecord,
   type LlmProviderKind,
   type LlmProviderConfigRecord,
   type LlmProviderModelRecord,
+  type LlmRequestBodyJsonValue,
+  type LlmRequestBodyRecord,
   type LlmProviderModelsSnapshotPayload,
   type LlmProviderConfigsRecord,
   type LlmSettingsRecord
@@ -56,18 +59,36 @@ function emptyFetchedModelsDialog(): FetchedModelsDialogState {
   return { open: false, loading: false, configId: '', models: [] };
 }
 
+function providerDefaultConnection(provider: LlmProviderKind): { baseUrl: string; model: string } {
+  switch (provider) {
+    case 'claude':
+      return { baseUrl: 'https://api.anthropic.com/v1', model: 'claude-sonnet-4-6' };
+    case 'gemini':
+      return { baseUrl: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-2.0-flash' };
+    case 'deepseek':
+      return { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash' };
+    case 'openai-responses':
+    case 'openai-compatible':
+    default:
+      return { baseUrl: 'https://api.openai.com/v1', model: 'gpt-5.5' };
+  }
+}
+
 function createDefaultProviderConfig(name = '新渠道配置', provider: LlmProviderKind = 'openai-compatible'): LlmProviderConfigRecord {
   const now = Date.now();
+  const defaults = providerDefaultConnection(provider);
   return {
     id: `llm-provider-config-${createMessageId()}`,
     name,
     provider,
-    baseUrl: 'https://api.openai.com/v1',
-    model: 'gpt-5.5',
-    models: [{ id: 'gpt-5.5', name: 'gpt-5.5' }],
+    baseUrl: defaults.baseUrl,
+    model: defaults.model,
+    models: [{ id: defaults.model, name: defaults.model }],
     apiKey: '',
     toolCallFormat: 'function-call',
     proxy: '',
+    generationConfig: {},
+    requestBody: {},
     createdAt: now,
     updatedAt: now
   };
@@ -75,7 +96,14 @@ function createDefaultProviderConfig(name = '新渠道配置', provider: LlmProv
 
 function normalizeProviderConfigForUi(config: LlmProviderConfigRecord): LlmProviderConfigRecord {
   const model = config.model?.trim() ?? '';
-  return { ...config, model, models: normalizeModelsForUi(config.models, model), proxy: config.proxy ?? '' };
+  return {
+    ...config,
+    model,
+    models: normalizeModelsForUi(config.models, model),
+    proxy: config.proxy ?? '',
+    generationConfig: normalizeGenerationConfigForUi(config.generationConfig) ?? {},
+    requestBody: sanitizeRequestBody(config.requestBody) ?? {}
+  };
 }
 
 function normalizeModelsForUi(models: LlmProviderModelRecord[] | undefined, activeModel: string): LlmProviderModelRecord[] {
@@ -103,6 +131,84 @@ function sanitizeModels(models: LlmProviderModelRecord[]): LlmProviderModelRecor
   return [...byId.values()].sort((left, right) => left.id.localeCompare(right.id));
 }
 
+function normalizeGenerationConfigForUi(input: LlmGenerationConfigRecord | undefined): LlmGenerationConfigRecord | undefined {
+  return sanitizeGenerationConfig(input);
+}
+
+function sanitizeGenerationConfig(input: LlmGenerationConfigRecord | undefined): LlmGenerationConfigRecord | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const config: LlmGenerationConfigRecord = {};
+  assignFiniteNumber(config, 'temperature', input.temperature);
+  assignFiniteNumber(config, 'topP', input.topP);
+  assignFiniteNumber(config, 'topK', input.topK);
+  assignFiniteNumber(config, 'maxOutputTokens', input.maxOutputTokens);
+
+  const thinkingConfig = input.thinkingConfig;
+  if (thinkingConfig && typeof thinkingConfig === 'object') {
+    const nextThinking: NonNullable<LlmGenerationConfigRecord['thinkingConfig']> = {};
+    if (typeof thinkingConfig.includeThoughts === 'boolean') nextThinking.includeThoughts = thinkingConfig.includeThoughts;
+    assignFiniteNumber(nextThinking, 'thinkingBudget', thinkingConfig.thinkingBudget);
+    if (isKnownThinkingLevel(thinkingConfig.thinkingLevel)) nextThinking.thinkingLevel = thinkingConfig.thinkingLevel;
+    if (Object.keys(nextThinking).length > 0) config.thinkingConfig = nextThinking;
+  }
+
+  return Object.keys(config).length > 0 ? config : undefined;
+}
+
+function assignFiniteNumber(target: object, key: string, value: unknown): void {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return;
+  (target as Record<string, unknown>)[key] = value;
+}
+
+function isKnownThinkingLevel(value: unknown): value is NonNullable<NonNullable<LlmGenerationConfigRecord['thinkingConfig']>['thinkingLevel']> {
+  return value === 'not-set'
+    || value === 'non-set'
+    || value === 'none'
+    || value === 'minimal'
+    || value === 'low'
+    || value === 'medium'
+    || value === 'high'
+    || value === 'xhigh'
+    || value === 'max';
+}
+
+function sanitizeRequestBody(input: LlmRequestBodyRecord | undefined): LlmRequestBodyRecord | undefined {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const record: LlmRequestBodyRecord = {};
+  for (const [rawKey, rawValue] of Object.entries(input)) {
+    const key = rawKey.trim();
+    if (!key) continue;
+    const value = sanitizeJsonValue(rawValue);
+    if (value !== undefined) record[key] = value;
+  }
+  return Object.keys(record).length > 0 ? record : undefined;
+}
+
+function sanitizeJsonValue(value: unknown): LlmRequestBodyJsonValue | undefined {
+  if (value === null) return null;
+  if (typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (Array.isArray(value)) {
+    const items: LlmRequestBodyJsonValue[] = [];
+    for (const item of value) {
+      const normalized = sanitizeJsonValue(item);
+      if (normalized !== undefined) items.push(normalized);
+    }
+    return items;
+  }
+  if (value && typeof value === 'object') {
+    const record: Record<string, LlmRequestBodyJsonValue> = {};
+    for (const [rawKey, rawChild] of Object.entries(value as Record<string, unknown>)) {
+      const key = rawKey.trim();
+      if (!key) continue;
+      const child = sanitizeJsonValue(rawChild);
+      if (child !== undefined) record[key] = child;
+    }
+    return record;
+  }
+  return undefined;
+}
+
 function toPlainProviderConfig(config: LlmProviderConfigRecord): LlmProviderConfigRecord {
   return {
     id: config.id,
@@ -114,6 +220,8 @@ function toPlainProviderConfig(config: LlmProviderConfigRecord): LlmProviderConf
     apiKey: config.apiKey,
     toolCallFormat: config.toolCallFormat,
     ...(config.proxy?.trim() ? { proxy: config.proxy.trim() } : {}),
+    ...(sanitizeGenerationConfig(config.generationConfig) ? { generationConfig: sanitizeGenerationConfig(config.generationConfig) } : {}),
+    ...(sanitizeRequestBody(config.requestBody) ? { requestBody: sanitizeRequestBody(config.requestBody) } : {}),
     createdAt: config.createdAt,
     updatedAt: config.updatedAt
   };
@@ -206,16 +314,17 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
         section: 'llmProviderConfigs',
         settings: {
-          configs: this.llmProviderConfigs.configs.map((config) => ({
-            ...config,
-            name: config.name.trim() || '未命名渠道',
-            apiKey: config.apiKey.trim(),
-            baseUrl: config.baseUrl.trim(),
-            models: sanitizeModels(config.models),
-            model: config.model.trim(),
-            ...(config.proxy?.trim() ? { proxy: config.proxy.trim() } : { proxy: undefined }),
-            updatedAt: Date.now()
-          }))
+          configs: this.llmProviderConfigs.configs.map((config) => {
+            const plain = toPlainProviderConfig(config);
+            return {
+              ...plain,
+              name: plain.name.trim() || '未命名渠道',
+              apiKey: plain.apiKey.trim(),
+              baseUrl: plain.baseUrl.trim(),
+              model: plain.model.trim(),
+              updatedAt: Date.now()
+            };
+          })
         }
       });
     },
@@ -242,6 +351,18 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       const config = this.activeLlmProviderConfig;
       if (!config) return;
       Object.assign(config, patch, { updatedAt: Date.now() });
+    },
+    updateActiveLlmGenerationConfig(generationConfig: LlmGenerationConfigRecord | undefined): void {
+      const config = this.activeLlmProviderConfig;
+      if (!config) return;
+      config.generationConfig = normalizeGenerationConfigForUi(generationConfig) ?? {};
+      config.updatedAt = Date.now();
+    },
+    updateActiveLlmRequestBody(requestBody: LlmRequestBodyRecord | undefined): void {
+      const config = this.activeLlmProviderConfig;
+      if (!config) return;
+      config.requestBody = sanitizeRequestBody(requestBody) ?? {};
+      config.updatedAt = Date.now();
     },
     requestModelsForActiveConfig(): void {
       const config = this.activeLlmProviderConfig;

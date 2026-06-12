@@ -352,6 +352,48 @@ openai-compatible request
 
 签名也跟着这条链一起走，不用你单独声明“签名转成什么格式”。
 
+### Dry Run：只构建请求，不发送
+
+如果你只想展示或复制“这次真实会发给 provider 的 HTTP 请求”，可以使用 `provider.dryRun()`。
+
+```ts
+const dry = await provider.dryRun(
+  {
+    contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+  },
+  {
+    inputFormat: 'unified',
+    outputFormat: 'unified',
+    stream: true,
+    curl: { includeApiKey: false },
+  }
+);
+
+console.log(dry.curl);
+console.log(dry.url);
+console.log(dry.headers);
+console.log(dry.body);
+```
+
+返回结果包含：
+
+```ts
+dry.url;       // 最终请求 URL
+dry.headers;   // 最终请求 headers（结构化对象）
+dry.body;      // 最终 provider 请求体（结构化对象）
+dry.bodyText;  // JSON 文本，方便展示/复制
+dry.curl;      // 可复制的 curl 命令
+```
+
+说明：
+
+- `dryRun` 会走真实 provider 编码逻辑，复用 `chat` / `chatStream` 的请求构建路径；
+- `dryRun` 不发送网络请求，也不会调用 `fetch`；
+- `curl` 默认隐藏 API Key（`includeApiKey: false`），避免 UI 展示时泄漏密钥；
+- 如果确实需要展示 API Key，可以显式传 `curl: { includeApiKey: true }`；
+- `stream: true` 时生成和 `chatStream` 相同的流式请求；
+- `stream: false` 时生成和 `chat` 相同的非流式请求。
+
 ---
 
 ## Router / Factory
@@ -398,6 +440,211 @@ const provider = createLLMFromConfig({
 - 自定义 `fetch`
 - 自定义超时
 - 显式指定 `proxy`
+
+---
+
+### 统一生成参数与 `requestBody` 覆盖规则
+
+统一请求体只把最常用的生成参数作为一等字段，命名采用 Gemini-like camelCase：
+
+```ts
+const request = {
+  contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+  generationConfig: {
+    temperature: 0.7,
+    topP: 0.9,
+    topK: 40,
+    maxOutputTokens: 1024,
+    thinkingConfig: {
+      includeThoughts: true,
+      thinkingBudget: 10000,
+      thinkingLevel: 'high',
+    },
+  },
+};
+```
+
+当前保证映射的字段：
+
+| unified / Gemini-like | Gemini | Claude | OpenAI Chat Completions | OpenAI Responses |
+|---|---|---|---|---|
+| `temperature` | `generationConfig.temperature` | `temperature` | `temperature` | `temperature` |
+| `topP` | `generationConfig.topP` | `top_p` | `top_p` | `top_p` |
+| `topK` | `generationConfig.topK` | `top_k` | 默认不映射 | 默认不映射 |
+| `maxOutputTokens` | `generationConfig.maxOutputTokens` | `max_tokens` | `max_tokens` | `max_output_tokens` |
+| `thinkingConfig.includeThoughts` | `generationConfig.thinkingConfig.includeThoughts` | 忽略 | 忽略 | 忽略 |
+| `thinkingConfig.thinkingBudget` | `generationConfig.thinkingConfig.thinkingBudget`；未显式传 `includeThoughts` 时自动补 `includeThoughts: true` | 无有效 `thinkingLevel` 时映射为 `thinking: { type: 'enabled', budget_tokens }` | 默认不映射 | 默认不映射 |
+| `thinkingConfig.thinkingLevel` | 仅支持 `minimal/low/medium/high` | 支持 `none/low/medium/high/xhigh/max` | 支持 `none/minimal/low/medium/high/xhigh` | 支持 `none/minimal/low/medium/high/xhigh` |
+
+思考参数规则：
+
+- `not-set` / `non-set` 表示不发送思考等级相关字段，让上游按默认策略处理。
+- 对某个 provider 不属于自身支持集合的 `thinkingLevel`，也按 `not-set` 处理，不发送对应思考字段。
+- `includeThoughts` 只对 Gemini 原生请求有效；Claude / OpenAI 系会忽略统一字段里的 `includeThoughts`。
+- 传入 `thinkingBudget` 或有效的 `thinkingLevel` 且没有显式传 `includeThoughts` 时，Gemini 请求里会自动补 `includeThoughts: true`；如果显式传 `includeThoughts: false`，则保留 `false`。
+
+各 provider 的 `thinkingLevel` 映射：
+
+| provider | 支持等级 | 映射 |
+|---|---|---|
+| Gemini | `minimal/low/medium/high` | `generationConfig.thinkingConfig.thinkingLevel = level`，并在未显式传 `includeThoughts` 时补 `includeThoughts: true` |
+| Claude | `none` | `thinking: { type: 'disabled' }` |
+| Claude | `low/medium/high/xhigh/max` | `thinking: { type: 'adaptive' }` + `output_config: { effort: level }` |
+| OpenAI Chat / OpenAI Compatible | `none/minimal/low/medium/high/xhigh` | `reasoning_effort = level` |
+| OpenAI Responses | `none/minimal/low/medium/high/xhigh` | `reasoning: { effort: level, summary: 'auto' }` |
+| DeepSeek | `none` | `thinking: { type: 'disabled' }` |
+| DeepSeek | `high/max` | `thinking: { type: 'enabled' }` + `reasoning_effort = level` |
+
+Claude 的 `thinkingBudget` 映射为：
+
+```json
+{
+  "thinking": {
+    "type": "enabled",
+    "budget_tokens": 10000
+  }
+}
+```
+
+如果同时传入 Claude 支持的 `thinkingLevel` 和 `thinkingBudget`，优先使用 `thinkingLevel` 的映射；如需强制改写最终 provider 原生字段，可用 `requestBody` 覆盖。
+
+
+`requestBody` 是 provider 原生请求体补丁，会在格式转换完成后再深合并到最终 body，因此它可以覆盖上面这些统一参数生成出来的字段：
+
+```ts
+const provider = createLLMFromConfig({
+  provider: 'openai-compatible',
+  model: 'gpt-4o',
+  apiKey: process.env.OPENAI_API_KEY,
+  requestBody: {
+    // 覆盖 generationConfig.temperature / topP / maxOutputTokens 转换后的结果
+    temperature: 0.2,
+    top_p: 0.95,
+    max_tokens: 2048,
+  },
+}, registry.llmProviders);
+```
+
+对于 Gemini，覆盖路径保持 Gemini 原生结构：
+
+```ts
+requestBody: {
+  generationConfig: {
+    temperature: 0.2,
+    topP: 0.95,
+    topK: 32,
+    maxOutputTokens: 2048,
+  },
+}
+```
+
+优先级规则：
+
+1. 统一请求体 `generationConfig` 先转换成目标 provider 请求体；
+2. `config.requestBody` 再合并，覆盖统一参数生成的同名 provider 字段；
+3. 运行时 `patchRequestBodyOverrides()` 最后合并，优先级最高。
+
+---
+
+
+### 获取模型列表：`listAvailableModels()`
+
+可以通过 `listAvailableModels()` 拉取 provider 的模型列表，并按用户指定格式返回。
+
+```ts
+import { listAvailableModels } from 'unified-llm-provider';
+
+// 默认返回 unified 统一格式：{ provider, baseUrl, models: UnifiedModelInfo[] }
+const unified = await listAvailableModels({
+  provider: 'openai-compatible',
+  apiKey: process.env.OPENAI_API_KEY,
+  baseUrl: 'https://api.openai.com/v1',
+});
+
+// 也可以直接返回目标 API 的模型列表格式
+const openAIStyle = await listAvailableModels({
+  provider: 'gemini',
+  apiKey: process.env.GEMINI_API_KEY,
+  baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+  outputFormat: 'openai-compatible',
+});
+```
+
+支持的返回格式：
+
+- `unified`：包内统一简化格式，默认值；
+- `openai-compatible` / `openai-responses` / `deepseek` / `openai`：OpenAI `GET /v1/models` 风格：`{ object: 'list', data: [...] }`；
+- `claude`：Anthropic `GET /v1/models` 风格：`{ data: [...] }`；
+- `gemini`：Gemini `GET /v1beta/models` 风格：`{ models: [...] }`。
+
+#### `unified` 模型字段
+
+`unified` 的模型条目统一使用 Gemini 风格字段：Gemini 原生有的字段直接复用；其它 provider 的信息映射到同义字段；Gemini 没有但其它 provider 有价值的信息，用新增的 camelCase 字段保存。
+
+```ts
+interface UnifiedModelInfo {
+  /** 可直接用于调用接口的模型 ID。Gemini 优先用 baseModelId；没有时用去掉 models/ 前缀后的 name。 */
+  id: string;
+
+  /** Gemini 风格模型名。Gemini 通常为 models/xxx；OAI/Claude 使用自身 id。 */
+  name: string;
+
+  /** 展示名。上游没有 displayName/display_name 时回退为 id。 */
+  displayName: string;
+
+  /** Gemini 原生字段。只有上游提供或可明确映射时才返回。 */
+  baseModelId?: string;
+  version?: string;
+  description?: string;
+  inputTokenLimit?: number;   // Claude max_input_tokens 会映射到这里
+  outputTokenLimit?: number;  // Claude max_tokens 会映射到这里
+  supportedGenerationMethods?: string[];
+  temperature?: number;
+  maxTemperature?: number;
+  topP?: number;
+  topK?: number;
+
+  /** 新增统一字段。 */
+  ownedBy?: string;       // OpenAI owned_by / owner
+  createdAt?: string;     // Claude created_at；OpenAI created 会转换为 ISO 字符串
+  modelType?: string;     // OpenAI object / Claude type
+  capabilities?: unknown; // Claude capabilities 等能力详情
+
+  /** 兼容旧版 UI 的展示标签。 */
+  label?: string;
+
+  /** 上游原始模型对象，用于保留 provider 私有字段和无损转换。 */
+  raw?: unknown;
+}
+```
+
+映射规则：
+
+| 上游 | unified 字段 |
+|---|---|
+| Gemini `name` | `name`；同时去掉 `models/` 后可作为 `id` 回退 |
+| Gemini `baseModelId` / `displayName` / `inputTokenLimit` / `outputTokenLimit` / `supportedGenerationMethods` / 采样参数 | 同名 camelCase 字段 |
+| OpenAI `id` | `id`、`name`、`displayName` 回退 |
+| OpenAI `owned_by` / `created` / `object` | `ownedBy` / `createdAt` + `created` / `modelType` |
+| Claude `id` / `display_name` / `created_at` / `type` | `id` + `name` / `displayName` / `createdAt` / `modelType` |
+| Claude `max_input_tokens` / `max_tokens` / `capabilities` | `inputTokenLimit` / `outputTokenLimit` / `capabilities` |
+
+实际请求端点：
+
+| provider | 请求端点 | 认证 |
+|---|---|---|
+| OpenAI 兼容 / OpenAI Responses / DeepSeek | `GET {baseUrl}/models?limit=1000`，如返回 `has_more` 会继续用 `after={last_id}` 拉取后续页 | `Authorization: Bearer ...` |
+| Claude | `GET {baseUrl}/models?limit=1000`，如返回 `has_more` 会继续用 `after_id={last_id}` 拉取后续页 | `x-api-key` + `anthropic-version: 2023-06-01` |
+| Gemini | `GET {baseUrl}/models?key=...&pageSize=1000`，如返回 `nextPageToken` 会继续分页 | query 参数 `key=` |
+
+说明：
+
+- 默认 `pageSize` / `limit` 为 `1000`，避免只拿到默认分页的 100 条；可通过 `pageSize` 覆盖。
+- 如果上游仍然返回分页游标，会在内部自动继续拉取直到完整列表；返回给下游时不暴露 `nextPageToken` / `first_id` / `last_id` / `has_more` 这类分页字段。
+- 返回模型对象时会尽量保留上游原始字段，并放在统一字段和 `raw` 中；转换格式时只补齐目标格式必要结构字段（如顶层 `object: 'list'`、模型 `id` / `name` / `displayName`）。
+- 对 `created`、`owned_by`、`capabilities`、`supportedGenerationMethods` 等可选信息：上游提供就保留或映射；上游没有提供就不返回该字段。
+- Gemini 会优先使用 `baseModelId` 作为对外模型 `id`；没有显示名称（`displayName` / `display_name`）时，会直接使用 `id`。
+- `format` 可作为 `outputFormat` 的别名。
 
 ---
 
@@ -752,6 +999,7 @@ curl -X POST 'https://api.anthropic.com/v1/messages' \
 - thought signature 跟随格式自动处理
 - 调试钩子 `onRequest` / `onResponse` / `onStreamChunk`
 - 显式代理配置 `proxy`
+- 模型列表拉取与 OpenAI / Claude / Gemini 格式转换
 
 已验证通过：
 
@@ -759,3 +1007,9 @@ curl -X POST 'https://api.anthropic.com/v1/messages' \
 npm run test
 npm run build
 ```
+
+
+
+## 社区支持
+
+- [LinuxDO](https://linux.do)

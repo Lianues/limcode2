@@ -13,7 +13,7 @@ import type {
   LlmToolCallFormat
 } from '../../../shared/protocol';
 import { createMessageId } from '../../../shared/protocol';
-import { DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL } from '../llmProvider';
+import { DEFAULT_LLM_BASE_URL } from '../llmProvider';
 import type { StoragePaths } from './clientStateStore';
 import { INDEX_FILE } from './constants';
 import { loadRecordStore, removeRecordStoreRecord, saveRecordStore } from './recordStore';
@@ -61,8 +61,8 @@ export function createDefaultLlmProviderConfig(input: { name?: string } = {}): L
     name: input.name?.trim() || DEFAULT_CONFIG_NAME,
     provider: 'openai-compatible',
     baseUrl: DEFAULT_LLM_BASE_URL,
-    model: DEFAULT_LLM_MODEL,
-    models: [{ id: DEFAULT_LLM_MODEL, name: DEFAULT_LLM_MODEL }],
+    model: '',
+    models: [],
     apiKey: '',
     toolCallFormat: 'function-call',
     createdAt: now,
@@ -74,7 +74,7 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
   const fallback = createDefaultLlmProviderConfig();
   const createdAt = finiteTimestamp(input?.createdAt, fallback.createdAt);
   const updatedAt = finiteTimestamp(input?.updatedAt, createdAt);
-  const model = typeof input?.model === 'string' ? input.model.trim() : fallback.model;
+  const model = typeof input?.model === 'string' && input.model.trim() ? input.model.trim() : fallback.model;
   const models = normalizeProviderModels(input?.models, model);
   const headers = normalizeHeaders(input?.headers);
   const generationConfig = normalizeGenerationConfig(input?.generationConfig);

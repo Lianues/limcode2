@@ -60,31 +60,30 @@ function emptyFetchedModelsDialog(): FetchedModelsDialogState {
   return { open: false, loading: false, configId: '', models: [] };
 }
 
-function providerDefaultConnection(provider: LlmProviderKind): { baseUrl: string; model: string } {
+function providerDefaultBaseUrl(provider: LlmProviderKind): string {
   switch (provider) {
     case 'claude':
-      return { baseUrl: 'https://api.anthropic.com/v1', model: 'claude-sonnet-4-6' };
+      return 'https://api.anthropic.com/v1';
     case 'gemini':
-      return { baseUrl: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-2.0-flash' };
+      return 'https://generativelanguage.googleapis.com/v1beta';
     case 'deepseek':
-      return { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash' };
+      return 'https://api.deepseek.com/v1';
     case 'openai-responses':
     case 'openai-compatible':
     default:
-      return { baseUrl: 'https://api.openai.com/v1', model: 'gpt-5.5' };
+      return 'https://api.openai.com/v1';
   }
 }
 
 function createDefaultProviderConfig(name = '新渠道配置', provider: LlmProviderKind = 'openai-compatible'): LlmProviderConfigRecord {
   const now = Date.now();
-  const defaults = providerDefaultConnection(provider);
   return {
     id: `llm-provider-config-${createMessageId()}`,
     name,
     provider,
-    baseUrl: defaults.baseUrl,
-    model: defaults.model,
-    models: [{ id: defaults.model, name: defaults.model }],
+    baseUrl: providerDefaultBaseUrl(provider),
+    model: '',
+    models: [],
     apiKey: '',
     toolCallFormat: 'function-call',
     proxy: '',

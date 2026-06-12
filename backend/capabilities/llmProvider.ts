@@ -21,7 +21,6 @@ import type {
 } from '../../shared/protocol';
 
 export const DEFAULT_LLM_BASE_URL = 'https://api.openai.com/v1';
-export const DEFAULT_LLM_MODEL = 'gpt-5.5';
 
 type MaybeProvider<T> = T | undefined | (() => T | undefined | Promise<T | undefined>);
 
@@ -243,7 +242,7 @@ function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmPr
     name: settings?.name?.trim() || '默认渠道',
     provider: normalizeProvider(settings?.provider),
     baseUrl: settings?.baseUrl?.trim() || DEFAULT_LLM_BASE_URL,
-    model: settings?.model?.trim() || DEFAULT_LLM_MODEL,
+    model: settings?.model?.trim() ?? '',
     models: settings?.models ?? [],
     apiKey: settings?.apiKey?.trim() ?? '',
     toolCallFormat: normalizeToolCallFormat(settings?.toolCallFormat),

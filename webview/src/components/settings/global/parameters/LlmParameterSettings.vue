@@ -220,7 +220,7 @@ function uniqueKey(base: string, existingKeys: string[]): string {
   <section class="llm-parameter-settings" aria-label="渠道参数配置">
     <header class="llm-parameter-header">
       <div>
-        <label>参数配置/自定义请求体参数</label>
+        <label>自定义请求体/参数配置</label>
         <p>参数视图用于管理常用统一参数和自定义覆盖参数；JSON 视图直接编辑 requestBody 原生覆盖补丁。</p>
       </div>
       <div class="llm-parameter-header-actions">

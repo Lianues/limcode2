@@ -8,6 +8,7 @@ export interface SettingsSelectableListItem {
   title: string;
   description?: string;
   meta?: string;
+  disabledReason?: string;
   disabled?: boolean;
 }
 
@@ -40,6 +41,7 @@ const filteredItems = computed(() => {
   return props.items.filter((item) => {
     return item.title.toLowerCase().includes(keyword)
       || (item.description?.toLowerCase().includes(keyword) ?? false)
+      || (item.disabledReason?.toLowerCase().includes(keyword) ?? false)
       || (item.meta?.toLowerCase().includes(keyword) ?? false);
   });
 });
@@ -80,6 +82,7 @@ function select(item: SettingsSelectableListItem): void {
             <span class="settings-selectable-main">
               <span class="settings-selectable-title">{{ item.title }}</span>
               <span v-if="item.description" class="settings-selectable-description">{{ item.description }}</span>
+              <span v-if="item.disabledReason" class="settings-selectable-disabled-reason">* {{ item.disabledReason }}</span>
             </span>
             <span v-if="item.meta" class="settings-selectable-meta">{{ item.meta }}</span>
           </button>
@@ -184,6 +187,11 @@ function select(item: SettingsSelectableListItem): void {
   cursor: default;
 }
 
+.settings-selectable-disabled-reason {
+  white-space: normal;
+  text-overflow: clip;
+}
+
 .settings-selectable-main {
   min-width: 0;
   display: flex;
@@ -193,6 +201,7 @@ function select(item: SettingsSelectableListItem): void {
 
 .settings-selectable-title,
 .settings-selectable-description,
+.settings-selectable-disabled-reason,
 .settings-selectable-meta {
   min-width: 0;
   overflow: hidden;
@@ -209,5 +218,11 @@ function select(item: SettingsSelectableListItem): void {
 .settings-selectable-meta {
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-xs);
+}
+
+.settings-selectable-disabled-reason {
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+  font-style: italic;
 }
 </style>

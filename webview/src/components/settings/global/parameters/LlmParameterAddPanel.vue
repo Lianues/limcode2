@@ -4,9 +4,14 @@ import { IconPlus } from '@tabler/icons-vue';
 import SettingsSelectableList, { type SettingsSelectableListItem } from '../SettingsSelectableList.vue';
 import type { LlmParameterDefinition } from './llmParameterDefinitions';
 
+export interface LlmParameterAddOption extends LlmParameterDefinition {
+  disabled?: boolean;
+  disabledReason?: string;
+}
+
 const props = defineProps<{
   open: boolean;
-  definitions: LlmParameterDefinition[];
+  definitions: LlmParameterAddOption[];
   providerLabel: string;
 }>();
 
@@ -21,7 +26,9 @@ const items = computed<SettingsSelectableListItem[]>(() => [
     id: `known:${definition.key}`,
     title: definition.label,
     description: definition.description,
-    meta: definition.displayPath
+    meta: definition.displayPath,
+    disabledReason: definition.disabledReason,
+    disabled: definition.disabled
   })),
   {
     id: 'custom:requestBody',
@@ -38,6 +45,7 @@ function select(item: SettingsSelectableListItem): void {
     return;
   }
   if (item.id.startsWith('known:')) {
+    if (item.disabled) return;
     emit('add-known', item.id.slice('known:'.length));
     emit('close');
   }

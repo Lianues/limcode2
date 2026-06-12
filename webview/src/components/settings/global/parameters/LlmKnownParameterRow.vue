@@ -135,6 +135,17 @@ function updateEnum(value: string): void {
   font: inherit;
 }
 
+.known-parameter-control input[type='number'] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.known-parameter-control input[type='number']::-webkit-outer-spin-button,
+.known-parameter-control input[type='number']::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
 .known-parameter-remove {
   width: 26px;
   height: 26px;

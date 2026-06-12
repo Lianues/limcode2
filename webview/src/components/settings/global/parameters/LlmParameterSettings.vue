@@ -4,7 +4,7 @@ import { IconPlus } from '@tabler/icons-vue';
 import type { LlmGenerationConfigRecord, LlmProviderConfigRecord, LlmRequestBodyRecord } from '@shared/protocol';
 import LlmKnownParameterRow from './LlmKnownParameterRow.vue';
 import LlmCustomRequestBodyEditor from './LlmCustomRequestBodyEditor.vue';
-import LlmParameterAddPanel from './LlmParameterAddPanel.vue';
+import LlmParameterAddPanel, { type LlmParameterAddOption } from './LlmParameterAddPanel.vue';
 import {
   labelForProvider,
   parameterDefinitionsForProvider,
@@ -31,7 +31,7 @@ const generationConfig = computed<LlmGenerationConfigRecord>(() => props.config.
 const requestBody = computed<LlmRequestBodyRecord>(() => props.config.requestBody ?? {});
 const definitions = computed(() => parameterDefinitionsForProvider(props.config.provider));
 const activeDefinitions = computed(() => definitions.value.filter((definition) => hasPath(generationConfig.value, definition.path)));
-const availableDefinitions = computed(() => definitions.value.filter((definition) => !hasPath(generationConfig.value, definition.path)));
+const availableDefinitions = computed<LlmParameterAddOption[]>(() => definitions.value.filter((definition) => !hasPath(generationConfig.value, definition.path)).map(withMutualExclusionState));
 const hasRequestBody = computed(() => Object.keys(requestBody.value).length > 0);
 const hasAnyParameter = computed(() => activeDefinitions.value.length > 0 || hasRequestBody.value);
 
@@ -48,6 +48,7 @@ watch(
 function addKnownParameter(key: string): void {
   const definition = definitions.value.find((candidate) => candidate.key === key);
   if (!definition) return;
+  if (isThinkingMutuallyExcluded(definition)) return;
   updateKnownValue(definition, definition.defaultValue);
 }
 
@@ -114,6 +115,26 @@ function clearJson(): void {
 
 function stringifyRequestBody(value: LlmRequestBodyRecord): string {
   return JSON.stringify(value ?? {}, null, 2);
+}
+
+function withMutualExclusionState(definition: LlmParameterDefinition): LlmParameterAddOption {
+  if (!isThinkingParameter(definition)) return definition;
+  const activeThinking = activeDefinitions.value.find((candidate) => isThinkingParameter(candidate));
+  if (!activeThinking || activeThinking.key === definition.key) return definition;
+  return {
+    ...definition,
+    disabled: true,
+    disabledReason: `${activeThinking.label} 已启用；思考预算和思考强度只能保留一个，请先移除 ${activeThinking.label}。`
+  };
+}
+
+function isThinkingMutuallyExcluded(definition: LlmParameterDefinition): boolean {
+  if (!isThinkingParameter(definition)) return false;
+  return activeDefinitions.value.some((candidate) => isThinkingParameter(candidate) && candidate.key !== definition.key);
+}
+
+function isThinkingParameter(definition: LlmParameterDefinition): boolean {
+  return definition.key === 'thinkingBudget' || definition.key === 'thinkingLevel';
 }
 
 function parseRequestBodyJson(text: string): { ok: true; value: LlmRequestBodyRecord } | { ok: false; error: string } {

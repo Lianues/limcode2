@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { IconCaretUp } from '@tabler/icons-vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { IconCaretUp, IconSearch } from '@tabler/icons-vue';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 
 export interface SettingsDropdownOption {
@@ -18,6 +18,9 @@ const props = withDefaults(
     title?: string;
     disabled?: boolean;
     emptyText?: string;
+    noMatchText?: string;
+    searchable?: boolean;
+    searchPlaceholder?: string;
     maxHeight?: number | string;
     height?: number | string;
   }>(),
@@ -26,6 +29,9 @@ const props = withDefaults(
     title: '',
     disabled: false,
     emptyText: '暂无可选项',
+    noMatchText: '没有匹配的选项',
+    searchable: false,
+    searchPlaceholder: '筛选...',
     maxHeight: 260,
     height: ''
   }
@@ -38,10 +44,22 @@ const emit = defineEmits<{
 
 const root = ref<HTMLElement | null>(null);
 const scroller = ref<HTMLElement | null>(null);
+const searchInput = ref<HTMLInputElement | null>(null);
 const open = ref(false);
+const filterText = ref('');
 
 const selectedOption = computed(() => props.options.find((option) => option.value === props.modelValue));
 const displayLabel = computed(() => selectedOption.value?.label ?? props.placeholder);
+const filteredOptions = computed(() => {
+  if (!props.searchable) return props.options;
+  const keyword = filterText.value.trim().toLowerCase();
+  if (!keyword) return props.options;
+  return props.options.filter((option) => {
+    return option.label.toLowerCase().includes(keyword)
+      || option.value.toLowerCase().includes(keyword)
+      || (option.description?.toLowerCase().includes(keyword) ?? false);
+  });
+});
 const panelStyle = computed<Record<string, string>>(() => ({
   '--settings-dropdown-panel-max-height': cssLength(props.maxHeight),
   ...(props.height === '' || props.height === undefined ? {} : { '--settings-dropdown-panel-height': cssLength(props.height) })
@@ -55,6 +73,19 @@ onBeforeUnmount(() => {
   document.removeEventListener('click', onDocumentClick);
 });
 
+watch(open, (nextOpen) => {
+  if (!nextOpen) return;
+  if (!props.searchable) return;
+  void nextTick(() => searchInput.value?.focus());
+});
+
+watch(
+  () => props.options,
+  () => {
+    filterText.value = '';
+  }
+);
+
 function toggle(): void {
   if (props.disabled) return;
   open.value = !open.value;
@@ -65,6 +96,7 @@ function select(option: SettingsDropdownOption): void {
   emit('update:modelValue', option.value);
   emit('change', option);
   open.value = false;
+  filterText.value = '';
 }
 
 function onDocumentClick(event: MouseEvent): void {
@@ -102,9 +134,14 @@ function cssLength(value: number | string): string {
       <section v-if="open" class="project-dropdown settings-dropdown-panel lc-dropdown-panel" :style="panelStyle" role="listbox" @click.stop>
         <div ref="scroller" class="settings-dropdown-scroll">
           <div v-if="title" class="project-dropdown-title">{{ title }}</div>
+          <label v-if="searchable" class="settings-dropdown-filter" aria-label="筛选选项">
+            <IconSearch stroke="2" aria-hidden="true" />
+            <input ref="searchInput" v-model="filterText" type="text" :placeholder="searchPlaceholder" />
+          </label>
           <div v-if="!options.length" class="project-dropdown-empty">{{ emptyText }}</div>
+          <div v-else-if="!filteredOptions.length" class="project-dropdown-empty">{{ noMatchText }}</div>
           <button
-            v-for="option in options"
+            v-for="option in filteredOptions"
             :key="option.value"
             type="button"
             class="project-option"
@@ -215,6 +252,36 @@ button.settings-dropdown-button:active {
   margin: 0 0 var(--space-1);
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-xs);
+}
+
+.settings-dropdown-filter {
+  min-height: 30px;
+  margin-bottom: var(--space-1);
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-2);
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: center;
+  color: var(--vscode-descriptionForeground);
+  background: var(--vscode-input-background);
+}
+
+.settings-dropdown-filter svg {
+  width: 15px;
+  height: 15px;
+}
+
+.settings-dropdown-filter input {
+  width: 100%;
+  min-height: 28px;
+  border: 0;
+  padding: 0;
+  color: var(--vscode-input-foreground);
+  background: transparent;
+  outline: none;
+  font: inherit;
 }
 
 .settings-dropdown-panel .project-dropdown-empty {

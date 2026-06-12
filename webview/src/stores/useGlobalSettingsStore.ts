@@ -302,6 +302,13 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
         bridge.request(BridgeMessageType.GlobalSettingsGet, { section });
       }
     },
+    requestChannelSettings(): void {
+      for (const section of ['llm', 'llmProviderConfigs'] as const) {
+        if (this.loadedSections[section] || this.pendingSettingsSections[section]) continue;
+        this.markPendingSettingSection(section);
+        bridge.request(BridgeMessageType.GlobalSettingsGet, { section });
+      }
+    },
     saveCommon(): void {
       this.status = '正在保存设置，并按需迁移、删除旧数据目录中的插件数据...';
       bridge.request(BridgeMessageType.GlobalSettingsUpdate, {

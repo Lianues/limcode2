@@ -219,6 +219,8 @@ function cancelDelete(): void {
           :options="configPageOptions"
           title="切换配置页"
           empty-text="暂无渠道配置。"
+          searchable
+          search-placeholder="筛选配置页..."
         />
       </label>
 

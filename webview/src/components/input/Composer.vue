@@ -2,8 +2,10 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { IconPencilExclamation, IconSend2 } from '@tabler/icons-vue';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
 import RichContentEditor from '@webview/components/content/RichContentEditor.vue';
+import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -19,6 +21,7 @@ const emit = defineEmits<{
 }>();
 
 const clientState = useClientStateStore();
+const globalSettings = useGlobalSettingsStore();
 const ui = useConversationUiStore();
 const highlighted = ref(false);
 const editorExpanded = ref(false);
@@ -34,6 +37,17 @@ const draft = computed({
 const expandTitle = computed(() => (editorExpanded.value ? '恢复输入框高度' : '扩大输入框'));
 const sendTitle = computed(() => (ui.isEditing ? '提交编辑' : '发送'));
 const modelSummary = computed(() => clientState.currentModelSummary);
+const channelOptions = computed<SettingsDropdownOption[]>(() =>
+  globalSettings.llmProviderConfigs.configs.map((config) => ({
+    value: config.id,
+    label: config.name,
+    description: config.model ? `${providerLabel(config.provider)} · ${config.model}` : providerLabel(config.provider)
+  }))
+);
+const activeChannelId = computed({
+  get: () => globalSettings.llm.activeProviderConfigId || globalSettings.activeLlmProviderConfig?.id || '',
+  set: (configId: string) => globalSettings.selectLlmProviderConfig(configId)
+});
 const editorShellStyle = computed(() => {
   if (!editorExpanded.value || !expandedEditorHeight.value) return undefined;
   return {
@@ -116,6 +130,23 @@ function pulseHighlight(): void {
     highlightTimer = undefined;
   }, 650);
 }
+
+function providerLabel(provider: string): string {
+  switch (provider) {
+    case 'openai-compatible':
+      return 'OpenAI Compatible';
+    case 'openai-responses':
+      return 'OpenAI Responses';
+    case 'claude':
+      return 'Claude';
+    case 'gemini':
+      return 'Gemini';
+    case 'deepseek':
+      return 'DeepSeek';
+    default:
+      return provider;
+  }
+}
 </script>
 
 <template>
@@ -193,10 +224,23 @@ function pulseHighlight(): void {
     </div>
 
     <div class="composer-zone composer-zone-bottom" aria-label="输入框下方功能区">
-      <span v-if="modelSummary.modeName || modelSummary.model" class="composer-meta">
+      <div v-if="modelSummary.modeName || channelOptions.length" class="composer-meta">
         <template v-if="modelSummary.modeName">模式：<code>{{ modelSummary.modeName }}</code></template>
-        <template v-if="modelSummary.model"> · 模型：<code>{{ modelSummary.model }}</code></template>
-      </span>
+        <template v-if="channelOptions.length">
+          <span v-if="modelSummary.modeName"> · </span>
+          <span>渠道：</span>
+          <SettingsDropdown
+            v-model="activeChannelId"
+            class="composer-channel-dropdown"
+            :options="channelOptions"
+            title="切换渠道配置页"
+            empty-text="暂无渠道配置"
+            searchable
+            search-placeholder="筛选渠道..."
+            :max-height="220"
+          />
+        </template>
+      </div>
       <button
         type="button"
         class="composer-send"
@@ -368,16 +412,53 @@ function pulseHighlight(): void {
   flex: 1 1 auto;
   min-width: 0;
   margin-right: auto;
-  overflow: hidden;
+  overflow: visible;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-sm);
   line-height: 1.4;
   white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
 .composer-meta code {
   font-size: inherit;
+}
+
+.composer-channel-dropdown {
+  width: min(240px, 38vw);
+  min-width: 150px;
+  --lc-dropdown-transform-origin: bottom left;
+  --lc-dropdown-offset-y: 4px;
+}
+
+.composer-channel-dropdown :deep(button.settings-dropdown-button) {
+  min-height: 24px;
+  border-color: transparent;
+  padding: 2px 6px;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  font-size: var(--font-size-sm);
+}
+
+.composer-channel-dropdown :deep(button.settings-dropdown-button:hover:not(:disabled)),
+.composer-channel-dropdown :deep(button.settings-dropdown-button[aria-expanded='true']),
+.composer-channel-dropdown :deep(button.settings-dropdown-button:focus-visible),
+.composer-channel-dropdown :deep(button.settings-dropdown-button:active) {
+  color: var(--vscode-foreground);
+  border-color: var(--vscode-panel-border, transparent);
+  background: var(--vscode-list-hoverBackground, transparent);
+}
+
+.composer-channel-dropdown :deep(.settings-dropdown-panel) {
+  top: auto;
+  bottom: calc(100% + 4px);
+  width: 100%;
+}
+
+.composer-channel-dropdown :deep(.settings-dropdown-caret) {
+  color: currentColor;
 }
 
 .composer-send {

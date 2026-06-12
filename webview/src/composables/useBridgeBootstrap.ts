@@ -49,6 +49,7 @@ export function useBridgeBootstrap(): void {
           globalSettings.requestAll();
           return;
         }
+        globalSettings.requestChannelSettings();
         if (message.payload?.meta?.conversationId) {
           clientState.setCurrentConversation(message.payload.meta.conversationId);
         }

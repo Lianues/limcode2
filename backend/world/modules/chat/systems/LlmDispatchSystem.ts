@@ -14,7 +14,7 @@ import {
 } from '../../agentRun/components';
 import { ToolCall, ToolState } from '../../tools/components';
 import { ToolSchemasKey } from '../../tools/resources';
-import { InFlight, LlmRequest, Message, MessageCurrentRevisionLink, PartOf } from '../components';
+import { Conversation, InFlight, LlmRequest, Message, MessageCurrentRevisionLink, PartOf } from '../components';
 import { textContent } from '../../../../../shared/protocol';
 import type { LlmModelSettings, LlmStartRequest, ToolSchema } from '../../llm/contracts';
 import {
@@ -118,6 +118,7 @@ export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmSt
 
   const systemPrompt = activeSystemPromptForRun(world, input.run)?.text;
   const modelProfile = activeModelProfileForRun(world, input.run);
+  const conversation = world.get(context.conversation, Conversation);
   const model = modelProfile === undefined
     ? undefined
     : { provider: modelProfile.provider, model: modelProfile.model } satisfies LlmModelSettings;
@@ -134,6 +135,7 @@ export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmSt
     systemInstruction: systemPrompt ? textContent('user', systemPrompt) : undefined,
     contents,
     tools,
+    conversationId: conversation?.id,
     model
   };
 }

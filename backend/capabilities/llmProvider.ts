@@ -22,7 +22,7 @@ import type {
 
 export const DEFAULT_LLM_BASE_URL = 'https://api.openai.com/v1';
 
-type MaybeProvider<T> = T | undefined | (() => T | undefined | Promise<T | undefined>);
+type MaybeProvider<T, TArg = void> = T | undefined | ((arg: TArg) => T | undefined | Promise<T | undefined>);
 
 type UnifiedModule = typeof import('unified-llm-provider');
 type UnifiedContent = import('unified-llm-provider').Content;
@@ -52,7 +52,7 @@ interface UnifiedDryRunCapable {
 }
 
 export interface LlmProviderOptions {
-  settings: MaybeProvider<LlmProviderConfigRecord>;
+  settings: MaybeProvider<LlmProviderConfigRecord, LlmStartRequest | undefined>;
   headers?: MaybeProvider<Record<string, string>>;
 }
 
@@ -99,7 +99,7 @@ export async function startLlmProvider(
   signal?: AbortSignal
 ): Promise<void> {
   try {
-    const settings = normalizeSettings(await resolveMaybe(options.settings));
+    const settings = normalizeSettings(await resolveMaybe(options.settings, request));
     if (!settings.apiKey) {
       emitLlmError(emit, request.id, '缺少 LLM API Key。请在全局设置的“渠道”页签里填写并保存。');
       return;
@@ -155,7 +155,7 @@ export async function startLlmProvider(
 }
 
 export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmProviderOptions, dryRunOptions: LlmDryRunOptions = {}): Promise<LlmDryRunResult> {
-  const settings = normalizeSettings(await resolveMaybe(options.settings));
+  const settings = normalizeSettings(await resolveMaybe(options.settings, request));
   if (!settings.apiKey) {
     throw new Error('缺少 LLM API Key，无法构建真实 provider 请求。');
   }
@@ -504,8 +504,8 @@ function normalizeOptionalString(value: string | undefined): string | undefined 
   return trimmed || undefined;
 }
 
-async function resolveMaybe<T>(value: MaybeProvider<T>): Promise<T | undefined> {
-  if (typeof value === 'function') return (value as () => T | undefined | Promise<T | undefined>)();
+async function resolveMaybe<T, TArg = void>(value: MaybeProvider<T, TArg>, arg?: TArg): Promise<T | undefined> {
+  if (typeof value === 'function') return (value as (input: TArg | undefined) => T | undefined | Promise<T | undefined>)(arg);
   return value;
 }
 

@@ -18,6 +18,7 @@ export interface LlmStartRequest {
   systemInstruction?: MessageContent;
   contents: MessageContent[];
   tools: ToolSchema[];
+  conversationId?: string;
   model?: LlmModelSettings;
 }
 

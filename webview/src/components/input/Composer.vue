@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { IconPencilExclamation, IconSend2 } from '@tabler/icons-vue';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
+import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
 import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
 import RichContentEditor from '@webview/components/content/RichContentEditor.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
@@ -22,6 +23,7 @@ const emit = defineEmits<{
 
 const clientState = useClientStateStore();
 const globalSettings = useGlobalSettingsStore();
+const conversationSettings = useConversationSettingsStore();
 const ui = useConversationUiStore();
 const highlighted = ref(false);
 const editorExpanded = ref(false);
@@ -45,8 +47,8 @@ const channelOptions = computed<SettingsDropdownOption[]>(() =>
   }))
 );
 const activeChannelId = computed({
-  get: () => globalSettings.llm.activeProviderConfigId || globalSettings.activeLlmProviderConfig?.id || '',
-  set: (configId: string) => globalSettings.selectLlmProviderConfig(configId)
+  get: () => conversationSettings.llm.activeProviderConfigId || globalSettings.llm.activeProviderConfigId || globalSettings.activeLlmProviderConfig?.id || '',
+  set: (configId: string) => selectChannel(configId)
 });
 const editorShellStyle = computed(() => {
   if (!editorExpanded.value || !expandedEditorHeight.value) return undefined;
@@ -146,6 +148,16 @@ function providerLabel(provider: string): string {
     default:
       return provider;
   }
+}
+
+function selectChannel(configId: string): void {
+  if (!configId) return;
+  const conversationId = clientState.currentConversationId;
+  if (conversationId) {
+    conversationSettings.selectLlmProviderConfigForConversation(conversationId, configId);
+    return;
+  }
+  globalSettings.selectLlmProviderConfig(configId);
 }
 </script>
 

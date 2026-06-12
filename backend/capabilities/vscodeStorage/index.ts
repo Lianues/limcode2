@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type {
+  ConversationLlmSettingsRecord,
   ConversationSettingsRecord,
   GlobalSettingsRecord,
   GlobalSettingsSectionValue,
@@ -182,10 +183,16 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       await writeGlobalSettingsFile(paths.settingsRootUri, section, settings);
       return loadGlobalSettingsFile(paths.settingsRootUri, section);
     },
-    async loadActiveLlmProviderConfig() {
+    async loadActiveLlmProviderConfig(conversationId) {
       const paths = getPaths();
       await ensureLlmSettingsRoots(paths);
       const configs = (await loadLlmProviderConfigsSettings(paths)).settings.configs;
+      if (conversationId) {
+        const conversationSettings = await this.loadConversationSettings(conversationId, 'llm');
+        const activeProviderConfigId = (conversationSettings?.settings as ConversationLlmSettingsRecord | undefined)?.activeProviderConfigId;
+        const conversationConfig = activeProviderConfigId ? configs.find((config) => config.id === activeProviderConfigId) : undefined;
+        if (conversationConfig) return conversationConfig;
+      }
       const stored = await loadNormalizedLlmGlobalSettings(paths);
       const activeConfigId = (stored.settings as LlmSettingsRecord).activeProviderConfigId;
       return configs.find((config) => config.id === activeConfigId) ?? configs[0]!;
@@ -193,14 +200,22 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     async loadConversationSettings(conversationId, section) {
       const paths = getPaths();
       const uri = conversationSettingsUri(paths, conversationId, section);
+      if (section === 'llm') {
+        const settings = await readJson<ConversationLlmSettingsRecord>(uri);
+        return settings
+          ? { conversationId, section, settings: normalizeConversationLlmSettings(conversationId, settings), filePath: uri.fsPath }
+          : { conversationId, section, settings: normalizeConversationLlmSettings(conversationId), filePath: uri.fsPath };
+      }
       const settings = await readJson<ConversationSettingsRecord>(uri);
-      return settings ? { conversationId, section, settings, filePath: uri.fsPath } : undefined;
+      return settings ? { conversationId, section, settings: normalizeConversationCommonSettings(conversationId, settings), filePath: uri.fsPath } : undefined;
     },
     async saveConversationSettings(section, settings) {
       const paths = getPaths();
       await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
-      const conversationId = (settings as ConversationSettingsRecord).conversationId;
-      const normalized: ConversationSettingsRecord = { conversationId, name: (settings as ConversationSettingsRecord).name };
+      const conversationId = (settings as ConversationSettingsRecord | ConversationLlmSettingsRecord).conversationId;
+      const normalized = section === 'llm'
+        ? normalizeConversationLlmSettings(conversationId, settings as Partial<ConversationLlmSettingsRecord>)
+        : normalizeConversationCommonSettings(conversationId, settings as Partial<ConversationSettingsRecord>);
       const uri = conversationSettingsUri(paths, conversationId, section);
       await writeJson(uri, normalized);
       return { conversationId, section, settings: normalized, filePath: uri.fsPath };
@@ -214,4 +229,15 @@ function conversationSettingsUri(paths: StoragePaths, conversationId: string, se
 
 function safeFileName(input: string): string {
   return input.replace(/[^a-zA-Z0-9_.-]+/g, '_');
+}
+
+function normalizeConversationCommonSettings(conversationId: string, settings: Partial<ConversationSettingsRecord> | undefined): ConversationSettingsRecord {
+  return { conversationId, name: typeof settings?.name === 'string' ? settings.name : '' };
+}
+
+function normalizeConversationLlmSettings(
+  conversationId: string,
+  settings: Partial<ConversationLlmSettingsRecord> | undefined = undefined
+): ConversationLlmSettingsRecord {
+  return { conversationId, activeProviderConfigId: typeof settings?.activeProviderConfigId === 'string' ? settings.activeProviderConfigId.trim() : '' };
 }

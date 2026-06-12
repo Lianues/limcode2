@@ -28,7 +28,7 @@ export function globalSettingsStreamId(section: GlobalSettingsSection): string {
 }
 
 export const CONVERSATION_SETTINGS_STREAM_PREFIX = 'settings:conversation:';
-export const CONVERSATION_SETTINGS_SECTIONS = ['common'] as const;
+export const CONVERSATION_SETTINGS_SECTIONS = ['common', 'llm'] as const;
 export type ConversationSettingsSection = typeof CONVERSATION_SETTINGS_SECTIONS[number];
 export const CONVERSATION_CLIENT_STATE_STREAM_PREFIX = 'conversation:';
 export const CONVERSATION_CLIENT_STATE_STREAM_SUFFIX = ':state';
@@ -947,7 +947,11 @@ export interface ConversationSettingsRecord {
   conversationId: string;
   name: string;
 }
-export type ConversationSettingsSectionValue = ConversationSettingsRecord;
+export interface ConversationLlmSettingsRecord {
+  conversationId: string;
+  activeProviderConfigId: string;
+}
+export type ConversationSettingsSectionValue = ConversationSettingsRecord | ConversationLlmSettingsRecord;
 export interface ConversationSettingsGetPayload {
   conversationId: string;
   section: ConversationSettingsSection;

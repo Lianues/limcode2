@@ -206,7 +206,7 @@ export interface StorageCapability {
   appendToolCallEvent(conversationId: string, event: ToolCallEventRecord): Promise<void>;
   loadGlobalSettings(section: GlobalSettingsSection): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
   saveGlobalSettings(section: GlobalSettingsSection, settings: GlobalSettingsSectionValue): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
-  loadActiveLlmProviderConfig(): Promise<LlmProviderConfigRecord>;
+  loadActiveLlmProviderConfig(conversationId?: string): Promise<LlmProviderConfigRecord>;
   loadConversationSettings(conversationId: string, section: ConversationSettingsSection): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string } | undefined>;
   saveConversationSettings(section: ConversationSettingsSection, settings: ConversationSettingsSectionValue): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }>;
 }

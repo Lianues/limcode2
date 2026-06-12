@@ -24,8 +24,8 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
   const registry = createToolRegistry(command);
   const storage = createVsCodeStorageCapability(context);
   const llm = createLlmProviderCapability({
-    settings: async () => {
-      return storage.loadActiveLlmProviderConfig();
+    settings: async (request) => {
+      return storage.loadActiveLlmProviderConfig(request?.conversationId);
     },
     headers: { 'User-Agent': 'LimCode/0.0.1' }
   });

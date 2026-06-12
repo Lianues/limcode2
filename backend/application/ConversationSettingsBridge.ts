@@ -6,6 +6,7 @@ import {
   conversationSettingsStreamId,
   createMessageId,
   type BridgeClientId,
+  type ConversationLlmSettingsRecord,
   type ConversationSettingsRecord,
   type ConversationSettingsSection,
   type ConversationSettingsSectionValue,
@@ -33,7 +34,7 @@ export class ConversationSettingsBridge {
   public async update(payload: ConversationSettingsUpdatePayload | undefined, correlationId?: string): Promise<void> {
     if (!payload) return;
     const settings = normalizeConversationSettings(payload.section, payload.settings);
-    if (payload.section === 'common') this.applyCommonSettingsToWorld(settings);
+    if (payload.section === 'common') this.applyCommonSettingsToWorld(settings as ConversationSettingsRecord);
 
     const stored = await this.deps.storage.saveConversationSettings(payload.section, settings);
     this.deps.webview.broadcastToStream(conversationSettingsStreamId(stored.conversationId, stored.section), this.createSnapshotMessage(stored, correlationId));
@@ -43,14 +44,22 @@ export class ConversationSettingsBridge {
 
   private async readSettings(conversationId: string, section: ConversationSettingsSection): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }> {
     const stored = await this.deps.storage.loadConversationSettings(conversationId, section);
-    if (section !== 'common') return stored ?? { conversationId, section, settings: { conversationId, name: DEFAULT_CONVERSATION_TITLE }, filePath: '' };
+    if (section === 'llm') {
+      const settings = stored?.settings as ConversationLlmSettingsRecord | undefined;
+      return {
+        conversationId,
+        section,
+        settings: normalizeConversationLlmSettings(conversationId, settings),
+        filePath: stored?.filePath ?? ''
+      };
+    }
 
     const entity = this.findConversation(conversationId);
     const conversation = entity === undefined ? undefined : this.deps.world.get(entity, Conversation);
     const settings = conversation
       ? { conversationId, name: displayConversationTitle({ id: conversationId, title: conversation.title }) }
       : (stored?.settings as ConversationSettingsRecord | undefined) ?? { conversationId, name: DEFAULT_CONVERSATION_TITLE };
-    return { conversationId, section, settings, filePath: stored?.filePath ?? '' };
+    return { conversationId, section, settings: normalizeConversationCommonSettings(conversationId, settings), filePath: stored?.filePath ?? '' };
   }
 
   private createSnapshotMessage(stored: { conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }, correlationId?: string): ExtensionToWebviewMessage {
@@ -77,9 +86,17 @@ export class ConversationSettingsBridge {
   }
 }
 
-function normalizeConversationSettings(section: ConversationSettingsSection, settings: ConversationSettingsSectionValue): ConversationSettingsRecord {
-  void section;
-  const id = settings.conversationId;
-  const name = settings.name.trim() || DEFAULT_CONVERSATION_TITLE;
-  return { conversationId: id, name };
+function normalizeConversationSettings(section: ConversationSettingsSection, settings: ConversationSettingsSectionValue): ConversationSettingsSectionValue {
+  return section === 'llm'
+    ? normalizeConversationLlmSettings((settings as ConversationLlmSettingsRecord).conversationId, settings as ConversationLlmSettingsRecord)
+    : normalizeConversationCommonSettings((settings as ConversationSettingsRecord).conversationId, settings as ConversationSettingsRecord);
+}
+
+function normalizeConversationCommonSettings(conversationId: string, settings: Partial<ConversationSettingsRecord> | undefined): ConversationSettingsRecord {
+  const name = settings?.name?.trim() || DEFAULT_CONVERSATION_TITLE;
+  return { conversationId, name };
+}
+
+function normalizeConversationLlmSettings(conversationId: string, settings: Partial<ConversationLlmSettingsRecord> | undefined): ConversationLlmSettingsRecord {
+  return { conversationId, activeProviderConfigId: settings?.activeProviderConfigId?.trim() ?? '' };
 }

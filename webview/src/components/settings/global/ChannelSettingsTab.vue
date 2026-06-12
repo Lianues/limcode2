@@ -4,6 +4,7 @@ import { IconCloudDown, IconPencil, IconPlus, IconSearch, IconTrash } from '@tab
 import type {
   LlmGenerationConfigRecord,
   LlmProviderConfigRecord,
+  LlmProviderHeadersRecord,
   LlmProviderKind,
   LlmProviderModelRecord,
   LlmRequestBodyRecord,
@@ -15,6 +16,7 @@ import InputPanel from '@webview/components/ui/InputPanel.vue';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import ModelFetchDialog from './ModelFetchDialog.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from './SettingsDropdown.vue';
+import LlmHeadersSettings from './parameters/LlmHeadersSettings.vue';
 import LlmParameterSettings from './parameters/LlmParameterSettings.vue';
 
 const settings = useGlobalSettingsStore();
@@ -87,6 +89,10 @@ function updateGenerationConfig(value: LlmGenerationConfigRecord | undefined): v
 
 function updateRequestBody(value: LlmRequestBodyRecord | undefined): void {
   settings.updateActiveLlmRequestBody(value);
+}
+
+function updateHeaders(value: LlmProviderHeadersRecord | undefined): void {
+  settings.updateActiveLlmHeaders(value);
 }
 
 function providerLabel(provider: LlmProviderKind | undefined): string {
@@ -255,13 +261,6 @@ function cancelDelete(): void {
         <input :value="activeConfig.apiKey" type="text" placeholder="sk-..." autocomplete="off" spellcheck="false" @input="updateActiveConfigField('apiKey', inputValue($event))" />
       </label>
 
-      <LlmParameterSettings
-        class="global-settings-field-wide"
-        :config="activeConfig"
-        @update-generation-config="updateGenerationConfig"
-        @update-request-body="updateRequestBody"
-      />
-
       <section class="model-manager global-settings-field-wide" aria-label="模型列表">
         <header class="model-manager-header">
           <label>模型列表</label>
@@ -324,6 +323,19 @@ function cancelDelete(): void {
           </div>
         </div>
       </section>
+
+      <LlmParameterSettings
+        class="global-settings-field-wide"
+        :config="activeConfig"
+        @update-generation-config="updateGenerationConfig"
+        @update-request-body="updateRequestBody"
+      />
+
+      <LlmHeadersSettings
+        class="global-settings-field-wide"
+        :model-value="activeConfig.headers ?? {}"
+        @update:model-value="updateHeaders"
+      />
     </div>
 
     <div v-else class="global-settings-empty">暂无渠道配置，请新建一个配置页。</div>

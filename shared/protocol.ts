@@ -222,6 +222,7 @@ export type LlmRequestBodyJsonValue =
   | { [key: string]: LlmRequestBodyJsonValue };
 
 export type LlmRequestBodyRecord = Record<string, LlmRequestBodyJsonValue>;
+export type LlmProviderHeadersRecord = Record<string, string>;
 
 export interface LlmUsageMetadataRecord {
   promptTokenCount?: number;
@@ -258,6 +259,7 @@ export interface LlmProviderConfigRecord {
   apiKey: string;
   toolCallFormat: LlmToolCallFormat;
   proxy?: string;
+  headers?: LlmProviderHeadersRecord;
   generationConfig?: LlmGenerationConfigRecord;
   requestBody?: LlmRequestBodyRecord;
   createdAt: number;

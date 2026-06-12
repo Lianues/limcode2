@@ -3,6 +3,7 @@ import type {
   LlmGenerationConfigRecord,
   LlmProviderConfigRecord,
   LlmProviderConfigsRecord,
+  LlmProviderHeadersRecord,
   LlmProviderKind,
   LlmProviderModelRecord,
   LlmRequestBodyJsonValue,
@@ -75,6 +76,7 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
   const updatedAt = finiteTimestamp(input?.updatedAt, createdAt);
   const model = typeof input?.model === 'string' ? input.model.trim() : fallback.model;
   const models = normalizeProviderModels(input?.models, model);
+  const headers = normalizeHeaders(input?.headers);
   const generationConfig = normalizeGenerationConfig(input?.generationConfig);
   const requestBody = normalizeRequestBody(input?.requestBody);
   return {
@@ -87,6 +89,7 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
     apiKey: typeof input?.apiKey === 'string' ? input.apiKey.trim() : fallback.apiKey,
     toolCallFormat: isKnownToolCallFormat(input?.toolCallFormat) ? input.toolCallFormat : fallback.toolCallFormat,
     ...(optionalString(input?.proxy) ? { proxy: optionalString(input?.proxy) } : {}),
+    ...(headers ? { headers } : {}),
     ...(generationConfig ? { generationConfig } : {}),
     ...(requestBody ? { requestBody } : {}),
     createdAt,
@@ -175,6 +178,18 @@ function optionalString(value: unknown): string | undefined {
 function finiteTimestamp(value: unknown, fallback: number): number {
   const timestamp = Number(value);
   return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : fallback;
+}
+
+function normalizeHeaders(input: unknown): LlmProviderHeadersRecord | undefined {
+  if (!isPlainObject(input)) return undefined;
+  const headers: LlmProviderHeadersRecord = {};
+  for (const [rawKey, rawValue] of Object.entries(input)) {
+    const key = rawKey.trim();
+    if (!key) continue;
+    if (typeof rawValue !== 'string' && typeof rawValue !== 'number' && typeof rawValue !== 'boolean') continue;
+    headers[key] = String(rawValue).trim();
+  }
+  return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
 function normalizeGenerationConfig(input: unknown): LlmGenerationConfigRecord | undefined {

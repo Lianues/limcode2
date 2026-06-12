@@ -7,6 +7,7 @@ import {
   type GlobalSettingsSnapshotPayload,
   type LlmGenerationConfigRecord,
   type LlmProviderKind,
+  type LlmProviderHeadersRecord,
   type LlmProviderConfigRecord,
   type LlmProviderModelRecord,
   type LlmRequestBodyJsonValue,
@@ -87,6 +88,7 @@ function createDefaultProviderConfig(name = '新渠道配置', provider: LlmProv
     apiKey: '',
     toolCallFormat: 'function-call',
     proxy: '',
+    headers: {},
     generationConfig: {},
     requestBody: {},
     createdAt: now,
@@ -101,6 +103,7 @@ function normalizeProviderConfigForUi(config: LlmProviderConfigRecord): LlmProvi
     model,
     models: normalizeModelsForUi(config.models, model),
     proxy: config.proxy ?? '',
+    headers: sanitizeHeaders(config.headers) ?? {},
     generationConfig: normalizeGenerationConfigForUi(config.generationConfig) ?? {},
     requestBody: sanitizeRequestBody(config.requestBody) ?? {}
   };
@@ -129,6 +132,18 @@ function sanitizeModels(models: LlmProviderModelRecord[]): LlmProviderModelRecor
     byId.set(id, { id, name, ...(createdAt ? { createdAt } : {}) });
   }
   return [...byId.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function sanitizeHeaders(input: LlmProviderHeadersRecord | undefined): LlmProviderHeadersRecord | undefined {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const headers: LlmProviderHeadersRecord = {};
+  for (const [rawKey, rawValue] of Object.entries(input)) {
+    const key = rawKey.trim();
+    if (!key) continue;
+    if (typeof rawValue !== 'string' && typeof rawValue !== 'number' && typeof rawValue !== 'boolean') continue;
+    headers[key] = String(rawValue).trim();
+  }
+  return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
 function normalizeGenerationConfigForUi(input: LlmGenerationConfigRecord | undefined): LlmGenerationConfigRecord | undefined {
@@ -220,6 +235,7 @@ function toPlainProviderConfig(config: LlmProviderConfigRecord): LlmProviderConf
     apiKey: config.apiKey,
     toolCallFormat: config.toolCallFormat,
     ...(config.proxy?.trim() ? { proxy: config.proxy.trim() } : {}),
+    ...(sanitizeHeaders(config.headers) ? { headers: sanitizeHeaders(config.headers) } : {}),
     ...(sanitizeGenerationConfig(config.generationConfig) ? { generationConfig: sanitizeGenerationConfig(config.generationConfig) } : {}),
     ...(sanitizeRequestBody(config.requestBody) ? { requestBody: sanitizeRequestBody(config.requestBody) } : {}),
     createdAt: config.createdAt,
@@ -362,6 +378,12 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       const config = this.activeLlmProviderConfig;
       if (!config) return;
       config.requestBody = sanitizeRequestBody(requestBody) ?? {};
+      config.updatedAt = Date.now();
+    },
+    updateActiveLlmHeaders(headers: LlmProviderHeadersRecord | undefined): void {
+      const config = this.activeLlmProviderConfig;
+      if (!config) return;
+      config.headers = sanitizeHeaders(headers) ?? {};
       config.updatedAt = Date.now();
     },
     requestModelsForActiveConfig(): void {

@@ -92,6 +92,11 @@
   font-size: var(--font-size-sm);
 }
 
+.global-settings-field > span {
+  color: var(--vscode-foreground);
+  font-weight: 600;
+}
+
 .global-settings-field-wide {
   grid-column: 1 / -1;
 }
@@ -163,8 +168,9 @@
 }
 
 .model-manager-header label {
-  color: var(--vscode-descriptionForeground);
+  color: var(--vscode-foreground);
   font-size: var(--font-size-sm);
+  font-weight: 600;
 }
 
 .model-manager-actions {

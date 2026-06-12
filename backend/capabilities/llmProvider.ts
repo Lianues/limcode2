@@ -12,6 +12,7 @@ import type {
   ContentPart,
   LlmGenerationConfigRecord,
   LlmProviderConfigRecord,
+  LlmProviderHeadersRecord,
   LlmProviderKind,
   LlmProviderModelRecord,
   LlmToolCallFormat,
@@ -109,13 +110,14 @@ export async function startLlmProvider(
     const registry = unified.createBootstrapExtensionRegistry();
     const proxy = normalizeOptionalString(settings.proxy);
     const proxyFetch = proxy ? await createUndiciFetch() : undefined;
+    const headers = mergeHeaders(await resolveMaybe(options.headers), settings.headers);
     if (proxy) console.log(`[LimCode] LLM proxy enabled: ${proxy} (fetch=undici)`);
     const provider = unified.createLLMFromConfig({
       provider: settings.provider,
       model: settings.model,
       apiKey: settings.apiKey,
       baseUrl: settings.baseUrl,
-      headers: await resolveMaybe(options.headers),
+      ...(headers ? { headers } : {}),
       ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
       ...(proxy ? { proxy, fetch: proxyFetch } : {})
     }, registry.llmProviders);
@@ -162,12 +164,13 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
   const unified = await importUnifiedLlmProvider();
   const registry = unified.createBootstrapExtensionRegistry();
   const proxy = normalizeOptionalString(settings.proxy);
+  const headers = mergeHeaders(await resolveMaybe(options.headers), settings.headers);
   const provider = unified.createLLMFromConfig({
     provider: settings.provider,
     model: settings.model,
     apiKey: settings.apiKey,
     baseUrl: settings.baseUrl,
-    headers: await resolveMaybe(options.headers),
+    ...(headers ? { headers } : {}),
     ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
     ...(proxy ? { proxy } : {})
   }, registry.llmProviders);
@@ -210,11 +213,12 @@ export async function listLlmProviderModels(config: LlmProviderConfigRecord, opt
   }
 
   const unified = await importUnifiedLlmProvider();
+  const headers = mergeHeaders(await resolveMaybe(options.headers), settings.headers);
   const result = await unified.listAvailableModels({
     provider: settings.provider,
     apiKey: settings.apiKey,
     baseUrl: settings.baseUrl,
-    headers: await resolveMaybe(options.headers),
+    ...(headers ? { headers } : {}),
     outputFormat: 'unified'
   });
 
@@ -231,6 +235,7 @@ function modelCatalogEntryToRecord(model: UnifiedModelCatalogEntry): LlmProvider
 
 function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmProviderConfigRecord {
   const proxy = normalizeOptionalString(settings?.proxy);
+  const headers = normalizeHeaders(settings?.headers);
   const generationConfig = settings?.generationConfig;
   const requestBody = settings?.requestBody;
   return {
@@ -243,6 +248,7 @@ function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmPr
     apiKey: settings?.apiKey?.trim() ?? '',
     toolCallFormat: normalizeToolCallFormat(settings?.toolCallFormat),
     ...(proxy ? { proxy } : {}),
+    ...(headers ? { headers } : {}),
     ...(nonEmptyRecord(generationConfig) ? { generationConfig } : {}),
     ...(nonEmptyRecord(requestBody) ? { requestBody } : {}),
     createdAt: settings?.createdAt ?? 0,
@@ -258,6 +264,33 @@ function normalizeProvider(provider: LlmProviderKind | undefined): LlmProviderKi
 
 function normalizeToolCallFormat(format: LlmToolCallFormat | undefined): LlmToolCallFormat {
   return format === 'function-call' ? format : 'function-call';
+}
+
+function normalizeHeaders(headers: unknown): LlmProviderHeadersRecord | undefined {
+  if (!isRecord(headers)) return undefined;
+  const result: LlmProviderHeadersRecord = {};
+  for (const [rawKey, rawValue] of Object.entries(headers)) {
+    const key = rawKey.trim();
+    if (!key) continue;
+    if (typeof rawValue !== 'string' && typeof rawValue !== 'number' && typeof rawValue !== 'boolean') continue;
+    result[key] = String(rawValue).trim();
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function mergeHeaders(...records: Array<Record<string, string> | undefined>): LlmProviderHeadersRecord | undefined {
+  const result: LlmProviderHeadersRecord = {};
+  for (const record of records) {
+    if (!record) continue;
+    for (const [rawKey, rawValue] of Object.entries(record)) {
+      const key = rawKey.trim();
+      if (!key) continue;
+      const existingKey = Object.keys(result).find((candidate) => candidate.toLowerCase() === key.toLowerCase());
+      if (existingKey && existingKey !== key) delete result[existingKey];
+      result[key] = rawValue;
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function nonEmptyRecord(value: unknown): value is Record<string, unknown> {

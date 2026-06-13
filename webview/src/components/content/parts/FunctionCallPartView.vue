@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { IconTool } from '@tabler/icons-vue';
-import type { FunctionCallPart, ToolCallRecord, ToolCallStatus } from '@shared/protocol';
+import type { FunctionCallPart, ToolCallRecord, ToolCallStatus, ToolSchedulingMode } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { bridge, BridgeMessageType } from '@webview/transport';
 import ContentBlockSection from '../ContentBlockSection.vue';
@@ -10,6 +10,13 @@ import CollapsibleContentBlock from '../CollapsibleContentBlock.vue';
 const props = defineProps<{
   part: FunctionCallPart;
   messageId?: string;
+  batchIndex?: number;
+  batchMode?: ToolSchedulingMode;
+  batchState?: 'active' | 'completed' | 'pending';
+  batchPosition?: 'single' | 'first' | 'middle' | 'last';
+  batchSize?: number;
+  activeBatchIndex?: number;
+  batchColorIndex?: number;
 }>();
 
 const clientState = useClientStateStore();
@@ -44,6 +51,21 @@ const durationLabel = computed(() => {
   const duration = toolCall.value?.durationMs;
   if (duration === undefined) return undefined;
   return duration < 1000 ? `${Math.round(duration)}ms` : `${(duration / 1000).toFixed(duration < 10_000 ? 1 : 0)}s`;
+});
+const hasBatchMeta = computed(() => props.batchIndex !== undefined && props.batchMode !== undefined && props.batchState !== undefined);
+const batchModeLabel = computed(() => props.batchMode === 'parallel' ? '并行批次' : '串行批次');
+const batchStateLabel = computed(() => {
+  switch (props.batchState) {
+    case 'active': return '当前执行';
+    case 'completed': return '已完成';
+    case 'pending': return '等待中';
+    default: return '';
+  }
+});
+const batchTitle = computed(() => {
+  if (!hasBatchMeta.value) return undefined;
+  const active = props.activeBatchIndex ? `当前批次：B${props.activeBatchIndex}` : '当前批次：无';
+  return `B${props.batchIndex} · ${batchModeLabel.value} · ${batchStateLabel.value} · ${active}`;
 });
 const toggleLabel = computed(() => {
   if (!hasDetails.value) return `工具调用 ${props.part.functionCall.name}`;
@@ -151,10 +173,17 @@ function isInternalApprovalProgress(progress: unknown): boolean {
   <CollapsibleContentBlock
     v-model:expanded="expanded"
     class="tool-call-card"
-    :class="toolCall ? `status-${toolCall.status}` : undefined"
+    :class="[
+      toolCall ? `status-${toolCall.status}` : undefined,
+      hasBatchMeta ? `batch-${batchState}` : undefined,
+      hasBatchMeta ? `batch-pos-${batchPosition}` : undefined,
+      hasBatchMeta ? `batch-mode-${batchMode}` : undefined,
+      hasBatchMeta ? `batch-color-${batchColorIndex ?? 1}` : undefined
+    ]"
     kind="input"
     :collapsible="hasDetails"
     :aria-label="toggleLabel"
+    :title="batchTitle"
   >
     <template #icon>
       <IconTool stroke="2" aria-hidden="true" />
@@ -191,6 +220,52 @@ function isInternalApprovalProgress(progress: unknown): boolean {
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-sm);
   font-style: normal;
+  --tool-batch-color: transparent;
+}
+
+.tool-call-card.batch-color-1 { --tool-batch-color: #6a9955; }
+.tool-call-card.batch-color-2 { --tool-batch-color: #c5863a; }
+.tool-call-card.batch-color-3 { --tool-batch-color: #b5cea8; }
+.tool-call-card.batch-color-4 { --tool-batch-color: #ce9178; }
+.tool-call-card.batch-color-5 { --tool-batch-color: #4ec9b0; }
+
+.tool-call-card.batch-color-1 :deep(.lc-collapsible-summary),
+.tool-call-card.batch-color-2 :deep(.lc-collapsible-summary),
+.tool-call-card.batch-color-3 :deep(.lc-collapsible-summary),
+.tool-call-card.batch-color-4 :deep(.lc-collapsible-summary),
+.tool-call-card.batch-color-5 :deep(.lc-collapsible-summary) {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--tool-batch-color) 78%, var(--vscode-editor-background) 22%);
+}
+
+.tool-call-card.batch-active :deep(.lc-collapsible-summary) {
+  box-shadow: inset 4px 0 0 var(--tool-batch-color);
+  border-color: color-mix(in srgb, var(--vscode-panel-border) 62%, var(--tool-batch-color) 38%);
+}
+
+.tool-call-card.batch-pending :deep(.lc-collapsible-summary) {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--tool-batch-color) 38%, transparent);
+  opacity: 0.86;
+}
+
+.tool-call-card.batch-completed :deep(.lc-collapsible-summary) {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--tool-batch-color) 52%, transparent);
+}
+
+.tool-call-card.batch-pos-middle,
+.tool-call-card.batch-pos-last {
+  margin-top: calc(-1 * var(--space-1));
+}
+
+.tool-call-card.batch-mode-parallel.batch-active :deep(.lc-collapsible-summary) {
+  box-shadow:
+    inset 3px 0 0 var(--tool-batch-color),
+    inset 7px 0 0 color-mix(in srgb, var(--tool-batch-color) 32%, transparent);
+}
+
+.tool-call-card.batch-mode-serial.batch-active :deep(.lc-collapsible-summary) {
+  box-shadow:
+    inset 4px 0 0 var(--tool-batch-color),
+    inset 6px 0 0 color-mix(in srgb, var(--vscode-editor-background) 70%, transparent);
 }
 
 .part-card-name {

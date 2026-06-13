@@ -4,7 +4,8 @@ import { Agent } from '../agent/components';
 import { AgentRun } from '../agentRun/components';
 import { Conversation, Message, PartOf } from '../chat/components';
 import { AgentMode, ToolPolicy } from '../mode/components';
-import { ToolDefinitionsKey } from './resources';
+import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey } from './resources';
+import { toolSchedulingDecision } from './scheduling';
 import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolPolicyScopeLinkData } from './components';
 
 export const toolsRuntimeStateProjectionReads: AccessDeclaration = {
@@ -21,12 +22,13 @@ export const toolsRuntimeStateProjectionReads: AccessDeclaration = {
     ToolCallEvent,
     ToolResultConsumed,
     ToolPolicyScopeLink
-  ]
+  ],
+  resources: [ToolDefinitionsKey, ToolRuntimeDefinitionsKey]
 };
 
 export const toolsClientStateProjectionReads: AccessDeclaration = {
   ...toolsRuntimeStateProjectionReads,
-  resources: [ToolDefinitionsKey]
+  resources: [ToolDefinitionsKey, ToolRuntimeDefinitionsKey]
 };
 
 export const toolsStateProjectionReads = toolsClientStateProjectionReads;
@@ -69,6 +71,7 @@ function buildToolCallRecord(world: WorldReader, entity: number): ToolCallRecord
 
   const message = world.get(messageEntity, Message);
   if (!message) return undefined;
+  const scheduling = toolSchedulingDecision(world, entity);
 
   return {
     id: call.id,
@@ -80,6 +83,8 @@ function buildToolCallRecord(world: WorldReader, entity: number): ToolCallRecord
     ...(state.result !== undefined ? { result: state.result } : {}),
     ...(state.error !== undefined ? { error: state.error } : {}),
     ...(state.progress !== undefined ? { progress: state.progress } : {}),
+    schedulingMode: scheduling.mode,
+    ...(scheduling.reason ? { schedulingReason: scheduling.reason } : {}),
     ...(state.durationMs !== undefined ? { durationMs: state.durationMs } : {}),
     createdAt: call.createdAt,
     updatedAt: state.updatedAt

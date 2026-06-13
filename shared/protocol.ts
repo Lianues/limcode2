@@ -201,6 +201,7 @@ export type ToolCallStatus = typeof TOOL_CALL_STATUSES[number];
 export const TERMINAL_TOOL_CALL_STATUSES: ReadonlySet<ToolCallStatus> = new Set(['success', 'warning', 'error']);
 
 export type ToolExecutionKind = 'runtime' | 'agentRun';
+export type ToolSchedulingMode = 'parallel' | 'serial';
 export type ToolRiskLevel = 'read' | 'write' | 'command' | 'agent';
 export type ToolDefinitionCategory = 'filesystem' | 'command' | 'agent' | 'general';
 export type ToolConfigFieldType = 'string' | 'number' | 'boolean' | 'stringList' | 'globList' | 'enum' | 'json';
@@ -560,6 +561,8 @@ export interface ToolCallRecord {
   result?: unknown;
   error?: string;
   progress?: unknown;
+  schedulingMode?: ToolSchedulingMode;
+  schedulingReason?: string;
   durationMs?: number;
   createdAt: number;
   updatedAt: number;

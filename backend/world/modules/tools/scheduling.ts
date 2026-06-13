@@ -1,7 +1,7 @@
 import type { Entity, WorldReader } from '../../../ecs/types';
 import { ToolCallRunLink } from '../agentRun/components';
 import { InFlight } from '../chat/components';
-import { ToolCall, ToolState, type ToolStateData } from './components';
+import { ToolCall, ToolResultConsumed, ToolState, type ToolStateData } from './components';
 import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey } from './resources';
 
 export type ToolSchedulingMode = 'parallel' | 'serial';
@@ -41,12 +41,12 @@ export function activeExecutionBatchForRun(world: WorldReader, run: Entity): Act
   if (startIndex < 0) return undefined;
 
   const first = ordered[startIndex]!;
-  const mode = toolSchedulingMode(world, first);
+  const mode = toolSchedulingDecision(world, first).mode;
   if (mode === 'serial') return { mode, calls: new Set([first]) };
 
   const calls = new Set<Entity>();
   for (const entity of ordered.slice(startIndex)) {
-    if (toolSchedulingMode(world, entity) !== 'parallel') break;
+    if (toolSchedulingDecision(world, entity).mode !== 'parallel') break;
     if (isExecutionBlockingToolCall(world, entity)) calls.add(entity);
   }
   return { mode, calls };
@@ -90,6 +90,9 @@ function isExecutionBlockingToolCall(world: WorldReader, entity: Entity): boolea
   if (world.has(entity, InFlight)) return true;
   const state = world.get(entity, ToolState);
   if (!state) return false;
+  if ((state.status === 'success' || state.status === 'warning' || state.status === 'error') && !world.has(entity, ToolResultConsumed)) {
+    return true;
+  }
   return state.status === 'streaming'
     || state.status === 'queued'
     || state.status === 'awaiting_approval'
@@ -97,20 +100,20 @@ function isExecutionBlockingToolCall(world: WorldReader, entity: Entity): boolea
     || state.status === 'awaiting_apply';
 }
 
-function toolSchedulingMode(world: WorldReader, entity: Entity): ToolSchedulingMode {
+export function toolSchedulingDecision(world: WorldReader, entity: Entity): ToolSchedulingDecision {
   const call = world.get(entity, ToolCall);
-  if (!call) return 'serial';
+  if (!call) return { mode: 'serial', reason: 'missing_tool_call' };
   const runtimeDefinition = (world.tryGetResource(ToolRuntimeDefinitionsKey) ?? []).find((tool) => tool.declaration.name === call.name);
   const args = parseToolArgs(call.argsJson);
-  const dynamic = runtimeDefinition?.scheduling?.(args, { toolName: call.name })?.mode;
-  if (dynamic === 'parallel' || dynamic === 'serial') return dynamic;
+  const dynamic = runtimeDefinition?.scheduling?.(args, { toolName: call.name });
+  if (dynamic?.mode === 'parallel' || dynamic?.mode === 'serial') return dynamic;
 
   const definition = (world.tryGetResource(ToolDefinitionsKey) ?? []).find((tool) => tool.name === call.name);
   if (
     definition?.metadata?.readonly === true
     || definition?.metadata?.riskLevel === 'read'
-  ) return 'parallel';
-  return 'serial';
+  ) return { mode: 'parallel', reason: 'readonly_metadata' };
+  return { mode: 'serial', reason: 'default_serial_metadata' };
 }
 
 function parseToolArgs(argsJson: string): unknown {

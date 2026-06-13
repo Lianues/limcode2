@@ -40,7 +40,7 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
           scheduling: {
             type: 'string',
             enum: ['auto', 'parallel', 'serial'],
-            description: '工具调度提示。auto=后端按命令只读性自动判断；parallel=仅在后端判断为只读命令时并行；serial=按原始顺序串行执行。默认 auto。'
+            description: '工具调度提示。auto=后端按命令只读性自动判断；parallel=明确进入并行批次；serial=按原始顺序串行执行。默认 auto。'
           }
         },
         required: ['command']
@@ -99,22 +99,16 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
 
 type CommandToolArgs = Parameters<CommandCapability['run']>[0] & {
   scheduling?: string;
-  executionMode?: string;
-  parallel?: boolean;
 };
 
 function resolveCommandScheduling(toolName: 'shell' | 'bash', rawArgs: unknown): { mode: 'parallel' | 'serial'; reason: string } {
   const args = (rawArgs ?? {}) as CommandToolArgs;
   const commandText = (args.command ?? '').trim();
-  const hint = normalizeSchedulingHint(args.scheduling ?? args.executionMode ?? (args.parallel === true ? 'parallel' : undefined));
+  const hint = normalizeSchedulingHint(args.scheduling);
   const readonlyCommand = isReadonlyCommandText(toolName, commandText);
 
   if (hint === 'serial') return { mode: 'serial', reason: 'explicit_serial' };
-  if (hint === 'parallel') {
-    return readonlyCommand
-      ? { mode: 'parallel', reason: 'explicit_parallel_readonly_command' }
-      : { mode: 'serial', reason: 'explicit_parallel_rejected_non_readonly_command' };
-  }
+  if (hint === 'parallel') return { mode: 'parallel', reason: 'explicit_parallel' };
   return readonlyCommand
     ? { mode: 'parallel', reason: 'auto_readonly_command' }
     : { mode: 'serial', reason: 'auto_command_side_effect_barrier' };

@@ -52,7 +52,7 @@ import {
 import { AgentRunBundle, spawnAgentRun } from '../../agentRun/bundles';
 import { activeToolPolicyForRun, runForToolCall, runTarget, toolCallEntityById } from '../../agentRun/queries';
 import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
-import { ToolCall, ToolPolicyScopeLink, ToolState, type ToolCallData, type ToolStateData } from '../components';
+import { ToolCall, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolStateData } from '../components';
 import { ToolEventType } from '../events';
 import { transitionToolState } from '../state';
 import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey, ToolSchemasKey } from '../resources';
@@ -96,7 +96,8 @@ const QueuedToolCallsQuery = defineQuery({
     ToolPolicy,
     ToolPolicyScopeLink,
     AgentRun,
-    ToolCallRunLink
+    ToolCallRunLink,
+    ToolResultConsumed
   ],
   write: [ToolState, AgentRun],
   add: [InFlight],
@@ -169,9 +170,6 @@ export const ToolDispatchSystem = defineSystem({
       }
       if (!isRunReadyForToolExecution(authorization)) continue;
       if (!isInActiveExecutionBatch(world, authorization.run, entity)) {
-        if (requiresExecutionApproval(authorization.policy, call.name)) {
-          awaitApproval(cmd, entity, call, state, authorization.agentId, authorization.runId);
-        }
         continue;
       }
 
@@ -851,7 +849,9 @@ function dispatchApprovedAwaitingCalls(world: WorldReader, cmd: CommandSink, han
       continue;
     }
     if (!isRunReadyForToolExecution(authorization)) continue;
-    if (!isInActiveExecutionBatch(world, authorization.run, entity)) continue;
+    if (!isInActiveExecutionBatch(world, authorization.run, entity)) {
+      continue;
+    }
     dispatchToolCall(world, cmd, entity, call, state, authorization);
     handled.add(entity);
   }

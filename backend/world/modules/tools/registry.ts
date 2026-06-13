@@ -7,6 +7,7 @@ import type {
   ToolDefinitionRecord,
   ToolExecutionKind
 } from '../../../../shared/protocol';
+import type { ToolSchedulingResolver } from './scheduling';
 
 export interface ToolDeps {
   fs: FsCapability;
@@ -45,12 +46,14 @@ export interface ToolDeclaration {
 export interface RuntimeToolDefinition {
   declaration: ToolDeclaration;
   execution: 'runtime';
+  scheduling?: ToolSchedulingResolver;
   execute(args: unknown, deps: ToolDeps, ctx?: ToolExecutionContext): Promise<ToolResultOut>;
 }
 
 export interface AgentRunToolDefinition {
   declaration: ToolDeclaration;
   execution: 'agentRun';
+  scheduling?: ToolSchedulingResolver;
 }
 
 export type ToolDefinition = RuntimeToolDefinition | AgentRunToolDefinition;

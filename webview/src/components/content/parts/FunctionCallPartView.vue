@@ -30,13 +30,16 @@ const outputText = computed(() => {
   const result = toolCall.value?.result;
   if (result !== undefined) return stringifyToolResult(result);
   const progress = toolCall.value?.progress;
+  if (isInternalApprovalProgress(progress)) return '';
   return progress !== undefined ? stringifyValue(progress) : '';
 });
 const hasOutput = computed(() => Boolean(outputText.value.trim()));
-const needsExecutionDecision = computed(() => toolCall.value?.status === 'awaiting_approval');
+const executionApproved = computed(() => isExecutionApprovedProgress(toolCall.value?.progress));
+const needsExecutionDecision = computed(() => toolCall.value?.status === 'awaiting_approval' && !executionApproved.value);
 const needsApplyDecision = computed(() => toolCall.value?.status === 'awaiting_apply');
-const hasDetails = computed(() => hasArgs.value || hasOutput.value || Boolean(toolCall.value?.error) || needsExecutionDecision.value || needsApplyDecision.value);
-const statusLabel = computed(() => toolCall.value ? labelForStatus(toolCall.value.status) : '已请求');
+const hasDetails = computed(() => hasArgs.value || hasOutput.value || Boolean(toolCall.value?.error) || needsExecutionDecision.value || needsApplyDecision.value || executionApproved.value);
+const statusLabel = computed(() => toolCall.value ? labelForToolCall(toolCall.value) : '工具请求已生成');
+const statusTitle = computed(() => toolCall.value ? `工具状态：${toolCall.value.status}` : '等待后端创建工具调用记录');
 const durationLabel = computed(() => {
   const duration = toolCall.value?.durationMs;
   if (duration === undefined) return undefined;
@@ -92,18 +95,55 @@ function sendToolDecision(type: BridgeMessageType.ToolExecutionApprove | BridgeM
   bridge.request(type, { toolCallId: call.id, conversationId: clientState.currentConversationId });
 }
 
+function labelForToolCall(call: ToolCallRecord): string {
+  if (call.status === 'awaiting_approval' && isExecutionApprovedProgress(call.progress)) return '已批准，等待前序批次';
+  if (call.status === 'error' && isDeniedResult(call.result)) {
+    return deniedStatusLabel(call.result, call.error);
+  }
+  if (call.status === 'success' && isAsyncAgentRunResult(call.result)) return '子任务已启动';
+  return labelForStatus(call.status);
+}
+
 function labelForStatus(status: ToolCallStatus): string {
   const labels: Record<ToolCallStatus, string> = {
-    streaming: '生成中',
-    queued: '排队中',
-    awaiting_approval: '等待批准',
-    executing: '执行中',
-    awaiting_apply: '等待应用',
-    success: '成功',
-    warning: '警告',
-    error: '失败'
+    streaming: '正在生成工具调用',
+    queued: '等待调度执行',
+    awaiting_approval: '等待批准执行',
+    executing: '工具执行中',
+    awaiting_apply: '等待应用结果',
+    success: '工具执行成功',
+    warning: '执行完成（有警告）',
+    error: '工具执行失败'
   };
   return labels[status];
+}
+
+function isDeniedResult(result: unknown): boolean {
+  return isRecord(result) && result.denied === true;
+}
+
+function deniedStatusLabel(result: unknown, error: string | undefined): string {
+  const reason = isRecord(result) && typeof result.reason === 'string' ? result.reason : error ?? '';
+  if (reason.includes('应用')) return '已拒绝应用结果';
+  if (reason.includes('执行')) return '已拒绝执行';
+  return '已拒绝工具调用';
+}
+
+function isAsyncAgentRunResult(result: unknown): boolean {
+  return isRecord(result) && result.status === 'async_launched';
+}
+
+function isExecutionApprovedProgress(progress: unknown): boolean {
+  return isRecord(progress) && progress.executionApproved === true;
+}
+
+function isWaitingForPreviousProgress(progress: unknown): boolean {
+  return isRecord(progress) && progress.waitingForPrevious === true;
+}
+
+function isInternalApprovalProgress(progress: unknown): boolean {
+  if (!isRecord(progress) || progress.executionApproved !== true) return false;
+  return Object.keys(progress).every((key) => key === 'executionApproved' || key === 'waitingForPrevious');
 }
 </script>
 
@@ -123,7 +163,7 @@ function labelForStatus(status: ToolCallStatus): string {
       <span class="part-card-name">{{ part.functionCall.name }}</span>
     </template>
     <template #trail>
-      <span class="part-card-status">{{ statusLabel }}</span>
+      <span class="part-card-status" :title="statusTitle">{{ statusLabel }}</span>
       <span v-if="durationLabel" class="part-card-meta">{{ durationLabel }}</span>
     </template>
 
@@ -139,6 +179,9 @@ function labelForStatus(status: ToolCallStatus): string {
         <button type="button" @click="sendToolDecision(BridgeMessageType.ToolResultApply)">应用结果</button>
         <button type="button" class="secondary" @click="sendToolDecision(BridgeMessageType.ToolResultReject)">拒绝应用</button>
       </div>
+      <p v-else-if="executionApproved && isWaitingForPreviousProgress(toolCall?.progress)" class="part-card-note">
+        已批准执行，将在前序批次完成后按原始顺序自动继续。
+      </p>
     </div>
   </CollapsibleContentBlock>
 </template>
@@ -199,6 +242,11 @@ function labelForStatus(status: ToolCallStatus): string {
 .part-card-error {
   margin: 6px 0 0;
   color: var(--vscode-errorForeground);
+}
+
+.part-card-note {
+  margin: 0;
+  color: var(--vscode-descriptionForeground);
 }
 
 .part-card-error:first-child {

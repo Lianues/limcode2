@@ -55,7 +55,13 @@ import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
 import { ToolCall, ToolPolicyScopeLink, ToolState, type ToolCallData, type ToolStateData } from '../components';
 import { ToolEventType } from '../events';
 import { transitionToolState } from '../state';
-import { ToolDefinitionsKey, ToolSchemasKey } from '../resources';
+import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey, ToolSchemasKey } from '../resources';
+import {
+  compareToolCallOrder,
+  isExecutionApproved,
+  isInActiveExecutionBatch,
+  progressRecord
+} from '../scheduling';
 import type {
   AgentRunStatus,
   ContextHistoryMode,
@@ -102,7 +108,7 @@ export const ToolDispatchSystem = defineSystem({
   name: 'ToolDispatchSystem',
   access: {
     queries: [QueuedToolCallsQuery],
-    resources: { read: [AgentBlueprintsKey, ToolSchemasKey, ToolDefinitionsKey] },
+    resources: { read: [AgentBlueprintsKey, ToolSchemasKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey] },
     bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentFromBlueprintBundle],
     events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested] },
     effects: { emit: ['tool.run'] }
@@ -136,12 +142,19 @@ export const ToolDispatchSystem = defineSystem({
         continue;
       }
       if (!isRunReadyForToolExecution(authorization)) continue;
+      if (!isInActiveExecutionBatch(world, authorization.run, entity)) {
+        markExecutionApproved(cmd, entity, call, state, authorization, true);
+        continue;
+      }
       dispatchToolCall(world, cmd, entity, call, state, authorization);
     }
 
+    dispatchApprovedAwaitingCalls(world, cmd, handled);
+
     const calls = world
       .query(ToolCall, ToolState)
-      .filter((entity) => !handled.has(entity) && !world.has(entity, InFlight) && world.get(entity, ToolState)?.status === 'queued');
+      .filter((entity) => !handled.has(entity) && !world.has(entity, InFlight) && world.get(entity, ToolState)?.status === 'queued')
+      .sort((left, right) => compareToolCallOrder(world, left, right));
     if (calls.length === 0) return;
 
     for (const entity of calls) {
@@ -155,6 +168,12 @@ export const ToolDispatchSystem = defineSystem({
         continue;
       }
       if (!isRunReadyForToolExecution(authorization)) continue;
+      if (!isInActiveExecutionBatch(world, authorization.run, entity)) {
+        if (requiresExecutionApproval(authorization.policy, call.name)) {
+          awaitApproval(cmd, entity, call, state, authorization.agentId, authorization.runId);
+        }
+        continue;
+      }
 
       if (requiresExecutionApproval(authorization.policy, call.name)) {
         awaitApproval(cmd, entity, call, state, authorization.agentId, authorization.runId);
@@ -807,6 +826,61 @@ function normalizeNewMessageWhileRunningBehavior(value: string | undefined): New
 
 function findByRecordId<T extends { id: string }>(world: WorldReader, component: { id: symbol }, id: string): Entity | undefined {
   return world.query(component as never).find((entity) => (world.get(entity, component as never) as T | undefined)?.id === id);
+}
+
+function dispatchApprovedAwaitingCalls(world: WorldReader, cmd: CommandSink, handled: Set<Entity>): void {
+  const approvedCalls = world
+    .query(ToolCall, ToolState)
+    .filter((entity) => {
+      const state = world.get(entity, ToolState);
+      return !handled.has(entity)
+        && !world.has(entity, InFlight)
+        && state?.status === 'awaiting_approval'
+        && isExecutionApproved(state);
+    })
+    .sort((left, right) => compareToolCallOrder(world, left, right));
+
+  for (const entity of approvedCalls) {
+    const call = world.get(entity, ToolCall);
+    const state = world.get(entity, ToolState);
+    if (!call || !state) continue;
+    const authorization = authorizeRunToolExecution(world, entity, call);
+    if (!authorization.ok) {
+      rejectToolCall(cmd, entity, call, state, authorization.reason);
+      handled.add(entity);
+      continue;
+    }
+    if (!isRunReadyForToolExecution(authorization)) continue;
+    if (!isInActiveExecutionBatch(world, authorization.run, entity)) continue;
+    dispatchToolCall(world, cmd, entity, call, state, authorization);
+    handled.add(entity);
+  }
+}
+
+function markExecutionApproved(
+  cmd: CommandSink,
+  entity: Entity,
+  call: ToolCallData,
+  state: ToolStateData,
+  authorization: Extract<AuthorizationResult, { ok: true }>,
+  waitingForPrevious: boolean
+): void {
+  const now = Date.now();
+  const progress = {
+    ...progressRecord(state.progress),
+    executionApproved: true,
+    waitingForPrevious
+  };
+  cmd.add(entity, ToolState, { ...state, status: 'awaiting_approval', progress, updatedAt: now });
+  spawnToolCallEvent(cmd, {
+    toolCall: entity,
+    toolCallId: call.id,
+    kind: 'state',
+    status: 'awaiting_approval',
+    at: now,
+    elapsedMs: Math.max(0, now - call.createdAt),
+    payload: { executorAgentId: authorization.agentId, runId: authorization.runId, approved: true, waitingForPrevious }
+  });
 }
 
 function findAgentById(world: WorldReader, id: string): Entity | undefined {

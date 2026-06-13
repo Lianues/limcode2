@@ -1,4 +1,5 @@
 import type { ToolDefinition } from '../../registry';
+import { staticToolScheduling } from '../../scheduling';
 import { defineToolDefinitionModule } from '../types';
 
 interface ReadFileArgs {
@@ -35,6 +36,7 @@ export const readFileTool: ToolDefinition = {
     }
   },
   execution: 'runtime',
+  scheduling: staticToolScheduling('parallel', 'readonly_file_read'),
   async execute(rawArgs, deps) {
     const args = (rawArgs ?? {}) as ReadFileArgs;
     if (!args.path) {

@@ -1,4 +1,5 @@
 import type { ToolDefinition } from '../../registry';
+import { normalizeSchedulingHint } from '../../scheduling';
 import { defineToolDefinitionModule } from '../types';
 
 export const runAgentToolModule = defineToolDefinitionModule({
@@ -99,7 +100,12 @@ export const runAgentTool: ToolDefinition = {
             includeTranscript: { type: 'string', description: 'none | summary | selected | full | link' }
           }
         },
-        run_in_background: { type: 'boolean', description: 'true 时默认使用 notification 回流；false/缺省时默认 tool_response 同步回流。' }
+        run_in_background: { type: 'boolean', description: 'true 时默认使用 notification 回流；false/缺省时默认 tool_response 同步回流。' },
+        scheduling: {
+          type: 'string',
+          enum: ['auto', 'parallel', 'serial'],
+          description: '工具调度提示。后台/通知型 AgentRun 可并行；同步 tool_response 默认串行。'
+        }
       },
       required: ['prompt']
     },
@@ -109,5 +115,37 @@ export const runAgentTool: ToolDefinition = {
       readonly: false,
       defaultEnabled: true
     }
-  }
+  },
+  scheduling: resolveRunAgentScheduling
 };
+
+interface RunAgentSchedulingArgs {
+  run_in_background?: boolean;
+  scheduling?: string;
+  delivery?: { mode?: string };
+  mode?: { deliveryPolicy?: { mode?: string } };
+}
+
+function resolveRunAgentScheduling(rawArgs: unknown): { mode: 'parallel' | 'serial'; reason: string } {
+  const args = (rawArgs ?? {}) as RunAgentSchedulingArgs;
+  const hint = normalizeSchedulingHint(args.scheduling);
+  const background = isBackgroundRunAgent(args);
+
+  if (hint === 'serial') return { mode: 'serial', reason: 'explicit_serial' };
+  if (hint === 'parallel') {
+    return background
+      ? { mode: 'parallel', reason: 'explicit_parallel_background_run_agent' }
+      : { mode: 'serial', reason: 'explicit_parallel_rejected_sync_run_agent' };
+  }
+  return background
+    ? { mode: 'parallel', reason: 'auto_background_run_agent' }
+    : { mode: 'serial', reason: 'auto_sync_run_agent_barrier' };
+}
+
+function isBackgroundRunAgent(args: RunAgentSchedulingArgs): boolean {
+  if (args.run_in_background === true) return true;
+  const deliveryMode = args.delivery?.mode ?? args.mode?.deliveryPolicy?.mode;
+  return deliveryMode === 'notification'
+    || deliveryMode === 'silent'
+    || deliveryMode === 'append_to_source_conversation';
+}

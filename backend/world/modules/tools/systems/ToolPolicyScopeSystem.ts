@@ -36,6 +36,7 @@ export const ToolPolicyScopeSystem = defineSystem({
         const currentPolicy = world.get(existing.link.toolPolicy, ToolPolicy);
         if (currentPolicy) {
           cmd.add(existing.link.toolPolicy, ToolPolicy, { ...currentPolicy, name: policyName, allowedTools, ...(nextToolConfigs !== undefined ? { toolConfigs: nextToolConfigs } : {}) });
+          cmd.add(existing.entity, ToolPolicyScopeLink, { ...existing.link, updatedAt: now });
         }
         continue;
       }

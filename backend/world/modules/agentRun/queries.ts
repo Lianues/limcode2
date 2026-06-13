@@ -135,23 +135,29 @@ export function activeToolPolicyForRun(world: WorldReader, run: Entity): ToolPol
   if (runLink) return world.get(runLink.toolPolicy, ToolPolicy);
 
   const target = runTarget(world, run);
-  if (target) {
-    const conversationScopePolicy = activeToolPolicyForScopeEntity(world, 'conversation', target.conversation);
-    if (conversationScopePolicy) return conversationScopePolicy;
-
-    const agentScopePolicy = activeToolPolicyForScopeEntity(world, 'agent', target.agent);
-    if (agentScopePolicy) return agentScopePolicy;
-  }
-
   const mode = activeModeForRun(world, run);
   if (mode !== undefined) {
     const modeScopePolicy = activeToolPolicyForScopeEntity(world, 'mode', mode);
     if (modeScopePolicy) return modeScopePolicy;
-    const modePolicy = activeToolPolicyForMode(world, mode);
-    if (modePolicy) return modePolicy;
   }
 
-  return activeToolPolicyForScopeEntity(world, 'global');
+  if (target) {
+    const agentScopePolicy = activeToolPolicyForScopeEntity(world, 'agent', target.agent);
+    if (agentScopePolicy) return agentScopePolicy;
+
+    const conversationScopePolicy = activeToolPolicyForScopeEntity(world, 'conversation', target.conversation);
+    if (conversationScopePolicy) return conversationScopePolicy;
+  }
+
+  const globalScopePolicy = activeToolPolicyForScopeEntity(world, 'global');
+  if (globalScopePolicy) return globalScopePolicy;
+
+  if (mode !== undefined) {
+    const legacyModePolicy = activeToolPolicyForMode(world, mode);
+    if (legacyModePolicy) return legacyModePolicy;
+  }
+
+  return undefined;
 }
 
 export function activeToolPolicyForScope(world: WorldReader, scopeKind: ToolPolicyScopeKind, scopeId?: string): ToolPolicyData | undefined {

@@ -1,9 +1,12 @@
 import { defineStore } from 'pinia';
 import type {
+  ToolConfigRecord,
+  ToolConfigValue,
   ToolDefinitionRecord,
   ToolPolicyRecord,
   ToolPolicyScopeKind,
   ToolPolicyScopeLinkRecord,
+  ToolPolicyScopeSetPayload,
   ToolPolicyToolConfigRecord
 } from '@shared/protocol';
 import { bridge, BridgeMessageType } from '@webview/transport';
@@ -51,12 +54,38 @@ function cloneToolConfigs(toolConfigs: Record<string, ToolPolicyToolConfigRecord
   const cloned: Record<string, ToolPolicyToolConfigRecord> = {};
   for (const [toolName, record] of Object.entries(toolConfigs)) {
     cloned[toolName] = {
-      config: { ...(record.config ?? {}) },
+      config: cloneToolConfigRecord(record.config),
       ...(typeof record.autoApproveExecution === 'boolean' ? { autoApproveExecution: record.autoApproveExecution } : {}),
       ...(typeof record.autoApplyResult === 'boolean' ? { autoApplyResult: record.autoApplyResult } : {})
     };
   }
   return cloned;
+}
+
+function cloneToolConfigRecord(config: ToolConfigRecord | undefined): ToolConfigRecord {
+  const cloned: ToolConfigRecord = {};
+  for (const [key, value] of Object.entries(config ?? {})) {
+    const next = cloneToolConfigValue(value as ToolConfigValue | undefined);
+    if (next !== undefined) cloned[key] = next;
+  }
+  return cloned;
+}
+
+function cloneToolConfigValue(value: ToolConfigValue | undefined): ToolConfigValue | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneToolConfigValue(item as ToolConfigValue | undefined) ?? null) as ToolConfigValue;
+  }
+  if (typeof value === 'object') {
+    const cloned: Record<string, ToolConfigValue> = {};
+    for (const [key, child] of Object.entries(value as Record<string, ToolConfigValue | undefined>)) {
+      const next = cloneToolConfigValue(child);
+      if (next !== undefined) cloned[key] = next;
+    }
+    return cloned;
+  }
+  return undefined;
 }
 
 function upsertById<T extends { id: string }>(list: T[], record: T): void {
@@ -89,20 +118,21 @@ export const useToolPolicyStore = defineStore('toolPolicy', {
       if (local.policy) return local;
 
       const clientState = useClientStateStore();
-      if (scopeKind === 'mode' && scopeId) {
-        const legacyLink = clientState.modeToolPolicyLinks.find((link) => link.modeId === scopeId && link.role === 'active');
-        const legacyPolicy = clientState.toolPolicies.find((policy) => policy.id === legacyLink?.toolPolicyId);
-        if (legacyPolicy) return { policy: legacyPolicy, inheritedFrom: 'modeLegacy' };
+      if (scopeKind !== 'global') {
+        const global = this.localPolicyFor('global');
+        if (global.policy) return { ...global, inheritedFrom: 'global' };
       }
+
       if (scopeKind === 'run' && scopeId) {
         const legacyLink = clientState.runToolPolicyLinks.find((link) => link.runId === scopeId && link.role === 'active');
         const legacyPolicy = clientState.toolPolicies.find((policy) => policy.id === legacyLink?.toolPolicyId);
         if (legacyPolicy) return { policy: legacyPolicy, inheritedFrom: 'runLegacy' };
       }
 
-      if (scopeKind !== 'global') {
-        const global = this.localPolicyFor('global');
-        if (global.policy) return { ...global, inheritedFrom: 'global' };
+      if (scopeKind === 'mode' && scopeId) {
+        const legacyLink = clientState.modeToolPolicyLinks.find((link) => link.modeId === scopeId && link.role === 'active');
+        const legacyPolicy = clientState.toolPolicies.find((policy) => policy.id === legacyLink?.toolPolicyId);
+        if (legacyPolicy) return { policy: legacyPolicy, inheritedFrom: 'modeLegacy' };
       }
 
       const fallback = clientState.toolPolicies[0];
@@ -115,15 +145,17 @@ export const useToolPolicyStore = defineStore('toolPolicy', {
         .map((tool) => tool.trim())
         .filter((tool, index, list) => !!tool && validNames.has(tool) && list.indexOf(tool) === index);
 
-      this.applyOptimisticPolicyScopeSet(scopeKind, scopeId, sanitized, name, toolConfigs);
+      const plainToolConfigs = cloneToolConfigs(toolConfigs);
+      this.applyOptimisticPolicyScopeSet(scopeKind, scopeId, sanitized, name, plainToolConfigs);
 
-      bridge.request(BridgeMessageType.ToolPolicyScopeSet, {
+      const payload: ToolPolicyScopeSetPayload = {
         scopeKind,
         ...(scopeIdFor(scopeKind, scopeId) ? { scopeId: scopeIdFor(scopeKind, scopeId) } : {}),
         ...(name?.trim() ? { name: name.trim() } : {}),
         allowedTools: sanitized,
-        ...(toolConfigs ? { toolConfigs } : {})
-      });
+        ...(plainToolConfigs !== undefined ? { toolConfigs: plainToolConfigs } : {})
+      };
+      bridge.request(BridgeMessageType.ToolPolicyScopeSet, payload);
     },
     clearPolicyScope(scopeKind: ToolPolicyScopeKind, scopeId?: string): void {
       if (scopeKind === 'global') return;

@@ -75,10 +75,12 @@ export class WebviewMessageRouter {
       case BridgeMessageType.ToolPolicyScopeSet:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ToolEventType.PolicyScopeSetRequested, payload: message.payload });
+        this.deps.requestSnapshot();
         break;
       case BridgeMessageType.ToolPolicyScopeClear:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ToolEventType.PolicyScopeClearRequested, payload: message.payload });
+        this.deps.requestSnapshot();
         break;
       case BridgeMessageType.ToolExecutionApprove:
         if (!this.deps.isHydrated() || !message.payload) return;

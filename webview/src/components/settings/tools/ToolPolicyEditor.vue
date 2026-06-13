@@ -165,7 +165,6 @@ function toolGateValue(tool: ToolDefinitionRecord, key: 'autoApproveExecution' |
   return effectivePolicy.value?.toolConfigs?.[tool.name]?.[key] !== false;
 }
 
-
 function sanitizeConfigForTool(tool: ToolDefinitionRecord, config: ToolConfigRecord): ToolConfigRecord {
   const allowedKeys = new Set((tool.configSchema?.fields ?? []).map((field) => field.key));
   if (allowedKeys.size === 0) return {};

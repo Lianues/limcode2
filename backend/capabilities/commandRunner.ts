@@ -50,7 +50,7 @@ function detectCommandProfile(): CommandProfile {
       toolName: 'shell',
       commandPrefix: PS_UTF8_PREFIX,
       description: `在项目目录下通过 PowerShell 后台执行非交互命令。返回 stdout、stderr 和退出码。
-内置安全检查：只读命令自动放行；危险命令拒绝；未知命令需用户确认后使用 force。
+内置安全检查：危险命令拒绝；工具策略黑名单拒绝；未知命令当前暂时按允许执行处理。
 命令规范：多条命令用分号 ; 分隔；路径含空格时用双引号；长输出建议加 | Select-Object -First N。
 编码规范：工具默认把 PowerShell 输入/输出设为 UTF-8；如读取非 UTF-8 文件，请在命令中显式指定 -Encoding。`
     };
@@ -61,7 +61,7 @@ function detectCommandProfile(): CommandProfile {
     toolName: 'bash',
     executable: process.env.SHELL || '/bin/bash',
     description: `在项目目录下通过 Bash/Shell 后台执行非交互命令。返回 stdout、stderr 和退出码。
-内置安全检查：只读命令自动放行；危险命令拒绝；未知命令需用户确认后使用 force。
+内置安全检查：危险命令拒绝；工具策略黑名单拒绝；未知命令当前暂时按允许执行处理。
 命令规范：多条命令建议用 && 连接；路径含空格时用双引号；长输出建议加 | head -n N。`
   };
 }

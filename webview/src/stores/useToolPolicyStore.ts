@@ -1,5 +1,11 @@
 import { defineStore } from 'pinia';
-import type { ToolDefinitionRecord, ToolPolicyRecord, ToolPolicyScopeKind, ToolPolicyScopeLinkRecord } from '@shared/protocol';
+import type {
+  ToolDefinitionRecord,
+  ToolPolicyRecord,
+  ToolPolicyScopeKind,
+  ToolPolicyScopeLinkRecord,
+  ToolPolicyToolConfigRecord
+} from '@shared/protocol';
 import { bridge, BridgeMessageType } from '@webview/transport';
 import { useClientStateStore } from './useClientStateStore';
 
@@ -64,7 +70,7 @@ export const useToolPolicyStore = defineStore('toolPolicy', {
       const fallback = clientState.toolPolicies[0];
       return fallback ? { policy: fallback, inheritedFrom: 'global' } : {};
     },
-    setPolicyForScope(scopeKind: ToolPolicyScopeKind, scopeId: string | undefined, allowedTools: string[], name?: string): void {
+    setPolicyForScope(scopeKind: ToolPolicyScopeKind, scopeId: string | undefined, allowedTools: string[], name?: string, toolConfigs?: Record<string, ToolPolicyToolConfigRecord>): void {
       const validNames = new Set(useClientStateStore().toolDefinitions.map((tool) => tool.name));
       const sanitized = allowedTools
         .map((tool) => tool.trim())
@@ -73,7 +79,8 @@ export const useToolPolicyStore = defineStore('toolPolicy', {
         scopeKind,
         ...(scopeIdFor(scopeKind, scopeId) ? { scopeId: scopeIdFor(scopeKind, scopeId) } : {}),
         ...(name?.trim() ? { name: name.trim() } : {}),
-        allowedTools: sanitized
+        allowedTools: sanitized,
+        ...(toolConfigs ? { toolConfigs } : {})
       });
     },
     clearPolicyScope(scopeKind: ToolPolicyScopeKind, scopeId?: string): void {

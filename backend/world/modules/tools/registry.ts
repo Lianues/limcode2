@@ -1,5 +1,12 @@
 import type { CommandCapability, FsCapability } from '../../../capabilities/types';
-import type { ToolCallEventKind, ToolDefinitionMetadataRecord, ToolDefinitionRecord, ToolExecutionKind } from '../../../../shared/protocol';
+import type {
+  ToolCallEventKind,
+  ToolConfigRecord,
+  ToolConfigSchemaRecord,
+  ToolDefinitionMetadataRecord,
+  ToolDefinitionRecord,
+  ToolExecutionKind
+} from '../../../../shared/protocol';
 
 export interface ToolDeps {
   fs: FsCapability;
@@ -22,6 +29,7 @@ export interface ToolExecutionContext {
   toolCallId: string;
   runId?: string;
   conversationId?: string;
+  config?: ToolConfigRecord;
   emit(event: ToolRuntimeEvent): void;
 }
 
@@ -30,6 +38,8 @@ export interface ToolDeclaration {
   description: string;
   parameters: unknown;
   metadata?: ToolDefinitionMetadataRecord;
+  configSchema?: ToolConfigSchemaRecord;
+  defaultConfig?: ToolConfigRecord;
 }
 
 export interface RuntimeToolDefinition {
@@ -82,6 +92,8 @@ export function toolDefinitionRecord(tool: ToolDefinition): ToolDefinitionRecord
     description: tool.declaration.description,
     parameters: tool.declaration.parameters,
     execution: tool.execution as ToolExecutionKind,
-    ...(tool.declaration.metadata ? { metadata: tool.declaration.metadata } : {})
+    ...(tool.declaration.metadata ? { metadata: tool.declaration.metadata } : {}),
+    ...(tool.declaration.configSchema ? { configSchema: tool.declaration.configSchema } : {}),
+    ...(tool.declaration.defaultConfig ? { defaultConfig: tool.declaration.defaultConfig } : {})
   };
 }

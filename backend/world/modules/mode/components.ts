@@ -1,5 +1,5 @@
 import { defineComponent, type Entity } from '../../../ecs/types';
-import type { AgentModeRole, ApprovalMode, LlmProviderKind, ModeBindingRole } from '../../../../shared/protocol';
+import type { AgentModeRole, ApprovalMode, LlmProviderKind, ModeBindingRole, ToolPolicyToolConfigRecord } from '../../../../shared/protocol';
 
 export interface AgentModeData {
   id: string;
@@ -12,6 +12,7 @@ export interface ToolPolicyData {
   id: string;
   name: string;
   allowedTools: string[];
+  toolConfigs?: Record<string, ToolPolicyToolConfigRecord>;
 }
 export const ToolPolicy = defineComponent<ToolPolicyData>('ToolPolicy');
 

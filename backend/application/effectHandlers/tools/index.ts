@@ -32,7 +32,7 @@ export function registerToolEffectHandlers(registry: EffectHandlerRegistry): voi
     };
 
     tool
-      .execute(args, { fs: env.fs, command: env.command }, { toolCallId: effect.toolCallId, runId: effect.runId, conversationId: effect.conversationId, emit: emitRuntimeEvent })
+      .execute(args, { fs: env.fs, command: env.command }, { toolCallId: effect.toolCallId, runId: effect.runId, conversationId: effect.conversationId, config: effect.config, emit: emitRuntimeEvent })
       .then((result) => emitToolState(emit, toToolStatePayload(effect.toolCallId, result, Date.now() - startedAt)))
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);

@@ -69,6 +69,7 @@ import type {
   MessageContent,
   NewMessageWhileRunningBehavior,
   SourceEditBehavior,
+  ToolConfigRecord,
   TranscriptInclusion
 } from '../../../../../shared/protocol';
 
@@ -203,11 +204,11 @@ function dispatchToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, 
     executeRunAgentTool(world, cmd, entity, call, state, authorization);
     return;
   }
-  executeRuntimeToolCall(cmd, entity, call, state, authorization);
+  executeRuntimeToolCall(world, cmd, entity, call, state, authorization);
 }
 
-function executeRuntimeToolCall(cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
-  cmd.effect({ kind: 'tool.run', toolCallId: call.id, name: call.name, argsJson: call.argsJson, runId: authorization.runId, conversationId: authorization.conversationId });
+function executeRuntimeToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
+  cmd.effect({ kind: 'tool.run', toolCallId: call.id, name: call.name, argsJson: call.argsJson, runId: authorization.runId, conversationId: authorization.conversationId, config: effectiveToolConfig(world, authorization.policy, call.name) });
   const now = Date.now();
   cmd.add(entity, ToolState, transitionToolState(state, 'executing', {}, now));
   spawnToolCallEvent(cmd, {
@@ -821,6 +822,15 @@ function findAgentByKind(world: WorldReader, kind: string): Entity | undefined {
 
 function isAgentRunTool(world: WorldReader, toolName: string): boolean {
   return (world.tryGetResource(ToolDefinitionsKey) ?? []).some((tool) => tool.name === toolName && tool.execution === 'agentRun');
+}
+
+function effectiveToolConfig(world: WorldReader, policy: ToolPolicyData, toolName: string): ToolConfigRecord | undefined {
+  const definition = (world.tryGetResource(ToolDefinitionsKey) ?? []).find((tool) => tool.name === toolName);
+  const config = {
+    ...(definition?.defaultConfig ?? {}),
+    ...(policy.toolConfigs?.[toolName]?.config ?? {})
+  } satisfies ToolConfigRecord;
+  return Object.keys(config).length > 0 ? config : undefined;
 }
 
 function requiresApproval(world: WorldReader, policy: ApprovalPolicyData | undefined, toolName: string): boolean {

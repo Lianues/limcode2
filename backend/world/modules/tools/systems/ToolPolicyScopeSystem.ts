@@ -7,7 +7,7 @@ import { AgentMode, ToolPolicy } from '../../mode/components';
 import { ToolPolicyScopeLink, type ToolPolicyScopeLinkData } from '../components';
 import { ToolEventType } from '../events';
 import { ToolDefinitionsKey } from '../resources';
-import type { ToolPolicyScopeKind } from '../../../../../shared/protocol';
+import type { ToolConfigRecord, ToolConfigValue, ToolPolicyScopeKind, ToolPolicyToolConfigRecord } from '../../../../../shared/protocol';
 
 export const ToolPolicyScopeSystem = defineSystem({
   name: 'ToolPolicyScopeSystem',
@@ -30,11 +30,12 @@ export const ToolPolicyScopeSystem = defineSystem({
       const existing = findActiveScopeLink(world, payload.scopeKind, scope.scopeId);
       const now = Date.now();
       const policyName = payload.name?.trim() || defaultPolicyName(payload.scopeKind);
+      const nextToolConfigs = payload.toolConfigs !== undefined ? sanitizeToolConfigs(world, payload.toolConfigs) : undefined;
 
       if (existing) {
         const currentPolicy = world.get(existing.link.toolPolicy, ToolPolicy);
         if (currentPolicy) {
-          cmd.add(existing.link.toolPolicy, ToolPolicy, { ...currentPolicy, name: policyName, allowedTools });
+          cmd.add(existing.link.toolPolicy, ToolPolicy, { ...currentPolicy, name: policyName, allowedTools, ...(nextToolConfigs !== undefined ? { toolConfigs: nextToolConfigs } : {}) });
         }
         continue;
       }
@@ -43,7 +44,8 @@ export const ToolPolicyScopeSystem = defineSystem({
       cmd.add(policy, ToolPolicy, {
         id: policyIdForScope(payload.scopeKind, scope.scopeId),
         name: policyName,
-        allowedTools
+        allowedTools,
+        ...(nextToolConfigs !== undefined && Object.keys(nextToolConfigs).length > 0 ? { toolConfigs: nextToolConfigs } : {})
       });
 
       const link = cmd.spawn();
@@ -87,6 +89,38 @@ function sanitizeAllowedTools(world: WorldReader, rawAllowedTools: readonly stri
     allowed.push(name);
   }
   return allowed;
+}
+
+function sanitizeToolConfigs(
+  world: WorldReader,
+  rawConfigs: Record<string, ToolPolicyToolConfigRecord> | undefined
+): Record<string, ToolPolicyToolConfigRecord> {
+  const definitions = world.tryGetResource(ToolDefinitionsKey) ?? [];
+  const definitionsByName = new Map(definitions.map((tool) => [tool.name, tool]));
+  const result: Record<string, ToolPolicyToolConfigRecord> = {};
+  for (const [rawToolName, rawRecord] of Object.entries(rawConfigs ?? {})) {
+    const toolName = rawToolName.trim();
+    const definition = definitionsByName.get(toolName);
+    if (!toolName || !definition || !isPlainRecord(rawRecord?.config)) continue;
+    const allowedFields = new Set((definition.configSchema?.fields ?? []).map((field) => field.key));
+    const config: ToolConfigRecord = {};
+    for (const [key, value] of Object.entries(rawRecord.config)) {
+      if (allowedFields.size > 0 && !allowedFields.has(key)) continue;
+      if (isToolConfigValue(value)) config[key] = value;
+    }
+    if (Object.keys(config).length > 0) result[toolName] = { config };
+  }
+  return result;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isToolConfigValue(value: unknown): value is ToolConfigValue {
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return true;
+  if (Array.isArray(value)) return value.every((item) => isToolConfigValue(item));
+  return isPlainRecord(value) && Object.values(value).every((item) => isToolConfigValue(item));
 }
 
 function resolveScope(world: WorldReader, scopeKind: ToolPolicyScopeKind, rawScopeId: string | undefined): ScopeResult {

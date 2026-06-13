@@ -200,6 +200,31 @@ export const TERMINAL_TOOL_CALL_STATUSES: ReadonlySet<ToolCallStatus> = new Set(
 export type ToolExecutionKind = 'runtime' | 'agentRun';
 export type ToolRiskLevel = 'read' | 'write' | 'command' | 'agent';
 export type ToolDefinitionCategory = 'filesystem' | 'command' | 'agent' | 'general';
+export type ToolConfigFieldType = 'string' | 'number' | 'boolean' | 'stringList' | 'globList' | 'enum' | 'json';
+export type ToolConfigValue = string | number | boolean | null | string[] | number[] | boolean[] | unknown[] | Record<string, unknown>;
+export type ToolConfigRecord = Record<string, ToolConfigValue>;
+
+export interface ToolConfigFieldOptionRecord {
+  label: string;
+  value: string | number | boolean;
+  description?: string;
+}
+
+export interface ToolConfigFieldRecord {
+  key: string;
+  label: string;
+  type: ToolConfigFieldType;
+  description?: string;
+  required?: boolean;
+  defaultValue?: ToolConfigValue;
+  placeholder?: string;
+  options?: ToolConfigFieldOptionRecord[];
+  sensitive?: boolean;
+}
+
+export interface ToolConfigSchemaRecord {
+  fields: ToolConfigFieldRecord[];
+}
 
 export interface ToolDefinitionMetadataRecord {
   category?: ToolDefinitionCategory;
@@ -216,6 +241,8 @@ export interface ToolDefinitionRecord {
   parameters: unknown;
   execution: ToolExecutionKind;
   metadata?: ToolDefinitionMetadataRecord;
+  configSchema?: ToolConfigSchemaRecord;
+  defaultConfig?: ToolConfigRecord;
 }
 
 export type LlmProviderKind = 'openai-compatible' | 'openai-responses' | 'claude' | 'gemini' | 'deepseek';
@@ -314,11 +341,16 @@ export interface AgentModeRecord {
   description?: string;
 }
 
+export interface ToolPolicyToolConfigRecord {
+  config: ToolConfigRecord;
+}
+
 
 export interface ToolPolicyRecord {
   id: string;
   name: string;
   allowedTools: string[];
+  toolConfigs?: Record<string, ToolPolicyToolConfigRecord>;
 }
 
 export interface ToolPolicyScopeLinkRecord {
@@ -846,6 +878,7 @@ export interface ToolPolicyScopeSetPayload {
   scopeId?: string;
   name?: string;
   allowedTools: string[];
+  toolConfigs?: Record<string, ToolPolicyToolConfigRecord>;
 }
 export interface ToolPolicyScopeClearPayload {
   scopeKind: ToolPolicyScopeKind;

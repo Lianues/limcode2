@@ -244,28 +244,24 @@ function isInternalApprovalProgress(progress: unknown): boolean {
 
 .tool-call-card.batch-pending :deep(.lc-collapsible-summary) {
   box-shadow: inset 3px 0 0 color-mix(in srgb, var(--tool-batch-color) 38%, transparent);
-  opacity: 0.86;
+  color: color-mix(in srgb, var(--vscode-descriptionForeground) 62%, var(--vscode-editor-background) 38%);
 }
 
 .tool-call-card.batch-completed :deep(.lc-collapsible-summary) {
   box-shadow: inset 3px 0 0 color-mix(in srgb, var(--tool-batch-color) 52%, transparent);
+  color: color-mix(in srgb, var(--vscode-descriptionForeground) 70%, var(--vscode-editor-background) 30%);
+}
+
+.tool-call-card.batch-pending :deep(.lc-collapsible-summary:hover),
+.tool-call-card.batch-pending :deep(.lc-collapsible-summary:focus-visible),
+.tool-call-card.batch-completed :deep(.lc-collapsible-summary:hover),
+.tool-call-card.batch-completed :deep(.lc-collapsible-summary:focus-visible) {
+  color: var(--vscode-foreground);
 }
 
 .tool-call-card.batch-pos-middle,
 .tool-call-card.batch-pos-last {
   margin-top: calc(-1 * var(--space-1));
-}
-
-.tool-call-card.batch-mode-parallel.batch-active :deep(.lc-collapsible-summary) {
-  box-shadow:
-    inset 3px 0 0 var(--tool-batch-color),
-    inset 7px 0 0 color-mix(in srgb, var(--tool-batch-color) 32%, transparent);
-}
-
-.tool-call-card.batch-mode-serial.batch-active :deep(.lc-collapsible-summary) {
-  box-shadow:
-    inset 4px 0 0 var(--tool-batch-color),
-    inset 6px 0 0 color-mix(in srgb, var(--vscode-editor-background) 70%, transparent);
 }
 
 .part-card-name {
@@ -274,6 +270,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
+  color: inherit;
 }
 
 .part-card-status,

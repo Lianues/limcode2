@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
+import ToolPolicyEditor from '@webview/components/settings/tools/ToolPolicyEditor.vue';
 
 const settings = useConversationSettingsStore();
 
@@ -26,6 +27,14 @@ function reload(): void {
     <p class="settings-note">
       对话级 common 设置会保存到当前 conversation 目录下的 <code>settings/common.json</code>。
     </p>
+
+    <ToolPolicyEditor
+      v-if="hasConversation"
+      scope-kind="conversation"
+      :scope-id="settings.common.conversationId"
+      title="对话工具策略"
+      description="默认继承全局工具策略；修改任一工具后会为当前对话创建独立覆盖。"
+    />
   </section>
 </template>
 

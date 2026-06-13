@@ -1,12 +1,12 @@
 import { defineClientStateContributor } from '../../clientSync/contributors';
-import { projectToolsState, toolsStateProjectionReads } from './stateProjection';
+import { projectToolsClientState, toolsClientStateProjectionReads } from './stateProjection';
 
-export const projectToolsClientState = projectToolsState;
+export { projectToolsClientState };
 
 export const toolsClientSyncContributor = defineClientStateContributor({
   key: 'tools',
-  tables: ['toolCalls', 'toolCallEvents'],
-  reads: toolsStateProjectionReads,
+  tables: ['toolDefinitions', 'toolCalls', 'toolCallEvents', 'toolPolicyScopeLinks'],
+  reads: toolsClientStateProjectionReads,
   project: projectToolsClientState,
   worker: {
     modulePath: '../world/modules/tools/clientSync',

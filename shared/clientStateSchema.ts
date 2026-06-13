@@ -278,8 +278,10 @@ const agentRunsTable: ClientSyncOverrides = {
 
 export const CLIENT_STATE_TABLES = {
   agents: upsertRemoveTable('agent', 'agent'),
+  toolDefinitions: upsertRemoveTable('toolDefinition', 'toolDefinition'),
   agentModes: upsertRemoveTable('agentMode', 'agentMode'),
   toolPolicies: upsertRemoveTable('toolPolicy', 'toolPolicy'),
+  toolPolicyScopeLinks: upsertRemoveTable('toolPolicyScopeLink', 'link'),
   approvalPolicies: upsertRemoveTable('approvalPolicy', 'approvalPolicy'),
   systemPrompts: upsertRemoveTable('systemPrompt', 'systemPrompt'),
   modelProfiles: upsertRemoveTable('modelProfile', 'modelProfile'),

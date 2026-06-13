@@ -1,5 +1,5 @@
-import { defineComponent } from '../../../ecs/types';
-import type { ToolCallEventKind, ToolCallStatus } from '../../../../shared/protocol';
+import { defineComponent, type Entity } from '../../../ecs/types';
+import type { PolicyBindingRole, ToolCallEventKind, ToolCallStatus, ToolPolicyScopeKind } from '../../../../shared/protocol';
 
 export interface ToolCallData {
   id: string;
@@ -36,3 +36,19 @@ export interface ToolCallEventData {
 export const ToolCallEvent = defineComponent<ToolCallEventData>('ToolCallEvent');
 
 export const ToolResultConsumed = defineComponent<true>('ToolResultConsumed');
+
+export interface ToolPolicyScopeLinkData {
+  id: string;
+  scopeKind: ToolPolicyScopeKind;
+  scopeId?: string;
+  toolPolicy: Entity;
+  conversation?: Entity;
+  agent?: Entity;
+  mode?: Entity;
+  run?: Entity;
+  agentSystemId?: string;
+  role: PolicyBindingRole;
+  createdAt: number;
+  updatedAt: number;
+}
+export const ToolPolicyScopeLink = defineComponent<ToolPolicyScopeLinkData>('ToolPolicyScopeLink');

@@ -76,6 +76,8 @@ export enum BridgeMessageType {
   AgentRunRegenerate = 'agentRun.regenerate',
   AgentRunMarkStale = 'agentRun.markStale',
   ToolExecute = 'tool.execute',
+  ToolPolicyScopeSet = 'toolPolicy.scope.set',
+  ToolPolicyScopeClear = 'toolPolicy.scope.clear',
   ClientResync = 'client.resync',
   ClientSnapshot = 'state.snapshot',
   ClientPatch = 'state.patch',
@@ -195,6 +197,27 @@ export const TOOL_CALL_STATUSES = [
 export type ToolCallStatus = typeof TOOL_CALL_STATUSES[number];
 export const TERMINAL_TOOL_CALL_STATUSES: ReadonlySet<ToolCallStatus> = new Set(['success', 'warning', 'error']);
 
+export type ToolExecutionKind = 'runtime' | 'agentRun';
+export type ToolRiskLevel = 'read' | 'write' | 'command' | 'agent';
+export type ToolDefinitionCategory = 'filesystem' | 'command' | 'agent' | 'general';
+
+export interface ToolDefinitionMetadataRecord {
+  category?: ToolDefinitionCategory;
+  riskLevel?: ToolRiskLevel;
+  readonly?: boolean;
+  defaultEnabled?: boolean;
+  requiresApproval?: boolean;
+}
+
+export interface ToolDefinitionRecord {
+  id: string;
+  name: string;
+  description: string;
+  parameters: unknown;
+  execution: ToolExecutionKind;
+  metadata?: ToolDefinitionMetadataRecord;
+}
+
 export type LlmProviderKind = 'openai-compatible' | 'openai-responses' | 'claude' | 'gemini' | 'deepseek';
 export type LlmToolCallFormat = 'function-call';
 export type LlmThinkingLevel = 'not-set' | 'non-set' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -283,6 +306,7 @@ export type AgentRunTargetRole = 'executor';
 export type MessageRunRole = 'input' | 'model' | 'tool_response' | 'notification';
 export type ToolCallRunRole = 'produced_by';
 export type PolicyBindingRole = 'active';
+export type ToolPolicyScopeKind = 'global' | 'conversation' | 'agent' | 'agentSystem' | 'mode' | 'run';
 
 export interface AgentModeRecord {
   id: string;
@@ -295,6 +319,17 @@ export interface ToolPolicyRecord {
   id: string;
   name: string;
   allowedTools: string[];
+}
+
+export interface ToolPolicyScopeLinkRecord {
+  id: string;
+  scopeKind: ToolPolicyScopeKind;
+  /** global scope 无 scopeId；agentSystem 当前预留为普通 id；其余 scope 使用对应领域对象 id。 */
+  scopeId?: string;
+  toolPolicyId: string;
+  role: PolicyBindingRole;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface ApprovalPolicyRecord {
@@ -695,8 +730,10 @@ export interface AgentRunInputRevisionRecord {
 
 export interface ClientStateRecordByTable {
   agents: AgentRecord;
+  toolDefinitions: ToolDefinitionRecord;
   agentModes: AgentModeRecord;
   toolPolicies: ToolPolicyRecord;
+  toolPolicyScopeLinks: ToolPolicyScopeLinkRecord;
   approvalPolicies: ApprovalPolicyRecord;
   systemPrompts: SystemPromptRecord;
   modelProfiles: ModelProfileRecord;
@@ -803,6 +840,16 @@ export interface AgentRunControlPayload {
 export interface ToolExecutePayload {
   toolCallId: string;
   conversationId?: string;
+}
+export interface ToolPolicyScopeSetPayload {
+  scopeKind: ToolPolicyScopeKind;
+  scopeId?: string;
+  name?: string;
+  allowedTools: string[];
+}
+export interface ToolPolicyScopeClearPayload {
+  scopeKind: ToolPolicyScopeKind;
+  scopeId?: string;
 }
 export interface ClientResyncPayload {
   streamId?: string;
@@ -1001,6 +1048,8 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.AgentRunRegenerate, AgentRunControlPayload>
   | BridgeEnvelope<BridgeMessageType.AgentRunMarkStale, AgentRunControlPayload>
   | BridgeEnvelope<BridgeMessageType.ToolExecute, ToolExecutePayload>
+  | BridgeEnvelope<BridgeMessageType.ToolPolicyScopeSet, ToolPolicyScopeSetPayload>
+  | BridgeEnvelope<BridgeMessageType.ToolPolicyScopeClear, ToolPolicyScopeClearPayload>
   | BridgeEnvelope<BridgeMessageType.ClientResync, ClientResyncPayload>
   | BridgeEnvelope<BridgeMessageType.RunHistoryPageGet, ConversationRunHistoryPageRequest>
   | BridgeEnvelope<BridgeMessageType.RunHistoryDetailGet, ConversationRunDetailRequest>

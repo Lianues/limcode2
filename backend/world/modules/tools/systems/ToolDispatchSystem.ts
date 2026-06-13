@@ -56,10 +56,10 @@ import {
 import { AgentRunBundle, spawnAgentRun } from '../../agentRun/bundles';
 import { activeApprovalPolicyForRun, activeToolPolicyForRun, runForToolCall, runTarget, toolCallEntityById } from '../../agentRun/queries';
 import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
-import { ToolCall, ToolState, type ToolCallData, type ToolStateData } from '../components';
+import { ToolCall, ToolPolicyScopeLink, ToolState, type ToolCallData, type ToolStateData } from '../components';
 import { ToolEventType } from '../events';
 import { transitionToolState } from '../state';
-import { ToolSchemasKey } from '../resources';
+import { ToolDefinitionsKey, ToolSchemasKey } from '../resources';
 import type {
   AgentRunStatus,
   ContextHistoryMode,
@@ -92,6 +92,7 @@ const QueuedToolCallsQuery = defineQuery({
     ModeToolPolicyLink,
     ModeApprovalPolicyLink,
     ToolPolicy,
+    ToolPolicyScopeLink,
     ApprovalPolicy,
     AgentRun,
     ToolCallRunLink
@@ -106,7 +107,7 @@ export const ToolDispatchSystem = defineSystem({
   name: 'ToolDispatchSystem',
   access: {
     queries: [QueuedToolCallsQuery],
-    resources: { read: [AgentBlueprintsKey, ToolSchemasKey] },
+    resources: { read: [AgentBlueprintsKey, ToolSchemasKey, ToolDefinitionsKey] },
     bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentFromBlueprintBundle],
     events: { read: [ToolEventType.ExecuteRequested] },
     effects: { emit: ['tool.run'] }
@@ -149,7 +150,7 @@ export const ToolDispatchSystem = defineSystem({
       }
       if (!isRunReadyForToolExecution(authorization)) continue;
 
-      if (requiresApproval(authorization.approvalPolicy, call.name)) {
+      if (requiresApproval(world, authorization.approvalPolicy, call.name)) {
         awaitApproval(cmd, entity, call, state, authorization.agentId, authorization.runId);
         continue;
       }
@@ -198,7 +199,7 @@ function isRunReadyForToolExecution(authorization: Extract<AuthorizationResult, 
 }
 
 function dispatchToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
-  if (call.name === 'run_agent') {
+  if (isAgentRunTool(world, call.name)) {
     executeRunAgentTool(world, cmd, entity, call, state, authorization);
     return;
   }
@@ -818,11 +819,16 @@ function findAgentByKind(world: WorldReader, kind: string): Entity | undefined {
   return world.query(Agent).find((agent) => world.get(agent, Agent)?.id === kind || world.get(agent, Agent)?.name === kind);
 }
 
-function requiresApproval(policy: ApprovalPolicyData | undefined, toolName: string): boolean {
+function isAgentRunTool(world: WorldReader, toolName: string): boolean {
+  return (world.tryGetResource(ToolDefinitionsKey) ?? []).some((tool) => tool.name === toolName && tool.execution === 'agentRun');
+}
+
+function requiresApproval(world: WorldReader, policy: ApprovalPolicyData | undefined, toolName: string): boolean {
   if (!policy) return false;
   if (policy.mode === 'always' || policy.mode === 'manualOnly') return policy.allowInteractiveApproval;
   if (policy.mode === 'never') return false;
-  return toolName === 'shell' || toolName === 'bash';
+  const tool = (world.tryGetResource(ToolDefinitionsKey) ?? []).find((candidate) => candidate.name === toolName);
+  return tool?.metadata?.requiresApproval === true || tool?.metadata?.riskLevel === 'command';
 }
 
 function awaitApproval(cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, executorAgentId: string, runId: string): void {

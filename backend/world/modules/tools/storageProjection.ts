@@ -1,8 +1,8 @@
 import { defineStorageStateContributor } from '../../storageProjection/contributors';
-import { projectToolsState, toolsStateProjectionReads } from './stateProjection';
+import { projectToolsRuntimeState, toolsRuntimeStateProjectionReads } from './stateProjection';
 
 export const toolsStorageStateContributor = defineStorageStateContributor({
   key: 'tools',
-  reads: toolsStateProjectionReads,
-  project: projectToolsState
+  reads: toolsRuntimeStateProjectionReads,
+  project: projectToolsRuntimeState
 });

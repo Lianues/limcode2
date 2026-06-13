@@ -102,6 +102,11 @@ export interface RuntimePaths {
   toolPoliciesRootPath: string;
   toolPoliciesIndexUri: vscode.Uri;
   toolPoliciesIndexPath: string;
+  /** ToolPolicy 与各作用域的关系数据根目录：<dataRoot>/tool-policy-scope-links */
+  toolPolicyScopeLinksRootUri: vscode.Uri;
+  toolPolicyScopeLinksRootPath: string;
+  toolPolicyScopeLinksIndexUri: vscode.Uri;
+  toolPolicyScopeLinksIndexPath: string;
   /** ApprovalPolicy 数据根目录：<dataRoot>/approval-policies */
   approvalPoliciesRootUri: vscode.Uri;
   approvalPoliciesRootPath: string;

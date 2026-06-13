@@ -1,5 +1,5 @@
 import type { CommandCapability, FsCapability } from '../../../capabilities/types';
-import type { ToolCallEventKind } from '../../../../shared/protocol';
+import type { ToolCallEventKind, ToolDefinitionMetadataRecord, ToolDefinitionRecord, ToolExecutionKind } from '../../../../shared/protocol';
 
 export interface ToolDeps {
   fs: FsCapability;
@@ -29,6 +29,7 @@ export interface ToolDeclaration {
   name: string;
   description: string;
   parameters: unknown;
+  metadata?: ToolDefinitionMetadataRecord;
 }
 
 export interface RuntimeToolDefinition {
@@ -68,4 +69,19 @@ export class ToolRegistry {
   public schemas(): ToolDeclaration[] {
     return this.list().map((tool) => tool.declaration);
   }
+
+  public records(): ToolDefinitionRecord[] {
+    return this.list().map((tool) => toolDefinitionRecord(tool));
+  }
+}
+
+export function toolDefinitionRecord(tool: ToolDefinition): ToolDefinitionRecord {
+  return {
+    id: tool.declaration.name,
+    name: tool.declaration.name,
+    description: tool.declaration.description,
+    parameters: tool.declaration.parameters,
+    execution: tool.execution as ToolExecutionKind,
+    ...(tool.declaration.metadata ? { metadata: tool.declaration.metadata } : {})
+  };
 }

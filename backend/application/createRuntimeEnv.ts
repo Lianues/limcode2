@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import type { ToolDefinitionRecord } from '../../shared/protocol';
 import {
   createLlmProviderCapability,
   createCommandCapability,
@@ -13,6 +14,7 @@ import type { RuntimeEnv } from './RuntimeEnv';
 export interface RuntimeEnvSetup {
   env: RuntimeEnv;
   toolSchemas: ToolSchema[];
+  toolDefinitions: ToolDefinitionRecord[];
 }
 
 /**
@@ -32,6 +34,7 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
   const fs = createVsCodeFsCapability();
   const webview = createWebviewCapability();
   const toolSchemas = registry.schemas();
+  const toolDefinitions = registry.records();
 
   return {
     env: {
@@ -43,6 +46,7 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
       get paths() { return storage.paths; },
       tools: { registry: registry.list() }
     },
-    toolSchemas
+    toolSchemas,
+    toolDefinitions
   };
 }

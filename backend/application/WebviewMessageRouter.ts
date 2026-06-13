@@ -76,6 +76,14 @@ export class WebviewMessageRouter {
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ToolEventType.ExecuteRequested, payload: message.payload });
         break;
+      case BridgeMessageType.ToolPolicyScopeSet:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: ToolEventType.PolicyScopeSetRequested, payload: message.payload });
+        break;
+      case BridgeMessageType.ToolPolicyScopeClear:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: ToolEventType.PolicyScopeClearRequested, payload: message.payload });
+        break;
       case BridgeMessageType.AgentRunCancel:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: AgentRunEventType.Cancel, payload: message.payload });
@@ -163,6 +171,8 @@ export class WebviewMessageRouter {
             this.deps.webview.subscribe(clientId, globalSettingsStreamId(section));
             void this.deps.globalSettingsBridge.postSnapshot(clientId, section, message.id);
           }
+          this.deps.webview.subscribe(clientId, GLOBAL_CLIENT_STATE_STREAM_ID);
+          this.deps.requestSnapshot();
         } else {
           this.deps.webview.subscribe(clientId, GLOBAL_CLIENT_STATE_STREAM_ID);
           this.deps.requestSnapshot();

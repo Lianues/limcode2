@@ -20,6 +20,7 @@ import {
   RUN_HISTORY_ROOT_DIR,
   SETTINGS_ROOT_DIR,
   SYSTEM_PROMPTS_ROOT_DIR,
+  TOOL_POLICY_SCOPE_LINKS_ROOT_DIR,
   TOOL_POLICIES_ROOT_DIR
 } from './constants';
 
@@ -30,6 +31,8 @@ export interface VscodeStorageUris {
   agentModesIndexUri: vscode.Uri;
   toolPoliciesRootUri: vscode.Uri;
   toolPoliciesIndexUri: vscode.Uri;
+  toolPolicyScopeLinksRootUri: vscode.Uri;
+  toolPolicyScopeLinksIndexUri: vscode.Uri;
   approvalPoliciesRootUri: vscode.Uri;
   approvalPoliciesIndexUri: vscode.Uri;
   systemPromptsRootUri: vscode.Uri;
@@ -71,6 +74,7 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const agents = root(globalStorageUri, AGENTS_ROOT_DIR);
   const agentModes = root(globalStorageUri, AGENT_MODES_ROOT_DIR);
   const toolPolicies = root(globalStorageUri, TOOL_POLICIES_ROOT_DIR);
+  const toolPolicyScopeLinks = root(globalStorageUri, TOOL_POLICY_SCOPE_LINKS_ROOT_DIR);
   const approvalPolicies = root(globalStorageUri, APPROVAL_POLICIES_ROOT_DIR);
   const systemPrompts = root(globalStorageUri, SYSTEM_PROMPTS_ROOT_DIR);
   const modelProfiles = root(globalStorageUri, MODEL_PROFILES_ROOT_DIR);
@@ -103,6 +107,10 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     toolPoliciesRootPath: toolPolicies.rootUri.fsPath,
     toolPoliciesIndexUri: toolPolicies.indexUri,
     toolPoliciesIndexPath: toolPolicies.indexUri.fsPath,
+    toolPolicyScopeLinksRootUri: toolPolicyScopeLinks.rootUri,
+    toolPolicyScopeLinksRootPath: toolPolicyScopeLinks.rootUri.fsPath,
+    toolPolicyScopeLinksIndexUri: toolPolicyScopeLinks.indexUri,
+    toolPolicyScopeLinksIndexPath: toolPolicyScopeLinks.indexUri.fsPath,
     approvalPoliciesRootUri: approvalPolicies.rootUri,
     approvalPoliciesRootPath: approvalPolicies.rootUri.fsPath,
     approvalPoliciesIndexUri: approvalPolicies.indexUri,

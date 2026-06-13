@@ -26,6 +26,12 @@ export const readFileTool: ToolDefinition = {
         endLine: { type: 'number', description: '1-based end line (inclusive).' }
       },
       required: ['path']
+    },
+    metadata: {
+      category: 'filesystem',
+      riskLevel: 'read',
+      readonly: true,
+      defaultEnabled: true
     }
   },
   execution: 'runtime',

@@ -12,7 +12,7 @@ import {
   RunSystemPromptLink,
   RunToolPolicyLink
 } from '../../agentRun/components';
-import { ToolCall, ToolState } from '../../tools/components';
+import { ToolCall, ToolPolicyScopeLink, ToolState } from '../../tools/components';
 import { ToolSchemasKey } from '../../tools/resources';
 import { Conversation, InFlight, LlmRequest, Message, MessageCurrentRevisionLink, PartOf } from '../components';
 import { textContent } from '../../../../../shared/protocol';
@@ -57,6 +57,7 @@ const LlmContextLookupComponents = [
   SystemPrompt,
   ModelProfile,
   ToolPolicy,
+  ToolPolicyScopeLink,
   ToolCall,
   ToolState
 ] as const;

@@ -5,6 +5,7 @@ export const RECORDS_DIR = 'records';
 export const AGENTS_ROOT_DIR = 'agents';
 export const AGENT_MODES_ROOT_DIR = 'agent-modes';
 export const TOOL_POLICIES_ROOT_DIR = 'tool-policies';
+export const TOOL_POLICY_SCOPE_LINKS_ROOT_DIR = 'tool-policy-scope-links';
 export const APPROVAL_POLICIES_ROOT_DIR = 'approval-policies';
 export const SYSTEM_PROMPTS_ROOT_DIR = 'system-prompts';
 export const MODEL_PROFILES_ROOT_DIR = 'model-profiles';
@@ -29,6 +30,7 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
   AGENTS_ROOT_DIR,
   AGENT_MODES_ROOT_DIR,
   TOOL_POLICIES_ROOT_DIR,
+  TOOL_POLICY_SCOPE_LINKS_ROOT_DIR,
   APPROVAL_POLICIES_ROOT_DIR,
   SYSTEM_PROMPTS_ROOT_DIR,
   MODEL_PROFILES_ROOT_DIR,

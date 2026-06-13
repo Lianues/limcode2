@@ -1,8 +1,10 @@
-import type { ToolCallEventKind, ToolCallStatus } from '../../../../shared/protocol';
+import type { ToolCallEventKind, ToolCallStatus, ToolPolicyScopeClearPayload, ToolPolicyScopeSetPayload } from '../../../../shared/protocol';
 
 export const ToolEventType = {
   State: 'tool:state',
-  ExecuteRequested: 'tool:executeRequested'
+  ExecuteRequested: 'tool:executeRequested',
+  PolicyScopeSetRequested: 'tool:policyScopeSetRequested',
+  PolicyScopeClearRequested: 'tool:policyScopeClearRequested'
 } as const;
 
 export interface ToolExecuteRequestedPayload {
@@ -25,5 +27,7 @@ declare module '@backend/world/events' {
   interface WorldEventPayloadMap {
     'tool:state': ToolStatePayload;
     'tool:executeRequested': ToolExecuteRequestedPayload;
+    'tool:policyScopeSetRequested': ToolPolicyScopeSetPayload;
+    'tool:policyScopeClearRequested': ToolPolicyScopeClearPayload;
   }
 }

@@ -103,6 +103,12 @@ export const runAgentTool: ToolDefinition = {
         run_in_background: { type: 'boolean', description: 'true 时默认使用 notification 回流；false/缺省时默认 tool_response 同步回流。' }
       },
       required: ['prompt']
+    },
+    metadata: {
+      category: 'agent',
+      riskLevel: 'agent',
+      readonly: false,
+      defaultEnabled: true
     }
   }
 };

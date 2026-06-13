@@ -119,7 +119,7 @@ export class BackendApplication {
   public readonly onDidChangeConversationHistory = this.conversationHistoryChangedEmitter.event;
 
   public constructor(context: vscode.ExtensionContext) {
-    const { env, toolSchemas } = createRuntimeEnv(context);
+    const { env, toolSchemas, toolDefinitions } = createRuntimeEnv(context);
     this.env = env;
     this.persistence = new ClientStatePersistence(this.world, this.env.storage, {
       renderLoadedConversationIds: () => this.renderLoadedConversationDetails,
@@ -169,7 +169,7 @@ export class BackendApplication {
 
     installWorldPlugins(
       { world: this.world, scheduler: this.scheduler },
-      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), modePlugin(), projectPlugin(), toolsPlugin({ toolSchemas }), chatPlugin(), agentRunPlugin()]
+      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), modePlugin(), projectPlugin(), toolsPlugin({ toolSchemas, toolDefinitions }), chatPlugin(), agentRunPlugin()]
     );
     registerClientSyncSystems(this.scheduler);
 
@@ -896,6 +896,8 @@ function shouldDeferUntilHydrated(message: WebviewToExtensionMessage): boolean {
     case 'message.deleteFrom':
     case 'message.retryFrom':
     case 'tool.execute':
+    case 'toolPolicy.scope.set':
+    case 'toolPolicy.scope.clear':
     case 'agentRun.cancel':
     case 'agentRun.pause':
     case 'agentRun.resume':

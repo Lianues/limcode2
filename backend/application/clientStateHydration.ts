@@ -15,7 +15,7 @@ import {
 import { rememberHydratedMessageSeq, resetMessageSeqState } from '../world/modules/chat/bundles';
 import { Conversation, ConversationBranchLink, ConversationReuseLink, Message, MessageCurrentRevisionLink, MessageRevision, PartOf } from '../world/modules/chat/components';
 import { ConversationProjectLink, ProjectContext } from '../world/modules/project/components';
-import { ToolCall, ToolCallEvent, ToolResultConsumed, ToolState } from '../world/modules/tools/components';
+import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolResultConsumed, ToolState } from '../world/modules/tools/components';
 import { isTerminalToolStatus } from '../world/modules/tools/state';
 import {
   AgentRun,
@@ -123,6 +123,14 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState): bo
     const now = Date.now();
     world.add(entity, ConversationBranchLink, { id: record.id, sourceConversation, targetConversation, kind: record.kind, createdAt: now, updatedAt: now });
   }
+
+  hydrateToolPolicyScopeLinks(world, state, {
+    agents: agentEntities,
+    conversations: conversationEntities,
+    modes: modeEntities,
+    toolPolicies: toolPolicyEntities,
+    runs: new Map()
+  });
 
   return true;
 }
@@ -247,6 +255,15 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
   for (const link of state.runDeliveryPolicyLinks ?? []) spawnRunLink(world, runEntities, deliveryPolicyEntities, link, RunDeliveryPolicyLink, 'run', 'policy');
   for (const link of state.runEditPolicyLinks ?? []) spawnRunLink(world, runEntities, editPolicyEntities, link, RunEditPolicyLink, 'run', 'policy');
 
+
+  hydrateToolPolicyScopeLinks(world, state, {
+    agents: agentEntities,
+    conversations: conversationEntities,
+    modes: modeEntities,
+    toolPolicies: toolPolicyEntities,
+    runs: runEntities
+  });
+
   const inputRevisionIds = existingIds(world, AgentRunInputRevision);
   for (const record of state.agentRunInputRevisions ?? []) {
     if (inputRevisionIds.has(record.id)) continue;
@@ -345,6 +362,67 @@ function existingRecords<T extends { id: string }>(world: World, component: { id
 function existingIds<T extends { id: string }>(world: World, component: { id: symbol }): Set<string> {
   return new Set([...existingRecords<T>(world, component).keys()]);
 }
+
+interface ToolPolicyScopeHydrationMaps {
+  agents: Map<string, Entity>;
+  conversations: Map<string, Entity>;
+  modes: Map<string, Entity>;
+  toolPolicies: Map<string, Entity>;
+  runs: Map<string, Entity>;
+}
+
+function hydrateToolPolicyScopeLinks(world: World, state: ClientState, maps: ToolPolicyScopeHydrationMaps): void {
+  const existing = existingIds(world, ToolPolicyScopeLink);
+  for (const record of state.toolPolicyScopeLinks ?? []) {
+    if (existing.has(record.id)) continue;
+    const toolPolicy = maps.toolPolicies.get(record.toolPolicyId);
+    if (toolPolicy === undefined) continue;
+    const scope = resolveHydratedToolPolicyScope(record.scopeKind, record.scopeId, maps);
+    if (!scope.ok) continue;
+    const entity = world.spawn();
+    existing.add(record.id);
+    world.add(entity, ToolPolicyScopeLink, {
+      id: record.id,
+      scopeKind: record.scopeKind,
+      ...(record.scopeId ? { scopeId: record.scopeId } : {}),
+      toolPolicy,
+      ...scope.data,
+      role: record.role,
+      createdAt: record.createdAt || Date.now(),
+      updatedAt: record.updatedAt || record.createdAt || Date.now()
+    });
+  }
+}
+
+function resolveHydratedToolPolicyScope(
+  scopeKind: NonNullable<ClientState['toolPolicyScopeLinks'][number]>['scopeKind'],
+  scopeId: string | undefined,
+  maps: ToolPolicyScopeHydrationMaps
+): { ok: true; data: Partial<{ conversation: Entity; agent: Entity; mode: Entity; run: Entity; agentSystemId: string }> } | { ok: false } {
+  switch (scopeKind) {
+    case 'global':
+      return { ok: true, data: {} };
+    case 'conversation': {
+      const conversation = scopeId ? maps.conversations.get(scopeId) : undefined;
+      return conversation === undefined ? { ok: false } : { ok: true, data: { conversation } };
+    }
+    case 'agent': {
+      const agent = scopeId ? maps.agents.get(scopeId) : undefined;
+      return agent === undefined ? { ok: false } : { ok: true, data: { agent } };
+    }
+    case 'mode': {
+      const mode = scopeId ? maps.modes.get(scopeId) : undefined;
+      return mode === undefined ? { ok: false } : { ok: true, data: { mode } };
+    }
+    case 'run': {
+      const run = scopeId ? maps.runs.get(scopeId) : undefined;
+      return run === undefined ? { ok: false } : { ok: true, data: { run } };
+    }
+    case 'agentSystem':
+      return scopeId ? { ok: true, data: { agentSystemId: scopeId } } : { ok: false };
+  }
+}
+
 
 function spawnLink(world: World, left: Map<string, Entity>, right: Map<string, Entity>, record: any, component: { id: symbol }, leftKey: string, rightKey: string): void {
   if (existingIds(world, component).has(record.id)) return;

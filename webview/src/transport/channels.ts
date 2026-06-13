@@ -16,6 +16,8 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
     case BridgeMessageType.AgentRunMarkStale:
     case BridgeMessageType.ConversationProjectSet:
     case BridgeMessageType.ToolExecute:
+    case BridgeMessageType.ToolPolicyScopeSet:
+    case BridgeMessageType.ToolPolicyScopeClear:
       return 'command';
     case BridgeMessageType.ClientResync:
     case BridgeMessageType.ProjectFoldersGet:

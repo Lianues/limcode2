@@ -1,4 +1,5 @@
 import type { ComponentType, Entity, WorldReader } from '../../../ecs/types';
+import type { ToolPolicyScopeKind } from '../../../../shared/protocol';
 import { Agent, AgentConversationLink } from '../agent/components';
 import {
   AgentMode,
@@ -18,6 +19,7 @@ import {
 } from '../mode/components';
 import { Conversation, Message, PartOf } from '../chat/components';
 import { ToolCall } from '../tools/components';
+import { ToolPolicyScopeLink, type ToolPolicyScopeLinkData } from '../tools/components';
 import {
   AgentRun,
   AgentRunSourceLink,
@@ -127,13 +129,38 @@ export function activeModeForAgent(world: WorldReader, agent: Entity): Entity | 
 }
 
 export function activeToolPolicyForRun(world: WorldReader, run: Entity): ToolPolicyData | undefined {
+  const runScopePolicy = activeToolPolicyForScopeEntity(world, 'run', run);
+  if (runScopePolicy) return runScopePolicy;
+
   const runLink = world
     .query(RunToolPolicyLink)
     .map((entity) => world.get(entity, RunToolPolicyLink))
     .find((candidate) => candidate?.run === run && candidate.role === 'active');
   if (runLink) return world.get(runLink.toolPolicy, ToolPolicy);
+
+  const target = runTarget(world, run);
+  if (target) {
+    const conversationScopePolicy = activeToolPolicyForScopeEntity(world, 'conversation', target.conversation);
+    if (conversationScopePolicy) return conversationScopePolicy;
+
+    const agentScopePolicy = activeToolPolicyForScopeEntity(world, 'agent', target.agent);
+    if (agentScopePolicy) return agentScopePolicy;
+  }
+
   const mode = activeModeForRun(world, run);
-  return mode === undefined ? undefined : activeToolPolicyForMode(world, mode);
+  if (mode !== undefined) {
+    const modeScopePolicy = activeToolPolicyForScopeEntity(world, 'mode', mode);
+    if (modeScopePolicy) return modeScopePolicy;
+    const modePolicy = activeToolPolicyForMode(world, mode);
+    if (modePolicy) return modePolicy;
+  }
+
+  return activeToolPolicyForScopeEntity(world, 'global');
+}
+
+export function activeToolPolicyForScope(world: WorldReader, scopeKind: ToolPolicyScopeKind, scopeId?: string): ToolPolicyData | undefined {
+  const scopeEntity = scopeKind === 'global' || scopeKind === 'agentSystem' ? undefined : entityForToolPolicyScope(world, scopeKind, scopeId);
+  return activeToolPolicyForScopeEntity(world, scopeKind, scopeEntity, scopeId);
 }
 
 export function activeApprovalPolicyForRun(world: WorldReader, run: Entity): ApprovalPolicyData | undefined {
@@ -211,6 +238,60 @@ function isNewerRunPolicyLink<T extends { createdAt: number; updatedAt: number }
   const previousTimestamp = previous.updatedAt || previous.createdAt;
   return timestamp > previousTimestamp || (timestamp === previousTimestamp && entity > previousEntity);
 }
+function activeToolPolicyForScopeEntity(
+  world: WorldReader,
+  scopeKind: ToolPolicyScopeKind,
+  scopeEntity?: Entity,
+  explicitScopeId?: string
+): ToolPolicyData | undefined {
+  let selected: { entity: Entity; link: ToolPolicyScopeLinkData } | undefined;
+  for (const entity of world.query(ToolPolicyScopeLink)) {
+    const link = world.get(entity, ToolPolicyScopeLink);
+    if (!link || link.role !== 'active' || link.scopeKind !== scopeKind) continue;
+    if (!matchesToolPolicyScope(world, link, scopeKind, scopeEntity, explicitScopeId)) continue;
+    if (!selected || isNewerRunPolicyLink(entity, link, selected.entity, selected.link)) selected = { entity, link };
+  }
+  return selected ? world.get(selected.link.toolPolicy, ToolPolicy) : undefined;
+}
+
+function matchesToolPolicyScope(
+  world: WorldReader,
+  link: ToolPolicyScopeLinkData,
+  scopeKind: ToolPolicyScopeKind,
+  scopeEntity?: Entity,
+  explicitScopeId?: string
+): boolean {
+  if (scopeKind === 'global') return true;
+  if (scopeKind === 'agentSystem') return !!explicitScopeId && (link.scopeId === explicitScopeId || link.agentSystemId === explicitScopeId);
+  if (scopeEntity !== undefined) {
+    switch (scopeKind) {
+      case 'conversation': return link.conversation === scopeEntity || link.scopeId === world.get(scopeEntity, Conversation)?.id;
+      case 'agent': return link.agent === scopeEntity || link.scopeId === world.get(scopeEntity, Agent)?.id;
+      case 'mode': return link.mode === scopeEntity || link.scopeId === world.get(scopeEntity, AgentMode)?.id;
+      case 'run': return link.run === scopeEntity || link.scopeId === world.get(scopeEntity, AgentRun)?.id;
+    }
+  }
+  return !!explicitScopeId && link.scopeId === explicitScopeId;
+}
+
+function entityForToolPolicyScope(world: WorldReader, scopeKind: ToolPolicyScopeKind, scopeId: string | undefined): Entity | undefined {
+  if (!scopeId) return undefined;
+  switch (scopeKind) {
+    case 'conversation': return findRecordEntity(world, Conversation, scopeId);
+    case 'agent': return findRecordEntity(world, Agent, scopeId);
+    case 'mode': return findRecordEntity(world, AgentMode, scopeId);
+    case 'run': return findRecordEntity(world, AgentRun, scopeId);
+    case 'global':
+    case 'agentSystem':
+      return undefined;
+  }
+}
+
+function findRecordEntity<T extends { id: string }>(world: WorldReader, component: ComponentType<T>, id: string): Entity | undefined {
+  return world.query(component).find((entity) => world.get(entity, component)?.id === id);
+}
+
+
 
 function activeToolPolicyForMode(world: WorldReader, mode: Entity): ToolPolicyData | undefined {
   const link = world

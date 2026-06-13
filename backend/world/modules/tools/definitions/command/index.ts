@@ -37,6 +37,13 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
           }
         },
         required: ['command']
+      },
+      metadata: {
+        category: 'command',
+        riskLevel: 'command',
+        readonly: false,
+        defaultEnabled: true,
+        requiresApproval: true
       }
     },
     execution: 'runtime',

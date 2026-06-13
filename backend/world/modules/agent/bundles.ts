@@ -19,6 +19,7 @@ import {
   SystemPrompt,
   ToolPolicy
 } from '../mode/components';
+import { ToolPolicyScopeLink } from '../tools/components';
 import type { AgentBlueprint, AgentModeBlueprint } from './blueprints';
 import type { AgentModeRole } from '../../../../shared/protocol';
 
@@ -38,6 +39,7 @@ export const AgentFromBlueprintBundle = defineBundle({
     ModeApprovalPolicyLink,
     ModeSystemPromptLink,
     ModeModelProfileLink,
+    ToolPolicyScopeLink,
     Conversation,
     AgentConversationLink,
     Message,
@@ -149,6 +151,17 @@ function spawnModeFromBlueprint(
     name: input.blueprint.toolPolicy.name ?? `${input.blueprint.name} Tools`,
     allowedTools: input.blueprint.toolPolicy.allowedTools
   });
+  if (input.agentId === 'main' && input.isDefault) {
+    const globalToolPolicyLink = cmd.spawn();
+    cmd.add(globalToolPolicyLink, ToolPolicyScopeLink, {
+      id: 'tool-policy-scope:global:default',
+      scopeKind: 'global',
+      toolPolicy,
+      role: 'active',
+      createdAt: now,
+      updatedAt: now
+    });
+  }
   const toolPolicyLink = cmd.spawn();
   cmd.add(toolPolicyLink, ModeToolPolicyLink, {
     id: `mode-tool-policy:${modeId}:${toolPolicyId}`,

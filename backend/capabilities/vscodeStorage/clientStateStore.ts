@@ -25,7 +25,8 @@ import type {
   SystemPromptRecord,
   ToolCallEventRecord,
   ToolCallRecord,
-  ToolPolicyRecord
+  ToolPolicyRecord,
+  ToolPolicyScopeLinkRecord
 } from '../../../shared/protocol';
 import { createEmptyClientState } from '../../../shared/clientStateSchema';
 import { INDEX_FILE, STORAGE_VERSION } from './constants';
@@ -134,6 +135,7 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Pr
     agents,
     agentModes,
     toolPolicies,
+    toolPolicyScopeLinks,
     approvalPolicies,
     systemPrompts,
     modelProfiles,
@@ -152,6 +154,7 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Pr
     loadSkeletonRecords<AgentRecord>('agents', [paths.agentsRootUri, paths.agentsIndexUri], 'agent'),
     loadSkeletonRecords<AgentModeRecord>('agentModes', [paths.agentModesRootUri, paths.agentModesIndexUri], 'agentMode'),
     loadSkeletonRecords<ToolPolicyRecord>('toolPolicies', [paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri], 'toolPolicy'),
+    loadSkeletonRecords<ToolPolicyScopeLinkRecord>('toolPolicyScopeLinks', [paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri], 'link'),
     loadSkeletonRecords<ApprovalPolicyRecord>('approvalPolicies', [paths.approvalPoliciesRootUri, paths.approvalPoliciesIndexUri], 'approvalPolicy'),
     loadSkeletonRecords<SystemPromptRecord>('systemPrompts', [paths.systemPromptsRootUri, paths.systemPromptsIndexUri], 'systemPrompt'),
     loadSkeletonRecords<ModelProfileRecord>('modelProfiles', [paths.modelProfilesRootUri, paths.modelProfilesIndexUri], 'modelProfile'),
@@ -171,6 +174,7 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Pr
   state.agents = agents;
   state.agentModes = agentModes;
   state.toolPolicies = toolPolicies;
+  state.toolPolicyScopeLinks = toolPolicyScopeLinks;
   state.approvalPolicies = approvalPolicies;
   state.systemPrompts = systemPrompts;
   state.modelProfiles = modelProfiles;
@@ -296,6 +300,7 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
     saveRecords(paths.agentsRootUri, paths.agentsIndexUri, state.agents, 'agent', (record) => record.name || record.id),
     saveRecords(paths.agentModesRootUri, paths.agentModesIndexUri, state.agentModes, 'agentMode', (record) => record.name || record.id),
     saveRecords(paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri, state.toolPolicies, 'toolPolicy', (record) => record.name || record.id),
+    saveRecords(paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri, state.toolPolicyScopeLinks, 'link'),
     saveRecords(paths.approvalPoliciesRootUri, paths.approvalPoliciesIndexUri, state.approvalPolicies, 'approvalPolicy', (record) => record.name || record.id),
     saveRecords(paths.systemPromptsRootUri, paths.systemPromptsIndexUri, state.systemPrompts, 'systemPrompt', (record) => record.name || record.id),
     saveRecords(paths.modelProfilesRootUri, paths.modelProfilesIndexUri, state.modelProfiles, 'modelProfile', (record) => record.name || record.id),

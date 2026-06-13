@@ -8,12 +8,10 @@ export const modeClientSyncContributor = defineClientStateContributor({
   tables: [
     'agentModes',
     'toolPolicies',
-    'approvalPolicies',
     'systemPrompts',
     'modelProfiles',
     'agentModeLinks',
     'modeToolPolicyLinks',
-    'modeApprovalPolicyLinks',
     'modeSystemPromptLinks',
     'modeModelProfileLinks'
   ],

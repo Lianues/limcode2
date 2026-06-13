@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { IconTool } from '@tabler/icons-vue';
 import type { FunctionCallPart, ToolCallRecord, ToolCallStatus } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import { bridge, BridgeMessageType } from '@webview/transport';
 import ContentBlockSection from '../ContentBlockSection.vue';
 import CollapsibleContentBlock from '../CollapsibleContentBlock.vue';
 
@@ -32,7 +33,9 @@ const outputText = computed(() => {
   return progress !== undefined ? stringifyValue(progress) : '';
 });
 const hasOutput = computed(() => Boolean(outputText.value.trim()));
-const hasDetails = computed(() => hasArgs.value || hasOutput.value || Boolean(toolCall.value?.error));
+const needsExecutionDecision = computed(() => toolCall.value?.status === 'awaiting_approval');
+const needsApplyDecision = computed(() => toolCall.value?.status === 'awaiting_apply');
+const hasDetails = computed(() => hasArgs.value || hasOutput.value || Boolean(toolCall.value?.error) || needsExecutionDecision.value || needsApplyDecision.value);
 const statusLabel = computed(() => toolCall.value ? labelForStatus(toolCall.value.status) : '已请求');
 const durationLabel = computed(() => {
   const duration = toolCall.value?.durationMs;
@@ -43,6 +46,14 @@ const toggleLabel = computed(() => {
   if (!hasDetails.value) return `工具调用 ${props.part.functionCall.name}`;
   return expanded.value ? '收起工具调用内容' : '展开工具调用内容';
 });
+
+watch(
+  () => toolCall.value?.status,
+  (status) => {
+    if (status === 'awaiting_approval' || status === 'awaiting_apply') expanded.value = true;
+  },
+  { immediate: true }
+);
 
 function stringifyValue(value: unknown): string {
   if (typeof value === 'string') return value;
@@ -73,6 +84,12 @@ function stringifyPossiblyJson(value: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function sendToolDecision(type: BridgeMessageType.ToolExecutionApprove | BridgeMessageType.ToolExecutionReject | BridgeMessageType.ToolResultApply | BridgeMessageType.ToolResultReject): void {
+  const call = toolCall.value;
+  if (!call) return;
+  bridge.request(type, { toolCallId: call.id, conversationId: clientState.currentConversationId });
 }
 
 function labelForStatus(status: ToolCallStatus): string {
@@ -114,6 +131,14 @@ function labelForStatus(status: ToolCallStatus): string {
       <ContentBlockSection v-if="hasArgs" kind="input" title="输入" :text="argsText" />
       <ContentBlockSection v-if="hasOutput" kind="output" title="输出" :text="outputText" />
       <p v-if="toolCall?.error" class="part-card-error">{{ toolCall.error }}</p>
+      <div v-if="needsExecutionDecision" class="tool-decision-actions">
+        <button type="button" @click="sendToolDecision(BridgeMessageType.ToolExecutionApprove)">批准执行</button>
+        <button type="button" class="secondary" @click="sendToolDecision(BridgeMessageType.ToolExecutionReject)">拒绝</button>
+      </div>
+      <div v-else-if="needsApplyDecision" class="tool-decision-actions">
+        <button type="button" @click="sendToolDecision(BridgeMessageType.ToolResultApply)">应用结果</button>
+        <button type="button" class="secondary" @click="sendToolDecision(BridgeMessageType.ToolResultReject)">拒绝应用</button>
+      </div>
     </div>
   </CollapsibleContentBlock>
 </template>
@@ -146,6 +171,30 @@ function labelForStatus(status: ToolCallStatus): string {
   flex-direction: column;
   gap: 6px;
 }
+
+.tool-decision-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.tool-decision-actions button {
+  min-height: 26px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-2);
+  color: var(--vscode-foreground);
+  background: transparent;
+  font: inherit;
+}
+
+.tool-decision-actions button:hover,
+.tool-decision-actions button:focus-visible {
+  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%));
+  outline: none;
+}
+
 
 .part-card-error {
   margin: 6px 0 0;

@@ -5,7 +5,6 @@ import type {
   AgentRunTargetLinkRecord,
   ClientState,
   MessageRunLinkRecord,
-  RunApprovalPolicyLinkRecord,
   RunContextPolicyLinkRecord,
   RunContextPolicyRecord,
   RunConversationPolicyLinkRecord,
@@ -23,7 +22,7 @@ import type {
 import type { AccessDeclaration, WorldReader } from '../../../ecs/types';
 import { Agent } from '../agent/components';
 import { Conversation, Message, MessageRevision } from '../chat/components';
-import { AgentMode, ApprovalPolicy, ModelProfile, SystemPrompt, ToolPolicy } from '../mode/components';
+import { AgentMode, ModelProfile, SystemPrompt, ToolPolicy } from '../mode/components';
 import { ToolCall } from '../tools/components';
 import {
   AgentRun,
@@ -31,7 +30,6 @@ import {
   AgentRunSourceLink,
   AgentRunTargetLink,
   MessageRunLink,
-  RunApprovalPolicyLink,
   RunContextPolicy,
   RunContextPolicyLink,
   RunConversationPolicy,
@@ -56,7 +54,6 @@ export const agentRunStateProjectionReads: AccessDeclaration = {
     ToolCall,
     AgentMode,
     ToolPolicy,
-    ApprovalPolicy,
     SystemPrompt,
     ModelProfile,
     AgentRun,
@@ -72,7 +69,6 @@ export const agentRunStateProjectionReads: AccessDeclaration = {
     RunSystemPromptLink,
     RunModelProfileLink,
     RunToolPolicyLink,
-    RunApprovalPolicyLink,
     RunConversationPolicyLink,
     RunContextPolicyLink,
     RunDeliveryPolicyLink,
@@ -96,7 +92,6 @@ export function projectAgentRunState(world: WorldReader): Partial<ClientState> {
     runSystemPromptLinks: world.query(RunSystemPromptLink).map((entity) => buildRunSystemPromptLinkRecord(world, entity)).filter(isDefined),
     runModelProfileLinks: world.query(RunModelProfileLink).map((entity) => buildRunModelProfileLinkRecord(world, entity)).filter(isDefined),
     runToolPolicyLinks: world.query(RunToolPolicyLink).map((entity) => buildRunToolPolicyLinkRecord(world, entity)).filter(isDefined),
-    runApprovalPolicyLinks: world.query(RunApprovalPolicyLink).map((entity) => buildRunApprovalPolicyLinkRecord(world, entity)).filter(isDefined),
     runConversationPolicyLinks: world.query(RunConversationPolicyLink).map((entity) => buildRunPolicyLinkRecord(world, entity, RunConversationPolicyLink, RunConversationPolicy)).filter(isDefined),
     runContextPolicyLinks: world.query(RunContextPolicyLink).map((entity) => buildRunPolicyLinkRecord(world, entity, RunContextPolicyLink, RunContextPolicy)).filter(isDefined),
     runDeliveryPolicyLinks: world.query(RunDeliveryPolicyLink).map((entity) => buildRunPolicyLinkRecord(world, entity, RunDeliveryPolicyLink, RunDeliveryPolicy)).filter(isDefined),
@@ -196,15 +191,6 @@ function buildRunToolPolicyLinkRecord(world: WorldReader, entity: number): RunTo
   const toolPolicy = world.get(link.toolPolicy, ToolPolicy);
   if (!run || !toolPolicy) return undefined;
   return { id: link.id, runId: run.id, toolPolicyId: toolPolicy.id, role: link.role };
-}
-
-function buildRunApprovalPolicyLinkRecord(world: WorldReader, entity: number): RunApprovalPolicyLinkRecord | undefined {
-  const link = world.get(entity, RunApprovalPolicyLink);
-  if (!link) return undefined;
-  const run = world.get(link.run, AgentRun);
-  const approvalPolicy = world.get(link.approvalPolicy, ApprovalPolicy);
-  if (!run || !approvalPolicy) return undefined;
-  return { id: link.id, runId: run.id, approvalPolicyId: approvalPolicy.id, role: link.role };
 }
 
 function buildRunPolicyLinkRecord<TLink extends { id: string; run: number; policy: number; role: 'active' }>(

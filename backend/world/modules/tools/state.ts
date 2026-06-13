@@ -14,12 +14,12 @@ export interface ToolStateTransitionPayload {
 const VALID_TRANSITIONS: Record<ToolCallStatus, readonly ToolCallStatus[]> = {
   streaming: ['queued', 'error'],
   queued: ['awaiting_approval', 'awaiting_apply', 'executing', 'error'],
-  awaiting_approval: ['awaiting_apply', 'executing', 'error'],
+  awaiting_approval: ['awaiting_apply', 'executing', 'success', 'warning', 'error'],
   executing: ['executing', 'awaiting_approval', 'awaiting_apply', 'success', 'warning', 'error'],
   awaiting_apply: ['executing', 'success', 'warning', 'error'],
-  success: [],
-  warning: [],
-  error: []
+  success: ['awaiting_apply'],
+  warning: ['awaiting_apply'],
+  error: ['awaiting_apply']
 };
 
 export function createToolState(status: ToolCallStatus = 'queued', now = Date.now()): ToolStateData {

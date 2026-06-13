@@ -72,10 +72,6 @@ export class WebviewMessageRouter {
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ChatEventType.RetryFrom, payload: message.payload });
         break;
-      case BridgeMessageType.ToolExecute:
-        if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: ToolEventType.ExecuteRequested, payload: message.payload });
-        break;
       case BridgeMessageType.ToolPolicyScopeSet:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ToolEventType.PolicyScopeSetRequested, payload: message.payload });
@@ -83,6 +79,22 @@ export class WebviewMessageRouter {
       case BridgeMessageType.ToolPolicyScopeClear:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ToolEventType.PolicyScopeClearRequested, payload: message.payload });
+        break;
+      case BridgeMessageType.ToolExecutionApprove:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: ToolEventType.ExecutionApproveRequested, payload: message.payload });
+        break;
+      case BridgeMessageType.ToolExecutionReject:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: ToolEventType.ExecutionRejectRequested, payload: message.payload });
+        break;
+      case BridgeMessageType.ToolResultApply:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: ToolEventType.ResultApplyRequested, payload: message.payload });
+        break;
+      case BridgeMessageType.ToolResultReject:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: ToolEventType.ResultRejectRequested, payload: message.payload });
         break;
       case BridgeMessageType.AgentRunCancel:
         if (!this.deps.isHydrated() || !message.payload) return;

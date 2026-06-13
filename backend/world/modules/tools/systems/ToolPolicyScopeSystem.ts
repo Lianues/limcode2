@@ -108,7 +108,16 @@ function sanitizeToolConfigs(
       if (allowedFields.size > 0 && !allowedFields.has(key)) continue;
       if (isToolConfigValue(value)) config[key] = value;
     }
-    if (Object.keys(config).length > 0) result[toolName] = { config };
+    const nextRecord: ToolPolicyToolConfigRecord = {
+      config,
+      ...(typeof rawRecord.autoApproveExecution === 'boolean' ? { autoApproveExecution: rawRecord.autoApproveExecution } : {}),
+      ...(typeof rawRecord.autoApplyResult === 'boolean' ? { autoApplyResult: rawRecord.autoApplyResult } : {})
+    };
+    if (
+      Object.keys(config).length > 0
+      || nextRecord.autoApproveExecution !== undefined
+      || nextRecord.autoApplyResult !== undefined
+    ) result[toolName] = nextRecord;
   }
   return result;
 }

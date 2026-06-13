@@ -19,7 +19,6 @@ export const agentRunClientSyncContributor = defineClientStateContributor({
     'runSystemPromptLinks',
     'runModelProfileLinks',
     'runToolPolicyLinks',
-    'runApprovalPolicyLinks',
     'runConversationPolicyLinks',
     'runContextPolicyLinks',
     'runDeliveryPolicyLinks',

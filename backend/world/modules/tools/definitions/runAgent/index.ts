@@ -14,7 +14,7 @@ export const runAgentTool: ToolDefinition = {
     name: 'run_agent',
     description: `启动一个 AgentRun，让指定 Agent 或指定类型 Agent 执行任务。所有 Agent 都是平等的一等对象；本工具只是创建一次新的 AgentRun，不引入子 Agent / 委派 Agent 的特殊执行核心。
 
-可通过 agent.id/agentId 指定已有 Agent；通过 agent.type/type 按蓝图选择或创建 Agent；通过 conversation 决定 same/fresh/reuse/fork/branch；通过 mode 覆盖 systemPrompt/modelProfile/toolPolicy/approvalPolicy/context/delivery/edit；通过 delivery 决定结果如何回流。默认同步 tool_response，run_in_background=true 时默认 notification。`,
+可通过 agent.id/agentId 指定已有 Agent；通过 agent.type/type 按蓝图选择或创建 Agent；通过 conversation 决定 same/fresh/reuse/fork/branch；通过 mode 覆盖 systemPrompt/modelProfile/toolPolicy/context/delivery/edit；通过 delivery 决定结果如何回流。默认同步 tool_response，run_in_background=true 时默认 notification。`,
     parameters: {
       type: 'object',
       properties: {
@@ -58,7 +58,6 @@ export const runAgentTool: ToolDefinition = {
             systemPromptId: { type: 'string' },
             modelProfileId: { type: 'string' },
             toolPolicyId: { type: 'string' },
-            approvalPolicyId: { type: 'string' },
             contextPolicyId: { type: 'string' },
             deliveryPolicyId: { type: 'string' },
             editPolicyId: { type: 'string' },

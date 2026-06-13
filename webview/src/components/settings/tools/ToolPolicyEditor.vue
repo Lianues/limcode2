@@ -9,6 +9,7 @@ import type {
   ToolPolicyToolConfigRecord
 } from '@shared/protocol';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
+import LcCheckbox from '@webview/components/ui/LcCheckbox.vue';
 import { useToolPolicyStore } from '@webview/stores/useToolPolicyStore';
 
 const props = withDefaults(defineProps<{
@@ -25,6 +26,7 @@ const props = withDefaults(defineProps<{
 
 const store = useToolPolicyStore();
 const scroller = ref<HTMLElement | null>(null);
+const expandedToolNames = ref<string[]>([]);
 
 const tools = computed(() => store.toolDefinitions);
 const localResolution = computed(() => store.localPolicyFor(props.scopeKind, props.scopeId));
@@ -52,7 +54,21 @@ function nextAllowed(toolName: string, enabled: boolean): string[] {
 
 function toggleTool(tool: ToolDefinitionRecord): void {
   if (props.readonly) return;
-  store.setPolicyForScope(props.scopeKind, props.scopeId, nextAllowed(tool.name, !allowedSet.value.has(tool.name)), effectivePolicy.value?.name, cloneToolConfigs());
+  const nextEnabled = !allowedSet.value.has(tool.name);
+  if (!nextEnabled) collapseToolConfig(tool.name);
+  store.setPolicyForScope(props.scopeKind, props.scopeId, nextAllowed(tool.name, nextEnabled), effectivePolicy.value?.name, cloneToolConfigs());
+}
+
+function isToolConfigExpanded(toolName: string): boolean { return expandedToolNames.value.includes(toolName); }
+
+function toggleToolConfig(toolName: string): void {
+  expandedToolNames.value = isToolConfigExpanded(toolName)
+    ? expandedToolNames.value.filter((name) => name !== toolName)
+    : [...expandedToolNames.value, toolName];
+}
+
+function collapseToolConfig(toolName: string): void {
+  expandedToolNames.value = expandedToolNames.value.filter((name) => name !== toolName);
 }
 
 function enableAll(): void {
@@ -62,6 +78,7 @@ function enableAll(): void {
 
 function disableAll(): void {
   if (props.readonly) return;
+  expandedToolNames.value = [];
   store.setPolicyForScope(props.scopeKind, props.scopeId, [], effectivePolicy.value?.name, cloneToolConfigs());
 }
 
@@ -91,7 +108,11 @@ function toolDescription(tool: ToolDefinitionRecord): string {
 function cloneToolConfigs(): Record<string, ToolPolicyToolConfigRecord> {
   const result: Record<string, ToolPolicyToolConfigRecord> = {};
   for (const [toolName, record] of Object.entries(effectivePolicy.value?.toolConfigs ?? {})) {
-    result[toolName] = { config: { ...(record.config ?? {}) } };
+    result[toolName] = {
+      config: { ...(record.config ?? {}) },
+      ...(typeof record.autoApproveExecution === 'boolean' ? { autoApproveExecution: record.autoApproveExecution } : {}),
+      ...(typeof record.autoApplyResult === 'boolean' ? { autoApplyResult: record.autoApplyResult } : {})
+    };
   }
   return result;
 }
@@ -118,7 +139,7 @@ function updateStringListField(tool: ToolDefinitionRecord, field: ToolConfigFiel
     [field.key]: value.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean)
   });
   const nextConfigs = cloneToolConfigs();
-  nextConfigs[tool.name] = { config };
+  nextConfigs[tool.name] = { ...(nextConfigs[tool.name] ?? {}), config };
   store.setPolicyForScope(props.scopeKind, props.scopeId, effectivePolicy.value?.allowedTools ?? [], effectivePolicy.value?.name, nextConfigs);
 }
 
@@ -126,9 +147,24 @@ function updateScalarField(tool: ToolDefinitionRecord, field: ToolConfigFieldRec
   if (props.readonly) return;
   const config = sanitizeConfigForTool(tool, { ...configForTool(tool), [field.key]: value });
   const nextConfigs = cloneToolConfigs();
-  nextConfigs[tool.name] = { config };
+  nextConfigs[tool.name] = { ...(nextConfigs[tool.name] ?? {}), config };
   store.setPolicyForScope(props.scopeKind, props.scopeId, effectivePolicy.value?.allowedTools ?? [], effectivePolicy.value?.name, nextConfigs);
 }
+
+function updateGateSetting(tool: ToolDefinitionRecord, key: 'autoApproveExecution' | 'autoApplyResult', value: boolean): void {
+  if (props.readonly) return;
+  const nextConfigs = cloneToolConfigs();
+  nextConfigs[tool.name] = {
+    ...(nextConfigs[tool.name] ?? { config: sanitizeConfigForTool(tool, configForTool(tool)) }),
+    [key]: value
+  };
+  store.setPolicyForScope(props.scopeKind, props.scopeId, effectivePolicy.value?.allowedTools ?? [], effectivePolicy.value?.name, nextConfigs);
+}
+
+function toolGateValue(tool: ToolDefinitionRecord, key: 'autoApproveExecution' | 'autoApplyResult'): boolean {
+  return effectivePolicy.value?.toolConfigs?.[tool.name]?.[key] !== false;
+}
+
 
 function sanitizeConfigForTool(tool: ToolDefinitionRecord, config: ToolConfigRecord): ToolConfigRecord {
   const allowedKeys = new Set((tool.configSchema?.fields ?? []).map((field) => field.key));
@@ -153,9 +189,6 @@ function inputNumber(event: Event): number {
   return Number.isFinite(value) ? value : 0;
 }
 
-function inputChecked(event: Event): boolean {
-  return (event.target as HTMLInputElement).checked;
-}
 </script>
 
 <template>
@@ -182,52 +215,128 @@ function inputChecked(event: Event): boolean {
         <div v-if="tools.length === 0" class="tool-list-empty">等待后端返回工具定义...</div>
         <template v-else>
           <article v-for="tool in tools" :key="tool.name" class="tool-item" :class="{ 'is-enabled': allowedSet.has(tool.name) }">
-            <button type="button" class="tool-item-main" :disabled="readonly" @click="toggleTool(tool)">
-              <span class="tool-toggle" aria-hidden="true"></span>
-              <span class="tool-main">
-                <span class="tool-name-row">
-                  <span class="tool-name">{{ tool.name }}</span>
-                  <span class="tool-pill">{{ executionLabel(tool) }}</span>
-                  <span class="tool-pill">{{ riskLabel(tool) }}</span>
+            <div class="tool-item-header">
+              <button type="button" class="tool-item-main" :disabled="readonly" @click="toggleTool(tool)">
+                <span class="tool-toggle" aria-hidden="true"></span>
+                <span class="tool-main">
+                  <span class="tool-name-row">
+                    <span class="tool-name">{{ tool.name }}</span>
+                    <span class="tool-pill">{{ executionLabel(tool) }}</span>
+                    <span class="tool-pill">{{ riskLabel(tool) }}</span>
+                  </span>
                 </span>
-                <span class="tool-description">{{ toolDescription(tool) }}</span>
-              </span>
-            </button>
+              </button>
 
-            <div v-if="allowedSet.has(tool.name) && tool.configSchema?.fields?.length" class="tool-config-panel">
-              <label v-for="field in tool.configSchema.fields.filter(supportsInlineField)" :key="field.key" class="tool-config-field">
-                <span>{{ field.label }}</span>
-                <textarea
-                  v-if="field.type === 'stringList' || field.type === 'globList'"
-                  :value="fieldListText(tool, field)"
-                  :placeholder="field.placeholder"
-                  :readonly="readonly"
-                  rows="3"
-                  @change="updateStringListField(tool, field, inputValue($event))"
-                ></textarea>
-                <input
-                  v-else-if="field.type === 'number'"
-                  :value="configForTool(tool)[field.key] ?? field.defaultValue ?? 0"
-                  :readonly="readonly"
-                  type="number"
-                  @change="updateScalarField(tool, field, inputNumber($event))"
-                />
-                <input
-                  v-else-if="field.type === 'boolean'"
-                  :checked="Boolean(configForTool(tool)[field.key] ?? field.defaultValue)"
-                  :disabled="readonly"
-                  type="checkbox"
-                  @change="updateScalarField(tool, field, inputChecked($event))"
-                />
-                <input
-                  v-else
-                  :value="String(configForTool(tool)[field.key] ?? field.defaultValue ?? '')"
-                  :readonly="readonly"
-                  type="text"
-                  @change="updateScalarField(tool, field, inputValue($event))"
-                />
-                <small v-if="field.description">{{ field.description }}</small>
-              </label>
+              <button
+                type="button"
+                class="tool-config-toggle"
+                :aria-expanded="isToolConfigExpanded(tool.name)"
+                :aria-controls="`tool-config-${tool.name}`"
+                @click="toggleToolConfig(tool.name)"
+              >
+                <span>{{ isToolConfigExpanded(tool.name) ? '收起' : '配置' }}</span>
+                <span class="tool-config-toggle-caret" :class="{ 'is-expanded': isToolConfigExpanded(tool.name) }" aria-hidden="true"></span>
+              </button>
+            </div>
+
+            <div
+              :id="`tool-config-${tool.name}`"
+              class="tool-config-collapse"
+              :class="{ 'is-expanded': isToolConfigExpanded(tool.name) }"
+            >
+              <div class="tool-config-collapse-frame">
+                <div class="tool-config-panel">
+                  <div class="tool-config-group tool-definition-details">
+                    <div class="tool-config-group-heading">
+                      <span class="tool-config-group-title">工具说明</span>
+                      <small>来自后端工具定义，展开后查看完整说明。</small>
+                    </div>
+                    <p class="tool-definition-description">{{ toolDescription(tool) }}</p>
+                  </div>
+
+                  <template v-if="allowedSet.has(tool.name)">
+                    <div class="tool-config-group tool-config-permissions">
+                    <div class="tool-config-group-heading">
+                      <span class="tool-config-group-title">权限</span>
+                      <small>关闭后会在聊天区显示确认按钮。</small>
+                    </div>
+                    <div class="tool-permission-options">
+                      <LcCheckbox
+                        class="tool-permission-card"
+                        :class="{ 'is-enabled': toolGateValue(tool, 'autoApproveExecution') }"
+                        :model-value="toolGateValue(tool, 'autoApproveExecution')"
+                        :disabled="readonly"
+                        @update:model-value="updateGateSetting(tool, 'autoApproveExecution', $event)"
+                      >
+                        <span class="permission-copy">
+                          <span class="permission-title">自动批准执行</span>
+                          <span class="permission-desc">开启时工具请求会直接进入执行；关闭时先询问用户。</span>
+                        </span>
+                      </LcCheckbox>
+                      <LcCheckbox
+                        class="tool-permission-card"
+                        :class="{ 'is-enabled': toolGateValue(tool, 'autoApplyResult') }"
+                        :model-value="toolGateValue(tool, 'autoApplyResult')"
+                        :disabled="readonly"
+                        @update:model-value="updateGateSetting(tool, 'autoApplyResult', $event)"
+                      >
+                        <span class="permission-copy">
+                          <span class="permission-title">自动应用结果</span>
+                          <span class="permission-desc">开启时结果自动回传给 LLM；关闭时先确认是否应用。</span>
+                        </span>
+                      </LcCheckbox>
+                    </div>
+                  </div>
+
+                  <div v-if="tool.configSchema?.fields?.length" class="tool-config-group tool-specific-config">
+                    <div class="tool-config-group-heading">
+                      <span class="tool-config-group-title">工具配置</span>
+                      <small>这些配置由后端工具定义提供，会随当前策略作用域保存。</small>
+                    </div>
+                    <div class="tool-config-fields">
+                      <label v-for="field in tool.configSchema.fields.filter(supportsInlineField)" :key="field.key" class="tool-config-field">
+                        <span>{{ field.label }}</span>
+                        <textarea
+                          v-if="field.type === 'stringList' || field.type === 'globList'"
+                          :value="fieldListText(tool, field)"
+                          :placeholder="field.placeholder"
+                          :readonly="readonly"
+                          rows="3"
+                          @change="updateStringListField(tool, field, inputValue($event))"
+                        ></textarea>
+                        <input
+                          v-else-if="field.type === 'number'"
+                          :value="configForTool(tool)[field.key] ?? field.defaultValue ?? 0"
+                          :readonly="readonly"
+                          type="number"
+                          @change="updateScalarField(tool, field, inputNumber($event))"
+                        />
+                        <LcCheckbox
+                          v-else-if="field.type === 'boolean'"
+                          class="tool-config-inline-checkbox"
+                          :model-value="Boolean(configForTool(tool)[field.key] ?? field.defaultValue)"
+                          :disabled="readonly"
+                          :aria-label="field.label"
+                          @update:model-value="updateScalarField(tool, field, $event)"
+                        />
+                        <input
+                          v-else
+                          :value="String(configForTool(tool)[field.key] ?? field.defaultValue ?? '')"
+                          :readonly="readonly"
+                          type="text"
+                          @change="updateScalarField(tool, field, inputValue($event))"
+                        />
+                        <small v-if="field.description">{{ field.description }}</small>
+                      </label>
+                    </div>
+                  </div>
+                  </template>
+                  <p v-else class="tool-config-disabled-note">
+                    启用此工具后，可在这里配置执行权限和工具参数。
+                  </p>
+
+                </div>
+              </div>
             </div>
           </article>
         </template>
@@ -345,6 +454,12 @@ function inputChecked(event: Event): boolean {
   background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-foreground) 8%);
 }
 
+.tool-item-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+}
+
 .tool-item-main {
   width: 100%;
   min-height: 64px;
@@ -357,12 +472,71 @@ function inputChecked(event: Event): boolean {
   color: var(--vscode-foreground);
   background: transparent;
   text-align: left;
+  min-width: 0;
 }
 
 .tool-item-main:hover:not(:disabled),
 .tool-item-main:focus-visible {
   background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%));
   outline: none;
+}
+
+.tool-config-toggle {
+  min-width: 72px;
+  min-height: 0;
+  border: 0;
+  border-left: 1px solid var(--vscode-panel-border);
+  padding: 0 var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  font: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.tool-config-toggle:hover,
+.tool-config-toggle:focus-visible,
+.tool-config-toggle:active {
+  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%);
+  outline: none;
+}
+
+.tool-config-toggle-caret {
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-1px) rotate(45deg);
+  transition: transform 0.18s ease;
+}
+
+.tool-config-toggle-caret.is-expanded {
+  transform: translateY(1px) rotate(225deg);
+}
+
+.tool-config-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  background: transparent;
+  transition: grid-template-rows 0.22s ease, opacity 0.16s ease;
+}
+
+.tool-config-collapse.is-expanded {
+  border-top: 1px solid var(--vscode-input-border, var(--vscode-descriptionForeground));
+  grid-template-rows: 1fr;
+  opacity: 1;
+  background: transparent;
+}
+
+.tool-config-collapse-frame {
+  min-height: 0;
+  overflow: hidden;
 }
 
 .tool-toggle {
@@ -406,8 +580,128 @@ function inputChecked(event: Event): boolean {
   font-size: var(--font-size-xs);
 }
 
-.tool-description {
-  overflow: hidden;
+
+.tool-config-group {
+  min-width: 0;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: color-mix(in srgb, var(--vscode-editor-background) 97%, var(--vscode-foreground) 3%);
+}
+
+.tool-config-group-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tool-config-group-title {
+  color: var(--vscode-foreground);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.tool-config-group-heading small {
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
+.tool-definition-description,
+.tool-config-disabled-note {
+  margin: 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-sm);
+  line-height: 1.55;
+}
+
+.tool-config-disabled-note {
+  border: 1px dashed var(--vscode-panel-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  background: color-mix(in srgb, var(--vscode-editor-background) 98%, var(--vscode-foreground) 2%);
+}
+
+
+.tool-permission-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.tool-permission-card {
+
+  min-width: 0;
+  min-height: 62px;
+  border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 88%, transparent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: flex-start;
+  background: var(--vscode-editor-background);
+  color: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.tool-permission-card.is-enabled {
+  border-color: color-mix(in srgb, var(--vscode-panel-border) 70%, var(--vscode-foreground) 30%);
+  background: color-mix(in srgb, var(--vscode-editor-background) 91%, var(--vscode-foreground) 9%);
+}
+
+.tool-permission-card:hover:not(:disabled),
+.tool-permission-card:focus-visible,
+.tool-permission-card:active:not(:disabled) {
+  color: inherit;
+  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground) 6%)) !important;
+}
+
+.tool-permission-card.is-enabled:hover:not(:disabled),
+.tool-permission-card.is-enabled:focus-visible,
+.tool-permission-card.is-enabled:active:not(:disabled) {
+  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%)) !important;
+}
+
+.tool-permission-card:focus-visible {
+  outline: 1px solid var(--vscode-panel-border);
+  outline-offset: 2px;
+}
+
+.tool-permission-card :deep(.lc-checkbox-box) {
+  margin-top: 2px;
+}
+
+.tool-config-inline-checkbox {
+  width: max-content;
+}
+
+.permission-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.permission-title {
+  color: var(--vscode-foreground);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.permission-desc {
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
+.tool-config-checkbox {
+  display: inline-flex;
+  align-items: center;
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-sm);
   line-height: 1.4;
@@ -416,17 +710,33 @@ function inputChecked(event: Event): boolean {
 }
 
 .tool-config-panel {
-  padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) + 28px);
+  padding: calc(var(--space-3) + 2px) var(--space-3) var(--space-3) calc(var(--space-3) + 28px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  transform: translateY(-4px);
+  transition: transform 0.18s ease;
+}
+
+.tool-config-collapse.is-expanded .tool-config-panel {
+  transform: translateY(0);
+}
+
+.tool-config-fields {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-2);
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: var(--space-4);
 }
 
 .tool-config-field {
   min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 88%, transparent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  background: var(--vscode-editor-background);
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-sm);
 }
@@ -461,8 +771,18 @@ function inputChecked(event: Event): boolean {
 }
 
 @media (max-width: 720px) {
-  .tool-config-panel {
+  .tool-permission-options,
+  .tool-config-fields {
     grid-template-columns: 1fr;
+  }
+
+  .tool-config-panel {
+    padding-left: var(--space-3);
+  }
+
+  .tool-config-toggle {
+    min-width: 64px;
+    padding: 0 var(--space-2);
   }
 }
 </style>

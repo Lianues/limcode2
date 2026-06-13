@@ -26,18 +26,14 @@ import { conversationMessages } from '../../chat/queries';
 import {
   AgentMode,
   AgentModeLink,
-  ApprovalPolicy,
-  ModeApprovalPolicyLink,
   ModeToolPolicyLink,
   ModelProfile,
   SystemPrompt,
   ToolPolicy,
-  type ApprovalPolicyData,
   type ToolPolicyData
 } from '../../mode/components';
 import {
   AgentRun,
-  RunApprovalPolicyLink,
   RunContextPolicy,
   RunContextPolicyLink,
   RunConversationPolicy,
@@ -54,7 +50,7 @@ import {
   ToolCallRunLink
 } from '../../agentRun/components';
 import { AgentRunBundle, spawnAgentRun } from '../../agentRun/bundles';
-import { activeApprovalPolicyForRun, activeToolPolicyForRun, runForToolCall, runTarget, toolCallEntityById } from '../../agentRun/queries';
+import { activeToolPolicyForRun, runForToolCall, runTarget, toolCallEntityById } from '../../agentRun/queries';
 import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
 import { ToolCall, ToolPolicyScopeLink, ToolState, type ToolCallData, type ToolStateData } from '../components';
 import { ToolEventType } from '../events';
@@ -91,10 +87,8 @@ const QueuedToolCallsQuery = defineQuery({
     AgentMode,
     AgentModeLink,
     ModeToolPolicyLink,
-    ModeApprovalPolicyLink,
     ToolPolicy,
     ToolPolicyScopeLink,
-    ApprovalPolicy,
     AgentRun,
     ToolCallRunLink
   ],
@@ -110,19 +104,30 @@ export const ToolDispatchSystem = defineSystem({
     queries: [QueuedToolCallsQuery],
     resources: { read: [AgentBlueprintsKey, ToolSchemasKey, ToolDefinitionsKey] },
     bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentFromBlueprintBundle],
-    events: { read: [ToolEventType.ExecuteRequested] },
+    events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested] },
     effects: { emit: ['tool.run'] }
   },
   run(ctx) {
     const { world, cmd } = ctx;
     const handled = new Set<Entity>();
 
-    for (const request of readEvents(ctx, ToolEventType.ExecuteRequested)) {
+    for (const request of readEvents(ctx, ToolEventType.ExecutionRejectRequested)) {
+      const entity = toolCallEntityById(world, request.toolCallId);
+      if (entity === undefined || handled.has(entity)) continue;
+      const call = world.get(entity, ToolCall);
+      const state = world.get(entity, ToolState);
+      if (!call || !state || state.status !== 'awaiting_approval') continue;
+      handled.add(entity);
+      rejectToolCall(cmd, entity, call, state, request.reason?.trim() || '用户拒绝执行工具。');
+    }
+
+    for (const request of readEvents(ctx, ToolEventType.ExecutionApproveRequested)) {
       const entity = toolCallEntityById(world, request.toolCallId);
       if (entity === undefined || handled.has(entity)) continue;
       const call = world.get(entity, ToolCall);
       const state = world.get(entity, ToolState);
       if (!call || !state || world.has(entity, InFlight) || isSettledOrRunning(state)) continue;
+      if (state.status !== 'awaiting_approval' && state.status !== 'queued') continue;
       handled.add(entity);
 
       const authorization = authorizeRunToolExecution(world, entity, call);
@@ -151,7 +156,7 @@ export const ToolDispatchSystem = defineSystem({
       }
       if (!isRunReadyForToolExecution(authorization)) continue;
 
-      if (requiresApproval(world, authorization.approvalPolicy, call.name)) {
+      if (requiresExecutionApproval(authorization.policy, call.name)) {
         awaitApproval(cmd, entity, call, state, authorization.agentId, authorization.runId);
         continue;
       }
@@ -162,7 +167,7 @@ export const ToolDispatchSystem = defineSystem({
 });
 
 type AuthorizationResult =
-  | { ok: true; run: Entity; runId: string; runStatus: AgentRunStatus; policy: ToolPolicyData; approvalPolicy: ApprovalPolicyData | undefined; agentId: string; conversationId: string }
+  | { ok: true; run: Entity; runId: string; runStatus: AgentRunStatus; policy: ToolPolicyData; agentId: string; conversationId: string }
   | { ok: false; reason: string };
 
 function isSettledOrRunning(state: ToolStateData): boolean {
@@ -189,7 +194,6 @@ function authorizeRunToolExecution(world: WorldReader, toolCall: Entity, call: T
     runId: runData.id,
     runStatus: runData.status,
     policy,
-    approvalPolicy: activeApprovalPolicyForRun(world, run),
     agentId: agent?.id ?? String(target.agent),
     conversationId: conversation?.id ?? String(target.conversation)
   };
@@ -255,7 +259,6 @@ interface RunAgentArgs {
     systemPromptId?: string;
     modelProfileId?: string;
     toolPolicyId?: string;
-    approvalPolicyId?: string;
     contextPolicyId?: string;
     deliveryPolicyId?: string;
     editPolicyId?: string;
@@ -725,12 +728,6 @@ function applyRunModeOverrides(world: WorldReader, cmd: CommandSink, run: Entity
     const link = cmd.spawn();
     cmd.add(link, RunToolPolicyLink, { id: `run-tool-policy:${run}:${mode.toolPolicyId}`, run, toolPolicy, role: 'active', createdAt: now, updatedAt: now });
   }
-  const approvalPolicy = mode.approvalPolicyId ? findByRecordId(world, ApprovalPolicy, mode.approvalPolicyId) : undefined;
-  if (approvalPolicy !== undefined) {
-    const link = cmd.spawn();
-    cmd.add(link, RunApprovalPolicyLink, { id: `run-approval-policy:${run}:${mode.approvalPolicyId}`, run, approvalPolicy, role: 'active', createdAt: now, updatedAt: now });
-  }
-
   const contextPolicy = mode.contextPolicyId ? findByRecordId(world, RunContextPolicy, mode.contextPolicyId) : undefined;
   if (contextPolicy !== undefined) linkRunPolicy(cmd, RunContextPolicyLink, `run-context-policy:${run}:${mode.contextPolicyId}`, run, contextPolicy, now);
 
@@ -833,12 +830,16 @@ function effectiveToolConfig(world: WorldReader, policy: ToolPolicyData, toolNam
   return Object.keys(config).length > 0 ? config : undefined;
 }
 
-function requiresApproval(world: WorldReader, policy: ApprovalPolicyData | undefined, toolName: string): boolean {
-  if (!policy) return false;
-  if (policy.mode === 'always' || policy.mode === 'manualOnly') return policy.allowInteractiveApproval;
-  if (policy.mode === 'never') return false;
-  const tool = (world.tryGetResource(ToolDefinitionsKey) ?? []).find((candidate) => candidate.name === toolName);
-  return tool?.metadata?.requiresApproval === true || tool?.metadata?.riskLevel === 'command';
+function toolGateSettings(policy: ToolPolicyData, toolName: string): { autoApproveExecution: boolean; autoApplyResult: boolean } {
+  const config = policy.toolConfigs?.[toolName];
+  return {
+    autoApproveExecution: config?.autoApproveExecution ?? true,
+    autoApplyResult: config?.autoApplyResult ?? true
+  };
+}
+
+function requiresExecutionApproval(toolPolicy: ToolPolicyData, toolName: string): boolean {
+  return toolGateSettings(toolPolicy, toolName).autoApproveExecution === false;
 }
 
 function awaitApproval(cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, executorAgentId: string, runId: string): void {

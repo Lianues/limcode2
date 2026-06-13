@@ -12,7 +12,6 @@ import {
   AgentRunNeedsModel,
   AgentRunSourceLink,
   AgentRunTargetLink,
-  RunApprovalPolicyLink,
   RunContextPolicyLink,
   RunConversationPolicyLink,
   RunDeliveryPolicyLink,
@@ -46,7 +45,6 @@ const LifecycleRunsQuery = defineQuery({
     RunSystemPromptLink,
     RunModelProfileLink,
     RunToolPolicyLink,
-    RunApprovalPolicyLink,
     RunConversationPolicyLink,
     RunContextPolicyLink,
     RunDeliveryPolicyLink,
@@ -236,7 +234,6 @@ function cloneRunOverrides(world: WorldReader, cmd: CommandSink, sourceRun: Enti
   cloneRunEntityLinks(world, cmd, sourceRun, targetRun, RunSystemPromptLink, 'systemPrompt', 'run-system-prompt-clone', now);
   cloneRunEntityLinks(world, cmd, sourceRun, targetRun, RunModelProfileLink, 'modelProfile', 'run-model-profile-clone', now);
   cloneRunEntityLinks(world, cmd, sourceRun, targetRun, RunToolPolicyLink, 'toolPolicy', 'run-tool-policy-clone', now);
-  cloneRunEntityLinks(world, cmd, sourceRun, targetRun, RunApprovalPolicyLink, 'approvalPolicy', 'run-approval-policy-clone', now);
   cloneRunPolicyLinks(world, cmd, sourceRun, targetRun, RunConversationPolicyLink, 'run-conversation-policy-clone', now);
   cloneRunPolicyLinks(world, cmd, sourceRun, targetRun, RunContextPolicyLink, 'run-context-policy-clone', now);
   cloneRunPolicyLinks(world, cmd, sourceRun, targetRun, RunDeliveryPolicyLink, 'run-delivery-policy-clone', now);

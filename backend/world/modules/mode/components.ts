@@ -1,5 +1,5 @@
 import { defineComponent, type Entity } from '../../../ecs/types';
-import type { AgentModeRole, ApprovalMode, LlmProviderKind, ModeBindingRole, ToolPolicyToolConfigRecord } from '../../../../shared/protocol';
+import type { AgentModeRole, LlmProviderKind, ModeBindingRole, ToolPolicyToolConfigRecord } from '../../../../shared/protocol';
 
 export interface AgentModeData {
   id: string;
@@ -15,14 +15,6 @@ export interface ToolPolicyData {
   toolConfigs?: Record<string, ToolPolicyToolConfigRecord>;
 }
 export const ToolPolicy = defineComponent<ToolPolicyData>('ToolPolicy');
-
-export interface ApprovalPolicyData {
-  id: string;
-  name: string;
-  mode: ApprovalMode;
-  allowInteractiveApproval: boolean;
-}
-export const ApprovalPolicy = defineComponent<ApprovalPolicyData>('ApprovalPolicy');
 
 export interface SystemPromptData {
   id: string;
@@ -58,16 +50,6 @@ export interface ModeToolPolicyLinkData {
   updatedAt: number;
 }
 export const ModeToolPolicyLink = defineComponent<ModeToolPolicyLinkData>('ModeToolPolicyLink');
-
-export interface ModeApprovalPolicyLinkData {
-  id: string;
-  mode: Entity;
-  approvalPolicy: Entity;
-  role: ModeBindingRole;
-  createdAt: number;
-  updatedAt: number;
-}
-export const ModeApprovalPolicyLink = defineComponent<ModeApprovalPolicyLinkData>('ModeApprovalPolicyLink');
 
 export interface ModeSystemPromptLinkData {
   id: string;

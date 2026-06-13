@@ -35,7 +35,6 @@ import {
   AgentRunSourceLink,
   AgentRunTargetLink,
   MessageRunLink,
-  RunApprovalPolicyLink,
   RunContextPolicy,
   RunContextPolicyLink,
   RunConversationPolicy,
@@ -718,7 +717,6 @@ export class BackendApplication {
     for (const entity of this.world.query(RunSystemPromptLink)) if (runs.has(this.world.get(entity, RunSystemPromptLink)?.run ?? -1)) entities.add(entity);
     for (const entity of this.world.query(RunModelProfileLink)) if (runs.has(this.world.get(entity, RunModelProfileLink)?.run ?? -1)) entities.add(entity);
     for (const entity of this.world.query(RunToolPolicyLink)) if (runs.has(this.world.get(entity, RunToolPolicyLink)?.run ?? -1)) entities.add(entity);
-    for (const entity of this.world.query(RunApprovalPolicyLink)) if (runs.has(this.world.get(entity, RunApprovalPolicyLink)?.run ?? -1)) entities.add(entity);
 
   }
 
@@ -895,9 +893,12 @@ function shouldDeferUntilHydrated(message: WebviewToExtensionMessage): boolean {
     case 'message.edit':
     case 'message.deleteFrom':
     case 'message.retryFrom':
-    case 'tool.execute':
     case 'toolPolicy.scope.set':
     case 'toolPolicy.scope.clear':
+    case 'tool.execution.approve':
+    case 'tool.execution.reject':
+    case 'tool.result.apply':
+    case 'tool.result.reject':
     case 'agentRun.cancel':
     case 'agentRun.pause':
     case 'agentRun.resume':

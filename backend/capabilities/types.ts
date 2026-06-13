@@ -107,11 +107,6 @@ export interface RuntimePaths {
   toolPolicyScopeLinksRootPath: string;
   toolPolicyScopeLinksIndexUri: vscode.Uri;
   toolPolicyScopeLinksIndexPath: string;
-  /** ApprovalPolicy 数据根目录：<dataRoot>/approval-policies */
-  approvalPoliciesRootUri: vscode.Uri;
-  approvalPoliciesRootPath: string;
-  approvalPoliciesIndexUri: vscode.Uri;
-  approvalPoliciesIndexPath: string;
   /** SystemPrompt 数据根目录：<dataRoot>/system-prompts */
   systemPromptsRootUri: vscode.Uri;
   systemPromptsRootPath: string;
@@ -157,10 +152,6 @@ export interface RuntimePaths {
   modeToolPolicyLinksRootPath: string;
   modeToolPolicyLinksIndexUri: vscode.Uri;
   modeToolPolicyLinksIndexPath: string;
-  modeApprovalPolicyLinksRootUri: vscode.Uri;
-  modeApprovalPolicyLinksRootPath: string;
-  modeApprovalPolicyLinksIndexUri: vscode.Uri;
-  modeApprovalPolicyLinksIndexPath: string;
   /** Mode 与 SystemPrompt 的关系数据根目录：<dataRoot>/mode-system-prompt-links */
   modeSystemPromptLinksRootUri: vscode.Uri;
   modeSystemPromptLinksRootPath: string;

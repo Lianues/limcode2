@@ -1,9 +1,7 @@
 import type {
   AgentModeLinkRecord,
   AgentModeRecord,
-  ApprovalPolicyRecord,
   ClientState,
-  ModeApprovalPolicyLinkRecord,
   ModeModelProfileLinkRecord,
   ModeSystemPromptLinkRecord,
   ModeToolPolicyLinkRecord,
@@ -16,8 +14,6 @@ import { Agent } from '../agent/components';
 import {
   AgentMode,
   AgentModeLink,
-  ApprovalPolicy,
-  ModeApprovalPolicyLink,
   ModeModelProfileLink,
   ModeSystemPromptLink,
   ModeToolPolicyLink,
@@ -31,12 +27,10 @@ export const modeStateProjectionReads: AccessDeclaration = {
     Agent,
     AgentMode,
     ToolPolicy,
-    ApprovalPolicy,
     SystemPrompt,
     ModelProfile,
     AgentModeLink,
     ModeToolPolicyLink,
-    ModeApprovalPolicyLink,
     ModeSystemPromptLink,
     ModeModelProfileLink
   ]
@@ -45,7 +39,6 @@ export const modeStateProjectionReads: AccessDeclaration = {
 export function projectModeState(world: WorldReader): Partial<ClientState> {
   const agentModes: AgentModeRecord[] = world.query(AgentMode).map((entity) => ({ ...world.get(entity, AgentMode)! }));
   const toolPolicies: ToolPolicyRecord[] = world.query(ToolPolicy).map((entity) => ({ ...world.get(entity, ToolPolicy)! }));
-  const approvalPolicies: ApprovalPolicyRecord[] = world.query(ApprovalPolicy).map((entity) => ({ ...world.get(entity, ApprovalPolicy)! }));
   const systemPrompts: SystemPromptRecord[] = world.query(SystemPrompt).map((entity) => ({ ...world.get(entity, SystemPrompt)! }));
   const modelProfiles: ModelProfileRecord[] = world.query(ModelProfile).map((entity) => ({ ...world.get(entity, ModelProfile)! }));
 
@@ -57,10 +50,6 @@ export function projectModeState(world: WorldReader): Partial<ClientState> {
     .query(ModeToolPolicyLink)
     .map((entity) => buildModeToolPolicyLinkRecord(world, entity))
     .filter((item): item is ModeToolPolicyLinkRecord => item !== undefined);
-  const modeApprovalPolicyLinks: ModeApprovalPolicyLinkRecord[] = world
-    .query(ModeApprovalPolicyLink)
-    .map((entity) => buildModeApprovalPolicyLinkRecord(world, entity))
-    .filter((item): item is ModeApprovalPolicyLinkRecord => item !== undefined);
   const modeSystemPromptLinks: ModeSystemPromptLinkRecord[] = world
     .query(ModeSystemPromptLink)
     .map((entity) => buildModeSystemPromptLinkRecord(world, entity))
@@ -73,12 +62,10 @@ export function projectModeState(world: WorldReader): Partial<ClientState> {
   return {
     agentModes,
     toolPolicies,
-    approvalPolicies,
     systemPrompts,
     modelProfiles,
     agentModeLinks,
     modeToolPolicyLinks,
-    modeApprovalPolicyLinks,
     modeSystemPromptLinks,
     modeModelProfileLinks
   };
@@ -100,15 +87,6 @@ function buildModeToolPolicyLinkRecord(world: WorldReader, entity: number): Mode
   const toolPolicy = world.get(link.toolPolicy, ToolPolicy);
   if (!mode || !toolPolicy) return undefined;
   return { id: link.id, modeId: mode.id, toolPolicyId: toolPolicy.id, role: link.role };
-}
-
-function buildModeApprovalPolicyLinkRecord(world: WorldReader, entity: number): ModeApprovalPolicyLinkRecord | undefined {
-  const link = world.get(entity, ModeApprovalPolicyLink);
-  if (!link) return undefined;
-  const mode = world.get(link.mode, AgentMode);
-  const approvalPolicy = world.get(link.approvalPolicy, ApprovalPolicy);
-  if (!mode || !approvalPolicy) return undefined;
-  return { id: link.id, modeId: mode.id, approvalPolicyId: approvalPolicy.id, role: link.role };
 }
 
 function buildModeSystemPromptLinkRecord(world: WorldReader, entity: number): ModeSystemPromptLinkRecord | undefined {

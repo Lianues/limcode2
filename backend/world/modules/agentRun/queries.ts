@@ -4,15 +4,12 @@ import { Agent, AgentConversationLink } from '../agent/components';
 import {
   AgentMode,
   AgentModeLink,
-  ApprovalPolicy,
-  ModeApprovalPolicyLink,
   ModeModelProfileLink,
   ModeSystemPromptLink,
   ModeToolPolicyLink,
   ModelProfile,
   SystemPrompt,
   ToolPolicy,
-  type ApprovalPolicyData,
   type ModelProfileData,
   type SystemPromptData,
   type ToolPolicyData
@@ -26,7 +23,6 @@ import {
   type AgentRunSourceLinkData,
   AgentRunTargetLink,
   MessageRunLink,
-  RunApprovalPolicyLink,
   RunContextPolicy,
   RunContextPolicyLink,
   RunDeliveryPolicy,
@@ -163,16 +159,6 @@ export function activeToolPolicyForScope(world: WorldReader, scopeKind: ToolPoli
   return activeToolPolicyForScopeEntity(world, scopeKind, scopeEntity, scopeId);
 }
 
-export function activeApprovalPolicyForRun(world: WorldReader, run: Entity): ApprovalPolicyData | undefined {
-  const runLink = world
-    .query(RunApprovalPolicyLink)
-    .map((entity) => world.get(entity, RunApprovalPolicyLink))
-    .find((candidate) => candidate?.run === run && candidate.role === 'active');
-  if (runLink) return world.get(runLink.approvalPolicy, ApprovalPolicy);
-  const mode = activeModeForRun(world, run);
-  return mode === undefined ? undefined : activeApprovalPolicyForMode(world, mode);
-}
-
 export function activeSystemPromptForRun(world: WorldReader, run: Entity): SystemPromptData | undefined {
   const runLink = world
     .query(RunSystemPromptLink)
@@ -299,14 +285,6 @@ function activeToolPolicyForMode(world: WorldReader, mode: Entity): ToolPolicyDa
     .map((entity) => world.get(entity, ModeToolPolicyLink))
     .find((candidate) => candidate?.mode === mode && candidate.role === 'active');
   return link ? world.get(link.toolPolicy, ToolPolicy) : undefined;
-}
-
-function activeApprovalPolicyForMode(world: WorldReader, mode: Entity): ApprovalPolicyData | undefined {
-  const link = world
-    .query(ModeApprovalPolicyLink)
-    .map((entity) => world.get(entity, ModeApprovalPolicyLink))
-    .find((candidate) => candidate?.mode === mode && candidate.role === 'active');
-  return link ? world.get(link.approvalPolicy, ApprovalPolicy) : undefined;
 }
 
 function activeSystemPromptForMode(world: WorldReader, mode: Entity): SystemPromptData | undefined {

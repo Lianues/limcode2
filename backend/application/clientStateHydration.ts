@@ -3,8 +3,6 @@ import { Agent, AgentConversationLink, AgentKind, AgentStatus } from '../world/m
 import {
   AgentMode,
   AgentModeLink,
-  ApprovalPolicy,
-  ModeApprovalPolicyLink,
   ModeModelProfileLink,
   ModeSystemPromptLink,
   ModeToolPolicyLink,
@@ -23,7 +21,6 @@ import {
   AgentRunSourceLink,
   AgentRunTargetLink,
   MessageRunLink,
-  RunApprovalPolicyLink,
   RunContextPolicy,
   RunContextPolicyLink,
   RunConversationPolicy,
@@ -63,13 +60,11 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState): bo
 
   const modeEntities = hydrateRecords(world, state.agentModes, AgentMode);
   const toolPolicyEntities = hydrateRecords(world, state.toolPolicies, ToolPolicy);
-  const approvalPolicyEntities = hydrateRecords(world, state.approvalPolicies, ApprovalPolicy);
   const systemPromptEntities = hydrateRecords(world, state.systemPrompts, SystemPrompt);
   const modelProfileEntities = hydrateRecords(world, state.modelProfiles, ModelProfile);
 
   for (const link of state.agentModeLinks) spawnLink(world, agentEntities, modeEntities, link, AgentModeLink, 'agent', 'mode');
   for (const link of state.modeToolPolicyLinks) spawnLink(world, modeEntities, toolPolicyEntities, link, ModeToolPolicyLink, 'mode', 'toolPolicy');
-  for (const link of state.modeApprovalPolicyLinks) spawnLink(world, modeEntities, approvalPolicyEntities, link, ModeApprovalPolicyLink, 'mode', 'approvalPolicy');
   for (const link of state.modeSystemPromptLinks) spawnLink(world, modeEntities, systemPromptEntities, link, ModeSystemPromptLink, 'mode', 'systemPrompt');
   for (const link of state.modeModelProfileLinks) spawnLink(world, modeEntities, modelProfileEntities, link, ModeModelProfileLink, 'mode', 'modelProfile');
 
@@ -144,7 +139,6 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
   const agentEntities = existingRecords(world, Agent);
   const modeEntities = existingRecords(world, AgentMode);
   const toolPolicyEntities = existingRecords(world, ToolPolicy);
-  const approvalPolicyEntities = existingRecords(world, ApprovalPolicy);
   const systemPromptEntities = existingRecords(world, SystemPrompt);
   const modelProfileEntities = existingRecords(world, ModelProfile);
 
@@ -249,7 +243,6 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
   for (const link of state.runSystemPromptLinks ?? []) spawnRunLink(world, runEntities, systemPromptEntities, link, RunSystemPromptLink, 'run', 'systemPrompt');
   for (const link of state.runModelProfileLinks ?? []) spawnRunLink(world, runEntities, modelProfileEntities, link, RunModelProfileLink, 'run', 'modelProfile');
   for (const link of state.runToolPolicyLinks ?? []) spawnRunLink(world, runEntities, toolPolicyEntities, link, RunToolPolicyLink, 'run', 'toolPolicy');
-  for (const link of state.runApprovalPolicyLinks ?? []) spawnRunLink(world, runEntities, approvalPolicyEntities, link, RunApprovalPolicyLink, 'run', 'approvalPolicy');
   for (const link of state.runConversationPolicyLinks ?? []) spawnRunLink(world, runEntities, conversationPolicyEntities, link, RunConversationPolicyLink, 'run', 'policy');
   for (const link of state.runContextPolicyLinks ?? []) spawnRunLink(world, runEntities, contextPolicyEntities, link, RunContextPolicyLink, 'run', 'policy');
   for (const link of state.runDeliveryPolicyLinks ?? []) spawnRunLink(world, runEntities, deliveryPolicyEntities, link, RunDeliveryPolicyLink, 'run', 'policy');

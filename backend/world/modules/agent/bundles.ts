@@ -10,8 +10,6 @@ import {
 import {
   AgentMode,
   AgentModeLink,
-  ApprovalPolicy,
-  ModeApprovalPolicyLink,
   ModeModelProfileLink,
   ModeSystemPromptLink,
   ModeToolPolicyLink,
@@ -31,12 +29,10 @@ export const AgentFromBlueprintBundle = defineBundle({
     AgentStatus,
     AgentMode,
     ToolPolicy,
-    ApprovalPolicy,
     SystemPrompt,
     ModelProfile,
     AgentModeLink,
     ModeToolPolicyLink,
-    ModeApprovalPolicyLink,
     ModeSystemPromptLink,
     ModeModelProfileLink,
     ToolPolicyScopeLink,
@@ -167,24 +163,6 @@ function spawnModeFromBlueprint(
     id: `mode-tool-policy:${modeId}:${toolPolicyId}`,
     mode,
     toolPolicy,
-    role: 'active',
-    createdAt: now,
-    updatedAt: now
-  });
-
-  const approvalPolicy = cmd.spawn();
-  const approvalPolicyId = `${modeId}:approval-policy`;
-  cmd.add(approvalPolicy, ApprovalPolicy, {
-    id: approvalPolicyId,
-    name: input.blueprint.approvalPolicy.name ?? `${input.blueprint.name} Approval`,
-    mode: input.blueprint.approvalPolicy.mode,
-    allowInteractiveApproval: input.blueprint.approvalPolicy.allowInteractiveApproval
-  });
-  const approvalPolicyLink = cmd.spawn();
-  cmd.add(approvalPolicyLink, ModeApprovalPolicyLink, {
-    id: `mode-approval-policy:${modeId}:${approvalPolicyId}`,
-    mode,
-    approvalPolicy,
     role: 'active',
     createdAt: now,
     updatedAt: now

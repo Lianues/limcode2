@@ -1,16 +1,14 @@
-import type { ToolCallEventKind, ToolCallStatus, ToolPolicyScopeClearPayload, ToolPolicyScopeSetPayload } from '../../../../shared/protocol';
+import type { ToolCallEventKind, ToolCallStatus, ToolDecisionPayload, ToolPolicyScopeClearPayload, ToolPolicyScopeSetPayload } from '../../../../shared/protocol';
 
 export const ToolEventType = {
   State: 'tool:state',
-  ExecuteRequested: 'tool:executeRequested',
   PolicyScopeSetRequested: 'tool:policyScopeSetRequested',
-  PolicyScopeClearRequested: 'tool:policyScopeClearRequested'
+  PolicyScopeClearRequested: 'tool:policyScopeClearRequested',
+  ExecutionApproveRequested: 'tool:executionApproveRequested',
+  ExecutionRejectRequested: 'tool:executionRejectRequested',
+  ResultApplyRequested: 'tool:resultApplyRequested',
+  ResultRejectRequested: 'tool:resultRejectRequested'
 } as const;
-
-export interface ToolExecuteRequestedPayload {
-  toolCallId: string;
-  conversationId?: string;
-}
 
 export interface ToolStatePayload {
   toolCallId: string;
@@ -26,8 +24,11 @@ export interface ToolStatePayload {
 declare module '@backend/world/events' {
   interface WorldEventPayloadMap {
     'tool:state': ToolStatePayload;
-    'tool:executeRequested': ToolExecuteRequestedPayload;
     'tool:policyScopeSetRequested': ToolPolicyScopeSetPayload;
     'tool:policyScopeClearRequested': ToolPolicyScopeClearPayload;
+    'tool:executionApproveRequested': ToolDecisionPayload;
+    'tool:executionRejectRequested': ToolDecisionPayload;
+    'tool:resultApplyRequested': ToolDecisionPayload;
+    'tool:resultRejectRequested': ToolDecisionPayload;
   }
 }

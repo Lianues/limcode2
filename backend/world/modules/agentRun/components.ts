@@ -161,15 +161,6 @@ export interface RunToolPolicyLinkData {
 }
 export const RunToolPolicyLink = defineComponent<RunToolPolicyLinkData>('RunToolPolicyLink');
 
-export interface RunApprovalPolicyLinkData {
-  id: string;
-  run: Entity;
-  approvalPolicy: Entity;
-  role: PolicyBindingRole;
-  createdAt: number;
-  updatedAt: number;
-}
-export const RunApprovalPolicyLink = defineComponent<RunApprovalPolicyLinkData>('RunApprovalPolicyLink');
 
 export interface RunConversationPolicyLinkData {
   id: string;

@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import { IconFilter2Question, IconSearch } from '@tabler/icons-vue';
 import type { LlmProviderModelRecord } from '@shared/protocol';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
+import LcCheckbox from '@webview/components/ui/LcCheckbox.vue';
 
 const props = defineProps<{
   open: boolean;
@@ -116,9 +117,7 @@ function formatModelTime(value: string | undefined): string {
                   :class="{ selected: selectedSet.has(model.id) }"
                   @click="toggleModel(model.id)"
                 >
-                  <span class="model-fetch-checkbox" aria-hidden="true">
-                    <span v-if="selectedSet.has(model.id)">✓</span>
-                  </span>
+                  <LcCheckbox class="model-fetch-checkbox" :model-value="selectedSet.has(model.id)" size="sm" presentation />
                   <span class="model-fetch-info">
                     <span class="model-fetch-name">{{ model.name }}</span>
                     <span class="model-fetch-id">ID: {{ model.id }}</span>
@@ -417,23 +416,6 @@ function formatModelTime(value: string | undefined): string {
   border-color: var(--vscode-panel-border, transparent);
   background: color-mix(in srgb, var(--vscode-editor-background) 86%, var(--vscode-foreground) 14%);
   outline: none;
-}
-
-.model-fetch-checkbox {
-  width: 14px;
-  height: 14px;
-  border: 1px solid var(--vscode-descriptionForeground);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--vscode-foreground);
-  font-size: 11px;
-  line-height: 1;
-}
-
-.model-fetch-item.selected .model-fetch-checkbox {
-  border-color: var(--vscode-foreground);
-  background: color-mix(in srgb, var(--vscode-editor-background) 70%, var(--vscode-foreground) 30%);
 }
 
 .model-fetch-info {

@@ -1,6 +1,5 @@
 import { defineResource } from '../../../ecs/types';
 import type {
-  ApprovalMode,
   ContextHistoryMode,
   ConversationPolicyMode,
   ConversationVisibility,
@@ -20,12 +19,6 @@ export interface ModeModelProfileBlueprint {
 export interface ModeToolPolicyBlueprint {
   name?: string;
   allowedTools: string[];
-}
-
-export interface ModeApprovalPolicyBlueprint {
-  name?: string;
-  mode: ApprovalMode;
-  allowInteractiveApproval: boolean;
 }
 
 export interface RunConversationPolicyBlueprint {
@@ -61,7 +54,6 @@ export interface AgentModeBlueprint {
   systemPrompt: string;
   model: ModeModelProfileBlueprint;
   toolPolicy: ModeToolPolicyBlueprint;
-  approvalPolicy: ModeApprovalPolicyBlueprint;
   conversationPolicy?: RunConversationPolicyBlueprint;
   contextPolicy?: RunContextPolicyBlueprint;
   deliveryPolicy?: RunDeliveryPolicyBlueprint;
@@ -107,8 +99,7 @@ export function createDefaultAgentBlueprints(): AgentBlueprintRegistry {
           description: '默认开发助手模式',
           systemPrompt: DEFAULT_SYSTEM_PROMPT,
           model: { name: 'Default Model', provider: 'openai-compatible', model: DEFAULT_MODEL },
-          toolPolicy: { name: 'Default Tools', allowedTools: DEFAULT_TOOLS },
-          approvalPolicy: { name: 'Default Approval', mode: 'never', allowInteractiveApproval: true }
+          toolPolicy: { name: 'Default Tools', allowedTools: DEFAULT_TOOLS }
         }
       ]
     },
@@ -127,8 +118,7 @@ export function createDefaultAgentBlueprints(): AgentBlueprintRegistry {
           description: '代码审查模式',
           systemPrompt: 'Review code and point out risks, bugs, and maintainability issues. Do not modify files unless explicitly requested.',
           model: { name: 'Reviewer Model', provider: 'openai-compatible', model: DEFAULT_MODEL },
-          toolPolicy: { name: 'Reviewer Tools', allowedTools: READONLY_TOOLS },
-          approvalPolicy: { name: 'Reviewer Approval', mode: 'never', allowInteractiveApproval: false }
+          toolPolicy: { name: 'Reviewer Tools', allowedTools: READONLY_TOOLS }
         }
       ]
     },
@@ -147,8 +137,7 @@ export function createDefaultAgentBlueprints(): AgentBlueprintRegistry {
           description: '可执行多步工具操作的通用子任务执行者',
           systemPrompt: 'You are an autonomous agent running in the same LimCode execution system. Complete the delegated task independently, use tools when useful, and return a concise result with important findings. You are not lower priority than any other agent; you are a peer execution subject.',
           model: { name: 'General Purpose Model', provider: 'openai-compatible', model: DEFAULT_MODEL },
-          toolPolicy: { name: 'General Purpose Tools', allowedTools: DEFAULT_TOOLS },
-          approvalPolicy: { name: 'General Purpose Approval', mode: 'never', allowInteractiveApproval: false }
+          toolPolicy: { name: 'General Purpose Tools', allowedTools: DEFAULT_TOOLS }
         }
       ]
     },
@@ -167,8 +156,7 @@ export function createDefaultAgentBlueprints(): AgentBlueprintRegistry {
           description: '只读搜索、阅读和分析代码的执行者',
           systemPrompt: 'You are a read-only exploration agent. Inspect code, run safe read-only commands, and report findings. Do not modify files.',
           model: { name: 'Explore Model', provider: 'openai-compatible', model: DEFAULT_MODEL },
-          toolPolicy: { name: 'Explore Tools', allowedTools: READONLY_TOOLS },
-          approvalPolicy: { name: 'Explore Approval', mode: 'never', allowInteractiveApproval: false }
+          toolPolicy: { name: 'Explore Tools', allowedTools: READONLY_TOOLS }
         }
       ]
     }

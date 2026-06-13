@@ -27,6 +27,44 @@ function latestLink(links: ToolPolicyScopeLinkRecord[]): ToolPolicyScopeLinkReco
   return [...links].sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt || right.id.localeCompare(left.id))[0];
 }
 
+function policyIdForScope(scopeKind: ToolPolicyScopeKind, scopeId?: string): string {
+  return `tool-policy:${scopeKind}:${scopeIdFor(scopeKind, scopeId) ?? 'global'}`;
+}
+
+function linkIdForScope(scopeKind: ToolPolicyScopeKind, scopeId?: string): string {
+  return `tool-policy-scope:${scopeKind}:${scopeIdFor(scopeKind, scopeId) ?? 'global'}`;
+}
+
+function defaultPolicyName(scopeKind: ToolPolicyScopeKind): string {
+  switch (scopeKind) {
+    case 'global': return '全局默认工具策略';
+    case 'conversation': return '对话工具策略';
+    case 'agent': return 'Agent 工具策略';
+    case 'agentSystem': return '多 Agent 系统工具策略';
+    case 'mode': return '模式工具策略';
+    case 'run': return '运行工具策略';
+  }
+}
+
+function cloneToolConfigs(toolConfigs: Record<string, ToolPolicyToolConfigRecord> | undefined): Record<string, ToolPolicyToolConfigRecord> | undefined {
+  if (!toolConfigs) return undefined;
+  const cloned: Record<string, ToolPolicyToolConfigRecord> = {};
+  for (const [toolName, record] of Object.entries(toolConfigs)) {
+    cloned[toolName] = {
+      config: { ...(record.config ?? {}) },
+      ...(typeof record.autoApproveExecution === 'boolean' ? { autoApproveExecution: record.autoApproveExecution } : {}),
+      ...(typeof record.autoApplyResult === 'boolean' ? { autoApplyResult: record.autoApplyResult } : {})
+    };
+  }
+  return cloned;
+}
+
+function upsertById<T extends { id: string }>(list: T[], record: T): void {
+  const index = list.findIndex((candidate) => candidate.id === record.id);
+  if (index >= 0) list[index] = record;
+  else list.push(record);
+}
+
 export const useToolPolicyStore = defineStore('toolPolicy', {
   state: () => ({}),
   getters: {
@@ -71,10 +109,14 @@ export const useToolPolicyStore = defineStore('toolPolicy', {
       return fallback ? { policy: fallback, inheritedFrom: 'global' } : {};
     },
     setPolicyForScope(scopeKind: ToolPolicyScopeKind, scopeId: string | undefined, allowedTools: string[], name?: string, toolConfigs?: Record<string, ToolPolicyToolConfigRecord>): void {
-      const validNames = new Set(useClientStateStore().toolDefinitions.map((tool) => tool.name));
+      const clientState = useClientStateStore();
+      const validNames = new Set(clientState.toolDefinitions.map((tool) => tool.name));
       const sanitized = allowedTools
         .map((tool) => tool.trim())
         .filter((tool, index, list) => !!tool && validNames.has(tool) && list.indexOf(tool) === index);
+
+      this.applyOptimisticPolicyScopeSet(scopeKind, scopeId, sanitized, name, toolConfigs);
+
       bridge.request(BridgeMessageType.ToolPolicyScopeSet, {
         scopeKind,
         ...(scopeIdFor(scopeKind, scopeId) ? { scopeId: scopeIdFor(scopeKind, scopeId) } : {}),
@@ -85,10 +127,42 @@ export const useToolPolicyStore = defineStore('toolPolicy', {
     },
     clearPolicyScope(scopeKind: ToolPolicyScopeKind, scopeId?: string): void {
       if (scopeKind === 'global') return;
+      const clientState = useClientStateStore();
+      clientState.toolPolicyScopeLinks = clientState.toolPolicyScopeLinks.filter((link) => !scopeLinkMatches(link, scopeKind, scopeId));
       bridge.request(BridgeMessageType.ToolPolicyScopeClear, {
         scopeKind,
         ...(scopeIdFor(scopeKind, scopeId) ? { scopeId: scopeIdFor(scopeKind, scopeId) } : {})
       });
+    },
+    applyOptimisticPolicyScopeSet(scopeKind: ToolPolicyScopeKind, scopeId: string | undefined, allowedTools: string[], name?: string, toolConfigs?: Record<string, ToolPolicyToolConfigRecord>): void {
+      const clientState = useClientStateStore();
+      const normalizedScopeId = scopeIdFor(scopeKind, scopeId);
+      const existingLink = latestLink(clientState.toolPolicyScopeLinks.filter((candidate) => scopeLinkMatches(candidate, scopeKind, normalizedScopeId)));
+      const existingPolicy = clientState.toolPolicies.find((policy) => policy.id === existingLink?.toolPolicyId);
+      const policyId = existingLink?.toolPolicyId ?? policyIdForScope(scopeKind, normalizedScopeId);
+      const now = Date.now();
+      const nextPolicy: ToolPolicyRecord = {
+        id: policyId,
+        name: name?.trim() || existingPolicy?.name || defaultPolicyName(scopeKind),
+        allowedTools,
+        ...(toolConfigs !== undefined
+          ? { toolConfigs: cloneToolConfigs(toolConfigs) ?? {} }
+          : existingPolicy?.toolConfigs
+            ? { toolConfigs: cloneToolConfigs(existingPolicy.toolConfigs) ?? {} }
+            : {})
+      };
+      upsertById(clientState.toolPolicies, nextPolicy);
+
+      const nextLink: ToolPolicyScopeLinkRecord = {
+        id: existingLink?.id ?? linkIdForScope(scopeKind, normalizedScopeId),
+        scopeKind,
+        ...(normalizedScopeId ? { scopeId: normalizedScopeId } : {}),
+        toolPolicyId: policyId,
+        role: 'active',
+        createdAt: existingLink?.createdAt ?? now,
+        updatedAt: now
+      };
+      upsertById(clientState.toolPolicyScopeLinks, nextLink);
     }
   }
 });

@@ -173,7 +173,6 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
     runSystemPromptLinks: state.runSystemPromptLinks.filter((link) => runIds.has(link.runId)),
     runModelProfileLinks: state.runModelProfileLinks.filter((link) => runIds.has(link.runId)),
     runToolPolicyLinks: state.runToolPolicyLinks.filter((link) => runIds.has(link.runId)),
-    runApprovalPolicyLinks: state.runApprovalPolicyLinks.filter((link) => runIds.has(link.runId)),
     runConversationPolicyLinks: state.runConversationPolicyLinks.filter((link) => runIds.has(link.runId)),
     runContextPolicyLinks: state.runContextPolicyLinks.filter((link) => runIds.has(link.runId)),
     runDeliveryPolicyLinks: state.runDeliveryPolicyLinks.filter((link) => runIds.has(link.runId)),

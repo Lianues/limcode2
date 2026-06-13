@@ -75,9 +75,12 @@ export enum BridgeMessageType {
   AgentRunRetry = 'agentRun.retry',
   AgentRunRegenerate = 'agentRun.regenerate',
   AgentRunMarkStale = 'agentRun.markStale',
-  ToolExecute = 'tool.execute',
   ToolPolicyScopeSet = 'toolPolicy.scope.set',
   ToolPolicyScopeClear = 'toolPolicy.scope.clear',
+  ToolExecutionApprove = 'tool.execution.approve',
+  ToolExecutionReject = 'tool.execution.reject',
+  ToolResultApply = 'tool.result.apply',
+  ToolResultReject = 'tool.result.reject',
   ClientResync = 'client.resync',
   ClientSnapshot = 'state.snapshot',
   ClientPatch = 'state.patch',
@@ -323,7 +326,6 @@ export interface AgentRecord {
   status: 'idle' | 'thinking' | 'running' | 'done' | 'error';
 }
 
-export type ApprovalMode = 'never' | 'onRisk' | 'always' | 'manualOnly';
 export type AgentRunKind = 'chat' | 'tool_invoked' | 'delegated' | 'review' | 'notification' | 'scheduled';
 export type AgentRunStatus = 'queued' | 'preparing' | 'running' | 'waiting_tool' | 'waiting_child_run' | 'delivering' | 'paused' | 'completed' | 'failed' | 'cancelled' | 'stale';
 export type AgentRunEndReason = 'completed' | 'failed' | 'cancelled_by_user' | 'cancelled_by_policy' | 'stale_source_edited' | 'retry_requested' | 'regenerate_requested';
@@ -342,6 +344,8 @@ export interface AgentModeRecord {
 }
 
 export interface ToolPolicyToolConfigRecord {
+  autoApproveExecution?: boolean;
+  autoApplyResult?: boolean;
   config: ToolConfigRecord;
 }
 
@@ -362,13 +366,6 @@ export interface ToolPolicyScopeLinkRecord {
   role: PolicyBindingRole;
   createdAt: number;
   updatedAt: number;
-}
-
-export interface ApprovalPolicyRecord {
-  id: string;
-  name: string;
-  mode: ApprovalMode;
-  allowInteractiveApproval: boolean;
 }
 
 export interface SystemPromptRecord {
@@ -398,13 +395,6 @@ export interface ModeToolPolicyLinkRecord {
   id: string;
   modeId: string;
   toolPolicyId: string;
-  role: ModeBindingRole;
-}
-
-export interface ModeApprovalPolicyLinkRecord {
-  id: string;
-  modeId: string;
-  approvalPolicyId: string;
   role: ModeBindingRole;
 }
 
@@ -718,13 +708,6 @@ export interface RunToolPolicyLinkRecord {
   role: PolicyBindingRole;
 }
 
-export interface RunApprovalPolicyLinkRecord {
-  id: string;
-  runId: string;
-  approvalPolicyId: string;
-  role: PolicyBindingRole;
-}
-
 export interface RunConversationPolicyLinkRecord {
   id: string;
   runId: string;
@@ -766,12 +749,10 @@ export interface ClientStateRecordByTable {
   agentModes: AgentModeRecord;
   toolPolicies: ToolPolicyRecord;
   toolPolicyScopeLinks: ToolPolicyScopeLinkRecord;
-  approvalPolicies: ApprovalPolicyRecord;
   systemPrompts: SystemPromptRecord;
   modelProfiles: ModelProfileRecord;
   agentModeLinks: AgentModeLinkRecord;
   modeToolPolicyLinks: ModeToolPolicyLinkRecord;
-  modeApprovalPolicyLinks: ModeApprovalPolicyLinkRecord;
   modeSystemPromptLinks: ModeSystemPromptLinkRecord;
   modeModelProfileLinks: ModeModelProfileLinkRecord;
   conversations: ConversationRecord;
@@ -798,7 +779,6 @@ export interface ClientStateRecordByTable {
   runSystemPromptLinks: RunSystemPromptLinkRecord;
   runModelProfileLinks: RunModelProfileLinkRecord;
   runToolPolicyLinks: RunToolPolicyLinkRecord;
-  runApprovalPolicyLinks: RunApprovalPolicyLinkRecord;
   runConversationPolicyLinks: RunConversationPolicyLinkRecord;
   runContextPolicyLinks: RunContextPolicyLinkRecord;
   runDeliveryPolicyLinks: RunDeliveryPolicyLinkRecord;
@@ -869,9 +849,10 @@ export interface AgentRunControlPayload {
   conversationId?: string;
   reason?: string;
 }
-export interface ToolExecutePayload {
+export interface ToolDecisionPayload {
   toolCallId: string;
   conversationId?: string;
+  reason?: string;
 }
 export interface ToolPolicyScopeSetPayload {
   scopeKind: ToolPolicyScopeKind;
@@ -1080,9 +1061,12 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.AgentRunRetry, AgentRunControlPayload>
   | BridgeEnvelope<BridgeMessageType.AgentRunRegenerate, AgentRunControlPayload>
   | BridgeEnvelope<BridgeMessageType.AgentRunMarkStale, AgentRunControlPayload>
-  | BridgeEnvelope<BridgeMessageType.ToolExecute, ToolExecutePayload>
   | BridgeEnvelope<BridgeMessageType.ToolPolicyScopeSet, ToolPolicyScopeSetPayload>
   | BridgeEnvelope<BridgeMessageType.ToolPolicyScopeClear, ToolPolicyScopeClearPayload>
+  | BridgeEnvelope<BridgeMessageType.ToolExecutionApprove, ToolDecisionPayload>
+  | BridgeEnvelope<BridgeMessageType.ToolExecutionReject, ToolDecisionPayload>
+  | BridgeEnvelope<BridgeMessageType.ToolResultApply, ToolDecisionPayload>
+  | BridgeEnvelope<BridgeMessageType.ToolResultReject, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ClientResync, ClientResyncPayload>
   | BridgeEnvelope<BridgeMessageType.RunHistoryPageGet, ConversationRunHistoryPageRequest>
   | BridgeEnvelope<BridgeMessageType.RunHistoryDetailGet, ConversationRunDetailRequest>

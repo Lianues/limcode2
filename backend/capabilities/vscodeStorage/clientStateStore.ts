@@ -4,7 +4,6 @@ import type {
   AgentModeLinkRecord,
   AgentModeRecord,
   AgentRecord,
-  ApprovalPolicyRecord,
   ClientState,
   ConversationBranchLinkRecord,
   ConversationProjectLinkRecord,
@@ -16,7 +15,6 @@ import type {
   MessageCurrentRevisionLinkRecord,
   MessageRecord,
   MessageRevisionRecord,
-  ModeApprovalPolicyLinkRecord,
   ModeModelProfileLinkRecord,
   ModeSystemPromptLinkRecord,
   ModeToolPolicyLinkRecord,
@@ -111,7 +109,6 @@ const RUN_HISTORY_TABLE_KEYS = [
   'runSystemPromptLinks',
   'runModelProfileLinks',
   'runToolPolicyLinks',
-  'runApprovalPolicyLinks',
   'runConversationPolicyLinks',
   'runContextPolicyLinks',
   'runDeliveryPolicyLinks',
@@ -136,12 +133,10 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Pr
     agentModes,
     toolPolicies,
     toolPolicyScopeLinks,
-    approvalPolicies,
     systemPrompts,
     modelProfiles,
     agentModeLinks,
     modeToolPolicyLinks,
-    modeApprovalPolicyLinks,
     modeSystemPromptLinks,
     modeModelProfileLinks,
     conversations,
@@ -155,12 +150,10 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Pr
     loadSkeletonRecords<AgentModeRecord>('agentModes', [paths.agentModesRootUri, paths.agentModesIndexUri], 'agentMode'),
     loadSkeletonRecords<ToolPolicyRecord>('toolPolicies', [paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri], 'toolPolicy'),
     loadSkeletonRecords<ToolPolicyScopeLinkRecord>('toolPolicyScopeLinks', [paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri], 'link'),
-    loadSkeletonRecords<ApprovalPolicyRecord>('approvalPolicies', [paths.approvalPoliciesRootUri, paths.approvalPoliciesIndexUri], 'approvalPolicy'),
     loadSkeletonRecords<SystemPromptRecord>('systemPrompts', [paths.systemPromptsRootUri, paths.systemPromptsIndexUri], 'systemPrompt'),
     loadSkeletonRecords<ModelProfileRecord>('modelProfiles', [paths.modelProfilesRootUri, paths.modelProfilesIndexUri], 'modelProfile'),
     loadSkeletonRecords<AgentModeLinkRecord>('agentModeLinks', [paths.agentModeLinksRootUri, paths.agentModeLinksIndexUri], 'link'),
     loadSkeletonRecords<ModeToolPolicyLinkRecord>('modeToolPolicyLinks', [paths.modeToolPolicyLinksRootUri, paths.modeToolPolicyLinksIndexUri], 'link'),
-    loadSkeletonRecords<ModeApprovalPolicyLinkRecord>('modeApprovalPolicyLinks', [paths.modeApprovalPolicyLinksRootUri, paths.modeApprovalPolicyLinksIndexUri], 'link'),
     loadSkeletonRecords<ModeSystemPromptLinkRecord>('modeSystemPromptLinks', [paths.modeSystemPromptLinksRootUri, paths.modeSystemPromptLinksIndexUri], 'link'),
     loadSkeletonRecords<ModeModelProfileLinkRecord>('modeModelProfileLinks', [paths.modeModelProfileLinksRootUri, paths.modeModelProfileLinksIndexUri], 'link'),
     loadSkeletonRecords<ConversationRecord>('conversations', [paths.conversationsRootUri, paths.conversationsIndexUri], 'conversation'),
@@ -175,12 +168,10 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Pr
   state.agentModes = agentModes;
   state.toolPolicies = toolPolicies;
   state.toolPolicyScopeLinks = toolPolicyScopeLinks;
-  state.approvalPolicies = approvalPolicies;
   state.systemPrompts = systemPrompts;
   state.modelProfiles = modelProfiles;
   state.agentModeLinks = agentModeLinks;
   state.modeToolPolicyLinks = modeToolPolicyLinks;
-  state.modeApprovalPolicyLinks = modeApprovalPolicyLinks;
   state.modeSystemPromptLinks = modeSystemPromptLinks;
   state.modeModelProfileLinks = modeModelProfileLinks;
   state.conversations = conversations;
@@ -301,12 +292,10 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
     saveRecords(paths.agentModesRootUri, paths.agentModesIndexUri, state.agentModes, 'agentMode', (record) => record.name || record.id),
     saveRecords(paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri, state.toolPolicies, 'toolPolicy', (record) => record.name || record.id),
     saveRecords(paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri, state.toolPolicyScopeLinks, 'link'),
-    saveRecords(paths.approvalPoliciesRootUri, paths.approvalPoliciesIndexUri, state.approvalPolicies, 'approvalPolicy', (record) => record.name || record.id),
     saveRecords(paths.systemPromptsRootUri, paths.systemPromptsIndexUri, state.systemPrompts, 'systemPrompt', (record) => record.name || record.id),
     saveRecords(paths.modelProfilesRootUri, paths.modelProfilesIndexUri, state.modelProfiles, 'modelProfile', (record) => record.name || record.id),
     saveRecords(paths.agentModeLinksRootUri, paths.agentModeLinksIndexUri, state.agentModeLinks, 'link'),
     saveRecords(paths.modeToolPolicyLinksRootUri, paths.modeToolPolicyLinksIndexUri, state.modeToolPolicyLinks, 'link'),
-    saveRecords(paths.modeApprovalPolicyLinksRootUri, paths.modeApprovalPolicyLinksIndexUri, state.modeApprovalPolicyLinks, 'link'),
     saveRecords(paths.modeSystemPromptLinksRootUri, paths.modeSystemPromptLinksIndexUri, state.modeSystemPromptLinks, 'link'),
     saveRecords(paths.modeModelProfileLinksRootUri, paths.modeModelProfileLinksIndexUri, state.modeModelProfileLinks, 'link'),
     saveRecords(paths.conversationsRootUri, paths.conversationsIndexUri, state.conversations, 'conversation', (record) => record.title || record.id),
@@ -413,7 +402,6 @@ export function conversationRunHistorySlice(state: ClientState, conversationId: 
   detail.runSystemPromptLinks = state.runSystemPromptLinks.filter((link) => runIds.has(link.runId));
   detail.runModelProfileLinks = state.runModelProfileLinks.filter((link) => runIds.has(link.runId));
   detail.runToolPolicyLinks = state.runToolPolicyLinks.filter((link) => runIds.has(link.runId));
-  detail.runApprovalPolicyLinks = state.runApprovalPolicyLinks.filter((link) => runIds.has(link.runId));
   detail.runConversationPolicyLinks = state.runConversationPolicyLinks.filter((link) => runIds.has(link.runId));
   detail.runContextPolicyLinks = state.runContextPolicyLinks.filter((link) => runIds.has(link.runId));
   detail.runDeliveryPolicyLinks = state.runDeliveryPolicyLinks.filter((link) => runIds.has(link.runId));
@@ -442,7 +430,6 @@ function copyRunHistoryTables(target: ClientState, source: ClientState): void {
   target.runSystemPromptLinks = source.runSystemPromptLinks;
   target.runModelProfileLinks = source.runModelProfileLinks;
   target.runToolPolicyLinks = source.runToolPolicyLinks;
-  target.runApprovalPolicyLinks = source.runApprovalPolicyLinks;
   target.runConversationPolicyLinks = source.runConversationPolicyLinks;
   target.runContextPolicyLinks = source.runContextPolicyLinks;
   target.runDeliveryPolicyLinks = source.runDeliveryPolicyLinks;
@@ -471,7 +458,6 @@ function runDetailSlice(state: ClientState, runId: string): ClientState {
   detail.runSystemPromptLinks = state.runSystemPromptLinks.filter((link) => link.runId === runId);
   detail.runModelProfileLinks = state.runModelProfileLinks.filter((link) => link.runId === runId);
   detail.runToolPolicyLinks = state.runToolPolicyLinks.filter((link) => link.runId === runId);
-  detail.runApprovalPolicyLinks = state.runApprovalPolicyLinks.filter((link) => link.runId === runId);
   detail.runConversationPolicyLinks = state.runConversationPolicyLinks.filter((link) => link.runId === runId);
   detail.runContextPolicyLinks = state.runContextPolicyLinks.filter((link) => link.runId === runId);
   detail.runDeliveryPolicyLinks = state.runDeliveryPolicyLinks.filter((link) => link.runId === runId);

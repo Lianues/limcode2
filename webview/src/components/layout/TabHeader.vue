@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { IconSettings } from '@tabler/icons-vue';
+import { IconMessage } from '@tabler/icons-vue';
 import type { ProjectFolderCandidateRecord } from '@shared/protocol';
 import { displayConversationTitle } from '@shared/conversationTitle';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
@@ -167,7 +167,7 @@ function middleEllipsis(value: string, maxLength: number): string {
         :title="props.settingsOpen ? '收起对话设置' : '对话设置'"
         @click="emit('toggle-settings')"
       >
-        <IconSettings class="tab-settings-icon" stroke="2" aria-hidden="true" />
+        <IconMessage class="tab-settings-icon" stroke="2" aria-hidden="true" />
       </button>
     </div>
   </header>

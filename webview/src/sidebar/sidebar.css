@@ -83,6 +83,7 @@ button {
 .primary-button:focus-visible,
 .history-action-button:focus-visible,
 .history-item:focus-visible,
+.settings-nav-card:focus-visible,
 .project-folder-button:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
@@ -97,6 +98,16 @@ button {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
+}
+
+.settings-entry-button {
+  border: 0;
+}
+
+.settings-gear-icon {
+  width: 15px;
+  height: 15px;
+  display: block;
 }
 
 .section-head {
@@ -687,50 +698,116 @@ button {
   gap: 10px;
 }
 
-.settings-card {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface-subtle);
-  padding: 11px;
-}
-
-.settings-card-title {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin: 0 0 5px;
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.settings-card-desc {
+.settings-nav-intro {
   margin: 0;
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
 }
 
-.settings-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 7px;
-  margin-top: 9px;
+.settings-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.setting-row {
-  display: flex;
-  justify-content: space-between;
+.settings-nav-card {
+  width: 100%;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  padding: 7px 0;
-  border-top: 1px solid var(--line);
+  gap: 9px;
+  color: var(--vscode-foreground);
+  background: var(--surface-subtle);
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease, opacity 0.16s ease;
+}
+
+.settings-nav-card:hover:not(:disabled),
+.settings-nav-card:focus-visible:not(:disabled) {
+  background: color-mix(in srgb, var(--vscode-sideBar-background) 86%, var(--vscode-foreground) 14%);
+  border-color: color-mix(in srgb, var(--line) 55%, var(--vscode-foreground) 45%);
+}
+
+.settings-nav-card:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.settings-nav-card.is-disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.settings-nav-icon {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--vscode-descriptionForeground);
+  background: color-mix(in srgb, var(--vscode-sideBar-background) 90%, var(--vscode-foreground) 10%);
+}
+
+.settings-nav-icon svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+}
+
+.settings-nav-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-nav-title,
+.settings-nav-desc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-nav-title {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--vscode-foreground);
+}
+
+.settings-nav-desc {
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
 }
 
-.setting-row strong {
-  color: var(--vscode-foreground);
-  font-size: 11px;
-  font-weight: 600;
+.settings-nav-trail,
+.settings-nav-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.settings-nav-trail svg {
+  display: block;
+}
+
+.settings-nav-badge {
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
 }
 
 .settings-actions {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { IconEdit, IconPlayerStop, IconTrash } from '@tabler/icons-vue';
+import { IconAdjustmentsAlt, IconEdit, IconMessage, IconPlayerStop, IconSettings, IconTrash } from '@tabler/icons-vue';
 import type { ConversationHistoryPageInfo, OpenConversationPanelRecord } from '@shared/protocol';
 import { displayConversationTitle as formatConversationTitle } from '@shared/conversationTitle';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
@@ -355,11 +355,8 @@ function ensureActiveScopeVisible(): void {
             <div class="section-title">对话历史</div>
             <div class="section-count">{{ historyCountText }}</div>
           </div>
-          <button type="button" class="icon-button" title="全局设置" aria-label="全局设置" @click="setView('settings')">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="3"></circle>
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-            </svg>
+          <button type="button" class="icon-button settings-entry-button" title="设置" aria-label="设置" @click="setView('settings')">
+            <IconAdjustmentsAlt class="settings-gear-icon" stroke="2" aria-hidden="true" />
           </button>
         </div>
         <div class="toolbar">
@@ -522,7 +519,7 @@ function ensureActiveScopeVisible(): void {
       </div>
     </section>
 
-    <section v-else class="view settings-view" aria-label="全局设置">
+    <section v-else class="view settings-view" aria-label="设置导航">
       <div class="settings-head">
         <button type="button" class="back-button" title="返回对话历史" aria-label="返回对话历史" @click="setView('history')">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -530,42 +527,44 @@ function ensureActiveScopeVisible(): void {
           </svg>
         </button>
         <div class="settings-heading">
-          <div class="settings-title">全局设置</div>
-          <div class="settings-desc">模型、密钥、数据目录与默认行为</div>
+          <div class="settings-title">设置</div>
+          <div class="settings-desc">选择要配置的范围</div>
         </div>
       </div>
 
       <div class="settings-content">
-        <article class="settings-card">
-          <h3 class="settings-card-title">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M12 2v20"></path><path d="M5 9h14"></path><path d="M5 15h14"></path>
-            </svg>
-            模型与 API
-          </h3>
-          <p class="settings-card-desc">配置默认 LLM Provider、模型名称、Base URL 和 API Key。</p>
-          <div class="settings-grid">
-            <div class="setting-row"><span>配置范围</span><strong>全局默认</strong></div>
-            <div class="setting-row"><span>优先级</span><strong>可被对话设置覆盖</strong></div>
-          </div>
-        </article>
+        <p class="settings-nav-intro">这个入口只负责导航到不同设置范围，具体配置仍在各自设置页中完成。</p>
 
-        <article class="settings-card">
-          <h3 class="settings-card-title">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M3 7h18"></path><path d="M5 7v12h14V7"></path><path d="M9 11h6"></path>
-            </svg>
-            数据与存储
-          </h3>
-          <p class="settings-card-desc">管理 LimCode 数据根目录，保持 Agent、Conversation 与 Link 独立存储。</p>
-          <div class="settings-grid">
-            <div class="setting-row"><span>存储结构</span><strong>ECS 解耦</strong></div>
-            <div class="setting-row"><span>主题适配</span><strong>跟随 VS Code</strong></div>
-          </div>
-        </article>
+        <nav class="settings-nav-list" aria-label="设置范围">
+          <button type="button" class="settings-nav-card" @click="openGlobalSettings">
+            <span class="settings-nav-icon" aria-hidden="true">
+              <IconSettings class="settings-gear-icon" stroke="2" />
+            </span>
+            <span class="settings-nav-main">
+              <span class="settings-nav-title">全局设置</span>
+              <span class="settings-nav-desc">模型渠道、工具权限、数据目录与默认行为。</span>
+            </span>
+            <span class="settings-nav-trail">
+              打开
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="9 18 15 12 9 6"></polyline>
+              </svg>
+            </span>
+          </button>
+
+          <button type="button" class="settings-nav-card is-disabled" disabled>
+            <span class="settings-nav-icon" aria-hidden="true">
+              <IconMessage class="settings-gear-icon" stroke="2" />
+            </span>
+            <span class="settings-nav-main">
+              <span class="settings-nav-title">对话设置</span>
+              <span class="settings-nav-desc">单个对话的名称、模型选择、工具策略与上下文配置。</span>
+            </span>
+            <span class="settings-nav-badge">即将支持</span>
+          </button>
+        </nav>
 
         <div class="settings-actions">
-          <button type="button" class="primary-button" @click="openGlobalSettings">打开完整设置面板</button>
           <button type="button" class="secondary-button" @click="setView('history')">返回对话历史</button>
         </div>
       </div>

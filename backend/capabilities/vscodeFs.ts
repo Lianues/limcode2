@@ -21,11 +21,10 @@ export async function readWorkspaceTextFile(relPath: string, startLine?: number,
   const lines = text.split(/\r?\n/);
   const from = Math.max(1, startLine ?? 1);
   const to = Math.min(lines.length, endLine ?? lines.length);
-  const width = String(to).length;
 
   const out: string[] = [];
   for (let i = from; i <= to; i += 1) {
-    out.push(`${String(i).padStart(width, ' ')} | ${lines[i - 1]}`);
+    out.push(`${i} ${lines[i - 1]}`);
   }
   return out.join('\n');
 }

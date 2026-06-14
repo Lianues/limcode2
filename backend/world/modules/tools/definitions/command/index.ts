@@ -74,6 +74,7 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
     },
     execution: 'runtime',
     scheduling: (rawArgs) => resolveCommandScheduling(command.toolName, rawArgs),
+    summary: summarizeCommandToolCall,
     async execute(rawArgs, deps, ctx) {
       const args = (rawArgs ?? {}) as CommandToolArgs;
       const commandText = (args.command ?? '').trim();
@@ -100,6 +101,13 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
 type CommandToolArgs = Parameters<CommandCapability['run']>[0] & {
   scheduling?: string;
 };
+
+function summarizeCommandToolCall(rawArgs: unknown): string | undefined {
+  const args = (rawArgs ?? {}) as CommandToolArgs;
+  const commandText = typeof args.command === 'string' ? args.command.trim() : '';
+  if (!commandText) return undefined;
+  return commandText.replace(/\s+/g, ' ');
+}
 
 function resolveCommandScheduling(toolName: 'shell' | 'bash', rawArgs: unknown): { mode: 'parallel' | 'serial'; reason: string } {
   const args = (rawArgs ?? {}) as CommandToolArgs;

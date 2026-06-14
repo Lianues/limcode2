@@ -52,6 +52,7 @@ const durationLabel = computed(() => {
   if (duration === undefined) return undefined;
   return duration < 1000 ? `${Math.round(duration)}ms` : `${(duration / 1000).toFixed(duration < 10_000 ? 1 : 0)}s`;
 });
+const summaryLabel = computed(() => toolCall.value?.summary?.trim() || undefined);
 const hasBatchMeta = computed(() => props.batchIndex !== undefined && props.batchMode !== undefined && props.batchState !== undefined);
 const batchModeLabel = computed(() => props.batchMode === 'parallel' ? '并行批次' : '串行批次');
 const batchStateLabel = computed(() => {
@@ -181,7 +182,8 @@ function isInternalApprovalProgress(progress: unknown): boolean {
       <IconTool stroke="2" aria-hidden="true" />
     </template>
     <template #summary>
-      <span class="part-card-name">{{ part.functionCall.name }}</span>
+      <span class="part-card-name" :class="{ 'has-summary': summaryLabel }">{{ part.functionCall.name }}</span>
+      <span v-if="summaryLabel" class="part-card-summary" :title="summaryLabel">{{ summaryLabel }}</span>
     </template>
     <template #trail>
       <span class="part-card-status" :title="statusTitle">{{ statusLabel }}</span>
@@ -254,11 +256,29 @@ function isInternalApprovalProgress(progress: unknown): boolean {
 
 .part-card-name {
   min-width: 0;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
   color: inherit;
+}
+
+.part-card-name.has-summary {
+  max-width: min(40%, 18ch);
+}
+
+.part-card-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+  font-weight: 400;
+  opacity: 0.86;
 }
 
 .tool-call-card :deep(.lc-collapsible-trail) {

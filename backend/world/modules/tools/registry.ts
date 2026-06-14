@@ -43,10 +43,21 @@ export interface ToolDeclaration {
   defaultConfig?: ToolConfigRecord;
 }
 
+export interface ToolCallSummaryContext {
+  toolName: string;
+  argsJson: string;
+}
+
+/**
+ * 工具调用收起条摘要。由工具定义根据调用参数临时生成，前端只展示投影结果。
+ */
+export type ToolCallSummaryResolver = (args: unknown, context: ToolCallSummaryContext) => string | undefined;
+
 export interface RuntimeToolDefinition {
   declaration: ToolDeclaration;
   execution: 'runtime';
   scheduling?: ToolSchedulingResolver;
+  summary?: ToolCallSummaryResolver;
   execute(args: unknown, deps: ToolDeps, ctx?: ToolExecutionContext): Promise<ToolResultOut>;
 }
 
@@ -54,6 +65,7 @@ export interface AgentRunToolDefinition {
   declaration: ToolDeclaration;
   execution: 'agentRun';
   scheduling?: ToolSchedulingResolver;
+  summary?: ToolCallSummaryResolver;
 }
 
 export type ToolDefinition = RuntimeToolDefinition | AgentRunToolDefinition;

@@ -557,6 +557,7 @@ export interface ToolCallRecord {
   name: string;
   functionCallId?: string;
   args: string;
+  summary?: string;
   status: ToolCallStatus;
   result?: unknown;
   error?: string;

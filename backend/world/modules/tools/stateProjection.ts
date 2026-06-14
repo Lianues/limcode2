@@ -6,7 +6,7 @@ import { Conversation, Message, PartOf } from '../chat/components';
 import { AgentMode, ToolPolicy } from '../mode/components';
 import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey } from './resources';
 import { toolSchedulingDecision } from './scheduling';
-import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolPolicyScopeLinkData } from './components';
+import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolPolicyScopeLinkData } from './components';
 
 export const toolsRuntimeStateProjectionReads: AccessDeclaration = {
   components: [
@@ -72,6 +72,7 @@ function buildToolCallRecord(world: WorldReader, entity: number): ToolCallRecord
   const message = world.get(messageEntity, Message);
   if (!message) return undefined;
   const scheduling = toolSchedulingDecision(world, entity);
+  const summary = resolveToolCallSummary(world, call);
 
   return {
     id: call.id,
@@ -79,6 +80,7 @@ function buildToolCallRecord(world: WorldReader, entity: number): ToolCallRecord
     name: call.name,
     functionCallId: call.functionCallId,
     args: call.argsJson,
+    ...(summary ? { summary } : {}),
     status: state.status,
     ...(state.result !== undefined ? { result: state.result } : {}),
     ...(state.error !== undefined ? { error: state.error } : {}),
@@ -89,6 +91,35 @@ function buildToolCallRecord(world: WorldReader, entity: number): ToolCallRecord
     createdAt: call.createdAt,
     updatedAt: state.updatedAt
   };
+}
+
+function resolveToolCallSummary(world: WorldReader, call: ToolCallData): string | undefined {
+  const definitions = world.tryGetResource(ToolRuntimeDefinitionsKey) ?? [];
+  const definition = definitions.find((tool) => tool.declaration.name === call.name);
+  if (!definition?.summary) return undefined;
+
+  try {
+    return normalizeToolCallSummary(definition.summary(parseToolCallArgs(call.argsJson), {
+      toolName: call.name,
+      argsJson: call.argsJson
+    }));
+  } catch {
+    return undefined;
+  }
+}
+
+function parseToolCallArgs(argsJson: string): unknown {
+  try {
+    return argsJson ? JSON.parse(argsJson) : {};
+  } catch {
+    return argsJson;
+  }
+}
+
+function normalizeToolCallSummary(summary: string | undefined): string | undefined {
+  const text = summary?.replace(/\s+/g, ' ').trim();
+  if (!text) return undefined;
+  return text.length > 240 ? `${text.slice(0, 239)}…` : text;
 }
 
 function buildToolCallEventRecord(world: WorldReader, entity: number): ToolCallEventRecord | undefined {

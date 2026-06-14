@@ -190,29 +190,31 @@ function itemKey(item: TooltipPanelItem, index: number): string {
     @focusout="scheduleClose"
   >
     <slot />
-  </span>
 
-  <Teleport to="body">
-    <span
-      v-if="open"
-      ref="panelRef"
-      class="lc-hover-tooltip-panel"
-      :class="[`is-placement-${placement}`]"
-      :style="panelStyle"
-      role="tooltip"
-      @mouseenter="openNow"
-      @mouseleave="scheduleClose"
-    >
-      <span class="lc-hover-tooltip-title">{{ panelTitle }}</span>
-      <template v-for="(item, index) in rows" :key="itemKey(item, index)">
-        <span v-if="isDivider(item)" class="lc-hover-tooltip-divider" aria-hidden="true"></span>
-        <span v-else class="lc-hover-tooltip-row" :class="{ 'is-nested': item.nested }">
-          <span class="lc-hover-tooltip-label">{{ item.label }}</span>
-          <span class="lc-hover-tooltip-value">{{ item.value }}</span>
+    <Teleport to="body">
+      <Transition name="lc-hover-tooltip">
+        <span
+          v-if="open"
+          ref="panelRef"
+          class="lc-hover-tooltip-panel"
+          :class="[`is-placement-${placement}`]"
+          :style="panelStyle"
+          role="tooltip"
+          @mouseenter="openNow"
+          @mouseleave="scheduleClose"
+        >
+          <span class="lc-hover-tooltip-title">{{ panelTitle }}</span>
+          <template v-for="(item, index) in rows" :key="itemKey(item, index)">
+            <span v-if="isDivider(item)" class="lc-hover-tooltip-divider" aria-hidden="true"></span>
+            <span v-else class="lc-hover-tooltip-row" :class="{ 'is-nested': item.nested }">
+              <span class="lc-hover-tooltip-label">{{ item.label }}</span>
+              <span class="lc-hover-tooltip-value">{{ item.value }}</span>
+            </span>
+          </template>
         </span>
-      </template>
-    </span>
-  </Teleport>
+      </Transition>
+    </Teleport>
+  </span>
 </template>
 
 <style scoped>
@@ -247,6 +249,28 @@ function itemKey(item: TooltipPanelItem, index: number): string {
   line-height: 1.35;
   white-space: normal;
   pointer-events: auto;
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.lc-hover-tooltip-enter-active,
+.lc-hover-tooltip-leave-active {
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease,
+    visibility 120ms ease;
+}
+
+.lc-hover-tooltip-enter-from,
+.lc-hover-tooltip-leave-to {
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(3px);
+}
+
+.lc-hover-tooltip-enter-to,
+.lc-hover-tooltip-leave-from {
   opacity: 1;
   visibility: visible;
   transform: translateY(0);

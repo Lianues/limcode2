@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
 import { IconTool } from '@tabler/icons-vue';
 import type { FunctionCallPart, ToolCallRecord, ToolCallStatus, ToolSchedulingMode } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
@@ -44,7 +44,7 @@ const hasOutput = computed(() => Boolean(outputText.value.trim()));
 const executionApproved = computed(() => isExecutionApprovedProgress(toolCall.value?.progress));
 const needsExecutionDecision = computed(() => toolCall.value?.status === 'awaiting_approval' && !executionApproved.value);
 const needsApplyDecision = computed(() => toolCall.value?.status === 'awaiting_apply');
-const hasDetails = computed(() => hasArgs.value || hasOutput.value || Boolean(toolCall.value?.error) || needsExecutionDecision.value || needsApplyDecision.value || executionApproved.value);
+const hasDetails = computed(() => hasArgs.value || hasOutput.value || Boolean(toolCall.value?.error) || executionApproved.value);
 const statusLabel = computed(() => toolCall.value ? labelForToolCall(toolCall.value) : '工具请求已生成');
 const statusTitle = computed(() => toolCall.value ? `工具状态：${toolCall.value.status}` : '等待后端创建工具调用记录');
 const durationLabel = computed(() => {
@@ -71,14 +71,6 @@ const toggleLabel = computed(() => {
   if (!hasDetails.value) return `工具调用 ${props.part.functionCall.name}`;
   return expanded.value ? '收起工具调用内容' : '展开工具调用内容';
 });
-
-watch(
-  () => toolCall.value?.status,
-  (status) => {
-    if (status === 'awaiting_approval' || status === 'awaiting_apply') expanded.value = true;
-  },
-  { immediate: true }
-);
 
 function stringifyValue(value: unknown): string {
   if (typeof value === 'string') return value;
@@ -200,19 +192,20 @@ function isInternalApprovalProgress(progress: unknown): boolean {
       <ContentBlockSection v-if="hasArgs" kind="input" title="输入" :text="argsText" />
       <ContentBlockSection v-if="hasOutput" kind="output" title="输出" :text="outputText" />
       <p v-if="toolCall?.error" class="part-card-error">{{ toolCall.error }}</p>
-      <div v-if="needsExecutionDecision" class="tool-decision-actions">
-        <button type="button" @click="sendToolDecision(BridgeMessageType.ToolExecutionApprove)">批准执行</button>
-        <button type="button" class="secondary" @click="sendToolDecision(BridgeMessageType.ToolExecutionReject)">拒绝</button>
-      </div>
-      <div v-else-if="needsApplyDecision" class="tool-decision-actions">
-        <button type="button" @click="sendToolDecision(BridgeMessageType.ToolResultApply)">应用结果</button>
-        <button type="button" class="secondary" @click="sendToolDecision(BridgeMessageType.ToolResultReject)">拒绝应用</button>
-      </div>
       <p v-else-if="executionApproved && isWaitingForPreviousProgress(toolCall?.progress)" class="part-card-note">
         已批准执行，将在前序批次完成后按原始顺序自动继续。
       </p>
     </div>
   </CollapsibleContentBlock>
+
+  <div v-if="needsExecutionDecision" class="tool-decision-actions is-external">
+    <button type="button" @click="sendToolDecision(BridgeMessageType.ToolExecutionApprove)">批准执行</button>
+    <button type="button" class="secondary" @click="sendToolDecision(BridgeMessageType.ToolExecutionReject)">拒绝</button>
+  </div>
+  <div v-else-if="needsApplyDecision" class="tool-decision-actions is-external">
+    <button type="button" @click="sendToolDecision(BridgeMessageType.ToolResultApply)">应用结果</button>
+    <button type="button" class="secondary" @click="sendToolDecision(BridgeMessageType.ToolResultReject)">拒绝应用</button>
+  </div>
 </template>
 
 <style scoped>
@@ -292,6 +285,11 @@ function isInternalApprovalProgress(progress: unknown): boolean {
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
+}
+
+.tool-decision-actions.is-external {
+  margin: 4px 0 0 24px;
+  padding-left: 0;
 }
 
 .tool-decision-actions button {

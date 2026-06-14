@@ -313,7 +313,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--vscode-descriptionForeground);
+  color: inherit;
   font-size: var(--font-size-xs);
   font-weight: 400;
   opacity: 0.86;

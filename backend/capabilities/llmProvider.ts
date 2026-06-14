@@ -123,7 +123,8 @@ export async function startLlmProvider(
 
     let latestUsageMetadata: LlmUsageMetadataRecord | undefined;
     let firstStreamChunkAt: number | undefined;
-    let lastStreamChunkAt: number | undefined;
+    let firstStreamChunkMark: number | undefined;
+    let streamOutputChunkCount = 0;
     let activeThoughtBlock: ActiveThoughtBlock | undefined;
     for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(toUnifiedRequest(request, settings.generationConfig), {
       inputFormat: 'unified',
@@ -131,22 +132,25 @@ export async function startLlmProvider(
       signal
     })) {
       const chunkAt = Date.now();
+      const chunkMark = nowMonotonicMs();
       activeThoughtBlock = emitThoughtDeltas(request.id, activeThoughtBlock, chunk, chunkAt, emit);
       if (activeThoughtBlock && shouldCloseThoughtBlock(chunk)) activeThoughtBlock = finishThoughtBlock(request.id, activeThoughtBlock, chunkAt, emit);
       const chunkUsageMetadata = usageMetadataFromChunk(chunk);
       if (chunkUsageMetadata) latestUsageMetadata = mergeUsageMetadata(latestUsageMetadata, chunkUsageMetadata);
       if (hasStreamOutput(chunk)) {
         firstStreamChunkAt ??= chunkAt;
-        lastStreamChunkAt = chunkAt;
+        firstStreamChunkMark ??= chunkMark;
+        streamOutputChunkCount += 1;
       }
       emitUnifiedChunk(request.id, chunk, emit);
     }
 
     const finishedAt = Date.now();
+    const finishedMark = nowMonotonicMs();
     if (activeThoughtBlock) finishThoughtBlock(request.id, activeThoughtBlock, finishedAt, emit);
     emit({
       type: LlmEventType.Done,
-      payload: { requestId: request.id, ...createDoneTiming(firstStreamChunkAt, lastStreamChunkAt, finishedAt), ...(latestUsageMetadata ? { usageMetadata: latestUsageMetadata } : {}) }
+      payload: { requestId: request.id, ...createDoneTiming(firstStreamChunkAt, finishedAt, firstStreamChunkMark, finishedMark, streamOutputChunkCount), ...(latestUsageMetadata ? { usageMetadata: latestUsageMetadata } : {}) }
     });
   } catch (error) {
     if (isAbortError(error)) return;
@@ -378,11 +382,33 @@ interface LlmDoneTiming {
   streamOutputDurationMs?: number;
 }
 
-function createDoneTiming(firstChunkAt: number | undefined, lastChunkAt: number | undefined, finishedAt = Date.now()): LlmDoneTiming {
+function createDoneTiming(
+  firstChunkAt: number | undefined,
+  finishedAt = Date.now(),
+  firstChunkMark?: number,
+  finishedMark?: number,
+  outputChunkCount = 0
+): LlmDoneTiming {
+  const rawDurationMs = firstChunkAt === undefined
+    ? undefined
+    : firstChunkMark !== undefined && finishedMark !== undefined
+      ? finishedMark - firstChunkMark
+      : finishedAt - firstChunkAt;
+
+  const streamOutputDurationMs = outputChunkCount >= 3 && rawDurationMs !== undefined && rawDurationMs >= 2
+    ? Math.round(rawDurationMs)
+    : undefined;
+
   return {
     createdAt: firstChunkAt ?? finishedAt,
-    ...(firstChunkAt !== undefined && lastChunkAt !== undefined ? { streamOutputDurationMs: Math.max(0, lastChunkAt - firstChunkAt) } : {})
+    ...(streamOutputDurationMs !== undefined ? { streamOutputDurationMs } : {})
   };
+}
+
+function nowMonotonicMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
 }
 
 function usageMetadataFromChunk(chunk: UnifiedLLMStreamChunk): LlmUsageMetadataRecord | undefined {

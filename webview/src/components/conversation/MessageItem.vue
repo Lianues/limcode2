@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, type ComponentPublicInstance } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import {
   IconArrowNarrowDown,
   IconArrowNarrowUp,
+  IconBolt,
   IconCheck,
+  IconClock,
   IconCopy,
   IconEdit,
   IconEye,
@@ -14,6 +16,7 @@ import {
 import { isVisibleTextPart, type LlmUsageMetadataRecord, type MessageRecord, type MessageStopReason } from '@shared/protocol';
 import RichContentView from '@webview/components/content/RichContentView.vue';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
+import HoverTooltipPanel from '@webview/components/ui/HoverTooltipPanel.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -36,6 +39,29 @@ const emit = defineEmits<{
 }>();
 
 const roleLabel = computed(() => (props.message.role === 'user' ? '你' : 'AI'));
+type RunMetricKey = 'time' | 'duration' | 'speed';
+interface RunMetricDetailItem {
+  label: string;
+  value: string;
+}
+interface RunMetricItem {
+  key: RunMetricKey;
+  label: string;
+  value: string;
+  tooltipTitle: string;
+  details: RunMetricDetailItem[];
+}
+interface TooltipPanelRow {
+  kind?: 'row';
+  label: string;
+  value: string;
+  nested?: boolean;
+}
+interface TooltipPanelDivider {
+  kind: 'divider';
+  id?: string;
+}
+type TooltipPanelItem = TooltipPanelRow | TooltipPanelDivider;
 type TokenUsageKind = 'total' | 'input' | 'output';
 interface TokenUsageDetailItem {
   label: string;
@@ -53,12 +79,9 @@ interface TokenUsageItem {
 }
 
 const hasOwn = Object.prototype.hasOwnProperty;
-type TemplateRefElement = Element | ComponentPublicInstance | null;
+const LOCAL_DAY_MS = 86_400_000;
 const streaming = computed(() => props.message.status === 'streaming');
 const copied = ref(false);
-const activeTokenUsageKey = ref<TokenUsageKind | undefined>();
-const tokenUsageTooltipStyle = ref<Record<string, string>>({});
-const tokenUsageTooltipPlacement = ref<'top' | 'bottom'>('top');
 const confirmRetryOpen = ref(false);
 const confirmDeleteOpen = ref(false);
 const deleteDescriptionHtml = computed(
@@ -90,6 +113,55 @@ const tokenUsageItems = computed<TokenUsageItem[]>(() => {
   ].filter((item): item is TokenUsageItem => item !== undefined);
 });
 
+const runMetricItems = computed<RunMetricItem[]>(() => {
+  if (props.message.role === 'user' || streaming.value) return [];
+  const startedAt = normalizeTimestamp(props.message.createdAt);
+  if (startedAt === undefined) return [];
+
+  const durationMs = normalizeDurationMs(props.message.streamOutputDurationMs);
+  const outputTokens = props.message.usageMetadata
+    ? usageNumber(props.message.usageMetadata, ['candidatesTokenCount', 'completion_tokens', 'output_tokens', 'outputTokens'])
+    : undefined;
+  const tokenSpeed = durationMs !== undefined && durationMs > 0 && outputTokens !== undefined
+    ? outputTokens / (durationMs / 1000)
+    : undefined;
+
+  const items: Array<RunMetricItem | undefined> = [
+    {
+      key: 'time',
+      label: '响应时间',
+      value: formatCallTime(startedAt),
+      tooltipTitle: '响应时间',
+      details: [{ label: '开始获取响应', value: formatFullDateTime(startedAt) }]
+    },
+    durationMs !== undefined
+      ? {
+          key: 'duration' as const,
+          label: '耗时',
+          value: formatDurationMs(durationMs),
+          tooltipTitle: '流式输出耗时',
+          details: [{ label: '耗时', value: formatDurationMs(durationMs) }]
+        }
+      : undefined,
+    tokenSpeed !== undefined
+      ? {
+          key: 'speed' as const,
+          label: '速度',
+          value: formatTokenSpeed(tokenSpeed),
+          tooltipTitle: '输出 token 速度',
+          details: [
+            { label: '输出 token', value: formatExactNumber(outputTokens!) },
+            { label: '流式耗时', value: formatDurationMs(durationMs!) },
+            { label: '速度', value: formatTokenSpeedExact(tokenSpeed) }
+          ]
+        }
+      : undefined
+  ];
+  return items.filter((item): item is RunMetricItem => item !== undefined);
+});
+
+const messageFooterVisible = computed(() => runMetricItems.value.length > 0 || tokenUsageItems.value.length > 0);
+
 function createTokenUsageItem(key: TokenUsageKind, label: string, value: number | undefined, usage: LlmUsageMetadataRecord): TokenUsageItem | undefined {
   if (value === undefined) return undefined;
   const exact = formatExactNumber(value);
@@ -106,11 +178,6 @@ function createTokenUsageItem(key: TokenUsageKind, label: string, value: number 
 }
 
 let copiedResetTimer: number | undefined;
-let tokenUsagePositionFrame: number | undefined;
-let tokenUsageHideTimer: number | undefined;
-let tokenUsagePositionListenersAttached = false;
-const tokenUsageTriggerRefs = new Map<TokenUsageKind, HTMLElement>();
-const tokenUsageTooltipRefs = new Map<TokenUsageKind, HTMLElement>();
 
 const deleteConfirmActions: ConfirmPanelAction[] = [
   { key: 'cancel', label: '取消', variant: 'secondary' },
@@ -123,9 +190,6 @@ const retryConfirmActions: ConfirmPanelAction[] = [
 
 onBeforeUnmount(() => {
   if (copiedResetTimer !== undefined) window.clearTimeout(copiedResetTimer);
-  if (tokenUsagePositionFrame !== undefined) window.cancelAnimationFrame(tokenUsagePositionFrame);
-  if (tokenUsageHideTimer !== undefined) window.clearTimeout(tokenUsageHideTimer);
-  detachTokenUsagePositionListeners();
 });
 
 const stopReasonLabel = computed<string | undefined>(() => {
@@ -181,6 +245,95 @@ function normalizeTokenNumber(value: unknown): number | undefined {
   if (!trimmed) return undefined;
   const numeric = Number(trimmed);
   return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function normalizeTimestamp(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function normalizeDurationMs(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function formatCallTime(timestamp: number): string {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const dayDiff = localDayNumber(now) - localDayNumber(date);
+  const monthDiff = localMonthNumber(now) - localMonthNumber(date);
+  const shortTime = formatTimeOfDay(date);
+
+  if (dayDiff === 0) return formatTimeOfDay(date, { seconds: true });
+  if (dayDiff === 1) return `昨天 ${shortTime}`;
+  if (dayDiff === 2) return `前天 ${shortTime}`;
+  if (dayDiff === -1) return `明天 ${shortTime}`;
+  if (dayDiff > 2 && isSameLocalMonth(date, now)) return `本月 ${date.getDate()}日 ${shortTime}`;
+  if (monthDiff === 1) return `上个月 ${date.getDate()}日 ${shortTime}`;
+  if (date.getFullYear() === now.getFullYear()) return `${date.getMonth() + 1}月${date.getDate()}日 ${shortTime}`;
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${shortTime}`;
+}
+
+function formatFullDateTime(timestamp: number): string {
+  const date = new Date(timestamp);
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${formatTimeOfDay(date, { seconds: true })} ${formatTimezoneLabel(date)}`;
+}
+
+function formatTimeOfDay(date: Date, options: { seconds?: boolean } = {}): string {
+  const base = `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+  return options.seconds ? `${base}:${pad2(date.getSeconds())}` : base;
+}
+
+function isSameLocalMonth(left: Date, right: Date): boolean {
+  return left.getFullYear() === right.getFullYear()
+    && left.getMonth() === right.getMonth();
+}
+
+function localDayNumber(date: Date): number {
+  return Math.floor(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / LOCAL_DAY_MS);
+}
+
+function localMonthNumber(date: Date): number {
+  return date.getFullYear() * 12 + date.getMonth();
+}
+
+function formatTimezoneLabel(date: Date): string {
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const absoluteOffset = Math.abs(offsetMinutes);
+  const offset = `UTC${sign}${pad2(Math.floor(absoluteOffset / 60))}:${pad2(absoluteOffset % 60)}`;
+  return timeZone ? `${timeZone} ${offset}` : offset;
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+function formatDurationMs(durationMs: number): string {
+  const safeDuration = Math.max(0, durationMs);
+  if (safeDuration < 1000) return `${Math.round(safeDuration)}ms`;
+  const seconds = safeDuration / 1000;
+  if (seconds < 60) {
+    const digits = seconds < 10 ? 1 : 0;
+    return `${trimFixed(seconds, digits)}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const restSeconds = Math.round(seconds % 60);
+  return `${minutes}m${restSeconds.toString().padStart(2, '0')}s`;
+}
+
+function formatTokenSpeed(speed: number): string {
+  const abs = Math.abs(speed);
+  if (abs >= 1000) return `${(speed / 1000).toFixed(1)}k tok/s`;
+  return `${speed.toFixed(1)} tok/s`;
+}
+
+function formatTokenSpeedExact(speed: number): string {
+  return `${speed.toFixed(1)} tok/s`;
+}
+
+function trimFixed(value: number, digits: number): string {
+  const fixed = value.toFixed(digits);
+  return fixed.endsWith('.0') ? fixed.slice(0, -2) : fixed;
 }
 
 function formatCompactNumber(value: number): string {
@@ -347,148 +500,20 @@ function usageWordLabel(word: string): string {
   return labels[word] ?? word;
 }
 
-function setTokenUsageTriggerRef(key: TokenUsageKind, value: TemplateRefElement): void {
-  const element = templateRefHTMLElement(value);
-  if (element) {
-    tokenUsageTriggerRefs.set(key, element);
-    return;
+function tokenUsageTooltipRows(item: TokenUsageItem): TooltipPanelItem[] {
+  const rows: TooltipPanelItem[] = [{ label: '精确值', value: item.exact }];
+  if (item.details.length > 0) {
+    rows.push({ kind: 'divider', id: `${item.key}-details` });
+    rows.push(...item.details.map((detail): TooltipPanelRow => ({
+      label: detail.label,
+      value: detail.value,
+      nested: (detail.depth ?? 0) > 0
+    })));
   }
-  tokenUsageTriggerRefs.delete(key);
+  return rows;
 }
 
-function setTokenUsageTooltipRef(key: TokenUsageKind, value: TemplateRefElement): void {
-  const element = templateRefHTMLElement(value);
-  if (element) {
-    tokenUsageTooltipRefs.set(key, element);
-    return;
-  }
-  tokenUsageTooltipRefs.delete(key);
-}
 
-function templateRefHTMLElement(value: TemplateRefElement): HTMLElement | undefined {
-  if (value instanceof HTMLElement) return value;
-  if (value instanceof Element) return undefined;
-  const element = value?.$el;
-  return element instanceof HTMLElement ? element : undefined;
-}
-
-function showTokenUsageTooltip(key: TokenUsageKind): void {
-  cancelTokenUsageHideTimer();
-  activeTokenUsageKey.value = key;
-  tokenUsageTooltipStyle.value = initialTokenUsageTooltipStyle();
-  attachTokenUsagePositionListeners();
-  void nextTick(() => updateTokenUsageTooltipPosition());
-}
-
-function hideTokenUsageTooltip(key: TokenUsageKind): void {
-  if (activeTokenUsageKey.value !== key) return;
-  cancelTokenUsageHideTimer();
-  tokenUsageHideTimer = window.setTimeout(() => {
-    tokenUsageHideTimer = undefined;
-    if (activeTokenUsageKey.value !== key) return;
-    closeTokenUsageTooltip();
-  }, 120);
-}
-
-function closeTokenUsageTooltip(): void {
-  activeTokenUsageKey.value = undefined;
-  tokenUsageTooltipStyle.value = {};
-  detachTokenUsagePositionListeners();
-}
-
-function cancelTokenUsageHideTimer(): void {
-  if (tokenUsageHideTimer === undefined) return;
-  window.clearTimeout(tokenUsageHideTimer);
-  tokenUsageHideTimer = undefined;
-}
-
-function initialTokenUsageTooltipStyle(): Record<string, string> {
-  const viewportWidth = viewportSize().width;
-  return {
-    left: '-9999px',
-    top: '-9999px',
-    maxWidth: `${Math.max(160, viewportWidth - 16)}px`
-  };
-}
-
-function scheduleTokenUsageTooltipPosition(): void {
-  if (tokenUsagePositionFrame !== undefined) return;
-  tokenUsagePositionFrame = window.requestAnimationFrame(() => {
-    tokenUsagePositionFrame = undefined;
-    updateTokenUsageTooltipPosition();
-  });
-}
-
-function updateTokenUsageTooltipPosition(): void {
-  const key = activeTokenUsageKey.value;
-  if (!key) return;
-
-  const trigger = tokenUsageTriggerRefs.get(key);
-  const tooltip = tokenUsageTooltipRefs.get(key);
-  if (!trigger || !tooltip) return;
-
-  const margin = 8;
-  const gap = 8;
-  const viewport = viewportSize();
-  const maxWidth = Math.max(160, viewport.width - margin * 2);
-  const triggerRect = trigger.getBoundingClientRect();
-  const tooltipRect = tooltip.getBoundingClientRect();
-  const tooltipWidth = Math.min(tooltipRect.width, maxWidth);
-
-  const tooltipHeight = tooltipRect.height;
-  const topWhenAbove = triggerRect.top - gap - tooltipHeight;
-  const topWhenBelow = triggerRect.bottom + gap;
-  const fitsAbove = topWhenAbove >= margin;
-  const fitsBelow = topWhenBelow + tooltipHeight <= viewport.height - margin;
-  const spaceAbove = triggerRect.top - margin - gap;
-  const spaceBelow = viewport.height - triggerRect.bottom - margin - gap;
-  // 默认优先显示在下方；只有下方放不下时，才尝试上方或选择空间更大的方向。
-  const placeTop = !fitsBelow && (fitsAbove || spaceAbove >= spaceBelow);
-  const rawTop = placeTop ? topWhenAbove : topWhenBelow;
-
-  const left = clamp(triggerRect.right - tooltipWidth, margin, viewport.width - tooltipWidth - margin);
-  const top = clamp(
-    rawTop,
-    margin,
-    viewport.height - tooltipHeight - margin
-  );
-  const triggerCenter = triggerRect.left + triggerRect.width / 2;
-  const arrowLeft = clamp(triggerCenter - left, 12, tooltipWidth - 12);
-
-  tokenUsageTooltipPlacement.value = placeTop ? 'top' : 'bottom';
-  tokenUsageTooltipStyle.value = {
-    left: `${Math.round(left)}px`,
-    top: `${Math.round(top)}px`,
-    maxWidth: `${Math.round(maxWidth)}px`,
-    '--token-usage-arrow-left': `${Math.round(arrowLeft)}px`
-  };
-}
-
-function attachTokenUsagePositionListeners(): void {
-  if (tokenUsagePositionListenersAttached) return;
-  window.addEventListener('resize', scheduleTokenUsageTooltipPosition);
-  window.addEventListener('scroll', scheduleTokenUsageTooltipPosition, true);
-  tokenUsagePositionListenersAttached = true;
-}
-
-function detachTokenUsagePositionListeners(): void {
-  if (!tokenUsagePositionListenersAttached) return;
-  window.removeEventListener('resize', scheduleTokenUsageTooltipPosition);
-  window.removeEventListener('scroll', scheduleTokenUsageTooltipPosition, true);
-  tokenUsagePositionListenersAttached = false;
-}
-
-function viewportSize(): { width: number; height: number } {
-  return {
-    width: document.documentElement.clientWidth || window.innerWidth,
-    height: document.documentElement.clientHeight || window.innerHeight
-  };
-}
-
-function clamp(value: number, min: number, max: number): number {
-  if (max < min) return min;
-  return Math.min(max, Math.max(min, value));
-}
 
 async function copyMessage(): Promise<void> {
   const text = messageText.value;
@@ -611,61 +636,45 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
             :message-id="message.id"
           />
         </div>
-        <footer v-if="tokenUsageItems.length > 0" class="token-usage-row" aria-label="Token 用量">
-          <span
-            v-for="item in tokenUsageItems"
-            :key="item.key"
-            class="token-usage-item"
-            :ref="(element) => setTokenUsageTriggerRef(item.key, element)"
-            :aria-label="`${item.label} token ${item.exact}`"
-            tabindex="0"
-            @mouseenter="showTokenUsageTooltip(item.key)"
-            @mouseleave="hideTokenUsageTooltip(item.key)"
-            @focus="showTokenUsageTooltip(item.key)"
-            @blur="hideTokenUsageTooltip(item.key)"
-          >
-            <IconHash v-if="item.key === 'total'" class="token-usage-icon" stroke="2" aria-hidden="true" />
-            <IconArrowNarrowUp
-              v-else-if="item.key === 'input'"
-              class="token-usage-icon"
-              stroke="2"
-              aria-hidden="true"
-            />
-            <IconArrowNarrowDown v-else class="token-usage-icon" stroke="2" aria-hidden="true" />
-            <span class="token-usage-value">{{ item.compact }}</span>
-            <span v-if="item.suffix" class="token-usage-suffix">{{ item.suffix }}</span>
-            <span
-              :ref="(element) => setTokenUsageTooltipRef(item.key, element)"
-              class="token-usage-tooltip"
-              :class="{
-                'is-active': activeTokenUsageKey === item.key,
-                'is-placement-top': activeTokenUsageKey === item.key && tokenUsageTooltipPlacement === 'top',
-                'is-placement-bottom': activeTokenUsageKey === item.key && tokenUsageTooltipPlacement === 'bottom'
-              }"
-              :style="activeTokenUsageKey === item.key ? tokenUsageTooltipStyle : undefined"
-              role="tooltip"
-              @mouseenter="showTokenUsageTooltip(item.key)"
-              @mouseleave="hideTokenUsageTooltip(item.key)"
+        <footer v-if="messageFooterVisible" class="message-footer">
+          <div v-if="runMetricItems.length > 0" class="message-run-metrics" aria-label="LLM 调用指标">
+            <HoverTooltipPanel
+              v-for="metric in runMetricItems"
+              :key="metric.key"
+              class="message-run-metric"
+              :class="`is-${metric.key}`"
+              :aria-label="`${metric.label} ${metric.value}`"
+              :panel-title="metric.tooltipTitle"
+              :rows="metric.details"
+              tabindex="0"
             >
-              <span class="token-usage-tooltip-title">{{ item.label }} token</span>
-              <span class="token-usage-tooltip-row">
-                <span class="token-usage-tooltip-label">精确值</span>
-                <span class="token-usage-tooltip-value">{{ item.exact }}</span>
-              </span>
-              <template v-if="item.details.length > 0">
-                <span class="token-usage-tooltip-divider" aria-hidden="true"></span>
-                <span
-                  v-for="(detail, index) in item.details"
-                  :key="`${detail.label}-${index}`"
-                  class="token-usage-tooltip-row"
-                  :class="{ 'is-nested': (detail.depth ?? 0) > 0 }"
-                >
-                  <span class="token-usage-tooltip-label">{{ detail.label }}</span>
-                  <span class="token-usage-tooltip-value">{{ detail.value }}</span>
-                </span>
-              </template>
-            </span>
-          </span>
+              <IconClock v-if="metric.key === 'duration'" class="message-run-metric-icon" stroke="2" aria-hidden="true" />
+              <IconBolt v-else-if="metric.key === 'speed'" class="message-run-metric-icon" stroke="2" aria-hidden="true" />
+              <span class="message-run-metric-value">{{ metric.value }}</span>
+            </HoverTooltipPanel>
+          </div>
+          <div v-if="tokenUsageItems.length > 0" class="token-usage-row" aria-label="Token 用量">
+            <HoverTooltipPanel
+              v-for="item in tokenUsageItems"
+              :key="item.key"
+              class="token-usage-item"
+              :aria-label="`${item.label} token ${item.exact}`"
+              :panel-title="`${item.label} token`"
+              :rows="tokenUsageTooltipRows(item)"
+              tabindex="0"
+            >
+              <IconHash v-if="item.key === 'total'" class="token-usage-icon" stroke="2" aria-hidden="true" />
+              <IconArrowNarrowUp
+                v-else-if="item.key === 'input'"
+                class="token-usage-icon"
+                stroke="2"
+                aria-hidden="true"
+              />
+              <IconArrowNarrowDown v-else class="token-usage-icon" stroke="2" aria-hidden="true" />
+              <span class="token-usage-value">{{ item.compact }}</span>
+              <span v-if="item.suffix" class="token-usage-suffix">{{ item.suffix }}</span>
+            </HoverTooltipPanel>
+          </div>
         </footer>
       </div>
     </div>
@@ -948,15 +957,91 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
   min-height: 1.6em;
 }
 
+.message-footer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  margin-top: var(--space-2);
+}
+
+.message-run-metrics {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+  line-height: 14px;
+  user-select: none;
+}
+
+.message-run-metric {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 14px;
+  color: inherit;
+  opacity: 0.78;
+  line-height: 14px;
+  white-space: nowrap;
+  cursor: default;
+  outline: none;
+}
+
+.message-run-metric.is-time {
+  opacity: 0.82;
+}
+
+.message-run-metric:hover {
+  color: var(--vscode-foreground);
+  opacity: 0.96;
+}
+
+.message-run-metric:focus-visible {
+  color: var(--vscode-foreground);
+  opacity: 0.96;
+  outline: 1px solid var(--vscode-focusBorder, currentColor);
+  outline-offset: 2px;
+}
+
+
+.message-run-metric-icon {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  display: block;
+  align-self: center;
+}
+
+.message-run-metric-value {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  height: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+  line-height: 14px;
+  align-self: center;
+}
+
 .token-usage-row {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: var(--space-2);
+  flex: 0 0 auto;
+  margin-left: auto;
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-xs);
-  line-height: 1;
+  line-height: 14px;
   user-select: none;
 }
 
@@ -965,9 +1050,11 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
   display: inline-flex;
   align-items: center;
   gap: 2px;
+  height: 14px;
   max-width: 132px;
   color: var(--vscode-descriptionForeground);
   opacity: 1;
+  line-height: 14px;
   cursor: default;
   outline: none;
 }
@@ -986,104 +1073,26 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
+  display: block;
+  align-self: center;
 }
 
 .token-usage-value {
+  display: inline-flex;
+  align-items: center;
+  height: 14px;
   font-variant-numeric: tabular-nums;
+  line-height: 14px;
+  align-self: center;
 }
 
 .token-usage-suffix {
+  display: inline-flex;
+  align-items: center;
+  height: 14px;
   font-variant-numeric: tabular-nums;
+  line-height: 14px;
+  align-self: center;
 }
 
-.token-usage-tooltip {
-  position: fixed;
-  left: -9999px;
-  top: -9999px;
-  z-index: 1000;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  min-width: 190px;
-  width: max-content;
-  max-width: min(320px, calc(100vw - 28px));
-  padding: 8px 10px;
-  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.32));
-  border-radius: var(--radius-sm);
-  color: var(--vscode-foreground);
-  background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, var(--vscode-editor-background)));
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
-  font-size: var(--font-size-xs);
-  line-height: 1.35;
-  white-space: normal;
-  pointer-events: auto;
-  opacity: 0;
-  visibility: hidden;
-  transform: translateY(3px);
-  transition:
-    opacity 120ms ease,
-    transform 120ms ease,
-    visibility 120ms ease;
-}
-
-.token-usage-tooltip::after {
-  content: '';
-  position: absolute;
-  left: var(--token-usage-arrow-left, calc(100% - 14px));
-  width: 8px;
-  height: 8px;
-  background: inherit;
-  transform: translateX(-50%) rotate(45deg);
-}
-
-.token-usage-tooltip.is-active {
-  opacity: 1;
-  visibility: visible;
-  transform: translateY(0);
-}
-
-.token-usage-tooltip.is-placement-top::after {
-  bottom: -5px;
-  border-right: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.32));
-  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.32));
-}
-
-.token-usage-tooltip.is-placement-bottom::after {
-  top: -5px;
-  border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.32));
-  border-left: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.32));
-}
-
-.token-usage-tooltip-title {
-  font-weight: 600;
-  color: var(--vscode-foreground);
-}
-
-.token-usage-tooltip-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.token-usage-tooltip-row.is-nested {
-  padding-left: 10px;
-}
-
-.token-usage-tooltip-label {
-  color: var(--vscode-descriptionForeground);
-}
-
-.token-usage-tooltip-value {
-  flex: 0 0 auto;
-  color: var(--vscode-foreground);
-  font-variant-numeric: tabular-nums;
-}
-
-.token-usage-tooltip-divider {
-  height: 1px;
-  margin: 2px 0;
-  background: var(--vscode-panel-border, rgba(128, 128, 128, 0.24));
-}
 </style>

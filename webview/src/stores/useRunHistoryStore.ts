@@ -128,7 +128,8 @@ export const useRunHistoryStore = defineStore('runHistory', {
       const target = this.ensureConversationState(payload.conversationId);
       target.detailByRunId[payload.runId] = payload;
       if (payload.summary) target.runById[payload.runId] = payload.summary;
-      this.activeDetail = { conversationId: payload.conversationId, runId: payload.runId };
+      const messageId = this.activeDetail?.conversationId === payload.conversationId ? this.activeDetail.messageId : undefined;
+      this.activeDetail = { conversationId: payload.conversationId, runId: payload.runId, ...(messageId ? { messageId } : {}) };
       target.status = 'idle';
       target.error = undefined;
     },

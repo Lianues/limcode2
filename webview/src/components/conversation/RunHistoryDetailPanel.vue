@@ -1,7 +1,16 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { IconCheck, IconCopy, IconEye, IconEyeOff } from '@tabler/icons-vue';
-import { isVisibleTextPart, type AgentRunStatus, type MessageRecord, type ToolCallRecord } from '@shared/protocol';
+import { IconCheck, IconCopy, IconEye, IconEyeOff, IconX } from '@tabler/icons-vue';
+import {
+  isFunctionCallPart,
+  isFunctionResponsePart,
+  isVisibleTextPart,
+  type AgentRunStatus,
+  type ContentPart,
+  type MessageRecord,
+  type ToolCallRecord,
+  type ToolCallStatus
+} from '@shared/protocol';
 import { useRunHistoryStore } from '@webview/stores/useRunHistoryStore';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 
@@ -23,12 +32,32 @@ const error = computed(() => activeConversationState.value?.error);
 const run = computed(() => activeState.value?.agentRuns[0]);
 const inputMessages = computed(() => messagesForRoles(['input']));
 const outputMessages = computed(() => messagesForRoles(['model', 'tool_response', 'notification']));
-const toolCalls = computed(() => activeState.value?.toolCalls ?? []);
 const detailJson = computed(() => rawDetailOpen.value && activeDetail.value ? JSON.stringify(activeDetail.value.state, null, 2) : '');
 const dryRun = computed(() => runHistory.activeDryRun);
 const dryRunLoading = computed(() => runHistory.activeDryRunLoading);
 const dryRunError = computed(() => runHistory.activeDryRunError);
-const activeKey = computed(() => runHistory.activeDetail ? `${runHistory.activeDetail.conversationId}:${runHistory.activeDetail.runId}` : '');
+const activeKey = computed(() => runHistory.activeDetail ? `${runHistory.activeDetail.conversationId}:${runHistory.activeDetail.runId ?? ''}:${runHistory.activeDetail.messageId ?? ''}` : '');
+const selectedMessageId = computed(() => runHistory.activeDetail?.messageId);
+const selectedMessage = computed(() => activeState.value?.messages.find((message) => message.id === selectedMessageId.value));
+const selectedToolCallIdentity = computed(() => {
+  const message = selectedMessage.value;
+  const ids = new Set<string>();
+  const names = new Set<string>();
+  if (!message) return { ids, names };
+
+  for (const part of toolParts(message)) {
+    if (!isFunctionCallPart(part)) continue;
+    names.add(part.functionCall.name);
+    if (part.id) ids.add(part.id);
+    const call = toolCallForPart(message, part);
+    if (call) {
+      ids.add(call.id);
+      if (call.functionCallId) ids.add(call.functionCallId);
+      names.add(call.name);
+    }
+  }
+  return { ids, names };
+});
 const apiKeyHeader = computed(() => sensitiveHeader(dryRun.value?.headers));
 const apiKeyValue = computed(() => includeApiKey.value ? apiKeyHeader.value?.value ?? '' : '••••••••');
 const displayCurl = computed(() => includeApiKey.value ? dryRun.value?.curl ?? '' : dryRun.value?.maskedCurl ?? dryRun.value?.curl ?? '');
@@ -99,13 +128,43 @@ function messagesForRoles(roles: string[]): MessageRecord[] {
   return state.messages.filter((message) => ids.has(message.id)).sort((left, right) => left.seq - right.seq || left.createdAt - right.createdAt);
 }
 
-function messagePreview(message: MessageRecord): string {
-  const text = message.content.parts
+function isSelectedDetailMessage(message: MessageRecord): boolean {
+  return !!selectedMessageId.value && message.id === selectedMessageId.value;
+}
+
+function isRelatedToolOutputMessage(message: MessageRecord): boolean {
+  if (isSelectedDetailMessage(message)) return false;
+  const identity = selectedToolCallIdentity.value;
+  if (identity.ids.size === 0 && identity.names.size === 0) return false;
+
+  for (const part of message.content.parts) {
+    if (!isFunctionResponsePart(part)) continue;
+    const call = toolCallForPart(message, part);
+    if (part.id && identity.ids.has(part.id)) return true;
+    if (call && (identity.ids.has(call.id) || (call.functionCallId !== undefined && identity.ids.has(call.functionCallId)))) return true;
+    if (identity.ids.size === 0 && identity.names.has(part.functionResponse.name)) return true;
+  }
+  return false;
+}
+
+function detailMessageClasses(message: MessageRecord): Record<string, boolean> {
+  return {
+    'is-selected-detail-message': isSelectedDetailMessage(message),
+    'is-related-tool-output': isRelatedToolOutputMessage(message)
+  };
+}
+
+function visibleMessageText(message: MessageRecord): string {
+  return message.content.parts
     .filter(isVisibleTextPart)
     .map((part) => part.text)
     .join('')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function messagePreview(message: MessageRecord): string {
+  const text = visibleMessageText(message);
   if (text) return text;
   return message.content.parts.some((part) => 'functionCall' in part)
     ? '工具调用消息'
@@ -114,8 +173,142 @@ function messagePreview(message: MessageRecord): string {
       : '空消息';
 }
 
-function toolCallLabel(toolCall: ToolCallRecord): string {
-  return `${toolCall.name} · ${toolCall.status}`;
+function toolParts(message: MessageRecord): ContentPart[] {
+  return message.content.parts.filter((part) => isFunctionCallPart(part) || isFunctionResponsePart(part));
+}
+
+function toolCallForPart(message: MessageRecord, part: ContentPart): ToolCallRecord | undefined {
+  const state = activeState.value;
+  if (!state) return undefined;
+
+  if (isFunctionResponsePart(part)) return toolCallForResponsePart(message, part);
+
+  const id = isFunctionCallPart(part) ? part.id : undefined;
+  const name = isFunctionCallPart(part) ? part.functionCall.name : undefined;
+  const sameMessage = state.toolCalls.filter((call) => call.messageId === message.id);
+  return sameMessage.find((call) => matchesToolCallPart(call, id, name))
+    ?? (id ? state.toolCalls.find((call) => toolCallIdMatches(call, id)) : undefined);
+}
+
+function toolCallForResponsePart(message: MessageRecord, part: Extract<ContentPart, { functionResponse: unknown }>): ToolCallRecord | undefined {
+  const state = activeState.value;
+  if (!state) return undefined;
+
+  const id = part.id;
+  const name = part.functionResponse.name;
+  const candidates = runScopedToolCalls(message, name);
+  if (id) {
+    const byId = candidates.find((call) => toolCallIdMatches(call, id))
+      ?? state.toolCalls.find((call) => toolCallIdMatches(call, id));
+    if (byId) return byId;
+  }
+
+  const responseFingerprint = jsonFingerprint(part.functionResponse.response);
+  const byResult = candidates.find((call) => jsonFingerprint(call.result) === responseFingerprint);
+  if (byResult) return byResult;
+
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+function runScopedToolCalls(message: MessageRecord, toolName: string): ToolCallRecord[] {
+  const state = activeState.value;
+  if (!state) return [];
+
+  const runIds = new Set(state.messageRunLinks.filter((link) => link.messageId === message.id).map((link) => link.runId));
+  const toolCallIds = new Set(state.toolCallRunLinks.filter((link) => runIds.has(link.runId)).map((link) => link.toolCallId));
+  return state.toolCalls.filter((call) => toolCallIds.has(call.id) && call.name === toolName);
+}
+
+function matchesToolCallPart(call: ToolCallRecord, partId: string | undefined, toolName: string | undefined): boolean {
+  if (partId && toolCallIdMatches(call, partId)) return true;
+  return !!toolName && call.name === toolName;
+}
+
+function toolCallIdMatches(call: ToolCallRecord, id: string): boolean {
+  return call.id === id || call.functionCallId === id;
+}
+
+function toolPartKind(part: ContentPart): string {
+  if (isFunctionCallPart(part)) return '工具调用';
+  if (isFunctionResponsePart(part)) return '工具响应';
+  return '工具消息';
+}
+
+function toolNameForPart(part: ContentPart): string {
+  if (isFunctionCallPart(part)) return part.functionCall.name;
+  if (isFunctionResponsePart(part)) return part.functionResponse.name;
+  return 'unknown';
+}
+
+function toolInputJson(part: ContentPart): string {
+  if (isFunctionCallPart(part)) return stringifyJson(part.functionCall.args);
+  return '';
+}
+
+function toolOutputJson(part: ContentPart): string {
+  if (isFunctionResponsePart(part)) return stringifyJson(part.functionResponse.response);
+  return '';
+}
+
+function toolExecutionInfo(call: ToolCallRecord | undefined): string {
+  if (!call) return '状态：未找到对应工具调用记录';
+  const lines = [
+    `状态：${toolStatusLabel(call.status)} (${call.status})`,
+    ...toolCallIdLines(call),
+    `创建时间：${formatTime(call.createdAt)}`,
+    `更新时间：${formatTime(call.updatedAt)}`,
+    call.error ? `错误：${call.error}` : undefined
+  ].filter((line): line is string => Boolean(line));
+  return lines.join('\n');
+}
+
+function toolResponseExecutionInfo(call: ToolCallRecord | undefined): string {
+  if (!call) return '状态：未找到对应工具调用记录';
+  const lines = [
+    `状态：${toolStatusLabel(call.status)} (${call.status})`,
+    ...toolCallIdLines(call),
+    call.durationMs !== undefined ? `耗时：${formatDuration(call.durationMs)}` : undefined,
+    `创建时间：${formatTime(call.createdAt)}`,
+    `更新时间：${formatTime(call.updatedAt)}`,
+    call.error ? `错误：${call.error}` : undefined
+  ].filter((line): line is string => Boolean(line));
+  return lines.join('\n');
+}
+
+function toolInfoForPart(part: ContentPart, call: ToolCallRecord | undefined): string {
+  return isFunctionResponsePart(part) ? toolResponseExecutionInfo(call) : toolExecutionInfo(call);
+}
+
+function toolCallIdLines(call: ToolCallRecord): string[] {
+  if (!call.functionCallId || call.functionCallId === call.id) return [`调用 ID：${call.id}`];
+  return [`ToolCall ID：${call.id}`, `FunctionCall ID：${call.functionCallId}`];
+}
+
+function toolStatusLabel(status: ToolCallStatus): string {
+  switch (status) {
+    case 'streaming': return '生成中';
+    case 'queued': return '排队中';
+    case 'awaiting_approval': return '等待批准';
+    case 'executing': return '执行中';
+    case 'awaiting_apply': return '等待应用';
+    case 'success': return '成功';
+    case 'warning': return '警告';
+    case 'error': return '失败';
+  }
+}
+
+function stringifyJson(value: unknown): string {
+  try { return JSON.stringify(value, null, 2); }
+  catch { return String(value); }
+}
+
+function jsonFingerprint(value: unknown): string {
+  try { return JSON.stringify(value); }
+  catch { return String(value); }
+}
+
+function formatDuration(value: number): string {
+  return value < 1000 ? `${Math.round(value)}ms` : `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}s`;
 }
 
 function formatTime(value: number | undefined): string {
@@ -159,7 +352,9 @@ function sensitiveHeader(headers: Record<string, string> | undefined): { name: s
             <IconEye class="run-detail-title-icon" stroke="2" aria-hidden="true" />
             <span>LLM 调用详情</span>
           </h2>
-          <button type="button" class="run-detail-close" aria-label="关闭" title="关闭" @click="close">×</button>
+          <button type="button" class="run-detail-close" aria-label="关闭" title="关闭" @click="close">
+            <IconX stroke="2" aria-hidden="true" />
+          </button>
         </header>
 
         <div class="run-detail-body-shell">
@@ -183,25 +378,63 @@ function sensitiveHeader(headers: Record<string, string> | undefined): { name: s
 
               <section v-if="inputMessages.length" class="run-detail-section">
                 <h3>输入消息</h3>
-                <article v-for="message in inputMessages" :key="message.id" class="run-detail-message">
+                <article
+                  v-for="message in inputMessages"
+                  :key="message.id"
+                  class="run-detail-message"
+                  :class="detailMessageClasses(message)"
+                >
                   <span class="run-detail-message-meta">{{ message.role }} · #{{ message.seq }}</span>
-                  <p>{{ messagePreview(message) }}</p>
+                  <p v-if="visibleMessageText(message)">{{ visibleMessageText(message) }}</p>
+                  <div v-if="toolParts(message).length" class="run-detail-tool-parts">
+                    <section v-for="(part, index) in toolParts(message)" :key="`${message.id}-tool-${index}`" class="run-detail-tool-card">
+                      <header class="run-detail-tool-card-head">
+                        <span>{{ toolPartKind(part) }}</span>
+                        <strong>{{ toolNameForPart(part) }}</strong>
+                      </header>
+                      <pre class="run-detail-tool-info">{{ toolInfoForPart(part, toolCallForPart(message, part)) }}</pre>
+                      <div v-if="toolInputJson(part)" class="run-detail-tool-json-block">
+                        <span>输入 JSON</span>
+                        <pre class="run-detail-json">{{ toolInputJson(part) }}</pre>
+                      </div>
+                      <div v-if="toolOutputJson(part)" class="run-detail-tool-json-block">
+                        <span>输出 JSON</span>
+                        <pre class="run-detail-json">{{ toolOutputJson(part) }}</pre>
+                      </div>
+                    </section>
+                  </div>
+                  <p v-else-if="!visibleMessageText(message)">{{ messagePreview(message) }}</p>
                 </article>
               </section>
 
               <section v-if="outputMessages.length" class="run-detail-section">
                 <h3>输出消息</h3>
-                <article v-for="message in outputMessages" :key="message.id" class="run-detail-message">
+                <article
+                  v-for="message in outputMessages"
+                  :key="message.id"
+                  class="run-detail-message"
+                  :class="detailMessageClasses(message)"
+                >
                   <span class="run-detail-message-meta">{{ message.role }} · #{{ message.seq }} · {{ message.status }}</span>
-                  <p>{{ messagePreview(message) }}</p>
-                </article>
-              </section>
-
-              <section v-if="toolCalls.length" class="run-detail-section">
-                <h3>工具调用</h3>
-                <article v-for="toolCall in toolCalls" :key="toolCall.id" class="run-detail-message">
-                  <span class="run-detail-message-meta">{{ toolCall.id }}</span>
-                  <p>{{ toolCallLabel(toolCall) }}</p>
+                  <p v-if="visibleMessageText(message)">{{ visibleMessageText(message) }}</p>
+                  <div v-if="toolParts(message).length" class="run-detail-tool-parts">
+                    <section v-for="(part, index) in toolParts(message)" :key="`${message.id}-tool-${index}`" class="run-detail-tool-card">
+                      <header class="run-detail-tool-card-head">
+                        <span>{{ toolPartKind(part) }}</span>
+                        <strong>{{ toolNameForPart(part) }}</strong>
+                      </header>
+                      <pre class="run-detail-tool-info">{{ toolInfoForPart(part, toolCallForPart(message, part)) }}</pre>
+                      <div v-if="toolInputJson(part)" class="run-detail-tool-json-block">
+                        <span>输入 JSON</span>
+                        <pre class="run-detail-json">{{ toolInputJson(part) }}</pre>
+                      </div>
+                      <div v-if="toolOutputJson(part)" class="run-detail-tool-json-block">
+                        <span>输出 JSON</span>
+                        <pre class="run-detail-json">{{ toolOutputJson(part) }}</pre>
+                      </div>
+                    </section>
+                  </div>
+                  <p v-else-if="!visibleMessageText(message)">{{ messagePreview(message) }}</p>
                 </article>
               </section>
 
@@ -374,13 +607,22 @@ function sensitiveHeader(headers: Record<string, string> | undefined): { name: s
 .run-detail-close {
   width: 28px;
   height: 28px;
+  padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--vscode-descriptionForeground);
   background: transparent;
-  font-size: 20px;
   line-height: 1;
   cursor: pointer;
+}
+
+.run-detail-close :deep(svg) {
+  width: 16px;
+  height: 16px;
+  display: block;
 }
 
 .run-detail-close:hover,
@@ -559,10 +801,23 @@ function sensitiveHeader(headers: Record<string, string> | undefined): { name: s
 }
 
 .run-detail-message {
+  position: relative;
   border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.2));
   border-radius: var(--radius-sm);
   padding: var(--space-2);
   background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground) 6%);
+}
+
+.run-detail-message.is-selected-detail-message {
+  border-color: color-mix(in srgb, var(--vscode-foreground) 40%, var(--vscode-panel-border) 60%);
+  box-shadow: inset 4px 0 0 var(--vscode-foreground);
+  padding-left: calc(var(--space-2) + 4px);
+}
+
+.run-detail-message.is-related-tool-output {
+  border-color: color-mix(in srgb, var(--vscode-descriptionForeground) 36%, var(--vscode-panel-border) 64%);
+  box-shadow: inset 4px 0 0 color-mix(in srgb, var(--vscode-descriptionForeground) 72%, transparent);
+  padding-left: calc(var(--space-2) + 4px);
 }
 
 .run-detail-message + .run-detail-message {
@@ -579,6 +834,58 @@ function sensitiveHeader(headers: Record<string, string> | undefined): { name: s
   margin: 4px 0 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.run-detail-tool-parts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.run-detail-tool-card {
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.2));
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-foreground) 10%);
+}
+
+.run-detail-tool-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.run-detail-tool-card-head span {
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+}
+
+.run-detail-tool-card-head strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.run-detail-tool-info {
+  margin: 0 0 var(--space-2);
+  color: var(--vscode-descriptionForeground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--font-size-xs);
+}
+
+.run-detail-tool-json-block + .run-detail-tool-json-block {
+  margin-top: var(--space-2);
+}
+
+.run-detail-tool-json-block > span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
 }
 
 .run-detail-json {

@@ -92,21 +92,7 @@ function stringifyValue(value: unknown): string {
 }
 
 function stringifyToolResult(value: unknown): string {
-  if (isRecord(value) && typeof value.output === 'string') {
-    return stringifyPossiblyJson(value.output);
-  }
   return stringifyValue(value);
-}
-
-function stringifyPossiblyJson(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) return value;
-  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return value;
-  try {
-    return JSON.stringify(JSON.parse(trimmed), null, 2);
-  } catch {
-    return value;
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

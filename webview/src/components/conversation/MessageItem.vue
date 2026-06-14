@@ -959,7 +959,7 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
 
 .message-footer {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
@@ -980,18 +980,22 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
   user-select: none;
 }
 
-.message-run-metric {
-  min-width: 0;
+.message-run-metric,
+.token-usage-item {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
   height: 14px;
-  color: inherit;
-  opacity: 0.78;
   line-height: 14px;
   white-space: nowrap;
   cursor: default;
   outline: none;
+}
+
+.message-run-metric {
+  min-width: 0;
+  gap: 4px;
+  color: inherit;
+  opacity: 0.78;
 }
 
 .message-run-metric.is-time {
@@ -1010,26 +1014,29 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
   outline-offset: 2px;
 }
 
-
-.message-run-metric-icon {
+.message-run-metric-icon,
+.token-usage-icon {
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
   display: block;
-  align-self: center;
+}
+
+.message-run-metric-value,
+.token-usage-value,
+.token-usage-suffix {
+  display: inline-flex;
+  align-items: center;
+  height: 14px;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+  line-height: 14px;
 }
 
 .message-run-metric-value {
   min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  height: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: 'tnum';
-  line-height: 14px;
-  align-self: center;
 }
 
 .token-usage-row {
@@ -1047,16 +1054,10 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
 
 .token-usage-item {
   position: relative;
-  display: inline-flex;
-  align-items: center;
   gap: 2px;
-  height: 14px;
   max-width: 132px;
   color: var(--vscode-descriptionForeground);
   opacity: 1;
-  line-height: 14px;
-  cursor: default;
-  outline: none;
 }
 
 .token-usage-item:hover {
@@ -1067,32 +1068,6 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
   color: var(--vscode-foreground);
   outline: 1px solid var(--vscode-focusBorder, currentColor);
   outline-offset: 2px;
-}
-
-.token-usage-icon {
-  width: 12px;
-  height: 12px;
-  flex: 0 0 auto;
-  display: block;
-  align-self: center;
-}
-
-.token-usage-value {
-  display: inline-flex;
-  align-items: center;
-  height: 14px;
-  font-variant-numeric: tabular-nums;
-  line-height: 14px;
-  align-self: center;
-}
-
-.token-usage-suffix {
-  display: inline-flex;
-  align-items: center;
-  height: 14px;
-  font-variant-numeric: tabular-nums;
-  line-height: 14px;
-  align-self: center;
 }
 
 </style>

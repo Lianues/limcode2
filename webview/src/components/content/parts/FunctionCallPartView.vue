@@ -261,11 +261,36 @@ function isInternalApprovalProgress(progress: unknown): boolean {
   color: inherit;
 }
 
+.tool-call-card :deep(.lc-collapsible-trail) {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(8em, max-content) 5.5ch;
+  align-items: center;
+  column-gap: 4px;
+}
+
 .part-card-status,
 .part-card-meta {
   flex: 0 0 auto;
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-xs);
+}
+
+.part-card-status {
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.part-card-meta {
+  width: 5.5ch;
+  justify-self: end;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
 }
 
 .part-card-details {

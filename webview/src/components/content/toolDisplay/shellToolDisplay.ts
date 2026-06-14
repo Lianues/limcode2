@@ -121,7 +121,6 @@ function progressText(context: ToolDisplayContext): string {
 function shellExitInfo(output: ShellResultOutput | undefined): string {
   if (!output) return '';
   const lines = [
-    output.command ? `command ${output.command}` : undefined,
     typeof output.exitCode === 'number' ? `exitCode ${output.exitCode}` : undefined,
     typeof output.killed === 'boolean' ? `killed ${output.killed}` : undefined
   ].filter((line): line is string => Boolean(line));

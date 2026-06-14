@@ -301,13 +301,13 @@ function isInternalApprovalProgress(progress: unknown): boolean {
 }
 
 .part-card-name.has-summary {
-  max-width: min(40%, 18ch);
+  max-width: 100%;
 }
 
 .part-card-summary {
   display: inline-flex;
   align-items: baseline;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
   margin-left: 8px;
   overflow: hidden;

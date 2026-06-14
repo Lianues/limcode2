@@ -37,6 +37,7 @@ export const readFileTool: ToolDefinition = {
   },
   execution: 'runtime',
   scheduling: staticToolScheduling('parallel', 'readonly_file_read'),
+  summary: summarizeReadFileToolCall,
   async execute(rawArgs, deps) {
     const args = (rawArgs ?? {}) as ReadFileArgs;
     if (!args.path) {
@@ -46,3 +47,31 @@ export const readFileTool: ToolDefinition = {
     return { ok: true, output: text };
   }
 };
+
+function summarizeReadFileToolCall(rawArgs: unknown): string | undefined {
+  const args = (rawArgs ?? {}) as ReadFileArgs;
+  const path = normalizeDisplayPath(args.path);
+  if (!path) return undefined;
+
+  const range = lineRangeSuffix(args.startLine, args.endLine);
+  return range ? `${path}${range}` : path;
+}
+
+function normalizeDisplayPath(path: string | undefined): string {
+  return typeof path === 'string' ? path.trim().replace(/\\+/g, '/') : '';
+}
+
+function lineRangeSuffix(startLine: number | undefined, endLine: number | undefined): string {
+  const start = normalizeLineNumber(startLine);
+  const end = normalizeLineNumber(endLine);
+  if (start !== undefined && end !== undefined) return `[L${start}-${end}]`;
+  if (start !== undefined) return `[L${start}-]`;
+  if (end !== undefined) return `[L1-${end}]`;
+  return '';
+}
+
+function normalizeLineNumber(value: number | undefined): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  const line = Math.floor(value);
+  return line > 0 ? line : undefined;
+}

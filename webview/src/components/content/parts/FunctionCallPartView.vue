@@ -53,6 +53,15 @@ const durationLabel = computed(() => {
   return duration < 1000 ? `${Math.round(duration)}ms` : `${(duration / 1000).toFixed(duration < 10_000 ? 1 : 0)}s`;
 });
 const summaryLabel = computed(() => toolCall.value?.summary?.trim() || undefined);
+const summaryDisplay = computed(() => {
+  const summary = summaryLabel.value;
+  if (!summary) return undefined;
+
+  const lineRangeMatch = summary.match(/^(.*?)(\[L\d+(?:-\d*)?\])$/);
+  return lineRangeMatch
+    ? { main: lineRangeMatch[1] ?? '', suffix: lineRangeMatch[2] }
+    : { main: summary };
+});
 const hasBatchMeta = computed(() => props.batchIndex !== undefined && props.batchMode !== undefined && props.batchState !== undefined);
 const batchModeLabel = computed(() => props.batchMode === 'parallel' ? '并行批次' : '串行批次');
 const batchStateLabel = computed(() => {
@@ -183,7 +192,10 @@ function isInternalApprovalProgress(progress: unknown): boolean {
     </template>
     <template #summary>
       <span class="part-card-name" :class="{ 'has-summary': summaryLabel }">{{ part.functionCall.name }}</span>
-      <span v-if="summaryLabel" class="part-card-summary" :title="summaryLabel">{{ summaryLabel }}</span>
+      <span v-if="summaryDisplay" class="part-card-summary" :title="summaryLabel">
+        <span class="part-card-summary-main">{{ summaryDisplay.main }}</span>
+        <span v-if="summaryDisplay.suffix" class="part-card-summary-suffix">{{ summaryDisplay.suffix }}</span>
+      </span>
     </template>
     <template #trail>
       <span class="part-card-status" :title="statusTitle">{{ statusLabel }}</span>
@@ -269,6 +281,8 @@ function isInternalApprovalProgress(progress: unknown): boolean {
 }
 
 .part-card-summary {
+  display: inline-flex;
+  align-items: baseline;
   flex: 1 1 auto;
   min-width: 0;
   margin-left: 8px;
@@ -279,6 +293,20 @@ function isInternalApprovalProgress(progress: unknown): boolean {
   font-size: var(--font-size-xs);
   font-weight: 400;
   opacity: 0.86;
+}
+
+.part-card-summary-main {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.part-card-summary-suffix {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  font-style: italic;
+  opacity: 0.82;
 }
 
 .tool-call-card :deep(.lc-collapsible-trail) {

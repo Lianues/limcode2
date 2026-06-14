@@ -252,11 +252,6 @@ function isInternalApprovalProgress(progress: unknown): boolean {
   color: var(--vscode-foreground);
 }
 
-.tool-call-card.batch-pos-middle,
-.tool-call-card.batch-pos-last {
-  margin-top: calc(-1 * var(--space-1));
-}
-
 .part-card-name {
   min-width: 0;
   overflow: hidden;

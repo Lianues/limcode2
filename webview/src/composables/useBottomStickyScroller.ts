@@ -50,6 +50,7 @@ export function useBottomStickyScroller(
   let stickyFrame: number | undefined;
   let contentCheckFrame: number | undefined;
   let stickyUntil = 0;
+  let userDetachedFromBottom = false;
 
   function isNearBottomElement(element: HTMLElement, threshold = thresholdPx): boolean {
     return element.scrollHeight - element.scrollTop - element.clientHeight <= threshold;
@@ -64,9 +65,25 @@ export function useBottomStickyScroller(
     return stickyToBottom;
   }
 
+  function cancelStickyFrame(): void {
+    if (stickyFrame === undefined) return;
+    window.cancelAnimationFrame(stickyFrame);
+    stickyFrame = undefined;
+  }
+
+  function releaseStickyFromUserIntent(): void {
+    stickyToBottom = false;
+    userDetachedFromBottom = true;
+    stickyUntil = 0;
+    cancelStickyFrame();
+  }
+
   function scrollToBottomNow(): void {
     const element = scroller.value;
-    if (element) element.scrollTop = element.scrollHeight;
+    if (element) {
+      userDetachedFromBottom = false;
+      element.scrollTop = element.scrollHeight;
+    }
   }
 
   function scrollToBottom(): void {
@@ -75,11 +92,26 @@ export function useBottomStickyScroller(
 
   function updateStickyFromUserScroll(): void {
     const element = scroller.value;
-    if (stickyToBottom && performance.now() < stickyUntil) {
+    if (!element) {
+      stickyToBottom = true;
+      userDetachedFromBottom = false;
       return;
     }
 
-    stickyToBottom = !element || isNearBottomElement(element);
+    const nearBottom = isNearBottomElement(element);
+    if (nearBottom) {
+      stickyToBottom = true;
+      userDetachedFromBottom = false;
+      return;
+    }
+
+    if (stickyToBottom && performance.now() < stickyUntil) return;
+
+    stickyToBottom = false;
+  }
+
+  function releaseStickyFromWheel(event: WheelEvent): void {
+    if (event.deltaY < 0) releaseStickyFromUserIntent();
   }
 
   function primeStickyFromBottomInteraction(event: Event): void {
@@ -90,11 +122,17 @@ export function useBottomStickyScroller(
     if (!element || !isNearBottomElement(element, interactionThresholdPx)) return;
 
     stickyToBottom = true;
+    userDetachedFromBottom = false;
     scrollToBottomNow();
     keepStickyDuringContentSettle();
   }
 
-  function primeStickyFromKeyboardInteraction(event: KeyboardEvent): void {
+  function handleKeyboardInteraction(event: KeyboardEvent): void {
+    if (event.key === 'ArrowUp' || event.key === 'PageUp' || event.key === 'Home') {
+      releaseStickyFromUserIntent();
+      return;
+    }
+
     if (event.key !== 'Enter' && event.key !== ' ') return;
     primeStickyFromBottomInteraction(event);
   }
@@ -127,6 +165,8 @@ export function useBottomStickyScroller(
   function onContentMayHaveChanged(): void {
     const element = scroller.value;
     if (!element) return;
+
+    if (userDetachedFromBottom) return;
 
     const wasSticky = stickyToBottom;
     const nowNearBottom = isNearBottomElement(element);
@@ -168,9 +208,11 @@ export function useBottomStickyScroller(
 
     observedScroller = element;
     stickyToBottom = isNearBottomElement(element);
+    userDetachedFromBottom = false;
     element.addEventListener('scroll', updateStickyFromUserScroll, { passive: true });
+    element.addEventListener('wheel', releaseStickyFromWheel, { passive: true });
     element.addEventListener('pointerdown', primeStickyFromBottomInteraction, { capture: true });
-    element.addEventListener('keydown', primeStickyFromKeyboardInteraction, { capture: true });
+    element.addEventListener('keydown', handleKeyboardInteraction, { capture: true });
 
     resizeObserver = new ResizeObserver(scheduleContentCheck);
     resizeObserver.observe(element);
@@ -193,8 +235,9 @@ export function useBottomStickyScroller(
   function detachScroller(): void {
     if (observedScroller) {
       observedScroller.removeEventListener('scroll', updateStickyFromUserScroll);
+      observedScroller.removeEventListener('wheel', releaseStickyFromWheel);
       observedScroller.removeEventListener('pointerdown', primeStickyFromBottomInteraction, { capture: true });
-      observedScroller.removeEventListener('keydown', primeStickyFromKeyboardInteraction, { capture: true });
+      observedScroller.removeEventListener('keydown', handleKeyboardInteraction, { capture: true });
     }
     observedScroller = null;
     observedContent = null;
@@ -204,8 +247,7 @@ export function useBottomStickyScroller(
     mutationObserver?.disconnect();
     mutationObserver = undefined;
 
-    if (stickyFrame !== undefined) window.cancelAnimationFrame(stickyFrame);
-    stickyFrame = undefined;
+    cancelStickyFrame();
     if (contentCheckFrame !== undefined) window.cancelAnimationFrame(contentCheckFrame);
     contentCheckFrame = undefined;
   }

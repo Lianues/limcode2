@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { FsCapability } from './types';
+import type { FsCapability, FsReadFileResult, FsReadLine } from './types';
 
 const MAX_BYTES = 256 * 1024;
 
@@ -10,7 +10,7 @@ export function createVsCodeFsCapability(): FsCapability {
   };
 }
 
-export async function readWorkspaceTextFile(relPath: string, startLine?: number, endLine?: number): Promise<string> {
+export async function readWorkspaceTextFile(relPath: string, startLine?: number, endLine?: number): Promise<FsReadFileResult> {
   const uri = resolveWorkspacePath(relPath);
   const data = await vscode.workspace.fs.readFile(uri);
   if (data.byteLength > MAX_BYTES) {
@@ -18,15 +18,33 @@ export async function readWorkspaceTextFile(relPath: string, startLine?: number,
   }
 
   const text = Buffer.from(data).toString('utf8');
-  const lines = text.split(/\r?\n/);
-  const from = Math.max(1, startLine ?? 1);
-  const to = Math.min(lines.length, endLine ?? lines.length);
+  const fileLines = text.split(/\r?\n/);
+  const from = normalizeStartLine(startLine);
+  const to = normalizeEndLine(endLine, fileLines.length);
+  const selectedLines: FsReadLine[] = [];
 
-  const out: string[] = [];
   for (let i = from; i <= to; i += 1) {
-    out.push(`${i} ${lines[i - 1]}`);
+    selectedLines.push({ line: i, text: fileLines[i - 1] ?? '' });
   }
-  return out.join('\n');
+
+  return {
+    path: relPath,
+    startLine: from,
+    endLine: to,
+    totalLines: fileLines.length,
+    lines: selectedLines,
+    content: selectedLines.map((line) => `${line.line} ${line.text}`).join('\n')
+  };
+}
+
+function normalizeStartLine(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 1;
+  return Math.max(1, Math.floor(value));
+}
+
+function normalizeEndLine(value: number | undefined, totalLines: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return totalLines;
+  return Math.min(totalLines, Math.max(1, Math.floor(value)));
 }
 
 function resolveWorkspacePath(relPath: string): vscode.Uri {

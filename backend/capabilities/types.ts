@@ -33,8 +33,22 @@ export interface LlmCapability {
 }
 
 /** 文件系统能力：隐藏 vscode.workspace.fs 等外部句柄。 */
+export interface FsReadLine {
+  line: number;
+  text: string;
+}
+
+export interface FsReadFileResult {
+  path: string;
+  startLine: number;
+  endLine: number;
+  totalLines: number;
+  lines: FsReadLine[];
+  content: string;
+}
+
 export interface FsCapability {
-  readFile(path: string, startLine?: number, endLine?: number): Promise<string>;
+  readFile(path: string, startLine?: number, endLine?: number): Promise<FsReadFileResult>;
 }
 
 export interface CommandRunEvent {

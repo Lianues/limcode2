@@ -1,9 +1,16 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { IconTool } from '@tabler/icons-vue';
-import type { FunctionCallPart, ToolCallRecord, ToolCallStatus, ToolSchedulingMode } from '@shared/protocol';
+import type {
+  FunctionCallPart,
+  ToolCallEventRecord,
+  ToolCallRecord,
+  ToolCallStatus,
+  ToolSchedulingMode
+} from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { bridge, BridgeMessageType } from '@webview/transport';
+import { resolveToolDisplay } from '../toolDisplay/registry';
 import ContentBlockSection from '../ContentBlockSection.vue';
 import CollapsibleContentBlock from '../CollapsibleContentBlock.vue';
 
@@ -28,19 +35,28 @@ const toolCall = computed<ToolCallRecord | undefined>(() => {
     (call) => call.messageId === props.messageId && (call.id === partId || call.functionCallId === partId)
   );
 });
-const argsText = computed(() => stringifyValue(props.part.functionCall.args));
-const hasArgs = computed(() => {
-  const text = argsText.value.trim();
-  return Boolean(text && text !== '{}');
+const toolEvents = computed<ToolCallEventRecord[]>(() => {
+  const callId = toolCall.value?.id;
+  if (!callId) return [];
+  return clientState.toolCallEvents.filter((event) => event.toolCallId === callId).sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
 });
-const outputText = computed(() => {
-  const result = toolCall.value?.result;
-  if (result !== undefined) return stringifyToolResult(result);
+const displayProgress = computed(() => {
   const progress = toolCall.value?.progress;
-  if (isInternalApprovalProgress(progress)) return '';
-  return progress !== undefined ? stringifyValue(progress) : '';
+  if (isInternalApprovalProgress(progress)) return undefined;
+  return progress;
 });
-const hasOutput = computed(() => Boolean(outputText.value.trim()));
+const toolDisplay = computed(() => resolveToolDisplay({
+  toolName: props.part.functionCall.name,
+  args: props.part.functionCall.args,
+  result: toolCall.value?.result,
+  progress: displayProgress.value,
+  events: toolEvents.value,
+  stringifyValue
+}));
+const inputSections = computed(() => toolDisplay.value.inputSections);
+const outputSections = computed(() => toolDisplay.value.outputSections);
+const hasArgs = computed(() => inputSections.value.length > 0);
+const hasOutput = computed(() => outputSections.value.length > 0);
 const executionApproved = computed(() => isExecutionApprovedProgress(toolCall.value?.progress));
 const needsExecutionDecision = computed(() => toolCall.value?.status === 'awaiting_approval' && !executionApproved.value);
 const needsApplyDecision = computed(() => toolCall.value?.status === 'awaiting_apply');
@@ -89,10 +105,6 @@ function stringifyValue(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-function stringifyToolResult(value: unknown): string {
-  return stringifyValue(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -189,8 +201,34 @@ function isInternalApprovalProgress(progress: unknown): boolean {
     </template>
 
     <div class="part-card-details">
-      <ContentBlockSection v-if="hasArgs" kind="input" title="输入" :text="argsText" />
-      <ContentBlockSection v-if="hasOutput" kind="output" title="输出" :text="outputText" />
+      <ContentBlockSection
+        v-for="(section, index) in inputSections"
+        :key="`input-${index}-${section.title}`"
+        :kind="section.kind"
+        :title="section.title"
+        :text="section.text"
+      >
+        <div v-if="section.rows?.length" class="tool-display-rows" :class="`is-${section.rowStyle ?? 'keyValue'}`">
+          <template v-for="(row, rowIndex) in section.rows" :key="`${section.title}-${rowIndex}-${row.label}`">
+            <span class="tool-display-row-label">{{ row.label }}</span>
+            <span class="tool-display-row-value">{{ row.value }}</span>
+          </template>
+        </div>
+      </ContentBlockSection>
+      <ContentBlockSection
+        v-for="(section, index) in outputSections"
+        :key="`output-${index}-${section.title}`"
+        :kind="section.kind"
+        :title="section.title"
+        :text="section.text"
+      >
+        <div v-if="section.rows?.length" class="tool-display-rows" :class="`is-${section.rowStyle ?? 'keyValue'}`">
+          <template v-for="(row, rowIndex) in section.rows" :key="`${section.title}-${rowIndex}-${row.label}`">
+            <span class="tool-display-row-label">{{ row.label }}</span>
+            <span class="tool-display-row-value">{{ row.value }}</span>
+          </template>
+        </div>
+      </ContentBlockSection>
       <p v-if="toolCall?.error" class="part-card-error">{{ toolCall.error }}</p>
       <p v-else-if="executionApproved && isWaitingForPreviousProgress(toolCall?.progress)" class="part-card-note">
         已批准执行，将在前序批次完成后按原始顺序自动继续。
@@ -325,6 +363,45 @@ function isInternalApprovalProgress(progress: unknown): boolean {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum';
+}
+
+.tool-display-rows {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: stretch;
+  min-width: 0;
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Consolas, monospace);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+}
+
+.tool-display-row-label,
+.tool-display-row-value {
+  min-width: 0;
+  padding-top: 1px;
+  padding-bottom: 1px;
+}
+
+.tool-display-row-label {
+  padding-right: 8px;
+  color: color-mix(in srgb, var(--vscode-descriptionForeground) 82%, transparent);
+  text-align: left;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.tool-display-rows.is-lineNumber .tool-display-row-label {
+  min-width: 2ch;
+  text-align: right;
+}
+
+.tool-display-row-value {
+  border-left: 1px solid color-mix(in srgb, var(--vscode-descriptionForeground) 42%, transparent);
+  padding-left: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .part-card-details {

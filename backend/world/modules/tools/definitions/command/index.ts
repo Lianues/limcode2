@@ -90,10 +90,7 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
           });
         }
       });
-      return {
-        ok: result.exitCode === 0,
-        output: JSON.stringify(result, null, 2)
-      };
+      return { ok: result.exitCode === 0, output: result };
     }
   };
 }

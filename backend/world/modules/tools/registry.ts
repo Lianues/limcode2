@@ -16,7 +16,7 @@ export interface ToolDeps {
 
 export interface ToolResultOut {
   ok: boolean;
-  output: string;
+  output: unknown;
 }
 
 export interface ToolRuntimeEvent {

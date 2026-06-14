@@ -46,7 +46,13 @@ function toToolStatePayload(toolCallId: string, result: ToolResultOut, durationM
   if (result.ok) {
     return { toolCallId, status: 'success', result: response, durationMs };
   }
-  return { toolCallId, status: 'error', error: result.output, result: response, durationMs };
+  return { toolCallId, status: 'error', error: errorTextForToolOutput(result.output), result: response, durationMs };
+}
+
+function errorTextForToolOutput(output: unknown): string {
+  if (typeof output === 'string') return output;
+  try { return JSON.stringify(output, null, 2); }
+  catch { return String(output); }
 }
 
 function toRunningToolStatePayload(toolCallId: string, event: ToolRuntimeEvent): ToolStatePayload {

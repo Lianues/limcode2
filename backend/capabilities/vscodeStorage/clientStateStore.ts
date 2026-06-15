@@ -2,10 +2,10 @@ import * as vscode from 'vscode';
 import type {
   AgentConversationLinkRecord,
   AgentModeLinkRecord,
-  AgentModeRecord,
   AgentRecord,
   ClientState,
   ConversationBranchLinkRecord,
+  ConversationModeSelectionRecord,
   ConversationProjectLinkRecord,
   ConversationRecord,
   ConversationRunDetailRecord,
@@ -18,6 +18,7 @@ import type {
   ModeModelProfileLinkRecord,
   ModeSystemPromptLinkRecord,
   ModeToolPolicyLinkRecord,
+  ModeRecord,
   ModelProfileRecord,
   ProjectContextRecord,
   SystemPromptRecord,
@@ -126,12 +127,13 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Pr
   const state = createEmptyClientState();
   const [
     agents,
-    agentModes,
+    modes,
     toolPolicies,
     toolPolicyScopeLinks,
     systemPrompts,
     modelProfiles,
     agentModeLinks,
+    conversationModeSelections,
     modeToolPolicyLinks,
     modeSystemPromptLinks,
     modeModelProfileLinks,
@@ -143,12 +145,13 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Pr
     conversationProjectLinks
   ] = await Promise.all([
     loadSkeletonRecords<AgentRecord>('agents', [paths.agentsRootUri, paths.agentsIndexUri], 'agent'),
-    loadSkeletonRecords<AgentModeRecord>('agentModes', [paths.agentModesRootUri, paths.agentModesIndexUri], 'agentMode'),
+    loadSkeletonRecords<ModeRecord>('modes', [paths.modesRootUri, paths.modesIndexUri], 'mode'),
     loadSkeletonRecords<ToolPolicyRecord>('toolPolicies', [paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri], 'toolPolicy'),
     loadSkeletonRecords<ToolPolicyScopeLinkRecord>('toolPolicyScopeLinks', [paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri], 'link'),
     loadSkeletonRecords<SystemPromptRecord>('systemPrompts', [paths.systemPromptsRootUri, paths.systemPromptsIndexUri], 'systemPrompt'),
     loadSkeletonRecords<ModelProfileRecord>('modelProfiles', [paths.modelProfilesRootUri, paths.modelProfilesIndexUri], 'modelProfile'),
     loadSkeletonRecords<AgentModeLinkRecord>('agentModeLinks', [paths.agentModeLinksRootUri, paths.agentModeLinksIndexUri], 'link'),
+    loadSkeletonRecords<ConversationModeSelectionRecord>('conversationModeSelections', [paths.conversationModeSelectionsRootUri, paths.conversationModeSelectionsIndexUri], 'selection'),
     loadSkeletonRecords<ModeToolPolicyLinkRecord>('modeToolPolicyLinks', [paths.modeToolPolicyLinksRootUri, paths.modeToolPolicyLinksIndexUri], 'link'),
     loadSkeletonRecords<ModeSystemPromptLinkRecord>('modeSystemPromptLinks', [paths.modeSystemPromptLinksRootUri, paths.modeSystemPromptLinksIndexUri], 'link'),
     loadSkeletonRecords<ModeModelProfileLinkRecord>('modeModelProfileLinks', [paths.modeModelProfileLinksRootUri, paths.modeModelProfileLinksIndexUri], 'link'),
@@ -161,12 +164,13 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Pr
   ]);
 
   state.agents = agents;
-  state.agentModes = agentModes;
+  state.modes = modes;
   state.toolPolicies = toolPolicies;
   state.toolPolicyScopeLinks = toolPolicyScopeLinks;
   state.systemPrompts = systemPrompts;
   state.modelProfiles = modelProfiles;
   state.agentModeLinks = agentModeLinks;
+  state.conversationModeSelections = conversationModeSelections;
   state.modeToolPolicyLinks = modeToolPolicyLinks;
   state.modeSystemPromptLinks = modeSystemPromptLinks;
   state.modeModelProfileLinks = modeModelProfileLinks;
@@ -265,12 +269,13 @@ async function loadConversationRunHistoryFromStores(paths: StoragePaths, convers
 export async function saveClientStateSkeletonToStores(paths: StoragePaths, state: ClientState): Promise<void> {
   await Promise.all([
     saveRecords(paths.agentsRootUri, paths.agentsIndexUri, state.agents, 'agent', (record) => record.name || record.id),
-    saveRecords(paths.agentModesRootUri, paths.agentModesIndexUri, state.agentModes, 'agentMode', (record) => record.name || record.id),
+    saveRecords(paths.modesRootUri, paths.modesIndexUri, state.modes, 'mode', (record) => record.name || record.id),
     saveRecords(paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri, state.toolPolicies, 'toolPolicy', (record) => record.name || record.id),
     saveRecords(paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri, state.toolPolicyScopeLinks, 'link'),
     saveRecords(paths.systemPromptsRootUri, paths.systemPromptsIndexUri, state.systemPrompts, 'systemPrompt', (record) => record.name || record.id),
     saveRecords(paths.modelProfilesRootUri, paths.modelProfilesIndexUri, state.modelProfiles, 'modelProfile', (record) => record.name || record.id),
     saveRecords(paths.agentModeLinksRootUri, paths.agentModeLinksIndexUri, state.agentModeLinks, 'link'),
+    saveRecords(paths.conversationModeSelectionsRootUri, paths.conversationModeSelectionsIndexUri, state.conversationModeSelections, 'selection'),
     saveRecords(paths.modeToolPolicyLinksRootUri, paths.modeToolPolicyLinksIndexUri, state.modeToolPolicyLinks, 'link'),
     saveRecords(paths.modeSystemPromptLinksRootUri, paths.modeSystemPromptLinksIndexUri, state.modeSystemPromptLinks, 'link'),
     saveRecords(paths.modeModelProfileLinksRootUri, paths.modeModelProfileLinksIndexUri, state.modeModelProfileLinks, 'link'),

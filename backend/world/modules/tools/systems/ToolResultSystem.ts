@@ -13,7 +13,7 @@ import { markRunNeedsModel, spawnMessageRunLink } from '../../agentRun/bundles';
 import { activeToolPolicyForRun, runForToolCall, runTarget } from '../../agentRun/queries';
 import { Conversation } from '../../chat/components';
 import { spawnToolResponseMessage, ToolResultMessageBundle } from '../../chat/bundles';
-import { AgentMode, AgentModeLink, ModeToolPolicyLink, ToolPolicy } from '../../mode/components';
+import { AgentModeLink, ConversationModeSelection, Mode, ModeToolPolicyLink, ToolPolicy } from '../../mode/components';
 import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
 import { ToolCall, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolStateData } from '../components';
 import { ToolEventType } from '../events';
@@ -34,7 +34,8 @@ const SettledToolCallsQuery = defineQuery({
     Agent,
     AgentConversationLink,
     Conversation,
-    AgentMode,
+    ConversationModeSelection,
+    Mode,
     AgentModeLink,
     ToolPolicy,
     ToolPolicyScopeLink,

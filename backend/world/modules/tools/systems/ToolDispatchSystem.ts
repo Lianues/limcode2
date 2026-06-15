@@ -24,8 +24,9 @@ import {
 } from '../../chat/bundles';
 import { conversationMessages } from '../../chat/queries';
 import {
-  AgentMode,
   AgentModeLink,
+  ConversationModeSelection,
+  Mode,
   ModeToolPolicyLink,
   ModelProfile,
   SystemPrompt,
@@ -90,7 +91,8 @@ const QueuedToolCallsQuery = defineQuery({
     MessageRevision,
     Agent,
     AgentConversationLink,
-    AgentMode,
+    ConversationModeSelection,
+    Mode,
     AgentModeLink,
     ModeToolPolicyLink,
     ToolPolicy,
@@ -725,7 +727,7 @@ function applyRunEditPolicy(cmd: CommandSink, run: Entity, editPolicy: RunEditPo
 function applyRunModeOverrides(world: WorldReader, cmd: CommandSink, run: Entity, mode?: RunAgentArgs['mode']): void {
   if (!mode) return;
   const now = Date.now();
-  const modeEntity = mode.modeId ? findByRecordId(world, AgentMode, mode.modeId) : undefined;
+  const modeEntity = mode.modeId ? findByRecordId(world, Mode, mode.modeId) : undefined;
   if (modeEntity !== undefined) {
     const link = cmd.spawn();
     cmd.add(link, RunModeLink, { id: `run-mode:${run}:${mode.modeId}`, run, mode: modeEntity, role: 'active', createdAt: now, updatedAt: now });

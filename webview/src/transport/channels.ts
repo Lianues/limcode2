@@ -14,6 +14,10 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
     case BridgeMessageType.AgentRunRetry:
     case BridgeMessageType.AgentRunRegenerate:
     case BridgeMessageType.AgentRunMarkStale:
+    case BridgeMessageType.ModeCreate:
+    case BridgeMessageType.ModeUpdate:
+    case BridgeMessageType.ModeDelete:
+    case BridgeMessageType.ConversationModeSelect:
     case BridgeMessageType.ConversationProjectSet:
     case BridgeMessageType.ToolPolicyScopeSet:
     case BridgeMessageType.ToolPolicyScopeClear:

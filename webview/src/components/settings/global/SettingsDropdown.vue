@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import type { Component } from 'vue';
 import { IconCaretUp, IconSearch } from '@tabler/icons-vue';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 
@@ -7,6 +8,7 @@ export interface SettingsDropdownOption {
   value: string;
   label: string;
   description?: string;
+  icon?: Component;
   disabled?: boolean;
 }
 
@@ -23,6 +25,7 @@ const props = withDefaults(
     searchPlaceholder?: string;
     maxHeight?: number | string;
     height?: number | string;
+    closeSignal?: number | string;
   }>(),
   {
     placeholder: '请选择',
@@ -40,6 +43,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   (event: 'update:modelValue', value: string): void;
   (event: 'change', option: SettingsDropdownOption): void;
+  (event: 'open'): void;
 }>();
 
 const root = ref<HTMLElement | null>(null);
@@ -49,6 +53,7 @@ const open = ref(false);
 const filterText = ref('');
 
 const selectedOption = computed(() => props.options.find((option) => option.value === props.modelValue));
+const selectedIcon = computed(() => selectedOption.value?.icon);
 const displayLabel = computed(() => selectedOption.value?.label ?? props.placeholder);
 const filteredOptions = computed(() => {
   if (!props.searchable) return props.options;
@@ -86,9 +91,21 @@ watch(
   }
 );
 
+watch(
+  () => props.closeSignal,
+  () => {
+    open.value = false;
+  }
+);
+
 function toggle(): void {
   if (props.disabled) return;
-  open.value = !open.value;
+  if (open.value) {
+    open.value = false;
+    return;
+  }
+  open.value = true;
+  emit('open');
 }
 
 function select(option: SettingsDropdownOption): void {
@@ -126,7 +143,10 @@ function cssLength(value: number | string): string {
       aria-haspopup="listbox"
       @click.stop="toggle"
     >
-      <span class="settings-dropdown-label">{{ displayLabel }}</span>
+      <span class="settings-dropdown-button-main">
+        <component v-if="selectedIcon" :is="selectedIcon" class="settings-dropdown-option-icon" stroke="2" aria-hidden="true" />
+        <span class="settings-dropdown-label">{{ displayLabel }}</span>
+      </span>
       <IconCaretUp class="settings-dropdown-caret" :class="{ 'is-open': open }" stroke="2" aria-hidden="true" />
     </button>
 
@@ -145,14 +165,17 @@ function cssLength(value: number | string): string {
             :key="option.value"
             type="button"
             class="project-option"
-            :class="{ 'is-active': option.value === modelValue }"
+            :class="{ 'is-active': option.value === modelValue, 'has-icon': !!option.icon }"
             :disabled="option.disabled"
             role="option"
             :aria-selected="option.value === modelValue"
             @click="select(option)"
           >
-            <span class="project-option-name">{{ compactLabel(option.label) }}</span>
-            <span v-if="option.description" class="project-option-path">{{ option.description }}</span>
+            <component v-if="option.icon" :is="option.icon" class="settings-dropdown-option-icon" stroke="2" aria-hidden="true" />
+            <span class="project-option-copy">
+              <span class="project-option-name">{{ compactLabel(option.label) }}</span>
+              <span v-if="option.description" class="project-option-path">{{ option.description }}</span>
+            </span>
           </button>
         </div>
         <AdvancedScrollbar :scroller="scroller" variant="minimal" />
@@ -184,6 +207,13 @@ button.settings-dropdown-button {
   align-items: center;
 }
 
+.settings-dropdown-button-main {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
 button.settings-dropdown-button:hover:not(:disabled),
 button.settings-dropdown-button[aria-expanded='true'],
 button.settings-dropdown-button:focus-visible,
@@ -199,6 +229,7 @@ button.settings-dropdown-button:active {
 
 .settings-dropdown-label {
   min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   text-align: left;
   white-space: nowrap;
@@ -292,9 +323,9 @@ button.settings-dropdown-button:active {
 
 .settings-dropdown-panel .project-option {
   width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
   gap: 2px;
   min-height: 0;
   padding: var(--space-2);
@@ -303,6 +334,24 @@ button.settings-dropdown-button:active {
   color: var(--vscode-foreground);
   background: transparent;
   text-align: left;
+}
+
+.settings-dropdown-option-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  color: currentColor;
+}
+
+.project-option-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-dropdown-panel .project-option:not(.has-icon) {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .settings-dropdown-panel .project-option:hover:not(:disabled),

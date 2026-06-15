@@ -3,9 +3,9 @@ import type { RuntimePaths } from '../types';
 import {
   AGENT_CONVERSATION_LINKS_ROOT_DIR,
   AGENT_MODE_LINKS_ROOT_DIR,
-  AGENT_MODES_ROOT_DIR,
   AGENTS_ROOT_DIR,
   CONVERSATION_HISTORY_ROOT_DIR,
+  CONVERSATION_MODE_SELECTIONS_ROOT_DIR,
   CONVERSATIONS_ROOT_DIR,
   CONVERSATION_PROJECT_LINKS_ROOT_DIR,
   INDEX_FILE,
@@ -13,6 +13,7 @@ import {
   MODE_MODEL_PROFILE_LINKS_ROOT_DIR,
   MODE_SYSTEM_PROMPT_LINKS_ROOT_DIR,
   MODE_TOOL_POLICY_LINKS_ROOT_DIR,
+  MODES_ROOT_DIR,
   MODEL_PROFILES_ROOT_DIR,
   PROJECT_CONTEXTS_ROOT_DIR,
   RUN_HISTORY_ROOT_DIR,
@@ -25,8 +26,8 @@ import {
 export interface VscodeStorageUris {
   agentsRootUri: vscode.Uri;
   agentsIndexUri: vscode.Uri;
-  agentModesRootUri: vscode.Uri;
-  agentModesIndexUri: vscode.Uri;
+  modesRootUri: vscode.Uri;
+  modesIndexUri: vscode.Uri;
   toolPoliciesRootUri: vscode.Uri;
   toolPoliciesIndexUri: vscode.Uri;
   toolPolicyScopeLinksRootUri: vscode.Uri;
@@ -53,6 +54,8 @@ export interface VscodeStorageUris {
   modeSystemPromptLinksIndexUri: vscode.Uri;
   modeModelProfileLinksRootUri: vscode.Uri;
   modeModelProfileLinksIndexUri: vscode.Uri;
+  conversationModeSelectionsRootUri: vscode.Uri;
+  conversationModeSelectionsIndexUri: vscode.Uri;
   runHistoryRootUri: vscode.Uri;
   runHistoryIndexUri: vscode.Uri;
   settingsRootUri: vscode.Uri;
@@ -66,7 +69,7 @@ function root(globalStorageUri: vscode.Uri, dir: string): { rootUri: vscode.Uri;
 
 export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimePaths & VscodeStorageUris {
   const agents = root(globalStorageUri, AGENTS_ROOT_DIR);
-  const agentModes = root(globalStorageUri, AGENT_MODES_ROOT_DIR);
+  const modes = root(globalStorageUri, MODES_ROOT_DIR);
   const toolPolicies = root(globalStorageUri, TOOL_POLICIES_ROOT_DIR);
   const toolPolicyScopeLinks = root(globalStorageUri, TOOL_POLICY_SCOPE_LINKS_ROOT_DIR);
   const systemPrompts = root(globalStorageUri, SYSTEM_PROMPTS_ROOT_DIR);
@@ -80,6 +83,7 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const modeToolPolicyLinks = root(globalStorageUri, MODE_TOOL_POLICY_LINKS_ROOT_DIR);
   const modeSystemPromptLinks = root(globalStorageUri, MODE_SYSTEM_PROMPT_LINKS_ROOT_DIR);
   const modeModelProfileLinks = root(globalStorageUri, MODE_MODEL_PROFILE_LINKS_ROOT_DIR);
+  const conversationModeSelections = root(globalStorageUri, CONVERSATION_MODE_SELECTIONS_ROOT_DIR);
   const runHistory = root(globalStorageUri, RUN_HISTORY_ROOT_DIR);
   const settingsRootUri = vscode.Uri.joinPath(globalStorageUri, SETTINGS_ROOT_DIR);
   const llmSettingsUri = vscode.Uri.joinPath(settingsRootUri, LLM_SETTINGS_FILE);
@@ -91,10 +95,10 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     agentsRootPath: agents.rootUri.fsPath,
     agentsIndexUri: agents.indexUri,
     agentsIndexPath: agents.indexUri.fsPath,
-    agentModesRootUri: agentModes.rootUri,
-    agentModesRootPath: agentModes.rootUri.fsPath,
-    agentModesIndexUri: agentModes.indexUri,
-    agentModesIndexPath: agentModes.indexUri.fsPath,
+    modesRootUri: modes.rootUri,
+    modesRootPath: modes.rootUri.fsPath,
+    modesIndexUri: modes.indexUri,
+    modesIndexPath: modes.indexUri.fsPath,
     toolPoliciesRootUri: toolPolicies.rootUri,
     toolPoliciesRootPath: toolPolicies.rootUri.fsPath,
     toolPoliciesIndexUri: toolPolicies.indexUri,
@@ -147,6 +151,10 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     modeModelProfileLinksRootPath: modeModelProfileLinks.rootUri.fsPath,
     modeModelProfileLinksIndexUri: modeModelProfileLinks.indexUri,
     modeModelProfileLinksIndexPath: modeModelProfileLinks.indexUri.fsPath,
+    conversationModeSelectionsRootUri: conversationModeSelections.rootUri,
+    conversationModeSelectionsRootPath: conversationModeSelections.rootUri.fsPath,
+    conversationModeSelectionsIndexUri: conversationModeSelections.indexUri,
+    conversationModeSelectionsIndexPath: conversationModeSelections.indexUri.fsPath,
     runHistoryRootUri: runHistory.rootUri,
     runHistoryRootPath: runHistory.rootUri.fsPath,
     runHistoryIndexUri: runHistory.indexUri,

@@ -6,11 +6,12 @@ export const projectModeClientState = projectModeState;
 export const modeClientSyncContributor = defineClientStateContributor({
   key: 'modes',
   tables: [
-    'agentModes',
+    'modes',
     'toolPolicies',
     'systemPrompts',
     'modelProfiles',
     'agentModeLinks',
+    'conversationModeSelections',
     'modeToolPolicyLinks',
     'modeSystemPromptLinks',
     'modeModelProfileLinks'

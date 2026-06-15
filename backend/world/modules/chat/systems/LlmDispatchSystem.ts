@@ -1,5 +1,15 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
-import { AgentModeLink, ModeModelProfileLink, ModeSystemPromptLink, ModeToolPolicyLink, ModelProfile, SystemPrompt, ToolPolicy } from '../../mode/components';
+import {
+  AgentModeLink,
+  ConversationModeSelection,
+  Mode,
+  ModeModelProfileLink,
+  ModeSystemPromptLink,
+  ModeToolPolicyLink,
+  ModelProfile,
+  SystemPrompt,
+  ToolPolicy
+} from '../../mode/components';
 import {
   AgentRunInputRevision,
   AgentRunSourceLink,
@@ -50,6 +60,8 @@ const LlmContextLookupComponents = [
   RunSystemPromptLink,
   RunModelProfileLink,
   RunToolPolicyLink,
+  ConversationModeSelection,
+  Mode,
   AgentModeLink,
   ModeSystemPromptLink,
   ModeModelProfileLink,

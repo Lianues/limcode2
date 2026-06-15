@@ -112,7 +112,14 @@ export const useClientStateStore = defineStore('clientState', {
         state.agentModeLinks.find((link) => link.agentId === agent?.id && link.role === 'active') ??
         state.agentModeLinks.find((link) => link.agentId === agent?.id && link.role === 'default') ??
         state.agentModeLinks.find((link) => link.agentId === agent?.id);
-      const mode = state.agentModes.find((candidate) => candidate.id === modeLink?.modeId);
+      const conversationModeSelection = state.conversationModeSelections.find(
+        (selection) => selection.conversationId === state.currentConversationId && selection.role === 'active'
+      );
+      const mode = conversationModeSelection
+        ? conversationModeSelection.scopeKind === 'mode'
+          ? state.modes.find((candidate) => candidate.id === conversationModeSelection.modeId)
+          : undefined
+        : state.modes.find((candidate) => candidate.id === modeLink?.modeId);
 
       const profileLink = state.modeModelProfileLinks.find(
         (link) => link.modeId === mode?.id && link.role === 'active'

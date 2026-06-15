@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { IconPencilExclamation, IconSend2 } from '@tabler/icons-vue';
+import { IconListDetails, IconPencilExclamation, IconSend2, IconWorld } from '@tabler/icons-vue';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
 import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
+import { GLOBAL_MODE_OPTION_ID, useModeStore } from '@webview/stores/useModeStore';
 import RichContentEditor from '@webview/components/content/RichContentEditor.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
 
@@ -24,6 +25,7 @@ const emit = defineEmits<{
 const clientState = useClientStateStore();
 const globalSettings = useGlobalSettingsStore();
 const conversationSettings = useConversationSettingsStore();
+const modeStore = useModeStore();
 const ui = useConversationUiStore();
 const highlighted = ref(false);
 const editorExpanded = ref(false);
@@ -31,6 +33,8 @@ const editor = ref<{ focus: () => void } | null>(null);
 const editorShell = ref<HTMLElement | null>(null);
 const expandedEditorHeight = ref(0);
 const collapsedEditorHeight = ref(0);
+const modeDropdownCloseSignal = ref(0);
+const channelDropdownCloseSignal = ref(0);
 
 const draft = computed({
   get: () => ui.composerDraft,
@@ -38,7 +42,6 @@ const draft = computed({
 });
 const expandTitle = computed(() => (editorExpanded.value ? '恢复输入框高度' : '扩大输入框'));
 const sendTitle = computed(() => (ui.isEditing ? '提交编辑' : '发送'));
-const modelSummary = computed(() => clientState.currentModelSummary);
 const channelOptions = computed<SettingsDropdownOption[]>(() =>
   globalSettings.llmProviderConfigs.configs.map((config) => ({
     value: config.id,
@@ -46,6 +49,24 @@ const channelOptions = computed<SettingsDropdownOption[]>(() =>
     description: config.model ? `${providerLabel(config.provider)} · ${config.model}` : providerLabel(config.provider)
   }))
 );
+const modeOptions = computed<SettingsDropdownOption[]>(() => [
+  {
+    value: GLOBAL_MODE_OPTION_ID,
+    label: 'Global',
+    description: '使用全局策略',
+    icon: IconWorld
+  },
+  ...modeStore.modes.map((mode) => ({
+    value: mode.id,
+    label: mode.name,
+    description: mode.description || (mode.source === 'builtin' ? '内置模式' : '用户模式'),
+    icon: IconListDetails
+  }))
+]);
+const activeModeId = computed({
+  get: () => modeStore.activeModeIdForConversation(clientState.currentConversationId),
+  set: (modeId: string) => selectMode(modeId)
+});
 const activeChannelId = computed({
   get: () => conversationSettings.llm.activeProviderConfigId || globalSettings.llm.activeProviderConfigId || globalSettings.activeLlmProviderConfig?.id || '',
   set: (configId: string) => selectChannel(configId)
@@ -159,6 +180,24 @@ function selectChannel(configId: string): void {
   }
   globalSettings.selectLlmProviderConfig(configId);
 }
+
+function selectMode(modeId: string): void {
+  const conversationId = clientState.currentConversationId;
+  if (!conversationId) return;
+  if (modeId === GLOBAL_MODE_OPTION_ID) {
+    modeStore.selectGlobal(conversationId);
+    return;
+  }
+  modeStore.selectMode(conversationId, modeId);
+}
+
+function onModeDropdownOpen(): void {
+  channelDropdownCloseSignal.value += 1;
+}
+
+function onChannelDropdownOpen(): void {
+  modeDropdownCloseSignal.value += 1;
+}
 </script>
 
 <template>
@@ -236,20 +275,32 @@ function selectChannel(configId: string): void {
     </div>
 
     <div class="composer-zone composer-zone-bottom" aria-label="输入框下方功能区">
-      <div v-if="modelSummary.modeName || channelOptions.length" class="composer-meta">
-        <template v-if="modelSummary.modeName">模式：<code>{{ modelSummary.modeName }}</code></template>
+      <div v-if="modeOptions.length || channelOptions.length" class="composer-meta">
+        <template v-if="modeOptions.length">
+          <SettingsDropdown
+            v-model="activeModeId"
+            class="composer-meta-dropdown composer-mode-dropdown"
+            :options="modeOptions"
+            title="切换对话模式"
+            searchable
+            search-placeholder="筛选模式..."
+            :close-signal="modeDropdownCloseSignal"
+            :max-height="220"
+            @open="onModeDropdownOpen"
+          />
+        </template>
         <template v-if="channelOptions.length">
-          <span v-if="modelSummary.modeName"> · </span>
-          <span>渠道：</span>
           <SettingsDropdown
             v-model="activeChannelId"
-            class="composer-channel-dropdown"
+            class="composer-meta-dropdown composer-channel-dropdown"
             :options="channelOptions"
             title="切换渠道配置页"
             empty-text="暂无渠道配置"
             searchable
             search-placeholder="筛选渠道..."
+            :close-signal="channelDropdownCloseSignal"
             :max-height="220"
+            @open="onChannelDropdownOpen"
           />
         </template>
       </div>
@@ -438,14 +489,22 @@ function selectChannel(configId: string): void {
   font-size: inherit;
 }
 
-.composer-channel-dropdown {
-  width: min(240px, 38vw);
-  min-width: 150px;
+.composer-meta-dropdown {
   --lc-dropdown-transform-origin: bottom left;
   --lc-dropdown-offset-y: 4px;
 }
 
-.composer-channel-dropdown :deep(button.settings-dropdown-button) {
+.composer-mode-dropdown {
+  width: min(180px, 28vw);
+  min-width: 118px;
+}
+
+.composer-channel-dropdown {
+  width: min(180px, 28vw);
+  min-width: 118px;
+}
+
+.composer-meta-dropdown :deep(button.settings-dropdown-button) {
   min-height: 24px;
   border-color: transparent;
   padding: 2px 6px;
@@ -454,22 +513,22 @@ function selectChannel(configId: string): void {
   font-size: var(--font-size-sm);
 }
 
-.composer-channel-dropdown :deep(button.settings-dropdown-button:hover:not(:disabled)),
-.composer-channel-dropdown :deep(button.settings-dropdown-button[aria-expanded='true']),
-.composer-channel-dropdown :deep(button.settings-dropdown-button:focus-visible),
-.composer-channel-dropdown :deep(button.settings-dropdown-button:active) {
+.composer-meta-dropdown :deep(button.settings-dropdown-button:hover:not(:disabled)),
+.composer-meta-dropdown :deep(button.settings-dropdown-button[aria-expanded='true']),
+.composer-meta-dropdown :deep(button.settings-dropdown-button:focus-visible),
+.composer-meta-dropdown :deep(button.settings-dropdown-button:active) {
   color: var(--vscode-foreground);
   border-color: var(--vscode-panel-border, transparent);
   background: var(--vscode-list-hoverBackground, transparent);
 }
 
-.composer-channel-dropdown :deep(.settings-dropdown-panel) {
+.composer-meta-dropdown :deep(.settings-dropdown-panel) {
   top: auto;
   bottom: calc(100% + 4px);
   width: 100%;
 }
 
-.composer-channel-dropdown :deep(.settings-dropdown-caret) {
+.composer-meta-dropdown :deep(.settings-dropdown-caret) {
   color: currentColor;
 }
 

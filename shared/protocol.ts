@@ -9,10 +9,10 @@ export type BridgeScope =
   | { kind: 'global' }
   | { kind: 'conversation'; id: string }
   | { kind: 'agent'; id: string }
-  | { kind: 'settings'; level: 'global' | 'conversation' | 'agent'; id?: string };
+  | { kind: 'settings'; level: 'global' | 'conversation' | 'agent' | 'mode'; id?: string };
 
 export interface WebviewClientMeta {
-  kind: 'mainPanel' | 'globalSettings' | 'sidebar' | 'unknown';
+  kind: 'mainPanel' | 'globalSettings' | 'modeSettings' | 'sidebar' | 'unknown';
   panelId?: string;
   title?: string;
   conversationId?: string;
@@ -100,6 +100,10 @@ export enum BridgeMessageType {
   ConversationSettingsSnapshot = 'settings.conversation.snapshot',
   ProjectFoldersGet = 'projectFolders.get',
   ProjectFoldersSnapshot = 'projectFolders.snapshot',
+  ModeCreate = 'mode.create',
+  ModeUpdate = 'mode.update',
+  ModeDelete = 'mode.delete',
+  ConversationModeSelect = 'conversation.mode.select',
   ConversationProjectSet = 'conversation.project.set'
 }
 
@@ -375,11 +379,21 @@ export type ToolCallRunRole = 'produced_by';
 export type PolicyBindingRole = 'active';
 export type ToolPolicyScopeKind = 'global' | 'conversation' | 'agent' | 'agentSystem' | 'mode' | 'run';
 
-export interface AgentModeRecord {
+export type ModeSource = 'builtin' | 'user';
+export type ModeIconKey = 'list-details';
+
+export interface ModeRecord {
   id: string;
   name: string;
   description?: string;
+  source: ModeSource;
+  icon?: ModeIconKey;
+  createdAt: number;
+  updatedAt: number;
 }
+
+export type ConversationModeScopeKind = 'global' | 'mode';
+export type ConversationModeSelectionRole = 'active';
 
 export interface ToolDisplayPolicyRecord {
   /** true 时前端默认展开该工具调用的内容面板；false/未设置则默认收起。 */
@@ -433,6 +447,16 @@ export interface AgentModeLinkRecord {
   agentId: string;
   modeId: string;
   role: AgentModeRole;
+}
+
+export interface ConversationModeSelectionRecord {
+  id: string;
+  conversationId: string;
+  scopeKind: ConversationModeScopeKind;
+  modeId?: string;
+  role: ConversationModeSelectionRole;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface ModeToolPolicyLinkRecord {
@@ -794,12 +818,13 @@ export interface AgentRunInputRevisionRecord {
 export interface ClientStateRecordByTable {
   agents: AgentRecord;
   toolDefinitions: ToolDefinitionRecord;
-  agentModes: AgentModeRecord;
+  modes: ModeRecord;
   toolPolicies: ToolPolicyRecord;
   toolPolicyScopeLinks: ToolPolicyScopeLinkRecord;
   systemPrompts: SystemPromptRecord;
   modelProfiles: ModelProfileRecord;
   agentModeLinks: AgentModeLinkRecord;
+  conversationModeSelections: ConversationModeSelectionRecord;
   modeToolPolicyLinks: ModeToolPolicyLinkRecord;
   modeSystemPromptLinks: ModeSystemPromptLinkRecord;
   modeModelProfileLinks: ModeModelProfileLinkRecord;
@@ -917,6 +942,21 @@ export interface ClientResyncPayload {
   streamId?: string;
   conversationId?: string;
 }
+export interface ModeCreatePayload {
+  name: string;
+  description?: string;
+}
+export interface ModeUpdatePayload {
+  modeId: string;
+  name?: string;
+  description?: string;
+}
+export interface ModeDeletePayload {
+  modeId: string;
+}
+export type ConversationModeSelectPayload =
+  | { conversationId: string; scopeKind: 'global' }
+  | { conversationId: string; scopeKind: 'mode'; modeId: string };
 export interface ClientSnapshotPayload {
   streamId: string;
   streamSeq: number;
@@ -1125,6 +1165,10 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsGet, ConversationSettingsGetPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsUpdate, ConversationSettingsUpdatePayload>
   | BridgeEnvelope<BridgeMessageType.ProjectFoldersGet, undefined>
+  | BridgeEnvelope<BridgeMessageType.ModeCreate, ModeCreatePayload>
+  | BridgeEnvelope<BridgeMessageType.ModeUpdate, ModeUpdatePayload>
+  | BridgeEnvelope<BridgeMessageType.ModeDelete, ModeDeletePayload>
+  | BridgeEnvelope<BridgeMessageType.ConversationModeSelect, ConversationModeSelectPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationProjectSet, ConversationProjectSetPayload>;
 
 export type ExtensionToWebviewMessage =

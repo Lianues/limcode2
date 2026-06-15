@@ -49,6 +49,9 @@ export function useBridgeBootstrap(): void {
           globalSettings.requestAll();
           return;
         }
+        if (session.viewKind === 'modeSettings') {
+          return;
+        }
         globalSettings.requestChannelSettings();
         if (message.payload?.meta?.conversationId) {
           clientState.setCurrentConversation(message.payload.meta.conversationId);
@@ -126,7 +129,7 @@ export function useBridgeBootstrap(): void {
       watch(
         () => clientState.currentConversationId,
         (conversationId) => {
-          if (session.viewKind === 'globalSettings' || !conversationId) return;
+          if (session.viewKind !== 'chat' || !conversationId) return;
           ensureConversationStream(conversationId);
           conversationSettings.request(conversationId);
         },

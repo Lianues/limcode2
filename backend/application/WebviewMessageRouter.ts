@@ -6,6 +6,7 @@ import { AgentRunEventType } from '../world/modules/agentRun/events';
 import { AgentRun } from '../world/modules/agentRun/components';
 import { buildLlmStartRequestForRun } from '../world/modules/chat/systems/LlmDispatchSystem';
 import { ToolEventType } from '../world/modules/tools/events';
+import { ModeEventType } from '../world/modules/mode/events';
 import {
   BridgeMessageType,
   GLOBAL_CLIENT_STATE_STREAM_ID,
@@ -121,6 +122,27 @@ export class WebviewMessageRouter {
       case BridgeMessageType.AgentRunMarkStale:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: AgentRunEventType.MarkStale, payload: message.payload });
+        break;
+      case BridgeMessageType.ModeCreate:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: ModeEventType.Create, payload: message.payload });
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.ModeUpdate:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: ModeEventType.Update, payload: message.payload });
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.ModeDelete:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: ModeEventType.Delete, payload: message.payload });
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.ConversationModeSelect:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: ModeEventType.ConversationSelect, payload: message.payload });
+        this.deps.requestSnapshot(message.payload.conversationId);
+        this.deps.requestSnapshot();
         break;
       case BridgeMessageType.ClientResync:
         this.handleClientResync(clientId, message.payload?.streamId, message.payload?.conversationId);

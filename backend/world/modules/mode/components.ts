@@ -1,12 +1,25 @@
 import { defineComponent, type Entity } from '../../../ecs/types';
-import type { AgentModeRole, LlmProviderKind, ModeBindingRole, ToolPolicyToolConfigRecord } from '../../../../shared/protocol';
+import type {
+  AgentModeRole,
+  ConversationModeScopeKind,
+  ConversationModeSelectionRole,
+  LlmProviderKind,
+  ModeBindingRole,
+  ModeIconKey,
+  ModeSource,
+  ToolPolicyToolConfigRecord
+} from '../../../../shared/protocol';
 
-export interface AgentModeData {
+export interface ModeData {
   id: string;
   name: string;
   description?: string;
+  source: ModeSource;
+  icon?: ModeIconKey;
+  createdAt: number;
+  updatedAt: number;
 }
-export const AgentMode = defineComponent<AgentModeData>('AgentMode');
+export const Mode = defineComponent<ModeData>('Mode');
 
 export interface ToolPolicyData {
   id: string;
@@ -40,6 +53,17 @@ export interface AgentModeLinkData {
   updatedAt: number;
 }
 export const AgentModeLink = defineComponent<AgentModeLinkData>('AgentModeLink');
+
+export interface ConversationModeSelectionData {
+  id: string;
+  conversation: Entity;
+  scopeKind: ConversationModeScopeKind;
+  mode?: Entity;
+  role: ConversationModeSelectionRole;
+  createdAt: number;
+  updatedAt: number;
+}
+export const ConversationModeSelection = defineComponent<ConversationModeSelectionData>('ConversationModeSelection');
 
 export interface ModeToolPolicyLinkData {
   id: string;

@@ -107,11 +107,11 @@ export interface RuntimePaths {
   agentsRootPath: string;
   agentsIndexUri: vscode.Uri;
   agentsIndexPath: string;
-  /** Agent Mode 数据根目录：<dataRoot>/agent-modes */
-  agentModesRootUri: vscode.Uri;
-  agentModesRootPath: string;
-  agentModesIndexUri: vscode.Uri;
-  agentModesIndexPath: string;
+  /** Mode 数据根目录：<dataRoot>/modes */
+  modesRootUri: vscode.Uri;
+  modesRootPath: string;
+  modesIndexUri: vscode.Uri;
+  modesIndexPath: string;
   /** ToolPolicy 数据根目录：<dataRoot>/tool-policies */
   toolPoliciesRootUri: vscode.Uri;
   toolPoliciesRootPath: string;
@@ -177,6 +177,11 @@ export interface RuntimePaths {
   modeModelProfileLinksRootPath: string;
   modeModelProfileLinksIndexUri: vscode.Uri;
   modeModelProfileLinksIndexPath: string;
+  /** Conversation 的当前模式选择数据根目录：<dataRoot>/conversation-mode-selections */
+  conversationModeSelectionsRootUri: vscode.Uri;
+  conversationModeSelectionsRootPath: string;
+  conversationModeSelectionsIndexUri: vscode.Uri;
+  conversationModeSelectionsIndexPath: string;
   runHistoryRootUri: vscode.Uri;
   runHistoryRootPath: string;
   runHistoryIndexUri: vscode.Uri;

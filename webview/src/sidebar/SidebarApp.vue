@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { IconAdjustmentsAlt, IconEdit, IconMessage, IconPlayerStop, IconSettings, IconTrash } from '@tabler/icons-vue';
+import { IconAdjustmentsAlt, IconEdit, IconListDetails, IconMessage, IconPlayerStop, IconSettings, IconTrash } from '@tabler/icons-vue';
 import type { ConversationHistoryPageInfo, OpenConversationPanelRecord } from '@shared/protocol';
 import { displayConversationTitle as formatConversationTitle } from '@shared/conversationTitle';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
@@ -200,6 +200,10 @@ function createNewConversation(projectFolderUri?: string): void {
 
 function openGlobalSettings(): void {
   postSidebarMessage({ type: SIDEBAR_MESSAGE.openGlobalSettings });
+}
+
+function openModeSettings(): void {
+  postSidebarMessage({ type: SIDEBAR_MESSAGE.openModeSettings });
 }
 
 function renameConversation(entry: SidebarConversationHistoryEntry): void {
@@ -543,6 +547,22 @@ function ensureActiveScopeVisible(): void {
             <span class="settings-nav-main">
               <span class="settings-nav-title">全局设置</span>
               <span class="settings-nav-desc">模型渠道、工具权限、数据目录与默认行为。</span>
+            </span>
+            <span class="settings-nav-trail">
+              打开
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="9 18 15 12 9 6"></polyline>
+              </svg>
+            </span>
+          </button>
+
+          <button type="button" class="settings-nav-card" @click="openModeSettings">
+            <span class="settings-nav-icon" aria-hidden="true">
+              <IconListDetails class="settings-gear-icon" stroke="2" />
+            </span>
+            <span class="settings-nav-main">
+              <span class="settings-nav-title">模式设置</span>
+              <span class="settings-nav-desc">内置模式、用户模式与模式级工具策略。</span>
             </span>
             <span class="settings-nav-trail">
               打开

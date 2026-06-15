@@ -1,8 +1,9 @@
 import type { Entity, World } from '../ecs/types';
 import { Agent, AgentConversationLink, AgentKind, AgentStatus } from '../world/modules/agent/components';
 import {
-  AgentMode,
   AgentModeLink,
+  ConversationModeSelection,
+  Mode,
   ModeModelProfileLink,
   ModeSystemPromptLink,
   ModeToolPolicyLink,
@@ -41,7 +42,7 @@ import { createDefaultAgentRecord, DEFAULT_AGENT_NAME, DEFAULT_CONVERSATION_ID }
 export function hydrateClientStateSkeleton(world: World, state: ClientState): boolean {
   resetMessageSeqState();
 
-  const hasAnyState = state.agents.length > 0 || state.conversations.length > 0 || state.agentModes.length > 0;
+  const hasAnyState = state.agents.length > 0 || state.conversations.length > 0 || state.modes.length > 0;
   if (!hasAnyState) return false;
 
   const defaultAgent = createDefaultAgentRecord();
@@ -58,7 +59,7 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState): bo
     world.add(entity, AgentStatus, { status: agent.status ?? 'idle' });
   }
 
-  const modeEntities = hydrateRecords(world, state.agentModes, AgentMode);
+  const modeEntities = hydrateRecords(world, state.modes, Mode);
   const toolPolicyEntities = hydrateRecords(world, state.toolPolicies, ToolPolicy);
   const systemPromptEntities = hydrateRecords(world, state.systemPrompts, SystemPrompt);
   const modelProfileEntities = hydrateRecords(world, state.modelProfiles, ModelProfile);
@@ -119,6 +120,8 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState): bo
     world.add(entity, ConversationBranchLink, { id: record.id, sourceConversation, targetConversation, kind: record.kind, createdAt: now, updatedAt: now });
   }
 
+  hydrateConversationModeSelections(world, state, conversationEntities, modeEntities);
+
   hydrateToolPolicyScopeLinks(world, state, {
     agents: agentEntities,
     conversations: conversationEntities,
@@ -137,7 +140,7 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
   if (conversation === undefined) return false;
 
   const agentEntities = existingRecords(world, Agent);
-  const modeEntities = existingRecords(world, AgentMode);
+  const modeEntities = existingRecords(world, Mode);
   const toolPolicyEntities = existingRecords(world, ToolPolicy);
   const systemPromptEntities = existingRecords(world, SystemPrompt);
   const modelProfileEntities = existingRecords(world, ModelProfile);
@@ -249,6 +252,8 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
   for (const link of state.runEditPolicyLinks ?? []) spawnRunLink(world, runEntities, editPolicyEntities, link, RunEditPolicyLink, 'run', 'policy');
 
 
+  hydrateConversationModeSelections(world, state, conversationEntities, modeEntities);
+
   hydrateToolPolicyScopeLinks(world, state, {
     agents: agentEntities,
     conversations: conversationEntities,
@@ -355,6 +360,34 @@ function existingRecords<T extends { id: string }>(world: World, component: { id
 function existingIds<T extends { id: string }>(world: World, component: { id: symbol }): Set<string> {
   return new Set([...existingRecords<T>(world, component).keys()]);
 }
+
+function hydrateConversationModeSelections(
+  world: World,
+  state: ClientState,
+  conversations: Map<string, Entity>,
+  modes: Map<string, Entity>
+): void {
+  const existing = existingIds(world, ConversationModeSelection);
+  for (const record of state.conversationModeSelections ?? []) {
+    if (existing.has(record.id)) continue;
+    const conversation = conversations.get(record.conversationId);
+    if (conversation === undefined) continue;
+    const mode = record.scopeKind === 'mode' && record.modeId ? modes.get(record.modeId) : undefined;
+    if (record.scopeKind === 'mode' && mode === undefined) continue;
+    const entity = world.spawn();
+    existing.add(record.id);
+    world.add(entity, ConversationModeSelection, {
+      id: record.id,
+      conversation,
+      scopeKind: record.scopeKind,
+      ...(mode !== undefined ? { mode } : {}),
+      role: record.role,
+      createdAt: record.createdAt || Date.now(),
+      updatedAt: record.updatedAt || record.createdAt || Date.now()
+    });
+  }
+}
+
 
 interface ToolPolicyScopeHydrationMaps {
   agents: Map<string, Entity>;

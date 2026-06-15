@@ -52,6 +52,8 @@ import {
 import { AgentRunEventType } from '../world/modules/agentRun/events';
 import { setConversationProject } from '../world/modules/project/bundles';
 import { ConversationProjectLink, ProjectContext } from '../world/modules/project/components';
+import { upsertGlobalModeSelection } from '../world/modules/mode/bundles';
+import { ConversationModeSelection } from '../world/modules/mode/components';
 import { ToolCall, ToolCallEvent } from '../world/modules/tools/components';
 import { clientSyncPlugin, registerClientSyncSystems } from '../world/clientSync';
 import { storageProjectionPlugin } from '../world/storageProjection';
@@ -204,6 +206,8 @@ export class BackendApplication {
       createdAt: now,
       updatedAt: now
     });
+
+    upsertGlobalModeSelection(this.world, conversation, conversationId);
 
     const projectFolder = this.resolveProjectFolderForNewConversation(options.projectFolderUri);
     if (projectFolder) setConversationProject(this.world, { conversation, uri: projectFolder.uri, name: projectFolder.name });
@@ -525,6 +529,11 @@ export class BackendApplication {
     for (const entity of this.world.query(AgentConversationLink)) {
       const link = this.world.get(entity, AgentConversationLink);
       if (link?.conversation === conversation) entities.add(entity);
+    }
+
+    for (const entity of this.world.query(ConversationModeSelection)) {
+      const selection = this.world.get(entity, ConversationModeSelection);
+      if (selection?.conversation === conversation) entities.add(entity);
     }
 
     for (const entity of this.world.query(ConversationProjectLink)) {
@@ -905,6 +914,10 @@ function shouldDeferUntilHydrated(message: WebviewToExtensionMessage): boolean {
     case 'agentRun.retry':
     case 'agentRun.regenerate':
     case 'agentRun.markStale':
+    case 'mode.create':
+    case 'mode.update':
+    case 'mode.delete':
+    case 'conversation.mode.select':
     case 'conversation.project.set':
       return true;
     default:

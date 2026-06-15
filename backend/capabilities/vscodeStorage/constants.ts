@@ -3,7 +3,7 @@ export const INDEX_FILE = 'index.json';
 export const RECORDS_DIR = 'records';
 
 export const AGENTS_ROOT_DIR = 'agents';
-export const AGENT_MODES_ROOT_DIR = 'agent-modes';
+export const MODES_ROOT_DIR = 'modes';
 export const TOOL_POLICIES_ROOT_DIR = 'tool-policies';
 export const TOOL_POLICY_SCOPE_LINKS_ROOT_DIR = 'tool-policy-scope-links';
 export const SYSTEM_PROMPTS_ROOT_DIR = 'system-prompts';
@@ -13,6 +13,7 @@ export const AGENT_MODE_LINKS_ROOT_DIR = 'agent-mode-links';
 export const MODE_TOOL_POLICY_LINKS_ROOT_DIR = 'mode-tool-policy-links';
 export const MODE_SYSTEM_PROMPT_LINKS_ROOT_DIR = 'mode-system-prompt-links';
 export const MODE_MODEL_PROFILE_LINKS_ROOT_DIR = 'mode-model-profile-links';
+export const CONVERSATION_MODE_SELECTIONS_ROOT_DIR = 'conversation-mode-selections';
 export const CONVERSATIONS_ROOT_DIR = 'conversations';
 export const CONVERSATION_HISTORY_ROOT_DIR = 'conversation-history';
 export const PROJECT_CONTEXTS_ROOT_DIR = 'project-contexts';
@@ -26,7 +27,7 @@ export const SETTINGS_ROOT_DIR = 'settings';
  */
 export const REGISTERED_STORAGE_ROOT_DIRS = [
   AGENTS_ROOT_DIR,
-  AGENT_MODES_ROOT_DIR,
+  MODES_ROOT_DIR,
   TOOL_POLICIES_ROOT_DIR,
   TOOL_POLICY_SCOPE_LINKS_ROOT_DIR,
   SYSTEM_PROMPTS_ROOT_DIR,
@@ -36,6 +37,7 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
   MODE_TOOL_POLICY_LINKS_ROOT_DIR,
   MODE_SYSTEM_PROMPT_LINKS_ROOT_DIR,
   MODE_MODEL_PROFILE_LINKS_ROOT_DIR,
+  CONVERSATION_MODE_SELECTIONS_ROOT_DIR,
   CONVERSATIONS_ROOT_DIR,
   CONVERSATION_HISTORY_ROOT_DIR,
   PROJECT_CONTEXTS_ROOT_DIR,

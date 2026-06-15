@@ -3,7 +3,7 @@ import { readEvents } from '../../../events';
 import { Agent } from '../../agent/components';
 import { AgentRun } from '../../agentRun/components';
 import { Conversation } from '../../chat/components';
-import { AgentMode, ToolPolicy } from '../../mode/components';
+import { Mode, ToolPolicy } from '../../mode/components';
 import { ToolPolicyScopeLink, type ToolPolicyScopeLinkData } from '../components';
 import { ToolEventType } from '../events';
 import { ToolDefinitionsKey } from '../resources';
@@ -16,7 +16,7 @@ export const ToolPolicyScopeSystem = defineSystem({
       || readEvents(ctx, ToolEventType.PolicyScopeClearRequested).length > 0;
   },
   access: {
-    reads: { components: [Agent, AgentRun, Conversation, AgentMode, ToolPolicy, ToolPolicyScopeLink] },
+    reads: { components: [Agent, AgentRun, Conversation, Mode, ToolPolicy, ToolPolicyScopeLink] },
     writes: { components: [ToolPolicy, ToolPolicyScopeLink], mutationMode: 'update' },
     resources: { read: [ToolDefinitionsKey] },
     events: { read: [ToolEventType.PolicyScopeSetRequested, ToolEventType.PolicyScopeClearRequested] }
@@ -153,7 +153,7 @@ function resolveScope(world: WorldReader, scopeKind: ToolPolicyScopeKind, rawSco
       return agent === undefined ? { ok: false } : { ok: true, scopeId, data: { agent } };
     }
     case 'mode': {
-      const mode = scopeId ? findByRecordId(world, AgentMode, scopeId) : undefined;
+      const mode = scopeId ? findByRecordId(world, Mode, scopeId) : undefined;
       return mode === undefined ? { ok: false } : { ok: true, scopeId, data: { mode } };
     }
     case 'run': {
@@ -192,7 +192,7 @@ function scopeIdForLink(world: WorldReader, link: ToolPolicyScopeLinkData): stri
   switch (link.scopeKind) {
     case 'conversation': return link.conversation !== undefined ? world.get(link.conversation, Conversation)?.id : undefined;
     case 'agent': return link.agent !== undefined ? world.get(link.agent, Agent)?.id : undefined;
-    case 'mode': return link.mode !== undefined ? world.get(link.mode, AgentMode)?.id : undefined;
+    case 'mode': return link.mode !== undefined ? world.get(link.mode, Mode)?.id : undefined;
     case 'run': return link.run !== undefined ? world.get(link.run, AgentRun)?.id : undefined;
     case 'agentSystem': return link.agentSystemId;
   }

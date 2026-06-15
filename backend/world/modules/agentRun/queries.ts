@@ -2,8 +2,10 @@ import type { ComponentType, Entity, WorldReader } from '../../../ecs/types';
 import type { ToolPolicyScopeKind } from '../../../../shared/protocol';
 import { Agent, AgentConversationLink } from '../agent/components';
 import {
-  AgentMode,
   AgentModeLink,
+  ConversationModeSelection,
+  type ConversationModeSelectionData,
+  Mode,
   ModeModelProfileLink,
   ModeSystemPromptLink,
   ModeToolPolicyLink,
@@ -110,7 +112,25 @@ export function activeModeForRun(world: WorldReader, run: Entity): Entity | unde
 
   const target = runTarget(world, run);
   if (!target) return undefined;
+  const conversationSelection = activeModeSelectionForConversation(world, target.conversation);
+  if (conversationSelection?.scopeKind === 'global') return undefined;
+  if (conversationSelection?.scopeKind === 'mode') return conversationSelection.mode;
+
   return activeModeForAgent(world, target.agent);
+}
+
+export function activeModeSelectionForConversation(world: WorldReader, conversation: Entity): { scopeKind: 'global' } | { scopeKind: 'mode'; mode: Entity } | undefined {
+  let selected: { entity: Entity; data: ConversationModeSelectionData } | undefined;
+  for (const entity of world.query(ConversationModeSelection)) {
+    const data = world.get(entity, ConversationModeSelection);
+    if (!data || data.role !== 'active' || data.conversation !== conversation) continue;
+    if (!selected || (data.updatedAt || data.createdAt) > (selected.data.updatedAt || selected.data.createdAt) || ((data.updatedAt || data.createdAt) === (selected.data.updatedAt || selected.data.createdAt) && entity > selected.entity)) {
+      selected = { entity, data };
+    }
+  }
+  if (!selected) return undefined;
+  if (selected.data.scopeKind === 'global') return { scopeKind: 'global' };
+  return selected.data.mode !== undefined ? { scopeKind: 'mode', mode: selected.data.mode } : undefined;
 }
 
 export function activeModeForAgent(world: WorldReader, agent: Entity): Entity | undefined {
@@ -259,7 +279,7 @@ function matchesToolPolicyScope(
     switch (scopeKind) {
       case 'conversation': return link.conversation === scopeEntity || link.scopeId === world.get(scopeEntity, Conversation)?.id;
       case 'agent': return link.agent === scopeEntity || link.scopeId === world.get(scopeEntity, Agent)?.id;
-      case 'mode': return link.mode === scopeEntity || link.scopeId === world.get(scopeEntity, AgentMode)?.id;
+      case 'mode': return link.mode === scopeEntity || link.scopeId === world.get(scopeEntity, Mode)?.id;
       case 'run': return link.run === scopeEntity || link.scopeId === world.get(scopeEntity, AgentRun)?.id;
     }
   }
@@ -271,7 +291,7 @@ function entityForToolPolicyScope(world: WorldReader, scopeKind: ToolPolicyScope
   switch (scopeKind) {
     case 'conversation': return findRecordEntity(world, Conversation, scopeId);
     case 'agent': return findRecordEntity(world, Agent, scopeId);
-    case 'mode': return findRecordEntity(world, AgentMode, scopeId);
+    case 'mode': return findRecordEntity(world, Mode, scopeId);
     case 'run': return findRecordEntity(world, AgentRun, scopeId);
     case 'global':
     case 'agentSystem':

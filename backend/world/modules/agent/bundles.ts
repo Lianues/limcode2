@@ -8,8 +8,9 @@ import {
   AgentStatus
 } from './components';
 import {
-  AgentMode,
   AgentModeLink,
+  ConversationModeSelection,
+  Mode,
   ModeModelProfileLink,
   ModeSystemPromptLink,
   ModeToolPolicyLink,
@@ -17,6 +18,7 @@ import {
   SystemPrompt,
   ToolPolicy
 } from '../mode/components';
+import { selectGlobalModeForConversation } from '../mode/bundles';
 import { ToolPolicyScopeLink } from '../tools/components';
 import type { AgentBlueprint, AgentModeBlueprint } from './blueprints';
 import type { AgentModeRole } from '../../../../shared/protocol';
@@ -27,7 +29,7 @@ export const AgentFromBlueprintBundle = defineBundle({
     Agent,
     AgentKind,
     AgentStatus,
-    AgentMode,
+    Mode,
     ToolPolicy,
     SystemPrompt,
     ModelProfile,
@@ -37,6 +39,7 @@ export const AgentFromBlueprintBundle = defineBundle({
     ModeModelProfileLink,
     ToolPolicyScopeLink,
     Conversation,
+    ConversationModeSelection,
     AgentConversationLink,
     Message,
     PartOf
@@ -70,6 +73,13 @@ export function spawnAgentProfileFromBlueprint(
   cmd.add(agent, AgentStatus, { status: 'idle' });
 
   for (const modeBlueprint of input.blueprint.modes) {
+    if (input.agentId === 'main' && modeBlueprint.id === input.blueprint.defaultModeId) {
+      spawnGlobalToolPolicyFromBlueprint(cmd, {
+        blueprint: modeBlueprint,
+        agentId: input.agentId
+      });
+      continue;
+    }
     spawnModeFromBlueprint(cmd, {
       agent,
       agentId: input.agentId,
@@ -89,6 +99,7 @@ export function spawnAgentFromBlueprint(
 
   const conversation = spawnConversation(cmd, { id: input.conversationId, title: input.conversationTitle });
   const link = linkAgentToConversation(cmd, { agent, conversation, role: 'default' });
+  selectGlobalModeForConversation(cmd, conversation, input.conversationId);
 
   if (input.initialMessage?.trim()) {
     spawnUserMessage(cmd, conversation, input.initialMessage.trim());
@@ -121,10 +132,14 @@ function spawnModeFromBlueprint(
   const now = Date.now();
   const mode = cmd.spawn();
   const modeId = modeIdFor(input.agentId, input.blueprint.id);
-  cmd.add(mode, AgentMode, {
+  cmd.add(mode, Mode, {
     id: modeId,
     name: input.blueprint.name,
-    description: input.blueprint.description
+    description: input.blueprint.description,
+    source: 'builtin',
+    icon: 'list-details',
+    createdAt: now,
+    updatedAt: now
   });
 
   const modeRoles: AgentModeRole[] = input.isDefault ? ['active', 'default'] : ['available'];
@@ -148,17 +163,6 @@ function spawnModeFromBlueprint(
     allowedTools: input.blueprint.toolPolicy.allowedTools,
     ...(input.blueprint.toolPolicy.toolConfigs ? { toolConfigs: input.blueprint.toolPolicy.toolConfigs } : {})
   });
-  if (input.agentId === 'main' && input.isDefault) {
-    const globalToolPolicyLink = cmd.spawn();
-    cmd.add(globalToolPolicyLink, ToolPolicyScopeLink, {
-      id: 'tool-policy-scope:global:default',
-      scopeKind: 'global',
-      toolPolicy,
-      role: 'active',
-      createdAt: now,
-      updatedAt: now
-    });
-  }
   const toolPolicyLink = cmd.spawn();
   cmd.add(toolPolicyLink, ModeToolPolicyLink, {
     id: `mode-tool-policy:${modeId}:${toolPolicyId}`,
@@ -205,6 +209,31 @@ function spawnModeFromBlueprint(
   });
 
   return mode;
+}
+
+function spawnGlobalToolPolicyFromBlueprint(
+  cmd: CommandSink,
+  input: { agentId: string; blueprint: AgentModeBlueprint }
+): Entity {
+  const now = Date.now();
+  const toolPolicy = cmd.spawn();
+  const toolPolicyId = `tool-policy:global:${input.agentId}`;
+  cmd.add(toolPolicy, ToolPolicy, {
+    id: toolPolicyId,
+    name: input.blueprint.toolPolicy.name ?? '全局默认工具策略',
+    allowedTools: input.blueprint.toolPolicy.allowedTools,
+    ...(input.blueprint.toolPolicy.toolConfigs ? { toolConfigs: input.blueprint.toolPolicy.toolConfigs } : {})
+  });
+  const globalToolPolicyLink = cmd.spawn();
+  cmd.add(globalToolPolicyLink, ToolPolicyScopeLink, {
+    id: 'tool-policy-scope:global:global',
+    scopeKind: 'global',
+    toolPolicy,
+    role: 'active',
+    createdAt: now,
+    updatedAt: now
+  });
+  return toolPolicy;
 }
 
 function modeIdFor(agentId: string, localModeId: string): string {

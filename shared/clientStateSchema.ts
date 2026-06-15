@@ -278,12 +278,22 @@ const agentRunsTable: ClientSyncOverrides = {
 export const CLIENT_STATE_TABLES = {
   agents: upsertRemoveTable('agent', 'agent'),
   toolDefinitions: upsertRemoveTable('toolDefinition', 'toolDefinition'),
-  agentModes: upsertRemoveTable('agentMode', 'agentMode'),
+  modes: upsertRemoveTable('mode', 'mode', {
+    cascadeRemove: [
+      { table: 'agentModeLinks', foreignKey: 'modeId' },
+      { table: 'conversationModeSelections', foreignKey: 'modeId' },
+      { table: 'modeToolPolicyLinks', foreignKey: 'modeId' },
+      { table: 'modeSystemPromptLinks', foreignKey: 'modeId' },
+      { table: 'modeModelProfileLinks', foreignKey: 'modeId' },
+      { table: 'runModeLinks', foreignKey: 'modeId' }
+    ]
+  }),
   toolPolicies: upsertRemoveTable('toolPolicy', 'toolPolicy'),
   toolPolicyScopeLinks: upsertRemoveTable('toolPolicyScopeLink', 'link'),
   systemPrompts: upsertRemoveTable('systemPrompt', 'systemPrompt'),
   modelProfiles: upsertRemoveTable('modelProfile', 'modelProfile'),
   agentModeLinks: upsertRemoveTable('agentModeLink', 'link'),
+  conversationModeSelections: upsertRemoveTable('conversationModeSelection', 'selection', { scope: { kind: 'conversation', field: 'conversationId' }, globalSnapshot: true }),
   modeToolPolicyLinks: upsertRemoveTable('modeToolPolicyLink', 'link'),
   modeSystemPromptLinks: upsertRemoveTable('modeSystemPromptLink', 'link'),
   modeModelProfileLinks: upsertRemoveTable('modeModelProfileLink', 'link'),
@@ -295,6 +305,7 @@ export const CLIENT_STATE_TABLES = {
       { table: 'conversationReuseLinks', foreignKey: 'conversationId' },
       { table: 'conversationBranchLinks', foreignKeys: ['sourceConversationId', 'targetConversationId'] },
       { table: 'agentConversationLinks', foreignKey: 'conversationId' },
+      { table: 'conversationModeSelections', foreignKey: 'conversationId' },
       { table: 'conversationProjectLinks', foreignKey: 'conversationId' },
       { table: 'messages', foreignKey: 'conversationId', cascade: true }
     ]

@@ -22,7 +22,7 @@ import type {
 import type { AccessDeclaration, WorldReader } from '../../../ecs/types';
 import { Agent } from '../agent/components';
 import { Conversation, Message, MessageRevision } from '../chat/components';
-import { AgentMode, ModelProfile, SystemPrompt, ToolPolicy } from '../mode/components';
+import { Mode, ModelProfile, SystemPrompt, ToolPolicy } from '../mode/components';
 import { ToolCall } from '../tools/components';
 import {
   AgentRun,
@@ -52,7 +52,7 @@ export const agentRunStateProjectionReads: AccessDeclaration = {
     Message,
     MessageRevision,
     ToolCall,
-    AgentMode,
+    Mode,
     ToolPolicy,
     SystemPrompt,
     ModelProfile,
@@ -161,7 +161,7 @@ function buildRunModeLinkRecord(world: WorldReader, entity: number): RunModeLink
   const link = world.get(entity, RunModeLink);
   if (!link) return undefined;
   const run = world.get(link.run, AgentRun);
-  const mode = world.get(link.mode, AgentMode);
+  const mode = world.get(link.mode, Mode);
   if (!run || !mode) return undefined;
   return { id: link.id, runId: run.id, modeId: mode.id, role: link.role };
 }

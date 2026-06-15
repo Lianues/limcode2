@@ -148,9 +148,16 @@ function clearScheduledRender(): void {
 }
 
 .rc-markdown :deep(blockquote) {
-  padding-left: var(--space-3);
-  border-left: 2px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.28));
+  margin-left: 0;
+  margin-right: 0;
+  padding: 2px 0 2px var(--space-3);
+  border-left: 3px solid color-mix(in srgb, var(--vscode-descriptionForeground) 58%, transparent);
   color: var(--vscode-descriptionForeground);
+  text-align: left;
+}
+
+.rc-markdown :deep(blockquote p) {
+  text-align: left;
 }
 
 .rc-markdown :deep(pre) {

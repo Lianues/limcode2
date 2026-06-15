@@ -1,9 +1,16 @@
 import type { ClientState, ToolCallEventRecord, ToolCallRecord, ToolDefinitionRecord, ToolPolicyScopeLinkRecord } from '../../../../shared/protocol';
 import type { AccessDeclaration, WorldReader } from '../../../ecs/types';
 import { Agent } from '../agent/components';
-import { AgentRun } from '../agentRun/components';
+import {
+  AgentRun,
+  AgentRunTargetLink,
+  RunModeLink,
+  RunToolPolicyLink,
+  ToolCallRunLink
+} from '../agentRun/components';
+import { activeToolPolicyForRun, runForToolCall } from '../agentRun/queries';
 import { Conversation, Message, PartOf } from '../chat/components';
-import { AgentMode, ToolPolicy } from '../mode/components';
+import { AgentMode, AgentModeLink, ModeToolPolicyLink, ToolPolicy } from '../mode/components';
 import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey } from './resources';
 import { toolSchedulingDecision } from './scheduling';
 import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolPolicyScopeLinkData } from './components';
@@ -17,6 +24,12 @@ export const toolsRuntimeStateProjectionReads: AccessDeclaration = {
     Message,
     PartOf,
     ToolPolicy,
+    AgentRunTargetLink,
+    ToolCallRunLink,
+    RunModeLink,
+    RunToolPolicyLink,
+    AgentModeLink,
+    ModeToolPolicyLink,
     ToolCall,
     ToolState,
     ToolCallEvent,
@@ -73,6 +86,7 @@ function buildToolCallRecord(world: WorldReader, entity: number): ToolCallRecord
   if (!message) return undefined;
   const scheduling = toolSchedulingDecision(world, entity);
   const summary = resolveToolCallSummary(world, call);
+  const display = resolveToolCallDisplay(world, entity, call);
 
   return {
     id: call.id,
@@ -87,10 +101,20 @@ function buildToolCallRecord(world: WorldReader, entity: number): ToolCallRecord
     ...(state.progress !== undefined ? { progress: state.progress } : {}),
     schedulingMode: scheduling.mode,
     ...(scheduling.reason ? { schedulingReason: scheduling.reason } : {}),
+    ...(display ? { display } : {}),
     ...(state.durationMs !== undefined ? { durationMs: state.durationMs } : {}),
     createdAt: call.createdAt,
     updatedAt: state.updatedAt
   };
+}
+
+function resolveToolCallDisplay(world: WorldReader, entity: number, call: ToolCallData): { autoExpand?: boolean } | undefined {
+  const run = runForToolCall(world, entity);
+  if (run === undefined) return undefined;
+  const display = activeToolPolicyForRun(world, run)?.toolConfigs?.[call.name]?.display;
+  if (display?.autoExpand === true) return { autoExpand: true };
+  if (display?.autoExpand === false) return { autoExpand: false };
+  return undefined;
 }
 
 function resolveToolCallSummary(world: WorldReader, call: ToolCallData): string | undefined {

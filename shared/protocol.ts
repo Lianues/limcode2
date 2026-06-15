@@ -381,9 +381,15 @@ export interface AgentModeRecord {
   description?: string;
 }
 
+export interface ToolDisplayPolicyRecord {
+  /** true 时前端默认展开该工具调用的内容面板；false/未设置则默认收起。 */
+  autoExpand?: boolean;
+}
+
 export interface ToolPolicyToolConfigRecord {
   autoApproveExecution?: boolean;
   autoApplyResult?: boolean;
+  display?: ToolDisplayPolicyRecord;
   config: ToolConfigRecord;
 }
 
@@ -601,6 +607,7 @@ export interface ToolCallRecord {
   progress?: unknown;
   schedulingMode?: ToolSchedulingMode;
   schedulingReason?: string;
+  display?: ToolDisplayPolicyRecord;
   durationMs?: number;
   createdAt: number;
   updatedAt: number;

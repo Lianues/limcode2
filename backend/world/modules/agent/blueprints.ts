@@ -7,7 +7,8 @@ import type {
   LlmProviderKind,
   NewMessageWhileRunningBehavior,
   SourceEditBehavior,
-  TranscriptInclusion
+  TranscriptInclusion,
+  ToolPolicyToolConfigRecord
 } from '../../../../shared/protocol';
 import { TASK_LIST_TOOL_NAME } from '../../../../shared/protocol';
 
@@ -20,6 +21,7 @@ export interface ModeModelProfileBlueprint {
 export interface ModeToolPolicyBlueprint {
   name?: string;
   allowedTools: string[];
+  toolConfigs?: Record<string, ToolPolicyToolConfigRecord>;
 }
 
 export interface RunConversationPolicyBlueprint {
@@ -80,6 +82,9 @@ const DEFAULT_SYSTEM_PROMPT = 'You are LimCode, a concise and helpful AI coding 
 const DEFAULT_MODEL = 'gpt-5.5';
 const DEFAULT_TOOLS = [TASK_LIST_TOOL_NAME, 'read_file', 'shell', 'bash', 'run_agent'];
 const READONLY_TOOLS = [TASK_LIST_TOOL_NAME, 'read_file', 'shell', 'bash'];
+const DEFAULT_TOOL_CONFIGS = {
+  [TASK_LIST_TOOL_NAME]: { config: {}, display: { autoExpand: true } }
+} satisfies Record<string, ToolPolicyToolConfigRecord>;
 const DEFAULT_CONTEXT_POLICY: RunContextPolicyBlueprint = { historyMode: 'full' };
 const DEFAULT_EDIT_POLICY: RunEditPolicyBlueprint = { onSourceEdited: 'mark_stale', onNewUserMessageWhileRunning: 'queue_next_run' };
 
@@ -100,7 +105,7 @@ export function createDefaultAgentBlueprints(): AgentBlueprintRegistry {
           description: '默认开发助手模式',
           systemPrompt: DEFAULT_SYSTEM_PROMPT,
           model: { name: 'Default Model', provider: 'openai-compatible', model: DEFAULT_MODEL },
-          toolPolicy: { name: 'Default Tools', allowedTools: DEFAULT_TOOLS }
+          toolPolicy: { name: 'Default Tools', allowedTools: DEFAULT_TOOLS, toolConfigs: DEFAULT_TOOL_CONFIGS }
         }
       ]
     },
@@ -119,7 +124,7 @@ export function createDefaultAgentBlueprints(): AgentBlueprintRegistry {
           description: '代码审查模式',
           systemPrompt: 'Review code and point out risks, bugs, and maintainability issues. Do not modify files unless explicitly requested.',
           model: { name: 'Reviewer Model', provider: 'openai-compatible', model: DEFAULT_MODEL },
-          toolPolicy: { name: 'Reviewer Tools', allowedTools: READONLY_TOOLS }
+          toolPolicy: { name: 'Reviewer Tools', allowedTools: READONLY_TOOLS, toolConfigs: DEFAULT_TOOL_CONFIGS }
         }
       ]
     },
@@ -138,7 +143,7 @@ export function createDefaultAgentBlueprints(): AgentBlueprintRegistry {
           description: '可执行多步工具操作的通用子任务执行者',
           systemPrompt: 'You are an autonomous agent running in the same LimCode execution system. Complete the delegated task independently, use tools when useful, and return a concise result with important findings. You are not lower priority than any other agent; you are a peer execution subject.',
           model: { name: 'General Purpose Model', provider: 'openai-compatible', model: DEFAULT_MODEL },
-          toolPolicy: { name: 'General Purpose Tools', allowedTools: DEFAULT_TOOLS }
+          toolPolicy: { name: 'General Purpose Tools', allowedTools: DEFAULT_TOOLS, toolConfigs: DEFAULT_TOOL_CONFIGS }
         }
       ]
     },
@@ -157,7 +162,7 @@ export function createDefaultAgentBlueprints(): AgentBlueprintRegistry {
           description: '只读搜索、阅读和分析代码的执行者',
           systemPrompt: 'You are a read-only exploration agent. Inspect code, run safe read-only commands, and report findings. Do not modify files.',
           model: { name: 'Explore Model', provider: 'openai-compatible', model: DEFAULT_MODEL },
-          toolPolicy: { name: 'Explore Tools', allowedTools: READONLY_TOOLS }
+          toolPolicy: { name: 'Explore Tools', allowedTools: READONLY_TOOLS, toolConfigs: DEFAULT_TOOL_CONFIGS }
         }
       ]
     }

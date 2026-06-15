@@ -111,7 +111,8 @@ function cloneToolConfigs(): Record<string, ToolPolicyToolConfigRecord> {
     result[toolName] = {
       config: { ...(record.config ?? {}) },
       ...(typeof record.autoApproveExecution === 'boolean' ? { autoApproveExecution: record.autoApproveExecution } : {}),
-      ...(typeof record.autoApplyResult === 'boolean' ? { autoApplyResult: record.autoApplyResult } : {})
+      ...(typeof record.autoApplyResult === 'boolean' ? { autoApplyResult: record.autoApplyResult } : {}),
+      ...(record.display ? { display: { ...record.display } } : {})
     };
   }
   return result;
@@ -163,6 +164,20 @@ function updateGateSetting(tool: ToolDefinitionRecord, key: 'autoApproveExecutio
 
 function toolGateValue(tool: ToolDefinitionRecord, key: 'autoApproveExecution' | 'autoApplyResult'): boolean {
   return effectivePolicy.value?.toolConfigs?.[tool.name]?.[key] !== false;
+}
+
+function updateDisplayAutoExpand(tool: ToolDefinitionRecord, value: boolean): void {
+  if (props.readonly) return;
+  const nextConfigs = cloneToolConfigs();
+  nextConfigs[tool.name] = {
+    ...(nextConfigs[tool.name] ?? { config: sanitizeConfigForTool(tool, configForTool(tool)) }),
+    display: { ...(nextConfigs[tool.name]?.display ?? {}), autoExpand: value }
+  };
+  store.setPolicyForScope(props.scopeKind, props.scopeId, effectivePolicy.value?.allowedTools ?? [], effectivePolicy.value?.name, nextConfigs);
+}
+
+function displayAutoExpandValue(tool: ToolDefinitionRecord): boolean {
+  return effectivePolicy.value?.toolConfigs?.[tool.name]?.display?.autoExpand === true;
 }
 
 function sanitizeConfigForTool(tool: ToolDefinitionRecord, config: ToolConfigRecord): ToolConfigRecord {
@@ -256,8 +271,8 @@ function inputNumber(event: Event): number {
                   <template v-if="allowedSet.has(tool.name)">
                     <div class="tool-config-group tool-config-permissions">
                     <div class="tool-config-group-heading">
-                      <span class="tool-config-group-title">权限</span>
-                      <small>关闭后会在聊天区显示确认按钮。</small>
+                      <span class="tool-config-group-title">权限与显示</span>
+                      <small>控制执行确认、结果应用，以及聊天区工具卡片的默认展开行为。</small>
                     </div>
                     <div class="tool-permission-options">
                       <LcCheckbox
@@ -282,6 +297,18 @@ function inputNumber(event: Event): number {
                         <span class="permission-copy">
                           <span class="permission-title">自动应用结果</span>
                           <span class="permission-desc">开启时结果自动回传给 LLM；关闭时先确认是否应用。</span>
+                        </span>
+                      </LcCheckbox>
+                      <LcCheckbox
+                        class="tool-permission-card"
+                        :class="{ 'is-enabled': displayAutoExpandValue(tool) }"
+                        :model-value="displayAutoExpandValue(tool)"
+                        :disabled="readonly"
+                        @update:model-value="updateDisplayAutoExpand(tool, $event)"
+                      >
+                        <span class="permission-copy">
+                          <span class="permission-title">自动展开内容</span>
+                          <span class="permission-desc">开启时聊天里的该工具调用会默认展开内容面板；用户仍可手动收起。</span>
                         </span>
                       </LcCheckbox>
                     </div>

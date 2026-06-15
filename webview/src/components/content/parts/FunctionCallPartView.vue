@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { IconTool } from '@tabler/icons-vue';
 import type {
   FunctionCallPart,
@@ -29,6 +29,7 @@ const props = defineProps<{
 
 const clientState = useClientStateStore();
 const expanded = ref(false);
+const userChangedExpanded = ref(false);
 const toolCall = computed<ToolCallRecord | undefined>(() => {
   const partId = props.part.id;
   if (!props.messageId || !partId) return undefined;
@@ -66,6 +67,7 @@ const executionApproved = computed(() => isExecutionApprovedProgress(toolCall.va
 const needsExecutionDecision = computed(() => toolCall.value?.status === 'awaiting_approval' && !executionApproved.value);
 const needsApplyDecision = computed(() => toolCall.value?.status === 'awaiting_apply');
 const hasDetails = computed(() => hasArgs.value || hasOutput.value || Boolean(toolCall.value?.error) || executionApproved.value);
+const autoExpandDetails = computed(() => toolCall.value?.display?.autoExpand === true);
 const statusLabel = computed(() => toolCall.value ? labelForToolCall(toolCall.value) : '工具请求已生成');
 const statusTitle = computed(() => toolCall.value ? `工具状态：${toolCall.value.status}` : '等待后端创建工具调用记录');
 const durationLabel = computed(() => {
@@ -103,6 +105,15 @@ const toggleLabel = computed(() => {
   return expanded.value ? '收起工具调用内容' : '展开工具调用内容';
 });
 
+watch(autoExpandDetails, (autoExpand) => {
+  if (autoExpand && !userChangedExpanded.value) expanded.value = true;
+}, { immediate: true });
+
+watch(() => toolCall.value?.id, () => {
+  userChangedExpanded.value = false;
+  expanded.value = autoExpandDetails.value;
+});
+
 function stringifyValue(value: unknown): string {
   if (typeof value === 'string') return value;
   try {
@@ -121,6 +132,12 @@ function sendToolDecision(type: BridgeMessageType.ToolExecutionApprove | BridgeM
   if (!call) return;
   bridge.request(type, { toolCallId: call.id, conversationId: clientState.currentConversationId });
 }
+
+function setExpanded(value: boolean): void {
+  userChangedExpanded.value = true;
+  expanded.value = value;
+}
+
 
 function labelForToolCall(call: ToolCallRecord): string {
   if (call.status === 'awaiting_approval' && isExecutionApprovedProgress(call.progress)) return '已批准，等待前序批次';
@@ -176,7 +193,8 @@ function isInternalApprovalProgress(progress: unknown): boolean {
 
 <template>
   <CollapsibleContentBlock
-    v-model:expanded="expanded"
+    :expanded="expanded"
+    @update:expanded="setExpanded"
     class="tool-call-card"
     :class="[
       toolCall ? `status-${toolCall.status}` : undefined,

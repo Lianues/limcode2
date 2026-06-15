@@ -145,7 +145,8 @@ function spawnModeFromBlueprint(
   cmd.add(toolPolicy, ToolPolicy, {
     id: toolPolicyId,
     name: input.blueprint.toolPolicy.name ?? `${input.blueprint.name} Tools`,
-    allowedTools: input.blueprint.toolPolicy.allowedTools
+    allowedTools: input.blueprint.toolPolicy.allowedTools,
+    ...(input.blueprint.toolPolicy.toolConfigs ? { toolConfigs: input.blueprint.toolPolicy.toolConfigs } : {})
   });
   if (input.agentId === 'main' && input.isDefault) {
     const globalToolPolicyLink = cmd.spawn();

@@ -112,15 +112,21 @@ function sanitizeToolConfigs(
     const nextRecord: ToolPolicyToolConfigRecord = {
       config,
       ...(typeof rawRecord.autoApproveExecution === 'boolean' ? { autoApproveExecution: rawRecord.autoApproveExecution } : {}),
-      ...(typeof rawRecord.autoApplyResult === 'boolean' ? { autoApplyResult: rawRecord.autoApplyResult } : {})
+      ...(typeof rawRecord.autoApplyResult === 'boolean' ? { autoApplyResult: rawRecord.autoApplyResult } : {}),
+      ...(isDisplayPolicy(rawRecord.display) ? { display: rawRecord.display } : {})
     };
     if (
       Object.keys(config).length > 0
       || nextRecord.autoApproveExecution !== undefined
       || nextRecord.autoApplyResult !== undefined
+      || nextRecord.display !== undefined
     ) result[toolName] = nextRecord;
   }
   return result;
+}
+
+function isDisplayPolicy(value: unknown): value is { autoExpand?: boolean } {
+  return isPlainRecord(value) && (value.autoExpand === undefined || typeof value.autoExpand === 'boolean');
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

@@ -56,7 +56,8 @@ function cloneToolConfigs(toolConfigs: Record<string, ToolPolicyToolConfigRecord
     cloned[toolName] = {
       config: cloneToolConfigRecord(record.config),
       ...(typeof record.autoApproveExecution === 'boolean' ? { autoApproveExecution: record.autoApproveExecution } : {}),
-      ...(typeof record.autoApplyResult === 'boolean' ? { autoApplyResult: record.autoApplyResult } : {})
+      ...(typeof record.autoApplyResult === 'boolean' ? { autoApplyResult: record.autoApplyResult } : {}),
+      ...(record.display ? { display: { ...record.display } } : {})
     };
   }
   return cloned;

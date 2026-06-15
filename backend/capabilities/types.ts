@@ -21,6 +21,7 @@ import type {
   ToolCallRecord,
   WebviewClientMeta
 } from '../../shared/protocol';
+import type { TimelineProjectionContextRecord } from '../../shared/timelineProjection';
 
 export type Emit = (event: WorldEvent) => void;
 
@@ -201,6 +202,11 @@ export interface StorageCapability {
     conversationId: string,
     options?: { includeRunHistory?: boolean }
   ): Promise<ClientState | undefined>;
+  loadConversationTimelineProjectionContext(
+    conversationId: string,
+    projectionKey: string,
+    chunkId?: string
+  ): Promise<TimelineProjectionContextRecord | undefined>;
   saveClientStateSkeleton(state: ClientState): Promise<void>;
   saveConversationRenderDetail(conversationId: string, state: ClientState): Promise<void>;
   saveConversationRunHistory(conversationId: string, state: ClientState, options: { mode: ConversationRunHistorySaveMode }): Promise<void>;

@@ -1,8 +1,11 @@
+import { TASK_LIST_TOOL_NAME } from '@shared/protocol';
 import { readFileToolDisplay } from './readFileToolDisplay';
 import { shellToolDisplay } from './shellToolDisplay';
+import { taskListToolDisplay } from './taskListToolDisplay';
 import type { ToolDisplayContext, ToolDisplayResolver, ToolDisplayResult, ToolDisplaySection } from './types';
 
 const TOOL_DISPLAY_RESOLVERS: Record<string, ToolDisplayResolver> = {
+  [TASK_LIST_TOOL_NAME]: taskListToolDisplay,
   read_file: readFileToolDisplay,
   shell: shellToolDisplay,
   bash: shellToolDisplay

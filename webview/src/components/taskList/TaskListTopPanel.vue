@@ -1,0 +1,141 @@
+<script setup lang="ts">
+import { computed, ref, watch } from 'vue';
+import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
+import TaskListDisplay from './TaskListDisplay.vue';
+import { buildTaskListTimeline, formatTaskListProgress } from './taskListModel';
+
+const clientState = useClientStateStore();
+const expanded = ref(true);
+const listScroller = ref<HTMLElement | null>(null);
+
+const timeline = computed(() => buildTaskListTimeline({
+  messages: clientState.messages,
+  toolCalls: clientState.toolCalls,
+  conversationId: clientState.currentConversationId
+}));
+const snapshot = computed(() => timeline.value.snapshot);
+const visible = computed(() => snapshot.value.items.length > 0);
+const progressLabel = computed(() => formatTaskListProgress(snapshot.value));
+const activeLabel = computed(() => {
+  const active = snapshot.value.activeItem;
+  return active ? active.activeForm || active.title : '';
+});
+const statsLabel = computed(() => {
+  const stats = snapshot.value.stats;
+  return `${stats.completed}/${stats.total} 已完成`;
+});
+const refreshKey = computed(() => snapshot.value.items.map((item) => `${item.key}:${item.status}:${item.updatedOrder}`).join('|'));
+
+watch(() => clientState.currentConversationId, () => {
+  expanded.value = true;
+});
+
+function toggleExpanded(): void {
+  expanded.value = !expanded.value;
+}
+</script>
+
+<template>
+  <section v-if="visible" class="task-list-top-panel" :class="{ 'is-expanded': expanded }" :title="progressLabel">
+    <button
+      type="button"
+      class="task-list-top-header"
+      :aria-expanded="expanded"
+      aria-label="展开或收起任务清单"
+      @click="toggleExpanded"
+    >
+      <span class="task-list-top-title">任务清单</span>
+      <span class="task-list-top-stats">{{ statsLabel }}</span>
+      <span v-if="activeLabel" class="task-list-top-active">当前：{{ activeLabel }}</span>
+      <span class="task-list-top-toggle" aria-hidden="true">{{ expanded ? '收起' : '展开' }}</span>
+    </button>
+
+    <div v-show="expanded" class="task-list-top-body">
+      <div class="task-list-top-scroll-shell">
+        <div ref="listScroller" class="task-list-top-scroll">
+          <TaskListDisplay :items="snapshot.items" density="compact" :show-description="false" />
+        </div>
+        <AdvancedScrollbar :scroller="listScroller" :refresh-key="refreshKey" variant="minimal" />
+      </div>
+    </div>
+  </section>
+</template>
+
+<style scoped>
+.task-list-top-panel {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--vscode-panel-border);
+  background: color-mix(in srgb, var(--vscode-editor-background) 96%, var(--vscode-foreground) 4%);
+}
+
+.task-list-top-header {
+  width: 100%;
+  min-height: 28px;
+  border: 0;
+  padding: 0 var(--space-4);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--vscode-foreground);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.task-list-top-header:hover,
+.task-list-top-header:focus-visible {
+  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%));
+  outline: none;
+}
+
+.task-list-top-title {
+  flex: 0 0 auto;
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+}
+
+.task-list-top-stats,
+.task-list-top-active,
+.task-list-top-toggle {
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+.task-list-top-active {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-list-top-toggle {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.task-list-top-body {
+  padding: 0 var(--conversation-content-padding-right, calc(var(--space-4) + 24px)) 8px
+    var(--conversation-content-padding-left, var(--space-4));
+}
+
+.task-list-top-scroll-shell {
+  position: relative;
+  min-height: 0;
+}
+
+.task-list-top-scroll {
+  max-height: 138px;
+  overflow-y: auto;
+  padding: 2px 14px 2px 0;
+  scrollbar-width: none;
+}
+
+.task-list-top-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+</style>

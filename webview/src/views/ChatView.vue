@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import TabHeader from '@webview/components/layout/TabHeader.vue';
 import ConversationView from '@webview/components/conversation/ConversationView.vue';
 import ConversationSettingsPanel from '@webview/components/settings/ConversationSettingsPanel.vue';
+import TaskListTopPanel from '@webview/components/taskList/TaskListTopPanel.vue';
 
 const settingsOpen = ref(false);
 </script>
@@ -10,6 +11,7 @@ const settingsOpen = ref(false);
 <template>
   <div class="chat-view">
     <TabHeader :settings-open="settingsOpen" @toggle-settings="settingsOpen = !settingsOpen" />
+    <TaskListTopPanel />
     <section v-if="settingsOpen" class="chat-settings-drawer">
       <ConversationSettingsPanel />
     </section>

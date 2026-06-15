@@ -10,6 +10,7 @@ import type {
 } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { bridge, BridgeMessageType } from '@webview/transport';
+import TaskListDisplay from '@webview/components/taskList/TaskListDisplay.vue';
 import { resolveToolDisplay } from '../toolDisplay/registry';
 import ContentBlockSection from '../ContentBlockSection.vue';
 import CollapsibleContentBlock from '../CollapsibleContentBlock.vue';
@@ -51,6 +52,10 @@ const toolDisplay = computed(() => resolveToolDisplay({
   result: toolCall.value?.result,
   progress: displayProgress.value,
   events: toolEvents.value,
+  toolCall: toolCall.value,
+  messages: clientState.messages,
+  toolCalls: clientState.toolCalls,
+  currentConversationId: clientState.currentConversationId,
   stringifyValue
 }));
 const inputSections = computed(() => toolDisplay.value.inputSections);
@@ -214,6 +219,13 @@ function isInternalApprovalProgress(progress: unknown): boolean {
             <span class="tool-display-row-value">{{ row.value }}</span>
           </template>
         </div>
+        <TaskListDisplay
+          v-if="section.taskList"
+          class="tool-display-task-list"
+          :items="section.taskList.items"
+          :show-change="section.taskList.showChange ?? false"
+          :empty-text="section.taskList.emptyText"
+        />
       </ContentBlockSection>
       <ContentBlockSection
         v-for="(section, index) in outputSections"
@@ -228,6 +240,13 @@ function isInternalApprovalProgress(progress: unknown): boolean {
             <span class="tool-display-row-value">{{ row.value }}</span>
           </template>
         </div>
+        <TaskListDisplay
+          v-if="section.taskList"
+          class="tool-display-task-list"
+          :items="section.taskList.items"
+          :show-change="section.taskList.showChange ?? false"
+          :empty-text="section.taskList.emptyText"
+        />
       </ContentBlockSection>
       <p v-if="toolCall?.error" class="part-card-error">{{ toolCall.error }}</p>
       <p v-else-if="executionApproved && isWaitingForPreviousProgress(toolCall?.progress)" class="part-card-note">
@@ -402,6 +421,10 @@ function isInternalApprovalProgress(progress: unknown): boolean {
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
+}
+
+.tool-display-task-list {
+  color: var(--vscode-foreground);
 }
 
 .part-card-details {

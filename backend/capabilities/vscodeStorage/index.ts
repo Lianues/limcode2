@@ -34,6 +34,7 @@ import {
   saveMessageRecord,
   saveToolCallRecord
 } from './clientStateStore';
+import { loadTimelineProjectionContext } from './conversationTimelineStore';
 import {
   loadConversationHistoryPageFromStore,
   removeConversationHistoryEntryFromStore,
@@ -105,6 +106,10 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       const paths = getPaths();
       const includeRunHistory = options?.includeRunHistory ?? false;
       return loadConversationDetailFromStores(paths, conversationId, { includeRunHistory });
+    },
+    async loadConversationTimelineProjectionContext(conversationId, projectionKey, chunkId) {
+      const paths = getPaths();
+      return loadTimelineProjectionContext(paths, conversationId, projectionKey, chunkId);
     },
     async saveClientStateSkeleton(state) {
       const paths = getPaths();

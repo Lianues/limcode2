@@ -1,4 +1,5 @@
-import type { ToolCallEventRecord } from '@shared/protocol';
+import type { MessageRecord, ToolCallEventRecord, ToolCallRecord } from '@shared/protocol';
+import type { TaskListChangeItemView, TaskListItemView } from '@webview/components/taskList/taskListModel';
 
 export interface ToolDisplayRow {
   label: string;
@@ -11,6 +12,13 @@ export interface ToolDisplaySection {
   text?: string;
   rows?: ToolDisplayRow[];
   rowStyle?: 'keyValue' | 'lineNumber';
+  taskList?: ToolDisplayTaskList;
+}
+
+export interface ToolDisplayTaskList {
+  items: Array<TaskListItemView | TaskListChangeItemView>;
+  showChange?: boolean;
+  emptyText?: string;
 }
 
 export interface ToolDisplayContext {
@@ -19,6 +27,10 @@ export interface ToolDisplayContext {
   result?: unknown;
   progress?: unknown;
   events: ToolCallEventRecord[];
+  toolCall?: ToolCallRecord;
+  messages?: MessageRecord[];
+  toolCalls?: ToolCallRecord[];
+  currentConversationId?: string;
   stringifyValue(value: unknown): string;
 }
 

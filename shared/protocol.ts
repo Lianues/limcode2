@@ -249,6 +249,43 @@ export interface ToolDefinitionRecord {
   defaultConfig?: ToolConfigRecord;
 }
 
+export const TASK_LIST_TOOL_NAME = 'update_task_list';
+
+export const TASK_LIST_ITEM_STATUSES = [
+  'pending',
+  'in_progress',
+  'completed',
+  'blocked',
+  'cancelled'
+] as const;
+export type TaskListItemStatus = typeof TASK_LIST_ITEM_STATUSES[number];
+export type TaskListToolMode = 'rewrite' | 'update';
+
+export interface TaskListToolItemRecord {
+  /** 面向用户展示的任务标题；update 模式下也作为匹配键。 */
+  title: string;
+  /** 任务的补充说明、验收条件或上下文。 */
+  description?: string;
+  /** 任务进行中时适合展示的现在进行时文案。 */
+  activeForm?: string;
+  /** 不传时前端回放会沿用旧状态；新任务默认 pending。 */
+  status?: TaskListItemStatus;
+  /** update 模式下删除同标题任务。 */
+  delete?: boolean;
+}
+
+export interface TaskListToolOperationRecord {
+  kind: 'task_list.operation';
+  mode: TaskListToolMode;
+  items: TaskListToolItemRecord[];
+}
+
+export interface TaskListToolOutputRecord {
+  kind: 'task_list.result';
+  operation: TaskListToolOperationRecord;
+  summary: string;
+}
+
 export type LlmProviderKind = 'openai-compatible' | 'openai-responses' | 'claude' | 'gemini' | 'deepseek';
 export type LlmToolCallFormat = 'function-call';
 export type LlmThinkingLevel = 'not-set' | 'non-set' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';

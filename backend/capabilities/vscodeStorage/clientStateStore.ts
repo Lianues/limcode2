@@ -31,6 +31,10 @@ import { INDEX_FILE, STORAGE_VERSION } from './constants';
 import { createVscodeStoragePaths } from './paths';
 import { loadRecordStore, saveRecordStore } from './recordStore';
 import { readJson, writeJson } from './json';
+import {
+  loadConversationTimelineDetail,
+  saveConversationTimelineDetail
+} from './conversationTimelineStore';
 
 export type StoragePaths = ReturnType<typeof createVscodeStoragePaths>;
 
@@ -45,10 +49,6 @@ export interface SaveConversationRunHistoryOptions {
 type StoreKey = string;
 type StoreRecord = { id: string };
 
-interface StoreLocation {
-  root: vscode.Uri;
-  indexUri: vscode.Uri;
-}
 
 interface ConversationRunHistoryIndexFile {
   schemaVersion: typeof STORAGE_VERSION;
@@ -82,14 +82,10 @@ interface RunHistoryDetailFile {
   state: ClientState;
 }
 
+
 const CONVERSATION_REUSE_LINKS_DIR = 'reuse-links';
 const CONVERSATION_BRANCH_LINKS_DIR = 'branch-links';
 const CONVERSATION_DETAILS_DIR = 'details';
-const CONVERSATION_MESSAGES_DIR = 'messages';
-const CONVERSATION_TOOL_CALLS_DIR = 'tool-calls';
-const CONVERSATION_TOOL_CALL_EVENTS_DIR = 'tool-call-events';
-const CONVERSATION_MESSAGE_REVISIONS_DIR = 'message-revisions';
-const MESSAGE_CURRENT_REVISION_LINKS_DIR = 'message-current-revision-links';
 const RUN_HISTORY_CONVERSATIONS_DIR = 'conversations';
 const RUN_HISTORY_PAGES_DIR = 'pages';
 const RUN_HISTORY_RUNS_DIR = 'runs';
@@ -190,27 +186,7 @@ export async function loadConversationDetailFromStores(
   options: LoadConversationDetailOptions = {}
 ): Promise<ClientState | undefined> {
   const includeRunHistory = options.includeRunHistory ?? false;
-  const state = createEmptyClientState();
-  const detailRoot = conversationDetailRoot(paths, conversationId);
-
-  const [
-    messages,
-    messageRevisions,
-    messageCurrentRevisionLinks,
-    toolCalls,
-    toolCallEvents
-  ] = await Promise.all([
-    loadRecords<MessageRecord>(...subStore(detailRoot, CONVERSATION_MESSAGES_DIR), 'message'),
-    loadRecords<MessageRevisionRecord>(...subStore(detailRoot, CONVERSATION_MESSAGE_REVISIONS_DIR), 'revision'),
-    loadRecords<MessageCurrentRevisionLinkRecord>(...subStore(detailRoot, MESSAGE_CURRENT_REVISION_LINKS_DIR), 'link'),
-    loadRecords<ToolCallRecord>(...subStore(detailRoot, CONVERSATION_TOOL_CALLS_DIR), 'toolCall'),
-    loadRecords<ToolCallEventRecord>(...subStore(detailRoot, CONVERSATION_TOOL_CALL_EVENTS_DIR), 'event')
-  ]);
-  state.messages = messages;
-  state.messageRevisions = messageRevisions;
-  state.messageCurrentRevisionLinks = messageCurrentRevisionLinks;
-  state.toolCalls = toolCalls;
-  state.toolCallEvents = toolCallEvents;
+  const state = (await loadConversationTimelineDetail(paths, conversationId)) ?? createEmptyClientState();
 
   if (includeRunHistory) {
     const runHistory = await loadConversationRunHistoryFromStores(paths, conversationId);
@@ -309,14 +285,7 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
 
 export async function saveConversationRenderDetailToStores(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
   const detail = conversationRenderDetailSlice(state, conversationId);
-  const detailRoot = conversationDetailRoot(paths, conversationId);
-  await Promise.all([
-    saveRecords(...subStore(detailRoot, CONVERSATION_MESSAGES_DIR), detail.messages, 'message'),
-    saveRecords(...subStore(detailRoot, CONVERSATION_MESSAGE_REVISIONS_DIR), detail.messageRevisions, 'revision'),
-    saveRecords(...subStore(detailRoot, MESSAGE_CURRENT_REVISION_LINKS_DIR), detail.messageCurrentRevisionLinks, 'link'),
-    saveRecords(...subStore(detailRoot, CONVERSATION_TOOL_CALLS_DIR), detail.toolCalls, 'toolCall'),
-    saveRecords(...subStore(detailRoot, CONVERSATION_TOOL_CALL_EVENTS_DIR), detail.toolCallEvents, 'event')
-  ]);
+  await saveConversationTimelineDetail(paths, conversationId, detail);
 }
 
 export async function saveConversationRunHistoryToStores(
@@ -339,27 +308,32 @@ export async function saveConversationRunHistoryToStores(
 }
 
 export async function saveMessageRecord(paths: StoragePaths, conversationId: string, message: MessageRecord): Promise<void> {
-  const location = detailStore(paths, conversationId, CONVERSATION_MESSAGES_DIR);
-  const messages = await loadRecords<MessageRecord>(location.root, location.indexUri, 'message');
-  await saveRecords(location.root, location.indexUri, upsertById(messages, { ...message, conversationId }), 'message');
+  const detail = (await loadConversationTimelineDetail(paths, conversationId)) ?? createEmptyClientState();
+  detail.messages = upsertById(detail.messages, { ...message, conversationId });
+  await saveConversationTimelineDetail(paths, conversationId, detail);
 }
 
 export async function removeMessageRecord(paths: StoragePaths, conversationId: string, messageId: string): Promise<void> {
-  const location = detailStore(paths, conversationId, CONVERSATION_MESSAGES_DIR);
-  const messages = await loadRecords<MessageRecord>(location.root, location.indexUri, 'message');
-  await saveRecords(location.root, location.indexUri, messages.filter((message) => message.id !== messageId), 'message');
+  const detail = (await loadConversationTimelineDetail(paths, conversationId)) ?? createEmptyClientState();
+  const toolCallIds = new Set(detail.toolCalls.filter((toolCall) => toolCall.messageId === messageId).map((toolCall) => toolCall.id));
+  detail.messages = detail.messages.filter((message) => message.id !== messageId);
+  detail.messageRevisions = detail.messageRevisions.filter((revision) => revision.messageId !== messageId);
+  detail.messageCurrentRevisionLinks = detail.messageCurrentRevisionLinks.filter((link) => link.messageId !== messageId);
+  detail.toolCalls = detail.toolCalls.filter((toolCall) => toolCall.messageId !== messageId);
+  detail.toolCallEvents = detail.toolCallEvents.filter((event) => !toolCallIds.has(event.toolCallId));
+  await saveConversationTimelineDetail(paths, conversationId, detail);
 }
 
 export async function saveToolCallRecord(paths: StoragePaths, conversationId: string, toolCall: ToolCallRecord): Promise<void> {
-  const location = detailStore(paths, conversationId, CONVERSATION_TOOL_CALLS_DIR);
-  const toolCalls = await loadRecords<ToolCallRecord>(location.root, location.indexUri, 'toolCall');
-  await saveRecords(location.root, location.indexUri, upsertById(toolCalls, toolCall), 'toolCall');
+  const detail = (await loadConversationTimelineDetail(paths, conversationId)) ?? createEmptyClientState();
+  detail.toolCalls = upsertById(detail.toolCalls, toolCall);
+  await saveConversationTimelineDetail(paths, conversationId, detail);
 }
 
 export async function appendToolCallEventRecord(paths: StoragePaths, conversationId: string, event: ToolCallEventRecord): Promise<void> {
-  const location = detailStore(paths, conversationId, CONVERSATION_TOOL_CALL_EVENTS_DIR);
-  const events = await loadRecords<ToolCallEventRecord>(location.root, location.indexUri, 'event');
-  await saveRecords(location.root, location.indexUri, upsertById(events, event), 'event');
+  const detail = (await loadConversationTimelineDetail(paths, conversationId)) ?? createEmptyClientState();
+  detail.toolCallEvents = upsertById(detail.toolCallEvents, event);
+  await saveConversationTimelineDetail(paths, conversationId, detail);
 }
 
 export function conversationRenderDetailSlice(state: ClientState, conversationId: string): ClientState {
@@ -717,10 +691,6 @@ function conversationDetailRoot(paths: StoragePaths, conversationId: string): vs
   return vscode.Uri.joinPath(paths.conversationsRootUri, CONVERSATION_DETAILS_DIR, safeShardName(conversationId));
 }
 
-function detailStore(paths: StoragePaths, conversationId: string, dir: string): StoreLocation {
-  const [root, indexUri] = subStore(conversationDetailRoot(paths, conversationId), dir);
-  return { root, indexUri };
-}
 
 function runHistoryRoot(paths: StoragePaths, conversationId: string): vscode.Uri {
   return vscode.Uri.joinPath(paths.runHistoryRootUri, RUN_HISTORY_CONVERSATIONS_DIR, safeShardName(conversationId));

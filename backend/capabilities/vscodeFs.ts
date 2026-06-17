@@ -5,6 +5,7 @@ import {
   workEnvironmentDisplayName,
   workEnvironmentSupportsCapability
 } from '../../shared/workEnvironmentCatalog';
+import { isRemoteServerCommandEnvironment, readRemoteServerTextFile } from './workEnvironmentProvider';
 
 const MAX_BYTES = 256 * 1024;
 
@@ -16,6 +17,9 @@ export function createVsCodeFsCapability(): FsCapability {
 }
 
 export async function readWorkspaceTextFile(relPath: string, startLine?: number, endLine?: number, options: WorkEnvironmentCapabilityOptions = {}): Promise<FsReadFileResult> {
+  if (isRemoteServerCommandEnvironment(options.workEnvironment)) {
+    return readRemoteServerTextFile(options.workEnvironment, relPath, startLine, endLine);
+  }
   const uri = resolveWorkspacePath(relPath, options);
   const data = await vscode.workspace.fs.readFile(uri);
   if (data.byteLength > MAX_BYTES) {

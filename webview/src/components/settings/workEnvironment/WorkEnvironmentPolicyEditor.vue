@@ -47,6 +47,7 @@ const defaultEnvironmentId = computed(() => effectivePolicy.value?.defaultWorkEn
 const activeEnvironment = computed(() => environments.value.find((item) => item.id === activeEnvironmentId.value) ?? environments.value[0]);
 const activeDetailEditor = computed(() => workEnvironmentDetailEditorForKind(activeEnvironment.value?.kind));
 const canDeleteActiveEnvironment = computed(() => !props.readonly && canRemoveWorkEnvironment(activeEnvironment.value));
+const policyEnabled = computed(() => effectivePolicy.value?.enabled !== false);
 const sourceLabel = computed(() => {
   if (props.scopeKind === 'global') return '全局默认策略';
   if (hasLocalOverride.value) return '当前作用域覆盖';
@@ -55,6 +56,7 @@ const sourceLabel = computed(() => {
   return '默认策略';
 });
 const enabledCount = computed(() => environments.value.filter((environment) => allowedSet.value.has(environment.id)).length);
+const toolSwitchLabel = computed(() => policyEnabled.value ? '工作环境已启用' : '工作环境已停用');
 
 watch(
   () => environments.value.map((item) => item.id).join('|'),
@@ -83,6 +85,13 @@ function setDefault(environment: WorkEnvironmentRecord): void {
 function restoreInheritance(): void {
   if (!canRestoreInheritance.value) return;
   store.clearPolicyScope(props.scopeKind, props.scopeId);
+}
+
+function setPolicyEnabled(enabled: boolean): void {
+  if (props.readonly) return;
+  const allowed = environments.value.map((item) => item.id).filter((id) => allowedSet.value.has(id));
+  const defaultId = allowed.includes(defaultEnvironmentId.value) ? defaultEnvironmentId.value : allowed[0];
+  store.setPolicyForScope(props.scopeKind, props.scopeId, allowed, defaultId, effectivePolicy.value?.name, enabled);
 }
 
 function openCreate(action: WorkEnvironmentCreateAction = WORK_ENVIRONMENT_CREATE_ACTIONS[0]): void {
@@ -162,11 +171,19 @@ function detailNote(environment: WorkEnvironmentRecord): string {
       </div>
       <div class="work-env-summary" aria-live="polite">
         <span>{{ sourceLabel }}</span>
+        <span>{{ toolSwitchLabel }}</span>
         <span>{{ enabledCount }} / {{ environments.length }} 已允许</span>
       </div>
     </header>
 
     <div class="work-env-actions">
+      <LcCheckbox
+        :model-value="policyEnabled"
+        :disabled="readonly"
+        @update:model-value="setPolicyEnabled"
+      >
+        <span>启用工作环境</span>
+      </LcCheckbox>
       <button type="button" :disabled="readonly" @click="importFromVscode">
         <IconCloudDown stroke="2" aria-hidden="true" />
         <span>从 VS Code 导入</span>

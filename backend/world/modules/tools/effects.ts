@@ -9,6 +9,7 @@ export interface ToolRunEffect {
   conversationId?: string;
   config?: ToolConfigRecord;
   workEnvironment?: WorkEnvironmentRecord;
+  workEnvironments?: WorkEnvironmentRecord[];
 }
 
 declare module '@backend/world/effects' {

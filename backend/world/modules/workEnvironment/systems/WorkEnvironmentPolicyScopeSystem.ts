@@ -40,6 +40,7 @@ export const WorkEnvironmentPolicyScopeSystem = defineSystem({
       const policy = upsertWorkEnvironmentPolicy(world, cmd, {
         id: currentPolicy?.id ?? workEnvironmentPolicyIdForScope(payload.scopeKind, scope.scopeId),
         name: payload.name?.trim() || currentPolicy?.name || defaultPolicyName(payload.scopeKind),
+        enabled: payload.enabled ?? currentPolicy?.enabled ?? true,
         allowedWorkEnvironmentIds: allowedIds,
         defaultWorkEnvironmentId: defaultId
       });

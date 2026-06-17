@@ -4,6 +4,7 @@ import { readFileToolModule } from './readFile';
 import { runAgentToolModule } from './runAgent';
 import { switchWorkEnvironmentToolModule } from './switchWorkEnvironment';
 import { taskListToolModule } from './taskList';
+import { transferFilesToolModule } from './transferFiles';
 import type { ToolDefinitionContext, ToolDefinitionModule } from './types';
 
 export * from './types';
@@ -12,10 +13,12 @@ export { readFileToolModule, readFileTool } from './readFile';
 export { runAgentToolModule, runAgentTool } from './runAgent';
 export { switchWorkEnvironmentToolModule, switchWorkEnvironmentTool } from './switchWorkEnvironment';
 export { taskListToolModule, taskListTool } from './taskList';
+export { transferFilesToolModule, transferFilesTool } from './transferFiles';
 
 const BUILTIN_TOOL_MODULES: readonly ToolDefinitionModule[] = [
   taskListToolModule,
   switchWorkEnvironmentToolModule,
+  transferFilesToolModule,
   readFileToolModule,
   runAgentToolModule,
   commandToolModule

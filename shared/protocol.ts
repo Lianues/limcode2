@@ -261,6 +261,7 @@ export interface ToolDefinitionRecord {
 
 export const TASK_LIST_TOOL_NAME = 'update_task_list';
 export const SWITCH_WORK_ENVIRONMENT_TOOL_NAME = 'switch_work_environment';
+export const TRANSFER_FILES_TOOL_NAME = 'transfer_files';
 
 export const TASK_LIST_ITEM_STATUSES = [
   'pending',
@@ -518,7 +519,7 @@ export type BuiltinWorkEnvironmentKind = 'localFolder' | 'remoteServer';
 export type WorkEnvironmentKind = BuiltinWorkEnvironmentKind | (string & {});
 export type WorkEnvironmentSource = 'workspaceFolder' | 'vscodeSshConfig' | 'manual' | (string & {});
 export type WorkEnvironmentOs = 'linux' | 'windows' | 'macos' | 'unknown' | string;
-export type WorkEnvironmentCapabilityKind = 'localFileRead' | 'localCommand' | 'remoteFileRead' | 'remoteCommand' | 'containerFileRead' | 'containerCommand' | (string & {});
+export type WorkEnvironmentCapabilityKind = 'localFileRead' | 'localCommand' | 'remoteFileRead' | 'remoteCommand' | 'containerFileRead' | 'containerCommand' | 'fileTransferRead' | 'fileTransferWrite' | (string & {});
 export type WorkEnvironmentPolicyScopeKind = 'global' | 'conversation' | 'agent' | 'agentSystem' | 'mode' | 'run';
 
 export interface ProjectContextRecord {
@@ -580,6 +581,7 @@ export interface WorkEnvironmentRecord {
 export interface WorkEnvironmentPolicyRecord {
   id: string;
   name: string;
+  enabled: boolean;
   allowedWorkEnvironmentIds: string[];
   defaultWorkEnvironmentId?: string;
   createdAt: number;
@@ -1246,6 +1248,7 @@ export interface WorkEnvironmentPolicyScopeSetPayload {
   scopeKind: WorkEnvironmentPolicyScopeKind;
   scopeId?: string;
   name?: string;
+  enabled?: boolean;
   allowedWorkEnvironmentIds: string[];
   defaultWorkEnvironmentId?: string;
 }

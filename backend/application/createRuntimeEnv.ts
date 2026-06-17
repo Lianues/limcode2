@@ -3,6 +3,7 @@ import type { ToolDefinitionRecord } from '../../shared/protocol';
 import {
   createLlmProviderCapability,
   createCommandCapability,
+  createWorkEnvironmentRuntimeCapability,
   createVsCodeFsCapability,
   createVsCodeStorageCapability,
   createWebviewCapability
@@ -23,6 +24,7 @@ export interface RuntimeEnvSetup {
  */
 export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSetup {
   const command = createCommandCapability();
+  const workEnvironment = createWorkEnvironmentRuntimeCapability();
   const registry = createToolRegistry(command);
   const storage = createVsCodeStorageCapability(context);
   const llm = createLlmProviderCapability({
@@ -41,6 +43,7 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
       llm,
       fs,
       command,
+      workEnvironment,
       webview,
       storage,
       get paths() { return storage.paths; },

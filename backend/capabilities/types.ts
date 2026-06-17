@@ -82,6 +82,58 @@ export interface CommandRunResult {
   stderr: string;
 }
 
+export type WorkEnvironmentTransferKind = 'auto' | 'file' | 'directory';
+export type WorkEnvironmentTransferVerifyMode = 'none' | 'size';
+
+export interface WorkEnvironmentTransferItem {
+  fromEnvironment: string;
+  fromPath: string;
+  toEnvironment: string;
+  toPath: string;
+  type?: WorkEnvironmentTransferKind;
+  overwrite?: boolean;
+  createDirs?: boolean;
+}
+
+export interface WorkEnvironmentTransferArgs {
+  transfers?: WorkEnvironmentTransferItem[];
+  verify?: WorkEnvironmentTransferVerifyMode;
+}
+
+export interface WorkEnvironmentTransferContext {
+  activeWorkEnvironment?: WorkEnvironmentRecord;
+  availableWorkEnvironments?: WorkEnvironmentRecord[];
+}
+
+export interface WorkEnvironmentTransferEntryResult {
+  success: boolean;
+  index: number;
+  type: WorkEnvironmentTransferKind;
+  from: { environment: string; path: string };
+  to: { environment: string; path: string };
+  files?: number;
+  dirs?: number;
+  bytes?: number;
+  verify?: { mode: WorkEnvironmentTransferVerifyMode; ok: boolean };
+  error?: string;
+  durationMs: number;
+}
+
+export interface WorkEnvironmentTransferResult {
+  results: WorkEnvironmentTransferEntryResult[];
+  successCount: number;
+  failCount: number;
+  totalCount: number;
+}
+
+export interface WorkEnvironmentRuntimeCapability {
+  transferFiles(
+    args: WorkEnvironmentTransferArgs,
+    observer?: CommandRunObserver,
+    context?: WorkEnvironmentTransferContext
+  ): Promise<WorkEnvironmentTransferResult>;
+}
+
 /** 命令执行能力：根据 extension host 平台自动选择 PowerShell(shell) 或 Bash(bash)。 */
 export interface CommandCapability {
   readonly toolName: 'shell' | 'bash';

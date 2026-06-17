@@ -66,6 +66,8 @@ import {
 } from '../../workEnvironment/components';
 import {
   activeWorkEnvironmentForRun,
+  allowedWorkEnvironmentsForRun,
+  effectiveWorkEnvironmentPolicyForRun,
   resolveWorkEnvironmentBySelector,
   toPublicWorkEnvironmentRecord
 } from '../../workEnvironment/queries';
@@ -83,6 +85,7 @@ import {
 } from '../scheduling';
 import {
   SWITCH_WORK_ENVIRONMENT_TOOL_NAME,
+  TRANSFER_FILES_TOOL_NAME,
   type AgentRunStatus,
   type ContextHistoryMode,
   type ConversationPolicyMode,
@@ -232,6 +235,9 @@ function authorizeRunToolExecution(world: WorldReader, toolCall: Entity, call: T
   if (!policy.allowedTools.includes(call.name)) {
     return { ok: false, reason: `AgentRun ${runData.id} 不允许执行工具 ${call.name}。` };
   }
+  if ((call.name === SWITCH_WORK_ENVIRONMENT_TOOL_NAME || call.name === TRANSFER_FILES_TOOL_NAME) && effectiveWorkEnvironmentPolicyForRun(world, run).policy?.enabled === false) {
+    return { ok: false, reason: `当前工作环境策略已停用工具 ${call.name}。` };
+  }
   return {
     ok: true,
     run,
@@ -261,6 +267,7 @@ function dispatchToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, 
 
 function executeRuntimeToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
   const workEnvironment = activeWorkEnvironmentForRun(world, authorization.run)?.data;
+  const workEnvironments = allowedWorkEnvironmentsForRun(world, authorization.run).map((item) => toPublicWorkEnvironmentRecord(item.data));
   cmd.effect({
     kind: 'tool.run',
     toolCallId: call.id,
@@ -269,7 +276,8 @@ function executeRuntimeToolCall(world: WorldReader, cmd: CommandSink, entity: En
     runId: authorization.runId,
     conversationId: authorization.conversationId,
     config: effectiveToolConfig(world, authorization.policy, call.name),
-    ...(workEnvironment ? { workEnvironment: toPublicWorkEnvironmentRecord(workEnvironment) } : {})
+    ...(workEnvironment ? { workEnvironment: toPublicWorkEnvironmentRecord(workEnvironment) } : {}),
+    ...(workEnvironments.length > 0 ? { workEnvironments } : {})
   });
   const now = Date.now();
   cmd.add(entity, ToolState, transitionToolState(state, 'executing', {}, now));

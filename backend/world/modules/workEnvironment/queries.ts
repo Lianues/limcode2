@@ -5,7 +5,6 @@ import type {
   WorkEnvironmentRecord
 } from '../../../../shared/protocol';
 import {
-  formatWorkEnvironmentForDisplay,
   isLocalFolderWorkEnvironment,
   workEnvironmentDisplayPath,
   workEnvironmentSortKey as buildWorkEnvironmentSortKey
@@ -74,6 +73,7 @@ export function toWorkEnvironmentPolicyRecord(data: WorkEnvironmentPolicyData): 
   return {
     id: data.id,
     name: data.name,
+    enabled: data.enabled,
     allowedWorkEnvironmentIds: [...data.allowedWorkEnvironmentIds],
     ...(data.defaultWorkEnvironmentId ? { defaultWorkEnvironmentId: data.defaultWorkEnvironmentId } : {}),
     createdAt: data.createdAt,
@@ -256,22 +256,6 @@ export function localPolicyForScope(world: WorldReader, scopeKind: WorkEnvironme
   };
 }
 
-export function formatWorkEnvironmentContext(world: WorldReader, run: Entity): string | undefined {
-  const environments = allowedWorkEnvironmentsForRun(world, run);
-  if (environments.length === 0) return undefined;
-
-  const current = activeWorkEnvironmentForRun(world, run) ?? environments[0];
-  const lines = [
-    '[工作环境 / WorkEnvironment]',
-    `当前工作环境: ${formatWorkEnvironmentLine(current.data)}`,
-    '可用工作环境:'
-  ];
-  for (const item of environments.slice(0, 12)) {
-    lines.push(`- ${formatWorkEnvironmentLine(item.data)}`);
-  }
-  lines.push('如果需要切换 read_file、shell/bash 等工具使用的相对路径根目录，请先调用 switch_work_environment。切换后工具参数仍然使用相对路径 / 相对 cwd。非本地执行类环境当前只支持识别与切换，具体工具执行能力需要对应环境 provider 接入。');
-  return lines.join('\n');
-}
 
 function localPolicyForScopeEntity(world: WorldReader, scopeKind: WorkEnvironmentPolicyScopeKind, scopeEntity: Entity | undefined): WorkEnvironmentPolicyResolution {
   if (scopeEntity === undefined) return {};
@@ -293,7 +277,7 @@ function fallbackPolicy(world: WorldReader): WorkEnvironmentPolicyResolution {
   const now = Date.now();
   const ids = availableWorkEnvironments(world).map((item) => item.data.id);
   return ids.length > 0
-    ? { policy: { id: 'work-environment-policy:fallback', name: '默认工作环境策略', allowedWorkEnvironmentIds: ids, defaultWorkEnvironmentId: ids[0], createdAt: now, updatedAt: now }, inheritedFrom: 'fallback' }
+    ? { policy: { id: 'work-environment-policy:fallback', name: '默认工作环境策略', enabled: true, allowedWorkEnvironmentIds: ids, defaultWorkEnvironmentId: ids[0], createdAt: now, updatedAt: now }, inheritedFrom: 'fallback' }
     : { inheritedFrom: 'fallback' };
 }
 
@@ -326,6 +310,3 @@ function workEnvironmentSortKey(data: WorkEnvironmentData): string {
   return buildWorkEnvironmentSortKey(data);
 }
 
-function formatWorkEnvironmentLine(data: WorkEnvironmentData): string {
-  return formatWorkEnvironmentForDisplay(data);
-}

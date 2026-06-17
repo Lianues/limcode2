@@ -36,6 +36,7 @@ export const WorkEnvironment = defineComponent<WorkEnvironmentData>('WorkEnviron
 export interface WorkEnvironmentPolicyData {
   id: string;
   name: string;
+  enabled: boolean;
   allowedWorkEnvironmentIds: string[];
   defaultWorkEnvironmentId?: string;
   createdAt: number;

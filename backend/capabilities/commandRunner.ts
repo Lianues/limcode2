@@ -7,6 +7,7 @@ import {
   workEnvironmentDisplayName,
   workEnvironmentSupportsCapability
 } from '../../shared/workEnvironmentCatalog';
+import { isRemoteServerCommandEnvironment, runRemoteServerCommand } from './workEnvironmentProvider';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT_CHARS = 120_000;
@@ -87,15 +88,24 @@ async function runCommand(profile: CommandProfile, args: CommandRunArgs, observe
   const command = (args.command ?? '').trim();
   if (!command) return failedResult('', 'Missing required argument: command');
 
-  const environmentError = validateCommandWorkEnvironment(options);
-  if (environmentError) return failedResult(command, environmentError);
+  const remoteEnvironment = isRemoteServerCommandEnvironment(options.workEnvironment) ? options.workEnvironment : undefined;
+  if (!remoteEnvironment) {
+    const environmentError = validateCommandWorkEnvironment(options);
+    if (environmentError) return failedResult(command, environmentError);
+  }
 
-  const safety = classifyCommand(profile.kind, command);
+  const safetyKind: ShellKind = remoteEnvironment ? 'bash' : profile.kind;
+  const safety = classifyCommand(safetyKind, command);
   if (safety === 'deny') {
-    return failedResult(command, `安全拒绝: ${getDenyReason(profile.kind, command) ?? '命令被安全策略拒绝'}\n此操作在黑名单中，force 参数也无法绕过。`);
+    return failedResult(command, `安全拒绝: ${getDenyReason(safetyKind, command) ?? '命令被安全策略拒绝'}\n此操作在黑名单中，force 参数也无法绕过。`);
   }
   if (safety === 'unknown' && args.force !== true) {
     return failedResult(command, `命令不在安全白名单中，已拒绝执行。请确认风险后设置 force: true 重试。`);
+  }
+
+  if (remoteEnvironment) {
+    const raw = await runRemoteServerCommand(remoteEnvironment, args, observer);
+    return annotateResult('bash', raw);
   }
 
   const cwd = resolveWorkDir(args.cwd, options);

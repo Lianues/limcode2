@@ -89,7 +89,7 @@ function fallbackPolicy(): WorkEnvironmentPolicyRecord | undefined {
   const ids = availableEnvironmentIds();
   if (ids.length === 0) return undefined;
   const now = Date.now();
-  return { id: 'work-environment-policy:fallback', name: '默认工作环境策略', allowedWorkEnvironmentIds: ids, defaultWorkEnvironmentId: ids[0], createdAt: now, updatedAt: now };
+  return { id: 'work-environment-policy:fallback', name: '默认工作环境策略', enabled: true, allowedWorkEnvironmentIds: ids, defaultWorkEnvironmentId: ids[0], createdAt: now, updatedAt: now };
 }
 
 function sanitizePolicyInput(allowedIds: string[], defaultId?: string): { allowed: string[]; defaultId?: string } {
@@ -181,13 +181,15 @@ export const useWorkEnvironmentStore = defineStore('workEnvironment', {
       upsertById(clientState.conversationWorkEnvironmentLinks, link);
       bridge.request(BridgeMessageType.WorkEnvironmentSelect, { conversationId, workEnvironmentId });
     },
-    setPolicyForScope(scopeKind: WorkEnvironmentPolicyScopeKind, scopeId: string | undefined, allowedIds: string[], defaultId?: string, name?: string): void {
+    setPolicyForScope(scopeKind: WorkEnvironmentPolicyScopeKind, scopeId: string | undefined, allowedIds: string[], defaultId?: string, name?: string, enabled?: boolean): void {
       const sanitized = sanitizePolicyInput(allowedIds, defaultId);
-      this.applyOptimisticPolicyScopeSet(scopeKind, scopeId, sanitized.allowed, sanitized.defaultId, name);
+      const resolvedEnabled = enabled ?? this.effectivePolicyFor(scopeKind, scopeId).policy?.enabled ?? true;
+      this.applyOptimisticPolicyScopeSet(scopeKind, scopeId, sanitized.allowed, sanitized.defaultId, name, resolvedEnabled);
       const payload: WorkEnvironmentPolicyScopeSetPayload = {
         scopeKind,
         ...(scopeIdFor(scopeKind, scopeId) ? { scopeId: scopeIdFor(scopeKind, scopeId) } : {}),
         ...(name?.trim() ? { name: name.trim() } : {}),
+        enabled: resolvedEnabled,
         allowedWorkEnvironmentIds: sanitized.allowed,
         ...(sanitized.defaultId ? { defaultWorkEnvironmentId: sanitized.defaultId } : {})
       };
@@ -202,7 +204,7 @@ export const useWorkEnvironmentStore = defineStore('workEnvironment', {
         ...(scopeIdFor(scopeKind, scopeId) ? { scopeId: scopeIdFor(scopeKind, scopeId) } : {})
       });
     },
-    applyOptimisticPolicyScopeSet(scopeKind: WorkEnvironmentPolicyScopeKind, scopeId: string | undefined, allowedIds: string[], defaultId?: string, name?: string): void {
+    applyOptimisticPolicyScopeSet(scopeKind: WorkEnvironmentPolicyScopeKind, scopeId: string | undefined, allowedIds: string[], defaultId?: string, name?: string, enabled?: boolean): void {
       const clientState = useClientStateStore();
       const normalizedScopeId = scopeIdFor(scopeKind, scopeId);
       const existingLink = latestLink(clientState.workEnvironmentPolicyScopeLinks.filter((candidate) => scopeLinkMatches(candidate, scopeKind, normalizedScopeId)));
@@ -212,6 +214,7 @@ export const useWorkEnvironmentStore = defineStore('workEnvironment', {
       const policy: WorkEnvironmentPolicyRecord = {
         id: policyId,
         name: name?.trim() || existingPolicy?.name || defaultPolicyName(scopeKind),
+        enabled: enabled ?? existingPolicy?.enabled ?? true,
         allowedWorkEnvironmentIds: allowedIds,
         ...(defaultId ? { defaultWorkEnvironmentId: defaultId } : {}),
         createdAt: existingPolicy?.createdAt ?? now,
@@ -311,7 +314,7 @@ export const useWorkEnvironmentStore = defineStore('workEnvironment', {
       const global = this.effectivePolicyFor('global').policy;
       const allowed = uniqueAllowed([...(global?.allowedWorkEnvironmentIds ?? availableEnvironmentIds()), workEnvironmentId]);
       const defaultId = global?.defaultWorkEnvironmentId && allowed.includes(global.defaultWorkEnvironmentId) ? global.defaultWorkEnvironmentId : allowed[0];
-      this.applyOptimisticPolicyScopeSet('global', undefined, allowed, defaultId, global?.name);
+      this.applyOptimisticPolicyScopeSet('global', undefined, allowed, defaultId, global?.name, global?.enabled ?? true);
     }
   }
 });

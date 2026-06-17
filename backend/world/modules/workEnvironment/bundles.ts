@@ -154,7 +154,7 @@ export function selectRunWorkEnvironment(
 export function upsertWorkEnvironmentPolicy(
   world: WorldReader,
   cmd: CommandSink,
-  input: { id: string; name: string; allowedWorkEnvironmentIds: string[]; defaultWorkEnvironmentId?: string }
+  input: { id: string; name: string; enabled?: boolean; allowedWorkEnvironmentIds: string[]; defaultWorkEnvironmentId?: string }
 ): Entity {
   const now = Date.now();
   const existing = findWorkEnvironmentPolicyById(world, input.id);
@@ -166,6 +166,7 @@ export function upsertWorkEnvironmentPolicy(
   const policy: WorkEnvironmentPolicyData = {
     id: input.id,
     name: input.name.trim() || '工作环境策略',
+    enabled: input.enabled ?? previous?.enabled ?? true,
     allowedWorkEnvironmentIds,
     ...(defaultWorkEnvironmentId ? { defaultWorkEnvironmentId } : {}),
     createdAt: previous?.createdAt ?? now,

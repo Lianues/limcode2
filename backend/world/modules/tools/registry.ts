@@ -1,4 +1,4 @@
-import type { CommandCapability, FsCapability } from '../../../capabilities/types';
+import type { CommandCapability, FsCapability, WorkEnvironmentRuntimeCapability } from '../../../capabilities/types';
 import type {
   ToolCallEventKind,
   ToolConfigRecord,
@@ -13,6 +13,7 @@ import type { ToolSchedulingResolver } from './scheduling';
 export interface ToolDeps {
   fs: FsCapability;
   command: CommandCapability;
+  workEnvironment: WorkEnvironmentRuntimeCapability;
 }
 
 export interface ToolResultOut {
@@ -33,6 +34,7 @@ export interface ToolExecutionContext {
   conversationId?: string;
   config?: ToolConfigRecord;
   workEnvironment?: WorkEnvironmentRecord;
+  workEnvironments?: WorkEnvironmentRecord[];
   emit(event: ToolRuntimeEvent): void;
 }
 

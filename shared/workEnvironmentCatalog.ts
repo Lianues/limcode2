@@ -15,7 +15,9 @@ export const WORK_ENVIRONMENT_CAPABILITY = {
   RemoteFileRead: 'remoteFileRead',
   RemoteCommand: 'remoteCommand',
   ContainerFileRead: 'containerFileRead',
-  ContainerCommand: 'containerCommand'
+  ContainerCommand: 'containerCommand',
+  FileTransferRead: 'fileTransferRead',
+  FileTransferWrite: 'fileTransferWrite'
 } as const satisfies Record<string, WorkEnvironmentCapabilityKind>;
 
 export type WorkEnvironmentKindCategory = 'local' | 'remote' | 'container' | 'custom';
@@ -76,7 +78,12 @@ const BUILTIN_KIND_DEFINITIONS: WorkEnvironmentKindDefinition[] = [
     editable: false,
     removable: false,
     creatable: false,
-    capabilities: [WORK_ENVIRONMENT_CAPABILITY.LocalFileRead, WORK_ENVIRONMENT_CAPABILITY.LocalCommand]
+    capabilities: [
+      WORK_ENVIRONMENT_CAPABILITY.LocalFileRead,
+      WORK_ENVIRONMENT_CAPABILITY.LocalCommand,
+      WORK_ENVIRONMENT_CAPABILITY.FileTransferRead,
+      WORK_ENVIRONMENT_CAPABILITY.FileTransferWrite
+    ]
   },
   {
     kind: REMOTE_SERVER_WORK_ENVIRONMENT_KIND,
@@ -89,7 +96,12 @@ const BUILTIN_KIND_DEFINITIONS: WorkEnvironmentKindDefinition[] = [
     editable: true,
     removable: true,
     creatable: true,
-    capabilities: []
+    capabilities: [
+      WORK_ENVIRONMENT_CAPABILITY.RemoteFileRead,
+      WORK_ENVIRONMENT_CAPABILITY.RemoteCommand,
+      WORK_ENVIRONMENT_CAPABILITY.FileTransferRead,
+      WORK_ENVIRONMENT_CAPABILITY.FileTransferWrite
+    ]
   }
 ];
 

@@ -27,7 +27,6 @@ import { ToolSchemasKey } from '../../tools/resources';
 import { buildRuntimeToolSchemas, TOOL_SCHEMA_CONTRIBUTOR_READS } from '../../tools/schemaContributors';
 import { Conversation, InFlight, LlmRequest, Message, MessageCurrentRevisionLink, PartOf } from '../components';
 import { textContent } from '../../../../../shared/protocol';
-import { formatWorkEnvironmentContext } from '../../workEnvironment/queries';
 import type { LlmModelSettings, LlmStartRequest, ToolSchema } from '../../llm/contracts';
 import {
   activeContextPolicyForRun,
@@ -133,7 +132,6 @@ export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmSt
   if (!context) return undefined;
 
   const systemPrompt = activeSystemPromptForRun(world, input.run)?.text;
-  const workEnvironmentContext = formatWorkEnvironmentContext(world, input.run);
   const modelProfile = activeModelProfileForRun(world, input.run);
   const conversation = world.get(context.conversation, Conversation);
   const model = modelProfile === undefined
@@ -147,7 +145,7 @@ export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmSt
   const tools = buildRuntimeToolSchemas(filteredTools, { world, run: input.run, conversation: context.conversation });
   const contextPolicy = activeContextPolicyForRun(world, input.run);
   const contents = buildRunContextContents(world, { ...context, policy: contextPolicy });
-  const systemText = [systemPrompt, workEnvironmentContext].filter((item): item is string => !!item?.trim()).join('\n\n');
+  const systemText = systemPrompt?.trim() ?? '';
 
   return {
     id: input.requestId ?? `dryrun-${input.run}-${Date.now()}`,

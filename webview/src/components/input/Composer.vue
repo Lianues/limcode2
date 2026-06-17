@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { IconListDetails, IconPencilExclamation, IconSend2, IconWorld } from '@tabler/icons-vue';
+import { IconFolder, IconListDetails, IconPencilExclamation, IconSend2, IconWorld } from '@tabler/icons-vue';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
 import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
 import { GLOBAL_MODE_OPTION_ID, useModeStore } from '@webview/stores/useModeStore';
+import { useWorkEnvironmentStore } from '@webview/stores/useWorkEnvironmentStore';
 import RichContentEditor from '@webview/components/content/RichContentEditor.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
+import ContextTokenUsageBar from '@webview/components/conversation/ContextTokenUsageBar.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -26,6 +28,7 @@ const clientState = useClientStateStore();
 const globalSettings = useGlobalSettingsStore();
 const conversationSettings = useConversationSettingsStore();
 const modeStore = useModeStore();
+const workEnvironmentStore = useWorkEnvironmentStore();
 const ui = useConversationUiStore();
 const highlighted = ref(false);
 const editorExpanded = ref(false);
@@ -35,6 +38,7 @@ const expandedEditorHeight = ref(0);
 const collapsedEditorHeight = ref(0);
 const modeDropdownCloseSignal = ref(0);
 const channelDropdownCloseSignal = ref(0);
+const workEnvironmentDropdownCloseSignal = ref(0);
 
 const draft = computed({
   get: () => ui.composerDraft,
@@ -48,6 +52,16 @@ const channelOptions = computed<SettingsDropdownOption[]>(() =>
     label: config.name,
     description: config.model ? `${providerLabel(config.provider)} · ${config.model}` : providerLabel(config.provider)
   }))
+);
+const workEnvironmentOptions = computed<SettingsDropdownOption[]>(() =>
+  workEnvironmentStore.allowedEnvironmentsForConversation(clientState.currentConversationId)
+    .sort((left, right) => workEnvironmentSortKey(left).localeCompare(workEnvironmentSortKey(right), 'zh-CN') || left.id.localeCompare(right.id))
+    .map((environment) => ({
+      value: environment.id,
+      label: environment.name,
+      description: middleEllipsis(environment.displayPath || environment.rootPath || environment.uri || environment.id, 58),
+      icon: IconFolder
+    }))
 );
 const modeOptions = computed<SettingsDropdownOption[]>(() => [
   {
@@ -70,6 +84,10 @@ const activeModeId = computed({
 const activeChannelId = computed({
   get: () => conversationSettings.llm.activeProviderConfigId || globalSettings.llm.activeProviderConfigId || globalSettings.activeLlmProviderConfig?.id || '',
   set: (configId: string) => selectChannel(configId)
+});
+const activeWorkEnvironmentId = computed({
+  get: () => workEnvironmentStore.activeEnvironmentForConversation(clientState.currentConversationId)?.id ?? workEnvironmentOptions.value[0]?.value ?? '',
+  set: (workEnvironmentId: string) => selectWorkEnvironment(workEnvironmentId)
 });
 const editorShellStyle = computed(() => {
   if (!editorExpanded.value || !expandedEditorHeight.value) return undefined;
@@ -191,12 +209,40 @@ function selectMode(modeId: string): void {
   modeStore.selectMode(conversationId, modeId);
 }
 
+function selectWorkEnvironment(workEnvironmentId: string): void {
+  if (!workEnvironmentId) return;
+  const conversationId = clientState.currentConversationId;
+  if (!conversationId) return;
+  workEnvironmentStore.selectConversationEnvironment(conversationId, workEnvironmentId);
+}
+
 function onModeDropdownOpen(): void {
   channelDropdownCloseSignal.value += 1;
+  workEnvironmentDropdownCloseSignal.value += 1;
 }
 
 function onChannelDropdownOpen(): void {
   modeDropdownCloseSignal.value += 1;
+  workEnvironmentDropdownCloseSignal.value += 1;
+}
+
+function onWorkEnvironmentDropdownOpen(): void {
+  modeDropdownCloseSignal.value += 1;
+  channelDropdownCloseSignal.value += 1;
+}
+
+function workEnvironmentSortKey(environment: { kind: string; index?: number; name: string }): string {
+  const kind = environment.kind === 'localFolder' ? '0' : '1';
+  const index = environment.index === undefined ? '999999' : String(environment.index).padStart(6, '0');
+  return `${kind}:${index}:${environment.name}`;
+}
+
+function middleEllipsis(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  const keep = Math.max(4, Math.floor((maxLength - 3) / 2));
+  const head = value.slice(0, keep);
+  const tail = value.slice(value.length - keep);
+  return `${head}...${tail}`;
 }
 </script>
 
@@ -275,7 +321,7 @@ function onChannelDropdownOpen(): void {
     </div>
 
     <div class="composer-zone composer-zone-bottom" aria-label="输入框下方功能区">
-      <div v-if="modeOptions.length || channelOptions.length" class="composer-meta">
+      <div v-if="modeOptions.length || channelOptions.length || workEnvironmentOptions.length" class="composer-meta">
         <template v-if="modeOptions.length">
           <SettingsDropdown
             v-model="activeModeId"
@@ -303,7 +349,22 @@ function onChannelDropdownOpen(): void {
             @open="onChannelDropdownOpen"
           />
         </template>
+        <template v-if="workEnvironmentOptions.length">
+          <SettingsDropdown
+            v-model="activeWorkEnvironmentId"
+            class="composer-meta-dropdown composer-work-environment-dropdown"
+            :options="workEnvironmentOptions"
+            title="切换工作环境"
+            empty-text="暂无工作环境"
+            searchable
+            search-placeholder="筛选工作环境..."
+            :close-signal="workEnvironmentDropdownCloseSignal"
+            :max-height="220"
+            @open="onWorkEnvironmentDropdownOpen"
+          />
+        </template>
       </div>
+      <ContextTokenUsageBar class="composer-token-usage" />
       <button
         type="button"
         class="composer-send"
@@ -504,6 +565,11 @@ function onChannelDropdownOpen(): void {
   min-width: 118px;
 }
 
+.composer-work-environment-dropdown {
+  width: min(210px, 32vw);
+  min-width: 130px;
+}
+
 .composer-meta-dropdown :deep(button.settings-dropdown-button) {
   min-height: 24px;
   border-color: transparent;
@@ -530,6 +596,11 @@ function onChannelDropdownOpen(): void {
 
 .composer-meta-dropdown :deep(.settings-dropdown-caret) {
   color: currentColor;
+}
+
+.composer-token-usage {
+  flex: 0 0 auto;
+  margin-left: var(--space-1);
 }
 
 .composer-send {

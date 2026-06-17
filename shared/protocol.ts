@@ -104,7 +104,13 @@ export enum BridgeMessageType {
   ModeUpdate = 'mode.update',
   ModeDelete = 'mode.delete',
   ConversationModeSelect = 'conversation.mode.select',
-  ConversationProjectSet = 'conversation.project.set'
+  ConversationProjectSet = 'conversation.project.set',
+  WorkEnvironmentSelect = 'workEnvironment.select',
+  WorkEnvironmentUpsert = 'workEnvironment.upsert',
+  WorkEnvironmentRemove = 'workEnvironment.remove',
+  WorkEnvironmentImportFromVscode = 'workEnvironment.importFromVscode',
+  WorkEnvironmentPolicyScopeSet = 'workEnvironmentPolicy.scope.set',
+  WorkEnvironmentPolicyScopeClear = 'workEnvironmentPolicy.scope.clear'
 }
 
 export interface BridgeEnvelope<TType extends string = string, TPayload = unknown> {
@@ -254,6 +260,7 @@ export interface ToolDefinitionRecord {
 }
 
 export const TASK_LIST_TOOL_NAME = 'update_task_list';
+export const SWITCH_WORK_ENVIRONMENT_TOOL_NAME = 'switch_work_environment';
 
 export const TASK_LIST_ITEM_STATUSES = [
   'pending',
@@ -507,6 +514,10 @@ export interface ConversationBranchLinkRecord {
 export type AgentConversationRole = 'default' | 'participant' | 'reviewer';
 
 export type ProjectContextKind = 'folder';
+export type WorkEnvironmentKind = 'localFolder' | 'remoteServer';
+export type WorkEnvironmentSource = 'workspaceFolder' | 'vscodeSshConfig' | 'manual';
+export type WorkEnvironmentOs = 'linux' | 'windows' | 'macos' | 'unknown' | string;
+export type WorkEnvironmentPolicyScopeKind = 'global' | 'conversation' | 'agent' | 'agentSystem' | 'mode' | 'run';
 
 export interface ProjectContextRecord {
   id: string;
@@ -524,6 +535,77 @@ export interface ConversationProjectLinkRecord {
   conversationId: string;
   projectContextId: string;
   role: ConversationProjectRole;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface WorkEnvironmentRecord {
+  id: string;
+  kind: WorkEnvironmentKind;
+  name: string;
+  /** 本地 folder 使用 VS Code uri；未来远程环境可使用自定义 uri。 */
+  uri?: string;
+  /** 本地 folder 的可执行根目录；未来远程环境可映射为远程根路径。 */
+  rootPath?: string;
+  /** 面向 UI / LLM 展示的路径或地址。 */
+  displayPath?: string;
+  source?: WorkEnvironmentSource;
+  /** SSH Config: Host。 */
+  host?: string;
+  /** SSH Config: Port，默认 22。 */
+  port?: number;
+  /** SSH Config: User。 */
+  user?: string;
+  /** SSH Config: IdentityFile。 */
+  identityFile?: string;
+  /** 可选明文密码；不会注入 LLM 上下文。 */
+  password?: string;
+  /** 远端默认工作目录。 */
+  workdir?: string;
+  os?: WorkEnvironmentOs;
+  description?: string;
+  /** VS Code workspace folder 顺序；远程环境可不填。 */
+  index?: number;
+  available: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface WorkEnvironmentPolicyRecord {
+  id: string;
+  name: string;
+  allowedWorkEnvironmentIds: string[];
+  defaultWorkEnvironmentId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface WorkEnvironmentPolicyScopeLinkRecord {
+  id: string;
+  scopeKind: WorkEnvironmentPolicyScopeKind;
+  scopeId?: string;
+  workEnvironmentPolicyId: string;
+  role: WorkEnvironmentLinkRole;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type WorkEnvironmentLinkRole = 'active';
+
+export interface ConversationWorkEnvironmentLinkRecord {
+  id: string;
+  conversationId: string;
+  workEnvironmentId: string;
+  role: WorkEnvironmentLinkRole;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RunWorkEnvironmentLinkRecord {
+  id: string;
+  runId: string;
+  workEnvironmentId: string;
+  role: WorkEnvironmentLinkRole;
   createdAt: number;
   updatedAt: number;
 }
@@ -834,6 +916,11 @@ export interface ClientStateRecordByTable {
   agentConversationLinks: AgentConversationLinkRecord;
   projectContexts: ProjectContextRecord;
   conversationProjectLinks: ConversationProjectLinkRecord;
+  workEnvironments: WorkEnvironmentRecord;
+  workEnvironmentPolicies: WorkEnvironmentPolicyRecord;
+  workEnvironmentPolicyScopeLinks: WorkEnvironmentPolicyScopeLinkRecord;
+  conversationWorkEnvironmentLinks: ConversationWorkEnvironmentLinkRecord;
+  runWorkEnvironmentLinks: RunWorkEnvironmentLinkRecord;
   messages: MessageRecord;
   messageRevisions: MessageRevisionRecord;
   messageCurrentRevisionLinks: MessageCurrentRevisionLinkRecord;
@@ -1132,6 +1219,36 @@ export interface ConversationProjectSetPayload {
   name?: string;
 }
 
+export interface WorkEnvironmentSelectPayload {
+  conversationId: string;
+  workEnvironmentId: string;
+}
+
+export interface WorkEnvironmentUpsertPayload {
+  workEnvironment: WorkEnvironmentRecord;
+}
+
+export interface WorkEnvironmentRemovePayload {
+  workEnvironmentId: string;
+}
+
+export interface WorkEnvironmentImportFromVscodePayload {
+  includeDefaultSshConfig?: boolean;
+}
+
+export interface WorkEnvironmentPolicyScopeSetPayload {
+  scopeKind: WorkEnvironmentPolicyScopeKind;
+  scopeId?: string;
+  name?: string;
+  allowedWorkEnvironmentIds: string[];
+  defaultWorkEnvironmentId?: string;
+}
+
+export interface WorkEnvironmentPolicyScopeClearPayload {
+  scopeKind: WorkEnvironmentPolicyScopeKind;
+  scopeId?: string;
+}
+
 export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.Ready, undefined>
   | BridgeEnvelope<BridgeMessageType.Ack, BridgeAckPayload>
@@ -1169,7 +1286,13 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ModeUpdate, ModeUpdatePayload>
   | BridgeEnvelope<BridgeMessageType.ModeDelete, ModeDeletePayload>
   | BridgeEnvelope<BridgeMessageType.ConversationModeSelect, ConversationModeSelectPayload>
-  | BridgeEnvelope<BridgeMessageType.ConversationProjectSet, ConversationProjectSetPayload>;
+  | BridgeEnvelope<BridgeMessageType.ConversationProjectSet, ConversationProjectSetPayload>
+  | BridgeEnvelope<BridgeMessageType.WorkEnvironmentSelect, WorkEnvironmentSelectPayload>
+  | BridgeEnvelope<BridgeMessageType.WorkEnvironmentUpsert, WorkEnvironmentUpsertPayload>
+  | BridgeEnvelope<BridgeMessageType.WorkEnvironmentRemove, WorkEnvironmentRemovePayload>
+  | BridgeEnvelope<BridgeMessageType.WorkEnvironmentImportFromVscode, WorkEnvironmentImportFromVscodePayload>
+  | BridgeEnvelope<BridgeMessageType.WorkEnvironmentPolicyScopeSet, WorkEnvironmentPolicyScopeSetPayload>
+  | BridgeEnvelope<BridgeMessageType.WorkEnvironmentPolicyScopeClear, WorkEnvironmentPolicyScopeClearPayload>;
 
 export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.Hello, BridgeHelloPayload>

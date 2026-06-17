@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from 'node:child_process';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import type { CommandCapability, CommandRunArgs, CommandRunObserver, CommandRunResult } from './types';
+import type { CommandCapability, CommandRunArgs, CommandRunObserver, CommandRunResult, WorkEnvironmentCapabilityOptions } from './types';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT_CHARS = 120_000;
@@ -37,8 +37,8 @@ export function createCommandCapability(): CommandCapability {
   return {
     toolName: profile.toolName,
     description: profile.description,
-    run(args, observer) {
-      return runCommand(profile, args, observer);
+    run(args, observer, options) {
+      return runCommand(profile, args, observer, options);
     }
   };
 }
@@ -78,9 +78,12 @@ function resolvePowerShell(): string {
   return cachedPowerShell;
 }
 
-async function runCommand(profile: CommandProfile, args: CommandRunArgs, observer?: CommandRunObserver): Promise<CommandRunResult> {
+async function runCommand(profile: CommandProfile, args: CommandRunArgs, observer?: CommandRunObserver, options: WorkEnvironmentCapabilityOptions = {}): Promise<CommandRunResult> {
   const command = (args.command ?? '').trim();
   if (!command) return failedResult('', 'Missing required argument: command');
+
+  const environmentError = validateCommandWorkEnvironment(options);
+  if (environmentError) return failedResult(command, environmentError);
 
   const safety = classifyCommand(profile.kind, command);
   if (safety === 'deny') {
@@ -90,7 +93,7 @@ async function runCommand(profile: CommandProfile, args: CommandRunArgs, observe
     return failedResult(command, `命令不在安全白名单中，已拒绝执行。请确认风险后设置 force: true 重试。`);
   }
 
-  const cwd = resolveWorkDir(args.cwd);
+  const cwd = resolveWorkDir(args.cwd, options);
   const timeout = resolveTimeout(args.timeout);
   const raw = await executeCommand(profile, command, cwd, timeout, observer);
   return annotateResult(profile.kind, raw);
@@ -260,11 +263,26 @@ function resolveTimeout(value: number | undefined): number {
   return value;
 }
 
-function resolveWorkDir(cwd: string | undefined): string {
-  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+function resolveWorkDir(cwd: string | undefined, options: WorkEnvironmentCapabilityOptions): string {
+  const root = workEnvironmentRootPath(options) ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
   if (!cwd?.trim()) return root;
   if (path.isAbsolute(cwd)) return cwd;
   return path.resolve(root, cwd);
+}
+
+function workEnvironmentRootPath(options: WorkEnvironmentCapabilityOptions): string | undefined {
+  const workEnvironment = options.workEnvironment;
+  if (!workEnvironment || workEnvironment.kind !== 'localFolder' || workEnvironment.available === false) return undefined;
+  return workEnvironment.rootPath?.trim() || undefined;
+}
+
+function validateCommandWorkEnvironment(options: WorkEnvironmentCapabilityOptions): string | undefined {
+  const workEnvironment = options.workEnvironment;
+  if (!workEnvironment) return undefined;
+  if (workEnvironment.kind !== 'localFolder') return `当前工作环境暂不支持本地命令执行：${workEnvironment.name} (${workEnvironment.kind})`;
+  if (workEnvironment.available === false) return `当前工作环境不可用：${workEnvironment.name}`;
+  if (!workEnvironment.rootPath?.trim()) return `当前工作环境缺少可执行根目录：${workEnvironment.name}`;
+  return undefined;
 }
 
 function nonInteractiveEnv(kind: ShellKind): NodeJS.ProcessEnv {

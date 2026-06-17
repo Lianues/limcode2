@@ -55,12 +55,13 @@ function isEditingTarget(row: MessageViewRow): boolean {
 <template>
   <div class="message-list">
     <MessageItem
-      v-for="row in ui.messageRows"
+      v-for="(row, index) in ui.messageRows"
       :key="row.id"
       :message="row.message"
       :run-id="runIdForMessage(row.message)"
       :run-detail-loading="isRunDetailLoading(row.message)"
       :delete-count="row.deleteCount"
+      :floor-number="index + 1"
       :deleting="row.phase === 'exiting'"
       :entering="row.phase === 'entering'"
       :editing-highlighted="isEditingTarget(row)"

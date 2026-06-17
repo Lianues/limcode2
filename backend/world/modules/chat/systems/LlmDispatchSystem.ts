@@ -24,8 +24,10 @@ import {
 } from '../../agentRun/components';
 import { ToolCall, ToolPolicyScopeLink, ToolState } from '../../tools/components';
 import { ToolSchemasKey } from '../../tools/resources';
+import { buildRuntimeToolSchemas, TOOL_SCHEMA_CONTRIBUTOR_READS } from '../../tools/schemaContributors';
 import { Conversation, InFlight, LlmRequest, Message, MessageCurrentRevisionLink, PartOf } from '../components';
 import { textContent } from '../../../../../shared/protocol';
+import { formatWorkEnvironmentContext } from '../../workEnvironment/queries';
 import type { LlmModelSettings, LlmStartRequest, ToolSchema } from '../../llm/contracts';
 import {
   activeContextPolicyForRun,
@@ -71,7 +73,8 @@ const LlmContextLookupComponents = [
   ToolPolicy,
   ToolPolicyScopeLink,
   ToolCall,
-  ToolState
+  ToolState,
+  ...(TOOL_SCHEMA_CONTRIBUTOR_READS.components ?? [])
 ] as const;
 
 export interface BuildLlmStartRequestForRunInput {
@@ -130,6 +133,7 @@ export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmSt
   if (!context) return undefined;
 
   const systemPrompt = activeSystemPromptForRun(world, input.run)?.text;
+  const workEnvironmentContext = formatWorkEnvironmentContext(world, input.run);
   const modelProfile = activeModelProfileForRun(world, input.run);
   const conversation = world.get(context.conversation, Conversation);
   const model = modelProfile === undefined
@@ -137,21 +141,26 @@ export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmSt
     : { provider: modelProfile.provider, model: modelProfile.model } satisfies LlmModelSettings;
   const toolPolicy = activeToolPolicyForRun(world, input.run);
   const allTools = input.tools ?? world.tryGetResource(ToolSchemasKey) ?? [];
-  const tools = toolPolicy
+  const filteredTools = toolPolicy
     ? allTools.filter((tool) => toolPolicy.allowedTools.includes(tool.name))
     : [];
+  const tools = buildRuntimeToolSchemas(filteredTools, { world, run: input.run, conversation: context.conversation });
   const contextPolicy = activeContextPolicyForRun(world, input.run);
   const contents = buildRunContextContents(world, { ...context, policy: contextPolicy });
+  const systemText = [systemPrompt, workEnvironmentContext].filter((item): item is string => !!item?.trim()).join('\n\n');
 
   return {
     id: input.requestId ?? `dryrun-${input.run}-${Date.now()}`,
-    systemInstruction: systemPrompt ? textContent('user', systemPrompt) : undefined,
+    systemInstruction: systemText ? textContent('user', systemText) : undefined,
     contents,
     tools,
     conversationId: conversation?.id,
     model
   };
 }
+
+
+
 
 function resolveLlmContext(world: WorldReader, input: BuildLlmStartRequestForRunInput): { run: Entity; conversation: Entity; modelMessage: Entity } | undefined {
   const modelMessage = input.modelMessage ?? latestModelMessageForRun(world, input.run);

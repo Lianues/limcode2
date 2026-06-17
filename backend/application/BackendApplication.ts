@@ -1,3 +1,6 @@
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { MapWorld } from '../ecs/World';
 import { Scheduler } from '../ecs/Scheduler';
@@ -13,7 +16,8 @@ import {
   agentRunPlugin,
   requestSpawnAgent,
   projectPlugin,
-  toolsPlugin
+  toolsPlugin,
+  workEnvironmentPlugin
 } from '../world/modules';
 import type { AgentSpawnRequestData } from '../world/modules/agent/requests';
 import { Agent, AgentConversationLink } from '../world/modules/agent/components';
@@ -55,6 +59,8 @@ import { ConversationProjectLink, ProjectContext } from '../world/modules/projec
 import { upsertGlobalModeSelection } from '../world/modules/mode/bundles';
 import { ConversationModeSelection } from '../world/modules/mode/components';
 import { ToolCall, ToolCallEvent } from '../world/modules/tools/components';
+import { WorkEnvironmentEventType, remoteWorkEnvironmentIdFromHost, workEnvironmentIdFromUri } from '../world/modules/workEnvironment';
+import type { LocalWorkEnvironmentCandidate } from '../world/modules/workEnvironment';
 import { clientSyncPlugin, registerClientSyncSystems } from '../world/clientSync';
 import { storageProjectionPlugin } from '../world/storageProjection';
 import { EffectHandlerRegistry, registerApplicationEffectHandlers } from './effectHandlers';
@@ -71,7 +77,8 @@ import type {
   SidebarHistoryScopeKind,
   SidebarConversationHistoryEntry,
   WebviewClientMeta,
-  WebviewToExtensionMessage
+  WebviewToExtensionMessage,
+  WorkEnvironmentRecord
 } from '../../shared/protocol';
 import { createRuntimeEnv } from './createRuntimeEnv';
 import { createDefaultAgentSpawnRequest, DEFAULT_AGENT_ID } from './defaults';
@@ -117,6 +124,7 @@ export class BackendApplication {
   private readonly renderLoadedConversationDetails = new Set<string>();
   private readonly runHistoryLoadedConversationDetails = new Set<string>();
   private readonly conversationHistoryChangedEmitter = new vscode.EventEmitter<void>();
+  private readonly disposables: vscode.Disposable[] = [];
   public readonly onDidChangeConversationHistory = this.conversationHistoryChangedEmitter.event;
 
   public constructor(context: vscode.ExtensionContext) {
@@ -149,10 +157,15 @@ export class BackendApplication {
       requestSnapshot: (conversationId) => this.requestSnapshot(conversationId),
       ensureConversationDetailLoaded: (conversationId) => this.ensureConversationDetailLoaded(conversationId),
       getProjectFolderCandidates: () => this.getProjectFolderCandidates(),
-      setConversationProjectFolder: (input) => this.setConversationProjectFolder(input)
+      setConversationProjectFolder: (input) => this.setConversationProjectFolder(input),
+      importWorkEnvironmentsFromVscode: () => this.importWorkEnvironmentsFromVscode()
     });
 
     registerApplicationEffectHandlers(this.effectHandlers);
+    this.disposables.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      this.syncWorkEnvironmentsFromWorkspaceFolders();
+    }));
+
     this.scheduler = new Scheduler(this.world, {
       applyEffect: (effect) => this.outbox.push(effect as WorldEffect),
       afterPass: () => {
@@ -170,7 +183,7 @@ export class BackendApplication {
 
     installWorldPlugins(
       { world: this.world, scheduler: this.scheduler },
-      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), modePlugin(), projectPlugin(), toolsPlugin({ toolSchemas, toolDefinitions, toolRuntimeDefinitions: this.env.tools.registry }), chatPlugin(), agentRunPlugin()]
+      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), modePlugin(), projectPlugin(), workEnvironmentPlugin(), toolsPlugin({ toolSchemas, toolDefinitions, toolRuntimeDefinitions: this.env.tools.registry }), chatPlugin(), agentRunPlugin()]
     );
     registerClientSyncSystems(this.scheduler);
 
@@ -418,6 +431,7 @@ export class BackendApplication {
 
   public dispose(): void {
     this.scheduler.dispose();
+    for (const disposable of this.disposables.splice(0)) disposable.dispose();
     this.env.webview.detachAll();
     this.webviewClients.clear();
     void this.persistence.persistImmediately();
@@ -441,6 +455,7 @@ export class BackendApplication {
     } finally {
       this.hydrated = true;
       this.persistence.enable();
+      this.syncWorkEnvironmentsFromWorkspaceFolders();
       this.requestSnapshot();
       this.flushPendingSnapshots();
       this.flushPendingHydrationMessages();
@@ -475,6 +490,69 @@ export class BackendApplication {
     const pending = this.pendingHydrationMessages.splice(0);
     for (const item of pending) this.webviewRouter.handle(item.clientId, item.message);
   }
+
+  private syncWorkEnvironmentsFromWorkspaceFolders(): void {
+    if (!this.hydrated) return;
+    this.world.enqueue({
+      type: WorkEnvironmentEventType.WorkspaceFoldersSynced,
+      payload: { folders: this.getLocalWorkEnvironmentCandidates() }
+    });
+    this.requestSnapshot();
+  }
+
+  private getLocalWorkEnvironmentCandidates(): LocalWorkEnvironmentCandidate[] {
+    return (vscode.workspace.workspaceFolders ?? []).map((folder, index) => ({
+      id: workEnvironmentIdFromUri(folder.uri.toString()),
+      name: folder.name,
+      uri: folder.uri.toString(),
+      rootPath: folder.uri.fsPath,
+      displayPath: folder.uri.fsPath || folder.uri.toString(),
+      index
+    }));
+  }
+
+  public async importWorkEnvironmentsFromVscode(): Promise<number> {
+    const records = await this.loadRemoteWorkEnvironmentRecordsFromVscode();
+    if (records.length === 0) return 0;
+    this.world.enqueue({
+      type: WorkEnvironmentEventType.ImportFromVscodeRequested,
+      payload: { records }
+    });
+    this.requestSnapshot();
+    return records.length;
+  }
+
+  private async loadRemoteWorkEnvironmentRecordsFromVscode(): Promise<WorkEnvironmentRecord[]> {
+    const configFiles = this.resolveVscodeSshConfigFiles();
+    const byId = new Map<string, WorkEnvironmentRecord>();
+    for (const file of configFiles) {
+      const entries = await readSshConfigEntries(file);
+      for (const entry of entries) {
+        const record = sshEntryToWorkEnvironmentRecord(entry);
+        byId.set(record.id, record);
+      }
+    }
+    return [...byId.values()].sort((left, right) => left.name.localeCompare(right.name, 'zh-CN') || left.id.localeCompare(right.id));
+  }
+
+  private resolveVscodeSshConfigFiles(): string[] {
+    const config = vscode.workspace.getConfiguration('remote.SSH');
+    const configured = config.get<string | string[]>('configFile');
+    const files: string[] = [];
+    const push = (value: string | undefined): void => {
+      const normalized = normalizeConfigPath(value);
+      if (normalized && !files.includes(normalized)) files.push(normalized);
+    };
+    if (Array.isArray(configured)) {
+      for (const item of configured) push(item);
+    } else {
+      push(configured);
+    }
+    push(path.join(os.homedir(), '.ssh', 'config'));
+    return files;
+  }
+
+
 
   private findDefaultAgent(): Entity | undefined {
     return this.world.query(Agent).find((entity) => this.world.get(entity, Agent)?.id === DEFAULT_AGENT_ID)
@@ -838,6 +916,107 @@ function normalizeConversationTitle(title: string): string {
   return truncateText(normalizeText(title) || '新对话', 80);
 }
 
+interface SshConfigEntry {
+  host: string;
+  user?: string;
+  port?: number;
+  identityFile?: string;
+}
+
+async function readSshConfigEntries(filePath: string): Promise<SshConfigEntry[]> {
+  let text = '';
+  try {
+    text = await fs.readFile(filePath, 'utf8');
+  } catch {
+    return [];
+  }
+
+  const entries: SshConfigEntry[] = [];
+  let currentHosts: string[] = [];
+  let current: Partial<SshConfigEntry> = {};
+  const flush = (): void => {
+    for (const host of currentHosts) {
+      if (!host || /[*?]/.test(host)) continue;
+      const entry: SshConfigEntry = {
+        host,
+        ...(current.user ? { user: current.user } : {}),
+        ...(current.port !== undefined ? { port: current.port } : {}),
+        ...(current.identityFile ? { identityFile: current.identityFile } : {})
+      };
+      entries.push(entry);
+    }
+  };
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = stripSshConfigComment(rawLine).trim();
+    if (!line) continue;
+    const match = /^(\S+)\s+(.*)$/.exec(line);
+    if (!match) continue;
+    const key = match[1].toLowerCase();
+    const value = match[2].trim();
+    if (key === 'host') {
+      flush();
+      currentHosts = value.split(/\s+/).filter(Boolean);
+      current = {};
+      continue;
+    }
+    if (currentHosts.length === 0) continue;
+    if (key === 'user') current.user = value;
+    else if (key === 'port') {
+      const port = Number.parseInt(value, 10);
+      if (Number.isFinite(port) && port > 0) current.port = port;
+    } else if (key === 'identityfile') current.identityFile = expandHome(value);
+  }
+  flush();
+  return entries;
+}
+
+function sshEntryToWorkEnvironmentRecord(entry: SshConfigEntry): WorkEnvironmentRecord {
+  const port = entry.port;
+  const user = entry.user?.trim();
+  const displayPath = `${user ? `${user}@` : ''}${entry.host}${port !== undefined && port !== 22 ? `:${port}` : ''}`;
+  const now = Date.now();
+  return {
+    id: remoteWorkEnvironmentIdFromHost(entry.host),
+    kind: 'remoteServer',
+    source: 'vscodeSshConfig',
+    name: entry.host,
+    host: entry.host,
+    ...(port !== undefined ? { port } : {}),
+    ...(user ? { user } : {}),
+    ...(entry.identityFile ? { identityFile: entry.identityFile } : {}),
+    displayPath,
+    available: true,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function normalizeConfigPath(input: string | undefined): string | undefined {
+  const text = input?.trim();
+  if (!text) return undefined;
+  return path.resolve(expandHome(text));
+}
+
+function expandHome(input: string): string {
+  if (input === '~') return os.homedir();
+  if (input.startsWith('~/') || input.startsWith('~\\')) return path.join(os.homedir(), input.slice(2));
+  return input.replace(/\$\{env:([^}]+)\}/gi, (_match, name: string) => process.env[name] ?? '');
+}
+
+function stripSshConfigComment(line: string): string {
+  let quote: string | undefined;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if ((char === '"' || char === "'") && line[index - 1] !== '\\') {
+      quote = quote === char ? undefined : quote ?? char;
+    }
+    if (char === '#' && !quote) return line.slice(0, index);
+  }
+  return line;
+}
+
+
 function projectFolderNameFromUri(uri: string): string {
   try {
     const parsed = vscode.Uri.parse(uri);
@@ -919,6 +1098,12 @@ function shouldDeferUntilHydrated(message: WebviewToExtensionMessage): boolean {
     case 'mode.delete':
     case 'conversation.mode.select':
     case 'conversation.project.set':
+    case 'workEnvironment.select':
+    case 'workEnvironment.upsert':
+    case 'workEnvironment.remove':
+    case 'workEnvironment.importFromVscode':
+    case 'workEnvironmentPolicy.scope.set':
+    case 'workEnvironmentPolicy.scope.clear':
       return true;
     default:
       return false;

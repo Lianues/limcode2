@@ -10,7 +10,7 @@ import type {
   TranscriptInclusion,
   ToolPolicyToolConfigRecord
 } from '../../../../shared/protocol';
-import { TASK_LIST_TOOL_NAME } from '../../../../shared/protocol';
+import { SWITCH_WORK_ENVIRONMENT_TOOL_NAME, TASK_LIST_TOOL_NAME } from '../../../../shared/protocol';
 
 export interface ModeModelProfileBlueprint {
   name?: string;
@@ -80,8 +80,8 @@ export const AgentBlueprintsKey = defineResource<AgentBlueprintRegistry>('AgentB
 
 const DEFAULT_SYSTEM_PROMPT = 'You are LimCode, a concise and helpful AI coding assistant running inside VS Code. Reply in the user\'s language unless asked otherwise.';
 const DEFAULT_MODEL = 'gpt-5.5';
-const DEFAULT_TOOLS = [TASK_LIST_TOOL_NAME, 'read_file', 'shell', 'bash', 'run_agent'];
-const READONLY_TOOLS = [TASK_LIST_TOOL_NAME, 'read_file', 'shell', 'bash'];
+const DEFAULT_TOOLS = [TASK_LIST_TOOL_NAME, SWITCH_WORK_ENVIRONMENT_TOOL_NAME, 'read_file', 'shell', 'bash', 'run_agent'];
+const READONLY_TOOLS = [TASK_LIST_TOOL_NAME, SWITCH_WORK_ENVIRONMENT_TOOL_NAME, 'read_file', 'shell', 'bash'];
 const DEFAULT_TOOL_CONFIGS = {
   [TASK_LIST_TOOL_NAME]: { config: {}, display: { autoExpand: true } }
 } satisfies Record<string, ToolPolicyToolConfigRecord>;

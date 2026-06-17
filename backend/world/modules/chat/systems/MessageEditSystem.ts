@@ -25,6 +25,7 @@ import {
   MessageBundle,
   spawnConversation,
   spawnConversationBranchLink,
+  estimateUserInputUsage,
   spawnMessageRevision,
   spawnUserMessage,
   UserMessageBundle
@@ -84,7 +85,8 @@ export const MessageEditSystem = defineSystem({
       const content: MessageContent = { role: current.content.role, parts: text ? [{ text }] : [] };
       const oldRevision = currentRevisionForMessage(world, message);
       for (const link of currentRevisionLinksForMessage(world, message)) cmd.remove(link, MessageCurrentRevisionLink);
-      cmd.add(message, Message, { ...current, content, status: 'complete' });
+      const usageMetadata = current.role === 'user' ? estimateUserInputUsage(text) : current.usageMetadata;
+      cmd.add(message, Message, { ...current, content, status: 'complete', usageMetadata });
       const newRevision = spawnMessageRevision(cmd, message, content, 'edited');
       applySourceEditedPolicies(world, cmd, { message, conversation, oldRevision, newRevision, content });
 

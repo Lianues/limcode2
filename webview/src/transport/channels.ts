@@ -19,6 +19,12 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
     case BridgeMessageType.ModeDelete:
     case BridgeMessageType.ConversationModeSelect:
     case BridgeMessageType.ConversationProjectSet:
+    case BridgeMessageType.WorkEnvironmentSelect:
+    case BridgeMessageType.WorkEnvironmentUpsert:
+    case BridgeMessageType.WorkEnvironmentRemove:
+    case BridgeMessageType.WorkEnvironmentImportFromVscode:
+    case BridgeMessageType.WorkEnvironmentPolicyScopeSet:
+    case BridgeMessageType.WorkEnvironmentPolicyScopeClear:
     case BridgeMessageType.ToolPolicyScopeSet:
     case BridgeMessageType.ToolPolicyScopeClear:
     case BridgeMessageType.ToolExecutionApprove:

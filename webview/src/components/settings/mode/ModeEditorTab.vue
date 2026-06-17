@@ -2,10 +2,12 @@
 import { computed, ref, watch } from 'vue';
 import { IconListDetails, IconPencil, IconPlus, IconTrash } from '@tabler/icons-vue';
 import type { ModeRecord } from '@shared/protocol';
+import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
 import ToolPolicyEditor from '@webview/components/settings/tools/ToolPolicyEditor.vue';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
+import WorkEnvironmentPolicyEditor from '@webview/components/settings/workEnvironment/WorkEnvironmentPolicyEditor.vue';
 import { useModeStore } from '@webview/stores/useModeStore';
 
 const modeStore = useModeStore();
@@ -13,6 +15,7 @@ const activeModeId = ref('');
 const createOpen = ref(false);
 const renameOpen = ref(false);
 const deleteConfirmOpen = ref(false);
+const modeDescriptionScroller = ref<HTMLElement | null>(null);
 
 const modeOptions = computed<SettingsDropdownOption[]>(() =>
   modeStore.modes.map((mode) => ({
@@ -77,8 +80,10 @@ function confirmDelete(): void {
 function updateDescription(event: Event): void {
   const mode = activeMode.value;
   if (!mode) return;
-  modeStore.updateModeDescription(mode.id, (event.target as HTMLTextAreaElement).value);
+  modeStore.updateModeDescription(mode.id, editableText(event));
 }
+
+function editableText(event: Event): string { return (event.currentTarget as HTMLElement | null)?.textContent ?? ''; }
 
 function escapeHtml(value: string): string {
   return value
@@ -137,8 +142,28 @@ function escapeHtml(value: string): string {
 
       <label v-if="activeMode" class="global-settings-field global-settings-field-wide mode-description-field">
         <span>模式描述</span>
-        <textarea :value="activeMode.description ?? ''" rows="3" placeholder="描述这个模式的用途" @change="updateDescription"></textarea>
+        <div class="mode-description-shell">
+          <div
+            :key="activeMode.id"
+            ref="modeDescriptionScroller"
+            class="mode-description-editor"
+            contenteditable="plaintext-only"
+            role="textbox"
+            aria-multiline="true"
+            data-placeholder="描述这个模式的用途"
+            @blur="updateDescription"
+          >{{ activeMode.description ?? '' }}</div>
+          <AdvancedScrollbar :scroller="modeDescriptionScroller" :refresh-key="activeMode.id" variant="minimal" />
+        </div>
       </label>
+
+      <WorkEnvironmentPolicyEditor
+        v-if="activeMode"
+        scope-kind="mode"
+        :scope-id="activeMode.id"
+        title="模式工作环境策略"
+        description="这个模式启用时会优先使用这里的工作环境策略；未配置时继承全局策略。"
+      />
 
       <ToolPolicyEditor
         v-if="activeMode"
@@ -255,15 +280,42 @@ function escapeHtml(value: string): string {
   white-space: nowrap;
 }
 
-.mode-description-field textarea {
+.mode-description-shell {
+  position: relative;
+  overflow: hidden;
+}
+
+.mode-description-editor {
   width: 100%;
-  min-height: 72px;
+  height: 86px;
+  overflow-y: auto;
   border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
   border-radius: var(--radius-sm);
-  padding: var(--space-2);
+  padding: var(--space-2) calc(var(--space-2) + 10px) var(--space-2) var(--space-2);
   color: var(--vscode-input-foreground);
   background: var(--vscode-input-background);
   font: inherit;
-  resize: vertical;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  scrollbar-width: none;
+}
+
+.mode-description-editor::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.mode-description-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground));
+  pointer-events: none;
+}
+
+.mode-description-editor:focus {
+  border-color: var(--vscode-focusBorder, var(--vscode-panel-border));
+  outline: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
 }
 </style>

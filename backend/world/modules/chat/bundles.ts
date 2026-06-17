@@ -1,5 +1,6 @@
+import { estimateTokenCount } from 'tokenx';
 import { defineBundle, type CommandSink, type Entity } from '../../../ecs/types';
-import type { ContentPart, ContentRole, MessageContent, MessageRevisionReason, MsgRole, MsgStatus } from '../../../../shared/protocol';
+import type { ContentPart, ContentRole, LlmUsageMetadataRecord, MessageContent, MessageRevisionReason, MsgRole, MsgStatus } from '../../../../shared/protocol';
 import { Conversation, ConversationBranchLink, ConversationReuseLink, LlmRequest, Message, MessageCurrentRevisionLink, MessageRevision, PartOf, Streaming, type MessageData } from './components';
 
 export const ConversationBundle = defineBundle({ name: 'ConversationBundle', writes: [Conversation], mutationMode: 'create', spawns: true });
@@ -36,6 +37,7 @@ export interface SpawnMessageInput {
   parts?: ContentPart[];
   status?: MsgStatus;
   revisionReason?: MessageRevisionReason;
+  usageMetadata?: LlmUsageMetadataRecord;
 }
 
 export function spawnMessage(cmd: CommandSink, input: SpawnMessageInput): Entity {
@@ -52,7 +54,8 @@ export function spawnMessage(cmd: CommandSink, input: SpawnMessageInput): Entity
     content,
     status: input.status ?? 'complete',
     seq,
-    createdAt
+    createdAt,
+    usageMetadata: input.usageMetadata
   });
   cmd.add(entity, PartOf, { parent: input.parent });
   spawnMessageRevision(cmd, entity, content, input.revisionReason ?? 'created');
@@ -74,11 +77,17 @@ export function spawnMessageRevision(cmd: CommandSink, message: Entity, content:
 }
 
 export function spawnUserMessage(cmd: CommandSink, conversation: Entity, text: string): Entity {
-  return spawnMessage(cmd, { parent: conversation, role: 'user', parts: [{ text }], status: 'complete' });
+  return spawnMessage(cmd, { parent: conversation, role: 'user', parts: [{ text }], status: 'complete', usageMetadata: estimateUserInputUsage(text) });
+}
+
+export function estimateUserInputUsage(text: string): LlmUsageMetadataRecord | undefined {
+  const estimated = estimateTokenCount(text);
+  if (!Number.isFinite(estimated) || estimated <= 0) return undefined;
+  return { promptTokenCount: estimated, totalTokenCount: estimated, estimated: true, tokenEstimator: 'tokenx' };
 }
 
 export function cloneMessageToConversation(cmd: CommandSink, conversation: Entity, message: MessageData, overrideContent?: MessageContent): Entity {
-  return spawnMessage(cmd, { parent: conversation, role: message.role, parts: overrideContent?.parts ?? message.content.parts, status: message.status === 'streaming' ? 'error' : message.status, revisionReason: 'created' });
+  return spawnMessage(cmd, { parent: conversation, role: message.role, parts: overrideContent?.parts ?? message.content.parts, status: message.status === 'streaming' ? 'error' : message.status, usageMetadata: message.usageMetadata, revisionReason: 'created' });
 }
 
 export function spawnModelMessage(cmd: CommandSink, conversation: Entity): Entity {

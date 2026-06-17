@@ -19,7 +19,8 @@ import type {
   LlmProviderModelRecord,
   ToolCallEventRecord,
   ToolCallRecord,
-  WebviewClientMeta
+  WebviewClientMeta,
+  WorkEnvironmentRecord
 } from '../../shared/protocol';
 import type { TimelineProjectionContextRecord } from '../../shared/timelineProjection';
 
@@ -49,7 +50,11 @@ export interface FsReadFileResult {
 }
 
 export interface FsCapability {
-  readFile(path: string, startLine?: number, endLine?: number): Promise<FsReadFileResult>;
+  readFile(path: string, startLine?: number, endLine?: number, options?: WorkEnvironmentCapabilityOptions): Promise<FsReadFileResult>;
+}
+
+export interface WorkEnvironmentCapabilityOptions {
+  workEnvironment?: WorkEnvironmentRecord;
 }
 
 export interface CommandRunEvent {
@@ -81,7 +86,7 @@ export interface CommandRunResult {
 export interface CommandCapability {
   readonly toolName: 'shell' | 'bash';
   readonly description: string;
-  run(args: CommandRunArgs, observer?: CommandRunObserver): Promise<CommandRunResult>;
+  run(args: CommandRunArgs, observer?: CommandRunObserver, options?: WorkEnvironmentCapabilityOptions): Promise<CommandRunResult>;
 }
 
 /** Webview 能力：集中管理多个 Webview client，真实 vscode.Webview 句柄不进入 ECS world。 */
@@ -152,6 +157,30 @@ export interface RuntimePaths {
   conversationProjectLinksRootPath: string;
   conversationProjectLinksIndexUri: vscode.Uri;
   conversationProjectLinksIndexPath: string;
+  /** 工作环境数据根目录：<dataRoot>/work-environments */
+  workEnvironmentsRootUri: vscode.Uri;
+  workEnvironmentsRootPath: string;
+  workEnvironmentsIndexUri: vscode.Uri;
+  workEnvironmentsIndexPath: string;
+  /** 工作环境策略数据根目录：<dataRoot>/work-environment-policies */
+  workEnvironmentPoliciesRootUri: vscode.Uri;
+  workEnvironmentPoliciesRootPath: string;
+  workEnvironmentPoliciesIndexUri: vscode.Uri;
+  workEnvironmentPoliciesIndexPath: string;
+  workEnvironmentPolicyScopeLinksRootUri: vscode.Uri;
+  workEnvironmentPolicyScopeLinksRootPath: string;
+  workEnvironmentPolicyScopeLinksIndexUri: vscode.Uri;
+  workEnvironmentPolicyScopeLinksIndexPath: string;
+  /** Conversation 与工作环境的关系数据根目录：<dataRoot>/conversation-work-environment-links */
+  conversationWorkEnvironmentLinksRootUri: vscode.Uri;
+  conversationWorkEnvironmentLinksRootPath: string;
+  conversationWorkEnvironmentLinksIndexUri: vscode.Uri;
+  conversationWorkEnvironmentLinksIndexPath: string;
+  /** AgentRun 与工作环境的关系数据根目录：<dataRoot>/run-work-environment-links */
+  runWorkEnvironmentLinksRootUri: vscode.Uri;
+  runWorkEnvironmentLinksRootPath: string;
+  runWorkEnvironmentLinksIndexUri: vscode.Uri;
+  runWorkEnvironmentLinksIndexPath: string;
   /** Agent 与 Conversation 的关系数据根目录：<dataRoot>/agent-conversation-links */
   linksRootUri: vscode.Uri;
   linksRootPath: string;

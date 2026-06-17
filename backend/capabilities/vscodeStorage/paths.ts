@@ -20,7 +20,12 @@ import {
   SETTINGS_ROOT_DIR,
   SYSTEM_PROMPTS_ROOT_DIR,
   TOOL_POLICY_SCOPE_LINKS_ROOT_DIR,
-  TOOL_POLICIES_ROOT_DIR
+  TOOL_POLICIES_ROOT_DIR,
+  WORK_ENVIRONMENTS_ROOT_DIR,
+  CONVERSATION_WORK_ENVIRONMENT_LINKS_ROOT_DIR,
+  RUN_WORK_ENVIRONMENT_LINKS_ROOT_DIR,
+  WORK_ENVIRONMENT_POLICIES_ROOT_DIR,
+  WORK_ENVIRONMENT_POLICY_SCOPE_LINKS_ROOT_DIR
 } from './constants';
 
 export interface VscodeStorageUris {
@@ -44,6 +49,16 @@ export interface VscodeStorageUris {
   projectContextsIndexUri: vscode.Uri;
   conversationProjectLinksRootUri: vscode.Uri;
   conversationProjectLinksIndexUri: vscode.Uri;
+  workEnvironmentsRootUri: vscode.Uri;
+  workEnvironmentsIndexUri: vscode.Uri;
+  workEnvironmentPoliciesRootUri: vscode.Uri;
+  workEnvironmentPoliciesIndexUri: vscode.Uri;
+  workEnvironmentPolicyScopeLinksRootUri: vscode.Uri;
+  workEnvironmentPolicyScopeLinksIndexUri: vscode.Uri;
+  conversationWorkEnvironmentLinksRootUri: vscode.Uri;
+  conversationWorkEnvironmentLinksIndexUri: vscode.Uri;
+  runWorkEnvironmentLinksRootUri: vscode.Uri;
+  runWorkEnvironmentLinksIndexUri: vscode.Uri;
   linksRootUri: vscode.Uri;
   linksIndexUri: vscode.Uri;
   agentModeLinksRootUri: vscode.Uri;
@@ -78,6 +93,11 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const conversationHistory = root(globalStorageUri, CONVERSATION_HISTORY_ROOT_DIR);
   const projectContexts = root(globalStorageUri, PROJECT_CONTEXTS_ROOT_DIR);
   const conversationProjectLinks = root(globalStorageUri, CONVERSATION_PROJECT_LINKS_ROOT_DIR);
+  const workEnvironments = root(globalStorageUri, WORK_ENVIRONMENTS_ROOT_DIR);
+  const workEnvironmentPolicies = root(globalStorageUri, WORK_ENVIRONMENT_POLICIES_ROOT_DIR);
+  const workEnvironmentPolicyScopeLinks = root(globalStorageUri, WORK_ENVIRONMENT_POLICY_SCOPE_LINKS_ROOT_DIR);
+  const conversationWorkEnvironmentLinks = root(globalStorageUri, CONVERSATION_WORK_ENVIRONMENT_LINKS_ROOT_DIR);
+  const runWorkEnvironmentLinks = root(globalStorageUri, RUN_WORK_ENVIRONMENT_LINKS_ROOT_DIR);
   const links = root(globalStorageUri, AGENT_CONVERSATION_LINKS_ROOT_DIR);
   const agentModeLinks = root(globalStorageUri, AGENT_MODE_LINKS_ROOT_DIR);
   const modeToolPolicyLinks = root(globalStorageUri, MODE_TOOL_POLICY_LINKS_ROOT_DIR);
@@ -131,6 +151,26 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     conversationProjectLinksRootPath: conversationProjectLinks.rootUri.fsPath,
     conversationProjectLinksIndexUri: conversationProjectLinks.indexUri,
     conversationProjectLinksIndexPath: conversationProjectLinks.indexUri.fsPath,
+    workEnvironmentsRootUri: workEnvironments.rootUri,
+    workEnvironmentsRootPath: workEnvironments.rootUri.fsPath,
+    workEnvironmentsIndexUri: workEnvironments.indexUri,
+    workEnvironmentsIndexPath: workEnvironments.indexUri.fsPath,
+    workEnvironmentPoliciesRootUri: workEnvironmentPolicies.rootUri,
+    workEnvironmentPoliciesRootPath: workEnvironmentPolicies.rootUri.fsPath,
+    workEnvironmentPoliciesIndexUri: workEnvironmentPolicies.indexUri,
+    workEnvironmentPoliciesIndexPath: workEnvironmentPolicies.indexUri.fsPath,
+    workEnvironmentPolicyScopeLinksRootUri: workEnvironmentPolicyScopeLinks.rootUri,
+    workEnvironmentPolicyScopeLinksRootPath: workEnvironmentPolicyScopeLinks.rootUri.fsPath,
+    workEnvironmentPolicyScopeLinksIndexUri: workEnvironmentPolicyScopeLinks.indexUri,
+    workEnvironmentPolicyScopeLinksIndexPath: workEnvironmentPolicyScopeLinks.indexUri.fsPath,
+    conversationWorkEnvironmentLinksRootUri: conversationWorkEnvironmentLinks.rootUri,
+    conversationWorkEnvironmentLinksRootPath: conversationWorkEnvironmentLinks.rootUri.fsPath,
+    conversationWorkEnvironmentLinksIndexUri: conversationWorkEnvironmentLinks.indexUri,
+    conversationWorkEnvironmentLinksIndexPath: conversationWorkEnvironmentLinks.indexUri.fsPath,
+    runWorkEnvironmentLinksRootUri: runWorkEnvironmentLinks.rootUri,
+    runWorkEnvironmentLinksRootPath: runWorkEnvironmentLinks.rootUri.fsPath,
+    runWorkEnvironmentLinksIndexUri: runWorkEnvironmentLinks.indexUri,
+    runWorkEnvironmentLinksIndexPath: runWorkEnvironmentLinks.indexUri.fsPath,
     linksRootUri: links.rootUri,
     linksRootPath: links.rootUri.fsPath,
     linksIndexUri: links.indexUri,

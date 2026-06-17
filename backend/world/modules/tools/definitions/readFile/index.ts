@@ -38,12 +38,12 @@ export const readFileTool: ToolDefinition = {
   execution: 'runtime',
   scheduling: staticToolScheduling('parallel', 'readonly_file_read'),
   summary: summarizeReadFileToolCall,
-  async execute(rawArgs, deps) {
+  async execute(rawArgs, deps, ctx) {
     const args = (rawArgs ?? {}) as ReadFileArgs;
     if (!args.path) {
       return { ok: false, output: 'Missing required argument: path' };
     }
-    const text = await deps.fs.readFile(args.path, args.startLine, args.endLine);
+    const text = await deps.fs.readFile(args.path, args.startLine, args.endLine, { workEnvironment: ctx?.workEnvironment });
     return { ok: true, output: text };
   }
 };

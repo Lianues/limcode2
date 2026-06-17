@@ -9,7 +9,8 @@ import {
   type ClientState,
   type ConversationRecord,
   type MessageRecord,
-  type ProjectContextRecord
+  type ProjectContextRecord,
+  type WorkEnvironmentRecord
 } from '@shared/protocol';
 import { createClientStateDb, type ClientStateDb } from './clientStateDb';
 
@@ -77,6 +78,17 @@ export const useClientStateStore = defineStore('clientState', {
         (candidate) => candidate.conversationId === state.currentConversationId && candidate.role === 'primary'
       );
       return state.projectContexts.find((candidate) => candidate.id === link?.projectContextId);
+    },
+    currentWorkEnvironment(state): WorkEnvironmentRecord | undefined {
+      const link = state.conversationWorkEnvironmentLinks.find(
+        (candidate) => candidate.conversationId === state.currentConversationId && candidate.role === 'active'
+      );
+      const linked = state.workEnvironments.find((candidate) => candidate.id === link?.workEnvironmentId && candidate.available);
+      if (linked) return linked;
+      return state.workEnvironments
+        .filter((candidate) => candidate.available)
+        .sort((left, right) => workEnvironmentSortKey(left).localeCompare(workEnvironmentSortKey(right), 'zh-CN') || left.id.localeCompare(right.id))
+        [0];
     },
     /** 当前对话下、按 seq 排序、剔除纯工具响应的消息（工具响应不直接展示）。 */
     currentMessages(state): MessageRecord[] {
@@ -199,4 +211,10 @@ function labelForRunStatus(status: AgentRunStatus): string {
     case 'stale':
       return '已过期';
   }
+}
+
+function workEnvironmentSortKey(environment: WorkEnvironmentRecord): string {
+  const kind = environment.kind === 'localFolder' ? '0' : '1';
+  const index = environment.index === undefined ? '999999' : String(environment.index).padStart(6, '0');
+  return `${kind}:${index}:${environment.name}`;
 }

@@ -20,6 +20,11 @@ export const PROJECT_CONTEXTS_ROOT_DIR = 'project-contexts';
 export const CONVERSATION_PROJECT_LINKS_ROOT_DIR = 'conversation-project-links';
 export const RUN_HISTORY_ROOT_DIR = 'run-history';
 export const SETTINGS_ROOT_DIR = 'settings';
+export const WORK_ENVIRONMENTS_ROOT_DIR = 'work-environments';
+export const CONVERSATION_WORK_ENVIRONMENT_LINKS_ROOT_DIR = 'conversation-work-environment-links';
+export const RUN_WORK_ENVIRONMENT_LINKS_ROOT_DIR = 'run-work-environment-links';
+export const WORK_ENVIRONMENT_POLICIES_ROOT_DIR = 'work-environment-policies';
+export const WORK_ENVIRONMENT_POLICY_SCOPE_LINKS_ROOT_DIR = 'work-environment-policy-scope-links';
 
 /**
  * 当前插件明确注册的数据根目录名。
@@ -43,6 +48,11 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
   PROJECT_CONTEXTS_ROOT_DIR,
   CONVERSATION_PROJECT_LINKS_ROOT_DIR,
   RUN_HISTORY_ROOT_DIR,
+  WORK_ENVIRONMENTS_ROOT_DIR,
+  CONVERSATION_WORK_ENVIRONMENT_LINKS_ROOT_DIR,
+  RUN_WORK_ENVIRONMENT_LINKS_ROOT_DIR,
+  WORK_ENVIRONMENT_POLICIES_ROOT_DIR,
+  WORK_ENVIRONMENT_POLICY_SCOPE_LINKS_ROOT_DIR,
   SETTINGS_ROOT_DIR
 ] as const;
 

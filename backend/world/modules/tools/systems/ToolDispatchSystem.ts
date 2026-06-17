@@ -35,6 +35,7 @@ import {
 } from '../../mode/components';
 import {
   AgentRun,
+  AgentRunTargetLink,
   RunContextPolicy,
   RunContextPolicyLink,
   RunConversationPolicy,
@@ -56,6 +57,23 @@ import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
 import { ToolCall, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolStateData } from '../components';
 import { ToolEventType } from '../events';
 import { transitionToolState } from '../state';
+import {
+  WorkEnvironment,
+  WorkEnvironmentPolicy,
+  WorkEnvironmentPolicyScopeLink,
+  ConversationWorkEnvironmentLink,
+  RunWorkEnvironmentLink
+} from '../../workEnvironment/components';
+import {
+  activeWorkEnvironmentForRun,
+  resolveWorkEnvironmentBySelector,
+  toPublicWorkEnvironmentRecord
+} from '../../workEnvironment/queries';
+import {
+  selectConversationWorkEnvironment,
+  selectRunWorkEnvironment,
+  WorkEnvironmentBundle
+} from '../../workEnvironment/bundles';
 import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey, ToolSchemasKey } from '../resources';
 import {
   compareToolCallOrder,
@@ -63,17 +81,18 @@ import {
   isInActiveExecutionBatch,
   progressRecord
 } from '../scheduling';
-import type {
-  AgentRunStatus,
-  ContextHistoryMode,
-  ConversationPolicyMode,
-  ConversationVisibility,
-  DeliveryMode,
-  MessageContent,
-  NewMessageWhileRunningBehavior,
-  SourceEditBehavior,
-  ToolConfigRecord,
-  TranscriptInclusion
+import {
+  SWITCH_WORK_ENVIRONMENT_TOOL_NAME,
+  type AgentRunStatus,
+  type ContextHistoryMode,
+  type ConversationPolicyMode,
+  type ConversationVisibility,
+  type DeliveryMode,
+  type MessageContent,
+  type NewMessageWhileRunningBehavior,
+  type SourceEditBehavior,
+  type ToolConfigRecord,
+  type TranscriptInclusion
 } from '../../../../../shared/protocol';
 
 const QueuedToolCallsQuery = defineQuery({
@@ -99,7 +118,13 @@ const QueuedToolCallsQuery = defineQuery({
     ToolPolicyScopeLink,
     AgentRun,
     ToolCallRunLink,
-    ToolResultConsumed
+    AgentRunTargetLink,
+    ToolResultConsumed,
+    WorkEnvironment,
+    WorkEnvironmentPolicy,
+    WorkEnvironmentPolicyScopeLink,
+    ConversationWorkEnvironmentLink,
+    RunWorkEnvironmentLink
   ],
   write: [ToolState, AgentRun],
   add: [InFlight],
@@ -112,7 +137,7 @@ export const ToolDispatchSystem = defineSystem({
   access: {
     queries: [QueuedToolCallsQuery],
     resources: { read: [AgentBlueprintsKey, ToolSchemasKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey] },
-    bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentFromBlueprintBundle],
+    bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentFromBlueprintBundle, WorkEnvironmentBundle],
     events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested] },
     effects: { emit: ['tool.run'] }
   },
@@ -223,6 +248,10 @@ function isRunReadyForToolExecution(authorization: Extract<AuthorizationResult, 
 }
 
 function dispatchToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
+  if (call.name === SWITCH_WORK_ENVIRONMENT_TOOL_NAME) {
+    executeSwitchWorkEnvironmentTool(world, cmd, entity, call, state, authorization);
+    return;
+  }
   if (isAgentRunTool(world, call.name)) {
     executeRunAgentTool(world, cmd, entity, call, state, authorization);
     return;
@@ -231,7 +260,17 @@ function dispatchToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, 
 }
 
 function executeRuntimeToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
-  cmd.effect({ kind: 'tool.run', toolCallId: call.id, name: call.name, argsJson: call.argsJson, runId: authorization.runId, conversationId: authorization.conversationId, config: effectiveToolConfig(world, authorization.policy, call.name) });
+  const workEnvironment = activeWorkEnvironmentForRun(world, authorization.run)?.data;
+  cmd.effect({
+    kind: 'tool.run',
+    toolCallId: call.id,
+    name: call.name,
+    argsJson: call.argsJson,
+    runId: authorization.runId,
+    conversationId: authorization.conversationId,
+    config: effectiveToolConfig(world, authorization.policy, call.name),
+    ...(workEnvironment ? { workEnvironment: toPublicWorkEnvironmentRecord(workEnvironment) } : {})
+  });
   const now = Date.now();
   cmd.add(entity, ToolState, transitionToolState(state, 'executing', {}, now));
   spawnToolCallEvent(cmd, {
@@ -244,6 +283,62 @@ function executeRuntimeToolCall(world: WorldReader, cmd: CommandSink, entity: En
     payload: { executorAgentId: authorization.agentId, runId: authorization.runId }
   });
   cmd.add(entity, InFlight, { kind: 'tool', startedAt: now });
+}
+
+interface SwitchWorkEnvironmentArgs {
+  workEnvironmentId?: string;
+}
+
+function executeSwitchWorkEnvironmentTool(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
+  let args: SwitchWorkEnvironmentArgs = {};
+  try {
+    args = call.argsJson ? JSON.parse(call.argsJson) as SwitchWorkEnvironmentArgs : {};
+  } catch (error) {
+    rejectToolCall(cmd, entity, call, state, `switch_work_environment 参数不是合法 JSON: ${String(error)}`);
+    return;
+  }
+  const workEnvironmentId = args.workEnvironmentId?.trim();
+  if (!workEnvironmentId) {
+    rejectToolCall(cmd, entity, call, state, 'switch_work_environment 缺少必填 workEnvironmentId。');
+    return;
+  }
+
+  const target = resolveWorkEnvironmentBySelector(world, {
+    workEnvironmentId
+  }, { run: authorization.run });
+  if (!target) {
+    rejectToolCall(cmd, entity, call, state, `未找到或当前策略不允许使用工作环境：${workEnvironmentId}`);
+    return;
+  }
+
+  const runTargetInfo = runTarget(world, authorization.run);
+  if (!runTargetInfo) {
+    rejectToolCall(cmd, entity, call, state, '无法解析当前 AgentRun 的目标对话，不能切换工作环境。');
+    return;
+  }
+
+  selectRunWorkEnvironment(world, cmd, authorization.run, target.entity);
+  selectConversationWorkEnvironment(world, cmd, runTargetInfo.conversation, target.entity);
+
+  const record = toPublicWorkEnvironmentRecord(target.data);
+  const now = Date.now();
+  const result = {
+    ok: true,
+    kind: 'work_environment.switch',
+    workEnvironment: record,
+    message: `已切换到工作环境：${record.name}`
+  };
+  cmd.add(entity, ToolState, transitionToolState(state, 'success', { result, durationMs: 0 }, now));
+  spawnToolCallEvent(cmd, {
+    toolCall: entity,
+    toolCallId: call.id,
+    kind: 'completed',
+    status: 'success',
+    at: now,
+    elapsedMs: Math.max(0, now - call.createdAt),
+    durationMs: 0,
+    payload: result
+  });
 }
 
 interface RunAgentArgs {
@@ -419,6 +514,11 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     deliveryMode,
     includeTranscript
   });
+  const inheritedWorkEnvironment = activeWorkEnvironmentForRun(world, authorization.run);
+  if (inheritedWorkEnvironment) {
+    selectConversationWorkEnvironment(world, cmd, resolved.value.conversation, inheritedWorkEnvironment.entity);
+    selectRunWorkEnvironment(world, cmd, childRun, inheritedWorkEnvironment.entity);
+  }
   applyRunConversationPolicy(cmd, childRun, resolved.value);
   applyRunContextPolicy(cmd, childRun, args, resolved.value, policyDefaults.contextPolicy);
   applyRunDeliveryPolicy(cmd, childRun, baseDeliveryPolicy);

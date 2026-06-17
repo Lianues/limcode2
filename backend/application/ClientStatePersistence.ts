@@ -27,6 +27,7 @@ const RUN_HISTORY_TABLE_KEYS = [
   'runContextPolicyLinks',
   'runDeliveryPolicyLinks',
   'runEditPolicyLinks',
+  'runWorkEnvironmentLinks',
   'agentRunInputRevisions'
 ] as const;
 

@@ -1,17 +1,17 @@
 import * as vscode from 'vscode';
-import type { FsCapability, FsReadFileResult, FsReadLine } from './types';
+import type { FsCapability, FsReadFileResult, FsReadLine, WorkEnvironmentCapabilityOptions } from './types';
 
 const MAX_BYTES = 256 * 1024;
 
 /** 函数式 VSCode FS capability 适配器。 */
 export function createVsCodeFsCapability(): FsCapability {
   return {
-    readFile: (path, startLine, endLine) => readWorkspaceTextFile(path, startLine, endLine)
+    readFile: (path, startLine, endLine, options) => readWorkspaceTextFile(path, startLine, endLine, options)
   };
 }
 
-export async function readWorkspaceTextFile(relPath: string, startLine?: number, endLine?: number): Promise<FsReadFileResult> {
-  const uri = resolveWorkspacePath(relPath);
+export async function readWorkspaceTextFile(relPath: string, startLine?: number, endLine?: number, options: WorkEnvironmentCapabilityOptions = {}): Promise<FsReadFileResult> {
+  const uri = resolveWorkspacePath(relPath, options);
   const data = await vscode.workspace.fs.readFile(uri);
   if (data.byteLength > MAX_BYTES) {
     throw new Error(`File too large: ${data.byteLength} bytes (limit ${MAX_BYTES}).`);
@@ -47,11 +47,30 @@ function normalizeEndLine(value: number | undefined, totalLines: number): number
   return Math.min(totalLines, Math.max(1, Math.floor(value)));
 }
 
-function resolveWorkspacePath(relPath: string): vscode.Uri {
+function resolveWorkspacePath(relPath: string, options: WorkEnvironmentCapabilityOptions): vscode.Uri {
+  const workEnvironment = options.workEnvironment;
+  if (workEnvironment && workEnvironment.kind !== 'localFolder') {
+    throw new Error(`当前工作环境暂不支持本地文件读取：${workEnvironment.name} (${workEnvironment.kind})`);
+  }
+  if (workEnvironment?.available === false) {
+    throw new Error(`当前工作环境不可用：${workEnvironment.name}`);
+  }
+
   const folders = vscode.workspace.workspaceFolders;
   const isAbsolute = /^([a-zA-Z]:[\\/]|\/)/.test(relPath);
+  const environmentRoot = workEnvironment?.kind === 'localFolder' && workEnvironment.uri
+    ? vscode.Uri.parse(workEnvironment.uri)
+    : undefined;
+  if (environmentRoot && !isAbsolute) {
+    return joinPath(environmentRoot, relPath);
+  }
   if (folders && folders.length > 0 && !isAbsolute) {
-    return vscode.Uri.joinPath(folders[0].uri, relPath);
+    return joinPath(folders[0].uri, relPath);
   }
   return vscode.Uri.file(relPath);
+}
+
+function joinPath(root: vscode.Uri, relPath: string): vscode.Uri {
+  const parts = relPath.replace(/\\+/g, '/').split('/').filter(Boolean);
+  return parts.length > 0 ? vscode.Uri.joinPath(root, ...parts) : root;
 }

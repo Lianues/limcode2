@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
 import ToolPolicyEditor from '@webview/components/settings/tools/ToolPolicyEditor.vue';
+import WorkEnvironmentPolicyEditor from '@webview/components/settings/workEnvironment/WorkEnvironmentPolicyEditor.vue';
 
 const settings = useConversationSettingsStore();
 
@@ -27,6 +28,14 @@ function reload(): void {
     <p class="settings-note">
       对话级 common 设置会保存到当前 conversation 目录下的 <code>settings/common.json</code>。
     </p>
+
+    <WorkEnvironmentPolicyEditor
+      v-if="hasConversation"
+      scope-kind="conversation"
+      :scope-id="settings.common.conversationId"
+      title="对话工作环境策略"
+      description="默认继承全局工作环境策略；修改任一工作环境后会为当前对话创建独立覆盖。"
+    />
 
     <ToolPolicyEditor
       v-if="hasConversation"

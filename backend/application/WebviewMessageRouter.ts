@@ -7,6 +7,7 @@ import { AgentRun } from '../world/modules/agentRun/components';
 import { buildLlmStartRequestForRun } from '../world/modules/chat/systems/LlmDispatchSystem';
 import { ToolEventType } from '../world/modules/tools/events';
 import { ModeEventType } from '../world/modules/mode/events';
+import { WorkEnvironmentEventType } from '../world/modules/workEnvironment/events';
 import {
   BridgeMessageType,
   GLOBAL_CLIENT_STATE_STREAM_ID,
@@ -41,6 +42,7 @@ export interface WebviewMessageRouterDeps {
   ensureConversationDetailLoaded: (conversationId: string) => Promise<void>;
   getProjectFolderCandidates: () => ProjectFolderCandidateRecord[];
   setConversationProjectFolder: (input: SetConversationProjectFolderInput) => boolean;
+  importWorkEnvironmentsFromVscode: () => Promise<number>;
 }
 
 /**
@@ -198,6 +200,36 @@ export class WebviewMessageRouter {
             payload: { requestType: message.type, message: '无法设置对话项目归属。' }
           });
         }
+        break;
+      case BridgeMessageType.WorkEnvironmentSelect:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: WorkEnvironmentEventType.ConversationSelectRequested, payload: message.payload });
+        this.deps.requestSnapshot(message.payload.conversationId);
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.WorkEnvironmentUpsert:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: WorkEnvironmentEventType.UpsertRequested, payload: message.payload });
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.WorkEnvironmentRemove:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: WorkEnvironmentEventType.RemoveRequested, payload: message.payload });
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.WorkEnvironmentImportFromVscode:
+        if (!this.deps.isHydrated()) return;
+        void this.deps.importWorkEnvironmentsFromVscode().then(() => this.deps.requestSnapshot()).catch((error) => this.postRequestError(clientId, message.type, error instanceof Error ? error.message : '无法从 VS Code 导入工作环境。', message.id));
+        break;
+      case BridgeMessageType.WorkEnvironmentPolicyScopeSet:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: WorkEnvironmentEventType.PolicyScopeSetRequested, payload: message.payload });
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.WorkEnvironmentPolicyScopeClear:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: WorkEnvironmentEventType.PolicyScopeClearRequested, payload: message.payload });
+        this.deps.requestSnapshot();
         break;
       case BridgeMessageType.Ready:
         this.sendBridgeHello(clientId, message.id);

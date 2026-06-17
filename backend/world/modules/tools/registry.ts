@@ -5,7 +5,8 @@ import type {
   ToolConfigSchemaRecord,
   ToolDefinitionMetadataRecord,
   ToolDefinitionRecord,
-  ToolExecutionKind
+  ToolExecutionKind,
+  WorkEnvironmentRecord
 } from '../../../../shared/protocol';
 import type { ToolSchedulingResolver } from './scheduling';
 
@@ -31,6 +32,7 @@ export interface ToolExecutionContext {
   runId?: string;
   conversationId?: string;
   config?: ToolConfigRecord;
+  workEnvironment?: WorkEnvironmentRecord;
   emit(event: ToolRuntimeEvent): void;
 }
 

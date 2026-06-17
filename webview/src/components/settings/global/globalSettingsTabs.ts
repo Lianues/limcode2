@@ -1,10 +1,11 @@
 import type { Component } from 'vue';
-import { IconSettings2, IconSettingsAi, IconTool } from '@tabler/icons-vue';
+import { IconServer, IconSettings2, IconSettingsAi, IconTool } from '@tabler/icons-vue';
 import ChannelSettingsTab from './ChannelSettingsTab.vue';
 import OtherSettingsTab from './OtherSettingsTab.vue';
 import ToolSettingsTab from './ToolSettingsTab.vue';
+import WorkEnvironmentSettingsTab from './WorkEnvironmentSettingsTab.vue';
 
-export type GlobalSettingsTabKey = 'channels' | 'tools' | 'other';
+export type GlobalSettingsTabKey = 'channels' | 'tools' | 'work-environments' | 'other';
 
 export interface GlobalSettingsTabDefinition {
   key: GlobalSettingsTabKey;
@@ -28,6 +29,13 @@ export const GLOBAL_SETTINGS_TABS: readonly GlobalSettingsTabDefinition[] = [
     description: '工具注册与默认策略',
     icon: IconTool,
     component: ToolSettingsTab
+  },
+  {
+    key: 'work-environments',
+    label: '工作环境',
+    description: '本地与服务器环境',
+    icon: IconServer,
+    component: WorkEnvironmentSettingsTab
   },
   {
     key: 'other',

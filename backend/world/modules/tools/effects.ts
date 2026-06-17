@@ -1,4 +1,4 @@
-import type { ToolConfigRecord } from '../../../../shared/protocol';
+import type { ToolConfigRecord, WorkEnvironmentRecord } from '../../../../shared/protocol';
 
 export interface ToolRunEffect {
   kind: 'tool.run';
@@ -8,6 +8,7 @@ export interface ToolRunEffect {
   runId?: string;
   conversationId?: string;
   config?: ToolConfigRecord;
+  workEnvironment?: WorkEnvironmentRecord;
 }
 
 declare module '@backend/world/effects' {

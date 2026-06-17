@@ -89,7 +89,7 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
             ...(event.payload !== undefined ? { payload: event.payload } : {})
           });
         }
-      });
+      }, { workEnvironment: ctx?.workEnvironment });
       return { ok: result.exitCode === 0, output: result };
     }
   };

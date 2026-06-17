@@ -310,6 +310,14 @@ webview/src/components/navigation/AdvancedScrollbar.vue
 3. 如确实不能使用 AdvancedScrollbar，需说明原因，并保持视觉风格与现有自定义滚动条一致。
 ```
 
+如果前端需要做信息展示类悬浮面板（例如 token / usage / 指标明细、图表柱子明细、状态解释等 hover/focus 提示），必须优先复用：
+
+```text
+webview/src/components/ui/HoverTooltipPanel.vue
+```
+
+要求：不要直接依赖浏览器默认 `title` 提示，也不要临时写新的 tooltip / hover 面板；复用 `HoverTooltipPanel` 的展示样式、进入 / 离开动画、延迟和关闭等待时间。只有在交互形态明显不是信息展示 tooltip 时，才允许使用下拉面板或其他浮层组件，并说明原因。
+
 
 ### 5.6 设置页组件使用标准
 

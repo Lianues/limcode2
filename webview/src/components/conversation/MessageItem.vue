@@ -24,11 +24,12 @@ const props = withDefaults(
     runId?: string;
     runDetailLoading?: boolean;
     deleteCount?: number;
+    floorNumber?: number;
     deleting?: boolean;
     entering?: boolean;
     editingHighlighted?: boolean;
   }>(),
-  { runId: undefined, runDetailLoading: false, deleteCount: 1, deleting: false, entering: false, editingHighlighted: false }
+  { runId: undefined, runDetailLoading: false, deleteCount: 1, floorNumber: 0, deleting: false, entering: false, editingHighlighted: false }
 );
 
 const emit = defineEmits<{
@@ -114,9 +115,20 @@ const tokenUsageItems = computed<TokenUsageItem[]>(() => {
 });
 
 const runMetricItems = computed<RunMetricItem[]>(() => {
-  if (props.message.role === 'user' || streaming.value) return [];
   const startedAt = normalizeTimestamp(props.message.createdAt);
-  if (startedAt === undefined) return [];
+  const timeMetric: RunMetricItem | undefined = startedAt !== undefined
+    ? {
+        key: 'time' as const,
+        label: props.message.role === 'user' ? '发送时间' : '响应时间',
+        value: formatCallTime(startedAt),
+        tooltipTitle: props.message.role === 'user' ? '发送时间' : '响应时间',
+        details: [{ label: props.message.role === 'user' ? '发送时间' : '开始获取响应', value: formatFullDateTime(startedAt) }]
+      }
+    : undefined;
+
+  if (props.message.role === 'user' || streaming.value) {
+    return [timeMetric].filter((item): item is RunMetricItem => item !== undefined);
+  }
 
   const durationMs = normalizeDurationMs(props.message.streamOutputDurationMs);
   const outputTokens = props.message.usageMetadata
@@ -127,13 +139,7 @@ const runMetricItems = computed<RunMetricItem[]>(() => {
     : undefined;
 
   const items: Array<RunMetricItem | undefined> = [
-    {
-      key: 'time',
-      label: '响应时间',
-      value: formatCallTime(startedAt),
-      tooltipTitle: '响应时间',
-      details: [{ label: '开始获取响应', value: formatFullDateTime(startedAt) }]
-    },
+    timeMetric,
     durationMs !== undefined
       ? {
           key: 'duration' as const,
@@ -160,7 +166,7 @@ const runMetricItems = computed<RunMetricItem[]>(() => {
   return items.filter((item): item is RunMetricItem => item !== undefined);
 });
 
-const messageFooterVisible = computed(() => runMetricItems.value.length > 0 || tokenUsageItems.value.length > 0);
+const messageFooterVisible = computed(() => props.floorNumber > 0 || runMetricItems.value.length > 0 || tokenUsageItems.value.length > 0);
 
 function createTokenUsageItem(key: TokenUsageKind, label: string, value: number | undefined, usage: LlmUsageMetadataRecord): TokenUsageItem | undefined {
   if (value === undefined) return undefined;
@@ -637,7 +643,8 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
           />
         </div>
         <footer v-if="messageFooterVisible" class="message-footer">
-          <div v-if="runMetricItems.length > 0" class="message-run-metrics" aria-label="LLM 调用指标">
+          <div v-if="floorNumber > 0 || runMetricItems.length > 0" class="message-run-metrics" aria-label="消息楼层与 LLM 调用指标">
+            <span v-if="floorNumber > 0" class="message-floor-index">#{{ floorNumber }}</span>
             <HoverTooltipPanel
               v-for="metric in runMetricItems"
               :key="metric.key"
@@ -978,6 +985,19 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
   font-size: var(--font-size-xs);
   line-height: 14px;
   user-select: none;
+}
+
+.message-floor-index {
+  display: inline-flex;
+  align-items: center;
+  height: 14px;
+  color: var(--vscode-descriptionForeground);
+  font-weight: 500;
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+  line-height: 14px;
+  opacity: 0.78;
 }
 
 .message-run-metric,

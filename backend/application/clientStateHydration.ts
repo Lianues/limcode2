@@ -17,6 +17,13 @@ import { ConversationProjectLink, ProjectContext } from '../world/modules/projec
 import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolResultConsumed, ToolState } from '../world/modules/tools/components';
 import { isTerminalToolStatus } from '../world/modules/tools/state';
 import {
+  ConversationWorkEnvironmentLink,
+  RunWorkEnvironmentLink,
+  WorkEnvironment,
+  WorkEnvironmentPolicy,
+  WorkEnvironmentPolicyScopeLink
+} from '../world/modules/workEnvironment/components';
+import {
   AgentRun,
   AgentRunInputRevision,
   AgentRunSourceLink,
@@ -86,6 +93,8 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState): bo
   }
 
   const projectContextEntities = hydrateRecords(world, state.projectContexts ?? [], ProjectContext);
+  const workEnvironmentEntities = hydrateRecords(world, state.workEnvironments ?? [], WorkEnvironment);
+  const workEnvironmentPolicyEntities = hydrateRecords(world, state.workEnvironmentPolicies ?? [], WorkEnvironmentPolicy);
 
   for (const link of state.conversationProjectLinks ?? []) {
     const conversation = conversationEntities.get(link.conversationId);
@@ -101,6 +110,23 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState): bo
       updatedAt: link.updatedAt
     });
   }
+
+  for (const link of state.conversationWorkEnvironmentLinks ?? []) {
+    const conversation = conversationEntities.get(link.conversationId);
+    const workEnvironment = workEnvironmentEntities.get(link.workEnvironmentId);
+    if (conversation === undefined || workEnvironment === undefined) continue;
+    const entity = world.spawn();
+    world.add(entity, ConversationWorkEnvironmentLink, {
+      id: link.id,
+      conversation,
+      workEnvironment,
+      role: link.role,
+      createdAt: link.createdAt,
+      updatedAt: link.updatedAt
+    });
+  }
+
+  hydrateWorkEnvironmentPolicyScopeLinks(world, state, { conversations: conversationEntities, modes: modeEntities, agents: agentEntities, runs: new Map(), policies: workEnvironmentPolicyEntities });
 
   for (const link of state.agentConversationLinks) {
     const agent = agentEntities.get(link.agentId);
@@ -144,6 +170,8 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
   const toolPolicyEntities = existingRecords(world, ToolPolicy);
   const systemPromptEntities = existingRecords(world, SystemPrompt);
   const modelProfileEntities = existingRecords(world, ModelProfile);
+  const workEnvironmentEntities = existingRecords(world, WorkEnvironment);
+  const workEnvironmentPolicyEntities = existingRecords(world, WorkEnvironmentPolicy);
 
   const messageEntities = existingRecords(world, Message);
   for (const record of state.messages.filter((message) => message.conversationId === conversationId)) {
@@ -250,6 +278,8 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
   for (const link of state.runContextPolicyLinks ?? []) spawnRunLink(world, runEntities, contextPolicyEntities, link, RunContextPolicyLink, 'run', 'policy');
   for (const link of state.runDeliveryPolicyLinks ?? []) spawnRunLink(world, runEntities, deliveryPolicyEntities, link, RunDeliveryPolicyLink, 'run', 'policy');
   for (const link of state.runEditPolicyLinks ?? []) spawnRunLink(world, runEntities, editPolicyEntities, link, RunEditPolicyLink, 'run', 'policy');
+  for (const link of state.runWorkEnvironmentLinks ?? []) spawnRunLink(world, runEntities, workEnvironmentEntities, link, RunWorkEnvironmentLink, 'run', 'workEnvironment');
+  hydrateWorkEnvironmentPolicyScopeLinks(world, state, { conversations: conversationEntities, modes: modeEntities, agents: agentEntities, runs: runEntities, policies: workEnvironmentPolicyEntities });
 
 
   hydrateConversationModeSelections(world, state, conversationEntities, modeEntities);
@@ -424,6 +454,66 @@ function resolveHydratedToolPolicyScope(
   scopeKind: NonNullable<ClientState['toolPolicyScopeLinks'][number]>['scopeKind'],
   scopeId: string | undefined,
   maps: ToolPolicyScopeHydrationMaps
+): { ok: true; data: Partial<{ conversation: Entity; agent: Entity; mode: Entity; run: Entity; agentSystemId: string }> } | { ok: false } {
+  switch (scopeKind) {
+    case 'global':
+      return { ok: true, data: {} };
+    case 'conversation': {
+      const conversation = scopeId ? maps.conversations.get(scopeId) : undefined;
+      return conversation === undefined ? { ok: false } : { ok: true, data: { conversation } };
+    }
+    case 'agent': {
+      const agent = scopeId ? maps.agents.get(scopeId) : undefined;
+      return agent === undefined ? { ok: false } : { ok: true, data: { agent } };
+    }
+    case 'mode': {
+      const mode = scopeId ? maps.modes.get(scopeId) : undefined;
+      return mode === undefined ? { ok: false } : { ok: true, data: { mode } };
+    }
+    case 'run': {
+      const run = scopeId ? maps.runs.get(scopeId) : undefined;
+      return run === undefined ? { ok: false } : { ok: true, data: { run } };
+    }
+    case 'agentSystem':
+      return scopeId ? { ok: true, data: { agentSystemId: scopeId } } : { ok: false };
+  }
+}
+
+interface WorkEnvironmentPolicyScopeHydrationMaps {
+  conversations: Map<string, Entity>;
+  agents: Map<string, Entity>;
+  modes: Map<string, Entity>;
+  runs: Map<string, Entity>;
+  policies: Map<string, Entity>;
+}
+
+function hydrateWorkEnvironmentPolicyScopeLinks(world: World, state: ClientState, maps: WorkEnvironmentPolicyScopeHydrationMaps): void {
+  const existing = existingIds(world, WorkEnvironmentPolicyScopeLink);
+  for (const record of state.workEnvironmentPolicyScopeLinks ?? []) {
+    if (existing.has(record.id)) continue;
+    const policy = maps.policies.get(record.workEnvironmentPolicyId);
+    if (policy === undefined) continue;
+    const scope = resolveHydratedWorkEnvironmentPolicyScope(record.scopeKind, record.scopeId, maps);
+    if (!scope.ok) continue;
+    const entity = world.spawn();
+    existing.add(record.id);
+    world.add(entity, WorkEnvironmentPolicyScopeLink, {
+      id: record.id,
+      scopeKind: record.scopeKind,
+      ...(record.scopeId ? { scopeId: record.scopeId } : {}),
+      policy,
+      ...scope.data,
+      role: record.role,
+      createdAt: record.createdAt || Date.now(),
+      updatedAt: record.updatedAt || record.createdAt || Date.now()
+    });
+  }
+}
+
+function resolveHydratedWorkEnvironmentPolicyScope(
+  scopeKind: NonNullable<ClientState['workEnvironmentPolicyScopeLinks'][number]>['scopeKind'],
+  scopeId: string | undefined,
+  maps: WorkEnvironmentPolicyScopeHydrationMaps
 ): { ok: true; data: Partial<{ conversation: Entity; agent: Entity; mode: Entity; run: Entity; agentSystemId: string }> } | { ok: false } {
   switch (scopeKind) {
     case 'global':

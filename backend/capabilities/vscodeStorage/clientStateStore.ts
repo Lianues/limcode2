@@ -25,7 +25,12 @@ import type {
   ToolCallEventRecord,
   ToolCallRecord,
   ToolPolicyRecord,
-  ToolPolicyScopeLinkRecord
+  ToolPolicyScopeLinkRecord,
+  WorkEnvironmentRecord,
+  ConversationWorkEnvironmentLinkRecord,
+  RunWorkEnvironmentLinkRecord,
+  WorkEnvironmentPolicyRecord,
+  WorkEnvironmentPolicyScopeLinkRecord
 } from '../../../shared/protocol';
 import { createEmptyClientState } from '../../../shared/clientStateSchema';
 import { INDEX_FILE, STORAGE_VERSION } from './constants';
@@ -110,6 +115,7 @@ const RUN_HISTORY_TABLE_KEYS = [
   'runContextPolicyLinks',
   'runDeliveryPolicyLinks',
   'runEditPolicyLinks',
+  'runWorkEnvironmentLinks',
   'agentRunInputRevisions'
 ] as const;
 
@@ -142,7 +148,11 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Pr
     conversationBranchLinks,
     agentConversationLinks,
     projectContexts,
-    conversationProjectLinks
+    conversationProjectLinks,
+    workEnvironments,
+    conversationWorkEnvironmentLinks,
+    workEnvironmentPolicies,
+    workEnvironmentPolicyScopeLinks
   ] = await Promise.all([
     loadSkeletonRecords<AgentRecord>('agents', [paths.agentsRootUri, paths.agentsIndexUri], 'agent'),
     loadSkeletonRecords<ModeRecord>('modes', [paths.modesRootUri, paths.modesIndexUri], 'mode'),
@@ -160,7 +170,11 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Pr
     loadSkeletonRecords<ConversationBranchLinkRecord>('conversationBranchLinks', subStore(paths.conversationsRootUri, CONVERSATION_BRANCH_LINKS_DIR), 'link'),
     loadSkeletonRecords<AgentConversationLinkRecord>('agentConversationLinks', [paths.linksRootUri, paths.linksIndexUri], 'link'),
     loadSkeletonRecords<ProjectContextRecord>('projectContexts', [paths.projectContextsRootUri, paths.projectContextsIndexUri], 'projectContext'),
-    loadSkeletonRecords<ConversationProjectLinkRecord>('conversationProjectLinks', [paths.conversationProjectLinksRootUri, paths.conversationProjectLinksIndexUri], 'link')
+    loadSkeletonRecords<ConversationProjectLinkRecord>('conversationProjectLinks', [paths.conversationProjectLinksRootUri, paths.conversationProjectLinksIndexUri], 'link'),
+    loadSkeletonRecords<WorkEnvironmentRecord>('workEnvironments', [paths.workEnvironmentsRootUri, paths.workEnvironmentsIndexUri], 'workEnvironment'),
+    loadSkeletonRecords<ConversationWorkEnvironmentLinkRecord>('conversationWorkEnvironmentLinks', [paths.conversationWorkEnvironmentLinksRootUri, paths.conversationWorkEnvironmentLinksIndexUri], 'link'),
+    loadSkeletonRecords<WorkEnvironmentPolicyRecord>('workEnvironmentPolicies', [paths.workEnvironmentPoliciesRootUri, paths.workEnvironmentPoliciesIndexUri], 'policy'),
+    loadSkeletonRecords<WorkEnvironmentPolicyScopeLinkRecord>('workEnvironmentPolicyScopeLinks', [paths.workEnvironmentPolicyScopeLinksRootUri, paths.workEnvironmentPolicyScopeLinksIndexUri], 'link')
   ]);
 
   state.agents = agents;
@@ -180,6 +194,10 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Pr
   state.agentConversationLinks = agentConversationLinks;
   state.projectContexts = projectContexts;
   state.conversationProjectLinks = conversationProjectLinks;
+  state.workEnvironments = workEnvironments;
+  state.workEnvironmentPolicies = workEnvironmentPolicies;
+  state.workEnvironmentPolicyScopeLinks = workEnvironmentPolicyScopeLinks;
+  state.conversationWorkEnvironmentLinks = conversationWorkEnvironmentLinks;
 
   return hasAnyState(state) ? state : undefined;
 }
@@ -284,7 +302,11 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
     saveRecords(...subStore(paths.conversationsRootUri, CONVERSATION_BRANCH_LINKS_DIR), state.conversationBranchLinks, 'link'),
     saveRecords(paths.linksRootUri, paths.linksIndexUri, state.agentConversationLinks, 'link'),
     saveRecords(paths.projectContextsRootUri, paths.projectContextsIndexUri, state.projectContexts, 'projectContext', (record) => record.name || record.id),
-    saveRecords(paths.conversationProjectLinksRootUri, paths.conversationProjectLinksIndexUri, state.conversationProjectLinks, 'link')
+    saveRecords(paths.conversationProjectLinksRootUri, paths.conversationProjectLinksIndexUri, state.conversationProjectLinks, 'link'),
+    saveRecords(paths.workEnvironmentsRootUri, paths.workEnvironmentsIndexUri, state.workEnvironments, 'workEnvironment', (record) => record.name || record.id),
+    saveRecords(paths.workEnvironmentPoliciesRootUri, paths.workEnvironmentPoliciesIndexUri, state.workEnvironmentPolicies, 'policy', (record) => record.name || record.id),
+    saveRecords(paths.workEnvironmentPolicyScopeLinksRootUri, paths.workEnvironmentPolicyScopeLinksIndexUri, state.workEnvironmentPolicyScopeLinks, 'link'),
+    saveRecords(paths.conversationWorkEnvironmentLinksRootUri, paths.conversationWorkEnvironmentLinksIndexUri, state.conversationWorkEnvironmentLinks, 'link')
   ]);
 }
 
@@ -385,6 +407,7 @@ export function conversationRunHistorySlice(state: ClientState, conversationId: 
   detail.runContextPolicyLinks = state.runContextPolicyLinks.filter((link) => runIds.has(link.runId));
   detail.runDeliveryPolicyLinks = state.runDeliveryPolicyLinks.filter((link) => runIds.has(link.runId));
   detail.runEditPolicyLinks = state.runEditPolicyLinks.filter((link) => runIds.has(link.runId));
+  detail.runWorkEnvironmentLinks = state.runWorkEnvironmentLinks.filter((link) => runIds.has(link.runId));
   detail.agentRunInputRevisions = state.agentRunInputRevisions.filter((input) => runIds.has(input.runId) || input.conversationId === conversationId || revisionIds.has(input.revisionId));
   return detail;
 }
@@ -413,6 +436,7 @@ function copyRunHistoryTables(target: ClientState, source: ClientState): void {
   target.runContextPolicyLinks = source.runContextPolicyLinks;
   target.runDeliveryPolicyLinks = source.runDeliveryPolicyLinks;
   target.runEditPolicyLinks = source.runEditPolicyLinks;
+  target.runWorkEnvironmentLinks = source.runWorkEnvironmentLinks;
   target.agentRunInputRevisions = source.agentRunInputRevisions;
 }
 
@@ -441,6 +465,7 @@ function runDetailSlice(state: ClientState, runId: string): ClientState {
   detail.runContextPolicyLinks = state.runContextPolicyLinks.filter((link) => link.runId === runId);
   detail.runDeliveryPolicyLinks = state.runDeliveryPolicyLinks.filter((link) => link.runId === runId);
   detail.runEditPolicyLinks = state.runEditPolicyLinks.filter((link) => link.runId === runId);
+  detail.runWorkEnvironmentLinks = state.runWorkEnvironmentLinks.filter((link) => link.runId === runId);
   detail.agentRunInputRevisions = state.agentRunInputRevisions.filter((input) => input.runId === runId);
 
   const conversationPolicyIds = new Set(detail.runConversationPolicyLinks.map((link) => link.policyId));

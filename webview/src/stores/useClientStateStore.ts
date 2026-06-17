@@ -12,6 +12,7 @@ import {
   type ProjectContextRecord,
   type WorkEnvironmentRecord
 } from '@shared/protocol';
+import { workEnvironmentSortKey as buildWorkEnvironmentSortKey } from '@shared/workEnvironmentCatalog';
 import { createClientStateDb, type ClientStateDb } from './clientStateDb';
 
 export interface ClientStateStoreState extends ClientState {
@@ -214,7 +215,5 @@ function labelForRunStatus(status: AgentRunStatus): string {
 }
 
 function workEnvironmentSortKey(environment: WorkEnvironmentRecord): string {
-  const kind = environment.kind === 'localFolder' ? '0' : '1';
-  const index = environment.index === undefined ? '999999' : String(environment.index).padStart(6, '0');
-  return `${kind}:${index}:${environment.name}`;
+  return buildWorkEnvironmentSortKey(environment);
 }

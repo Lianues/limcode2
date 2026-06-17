@@ -14,7 +14,7 @@ import WorkEnvironmentPolicyEditor from '@webview/components/settings/workEnviro
     <WorkEnvironmentPolicyEditor
       scope-kind="global"
       title="全局默认工作环境策略"
-      description="全局允许的工作环境会出现在输入框工作环境下拉中；服务器环境可从 VS Code SSH 配置导入或手动创建。"
+      description="全局允许的工作环境会出现在输入框工作环境下拉中；不同环境类型通过独立 provider 接入，服务器环境可从 VS Code SSH 配置导入或手动创建。"
     />
   </section>
 </template>

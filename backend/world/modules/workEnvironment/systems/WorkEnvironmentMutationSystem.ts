@@ -17,6 +17,7 @@ import {
   upsertWorkEnvironmentPolicyScopeLink,
   workEnvironmentPolicyIdForScope
 } from '../bundles';
+import { canRemoveWorkEnvironment, workEnvironmentSortKey } from '../../../../../shared/workEnvironmentCatalog';
 
 export const WorkEnvironmentMutationSystem = defineSystem({
   name: 'WorkEnvironmentMutationSystem',
@@ -77,7 +78,7 @@ function removeWorkEnvironment(world: WorldReader, cmd: CommandSink, workEnviron
   const target = findWorkEnvironmentById(world, workEnvironmentId);
   if (target === undefined) return;
   const current = world.get(target, WorkEnvironment);
-  if (!current || current.kind === 'localFolder') return;
+  if (!current || !canRemoveWorkEnvironment(current)) return;
 
   for (const entity of world.query(ConversationWorkEnvironmentLink)) {
     const link = world.get(entity, ConversationWorkEnvironmentLink);
@@ -111,7 +112,7 @@ function availableEnvironmentIds(world: WorldReader): string[] {
     .query(WorkEnvironment)
     .map((entity) => world.get(entity, WorkEnvironment))
     .filter((item): item is NonNullable<typeof item> => !!item && item.available)
-    .sort((left, right) => (left.index ?? 999999) - (right.index ?? 999999) || left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
+    .sort((left, right) => workEnvironmentSortKey(left).localeCompare(workEnvironmentSortKey(right), 'zh-CN') || left.id.localeCompare(right.id))
     .map((item) => item.id);
 }
 

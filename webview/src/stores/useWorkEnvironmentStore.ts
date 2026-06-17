@@ -6,8 +6,16 @@ import {
   type WorkEnvironmentPolicyScopeKind,
   type WorkEnvironmentPolicyScopeLinkRecord,
   type WorkEnvironmentPolicyScopeSetPayload,
+  type WorkEnvironmentKind,
   type WorkEnvironmentRecord
 } from '@shared/protocol';
+import {
+  canRemoveWorkEnvironment,
+  createRemoteServerWorkEnvironmentRecord,
+  isRemoteServerWorkEnvironment,
+  isRemoteServerWorkEnvironmentKind,
+  workEnvironmentSortKey as buildWorkEnvironmentSortKey
+} from '@shared/workEnvironmentCatalog';
 import { bridge, BridgeMessageType } from '@webview/transport';
 import { useClientStateStore } from './useClientStateStore';
 import { GLOBAL_MODE_OPTION_ID, useModeStore } from './useModeStore';
@@ -56,9 +64,7 @@ function upsertById<T extends { id: string }>(list: T[], record: T): void {
 }
 
 function workEnvironmentSortKey(environment: WorkEnvironmentRecord): string {
-  const kind = environment.kind === 'localFolder' ? '0' : '1';
-  const index = environment.index === undefined ? '999999' : String(environment.index).padStart(6, '0');
-  return `${kind}:${index}:${environment.name}`;
+  return buildWorkEnvironmentSortKey(environment);
 }
 
 function uniqueAllowed(ids: readonly string[]): string[] {
@@ -104,7 +110,7 @@ export const useWorkEnvironmentStore = defineStore('workEnvironment', {
       return this.environments.filter((environment) => environment.available);
     },
     remoteServerEnvironments(): WorkEnvironmentRecord[] {
-      return this.environments.filter((environment) => environment.kind === 'remoteServer');
+      return this.environments.filter((environment) => isRemoteServerWorkEnvironment(environment));
     }
   },
   actions: {
@@ -223,6 +229,31 @@ export const useWorkEnvironmentStore = defineStore('workEnvironment', {
       };
       upsertById(clientState.workEnvironmentPolicyScopeLinks, link);
     },
+    upsertEnvironmentRecord(record: WorkEnvironmentRecord): string {
+      const clientState = useClientStateStore();
+      upsertById(clientState.workEnvironments, record);
+      this.ensureEnvironmentAllowedInGlobal(record.id);
+      bridge.request(BridgeMessageType.WorkEnvironmentUpsert, { workEnvironment: record });
+      return record.id;
+    },
+    createEnvironment(kind: WorkEnvironmentKind, seed: string): string | undefined {
+      const text = seed.trim();
+      if (!text) return undefined;
+      if (isRemoteServerWorkEnvironmentKind(kind)) {
+        return this.upsertRemoteServerEnvironment({ host: text, name: text, source: 'manual', available: true });
+      }
+      return undefined;
+    },
+    updateEnvironment(workEnvironmentId: string, patch: Partial<WorkEnvironmentRecord>): string | undefined {
+      const clientState = useClientStateStore();
+      const existing = clientState.workEnvironments.find((item) => item.id === workEnvironmentId);
+      if (!existing) return undefined;
+      if (isRemoteServerWorkEnvironment(existing)) {
+        return this.upsertRemoteServerEnvironment({ ...existing, ...patch, id: existing.id });
+      }
+      const now = Date.now();
+      return this.upsertEnvironmentRecord({ ...existing, ...patch, id: existing.id, createdAt: existing.createdAt, updatedAt: now });
+    },
     upsertRemoteServerEnvironment(patch: Partial<WorkEnvironmentRecord> & { id?: string; host?: string; name?: string }): string {
       const clientState = useClientStateStore();
       const now = Date.now();
@@ -241,34 +272,28 @@ export const useWorkEnvironmentStore = defineStore('workEnvironment', {
       const workdir = stringField('workdir');
       const os = stringField('os');
       const description = stringField('description');
-      const displayPath = `${user ? `${user}@` : ''}${host}${port !== undefined && port !== 22 ? `:${port}` : ''}${workdir ? ` ${workdir}` : ''}`;
-      const record: WorkEnvironmentRecord = {
+      const record = createRemoteServerWorkEnvironmentRecord({
         id,
-        kind: 'remoteServer',
         source: patch.source ?? existing?.source ?? 'manual',
         name: (patch.name ?? existing?.name ?? host).trim() || host,
         host,
-        ...(port !== undefined ? { port } : {}),
-        ...(user ? { user } : {}),
-        ...(identityFile ? { identityFile } : {}),
+        port,
+        user,
+        identityFile,
         ...(typeof password === 'string' ? { password } : {}),
-        ...(workdir ? { workdir } : {}),
-        ...(os ? { os } : {}),
-        ...(description ? { description } : {}),
-        ...(displayPath ? { displayPath } : {}),
+        workdir,
+        os,
+        description,
         available: patch.available ?? existing?.available ?? true,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now
-      };
-      upsertById(clientState.workEnvironments, record);
-      this.ensureEnvironmentAllowedInGlobal(record.id);
-      bridge.request(BridgeMessageType.WorkEnvironmentUpsert, { workEnvironment: record });
-      return record.id;
+      });
+      return this.upsertEnvironmentRecord(record);
     },
     removeEnvironment(workEnvironmentId: string): void {
       const clientState = useClientStateStore();
       const environment = clientState.workEnvironments.find((candidate) => candidate.id === workEnvironmentId);
-      if (!environment || environment.kind === 'localFolder') return;
+      if (!environment || !canRemoveWorkEnvironment(environment)) return;
       clientState.workEnvironments = clientState.workEnvironments.filter((candidate) => candidate.id !== workEnvironmentId);
       clientState.conversationWorkEnvironmentLinks = clientState.conversationWorkEnvironmentLinks.filter((link) => link.workEnvironmentId !== workEnvironmentId);
       clientState.runWorkEnvironmentLinks = clientState.runWorkEnvironmentLinks.filter((link) => link.workEnvironmentId !== workEnvironmentId);

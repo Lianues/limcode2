@@ -11,6 +11,21 @@ import {
 } from './components';
 import type { LocalWorkEnvironmentCandidate } from './events';
 import type { WorkEnvironmentPolicyScopeKind, WorkEnvironmentRecord } from '../../../../shared/protocol';
+import {
+  createLocalFolderWorkEnvironmentRecord,
+  finiteTimestamp,
+  getWorkEnvironmentKindDefinition,
+  isLocalFolderWorkEnvironment,
+  isRemoteServerWorkEnvironmentKind,
+  normalizePort,
+  normalizeString,
+  normalizeWorkEnvironmentKind,
+  workEnvironmentDisplayPath,
+  remoteWorkEnvironmentIdFromHost as sharedRemoteWorkEnvironmentIdFromHost,
+  uniqueStrings,
+  workEnvironmentIdForKind,
+  workEnvironmentIdFromUri as sharedWorkEnvironmentIdFromUri
+} from '../../../../shared/workEnvironmentCatalog';
 
 export const WorkEnvironmentBundle = defineBundle({
   name: 'WorkEnvironmentBundle',
@@ -25,19 +40,7 @@ export function upsertLocalWorkEnvironment(
   cmd: CommandSink,
   candidate: LocalWorkEnvironmentCandidate
 ): Entity {
-  return upsertWorkEnvironment(world, cmd, {
-    id: candidate.id,
-    kind: 'localFolder',
-    source: 'workspaceFolder',
-    name: candidate.name,
-    uri: candidate.uri,
-    rootPath: candidate.rootPath,
-    displayPath: candidate.displayPath ?? candidate.rootPath,
-    index: candidate.index,
-    available: true,
-    createdAt: Date.now(),
-    updatedAt: Date.now()
-  });
+  return upsertWorkEnvironment(world, cmd, createLocalFolderWorkEnvironmentRecord(candidate));
 }
 
 export function upsertWorkEnvironment(world: WorldReader, cmd: CommandSink, record: WorkEnvironmentRecord): Entity {
@@ -64,7 +67,7 @@ export function markMissingLocalWorkEnvironmentsUnavailable(
   const now = Date.now();
   for (const entity of world.query(WorkEnvironment)) {
     const current = world.get(entity, WorkEnvironment);
-    if (!current || current.kind !== 'localFolder' || activeIds.has(current.id) || !current.available) continue;
+    if (!current || !isLocalFolderWorkEnvironment(current) || activeIds.has(current.id) || !current.available) continue;
     const { index: _index, ...withoutIndex } = current;
     cmd.add(entity, WorkEnvironment, { ...withoutIndex, available: false, updatedAt: now });
   }
@@ -233,11 +236,11 @@ export function findActivePolicyScopeLink(world: WorldReader, scopeKind: WorkEnv
 }
 
 export function workEnvironmentIdFromUri(uri: string): string {
-  return `work-env-local-${shortHash(uri.trim())}`;
+  return sharedWorkEnvironmentIdFromUri(uri);
 }
 
 export function remoteWorkEnvironmentIdFromHost(host: string): string {
-  return `work-env-remote-${shortHash(host.trim().toLowerCase())}`;
+  return sharedRemoteWorkEnvironmentIdFromHost(host);
 }
 
 export function workEnvironmentPolicyIdForScope(scopeKind: WorkEnvironmentPolicyScopeKind, scopeId?: string): string {
@@ -250,36 +253,57 @@ export function workEnvironmentPolicyScopeLinkId(scopeKind: WorkEnvironmentPolic
 
 export function normalizeAllowedWorkEnvironmentIds(world: WorldReader, ids: readonly string[]): string[] {
   void world;
-  const result: string[] = [];
-  for (const id of ids) {
-    const normalized = typeof id === 'string' ? id.trim() : '';
-    if (!normalized || result.includes(normalized)) continue;
-    result.push(normalized);
-  }
-  return result;
+  return uniqueStrings(ids);
 }
 
 function normalizeWorkEnvironmentRecord(record: WorkEnvironmentRecord, previous: WorkEnvironmentData | undefined, now: number): WorkEnvironmentData {
-  const kind = record.kind === 'remoteServer' ? 'remoteServer' : 'localFolder';
-  const name = kind === 'remoteServer'
-    ? normalizeString(record.name) || normalizeString(record.host) || previous?.name || '服务器环境'
-    : normalizeString(record.name) || previous?.name || '工作环境';
-  const host = normalizeString(record.host) || (kind === 'remoteServer' ? previous?.host || normalizeString(record.name) : undefined);
+  const kind = normalizeWorkEnvironmentKind(record.kind, previous?.kind);
+  const definition = getWorkEnvironmentKindDefinition(kind);
+  const isRemoteServer = isRemoteServerWorkEnvironmentKind(kind);
+  const name = normalizeString(record.name)
+    ?? (isRemoteServer ? normalizeString(record.host) : undefined)
+    ?? previous?.name
+    ?? definition.defaultName;
+  const host = normalizeString(record.host) ?? (isRemoteServer ? previous?.host ?? normalizeString(record.name) : undefined);
   const user = normalizeString(record.user);
   const port = normalizePort(record.port);
   const identityFile = normalizeString(record.identityFile);
   const password = identityFile ? undefined : typeof record.password === 'string' ? record.password : undefined;
   const workdir = normalizeString(record.workdir);
-  const displayPath = normalizeString(record.displayPath) || (kind === 'remoteServer' ? remoteDisplayPath({ user, host, port, workdir }) : normalizeString(record.rootPath) || normalizeString(record.uri));
+  const uri = normalizeString(record.uri);
+  const rootPath = normalizeString(record.rootPath);
+  const displayPath = normalizeString(record.displayPath)
+    ?? workEnvironmentDisplayPath({
+      id: previous?.id ?? '',
+      kind,
+      name,
+      ...(uri ? { uri } : {}),
+      ...(rootPath ? { rootPath } : {}),
+      ...(host ? { host } : {}),
+      ...(port !== undefined ? { port } : {}),
+      ...(user ? { user } : {}),
+      ...(workdir ? { workdir } : {})
+    })
+    ?? previous?.displayPath;
+  const source = record.source
+    ?? previous?.source
+    ?? (isRemoteServer ? 'manual' as const : isLocalFolderWorkEnvironment({ kind }) ? 'workspaceFolder' as const : undefined);
+  const capabilities = uniqueStrings(record.capabilities ?? previous?.capabilities ?? []);
+  const metadata = normalizeMetadata(record.metadata) ?? normalizeMetadata(previous?.metadata);
+  const id = normalizeString(record.id)
+    ?? previous?.id
+    ?? (isRemoteServer && host ? sharedRemoteWorkEnvironmentIdFromHost(host) : workEnvironmentIdForKind(kind, `${name}:${displayPath ?? now}`));
 
   return {
-    id: normalizeString(record.id) || previous?.id || (kind === 'remoteServer' && host ? remoteWorkEnvironmentIdFromHost(host) : `work-env-${shortHash(`${name}:${now}`)}`),
+    id,
     kind,
     name,
-    ...(normalizeString(record.uri) ? { uri: normalizeString(record.uri) } : {}),
-    ...(normalizeString(record.rootPath) ? { rootPath: normalizeString(record.rootPath) } : {}),
+    ...(uri ? { uri } : {}),
+    ...(rootPath ? { rootPath } : {}),
     ...(displayPath ? { displayPath } : {}),
-    ...(record.source ? { source: record.source } : previous?.source ? { source: previous.source } : kind === 'remoteServer' ? { source: 'manual' as const } : { source: 'workspaceFolder' as const }),
+    ...(source ? { source } : {}),
+    ...(capabilities.length > 0 ? { capabilities } : {}),
+    ...(metadata ? { metadata } : {}),
     ...(host ? { host } : {}),
     ...(port !== undefined ? { port } : {}),
     ...(user ? { user } : {}),
@@ -289,39 +313,13 @@ function normalizeWorkEnvironmentRecord(record: WorkEnvironmentRecord, previous:
     ...(normalizeString(record.os) ? { os: normalizeString(record.os) } : {}),
     ...(normalizeString(record.description) ? { description: normalizeString(record.description) } : {}),
     ...(record.index !== undefined ? { index: record.index } : previous?.index !== undefined ? { index: previous.index } : {}),
-    available: record.available !== false,
+    available: record.available !== undefined ? record.available !== false : previous?.available ?? true,
     createdAt: previous?.createdAt ?? finiteTimestamp(record.createdAt, now),
     updatedAt: now
   };
 }
 
-function remoteDisplayPath(input: { user?: string; host?: string; port?: number; workdir?: string }): string | undefined {
-  if (!input.host) return undefined;
-  const userPart = input.user ? `${input.user}@` : '';
-  const portPart = input.port && input.port !== 22 ? `:${input.port}` : '';
-  const dirPart = input.workdir ? ` ${input.workdir}` : '';
-  return `${userPart}${input.host}${portPart}${dirPart}`;
-}
-
-function normalizeString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function normalizePort(value: unknown): number | undefined {
-  const number = typeof value === 'number' ? value : typeof value === 'string' ? Number.parseInt(value, 10) : undefined;
-  return number !== undefined && Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
-}
-
-function finiteTimestamp(value: unknown, fallback: number): number {
-  const timestamp = Number(value);
-  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : fallback;
-}
-
-function shortHash(value: string): string {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(36).padStart(7, '0');
+function normalizeMetadata(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return { ...(value as Record<string, unknown>) };
 }

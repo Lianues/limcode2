@@ -33,7 +33,7 @@ export const GLOBAL_SETTINGS_TABS: readonly GlobalSettingsTabDefinition[] = [
   {
     key: 'work-environments',
     label: '工作环境',
-    description: '本地与服务器环境',
+    description: '本地、服务器及后续扩展环境',
     icon: IconServer,
     component: WorkEnvironmentSettingsTab
   },

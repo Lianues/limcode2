@@ -2,6 +2,11 @@ import { execFileSync, spawn } from 'node:child_process';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { CommandCapability, CommandRunArgs, CommandRunObserver, CommandRunResult, WorkEnvironmentCapabilityOptions } from './types';
+import {
+  WORK_ENVIRONMENT_CAPABILITY,
+  workEnvironmentDisplayName,
+  workEnvironmentSupportsCapability
+} from '../../shared/workEnvironmentCatalog';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT_CHARS = 120_000;
@@ -272,16 +277,16 @@ function resolveWorkDir(cwd: string | undefined, options: WorkEnvironmentCapabil
 
 function workEnvironmentRootPath(options: WorkEnvironmentCapabilityOptions): string | undefined {
   const workEnvironment = options.workEnvironment;
-  if (!workEnvironment || workEnvironment.kind !== 'localFolder' || workEnvironment.available === false) return undefined;
+  if (!workEnvironment || !workEnvironmentSupportsCapability(workEnvironment, WORK_ENVIRONMENT_CAPABILITY.LocalCommand) || workEnvironment.available === false) return undefined;
   return workEnvironment.rootPath?.trim() || undefined;
 }
 
 function validateCommandWorkEnvironment(options: WorkEnvironmentCapabilityOptions): string | undefined {
   const workEnvironment = options.workEnvironment;
   if (!workEnvironment) return undefined;
-  if (workEnvironment.kind !== 'localFolder') return `当前工作环境暂不支持本地命令执行：${workEnvironment.name} (${workEnvironment.kind})`;
-  if (workEnvironment.available === false) return `当前工作环境不可用：${workEnvironment.name}`;
-  if (!workEnvironment.rootPath?.trim()) return `当前工作环境缺少可执行根目录：${workEnvironment.name}`;
+  if (!workEnvironmentSupportsCapability(workEnvironment, WORK_ENVIRONMENT_CAPABILITY.LocalCommand)) return `当前工作环境暂不支持本地命令执行：${workEnvironmentDisplayName(workEnvironment)} (${workEnvironment.kind})`;
+  if (workEnvironment.available === false) return `当前工作环境不可用：${workEnvironmentDisplayName(workEnvironment)}`;
+  if (!workEnvironment.rootPath?.trim()) return `当前工作环境缺少可执行根目录：${workEnvironmentDisplayName(workEnvironment)}`;
   return undefined;
 }
 

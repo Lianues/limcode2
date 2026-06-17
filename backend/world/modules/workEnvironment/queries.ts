@@ -4,6 +4,12 @@ import type {
   WorkEnvironmentPolicyScopeKind,
   WorkEnvironmentRecord
 } from '../../../../shared/protocol';
+import {
+  formatWorkEnvironmentForDisplay,
+  isLocalFolderWorkEnvironment,
+  workEnvironmentDisplayPath,
+  workEnvironmentSortKey as buildWorkEnvironmentSortKey
+} from '../../../../shared/workEnvironmentCatalog';
 import { Agent } from '../agent/components';
 import { AgentRun, AgentRunTargetLink } from '../agentRun/components';
 import { activeModeForRun, activeModeSelectionForConversation, runTarget } from '../agentRun/queries';
@@ -43,6 +49,8 @@ export function toWorkEnvironmentRecord(data: WorkEnvironmentData, options: { in
     ...(data.rootPath ? { rootPath: data.rootPath } : {}),
     ...(data.displayPath ? { displayPath: data.displayPath } : {}),
     ...(data.source ? { source: data.source } : {}),
+    ...(data.capabilities && data.capabilities.length > 0 ? { capabilities: [...data.capabilities] } : {}),
+    ...(data.metadata ? { metadata: { ...data.metadata } } : {}),
     ...(data.host ? { host: data.host } : {}),
     ...(data.port !== undefined ? { port: data.port } : {}),
     ...(data.user ? { user: data.user } : {}),
@@ -152,7 +160,7 @@ export function linkedWorkEnvironmentForRun(world: WorldReader, run: Entity): Re
 export function projectWorkEnvironmentForConversation(world: WorldReader, conversation: Entity): ResolvedWorkEnvironment | undefined {
   const project = projectContextForConversation(world, conversation);
   if (!project?.uri) return undefined;
-  return availableWorkEnvironments(world).find((candidate) => candidate.data.kind === 'localFolder' && candidate.data.uri === project.uri);
+  return availableWorkEnvironments(world).find((candidate) => isLocalFolderWorkEnvironment(candidate.data) && candidate.data.uri === project.uri);
 }
 
 export function runTargetConversation(world: WorldReader, run: Entity): Entity | undefined {
@@ -180,7 +188,7 @@ export function resolveWorkEnvironmentBySelector(
   if (requestedId) {
     const byId = environments.find((candidate) => candidate.data.id === requestedId);
     if (byId) return byId;
-    const byPath = environments.find((candidate) => candidate.data.uri === requestedId || candidate.data.rootPath === requestedId || candidate.data.displayPath === requestedId || candidate.data.host === requestedId);
+    const byPath = environments.find((candidate) => candidate.data.uri === requestedId || candidate.data.rootPath === requestedId || workEnvironmentDisplayPath(candidate.data) === requestedId || candidate.data.host === requestedId);
     if (byPath) return byPath;
   }
 
@@ -261,7 +269,7 @@ export function formatWorkEnvironmentContext(world: WorldReader, run: Entity): s
   for (const item of environments.slice(0, 12)) {
     lines.push(`- ${formatWorkEnvironmentLine(item.data)}`);
   }
-  lines.push('如果需要切换 read_file、shell/bash 等工具使用的相对路径根目录，请先调用 switch_work_environment。切换后工具参数仍然使用相对路径 / 相对 cwd。远程服务器环境当前只支持识别与切换，远程工具执行暂未接入。');
+  lines.push('如果需要切换 read_file、shell/bash 等工具使用的相对路径根目录，请先调用 switch_work_environment。切换后工具参数仍然使用相对路径 / 相对 cwd。非本地执行类环境当前只支持识别与切换，具体工具执行能力需要对应环境 provider 接入。');
   return lines.join('\n');
 }
 
@@ -315,22 +323,9 @@ function compareResolvedWorkEnvironments(left: ResolvedWorkEnvironment, right: R
 }
 
 function workEnvironmentSortKey(data: WorkEnvironmentData): string {
-  const index = data.index === undefined ? '999999' : String(data.index).padStart(6, '0');
-  const kind = data.kind === 'localFolder' ? '0' : '1';
-  return `${kind}:${index}:${data.name}`;
+  return buildWorkEnvironmentSortKey(data);
 }
 
 function formatWorkEnvironmentLine(data: WorkEnvironmentData): string {
-  const kindLabel = data.kind === 'localFolder' ? '本地' : '远程';
-  if (data.kind === 'remoteServer') {
-    const userPart = data.user ? `${data.user}@` : '';
-    const host = data.host ?? data.name;
-    const port = data.port && data.port !== 22 ? `:${data.port}` : '';
-    const workdir = data.workdir ? ` · ${data.workdir}` : '';
-    const os = data.os ? ` · ${data.os}` : '';
-    const description = data.description ? ` · ${data.description}` : '';
-    return `${data.id} · ${data.name} · ${kindLabel} · ${userPart}${host}${port}${workdir}${os}${description}`;
-  }
-  const path = data.displayPath ?? data.rootPath ?? data.uri ?? '';
-  return `${data.id} · ${data.name} · ${kindLabel}${path ? ` · ${path}` : ''}`;
+  return formatWorkEnvironmentForDisplay(data);
 }

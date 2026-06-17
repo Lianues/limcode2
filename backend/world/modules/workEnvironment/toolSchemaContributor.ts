@@ -15,6 +15,7 @@ import {
   type WorkEnvironmentData
 } from './components';
 import { activeWorkEnvironmentForRun, allowedWorkEnvironmentsForRun } from './queries';
+import { formatWorkEnvironmentForDisplay } from '../../../../shared/workEnvironmentCatalog';
 
 export const workEnvironmentToolSchemaContributor: ToolSchemaContributor = {
   key: 'workEnvironment',
@@ -66,17 +67,7 @@ function workEnvironmentToolDefinitionText(context: Parameters<NonNullable<ToolS
 }
 
 function formatToolEnvironmentLine(environment: WorkEnvironmentData): string {
-  if (environment.kind === 'remoteServer') {
-    const userPart = environment.user ? `${environment.user}@` : '';
-    const host = environment.host ?? environment.name;
-    const port = environment.port && environment.port !== 22 ? `:${environment.port}` : '';
-    const workdir = environment.workdir ? ` · workdir=${environment.workdir}` : '';
-    const os = environment.os ? ` · os=${environment.os}` : '';
-    const description = environment.description ? ` · ${environment.description}` : '';
-    return `${environment.id} · ${environment.name} · remoteServer · ${userPart}${host}${port}${workdir}${os}${description}`;
-  }
-  const path = environment.displayPath ?? environment.rootPath ?? environment.uri ?? '';
-  return `${environment.id} · ${environment.name} · localFolder${path ? ` · ${path}` : ''}`;
+  return formatWorkEnvironmentForDisplay(environment);
 }
 
 function withWorkEnvironmentIdParameterHints(parameters: unknown, environmentText: string): unknown {

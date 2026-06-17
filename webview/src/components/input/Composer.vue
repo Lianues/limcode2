@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { IconFolder, IconListDetails, IconPencilExclamation, IconSend2, IconWorld } from '@tabler/icons-vue';
+import { workEnvironmentDisplayPath, workEnvironmentSortKey as buildWorkEnvironmentSortKey } from '@shared/workEnvironmentCatalog';
+import type { WorkEnvironmentRecord } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
@@ -59,7 +61,7 @@ const workEnvironmentOptions = computed<SettingsDropdownOption[]>(() =>
     .map((environment) => ({
       value: environment.id,
       label: environment.name,
-      description: middleEllipsis(environment.displayPath || environment.rootPath || environment.uri || environment.id, 58),
+      description: middleEllipsis(workEnvironmentDisplayPath(environment), 58),
       icon: IconFolder
     }))
 );
@@ -231,10 +233,8 @@ function onWorkEnvironmentDropdownOpen(): void {
   channelDropdownCloseSignal.value += 1;
 }
 
-function workEnvironmentSortKey(environment: { kind: string; index?: number; name: string }): string {
-  const kind = environment.kind === 'localFolder' ? '0' : '1';
-  const index = environment.index === undefined ? '999999' : String(environment.index).padStart(6, '0');
-  return `${kind}:${index}:${environment.name}`;
+function workEnvironmentSortKey(environment: WorkEnvironmentRecord): string {
+  return buildWorkEnvironmentSortKey(environment);
 }
 
 function middleEllipsis(value: string, maxLength: number): string {

@@ -1,5 +1,6 @@
 import { defineComponent, type Entity } from '../../../ecs/types';
 import type {
+  WorkEnvironmentCapabilityKind,
   WorkEnvironmentKind,
   WorkEnvironmentLinkRole,
   WorkEnvironmentOs,
@@ -15,6 +16,8 @@ export interface WorkEnvironmentData {
   rootPath?: string;
   displayPath?: string;
   source?: WorkEnvironmentSource;
+  capabilities?: WorkEnvironmentCapabilityKind[];
+  metadata?: Record<string, unknown>;
   host?: string;
   port?: number;
   user?: string;

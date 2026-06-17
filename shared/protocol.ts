@@ -514,9 +514,11 @@ export interface ConversationBranchLinkRecord {
 export type AgentConversationRole = 'default' | 'participant' | 'reviewer';
 
 export type ProjectContextKind = 'folder';
-export type WorkEnvironmentKind = 'localFolder' | 'remoteServer';
-export type WorkEnvironmentSource = 'workspaceFolder' | 'vscodeSshConfig' | 'manual';
+export type BuiltinWorkEnvironmentKind = 'localFolder' | 'remoteServer';
+export type WorkEnvironmentKind = BuiltinWorkEnvironmentKind | (string & {});
+export type WorkEnvironmentSource = 'workspaceFolder' | 'vscodeSshConfig' | 'manual' | (string & {});
 export type WorkEnvironmentOs = 'linux' | 'windows' | 'macos' | 'unknown' | string;
+export type WorkEnvironmentCapabilityKind = 'localFileRead' | 'localCommand' | 'remoteFileRead' | 'remoteCommand' | 'containerFileRead' | 'containerCommand' | (string & {});
 export type WorkEnvironmentPolicyScopeKind = 'global' | 'conversation' | 'agent' | 'agentSystem' | 'mode' | 'run';
 
 export interface ProjectContextRecord {
@@ -550,6 +552,10 @@ export interface WorkEnvironmentRecord {
   /** 面向 UI / LLM 展示的路径或地址。 */
   displayPath?: string;
   source?: WorkEnvironmentSource;
+  /** 环境类型声明的能力；不填时由 kind 的定义提供默认能力。 */
+  capabilities?: WorkEnvironmentCapabilityKind[];
+  /** provider 专属的非敏感扩展信息，例如未来 Docker container/workspace 映射等。 */
+  metadata?: Record<string, unknown>;
   /** SSH Config: Host。 */
   host?: string;
   /** SSH Config: Port，默认 22。 */

@@ -2,12 +2,20 @@
 import { computed, ref, watch } from 'vue';
 import { IconCloudDown, IconPlus, IconServer, IconTrash } from '@tabler/icons-vue';
 import type { WorkEnvironmentPolicyScopeKind, WorkEnvironmentRecord } from '@shared/protocol';
+import {
+  canRemoveWorkEnvironment,
+  getWorkEnvironmentKindDefinition,
+  workEnvironmentDisplayName,
+  workEnvironmentDisplayPath,
+  workEnvironmentKindLabel
+} from '@shared/workEnvironmentCatalog';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import LcCheckbox from '@webview/components/ui/LcCheckbox.vue';
 import ConfirmPanel from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
-import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
 import { useWorkEnvironmentStore } from '@webview/stores/useWorkEnvironmentStore';
+import { WORK_ENVIRONMENT_CREATE_ACTIONS, type WorkEnvironmentCreateAction } from './creationActions';
+import { workEnvironmentDetailEditorForKind } from './detailEditors';
 
 const props = withDefaults(defineProps<{
   scopeKind: WorkEnvironmentPolicyScopeKind;
@@ -23,9 +31,8 @@ const props = withDefaults(defineProps<{
 
 const store = useWorkEnvironmentStore();
 const scroller = ref<HTMLElement | null>(null);
-const descriptionScroller = ref<HTMLElement | null>(null);
 const activeEnvironmentId = ref('');
-const sshAuthMethodByEnvironmentId = ref<Record<string, 'identityFile' | 'password'>>({});
+const activeCreateAction = ref<WorkEnvironmentCreateAction | undefined>(WORK_ENVIRONMENT_CREATE_ACTIONS[0]);
 const createOpen = ref(false);
 const deleteConfirmOpen = ref(false);
 
@@ -38,7 +45,8 @@ const environments = computed(() => store.availableEnvironments);
 const allowedSet = computed(() => new Set(effectivePolicy.value?.allowedWorkEnvironmentIds ?? environments.value.map((item) => item.id)));
 const defaultEnvironmentId = computed(() => effectivePolicy.value?.defaultWorkEnvironmentId ?? environments.value.find((item) => allowedSet.value.has(item.id))?.id ?? '');
 const activeEnvironment = computed(() => environments.value.find((item) => item.id === activeEnvironmentId.value) ?? environments.value[0]);
-const activeRemoteEnvironment = computed(() => activeEnvironment.value?.kind === 'remoteServer' ? activeEnvironment.value : undefined);
+const activeDetailEditor = computed(() => workEnvironmentDetailEditorForKind(activeEnvironment.value?.kind));
+const canDeleteActiveEnvironment = computed(() => !props.readonly && canRemoveWorkEnvironment(activeEnvironment.value));
 const sourceLabel = computed(() => {
   if (props.scopeKind === 'global') return '全局默认策略';
   if (hasLocalOverride.value) return '当前作用域覆盖';
@@ -47,17 +55,6 @@ const sourceLabel = computed(() => {
   return '默认策略';
 });
 const enabledCount = computed(() => environments.value.filter((environment) => allowedSet.value.has(environment.id)).length);
-const osOptions: SettingsDropdownOption[] = [
-  { value: '', label: '未设置' },
-  { value: 'linux', label: 'linux' },
-  { value: 'windows', label: 'windows' },
-  { value: 'macos', label: 'macos' },
-  { value: 'unknown', label: 'unknown' }
-];
-const sshAuthMethodOptions: SettingsDropdownOption[] = [
-  { value: 'identityFile', label: 'IdentityFile', description: '使用 SSH 密钥文件登录' },
-  { value: 'password', label: 'Password', description: '使用密码登录' }
-];
 
 watch(
   () => environments.value.map((item) => item.id).join('|'),
@@ -88,18 +85,22 @@ function restoreInheritance(): void {
   store.clearPolicyScope(props.scopeKind, props.scopeId);
 }
 
-function openCreate(): void {
+function openCreate(action: WorkEnvironmentCreateAction = WORK_ENVIRONMENT_CREATE_ACTIONS[0]): void {
   if (props.readonly) return;
+  activeCreateAction.value = action;
   createOpen.value = true;
 }
 
-function confirmCreate(host: string): void {
+function confirmCreate(input: string): void {
   createOpen.value = false;
-  const text = host.trim();
-  if (!text) return;
-  const id = store.upsertRemoteServerEnvironment({ host: text, name: text, source: 'manual', available: true });
+  const action = activeCreateAction.value;
+  const text = input.trim();
+  if (!action || !text) return;
+  const id = store.createEnvironment(action.kind, text);
+  if (!id) return;
   activeEnvironmentId.value = id;
-  toggleAllowed({ id, kind: 'remoteServer', name: text, available: true, createdAt: Date.now(), updatedAt: Date.now() }, true);
+  const created = environments.value.find((environment) => environment.id === id);
+  toggleAllowed(created ?? { id, kind: action.kind, name: text, available: true, createdAt: Date.now(), updatedAt: Date.now() }, true);
 }
 
 function cancelCreate(): void { createOpen.value = false; }
@@ -110,83 +111,46 @@ function importFromVscode(): void {
 }
 
 function openDeleteConfirm(): void {
-  if (props.readonly || activeRemoteEnvironment.value === undefined) return;
+  if (!canDeleteActiveEnvironment.value) return;
   deleteConfirmOpen.value = true;
 }
 
 function confirmDelete(): void {
-  const environment = activeRemoteEnvironment.value;
+  const environment = activeEnvironment.value;
   deleteConfirmOpen.value = false;
-  if (!environment) return;
+  if (!environment || !canRemoveWorkEnvironment(environment)) return;
   store.removeEnvironment(environment.id);
   activeEnvironmentId.value = environments.value[0]?.id ?? '';
 }
 
 function cancelDelete(): void { deleteConfirmOpen.value = false; }
 
-function updateRemoteField(field: keyof WorkEnvironmentRecord, value: string | number | boolean | undefined): void {
-  const environment = activeRemoteEnvironment.value;
+function updateActiveEnvironment(patch: Partial<WorkEnvironmentRecord>): void {
+  const environment = activeEnvironment.value;
   if (!environment || props.readonly) return;
-  const credentialPatch = field === 'identityFile' && typeof value === 'string' && value.trim()
-    ? { password: undefined }
-    : field === 'password' && typeof value === 'string' && value
-      ? { identityFile: undefined }
-      : {};
-  if (field === 'identityFile' && typeof value === 'string' && value.trim()) sshAuthMethodByEnvironmentId.value[environment.id] = 'identityFile';
-  if (field === 'password' && typeof value === 'string' && value) sshAuthMethodByEnvironmentId.value[environment.id] = 'password';
-  store.upsertRemoteServerEnvironment({ ...environment, [field]: value, ...credentialPatch });
-}
-
-function sshAuthMethod(environment: WorkEnvironmentRecord | undefined): string {
-  if (environment?.id && sshAuthMethodByEnvironmentId.value[environment.id]) return sshAuthMethodByEnvironmentId.value[environment.id];
-  if (environment?.identityFile?.trim()) return 'identityFile';
-  if (environment?.password) return 'password';
-  return 'identityFile';
-}
-
-function updateSshAuthMethod(value: string): void {
-  const environment = activeRemoteEnvironment.value;
-  if (!environment || props.readonly) return;
-  sshAuthMethodByEnvironmentId.value[environment.id] = value === 'password' ? 'password' : 'identityFile';
-  if (value === 'password') updateRemoteField('identityFile', undefined);
-  else updateRemoteField('password', undefined);
-}
-
-function inputValue(event: Event): string {
-  return (event.target as HTMLInputElement | HTMLTextAreaElement).value;
-}
-
-function editableText(event: Event): string {
-  return (event.currentTarget as HTMLElement | null)?.textContent ?? '';
-}
-
-function inputOptionalNumber(event: Event): number | undefined {
-  const raw = (event.target as HTMLInputElement).value.trim();
-  return raw ? normalizePositiveInteger(raw) : undefined;
+  store.updateEnvironment(environment.id, patch);
 }
 
 function environmentPath(environment: WorkEnvironmentRecord): string {
-  if (environment.kind === 'remoteServer') {
-    const userPart = environment.user ? `${environment.user}@` : '';
-    const host = environment.host || environment.name || '未设置 Host';
-    const port = environment.port && environment.port !== 22 ? `:${environment.port}` : '';
-    return `${userPart}${host}${port}${environment.workdir ? ` ${environment.workdir}` : ''}`;
-  }
-  return environment.displayPath || environment.rootPath || environment.uri || environment.id;
+  return workEnvironmentDisplayPath(environment);
 }
 
 function environmentName(environment: WorkEnvironmentRecord | undefined): string {
-  return environment?.name?.trim() || environment?.host?.trim() || environment?.id || '未命名工作环境';
+  return workEnvironmentDisplayName(environment);
 }
 
 function kindLabel(environment: WorkEnvironmentRecord): string {
-  return environment.kind === 'remoteServer' ? '服务器' : '本地';
+  return workEnvironmentKindLabel(environment.kind);
 }
 
-function normalizePositiveInteger(value: string): number | undefined {
-  const number = Number.parseInt(value, 10);
-  return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
+function detailNote(environment: WorkEnvironmentRecord): string {
+  const definition = getWorkEnvironmentKindDefinition(environment.kind);
+  if (definition.systemManaged) return `${definition.label}工作环境由系统自动同步，仅可在这里配置是否允许和默认选择。`;
+  if (!activeDetailEditor.value) return `${definition.label}工作环境暂未提供专属编辑器；后续新增 Docker 等环境时，只需要接入对应 kind 的详情编辑组件。`;
+  return definition.description;
 }
+
+
 </script>
 
 <template>
@@ -207,9 +171,16 @@ function normalizePositiveInteger(value: string): number | undefined {
         <IconCloudDown stroke="2" aria-hidden="true" />
         <span>从 VS Code 导入</span>
       </button>
-      <button type="button" class="secondary" :disabled="readonly" @click="openCreate">
+      <button
+        v-for="action in WORK_ENVIRONMENT_CREATE_ACTIONS"
+        :key="action.id"
+        type="button"
+        class="secondary"
+        :disabled="readonly"
+        @click="openCreate(action)"
+      >
         <IconPlus stroke="2" aria-hidden="true" />
-        <span>新建服务器环境</span>
+        <span>{{ action.label }}</span>
       </button>
       <button type="button" class="secondary" :disabled="!canRestoreInheritance" @click="restoreInheritance">恢复继承</button>
       <span class="work-env-status">{{ store.status }}</span>
@@ -218,7 +189,7 @@ function normalizePositiveInteger(value: string): number | undefined {
     <div class="work-env-layout">
       <div class="work-env-list-shell">
         <div ref="scroller" class="work-env-list-scroll">
-          <div v-if="environments.length === 0" class="work-env-empty">暂无工作环境。可打开 VS Code 工作区，或从 SSH 配置导入服务器。</div>
+          <div v-if="environments.length === 0" class="work-env-empty">暂无工作环境。可打开 VS Code 工作区，或通过上方导入 / 新建入口添加环境。</div>
           <article
             v-for="environment in environments"
             :key="environment.id"
@@ -260,87 +231,27 @@ function normalizePositiveInteger(value: string): number | undefined {
               <p>{{ environmentPath(activeEnvironment) }}</p>
             </div>
             <button
-              v-if="activeRemoteEnvironment"
+              v-if="activeEnvironment && canRemoveWorkEnvironment(activeEnvironment)"
               type="button"
               class="icon-action"
-              :disabled="readonly"
-              title="删除服务器环境"
+              :disabled="!canDeleteActiveEnvironment"
+              aria-label="删除工作环境"
               @click="openDeleteConfirm"
             >
               <IconTrash stroke="2" aria-hidden="true" />
             </button>
           </header>
 
-          <div v-if="activeRemoteEnvironment" class="work-env-form-grid">
-            <label class="global-settings-field">
-              <span>Name</span>
-              <input :value="activeRemoteEnvironment.name ?? ''" :readonly="readonly" type="text" placeholder="必填，环境显示名称，方便自己和 AI 识别" @change="updateRemoteField('name', inputValue($event))" />
-            </label>
-            <label class="global-settings-field">
-              <span>Host</span>
-              <input :value="activeRemoteEnvironment.host ?? activeRemoteEnvironment.name" :readonly="readonly" type="text" @change="updateRemoteField('host', inputValue($event))" />
-            </label>
-            <label class="global-settings-field">
-              <span>User</span>
-              <input :value="activeRemoteEnvironment.user ?? ''" :readonly="readonly" type="text" placeholder="必填，例如：root" @change="updateRemoteField('user', inputValue($event))" />
-            </label>
-            <label class="global-settings-field">
-              <span>Port（可选）</span>
-              <input :value="activeRemoteEnvironment.port ?? ''" :readonly="readonly" type="number" placeholder="默认 22" @change="updateRemoteField('port', inputOptionalNumber($event))" />
-            </label>
-            <label class="global-settings-field global-settings-field-wide">
-              <span>SSH 登录方式</span>
-              <SettingsDropdown
-                :model-value="sshAuthMethod(activeRemoteEnvironment)"
-                :options="sshAuthMethodOptions"
-                title="选择 SSH 登录方式"
-                :disabled="readonly"
-                @update:model-value="updateSshAuthMethod"
-              />
-            </label>
-            <label v-if="sshAuthMethod(activeRemoteEnvironment) === 'identityFile'" class="global-settings-field global-settings-field-wide">
-              <span>IdentityFile</span>
-              <input :value="activeRemoteEnvironment.identityFile ?? ''" :readonly="readonly" type="text" placeholder="必填，例如：C:\Users\you\.ssh\id_rsa" @change="updateRemoteField('identityFile', inputValue($event))" />
-              <small>如果同时配置了 IdentityFile 和 Password，会优先使用 IdentityFile。</small>
-            </label>
-            <label v-else class="global-settings-field global-settings-field-wide">
-              <span>Password</span>
-              <input :value="activeRemoteEnvironment.password ?? ''" :readonly="readonly" type="password" autocomplete="off" placeholder="必填，输入 SSH 登录密码" @change="updateRemoteField('password', inputValue($event))" />
-            </label>
-            <label class="global-settings-field">
-              <span>Workdir（可选）</span>
-              <input :value="activeRemoteEnvironment.workdir ?? ''" :readonly="readonly" type="text" placeholder="例如：/root" @change="updateRemoteField('workdir', inputValue($event))" />
-            </label>
-            <label class="global-settings-field">
-              <span>OS（可选）</span>
-              <SettingsDropdown
-                :model-value="activeRemoteEnvironment.os ?? ''"
-                :options="osOptions"
-                title="选择系统"
-                :disabled="readonly"
-                @update:model-value="updateRemoteField('os', $event)"
-              />
-            </label>
-            <label class="global-settings-field global-settings-field-wide">
-              <span>Description（可选）</span>
-              <div class="work-env-description-shell">
-                <div
-                  :key="activeRemoteEnvironment.id"
-                  ref="descriptionScroller"
-                  class="work-env-description-editor"
-                  :class="{ 'is-readonly': readonly }"
-                  :contenteditable="readonly ? 'false' : 'plaintext-only'"
-                  role="textbox"
-                  aria-multiline="true"
-                  data-placeholder="描述这个服务器环境的用途、权限边界或注意事项"
-                  @blur="updateRemoteField('description', editableText($event))"
-                >{{ activeRemoteEnvironment.description ?? '' }}</div>
-                <AdvancedScrollbar :scroller="descriptionScroller" :refresh-key="activeRemoteEnvironment.id" variant="minimal" />
-              </div>
-            </label>
-          </div>
+          <component
+            :is="activeDetailEditor"
+            v-if="activeDetailEditor"
+            :environment="activeEnvironment"
+            :readonly="readonly"
+            @update="updateActiveEnvironment"
+          />
 
-          <p v-else class="work-env-note">本地工作环境由 VS Code 工作区自动同步，仅可在这里配置是否允许和默认选择。</p>
+          <p v-else class="work-env-note">{{ detailNote(activeEnvironment) }}</p>
+
         </template>
         <div v-else class="work-env-empty">请选择一个工作环境。</div>
       </section>
@@ -348,19 +259,19 @@ function normalizePositiveInteger(value: string): number | undefined {
 
     <InputPanel
       :open="createOpen"
-      title="新建服务器环境"
-      description="输入 SSH Host，也就是实际用于 ssh user@host 的主机名、IP、域名或 SSH 配置别名。创建后可继续编辑 Name、User、IdentityFile、Password、Workdir 等字段。"
-      label="Host"
-      placeholder="例如：93.127.137.197"
-      confirm-label="创建"
+      :title="activeCreateAction?.title ?? '新建工作环境'"
+      :description="activeCreateAction?.description ?? ''"
+      :label="activeCreateAction?.inputLabel ?? '名称'"
+      :placeholder="activeCreateAction?.placeholder ?? '输入工作环境名称'"
+      :confirm-label="activeCreateAction?.confirmLabel ?? '创建'"
       @confirm="confirmCreate"
       @cancel="cancelCreate"
     />
 
     <ConfirmPanel
       :open="deleteConfirmOpen"
-      title="删除服务器环境？"
-      :description-html="`将删除「${activeRemoteEnvironment?.name ?? '当前服务器环境'}」，并从相关工作环境策略中移除引用。此操作<strong>无法撤销</strong>。`"
+      title="删除工作环境？"
+      :description-html="`将删除「${activeEnvironment ? environmentName(activeEnvironment) : '当前工作环境'}」，并从相关工作环境策略中移除引用。此操作<strong>无法撤销</strong>。`"
       confirm-label="删除"
       cancel-label="取消"
       @confirm="confirmDelete"
@@ -613,75 +524,6 @@ function normalizePositiveInteger(value: string): number | undefined {
   padding: var(--space-3);
 }
 
-.work-env-form-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3);
-}
-
-.work-env-form-grid .global-settings-field small {
-  color: var(--vscode-descriptionForeground);
-  font-size: var(--font-size-xs);
-  line-height: 1.4;
-  opacity: 0.82;
-}
-
-.work-env-form-grid :deep(input[type='number']) {
-  appearance: textfield;
-  -moz-appearance: textfield;
-}
-
-.work-env-form-grid :deep(input[type='number']::-webkit-outer-spin-button),
-.work-env-form-grid :deep(input[type='number']::-webkit-inner-spin-button) {
-  margin: 0;
-  appearance: none;
-  -webkit-appearance: none;
-}
-
-.work-env-description-shell {
-  position: relative;
-  overflow: hidden;
-}
-
-.work-env-description-editor {
-  width: 100%;
-  height: 86px;
-  overflow-y: auto;
-  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
-  border-radius: var(--radius-sm);
-  padding: var(--space-2) calc(var(--space-2) + 10px) var(--space-2) var(--space-2);
-  color: var(--vscode-input-foreground);
-  background: var(--vscode-input-background);
-  font: inherit;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-  scrollbar-width: none;
-}
-
-.work-env-description-editor::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-  display: none;
-}
-
-.work-env-description-editor:empty::before {
-  content: attr(data-placeholder);
-  color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground));
-  pointer-events: none;
-}
-
-.work-env-description-editor:focus {
-  border-color: var(--vscode-focusBorder, var(--vscode-panel-border));
-  outline: none;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
-}
-
-.work-env-description-editor.is-readonly {
-  color: var(--vscode-descriptionForeground);
-  cursor: default;
-  opacity: 0.82;
-}
 
 .work-env-empty {
   padding: var(--space-3);
@@ -690,8 +532,7 @@ function normalizePositiveInteger(value: string): number | undefined {
 }
 
 @media (max-width: 820px) {
-  .work-env-layout,
-  .work-env-form-grid {
+  .work-env-layout {
     grid-template-columns: 1fr;
   }
 }

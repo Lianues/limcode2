@@ -1,5 +1,10 @@
 import * as vscode from 'vscode';
 import type { FsCapability, FsReadFileResult, FsReadLine, WorkEnvironmentCapabilityOptions } from './types';
+import {
+  WORK_ENVIRONMENT_CAPABILITY,
+  workEnvironmentDisplayName,
+  workEnvironmentSupportsCapability
+} from '../../shared/workEnvironmentCatalog';
 
 const MAX_BYTES = 256 * 1024;
 
@@ -49,16 +54,16 @@ function normalizeEndLine(value: number | undefined, totalLines: number): number
 
 function resolveWorkspacePath(relPath: string, options: WorkEnvironmentCapabilityOptions): vscode.Uri {
   const workEnvironment = options.workEnvironment;
-  if (workEnvironment && workEnvironment.kind !== 'localFolder') {
-    throw new Error(`当前工作环境暂不支持本地文件读取：${workEnvironment.name} (${workEnvironment.kind})`);
+  if (workEnvironment && !workEnvironmentSupportsCapability(workEnvironment, WORK_ENVIRONMENT_CAPABILITY.LocalFileRead)) {
+    throw new Error(`当前工作环境暂不支持本地文件读取：${workEnvironmentDisplayName(workEnvironment)} (${workEnvironment.kind})`);
   }
   if (workEnvironment?.available === false) {
-    throw new Error(`当前工作环境不可用：${workEnvironment.name}`);
+    throw new Error(`当前工作环境不可用：${workEnvironmentDisplayName(workEnvironment)}`);
   }
 
   const folders = vscode.workspace.workspaceFolders;
   const isAbsolute = /^([a-zA-Z]:[\\/]|\/)/.test(relPath);
-  const environmentRoot = workEnvironment?.kind === 'localFolder' && workEnvironment.uri
+  const environmentRoot = workEnvironment && workEnvironmentSupportsCapability(workEnvironment, WORK_ENVIRONMENT_CAPABILITY.LocalFileRead) && workEnvironment.uri
     ? vscode.Uri.parse(workEnvironment.uri)
     : undefined;
   if (environmentRoot && !isAbsolute) {

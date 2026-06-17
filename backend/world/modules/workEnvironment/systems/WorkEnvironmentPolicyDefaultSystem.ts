@@ -1,6 +1,7 @@
 import { defineSystem } from '../../../../ecs/types';
 import { WorkEnvironment, WorkEnvironmentPolicy, WorkEnvironmentPolicyScopeLink } from '../components';
 import { WorkEnvironmentBundle, upsertWorkEnvironmentPolicy, upsertWorkEnvironmentPolicyScopeLink, workEnvironmentPolicyIdForScope } from '../bundles';
+import { workEnvironmentSortKey } from '../../../../../shared/workEnvironmentCatalog';
 
 export const WorkEnvironmentPolicyDefaultSystem = defineSystem({
   name: 'WorkEnvironmentPolicyDefaultSystem',
@@ -21,7 +22,7 @@ export const WorkEnvironmentPolicyDefaultSystem = defineSystem({
       .query(WorkEnvironment)
       .map((entity) => world.get(entity, WorkEnvironment))
       .filter((item): item is NonNullable<typeof item> => !!item && item.available)
-      .sort((left, right) => (left.index ?? 999999) - (right.index ?? 999999) || left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
+      .sort((left, right) => workEnvironmentSortKey(left).localeCompare(workEnvironmentSortKey(right), 'zh-CN') || left.id.localeCompare(right.id))
       .map((item) => item.id);
     if (ids.length === 0) return;
     const policy = upsertWorkEnvironmentPolicy(world, cmd, {

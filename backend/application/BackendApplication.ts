@@ -17,7 +17,7 @@ import {
   workEnvironmentPlugin
 } from '../world/modules';
 import type { AgentSpawnRequestData } from '../world/modules/agent/requests';
-import { Agent, AgentConversationLink } from '../world/modules/agent/components';
+import { Agent, AgentConversationLink, ConversationAgentSelection } from '../world/modules/agent/components';
 import {
   Conversation,
   ConversationBranchLink,
@@ -213,6 +213,17 @@ export class BackendApplication {
       agent,
       conversation,
       role: 'default',
+      createdAt: now,
+      updatedAt: now
+    });
+
+    const selection = this.world.spawn();
+    const agentRecord = this.world.get(agent, Agent);
+    this.world.add(selection, ConversationAgentSelection, {
+      id: `conversation-agent:${conversationId}:${agentRecord?.id ?? DEFAULT_AGENT_ID}`,
+      conversation,
+      agent,
+      role: 'active',
       createdAt: now,
       updatedAt: now
     });
@@ -574,6 +585,11 @@ export class BackendApplication {
     for (const entity of this.world.query(AgentConversationLink)) {
       const link = this.world.get(entity, AgentConversationLink);
       if (link?.conversation === conversation) entities.add(entity);
+    }
+
+    for (const entity of this.world.query(ConversationAgentSelection)) {
+      const selection = this.world.get(entity, ConversationAgentSelection);
+      if (selection?.conversation === conversation) entities.add(entity);
     }
 
     for (const entity of this.world.query(ConversationModeSelection)) {

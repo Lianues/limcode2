@@ -1,5 +1,6 @@
 import type { Component } from 'vue';
 import {
+  isContextReferencePart,
   isFileDataPart,
   isFunctionCallPart,
   isFunctionResponsePart,
@@ -14,6 +15,7 @@ import FunctionCallPartView from './parts/FunctionCallPartView.vue';
 import FunctionResponsePartView from './parts/FunctionResponsePartView.vue';
 import InlineDataPartView from './parts/InlineDataPartView.vue';
 import FileDataPartView from './parts/FileDataPartView.vue';
+import ContextReferencePartView from './parts/ContextReferencePartView.vue';
 
 /**
  * 富内容显示子组件注册表。
@@ -21,7 +23,7 @@ import FileDataPartView from './parts/FileDataPartView.vue';
  * 这里是 ContentPart -> 渲染节点的唯一编排层。它按后端传来的 parts 原始顺序生成节点，
  * MessageItem 不再关心正文、思考、工具、附件之间的排列关系。
  */
-export type RichPartKind = 'text' | 'thought' | 'functionCall' | 'functionResponse' | 'inlineData' | 'fileData';
+export type RichPartKind = 'text' | 'thought' | 'functionCall' | 'functionResponse' | 'inlineData' | 'fileData' | 'contextReference';
 
 export interface RichRenderNode {
   readonly key: string;
@@ -35,7 +37,8 @@ const COMPONENTS: Record<RichPartKind, Component> = {
   functionCall: FunctionCallPartView,
   functionResponse: FunctionResponsePartView,
   inlineData: InlineDataPartView,
-  fileData: FileDataPartView
+  fileData: FileDataPartView,
+  contextReference: ContextReferencePartView
 };
 
 export function partViewComponent(kind: RichPartKind): Component {
@@ -120,6 +123,10 @@ export function toRenderNodes(parts: readonly ContentPart[]): RichRenderNode[] {
     }
     if (isFileDataPart(part)) {
       nodes.push({ key: `fileData:${index}:${part.fileData.uri}`, kind: 'fileData', props: { part, partIndex: index } });
+      return;
+    }
+    if (isContextReferencePart(part)) {
+      nodes.push({ key: `contextReference:${index}:${part.contextReference.conversationId}:${part.contextReference.createdAt}`, kind: 'contextReference', props: { part, partIndex: index } });
     }
   });
 

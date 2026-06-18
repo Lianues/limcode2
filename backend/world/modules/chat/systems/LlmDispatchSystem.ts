@@ -1,15 +1,14 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
 import {
-  AgentModeLink,
   ConversationModeSelection,
   Mode,
-  ModeModelProfileLink,
-  ModeSystemPromptLink,
-  ModeToolPolicyLink,
+  ModelProfileScopeLink,
   ModelProfile,
+  SystemPromptScopeLink,
   SystemPrompt,
   ToolPolicy
 } from '../../mode/components';
+import { Agent } from '../../agent/components';
 import {
   AgentRunInputRevision,
   AgentRunSourceLink,
@@ -31,7 +30,7 @@ import type { LlmModelSettings, LlmStartRequest, ToolSchema } from '../../llm/co
 import {
   activeContextPolicyForRun,
   activeModelProfileForRun,
-  activeSystemPromptForRun,
+  systemPromptsForRun,
   activeToolPolicyForRun
 } from '../../agentRun/queries';
 import { buildRunContextContents, selectRunContextMessageEntities } from '../../agentRun/contextPolicy';
@@ -63,10 +62,9 @@ const LlmContextLookupComponents = [
   RunToolPolicyLink,
   ConversationModeSelection,
   Mode,
-  AgentModeLink,
-  ModeSystemPromptLink,
-  ModeModelProfileLink,
-  ModeToolPolicyLink,
+  Agent,
+  SystemPromptScopeLink,
+  ModelProfileScopeLink,
   SystemPrompt,
   ModelProfile,
   ToolPolicy,
@@ -131,12 +129,12 @@ export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmSt
   const context = resolveLlmContext(world, input);
   if (!context) return undefined;
 
-  const systemPrompt = activeSystemPromptForRun(world, input.run)?.text;
+  const systemPrompt = composeSystemInstruction(systemPromptsForRun(world, input.run));
   const modelProfile = activeModelProfileForRun(world, input.run);
   const conversation = world.get(context.conversation, Conversation);
   const model = modelProfile === undefined
     ? undefined
-    : { provider: modelProfile.provider, model: modelProfile.model } satisfies LlmModelSettings;
+    : { providerConfigId: modelProfile.providerConfigId, provider: modelProfile.provider, model: modelProfile.model } satisfies LlmModelSettings;
   const toolPolicy = activeToolPolicyForRun(world, input.run);
   const allTools = input.tools ?? world.tryGetResource(ToolSchemasKey) ?? [];
   const filteredTools = toolPolicy
@@ -145,7 +143,7 @@ export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmSt
   const tools = buildRuntimeToolSchemas(filteredTools, { world, run: input.run, conversation: context.conversation });
   const contextPolicy = activeContextPolicyForRun(world, input.run);
   const contents = buildRunContextContents(world, { ...context, policy: contextPolicy });
-  const systemText = systemPrompt?.trim() ?? '';
+  const systemText = systemPrompt.trim();
 
   return {
     id: input.requestId ?? `dryrun-${input.run}-${Date.now()}`,
@@ -155,6 +153,18 @@ export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmSt
     conversationId: conversation?.id,
     model
   };
+}
+
+function composeSystemInstruction(prompts: Array<{ name: string; text: string }>): string {
+  return prompts
+    .map((prompt) => {
+      const text = prompt.text.trim();
+      if (!text) return '';
+      const name = prompt.name.trim();
+      return name ? `[${name}]\n${text}` : text;
+    })
+    .filter(Boolean)
+    .join('\n\n');
 }
 
 

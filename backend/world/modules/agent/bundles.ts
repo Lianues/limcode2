@@ -1,27 +1,26 @@
-import { defineBundle, type CommandSink, type Entity } from '../../../ecs/types';
+import { defineBundle, type CommandSink, type Entity, type WorldReader } from '../../../ecs/types';
 import { Conversation, PartOf, Message } from '../chat/components';
 import { spawnConversation, spawnUserMessage } from '../chat/bundles';
 import {
   Agent,
   AgentConversationLink,
   AgentKind,
-  AgentStatus
+  AgentStatus,
+  ConversationAgentSelection
 } from './components';
 import {
-  AgentModeLink,
   ConversationModeSelection,
   Mode,
-  ModeModelProfileLink,
-  ModeSystemPromptLink,
-  ModeToolPolicyLink,
   ModelProfile,
+  ModelProfileScopeLink,
   SystemPrompt,
+  SystemPromptScopeLink,
   ToolPolicy
 } from '../mode/components';
 import { selectGlobalModeForConversation } from '../mode/bundles';
 import { ToolPolicyScopeLink } from '../tools/components';
-import type { AgentBlueprint, AgentModeBlueprint } from './blueprints';
-import type { AgentModeRole } from '../../../../shared/protocol';
+import type { BuiltinAgentDefinition, BuiltinModeDefinition } from './blueprints';
+import type { ConfigScopeKind, ToolPolicyScopeKind } from '../../../../shared/protocol';
 
 export const AgentFromBlueprintBundle = defineBundle({
   name: 'AgentFromBlueprintBundle',
@@ -32,15 +31,14 @@ export const AgentFromBlueprintBundle = defineBundle({
     Mode,
     ToolPolicy,
     SystemPrompt,
+    SystemPromptScopeLink,
     ModelProfile,
-    AgentModeLink,
-    ModeToolPolicyLink,
-    ModeSystemPromptLink,
-    ModeModelProfileLink,
+    ModelProfileScopeLink,
     ToolPolicyScopeLink,
     Conversation,
     ConversationModeSelection,
     AgentConversationLink,
+    ConversationAgentSelection,
     Message,
     PartOf
   ],
@@ -48,64 +46,124 @@ export const AgentFromBlueprintBundle = defineBundle({
   spawns: true
 });
 
-export interface SpawnAgentFromBlueprintInput {
-  blueprint: AgentBlueprint;
-  agentId: string;
-  conversationId: string;
+export interface SpawnAgentProfileInput {
+  definition: BuiltinAgentDefinition;
+  agentId?: string;
   agentName?: string;
+  source?: 'builtin' | 'user';
+}
+
+export interface SpawnAgentWithConversationInput extends SpawnAgentProfileInput {
+  conversationId: string;
   initialMessage?: string;
   conversationTitle?: string;
 }
 
-export interface SpawnAgentFromBlueprintResult {
+export interface SpawnAgentWithConversationResult {
   agent: Entity;
   conversation: Entity;
   link: Entity;
+  selection: Entity;
 }
 
-export function spawnAgentProfileFromBlueprint(
-  cmd: CommandSink,
-  input: { blueprint: AgentBlueprint; agentId: string; agentName?: string }
-): Entity {
+export function spawnAgentProfileFromBlueprint(cmd: CommandSink, input: SpawnAgentProfileInput): Entity {
+  const definition = input.definition;
+  const agentId = input.agentId ?? definition.id;
   const agent = cmd.spawn();
-  cmd.add(agent, Agent, { id: input.agentId, name: input.agentName ?? input.blueprint.name });
-  cmd.add(agent, AgentKind, { kind: input.blueprint.kind });
+  cmd.add(agent, Agent, {
+    id: agentId,
+    name: input.agentName ?? definition.name,
+    ...(definition.description ? { description: definition.description } : {}),
+    source: input.source ?? 'builtin'
+  });
+  cmd.add(agent, AgentKind, { kind: definition.kind });
   cmd.add(agent, AgentStatus, { status: 'idle' });
 
-  for (const modeBlueprint of input.blueprint.modes) {
-    if (input.agentId === 'main' && modeBlueprint.id === input.blueprint.defaultModeId) {
-      spawnGlobalToolPolicyFromBlueprint(cmd, {
-        blueprint: modeBlueprint,
-        agentId: input.agentId
-      });
-      continue;
-    }
-    spawnModeFromBlueprint(cmd, {
-      agent,
-      agentId: input.agentId,
-      blueprint: modeBlueprint,
-      isDefault: modeBlueprint.id === input.blueprint.defaultModeId
+  const prompt = spawnSystemPrompt(cmd, {
+    id: `system-prompt:agent:${agentId}`,
+    name: `${definition.name} Prompt`,
+    text: definition.systemPrompt
+  });
+  linkSystemPromptToScope(cmd, { scopeKind: 'agent', scopeId: agentId, agent, systemPrompt: prompt });
+
+  const policy = spawnToolPolicy(cmd, {
+    id: `tool-policy:agent:${agentId}`,
+    name: definition.toolPolicy.name ?? `${definition.name} Tools`,
+    allowedTools: definition.toolPolicy.allowedTools,
+    toolConfigs: definition.toolPolicy.toolConfigs
+  });
+  linkToolPolicyToScope(cmd, { scopeKind: 'agent', scopeId: agentId, agent, toolPolicy: policy });
+
+  if (definition.model?.model.trim()) {
+    const profile = spawnModelProfile(cmd, {
+      id: `model-profile:agent:${agentId}`,
+      name: definition.model.name ?? `${definition.name} Model`,
+      provider: definition.model.provider,
+      model: definition.model.model
     });
+    linkModelProfileToScope(cmd, { scopeKind: 'agent', scopeId: agentId, agent, modelProfile: profile });
   }
 
   return agent;
 }
 
-export function spawnAgentFromBlueprint(
-  cmd: CommandSink,
-  input: SpawnAgentFromBlueprintInput
-): SpawnAgentFromBlueprintResult {
-  const agent = spawnAgentProfileFromBlueprint(cmd, input);
+export function spawnModeFromDefinition(cmd: CommandSink, definition: BuiltinModeDefinition): Entity {
+  const now = Date.now();
+  const mode = cmd.spawn();
+  cmd.add(mode, Mode, {
+    id: definition.id,
+    name: definition.name,
+    ...(definition.description ? { description: definition.description } : {}),
+    source: 'builtin',
+    icon: 'list-details',
+    createdAt: now,
+    updatedAt: now
+  });
 
+  if (definition.systemPrompt?.trim()) {
+    const prompt = spawnSystemPrompt(cmd, {
+      id: `system-prompt:mode:${definition.id}`,
+      name: `${definition.name} Prompt`,
+      text: definition.systemPrompt
+    });
+    linkSystemPromptToScope(cmd, { scopeKind: 'mode', scopeId: definition.id, mode, systemPrompt: prompt });
+  }
+
+  if (definition.toolPolicy) {
+    const policy = spawnToolPolicy(cmd, {
+      id: `tool-policy:mode:${definition.id}`,
+      name: definition.toolPolicy.name ?? `${definition.name} Tools`,
+      allowedTools: definition.toolPolicy.allowedTools,
+      toolConfigs: definition.toolPolicy.toolConfigs
+    });
+    linkToolPolicyToScope(cmd, { scopeKind: 'mode', scopeId: definition.id, mode, toolPolicy: policy });
+  }
+
+  if (definition.model) {
+    const profile = spawnModelProfile(cmd, {
+      id: `model-profile:mode:${definition.id}`,
+      name: definition.model.name ?? `${definition.name} Model`,
+      provider: definition.model.provider,
+      model: definition.model.model
+    });
+    linkModelProfileToScope(cmd, { scopeKind: 'mode', scopeId: definition.id, mode, modelProfile: profile });
+  }
+
+  return mode;
+}
+
+export function spawnAgentFromBlueprint(cmd: CommandSink, input: SpawnAgentWithConversationInput): SpawnAgentWithConversationResult {
+  const agent = spawnAgentProfileFromBlueprint(cmd, input);
   const conversation = spawnConversation(cmd, { id: input.conversationId, title: input.conversationTitle });
   const link = linkAgentToConversation(cmd, { agent, conversation, role: 'default' });
+  const selection = selectAgentForConversation(cmd, { agent, conversation, conversationId: input.conversationId, agentId: input.agentId ?? input.definition.id });
   selectGlobalModeForConversation(cmd, conversation, input.conversationId);
 
   if (input.initialMessage?.trim()) {
     spawnUserMessage(cmd, conversation, input.initialMessage.trim());
   }
 
-  return { agent, conversation, link };
+  return { agent, conversation, link, selection };
 }
 
 export function linkAgentToConversation(
@@ -125,117 +183,123 @@ export function linkAgentToConversation(
   return link;
 }
 
-function spawnModeFromBlueprint(
+export function selectAgentForConversation(
   cmd: CommandSink,
-  input: { agent: Entity; agentId: string; blueprint: AgentModeBlueprint; isDefault: boolean }
+  input: { agent: Entity; conversation: Entity; conversationId: string; agentId: string }
 ): Entity {
   const now = Date.now();
-  const mode = cmd.spawn();
-  const modeId = modeIdFor(input.agentId, input.blueprint.id);
-  cmd.add(mode, Mode, {
-    id: modeId,
-    name: input.blueprint.name,
-    description: input.blueprint.description,
-    source: 'builtin',
-    icon: 'list-details',
-    createdAt: now,
-    updatedAt: now
-  });
-
-  const modeRoles: AgentModeRole[] = input.isDefault ? ['active', 'default'] : ['available'];
-  for (const role of modeRoles) {
-    const modeLink = cmd.spawn();
-    cmd.add(modeLink, AgentModeLink, {
-      id: `agent-mode:${role}:${input.agentId}:${modeId}`,
-      agent: input.agent,
-      mode,
-      role,
-      createdAt: now,
-      updatedAt: now
-    });
-  }
-
-  const toolPolicy = cmd.spawn();
-  const toolPolicyId = `${modeId}:tool-policy`;
-  cmd.add(toolPolicy, ToolPolicy, {
-    id: toolPolicyId,
-    name: input.blueprint.toolPolicy.name ?? `${input.blueprint.name} Tools`,
-    allowedTools: input.blueprint.toolPolicy.allowedTools,
-    ...(input.blueprint.toolPolicy.toolConfigs ? { toolConfigs: input.blueprint.toolPolicy.toolConfigs } : {})
-  });
-  const toolPolicyLink = cmd.spawn();
-  cmd.add(toolPolicyLink, ModeToolPolicyLink, {
-    id: `mode-tool-policy:${modeId}:${toolPolicyId}`,
-    mode,
-    toolPolicy,
+  const selection = cmd.spawn();
+  cmd.add(selection, ConversationAgentSelection, {
+    id: `conversation-agent:${input.conversationId}:${input.agentId}`,
+    conversation: input.conversation,
+    agent: input.agent,
     role: 'active',
     createdAt: now,
     updatedAt: now
   });
-
-  const systemPrompt = cmd.spawn();
-  const systemPromptId = `${modeId}:system-prompt`;
-  cmd.add(systemPrompt, SystemPrompt, {
-    id: systemPromptId,
-    name: `${input.blueprint.name} System Prompt`,
-    text: input.blueprint.systemPrompt
-  });
-  const systemPromptLink = cmd.spawn();
-  cmd.add(systemPromptLink, ModeSystemPromptLink, {
-    id: `mode-system-prompt:${modeId}:${systemPromptId}`,
-    mode,
-    systemPrompt,
-    role: 'active',
-    createdAt: now,
-    updatedAt: now
-  });
-
-  const modelProfile = cmd.spawn();
-  const modelProfileId = `${modeId}:model-profile`;
-  cmd.add(modelProfile, ModelProfile, {
-    id: modelProfileId,
-    name: input.blueprint.model.name ?? `${input.blueprint.name} Model`,
-    provider: input.blueprint.model.provider,
-    model: input.blueprint.model.model
-  });
-  const modelProfileLink = cmd.spawn();
-  cmd.add(modelProfileLink, ModeModelProfileLink, {
-    id: `mode-model-profile:${modeId}:${modelProfileId}`,
-    mode,
-    modelProfile,
-    role: 'active',
-    createdAt: now,
-    updatedAt: now
-  });
-
-  return mode;
+  return selection;
 }
 
-function spawnGlobalToolPolicyFromBlueprint(
+export function spawnSystemPrompt(cmd: CommandSink, input: { id: string; name: string; text: string }): Entity {
+  const entity = cmd.spawn();
+  cmd.add(entity, SystemPrompt, { id: input.id, name: input.name, text: input.text });
+  return entity;
+}
+
+export function spawnModelProfile(cmd: CommandSink, input: { id: string; name: string; provider?: string; providerConfigId?: string; model: string }): Entity {
+  const entity = cmd.spawn();
+  cmd.add(entity, ModelProfile, {
+    id: input.id,
+    name: input.name,
+    ...(input.providerConfigId ? { providerConfigId: input.providerConfigId } : {}),
+    ...(input.provider ? { provider: input.provider as never } : {}),
+    model: input.model
+  });
+  return entity;
+}
+
+export function spawnToolPolicy(cmd: CommandSink, input: { id: string; name: string; allowedTools: string[]; toolConfigs?: Record<string, never> | unknown }): Entity {
+  const entity = cmd.spawn();
+  cmd.add(entity, ToolPolicy, {
+    id: input.id,
+    name: input.name,
+    allowedTools: input.allowedTools,
+    ...(input.toolConfigs ? { toolConfigs: input.toolConfigs as never } : {})
+  });
+  return entity;
+}
+
+export function linkSystemPromptToScope(
   cmd: CommandSink,
-  input: { agentId: string; blueprint: AgentModeBlueprint }
+  input: { scopeKind: ConfigScopeKind; scopeId?: string; systemPrompt: Entity; agent?: Entity; mode?: Entity; conversation?: Entity; run?: Entity; order?: number }
 ): Entity {
+  const entity = cmd.spawn();
   const now = Date.now();
-  const toolPolicy = cmd.spawn();
-  const toolPolicyId = `tool-policy:global:${input.agentId}`;
-  cmd.add(toolPolicy, ToolPolicy, {
-    id: toolPolicyId,
-    name: input.blueprint.toolPolicy.name ?? '全局默认工具策略',
-    allowedTools: input.blueprint.toolPolicy.allowedTools,
-    ...(input.blueprint.toolPolicy.toolConfigs ? { toolConfigs: input.blueprint.toolPolicy.toolConfigs } : {})
+  cmd.add(entity, SystemPromptScopeLink, {
+    id: `system-prompt-scope:${input.scopeKind}:${input.scopeId ?? 'global'}`,
+    scopeKind: input.scopeKind,
+    ...(input.scopeId ? { scopeId: input.scopeId } : {}),
+    systemPrompt: input.systemPrompt,
+    ...(input.agent !== undefined ? { agent: input.agent } : {}),
+    ...(input.mode !== undefined ? { mode: input.mode } : {}),
+    ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
+    ...(input.run !== undefined ? { run: input.run } : {}),
+    role: 'active',
+    ...(input.order !== undefined ? { order: input.order } : {}),
+    createdAt: now,
+    updatedAt: now
   });
-  const globalToolPolicyLink = cmd.spawn();
-  cmd.add(globalToolPolicyLink, ToolPolicyScopeLink, {
-    id: 'tool-policy-scope:global:global',
-    scopeKind: 'global',
-    toolPolicy,
+  return entity;
+}
+
+export function linkModelProfileToScope(
+  cmd: CommandSink,
+  input: { scopeKind: ConfigScopeKind; scopeId?: string; modelProfile: Entity; agent?: Entity; mode?: Entity; conversation?: Entity; run?: Entity }
+): Entity {
+  const entity = cmd.spawn();
+  const now = Date.now();
+  cmd.add(entity, ModelProfileScopeLink, {
+    id: `model-profile-scope:${input.scopeKind}:${input.scopeId ?? 'global'}`,
+    scopeKind: input.scopeKind,
+    ...(input.scopeId ? { scopeId: input.scopeId } : {}),
+    modelProfile: input.modelProfile,
+    ...(input.agent !== undefined ? { agent: input.agent } : {}),
+    ...(input.mode !== undefined ? { mode: input.mode } : {}),
+    ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
+    ...(input.run !== undefined ? { run: input.run } : {}),
     role: 'active',
     createdAt: now,
     updatedAt: now
   });
-  return toolPolicy;
+  return entity;
 }
 
-function modeIdFor(agentId: string, localModeId: string): string {
-  return `${agentId}:mode:${localModeId}`;
+export function linkToolPolicyToScope(
+  cmd: CommandSink,
+  input: { scopeKind: ToolPolicyScopeKind; scopeId?: string; toolPolicy: Entity; agent?: Entity; mode?: Entity; conversation?: Entity; run?: Entity }
+): Entity {
+  const entity = cmd.spawn();
+  const now = Date.now();
+  cmd.add(entity, ToolPolicyScopeLink, {
+    id: `tool-policy-scope:${input.scopeKind}:${input.scopeId ?? 'global'}`,
+    scopeKind: input.scopeKind,
+    ...(input.scopeId ? { scopeId: input.scopeId } : {}),
+    toolPolicy: input.toolPolicy,
+    ...(input.agent !== undefined ? { agent: input.agent } : {}),
+    ...(input.mode !== undefined ? { mode: input.mode } : {}),
+    ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
+    ...(input.run !== undefined ? { run: input.run } : {}),
+    role: 'active',
+    createdAt: now,
+    updatedAt: now
+  });
+  return entity;
+}
+
+export function hasAgentId(world: WorldReader, id: string): boolean {
+  return world.query(Agent).some((entity) => world.get(entity, Agent)?.id === id);
+}
+
+export function hasModeId(world: WorldReader, id: string): boolean {
+  return world.query(Mode).some((entity) => world.get(entity, Mode)?.id === id);
 }

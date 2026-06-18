@@ -10,6 +10,7 @@ export function createDefaultAgentRecord(): AgentRecord {
     id: DEFAULT_AGENT_ID,
     name: DEFAULT_AGENT_NAME,
     kind: 'main',
+    source: 'builtin',
     status: 'idle'
   };
 }

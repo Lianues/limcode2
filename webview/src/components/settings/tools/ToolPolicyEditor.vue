@@ -40,8 +40,6 @@ const sourceLabel = computed(() => {
   if (props.scopeKind === 'global') return '全局默认策略';
   if (hasLocalOverride.value) return '当前作用域覆盖';
   const inheritedFrom = effectiveResolution.value.inheritedFrom;
-  if (inheritedFrom === 'modeLegacy') return '继承模式策略';
-  if (inheritedFrom === 'runLegacy') return '继承运行策略';
   return '继承全局默认策略';
 });
 

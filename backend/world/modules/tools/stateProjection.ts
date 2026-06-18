@@ -10,7 +10,7 @@ import {
 } from '../agentRun/components';
 import { activeToolPolicyForRun, runForToolCall } from '../agentRun/queries';
 import { Conversation, Message, PartOf } from '../chat/components';
-import { AgentModeLink, ConversationModeSelection, Mode, ModeToolPolicyLink, ToolPolicy } from '../mode/components';
+import { ConversationModeSelection, Mode, ToolPolicy } from '../mode/components';
 import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey } from './resources';
 import { toolSchedulingDecision } from './scheduling';
 import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolPolicyScopeLinkData } from './components';
@@ -29,8 +29,6 @@ export const toolsRuntimeStateProjectionReads: AccessDeclaration = {
     RunModeLink,
     RunToolPolicyLink,
     ConversationModeSelection,
-    AgentModeLink,
-    ModeToolPolicyLink,
     ToolCall,
     ToolState,
     ToolCallEvent,

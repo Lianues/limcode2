@@ -12,6 +12,7 @@ export const SIDEBAR_MESSAGE = {
   newConversation: 'newConversation',
   openGlobalSettings: 'openGlobalSettings',
   openModeSettings: 'openModeSettings',
+  openAgentSettings: 'openAgentSettings',
   historyPageGet: 'sidebar.historyPage.get',
   state: 'sidebar.state',
   ready: 'sidebar.ready',
@@ -26,6 +27,7 @@ export type SidebarToExtensionMessage =
   | { type: typeof SIDEBAR_MESSAGE.newConversation; projectFolderUri?: string }
   | { type: typeof SIDEBAR_MESSAGE.openGlobalSettings }
   | { type: typeof SIDEBAR_MESSAGE.openModeSettings }
+  | { type: typeof SIDEBAR_MESSAGE.openAgentSettings }
   | { type: typeof SIDEBAR_MESSAGE.historyPageGet; scopeKind: SidebarHistoryScopeKind; projectFolderUri?: string; cursor?: string; limit?: number }
   | { type: typeof SIDEBAR_MESSAGE.renameConversation; conversationId: string; title: string }
   | { type: typeof SIDEBAR_MESSAGE.deleteConversation; conversationId: string }

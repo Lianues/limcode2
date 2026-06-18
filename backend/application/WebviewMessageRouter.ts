@@ -8,6 +8,7 @@ import { buildLlmStartRequestForRun } from '../world/modules/chat/systems/LlmDis
 import { ToolEventType } from '../world/modules/tools/events';
 import { ModeEventType } from '../world/modules/mode/events';
 import { WorkEnvironmentEventType } from '../world/modules/workEnvironment/events';
+import { AgentEventType } from '../world/modules/agent/events';
 import {
   BridgeMessageType,
   GLOBAL_CLIENT_STATE_STREAM_ID,
@@ -124,6 +125,47 @@ export class WebviewMessageRouter {
       case BridgeMessageType.AgentRunMarkStale:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: AgentRunEventType.MarkStale, payload: message.payload });
+        break;
+      case BridgeMessageType.AgentCreate:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentEventType.Create, payload: message.payload });
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.AgentUpdate:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentEventType.Update, payload: message.payload });
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.AgentDelete:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentEventType.Delete, payload: message.payload });
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.ConversationAgentSelect:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentEventType.ConversationSelect, payload: message.payload });
+        this.deps.requestSnapshot(message.payload.conversationId);
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.SystemPromptScopeSet:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentEventType.SystemPromptScopeSet, payload: message.payload });
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.SystemPromptScopeClear:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentEventType.SystemPromptScopeClear, payload: message.payload });
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.ModelProfileScopeSet:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentEventType.ModelProfileScopeSet, payload: message.payload });
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.ModelProfileScopeClear:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentEventType.ModelProfileScopeClear, payload: message.payload });
+        this.deps.requestSnapshot();
         break;
       case BridgeMessageType.ModeCreate:
         if (!this.deps.isHydrated() || !message.payload) return;

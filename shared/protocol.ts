@@ -12,7 +12,7 @@ export type BridgeScope =
   | { kind: 'settings'; level: 'global' | 'conversation' | 'agent' | 'mode'; id?: string };
 
 export interface WebviewClientMeta {
-  kind: 'mainPanel' | 'globalSettings' | 'modeSettings' | 'sidebar' | 'unknown';
+  kind: 'mainPanel' | 'globalSettings' | 'modeSettings' | 'agentSettings' | 'sidebar' | 'unknown';
   panelId?: string;
   title?: string;
   conversationId?: string;
@@ -66,6 +66,14 @@ export enum BridgeMessageType {
   Error = 'bridge.error',
   ChatSend = 'chat.send',
   ChatAbort = 'chat.abort',
+  ConversationOpen = 'conversation.open',
+  AgentCreate = 'agent.create',
+  AgentUpdate = 'agent.update',
+  AgentDelete = 'agent.delete',
+  SystemPromptScopeSet = 'systemPrompt.scope.set',
+  SystemPromptScopeClear = 'systemPrompt.scope.clear',
+  ModelProfileScopeSet = 'modelProfile.scope.set',
+  ModelProfileScopeClear = 'modelProfile.scope.clear',
   MessageEdit = 'message.edit',
   MessageDeleteFrom = 'message.deleteFrom',
   MessageRetryFrom = 'message.retryFrom',
@@ -104,6 +112,7 @@ export enum BridgeMessageType {
   ModeUpdate = 'mode.update',
   ModeDelete = 'mode.delete',
   ConversationModeSelect = 'conversation.mode.select',
+  ConversationAgentSelect = 'conversation.agent.select',
   ConversationProjectSet = 'conversation.project.set',
   WorkEnvironmentSelect = 'workEnvironment.select',
   WorkEnvironmentUpsert = 'workEnvironment.upsert',
@@ -369,10 +378,14 @@ export interface LlmProviderConfigRecord {
   updatedAt: number;
 }
 
+export type AgentSource = 'builtin' | 'user';
+
 export interface AgentRecord {
   id: string;
   name: string;
+  description?: string;
   kind: string;
+  source: AgentSource;
   status: 'idle' | 'thinking' | 'running' | 'done' | 'error';
 }
 
@@ -386,6 +399,8 @@ export type MessageRunRole = 'input' | 'model' | 'tool_response' | 'notification
 export type ToolCallRunRole = 'produced_by';
 export type PolicyBindingRole = 'active';
 export type ToolPolicyScopeKind = 'global' | 'conversation' | 'agent' | 'agentSystem' | 'mode' | 'run';
+export type ConfigScopeKind = 'global' | 'conversation' | 'agent' | 'mode' | 'run';
+export type ConfigScopeBindingRole = 'active';
 
 export type ModeSource = 'builtin' | 'user';
 export type ModeIconKey = 'list-details';
@@ -440,21 +455,33 @@ export interface SystemPromptRecord {
   text: string;
 }
 
+export interface SystemPromptScopeLinkRecord {
+  id: string;
+  scopeKind: ConfigScopeKind;
+  scopeId?: string;
+  systemPromptId: string;
+  role: ConfigScopeBindingRole;
+  order?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface ModelProfileRecord {
   id: string;
   name: string;
-  provider: LlmProviderKind;
+  providerConfigId?: string;
+  provider?: LlmProviderKind;
   model: string;
 }
 
-export type AgentModeRole = 'active' | 'available' | 'default';
-export type ModeBindingRole = 'active';
-
-export interface AgentModeLinkRecord {
+export interface ModelProfileScopeLinkRecord {
   id: string;
-  agentId: string;
-  modeId: string;
-  role: AgentModeRole;
+  scopeKind: ConfigScopeKind;
+  scopeId?: string;
+  modelProfileId: string;
+  role: ConfigScopeBindingRole;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface ConversationModeSelectionRecord {
@@ -465,27 +492,6 @@ export interface ConversationModeSelectionRecord {
   role: ConversationModeSelectionRole;
   createdAt: number;
   updatedAt: number;
-}
-
-export interface ModeToolPolicyLinkRecord {
-  id: string;
-  modeId: string;
-  toolPolicyId: string;
-  role: ModeBindingRole;
-}
-
-export interface ModeSystemPromptLinkRecord {
-  id: string;
-  modeId: string;
-  systemPromptId: string;
-  role: ModeBindingRole;
-}
-
-export interface ModeModelProfileLinkRecord {
-  id: string;
-  modeId: string;
-  modelProfileId: string;
-  role: ModeBindingRole;
 }
 
 export interface ConversationRecord {
@@ -625,6 +631,17 @@ export interface AgentConversationLinkRecord {
   role: AgentConversationRole;
 }
 
+export type ConversationAgentSelectionRole = 'active';
+
+export interface ConversationAgentSelectionRecord {
+  id: string;
+  conversationId: string;
+  agentId: string;
+  role: ConversationAgentSelectionRole;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export type ContentRole = MsgRole;
 
 export interface TextPart {
@@ -660,7 +677,20 @@ export interface FileDataPart {
   fileData: { mimeType?: string; uri: string };
 }
 
-export type ContentPart = TextPart | FunctionCallPart | FunctionResponsePart | InlineDataPart | FileDataPart;
+export interface ContextReferencePart {
+  contextReference: {
+    kind: 'conversation' | 'message' | 'run';
+    conversationId: string;
+    messageIds?: string[];
+    runId?: string;
+    title?: string;
+    mode: 'snapshot' | 'link';
+    text?: string;
+    createdAt: number;
+  };
+}
+
+export type ContentPart = TextPart | FunctionCallPart | FunctionResponsePart | InlineDataPart | FileDataPart | ContextReferencePart;
 
 export function isTextPart(part: ContentPart): part is TextPart { return 'text' in part; }
 export function isVisibleTextPart(part: ContentPart): part is TextPart { return isTextPart(part) && part.thought !== true; }
@@ -668,6 +698,7 @@ export function isFunctionCallPart(part: ContentPart): part is FunctionCallPart 
 export function isFunctionResponsePart(part: ContentPart): part is FunctionResponsePart { return 'functionResponse' in part; }
 export function isInlineDataPart(part: ContentPart): part is InlineDataPart { return 'inlineData' in part; }
 export function isFileDataPart(part: ContentPart): part is FileDataPart { return 'fileData' in part; }
+export function isContextReferencePart(part: ContentPart): part is ContextReferencePart { return 'contextReference' in part; }
 
 export interface MessageContent {
   role: ContentRole;
@@ -912,16 +943,15 @@ export interface ClientStateRecordByTable {
   toolPolicies: ToolPolicyRecord;
   toolPolicyScopeLinks: ToolPolicyScopeLinkRecord;
   systemPrompts: SystemPromptRecord;
+  systemPromptScopeLinks: SystemPromptScopeLinkRecord;
   modelProfiles: ModelProfileRecord;
-  agentModeLinks: AgentModeLinkRecord;
+  modelProfileScopeLinks: ModelProfileScopeLinkRecord;
   conversationModeSelections: ConversationModeSelectionRecord;
-  modeToolPolicyLinks: ModeToolPolicyLinkRecord;
-  modeSystemPromptLinks: ModeSystemPromptLinkRecord;
-  modeModelProfileLinks: ModeModelProfileLinkRecord;
   conversations: ConversationRecord;
   conversationReuseLinks: ConversationReuseLinkRecord;
   conversationBranchLinks: ConversationBranchLinkRecord;
   agentConversationLinks: AgentConversationLinkRecord;
+  conversationAgentSelections: ConversationAgentSelectionRecord;
   projectContexts: ProjectContextRecord;
   conversationProjectLinks: ConversationProjectLinkRecord;
   workEnvironments: WorkEnvironmentRecord;
@@ -992,7 +1022,9 @@ export type ClientPatchOp = ClientStateTablePatchOp;
 
 export interface ChatSendPayload {
   conversationId: string;
-  text: string;
+  text?: string;
+  content?: MessageContent;
+  agentId?: string;
 }
 export interface ChatAbortPayload {
   conversationId: string;
@@ -1000,10 +1032,15 @@ export interface ChatAbortPayload {
 export interface MessageEditPayload {
   conversationId: string;
   messageId: string;
-  text: string;
+  text?: string;
+  content?: MessageContent;
   runAfterEdit?: boolean;
   deleteFollowing?: boolean;
 }
+export interface ConversationOpenPayload { conversationId: string; title?: string }
+export interface AgentCreatePayload { name: string; description?: string; kind?: string }
+export interface AgentUpdatePayload { agentId: string; name?: string; description?: string; kind?: string }
+export interface AgentDeletePayload { agentId: string }
 export interface MessageDeleteFromPayload {
   conversationId: string;
   messageId: string;
@@ -1033,6 +1070,23 @@ export interface ToolPolicyScopeClearPayload {
   scopeKind: ToolPolicyScopeKind;
   scopeId?: string;
 }
+export interface SystemPromptScopeSetPayload {
+  scopeKind: ConfigScopeKind;
+  scopeId?: string;
+  name?: string;
+  text: string;
+  order?: number;
+}
+export interface SystemPromptScopeClearPayload { scopeKind: ConfigScopeKind; scopeId?: string }
+export interface ModelProfileScopeSetPayload {
+  scopeKind: ConfigScopeKind;
+  scopeId?: string;
+  name?: string;
+  providerConfigId?: string;
+  provider?: LlmProviderKind;
+  model: string;
+}
+export interface ModelProfileScopeClearPayload { scopeKind: ConfigScopeKind; scopeId?: string }
 export interface ClientResyncPayload {
   streamId?: string;
   conversationId?: string;
@@ -1052,6 +1106,9 @@ export interface ModeDeletePayload {
 export type ConversationModeSelectPayload =
   | { conversationId: string; scopeKind: 'global' }
   | { conversationId: string; scopeKind: 'mode'; modeId: string };
+export interface ConversationAgentSelectPayload {
+  conversationId: string; agentId: string;
+}
 export interface ClientSnapshotPayload {
   streamId: string;
   streamSeq: number;
@@ -1266,6 +1323,15 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ShowInfo, { message: string }>
   | BridgeEnvelope<BridgeMessageType.ChatSend, ChatSendPayload>
   | BridgeEnvelope<BridgeMessageType.ChatAbort, ChatAbortPayload>
+  | BridgeEnvelope<BridgeMessageType.ConversationOpen, ConversationOpenPayload>
+  | BridgeEnvelope<BridgeMessageType.AgentCreate, AgentCreatePayload>
+  | BridgeEnvelope<BridgeMessageType.AgentUpdate, AgentUpdatePayload>
+  | BridgeEnvelope<BridgeMessageType.AgentDelete, AgentDeletePayload>
+  | BridgeEnvelope<BridgeMessageType.ConversationAgentSelect, ConversationAgentSelectPayload>
+  | BridgeEnvelope<BridgeMessageType.SystemPromptScopeSet, SystemPromptScopeSetPayload>
+  | BridgeEnvelope<BridgeMessageType.SystemPromptScopeClear, SystemPromptScopeClearPayload>
+  | BridgeEnvelope<BridgeMessageType.ModelProfileScopeSet, ModelProfileScopeSetPayload>
+  | BridgeEnvelope<BridgeMessageType.ModelProfileScopeClear, ModelProfileScopeClearPayload>
   | BridgeEnvelope<BridgeMessageType.MessageEdit, MessageEditPayload>
   | BridgeEnvelope<BridgeMessageType.MessageDeleteFrom, MessageDeleteFromPayload>
   | BridgeEnvelope<BridgeMessageType.MessageRetryFrom, MessageRetryFromPayload>

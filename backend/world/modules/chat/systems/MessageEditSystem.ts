@@ -81,11 +81,14 @@ export const MessageEditSystem = defineSystem({
       const current = world.get(message, Message);
       if (!current || current.status === 'streaming') continue;
 
-      const text = payload.text.trim();
-      const content: MessageContent = { role: current.content.role, parts: text ? [{ text }] : [] };
+      const text = payload.text?.trim() ?? '';
+      const content: MessageContent = payload.content?.parts?.length
+        ? { role: current.content.role, parts: payload.content.parts }
+        : { role: current.content.role, parts: text ? [{ text }] : [] };
+      if (content.parts.length === 0) continue;
       const oldRevision = currentRevisionForMessage(world, message);
       for (const link of currentRevisionLinksForMessage(world, message)) cmd.remove(link, MessageCurrentRevisionLink);
-      const usageMetadata = current.role === 'user' ? estimateUserInputUsage(text) : current.usageMetadata;
+      const usageMetadata = current.role === 'user' ? estimateUserInputUsage(visibleText(content)) : current.usageMetadata;
       cmd.add(message, Message, { ...current, content, status: 'complete', usageMetadata });
       const newRevision = spawnMessageRevision(cmd, message, content, 'edited');
       applySourceEditedPolicies(world, cmd, { message, conversation, oldRevision, newRevision, content });
@@ -102,6 +105,14 @@ export const MessageEditSystem = defineSystem({
     }
   }
 });
+
+function visibleText(content: MessageContent): string {
+  return content.parts.map((part) => {
+    if ('text' in part && part.thought !== true) return part.text;
+    if ('contextReference' in part) return part.contextReference.text ?? part.contextReference.title ?? '';
+    return '';
+  }).join('\n');
+}
 
 function spawnEditedMessageRun(world: WorldReader, cmd: CommandSink, conversation: Entity, message: Entity): void {
   const agent = defaultAgentForConversation(world, conversation);

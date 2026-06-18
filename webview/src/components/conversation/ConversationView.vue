@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
-import { isVisibleTextPart } from '@shared/protocol';
+import { isVisibleTextPart, type MessageContent } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
 import { useChat } from '@webview/composables/useChat';
@@ -68,13 +68,13 @@ watch(
   { immediate: true }
 );
 
-function onSubmit(text: string): void {
+function onSubmit(text: string, content?: MessageContent): void {
   if (conversationUi.isEditing) {
     conversationUi.pendingEditText = text;
     conversationUi.editConfirmOpen = true;
     return;
   }
-  sendMessage(text);
+  sendMessage(text, content);
 }
 
 function handleEditConfirmAction(action: ConfirmPanelAction): void {

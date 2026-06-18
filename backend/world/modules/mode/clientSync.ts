@@ -9,12 +9,10 @@ export const modeClientSyncContributor = defineClientStateContributor({
     'modes',
     'toolPolicies',
     'systemPrompts',
+    'systemPromptScopeLinks',
     'modelProfiles',
-    'agentModeLinks',
-    'conversationModeSelections',
-    'modeToolPolicyLinks',
-    'modeSystemPromptLinks',
-    'modeModelProfileLinks'
+    'modelProfileScopeLinks',
+    'conversationModeSelections'
   ],
   reads: modeStateProjectionReads,
   project: projectModeClientState,

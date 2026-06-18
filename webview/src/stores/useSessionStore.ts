@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import type { WebviewClientMeta } from '@shared/protocol';
 
 /** 当前 webview 这个"任务单元"承载的视图类型。 */
-export type SessionViewKind = 'chat' | 'globalSettings' | 'modeSettings' | 'unknown';
+export type SessionViewKind = 'chat' | 'globalSettings' | 'modeSettings' | 'agentSettings' | 'unknown';
 
 interface SessionState {
   /** 视图类型，由后端 Hello.meta.kind 决定。 */
@@ -28,11 +28,12 @@ export const useSessionStore = defineStore('session', {
   getters: {
     isChat: (state): boolean => state.viewKind === 'chat',
     isGlobalSettings: (state): boolean => state.viewKind === 'globalSettings',
-    isModeSettings: (state): boolean => state.viewKind === 'modeSettings'
+    isModeSettings: (state): boolean => state.viewKind === 'modeSettings',
+    isAgentSettings: (state): boolean => state.viewKind === 'agentSettings'
   },
   actions: {
     applyHello(meta: WebviewClientMeta | undefined): void {
-      this.viewKind = meta?.kind === 'globalSettings' ? 'globalSettings' : meta?.kind === 'modeSettings' ? 'modeSettings' : 'chat';
+      this.viewKind = meta?.kind === 'globalSettings' ? 'globalSettings' : meta?.kind === 'modeSettings' ? 'modeSettings' : meta?.kind === 'agentSettings' ? 'agentSettings' : 'chat';
       if (meta?.conversationId) this.conversationId = meta.conversationId;
       this.status = 'ready';
     },

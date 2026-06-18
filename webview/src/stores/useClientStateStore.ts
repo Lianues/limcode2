@@ -24,6 +24,7 @@ export interface ClientStateStoreState extends ClientState {
 
 /** 当前对话的模型 / 模式概要，供标签头展示。 */
 export interface CurrentModelSummary {
+  agentName?: string;
   modeName?: string;
   model?: string;
 }
@@ -115,16 +116,15 @@ export const useClientStateStore = defineStore('clientState', {
       };
     },
     currentModelSummary(state): CurrentModelSummary {
-      const agentLink =
-        state.agentConversationLinks.find(
-          (link) => link.conversationId === state.currentConversationId && link.role === 'default'
-        ) ?? state.agentConversationLinks.find((link) => link.conversationId === state.currentConversationId);
-      const agent = state.agents.find((candidate) => candidate.id === agentLink?.agentId);
+      const agentSelection = state.conversationAgentSelections
+        .filter((selection) => selection.conversationId === state.currentConversationId && selection.role === 'active')
+        .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt || right.id.localeCompare(left.id))[0];
+      const agentLink = agentSelection
+        ? undefined
+        : state.agentConversationLinks.find((link) => link.conversationId === state.currentConversationId && link.role === 'default') ??
+          state.agentConversationLinks.find((link) => link.conversationId === state.currentConversationId);
+      const agent = state.agents.find((candidate) => candidate.id === (agentSelection?.agentId ?? agentLink?.agentId));
 
-      const modeLink =
-        state.agentModeLinks.find((link) => link.agentId === agent?.id && link.role === 'active') ??
-        state.agentModeLinks.find((link) => link.agentId === agent?.id && link.role === 'default') ??
-        state.agentModeLinks.find((link) => link.agentId === agent?.id);
       const conversationModeSelection = state.conversationModeSelections.find(
         (selection) => selection.conversationId === state.currentConversationId && selection.role === 'active'
       );
@@ -132,14 +132,19 @@ export const useClientStateStore = defineStore('clientState', {
         ? conversationModeSelection.scopeKind === 'mode'
           ? state.modes.find((candidate) => candidate.id === conversationModeSelection.modeId)
           : undefined
-        : state.modes.find((candidate) => candidate.id === modeLink?.modeId);
+        : undefined;
 
-      const profileLink = state.modeModelProfileLinks.find(
-        (link) => link.modeId === mode?.id && link.role === 'active'
-      );
+      const profileLink = latestScopeLink(state.modelProfileScopeLinks.filter((link) =>
+        link.role === 'active' && (
+          (link.scopeKind === 'conversation' && link.scopeId === state.currentConversationId) ||
+          (mode && link.scopeKind === 'mode' && link.scopeId === mode.id) ||
+          (agent && link.scopeKind === 'agent' && link.scopeId === agent.id) ||
+          link.scopeKind === 'global'
+        )
+      ));
       const profile = state.modelProfiles.find((candidate) => candidate.id === profileLink?.modelProfileId);
 
-      return { modeName: mode?.name, model: profile?.model };
+      return { agentName: agent?.name, modeName: mode?.name, model: profile?.model };
     }
   },
   actions: {
@@ -209,6 +214,7 @@ function labelForRunStatus(status: AgentRunStatus): string {
       return '失败';
     case 'cancelled':
       return '已终止';
+
     case 'stale':
       return '已过期';
   }
@@ -217,3 +223,8 @@ function labelForRunStatus(status: AgentRunStatus): string {
 function workEnvironmentSortKey(environment: WorkEnvironmentRecord): string {
   return buildWorkEnvironmentSortKey(environment);
 }
+
+function latestScopeLink<T extends { createdAt: number; updatedAt: number; id: string }>(links: T[]): T | undefined {
+  return [...links].sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt || right.id.localeCompare(left.id))[0];
+}
+

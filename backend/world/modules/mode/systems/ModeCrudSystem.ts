@@ -2,7 +2,7 @@ import { defineSystem, type Entity, type WorldReader } from '../../../../ecs/typ
 import { createMessageId } from '../../../../../shared/protocol';
 import { readEvents } from '../../../events';
 import { ToolPolicyScopeLink } from '../../tools/components';
-import { ConversationModeSelection, Mode } from '../components';
+import { ConversationModeSelection, Mode, ModelProfileScopeLink, SystemPromptScopeLink } from '../components';
 import { ModeEventType } from '../events';
 
 export const ModeCrudSystem = defineSystem({
@@ -13,8 +13,8 @@ export const ModeCrudSystem = defineSystem({
       || readEvents(ctx, ModeEventType.Delete).length > 0;
   },
   access: {
-    reads: { components: [Mode, ConversationModeSelection, ToolPolicyScopeLink] },
-    writes: { components: [Mode, ConversationModeSelection, ToolPolicyScopeLink], mutationMode: 'update' },
+    reads: { components: [Mode, ConversationModeSelection, ToolPolicyScopeLink, SystemPromptScopeLink, ModelProfileScopeLink] },
+    writes: { components: [Mode, ConversationModeSelection, ToolPolicyScopeLink, SystemPromptScopeLink, ModelProfileScopeLink], mutationMode: 'update' },
     events: { read: [ModeEventType.Create, ModeEventType.Update, ModeEventType.Delete] }
   },
   run(ctx) {
@@ -56,6 +56,8 @@ export const ModeCrudSystem = defineSystem({
       if (!current || current.source === 'builtin') continue;
       for (const entity of relatedSelectionEntities(world, target)) cmd.despawn(entity);
       for (const entity of relatedToolPolicyScopeLinkEntities(world, current.id, target)) cmd.despawn(entity);
+      for (const entity of relatedSystemPromptScopeLinkEntities(world, current.id, target)) cmd.despawn(entity);
+      for (const entity of relatedModelProfileScopeLinkEntities(world, current.id, target)) cmd.despawn(entity);
       cmd.despawn(target);
     }
   }
@@ -72,6 +74,20 @@ function relatedSelectionEntities(world: WorldReader, mode: Entity): Entity[] {
 function relatedToolPolicyScopeLinkEntities(world: WorldReader, modeId: string, mode: Entity): Entity[] {
   return world.query(ToolPolicyScopeLink).filter((entity) => {
     const link = world.get(entity, ToolPolicyScopeLink);
+    return !!link && link.scopeKind === 'mode' && (link.mode === mode || link.scopeId === modeId);
+  });
+}
+
+function relatedSystemPromptScopeLinkEntities(world: WorldReader, modeId: string, mode: Entity): Entity[] {
+  return world.query(SystemPromptScopeLink).filter((entity) => {
+    const link = world.get(entity, SystemPromptScopeLink);
+    return !!link && link.scopeKind === 'mode' && (link.mode === mode || link.scopeId === modeId);
+  });
+}
+
+function relatedModelProfileScopeLinkEntities(world: WorldReader, modeId: string, mode: Entity): Entity[] {
+  return world.query(ModelProfileScopeLink).filter((entity) => {
+    const link = world.get(entity, ModelProfileScopeLink);
     return !!link && link.scopeKind === 'mode' && (link.mode === mode || link.scopeId === modeId);
   });
 }

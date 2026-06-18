@@ -1,14 +1,12 @@
 import type { Entity, World } from '../ecs/types';
-import { Agent, AgentConversationLink, AgentKind, AgentStatus } from '../world/modules/agent/components';
+import { Agent, AgentConversationLink, AgentKind, AgentStatus, ConversationAgentSelection } from '../world/modules/agent/components';
 import {
-  AgentModeLink,
   ConversationModeSelection,
   Mode,
-  ModeModelProfileLink,
-  ModeSystemPromptLink,
-  ModeToolPolicyLink,
   ModelProfile,
+  ModelProfileScopeLink,
   SystemPrompt,
+  SystemPromptScopeLink,
   ToolPolicy
 } from '../world/modules/mode/components';
 import { rememberHydratedMessageSeq, resetMessageSeqState } from '../world/modules/chat/bundles';
@@ -61,7 +59,7 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState): bo
     if (agentEntities.has(agent.id)) continue;
     const entity = world.spawn();
     agentEntities.set(agent.id, entity);
-    world.add(entity, Agent, { id: agent.id, name: agent.name || DEFAULT_AGENT_NAME });
+    world.add(entity, Agent, { id: agent.id, name: agent.name || DEFAULT_AGENT_NAME, ...(agent.description ? { description: agent.description } : {}), source: agent.source ?? 'user' });
     world.add(entity, AgentKind, { kind: agent.kind || 'main' });
     world.add(entity, AgentStatus, { status: agent.status ?? 'idle' });
   }
@@ -71,10 +69,8 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState): bo
   const systemPromptEntities = hydrateRecords(world, state.systemPrompts, SystemPrompt);
   const modelProfileEntities = hydrateRecords(world, state.modelProfiles, ModelProfile);
 
-  for (const link of state.agentModeLinks) spawnLink(world, agentEntities, modeEntities, link, AgentModeLink, 'agent', 'mode');
-  for (const link of state.modeToolPolicyLinks) spawnLink(world, modeEntities, toolPolicyEntities, link, ModeToolPolicyLink, 'mode', 'toolPolicy');
-  for (const link of state.modeSystemPromptLinks) spawnLink(world, modeEntities, systemPromptEntities, link, ModeSystemPromptLink, 'mode', 'systemPrompt');
-  for (const link of state.modeModelProfileLinks) spawnLink(world, modeEntities, modelProfileEntities, link, ModeModelProfileLink, 'mode', 'modelProfile');
+  hydrateSystemPromptScopeLinks(world, state, { agents: agentEntities, conversations: new Map(), modes: modeEntities, runs: new Map(), prompts: systemPromptEntities });
+  hydrateModelProfileScopeLinks(world, state, { agents: agentEntities, conversations: new Map(), modes: modeEntities, runs: new Map(), profiles: modelProfileEntities });
 
   const conversationEntities = new Map<string, Entity>();
   for (const conversation of conversations) {
@@ -137,6 +133,8 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState): bo
     world.add(entity, AgentConversationLink, { id: link.id, agent, conversation, role: link.role, createdAt: now, updatedAt: now });
   }
 
+  hydrateConversationAgentSelections(world, state, conversationEntities, agentEntities);
+
   for (const record of state.conversationBranchLinks ?? []) {
     const sourceConversation = conversationEntities.get(record.sourceConversationId);
     const targetConversation = conversationEntities.get(record.targetConversationId);
@@ -155,6 +153,8 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState): bo
     toolPolicies: toolPolicyEntities,
     runs: new Map()
   });
+  hydrateSystemPromptScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, modes: modeEntities, runs: new Map(), prompts: systemPromptEntities });
+  hydrateModelProfileScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, modes: modeEntities, runs: new Map(), profiles: modelProfileEntities });
 
   return true;
 }
@@ -291,6 +291,8 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
     toolPolicies: toolPolicyEntities,
     runs: runEntities
   });
+  hydrateSystemPromptScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, modes: modeEntities, runs: runEntities, prompts: systemPromptEntities });
+  hydrateModelProfileScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, modes: modeEntities, runs: runEntities, profiles: modelProfileEntities });
 
   const inputRevisionIds = existingIds(world, AgentRunInputRevision);
   for (const record of state.agentRunInputRevisions ?? []) {
@@ -417,6 +419,116 @@ function hydrateConversationModeSelections(
     });
   }
 }
+
+
+
+function hydrateConversationAgentSelections(
+  world: World,
+  state: ClientState,
+  conversations: Map<string, Entity>,
+  agents: Map<string, Entity>
+): void {
+  const existing = existingIds(world, ConversationAgentSelection);
+  for (const record of state.conversationAgentSelections ?? []) {
+    if (existing.has(record.id)) continue;
+    const conversation = conversations.get(record.conversationId);
+    const agent = agents.get(record.agentId);
+    if (conversation === undefined || agent === undefined) continue;
+    const entity = world.spawn();
+    existing.add(record.id);
+    world.add(entity, ConversationAgentSelection, {
+      id: record.id,
+      conversation,
+      agent,
+      role: record.role,
+      createdAt: record.createdAt || Date.now(),
+      updatedAt: record.updatedAt || record.createdAt || Date.now()
+    });
+  }
+}
+
+interface ConfigScopeHydrationMaps<TTargetKey extends 'prompts' | 'profiles'> {
+  agents: Map<string, Entity>;
+  conversations: Map<string, Entity>;
+  modes: Map<string, Entity>;
+  runs: Map<string, Entity>;
+  prompts?: Map<string, Entity>;
+  profiles?: Map<string, Entity>;
+}
+
+function hydrateSystemPromptScopeLinks(world: World, state: ClientState, maps: ConfigScopeHydrationMaps<'prompts'>): void {
+  const existing = existingIds(world, SystemPromptScopeLink);
+  for (const record of state.systemPromptScopeLinks ?? []) {
+    if (existing.has(record.id)) continue;
+    const systemPrompt = maps.prompts?.get(record.systemPromptId);
+    if (systemPrompt === undefined) continue;
+    const scope = resolveHydratedConfigScope(record.scopeKind, record.scopeId, maps);
+    if (!scope.ok) continue;
+    const entity = world.spawn();
+    existing.add(record.id);
+    world.add(entity, SystemPromptScopeLink, {
+      id: record.id,
+      scopeKind: record.scopeKind,
+      ...(record.scopeId ? { scopeId: record.scopeId } : {}),
+      systemPrompt,
+      ...scope.data,
+      role: record.role,
+      ...(record.order !== undefined ? { order: record.order } : {}),
+      createdAt: record.createdAt || Date.now(),
+      updatedAt: record.updatedAt || record.createdAt || Date.now()
+    });
+  }
+}
+
+function hydrateModelProfileScopeLinks(world: World, state: ClientState, maps: ConfigScopeHydrationMaps<'profiles'>): void {
+  const existing = existingIds(world, ModelProfileScopeLink);
+  for (const record of state.modelProfileScopeLinks ?? []) {
+    if (existing.has(record.id)) continue;
+    const modelProfile = maps.profiles?.get(record.modelProfileId);
+    if (modelProfile === undefined) continue;
+    const scope = resolveHydratedConfigScope(record.scopeKind, record.scopeId, maps);
+    if (!scope.ok) continue;
+    const entity = world.spawn();
+    existing.add(record.id);
+    world.add(entity, ModelProfileScopeLink, {
+      id: record.id,
+      scopeKind: record.scopeKind,
+      ...(record.scopeId ? { scopeId: record.scopeId } : {}),
+      modelProfile,
+      ...scope.data,
+      role: record.role,
+      createdAt: record.createdAt || Date.now(),
+      updatedAt: record.updatedAt || record.createdAt || Date.now()
+    });
+  }
+}
+
+function resolveHydratedConfigScope(
+  scopeKind: NonNullable<ClientState['systemPromptScopeLinks'][number]>['scopeKind'],
+  scopeId: string | undefined,
+  maps: ConfigScopeHydrationMaps<'prompts' | 'profiles'>
+): { ok: true; data: Partial<{ conversation: Entity; agent: Entity; mode: Entity; run: Entity }> } | { ok: false } {
+  switch (scopeKind) {
+    case 'global': return { ok: true, data: {} };
+    case 'conversation': {
+      const conversation = scopeId ? maps.conversations.get(scopeId) : undefined;
+      return conversation === undefined ? { ok: false } : { ok: true, data: { conversation } };
+    }
+    case 'agent': {
+      const agent = scopeId ? maps.agents.get(scopeId) : undefined;
+      return agent === undefined ? { ok: false } : { ok: true, data: { agent } };
+    }
+    case 'mode': {
+      const mode = scopeId ? maps.modes.get(scopeId) : undefined;
+      return mode === undefined ? { ok: false } : { ok: true, data: { mode } };
+    }
+    case 'run': {
+      const run = scopeId ? maps.runs.get(scopeId) : undefined;
+      return run === undefined ? { ok: false } : { ok: true, data: { run } };
+    }
+  }
+}
+
 
 
 interface ToolPolicyScopeHydrationMaps {

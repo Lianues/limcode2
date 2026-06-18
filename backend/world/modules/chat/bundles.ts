@@ -80,6 +80,15 @@ export function spawnUserMessage(cmd: CommandSink, conversation: Entity, text: s
   return spawnMessage(cmd, { parent: conversation, role: 'user', parts: [{ text }], status: 'complete', usageMetadata: estimateUserInputUsage(text) });
 }
 
+export function spawnUserContentMessage(cmd: CommandSink, conversation: Entity, content: MessageContent): Entity {
+  const visibleText = content.parts.map((part) => {
+    if ('text' in part && part.thought !== true) return part.text;
+    if ('contextReference' in part) return part.contextReference.text ?? part.contextReference.title ?? '';
+    return '';
+  }).join('\n');
+  return spawnMessage(cmd, { parent: conversation, role: 'user', parts: content.parts, status: 'complete', usageMetadata: estimateUserInputUsage(visibleText) });
+}
+
 export function estimateUserInputUsage(text: string): LlmUsageMetadataRecord | undefined {
   const estimated = estimateTokenCount(text);
   if (!Number.isFinite(estimated) || estimated <= 0) return undefined;

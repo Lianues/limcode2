@@ -3,7 +3,7 @@ import type { ToolSchema } from '../llm/contracts';
 import type { ToolSchemaContributor } from '../tools/schemaContributors';
 import { Agent } from '../agent/components';
 import { AgentRun, AgentRunTargetLink, RunModeLink } from '../agentRun/components';
-import { AgentModeLink, ConversationModeSelection, Mode } from '../mode/components';
+import { ConversationModeSelection, Mode } from '../mode/components';
 import { Conversation } from '../chat/components';
 import { ConversationProjectLink, ProjectContext } from '../project/components';
 import {
@@ -25,7 +25,6 @@ export const workEnvironmentToolSchemaContributor: ToolSchemaContributor = {
       AgentRun,
       AgentRunTargetLink,
       RunModeLink,
-      AgentModeLink,
       Conversation,
       ConversationModeSelection,
       Mode,

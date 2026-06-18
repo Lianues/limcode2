@@ -5,7 +5,7 @@ export const projectAgentClientState = projectAgentState;
 
 export const agentClientSyncContributor = defineClientStateContributor({
   key: 'agents',
-  tables: ['agents', 'agentConversationLinks'],
+  tables: ['agents', 'agentConversationLinks', 'conversationAgentSelections'],
   reads: agentStateProjectionReads,
   project: projectAgentClientState,
   worker: {

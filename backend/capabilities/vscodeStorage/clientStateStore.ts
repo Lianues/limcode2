@@ -1,10 +1,10 @@
 import * as vscode from 'vscode';
 import type {
   AgentConversationLinkRecord,
-  AgentModeLinkRecord,
   AgentRecord,
   ClientState,
   ConversationBranchLinkRecord,
+  ConversationAgentSelectionRecord,
   ConversationModeSelectionRecord,
   ConversationProjectLinkRecord,
   ConversationRecord,
@@ -15,13 +15,12 @@ import type {
   MessageCurrentRevisionLinkRecord,
   MessageRecord,
   MessageRevisionRecord,
-  ModeModelProfileLinkRecord,
-  ModeSystemPromptLinkRecord,
-  ModeToolPolicyLinkRecord,
   ModeRecord,
   ModelProfileRecord,
+  ModelProfileScopeLinkRecord,
   ProjectContextRecord,
   SystemPromptRecord,
+  SystemPromptScopeLinkRecord,
   ToolCallEventRecord,
   ToolCallRecord,
   ToolPolicyRecord,
@@ -138,19 +137,19 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Pr
     toolPolicyScopeLinks,
     systemPrompts,
     modelProfiles,
-    agentModeLinks,
+    systemPromptScopeLinks,
+    modelProfileScopeLinks,
     conversationModeSelections,
-    modeToolPolicyLinks,
-    modeSystemPromptLinks,
-    modeModelProfileLinks,
     conversations,
     conversationReuseLinks,
     conversationBranchLinks,
     agentConversationLinks,
+    conversationAgentSelections,
     projectContexts,
     conversationProjectLinks,
     workEnvironments,
     conversationWorkEnvironmentLinks,
+    runWorkEnvironmentLinks,
     workEnvironmentPolicies,
     workEnvironmentPolicyScopeLinks
   ] = await Promise.all([
@@ -160,19 +159,19 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Pr
     loadSkeletonRecords<ToolPolicyScopeLinkRecord>('toolPolicyScopeLinks', [paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri], 'link'),
     loadSkeletonRecords<SystemPromptRecord>('systemPrompts', [paths.systemPromptsRootUri, paths.systemPromptsIndexUri], 'systemPrompt'),
     loadSkeletonRecords<ModelProfileRecord>('modelProfiles', [paths.modelProfilesRootUri, paths.modelProfilesIndexUri], 'modelProfile'),
-    loadSkeletonRecords<AgentModeLinkRecord>('agentModeLinks', [paths.agentModeLinksRootUri, paths.agentModeLinksIndexUri], 'link'),
+    loadSkeletonRecords<SystemPromptScopeLinkRecord>('systemPromptScopeLinks', [paths.systemPromptScopeLinksRootUri, paths.systemPromptScopeLinksIndexUri], 'link'),
+    loadSkeletonRecords<ModelProfileScopeLinkRecord>('modelProfileScopeLinks', [paths.modelProfileScopeLinksRootUri, paths.modelProfileScopeLinksIndexUri], 'link'),
     loadSkeletonRecords<ConversationModeSelectionRecord>('conversationModeSelections', [paths.conversationModeSelectionsRootUri, paths.conversationModeSelectionsIndexUri], 'selection'),
-    loadSkeletonRecords<ModeToolPolicyLinkRecord>('modeToolPolicyLinks', [paths.modeToolPolicyLinksRootUri, paths.modeToolPolicyLinksIndexUri], 'link'),
-    loadSkeletonRecords<ModeSystemPromptLinkRecord>('modeSystemPromptLinks', [paths.modeSystemPromptLinksRootUri, paths.modeSystemPromptLinksIndexUri], 'link'),
-    loadSkeletonRecords<ModeModelProfileLinkRecord>('modeModelProfileLinks', [paths.modeModelProfileLinksRootUri, paths.modeModelProfileLinksIndexUri], 'link'),
     loadSkeletonRecords<ConversationRecord>('conversations', [paths.conversationsRootUri, paths.conversationsIndexUri], 'conversation'),
     loadSkeletonRecords<ConversationReuseLinkRecord>('conversationReuseLinks', subStore(paths.conversationsRootUri, CONVERSATION_REUSE_LINKS_DIR), 'link'),
     loadSkeletonRecords<ConversationBranchLinkRecord>('conversationBranchLinks', subStore(paths.conversationsRootUri, CONVERSATION_BRANCH_LINKS_DIR), 'link'),
     loadSkeletonRecords<AgentConversationLinkRecord>('agentConversationLinks', [paths.linksRootUri, paths.linksIndexUri], 'link'),
+    loadSkeletonRecords<ConversationAgentSelectionRecord>('conversationAgentSelections', [paths.conversationAgentSelectionsRootUri, paths.conversationAgentSelectionsIndexUri], 'selection'),
     loadSkeletonRecords<ProjectContextRecord>('projectContexts', [paths.projectContextsRootUri, paths.projectContextsIndexUri], 'projectContext'),
     loadSkeletonRecords<ConversationProjectLinkRecord>('conversationProjectLinks', [paths.conversationProjectLinksRootUri, paths.conversationProjectLinksIndexUri], 'link'),
     loadSkeletonRecords<WorkEnvironmentRecord>('workEnvironments', [paths.workEnvironmentsRootUri, paths.workEnvironmentsIndexUri], 'workEnvironment'),
     loadSkeletonRecords<ConversationWorkEnvironmentLinkRecord>('conversationWorkEnvironmentLinks', [paths.conversationWorkEnvironmentLinksRootUri, paths.conversationWorkEnvironmentLinksIndexUri], 'link'),
+    loadSkeletonRecords<RunWorkEnvironmentLinkRecord>('runWorkEnvironmentLinks', [paths.runWorkEnvironmentLinksRootUri, paths.runWorkEnvironmentLinksIndexUri], 'link'),
     loadSkeletonRecords<WorkEnvironmentPolicyRecord>('workEnvironmentPolicies', [paths.workEnvironmentPoliciesRootUri, paths.workEnvironmentPoliciesIndexUri], 'policy'),
     loadSkeletonRecords<WorkEnvironmentPolicyScopeLinkRecord>('workEnvironmentPolicyScopeLinks', [paths.workEnvironmentPolicyScopeLinksRootUri, paths.workEnvironmentPolicyScopeLinksIndexUri], 'link')
   ]);
@@ -182,22 +181,22 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Pr
   state.toolPolicies = toolPolicies;
   state.toolPolicyScopeLinks = toolPolicyScopeLinks;
   state.systemPrompts = systemPrompts;
+  state.systemPromptScopeLinks = systemPromptScopeLinks;
   state.modelProfiles = modelProfiles;
-  state.agentModeLinks = agentModeLinks;
+  state.modelProfileScopeLinks = modelProfileScopeLinks;
   state.conversationModeSelections = conversationModeSelections;
-  state.modeToolPolicyLinks = modeToolPolicyLinks;
-  state.modeSystemPromptLinks = modeSystemPromptLinks;
-  state.modeModelProfileLinks = modeModelProfileLinks;
   state.conversations = conversations;
   state.conversationReuseLinks = conversationReuseLinks;
   state.conversationBranchLinks = conversationBranchLinks;
   state.agentConversationLinks = agentConversationLinks;
+  state.conversationAgentSelections = conversationAgentSelections;
   state.projectContexts = projectContexts;
   state.conversationProjectLinks = conversationProjectLinks;
   state.workEnvironments = workEnvironments;
   state.workEnvironmentPolicies = workEnvironmentPolicies;
   state.workEnvironmentPolicyScopeLinks = workEnvironmentPolicyScopeLinks;
   state.conversationWorkEnvironmentLinks = conversationWorkEnvironmentLinks;
+  state.runWorkEnvironmentLinks = runWorkEnvironmentLinks;
 
   return hasAnyState(state) ? state : undefined;
 }
@@ -291,22 +290,22 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
     saveRecords(paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri, state.toolPolicies, 'toolPolicy', (record) => record.name || record.id),
     saveRecords(paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri, state.toolPolicyScopeLinks, 'link'),
     saveRecords(paths.systemPromptsRootUri, paths.systemPromptsIndexUri, state.systemPrompts, 'systemPrompt', (record) => record.name || record.id),
+    saveRecords(paths.systemPromptScopeLinksRootUri, paths.systemPromptScopeLinksIndexUri, state.systemPromptScopeLinks, 'link'),
     saveRecords(paths.modelProfilesRootUri, paths.modelProfilesIndexUri, state.modelProfiles, 'modelProfile', (record) => record.name || record.id),
-    saveRecords(paths.agentModeLinksRootUri, paths.agentModeLinksIndexUri, state.agentModeLinks, 'link'),
+    saveRecords(paths.modelProfileScopeLinksRootUri, paths.modelProfileScopeLinksIndexUri, state.modelProfileScopeLinks, 'link'),
     saveRecords(paths.conversationModeSelectionsRootUri, paths.conversationModeSelectionsIndexUri, state.conversationModeSelections, 'selection'),
-    saveRecords(paths.modeToolPolicyLinksRootUri, paths.modeToolPolicyLinksIndexUri, state.modeToolPolicyLinks, 'link'),
-    saveRecords(paths.modeSystemPromptLinksRootUri, paths.modeSystemPromptLinksIndexUri, state.modeSystemPromptLinks, 'link'),
-    saveRecords(paths.modeModelProfileLinksRootUri, paths.modeModelProfileLinksIndexUri, state.modeModelProfileLinks, 'link'),
     saveRecords(paths.conversationsRootUri, paths.conversationsIndexUri, state.conversations, 'conversation', (record) => record.title || record.id),
     saveRecords(...subStore(paths.conversationsRootUri, CONVERSATION_REUSE_LINKS_DIR), state.conversationReuseLinks, 'link'),
     saveRecords(...subStore(paths.conversationsRootUri, CONVERSATION_BRANCH_LINKS_DIR), state.conversationBranchLinks, 'link'),
     saveRecords(paths.linksRootUri, paths.linksIndexUri, state.agentConversationLinks, 'link'),
+    saveRecords(paths.conversationAgentSelectionsRootUri, paths.conversationAgentSelectionsIndexUri, state.conversationAgentSelections, 'selection'),
     saveRecords(paths.projectContextsRootUri, paths.projectContextsIndexUri, state.projectContexts, 'projectContext', (record) => record.name || record.id),
     saveRecords(paths.conversationProjectLinksRootUri, paths.conversationProjectLinksIndexUri, state.conversationProjectLinks, 'link'),
     saveRecords(paths.workEnvironmentsRootUri, paths.workEnvironmentsIndexUri, state.workEnvironments, 'workEnvironment', (record) => record.name || record.id),
     saveRecords(paths.workEnvironmentPoliciesRootUri, paths.workEnvironmentPoliciesIndexUri, state.workEnvironmentPolicies, 'policy', (record) => record.name || record.id),
     saveRecords(paths.workEnvironmentPolicyScopeLinksRootUri, paths.workEnvironmentPolicyScopeLinksIndexUri, state.workEnvironmentPolicyScopeLinks, 'link'),
-    saveRecords(paths.conversationWorkEnvironmentLinksRootUri, paths.conversationWorkEnvironmentLinksIndexUri, state.conversationWorkEnvironmentLinks, 'link')
+    saveRecords(paths.conversationWorkEnvironmentLinksRootUri, paths.conversationWorkEnvironmentLinksIndexUri, state.conversationWorkEnvironmentLinks, 'link'),
+    saveRecords(paths.runWorkEnvironmentLinksRootUri, paths.runWorkEnvironmentLinksIndexUri, state.runWorkEnvironmentLinks, 'link')
   ]);
 }
 

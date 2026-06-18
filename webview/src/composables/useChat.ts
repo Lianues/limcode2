@@ -1,15 +1,19 @@
 import { bridge, BridgeMessageType } from '@webview/transport';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import { useAgentStore } from '@webview/stores/useAgentStore';
+import type { MessageContent } from '@shared/protocol';
 
 /** 对话相关的出站动作收口，组件通过它发送消息而不直接接触 bridge。 */
 export function useChat() {
   const clientState = useClientStateStore();
+  const agentStore = useAgentStore();
 
-  function sendMessage(text: string): boolean {
+  function sendMessage(text: string, content?: MessageContent): boolean {
     const conversationId = clientState.currentConversationId;
     const trimmed = text.trim();
     if (!trimmed || !conversationId) return false;
-    bridge.request(BridgeMessageType.ChatSend, { conversationId, text: trimmed });
+    const agentId = agentStore.activeAgentForConversation(conversationId)?.id;
+    bridge.request(BridgeMessageType.ChatSend, { conversationId, text: trimmed, ...(content ? { content } : {}), ...(agentId ? { agentId } : {}) });
     return true;
   }
 

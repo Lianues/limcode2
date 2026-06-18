@@ -4,6 +4,7 @@ import { useBridgeBootstrap } from '@webview/composables/useBridgeBootstrap';
 import ChatView from '@webview/views/ChatView.vue';
 import GlobalSettingsView from '@webview/views/GlobalSettingsView.vue';
 import ModeSettingsView from '@webview/views/ModeSettingsView.vue';
+import AgentSettingsView from '@webview/views/AgentSettingsView.vue';
 
 // 在根组件挂载时接好桥接监听；视图按任务单元类型路由。
 useBridgeBootstrap();
@@ -13,5 +14,6 @@ const session = useSessionStore();
 <template>
   <GlobalSettingsView v-if="session.isGlobalSettings" />
   <ModeSettingsView v-else-if="session.isModeSettings" />
+  <AgentSettingsView v-else-if="session.isAgentSettings" />
   <ChatView v-else />
 </template>

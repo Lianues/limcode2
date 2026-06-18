@@ -189,6 +189,16 @@ export interface RuntimePaths {
   modelProfilesRootPath: string;
   modelProfilesIndexUri: vscode.Uri;
   modelProfilesIndexPath: string;
+  /** SystemPrompt 与各 scope 的关系数据根目录：<dataRoot>/system-prompt-scope-links */
+  systemPromptScopeLinksRootUri: vscode.Uri;
+  systemPromptScopeLinksRootPath: string;
+  systemPromptScopeLinksIndexUri: vscode.Uri;
+  systemPromptScopeLinksIndexPath: string;
+  /** ModelProfile 与各 scope 的关系数据根目录：<dataRoot>/model-profile-scope-links */
+  modelProfileScopeLinksRootUri: vscode.Uri;
+  modelProfileScopeLinksRootPath: string;
+  modelProfileScopeLinksIndexUri: vscode.Uri;
+  modelProfileScopeLinksIndexPath: string;
   /** Conversation/消息数据根目录：<dataRoot>/conversations */
   conversationsRootUri: vscode.Uri;
   conversationsRootPath: string;
@@ -238,31 +248,16 @@ export interface RuntimePaths {
   linksRootPath: string;
   linksIndexUri: vscode.Uri;
   linksIndexPath: string;
-  /** Agent 与 Mode 的关系数据根目录：<dataRoot>/agent-mode-links */
-  agentModeLinksRootUri: vscode.Uri;
-  agentModeLinksRootPath: string;
-  agentModeLinksIndexUri: vscode.Uri;
-  agentModeLinksIndexPath: string;
-  /** Mode 与 ToolPolicy 的关系数据根目录：<dataRoot>/mode-tool-policy-links */
-  modeToolPolicyLinksRootUri: vscode.Uri;
-  modeToolPolicyLinksRootPath: string;
-  modeToolPolicyLinksIndexUri: vscode.Uri;
-  modeToolPolicyLinksIndexPath: string;
-  /** Mode 与 SystemPrompt 的关系数据根目录：<dataRoot>/mode-system-prompt-links */
-  modeSystemPromptLinksRootUri: vscode.Uri;
-  modeSystemPromptLinksRootPath: string;
-  modeSystemPromptLinksIndexUri: vscode.Uri;
-  modeSystemPromptLinksIndexPath: string;
-  /** Mode 与 ModelProfile 的关系数据根目录：<dataRoot>/mode-model-profile-links */
-  modeModelProfileLinksRootUri: vscode.Uri;
-  modeModelProfileLinksRootPath: string;
-  modeModelProfileLinksIndexUri: vscode.Uri;
-  modeModelProfileLinksIndexPath: string;
   /** Conversation 的当前模式选择数据根目录：<dataRoot>/conversation-mode-selections */
   conversationModeSelectionsRootUri: vscode.Uri;
   conversationModeSelectionsRootPath: string;
   conversationModeSelectionsIndexUri: vscode.Uri;
   conversationModeSelectionsIndexPath: string;
+  /** Conversation 的当前 Agent 选择数据根目录：<dataRoot>/conversation-agent-selections */
+  conversationAgentSelectionsRootUri: vscode.Uri;
+  conversationAgentSelectionsRootPath: string;
+  conversationAgentSelectionsIndexUri: vscode.Uri;
+  conversationAgentSelectionsIndexPath: string;
   runHistoryRootUri: vscode.Uri;
   runHistoryRootPath: string;
   runHistoryIndexUri: vscode.Uri;
@@ -309,6 +304,7 @@ export interface StorageCapability {
   loadGlobalSettings(section: GlobalSettingsSection): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
   saveGlobalSettings(section: GlobalSettingsSection, settings: GlobalSettingsSectionValue): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
   loadActiveLlmProviderConfig(conversationId?: string): Promise<LlmProviderConfigRecord>;
+  loadLlmProviderConfigById(configId: string): Promise<LlmProviderConfigRecord | undefined>;
   loadConversationSettings(conversationId: string, section: ConversationSettingsSection): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string } | undefined>;
   saveConversationSettings(section: ConversationSettingsSection, settings: ConversationSettingsSectionValue): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }>;
 }

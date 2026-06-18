@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { IconFolder, IconListDetails, IconPencilExclamation, IconSend2, IconWorld } from '@tabler/icons-vue';
+import { IconFolder, IconLink, IconListDetails, IconPencilExclamation, IconRobot, IconSend2, IconWorld } from '@tabler/icons-vue';
 import { workEnvironmentDisplayPath, workEnvironmentSortKey as buildWorkEnvironmentSortKey } from '@shared/workEnvironmentCatalog';
-import type { WorkEnvironmentRecord } from '@shared/protocol';
+import type { ContextReferencePart, MessageContent, WorkEnvironmentRecord } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
 import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
 import { GLOBAL_MODE_OPTION_ID, useModeStore } from '@webview/stores/useModeStore';
 import { useWorkEnvironmentStore } from '@webview/stores/useWorkEnvironmentStore';
+import { useAgentStore } from '@webview/stores/useAgentStore';
 import RichContentEditor from '@webview/components/content/RichContentEditor.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
 import ContextTokenUsageBar from '@webview/components/conversation/ContextTokenUsageBar.vue';
@@ -23,21 +24,24 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{
-  (event: 'submit', text: string): void;
+  (event: 'submit', text: string, content?: MessageContent): void;
 }>();
 
 const clientState = useClientStateStore();
 const globalSettings = useGlobalSettingsStore();
 const conversationSettings = useConversationSettingsStore();
 const modeStore = useModeStore();
+const agentStore = useAgentStore();
 const workEnvironmentStore = useWorkEnvironmentStore();
 const ui = useConversationUiStore();
 const highlighted = ref(false);
 const editorExpanded = ref(false);
 const editor = ref<{ focus: () => void } | null>(null);
+const contextRefs = ref<ContextReferencePart[]>([]);
 const editorShell = ref<HTMLElement | null>(null);
 const expandedEditorHeight = ref(0);
 const collapsedEditorHeight = ref(0);
+const agentDropdownCloseSignal = ref(0);
 const modeDropdownCloseSignal = ref(0);
 const channelDropdownCloseSignal = ref(0);
 const workEnvironmentDropdownCloseSignal = ref(0);
@@ -79,6 +83,18 @@ const modeOptions = computed<SettingsDropdownOption[]>(() => [
     icon: IconListDetails
   }))
 ]);
+const agentOptions = computed<SettingsDropdownOption[]>(() =>
+  agentStore.agents.map((agent) => ({
+    value: agent.id,
+    label: agent.name,
+    description: agent.description || (agent.source === 'builtin' ? `内置 Agent · ${agent.kind}` : `用户 Agent · ${agent.kind}`),
+    icon: IconRobot
+  }))
+);
+const activeAgentId = computed({
+  get: () => agentStore.activeAgentForConversation(clientState.currentConversationId)?.id ?? agentOptions.value[0]?.value ?? '',
+  set: (agentId: string) => selectAgent(agentId)
+});
 const activeModeId = computed({
   get: () => modeStore.activeModeIdForConversation(clientState.currentConversationId),
   set: (modeId: string) => selectMode(modeId)
@@ -133,10 +149,24 @@ function onWindowResize(): void {
 
 function submit(): void {
   const text = draft.value.trim();
-  if (!text || props.disabled) return;
-  emit('submit', text);
+  if ((!text && contextRefs.value.length === 0) || props.disabled) return;
+  const content = contextRefs.value.length > 0 ? buildSubmitContent(text) : undefined;
+  emit('submit', text, content);
   if (!ui.isEditing) ui.clearChatDraft();
+  contextRefs.value = [];
 }
+
+function buildSubmitContent(text: string): MessageContent { return { role: 'user', parts: [...contextRefs.value, ...(text ? [{ text }] : [])] }; }
+
+function insertCurrentConversationContext(): void {
+  const conversationId = clientState.currentConversationId;
+  if (!conversationId) return;
+  const messages = clientState.currentMessages.slice(-8);
+  const text = messages.map((message) => `${message.role} ${message.id}: ${message.content.parts.map((part) => 'text' in part && part.thought !== true ? part.text : '').join('')}`).join('\n\n');
+  contextRefs.value.push({ contextReference: { kind: 'conversation', conversationId, title: '当前对话片段', mode: 'snapshot', text, createdAt: Date.now() } });
+}
+
+function removeContextRef(index: number): void { contextRefs.value.splice(index, 1); }
 
 function toggleEditorExpanded(): void {
   if (!editorExpanded.value) {
@@ -201,6 +231,12 @@ function selectChannel(configId: string): void {
   globalSettings.selectLlmProviderConfig(configId);
 }
 
+function selectAgent(agentId: string): void {
+  const conversationId = clientState.currentConversationId;
+  if (!conversationId || !agentId) return;
+  agentStore.selectAgent(conversationId, agentId);
+}
+
 function selectMode(modeId: string): void {
   const conversationId = clientState.currentConversationId;
   if (!conversationId) return;
@@ -218,17 +254,21 @@ function selectWorkEnvironment(workEnvironmentId: string): void {
   workEnvironmentStore.selectConversationEnvironment(conversationId, workEnvironmentId);
 }
 
+function onAgentDropdownOpen(): void { modeDropdownCloseSignal.value += 1; channelDropdownCloseSignal.value += 1; workEnvironmentDropdownCloseSignal.value += 1; }
 function onModeDropdownOpen(): void {
+  agentDropdownCloseSignal.value += 1;
   channelDropdownCloseSignal.value += 1;
   workEnvironmentDropdownCloseSignal.value += 1;
 }
 
 function onChannelDropdownOpen(): void {
+  agentDropdownCloseSignal.value += 1;
   modeDropdownCloseSignal.value += 1;
   workEnvironmentDropdownCloseSignal.value += 1;
 }
 
 function onWorkEnvironmentDropdownOpen(): void {
+  agentDropdownCloseSignal.value += 1;
   modeDropdownCloseSignal.value += 1;
   channelDropdownCloseSignal.value += 1;
 }
@@ -256,6 +296,24 @@ function middleEllipsis(value: string, maxLength: number): string {
         <span class="composer-edit-text">正在编辑消息，发送前需要确认。</span>
         <button type="button" class="composer-edit-cancel" @click="ui.cancelEditMode">取消编辑</button>
       </div>
+      <div v-if="!ui.isEditing" class="composer-context-actions">
+        <button type="button" class="composer-context-button" :disabled="!clientState.currentMessages.length" @click="insertCurrentConversationContext">
+          <IconLink stroke="2" aria-hidden="true" />
+          插入当前对话片段
+        </button>
+      </div>
+      <div v-if="contextRefs.length" class="composer-context-chips">
+        <button
+          v-for="(refPart, index) in contextRefs"
+          :key="`${refPart.contextReference.conversationId}-${refPart.contextReference.createdAt}`"
+          type="button"
+          class="composer-context-chip"
+          @click="removeContextRef(index)"
+        >
+          {{ refPart.contextReference.title || refPart.contextReference.conversationId }} ×
+        </button>
+      </div>
+
     </div>
 
     <div class="composer-input-row">
@@ -321,7 +379,20 @@ function middleEllipsis(value: string, maxLength: number): string {
     </div>
 
     <div class="composer-zone composer-zone-bottom" aria-label="输入框下方功能区">
-      <div v-if="modeOptions.length || channelOptions.length || workEnvironmentOptions.length" class="composer-meta">
+      <div v-if="agentOptions.length || modeOptions.length || channelOptions.length || workEnvironmentOptions.length" class="composer-meta">
+        <template v-if="agentOptions.length">
+          <SettingsDropdown
+            v-model="activeAgentId"
+            class="composer-meta-dropdown composer-agent-dropdown"
+            :options="agentOptions"
+            title="切换当前 Agent"
+            searchable
+            search-placeholder="筛选 Agent..."
+            :close-signal="agentDropdownCloseSignal"
+            :max-height="220"
+            @open="onAgentDropdownOpen"
+          />
+        </template>
         <template v-if="modeOptions.length">
           <SettingsDropdown
             v-model="activeModeId"
@@ -368,7 +439,7 @@ function middleEllipsis(value: string, maxLength: number): string {
       <button
         type="button"
         class="composer-send"
-        :disabled="disabled || !draft.trim()"
+        :disabled="disabled || (!draft.trim() && contextRefs.length === 0)"
         :aria-label="sendTitle"
         :title="sendTitle"
         @click="submit"
@@ -391,6 +462,52 @@ function middleEllipsis(value: string, maxLength: number): string {
   align-items: flex-end;
   gap: var(--space-1);
   min-width: 0;
+}
+
+.composer-context-actions,
+.composer-context-chips {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+
+.composer-context-button,
+.composer-context-chip {
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: var(--radius-sm);
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  font-size: var(--font-size-xs);
+}
+
+.composer-context-button:hover:not(:disabled),
+.composer-context-button:focus-visible,
+.composer-context-button:active,
+.composer-context-chip:hover:not(:disabled),
+.composer-context-chip:focus-visible,
+.composer-context-chip:active {
+  color: var(--vscode-foreground);
+  border-color: var(--vscode-panel-border);
+  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%));
+  outline: none;
+}
+
+.composer-context-button:disabled {
+  color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
+  background: transparent;
+  opacity: 0.55;
+}
+
+.composer-context-button :deep(svg) {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 11px;
 }
 
 .composer-zone {
@@ -556,6 +673,11 @@ function middleEllipsis(value: string, maxLength: number): string {
 }
 
 .composer-mode-dropdown {
+  width: min(180px, 28vw);
+  min-width: 118px;
+}
+
+.composer-agent-dropdown {
   width: min(180px, 28vw);
   min-width: 118px;
 }

@@ -3,12 +3,8 @@ import { readEvents } from '../../../events';
 import { Agent, AgentConversationLink, AgentKind } from '../../agent/components';
 import {
   AgentBlueprintsKey,
-  type AgentBlueprint,
-  type AgentModeBlueprint,
-  type RunContextPolicyBlueprint,
-  type RunConversationPolicyBlueprint,
-  type RunDeliveryPolicyBlueprint,
-  type RunEditPolicyBlueprint
+  type BuiltinAgentDefinition,
+  type BuiltinModeDefinition
 } from '../../agent/blueprints';
 import { AgentFromBlueprintBundle, linkAgentToConversation, spawnAgentFromBlueprint, spawnAgentProfileFromBlueprint } from '../../agent/bundles';
 import { Conversation, ConversationBranchLink, ConversationReuseLink, InFlight, Message, MessageRevision, PartOf } from '../../chat/components';
@@ -24,10 +20,8 @@ import {
 } from '../../chat/bundles';
 import { conversationMessages } from '../../chat/queries';
 import {
-  AgentModeLink,
   ConversationModeSelection,
   Mode,
-  ModeToolPolicyLink,
   ModelProfile,
   SystemPrompt,
   ToolPolicy,
@@ -115,8 +109,6 @@ const QueuedToolCallsQuery = defineQuery({
     AgentConversationLink,
     ConversationModeSelection,
     Mode,
-    AgentModeLink,
-    ModeToolPolicyLink,
     ToolPolicy,
     ToolPolicyScopeLink,
     AgentRun,
@@ -379,6 +371,7 @@ interface RunAgentArgs {
   mode?: {
     modeId?: string;
     systemPromptId?: string;
+    systemPromptText?: string;
     modelProfileId?: string;
     toolPolicyId?: string;
     contextPolicyId?: string;
@@ -414,20 +407,44 @@ interface ResolvedRunAgentPolicyDefaults {
   editPolicy: RunEditPolicyBlueprint;
 }
 
-function resolveTargetModeBlueprint(blueprint: AgentBlueprint, modeId: string | undefined): AgentModeBlueprint | undefined {
-  if (modeId) {
-    const explicit = blueprint.modes.find((mode) => mode.id === modeId || modeId.endsWith(`:mode:${mode.id}`));
-    if (explicit) return explicit;
-  }
-  return blueprint.modes.find((mode) => mode.id === blueprint.defaultModeId) ?? blueprint.modes[0];
+
+interface RunConversationPolicyBlueprint {
+  mode: ConversationPolicyMode;
+  visibility?: ConversationVisibility;
+  reuseKey?: string;
+  conversationId?: string;
 }
 
-function resolveRunAgentPolicyDefaults(blueprint: AgentBlueprint, mode: AgentModeBlueprint | undefined): ResolvedRunAgentPolicyDefaults {
+interface RunContextPolicyBlueprint {
+  historyMode: ContextHistoryMode;
+  lastN?: number;
+  sinceMessageId?: string;
+  selectedMessageIds?: string[];
+  includeSourceContext?: boolean;
+  includeSourceToolResult?: boolean;
+}
+
+interface RunDeliveryPolicyBlueprint {
+  mode: DeliveryMode;
+  includeTranscript: TranscriptInclusion;
+}
+
+interface RunEditPolicyBlueprint {
+  onSourceEdited: SourceEditBehavior;
+  onNewUserMessageWhileRunning: NewMessageWhileRunningBehavior;
+}
+
+function resolveTargetModeBlueprint(modes: Record<string, BuiltinModeDefinition>, modeId: string | undefined): BuiltinModeDefinition | undefined {
+  if (!modeId) return undefined;
+  return modes[modeId] ?? Object.values(modes).find((mode) => mode.id === modeId || modeId.endsWith(`:mode:${mode.id}`));
+}
+
+function resolveRunAgentPolicyDefaults(_definition: BuiltinAgentDefinition, _mode: BuiltinModeDefinition | undefined): ResolvedRunAgentPolicyDefaults {
   return {
-    conversationPolicy: mode?.conversationPolicy ?? blueprint.defaultConversationPolicy ?? { mode: 'new_conversation', visibility: 'collapsed' },
-    contextPolicy: mode?.contextPolicy ?? blueprint.defaultContextPolicy ?? { historyMode: 'full' },
-    deliveryPolicy: mode?.deliveryPolicy ?? blueprint.defaultDeliveryPolicy ?? { mode: 'tool_response', includeTranscript: 'summary' },
-    editPolicy: mode?.editPolicy ?? blueprint.defaultEditPolicy ?? { onSourceEdited: 'mark_stale', onNewUserMessageWhileRunning: 'queue_next_run' }
+    conversationPolicy: { mode: 'new_conversation', visibility: 'collapsed' },
+    contextPolicy: { historyMode: 'full' },
+    deliveryPolicy: { mode: 'tool_response', includeTranscript: 'summary' },
+    editPolicy: { onSourceEdited: 'mark_stale', onNewUserMessageWhileRunning: 'queue_next_run' }
   };
 }
 
@@ -476,15 +493,25 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     return;
   }
   const kind = requestedKind || (existingAgent !== undefined ? world.get(existingAgent, AgentKind)?.kind : undefined) || 'general-purpose';
-  const blueprint = blueprints[kind];
-  if (!blueprint) {
+  const existingAgentData = existingAgent !== undefined ? world.get(existingAgent, Agent) : undefined;
+  const definition = blueprints.agents[kind]
+    ?? Object.values(blueprints.agents).find((candidate) => candidate.kind === kind || candidate.id === kind)
+    ?? (existingAgentData ? {
+      id: existingAgentData.id,
+      kind,
+      name: existingAgentData.name,
+      description: existingAgentData.description,
+      systemPrompt: '',
+      toolPolicy: { allowedTools: [] }
+    } satisfies BuiltinAgentDefinition : undefined);
+  if (!definition) {
     rejectToolCall(cmd, entity, call, state, `未知 Agent 类型: ${kind}`);
     return;
   }
 
-  const targetAgent = existingAgent ?? findAgentByKind(world, kind) ?? spawnAgentProfileFromBlueprint(cmd, { blueprint, agentId: requestedAgentId ?? `${kind}-${entity}`, agentName: args.agent?.name ?? blueprint.name });
-  const targetModeBlueprint = resolveTargetModeBlueprint(blueprint, args.mode?.modeId);
-  const policyDefaults = resolveRunAgentPolicyDefaults(blueprint, targetModeBlueprint);
+  const targetAgent = existingAgent ?? findAgentByKind(world, kind) ?? spawnAgentProfileFromBlueprint(cmd, { definition, agentId: requestedAgentId ?? definition.id, agentName: args.agent?.name ?? definition.name });
+  const targetModeBlueprint = resolveTargetModeBlueprint(blueprints.modes, args.mode?.modeId);
+  const policyDefaults = resolveRunAgentPolicyDefaults(definition, targetModeBlueprint);
   const resolved = resolveTargetConversation(world, cmd, {
     sourceConversation: parentTarget.conversation,
     targetAgent,
@@ -845,6 +872,17 @@ function applyRunModeOverrides(world: WorldReader, cmd: CommandSink, run: Entity
     const link = cmd.spawn();
     cmd.add(link, RunSystemPromptLink, { id: `run-system-prompt:${run}:${mode.systemPromptId}`, run, systemPrompt, role: 'active', createdAt: now, updatedAt: now });
   }
+  const inlineSystemPromptText = mode.systemPromptText?.trim();
+  if (inlineSystemPromptText) {
+    const prompt = cmd.spawn();
+    cmd.add(prompt, SystemPrompt, {
+      id: `run-system-prompt-inline:${run}`,
+      name: 'Run Inline System Prompt',
+      text: inlineSystemPromptText
+    });
+    const link = cmd.spawn();
+    cmd.add(link, RunSystemPromptLink, { id: `run-system-prompt-inline-link:${run}`, run, systemPrompt: prompt, role: 'active', createdAt: now, updatedAt: now });
+  }
   const modelProfile = mode.modelProfileId ? findByRecordId(world, ModelProfile, mode.modelProfileId) : undefined;
   if (modelProfile !== undefined) {
     const link = cmd.spawn();
@@ -998,7 +1036,7 @@ function findAgentById(world: WorldReader, id: string): Entity | undefined {
 }
 
 function findAgentByKind(world: WorldReader, kind: string): Entity | undefined {
-  return world.query(Agent).find((agent) => world.get(agent, Agent)?.id === kind || world.get(agent, Agent)?.name === kind);
+  return world.query(Agent).find((agent) => world.get(agent, AgentKind)?.kind === kind || world.get(agent, Agent)?.id === kind);
 }
 
 function isAgentRunTool(world: WorldReader, toolName: string): boolean {

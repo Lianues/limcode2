@@ -5,6 +5,7 @@ import { runAgentToolModule } from './runAgent';
 import { switchWorkEnvironmentToolModule } from './switchWorkEnvironment';
 import { taskListToolModule } from './taskList';
 import { transferFilesToolModule } from './transferFiles';
+import { listConversationsToolModule, readConversationToolModule } from './conversationContext';
 import type { ToolDefinitionContext, ToolDefinitionModule } from './types';
 
 export * from './types';
@@ -14,12 +15,15 @@ export { runAgentToolModule, runAgentTool } from './runAgent';
 export { switchWorkEnvironmentToolModule, switchWorkEnvironmentTool } from './switchWorkEnvironment';
 export { taskListToolModule, taskListTool } from './taskList';
 export { transferFilesToolModule, transferFilesTool } from './transferFiles';
+export { listConversationsToolModule, listConversationsTool, readConversationToolModule, readConversationTool } from './conversationContext';
 
 const BUILTIN_TOOL_MODULES: readonly ToolDefinitionModule[] = [
   taskListToolModule,
   switchWorkEnvironmentToolModule,
   transferFilesToolModule,
   readFileToolModule,
+  listConversationsToolModule,
+  readConversationToolModule,
   runAgentToolModule,
   commandToolModule
 ];

@@ -14,11 +14,11 @@ import type { BackendApplication } from '../../backend/application/BackendApplic
 export interface MainPanelOptions {
   conversationId?: string;
   title?: string;
-  kind?: 'chat' | 'globalSettings' | 'modeSettings';
+  kind?: 'chat' | 'globalSettings' | 'modeSettings' | 'agentSettings';
   reuse?: boolean;
 }
 
-type MainPanelKind = 'chat' | 'globalSettings' | 'modeSettings';
+type MainPanelKind = 'chat' | 'globalSettings' | 'modeSettings' | 'agentSettings';
 
 const PANEL_TAB_TITLE_MAX_DISPLAY_UNITS = 20;
 const PANEL_TAB_TITLE_ELLIPSIS = '...';
@@ -113,7 +113,7 @@ export class MainPanel {
     this.refreshTitle(options.title);
     this.panel.webview.options = MainPanel.webviewPanelOptions(this.extensionUri);
     this.clientId = this.backendApp.attachWebview(panel.webview, {
-      kind: this.kind === 'globalSettings' ? 'globalSettings' : this.kind === 'modeSettings' ? 'modeSettings' : 'mainPanel',
+      kind: this.kind === 'globalSettings' ? 'globalSettings' : this.kind === 'modeSettings' ? 'modeSettings' : this.kind === 'agentSettings' ? 'agentSettings' : 'mainPanel',
       panelId: this.panelId,
       title: this.panel.title,
       conversationId: this.conversationId
@@ -125,6 +125,14 @@ export class MainPanel {
     this.panel.onDidChangeViewState(() => MainPanel.notifyConversationPanelStateChanged(), null, this.disposables);
     this.panel.webview.onDidReceiveMessage(
       (message: WebviewToExtensionMessage) => {
+        if (message.type === BridgeMessageType.ConversationOpen && message.payload?.conversationId) {
+          MainPanel.createOrShow(this.extensionUri, this.backendApp, {
+            conversationId: message.payload.conversationId,
+            title: message.payload.title,
+            reuse: true
+          });
+          return;
+        }
         this.backendApp.handleWebviewMessage(this.clientId, message);
         this.refreshTitleFromOutgoingMessage(message);
       },
@@ -147,7 +155,7 @@ export class MainPanel {
   private matches(options: MainPanelOptions): boolean {
     const kind = panelKind(options);
     if (kind !== this.kind) return false;
-    if (kind === 'globalSettings' || kind === 'modeSettings') return true;
+    if (kind === 'globalSettings' || kind === 'modeSettings' || kind === 'agentSettings') return true;
     return (options.conversationId ?? '') === (this.conversationId ?? '');
   }
 
@@ -160,7 +168,7 @@ export class MainPanel {
     const payload = message.payload;
     if (!this.conversationId || !payload || payload.conversationId !== this.conversationId) return;
     if (!isDefaultConversationTitle(this.panel.title)) return;
-    this.panel.title = panelTabTitle(displayConversationTitleFromText(payload.text));
+    this.panel.title = panelTabTitle(displayConversationTitleFromText(payload.text ?? payload.content?.parts.map((part) => 'text' in part ? part.text : '').join('\n') ?? ''));
   }
 
   public static refreshConversationTitle(conversationId: string): void {
@@ -189,6 +197,7 @@ export class MainPanel {
 }
 
 function panelKind(options: MainPanelOptions): MainPanelKind {
+  if (options.kind === 'agentSettings') return 'agentSettings';
   if (options.kind === 'modeSettings') return 'modeSettings';
   return options.kind === 'globalSettings' ? 'globalSettings' : 'chat';
 }
@@ -196,6 +205,7 @@ function panelKind(options: MainPanelOptions): MainPanelKind {
 function panelTitle(options: MainPanelOptions, backendApp: BackendApplication): string {
   if (options.kind === 'globalSettings') return 'LimCode 设置';
   if (options.kind === 'modeSettings') return 'LimCode 模式设置';
+  if (options.kind === 'agentSettings') return 'LimCode Agent 设置';
   if (!options.conversationId) return panelTabTitle('LimCode');
   const title = options.title
     ? displayConversationTitle({ id: options.conversationId, title: options.title })
@@ -219,12 +229,19 @@ function optionsFromSerializedState(state: unknown, fallbackTitle: string): Main
     serializedKind === 'modeSettings' ||
     meta?.kind === 'modeSettings' ||
     fallbackTitle === 'LimCode 模式设置';
+  const isAgentSettings =
+    serializedKind === 'agentSettings' ||
+    meta?.kind === 'agentSettings' ||
+    fallbackTitle === 'LimCode Agent 设置';
 
   if (isGlobalSettings) {
     return { kind: 'globalSettings', reuse: true };
   }
   if (isModeSettings) {
     return { kind: 'modeSettings', reuse: true };
+  }
+  if (isAgentSettings) {
+    return { kind: 'agentSettings', reuse: true };
   }
 
   const conversationId =
@@ -245,7 +262,7 @@ function metaFromState(value: unknown): WebviewClientMeta | undefined {
   if (!record) return undefined;
 
   const kind = stringValue(record.kind);
-  if (kind !== 'mainPanel' && kind !== 'globalSettings' && kind !== 'modeSettings' && kind !== 'sidebar' && kind !== 'unknown') {
+  if (kind !== 'mainPanel' && kind !== 'globalSettings' && kind !== 'modeSettings' && kind !== 'agentSettings' && kind !== 'sidebar' && kind !== 'unknown') {
     return undefined;
   }
 

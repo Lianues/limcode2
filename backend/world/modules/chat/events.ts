@@ -1,3 +1,5 @@
+import type { ChatAbortPayload, ChatSendPayload, MessageDeleteFromPayload, MessageEditPayload, MessageRetryFromPayload } from '../../../../shared/protocol';
+
 export const ChatEventType = {
   Send: 'chat:send',
   Abort: 'chat:abort',
@@ -6,33 +8,16 @@ export const ChatEventType = {
   RetryFrom: 'chat:retryFrom'
 } as const;
 
-export interface ChatSendPayload {
-  conversationId: string;
-  text: string;
-}
-export interface ChatAbortPayload {
-  conversationId: string;
-}
-export interface ChatEditPayload {
-  conversationId: string;
-  messageId: string;
-  text: string;
-  runAfterEdit?: boolean;
-  deleteFollowing?: boolean;
-}
-export interface ChatDeleteFromPayload {
-  conversationId: string;
-  messageId: string;
-}
-export interface ChatRetryFromPayload {
-  conversationId: string;
-  messageId: string;
-}
+export type ChatSendEventPayload = ChatSendPayload;
+export type ChatAbortEventPayload = ChatAbortPayload;
+export type ChatEditPayload = MessageEditPayload;
+export type ChatDeleteFromPayload = MessageDeleteFromPayload;
+export type ChatRetryFromPayload = MessageRetryFromPayload;
 
 declare module '@backend/world/events' {
   interface WorldEventPayloadMap {
-    'chat:send': ChatSendPayload;
-    'chat:abort': ChatAbortPayload;
+    'chat:send': ChatSendEventPayload;
+    'chat:abort': ChatAbortEventPayload;
     'chat:edit': ChatEditPayload;
     'chat:deleteFrom': ChatDeleteFromPayload;
     'chat:retryFrom': ChatRetryFromPayload;

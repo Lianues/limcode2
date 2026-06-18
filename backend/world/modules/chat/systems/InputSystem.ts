@@ -2,17 +2,18 @@ import { defineQuery, defineSystem, type Entity, type WorldReader, type CommandS
 import { ChatEventType } from '../events';
 import { readEvents } from '../../../events';
 import { Aborted, Conversation, LlmRequest, Message, Streaming } from '../components';
-import { spawnUserMessage, UserMessageBundle } from '../bundles';
-import { Agent, AgentConversationLink } from '../../agent/components';
+import { spawnUserContentMessage, spawnUserMessage, UserMessageBundle } from '../bundles';
+import { Agent, AgentConversationLink, ConversationAgentSelection } from '../../agent/components';
 import { AgentRun, AgentRunNeedsModel, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink } from '../../agentRun/components';
 import { AgentRunBundle, spawnAgentRun, spawnMessageRunLink } from '../../agentRun/bundles';
 import { cleanupRunLlmRequests } from '../../agentRun/llmRequestCleanup';
-import { defaultAgentForConversation, effectiveEditPolicyForRun, runTarget } from '../../agentRun/queries';
+import { defaultAgentForConversation, effectiveEditPolicyForRun, findAgentById, runTarget } from '../../agentRun/queries';
+import type { ChatSendPayload, MessageContent } from '../../../../../shared/protocol';
 
 const ConversationsByIdQuery = defineQuery({
   name: 'ConversationsById',
   all: [Conversation],
-  read: [Conversation, Agent, AgentConversationLink, AgentRun, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink, LlmRequest, Message],
+  read: [Conversation, Agent, AgentConversationLink, ConversationAgentSelection, AgentRun, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink, LlmRequest, Message],
   write: [AgentRun, Message],
   remove: [AgentRunNeedsModel, Streaming, LlmRequest],
   role: 'work'
@@ -32,7 +33,7 @@ export const InputSystem = defineSystem({
     for (const payload of readEvents(ctx, ChatEventType.Send)) {
       const conversation = findConversation(world, payload.conversationId);
       if (conversation === undefined) continue;
-      handleSend(world, cmd, conversation, payload.text);
+      handleSend(world, cmd, conversation, payload);
     }
 
     for (const payload of readEvents(ctx, ChatEventType.Abort)) {
@@ -42,13 +43,15 @@ export const InputSystem = defineSystem({
   }
 });
 
-function handleSend(world: WorldReader, cmd: CommandSink, conversation: Entity, text: string): void {
-  const agent = defaultAgentForConversation(world, conversation);
+function handleSend(world: WorldReader, cmd: CommandSink, conversation: Entity, payload: ChatSendPayload): void {
+  const agent = payload.agentId ? findAgentById(world, payload.agentId) ?? defaultAgentForConversation(world, conversation) : defaultAgentForConversation(world, conversation);
   if (agent === undefined) return;
+  const content = normalizeInputContent(payload);
+  if (content.parts.length === 0) return;
 
   const activeRuns = activeRunsForConversation(world, conversation);
   if (activeRuns.length === 0) {
-    const message = spawnUserMessage(cmd, conversation, text);
+    const message = spawnInputMessage(cmd, conversation, content);
     spawnChatRun(cmd, { agent, conversation, message });
     return;
   }
@@ -59,23 +62,36 @@ function handleSend(world: WorldReader, cmd: CommandSink, conversation: Entity, 
       return;
     case 'append_to_target': {
       const target = runTarget(world, activeRuns[0]);
-      const message = spawnUserMessage(cmd, target?.conversation ?? conversation, text);
+      const message = spawnInputMessage(cmd, target?.conversation ?? conversation, content);
       spawnMessageRunLink(cmd, { message, run: activeRuns[0], role: 'input' });
       return;
     }
     case 'interrupt_current': {
       cancelRuns(world, cmd, activeRuns);
-      const message = spawnUserMessage(cmd, conversation, text);
+      const message = spawnInputMessage(cmd, conversation, content);
       spawnChatRun(cmd, { agent, conversation, message });
       return;
     }
     case 'queue_next_run':
     default: {
-      const message = spawnUserMessage(cmd, conversation, text);
+      const message = spawnInputMessage(cmd, conversation, content);
       spawnChatRun(cmd, { agent, conversation, message, needsModel: false });
       return;
     }
   }
+}
+
+function normalizeInputContent(payload: ChatSendPayload): MessageContent {
+  if (payload.content?.parts?.length) {
+    return { role: 'user', parts: payload.content.parts };
+  }
+  const text = payload.text?.trim() ?? '';
+  return { role: 'user', parts: text ? [{ text }] : [] };
+}
+
+function spawnInputMessage(cmd: CommandSink, conversation: Entity, content: MessageContent): Entity {
+  if (content.parts.length === 1 && 'text' in content.parts[0]) return spawnUserMessage(cmd, conversation, content.parts[0].text);
+  return spawnUserContentMessage(cmd, conversation, content);
 }
 
 function spawnChatRun(

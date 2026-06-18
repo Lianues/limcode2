@@ -29,7 +29,15 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
   const storage = createVsCodeStorageCapability(context);
   const llm = createLlmProviderCapability({
     settings: async (request) => {
-      return storage.loadActiveLlmProviderConfig(request?.conversationId);
+      const override = request?.model;
+      const base = override?.providerConfigId
+        ? await storage.loadLlmProviderConfigById(override.providerConfigId) ?? await storage.loadActiveLlmProviderConfig(request?.conversationId)
+        : await storage.loadActiveLlmProviderConfig(request?.conversationId);
+      return {
+        ...base,
+        ...(override?.provider ? { provider: override.provider } : {}),
+        ...(override?.model ? { model: override.model } : {})
+      };
     },
     headers: { 'User-Agent': 'LimCode/0.0.1' }
   });

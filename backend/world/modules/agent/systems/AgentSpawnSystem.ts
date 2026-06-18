@@ -1,6 +1,6 @@
 import { defineQuery, defineSystem } from '../../../../ecs/types';
 import { AgentBlueprintsKey } from '../blueprints';
-import { AgentFromBlueprintBundle, spawnAgentFromBlueprint } from '../bundles';
+import { AgentFromBlueprintBundle, hasAgentId, hasModeId, spawnAgentFromBlueprint, spawnModeFromDefinition } from '../bundles';
 import { AgentSpawnRequest } from '../requests';
 
 const SpawnRequestsQuery = defineQuery({
@@ -23,6 +23,11 @@ export const AgentSpawnSystem = defineSystem({
     bundles: [AgentFromBlueprintBundle]
   },
   run({ world, cmd }) {
+    const registry = world.getResource(AgentBlueprintsKey);
+    for (const mode of Object.values(registry.modes)) {
+      if (!hasModeId(world, mode.id)) spawnModeFromDefinition(cmd, mode);
+    }
+
     for (const entity of world.query(AgentSpawnRequest)) {
       const request = world.get(entity, AgentSpawnRequest);
       if (!request) {
@@ -30,24 +35,25 @@ export const AgentSpawnSystem = defineSystem({
         continue;
       }
 
-      const blueprints = world.getResource(AgentBlueprintsKey);
-      const blueprint = blueprints[request.kind];
-      if (!blueprint) {
+      const definition = registry.agents[request.kind] ?? Object.values(registry.agents).find((candidate) => candidate.kind === request.kind || candidate.id === request.kind);
+      if (!definition) {
         console.warn(`[AgentSpawnSystem] Unknown agent blueprint: ${request.kind}`);
         cmd.despawn(entity);
         continue;
       }
 
-      const agentId = request.agentId ?? `${request.kind}-${entity}`;
+      const agentId = request.agentId ?? definition.id;
       const conversationId = request.conversationId ?? `${agentId}-conversation`;
-      spawnAgentFromBlueprint(cmd, {
-        blueprint,
-        agentId,
-        agentName: request.agentName,
-        conversationId,
-        conversationTitle: request.conversationTitle,
-        initialMessage: request.initialMessage
-      });
+      if (!hasAgentId(world, agentId)) {
+        spawnAgentFromBlueprint(cmd, {
+          definition,
+          agentId,
+          agentName: request.agentName,
+          conversationId,
+          conversationTitle: request.conversationTitle,
+          initialMessage: request.initialMessage
+        });
+      }
 
       cmd.despawn(entity);
     }

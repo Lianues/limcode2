@@ -15,7 +15,7 @@ import { useClientStateStore } from './useClientStateStore';
 export interface ToolPolicyResolution {
   policy?: ToolPolicyRecord;
   link?: ToolPolicyScopeLinkRecord;
-  inheritedFrom?: ToolPolicyScopeKind | 'modeLegacy' | 'runLegacy';
+  inheritedFrom?: ToolPolicyScopeKind;
 }
 
 function scopeIdFor(scopeKind: ToolPolicyScopeKind, scopeId?: string): string | undefined {
@@ -119,21 +119,10 @@ export const useToolPolicyStore = defineStore('toolPolicy', {
       if (local.policy) return local;
 
       const clientState = useClientStateStore();
+      void clientState;
       if (scopeKind !== 'global') {
         const global = this.localPolicyFor('global');
         if (global.policy) return { ...global, inheritedFrom: 'global' };
-      }
-
-      if (scopeKind === 'run' && scopeId) {
-        const legacyLink = clientState.runToolPolicyLinks.find((link) => link.runId === scopeId && link.role === 'active');
-        const legacyPolicy = clientState.toolPolicies.find((policy) => policy.id === legacyLink?.toolPolicyId);
-        if (legacyPolicy) return { policy: legacyPolicy, inheritedFrom: 'runLegacy' };
-      }
-
-      if (scopeKind === 'mode' && scopeId) {
-        const legacyLink = clientState.modeToolPolicyLinks.find((link) => link.modeId === scopeId && link.role === 'active');
-        const legacyPolicy = clientState.toolPolicies.find((policy) => policy.id === legacyLink?.toolPolicyId);
-        if (legacyPolicy) return { policy: legacyPolicy, inheritedFrom: 'modeLegacy' };
       }
 
       const fallback = clientState.toolPolicies[0];

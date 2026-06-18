@@ -1,10 +1,10 @@
 import { defineComponent, type Entity } from '../../../ecs/types';
 import type {
-  AgentModeRole,
+  ConfigScopeBindingRole,
+  ConfigScopeKind,
   ConversationModeScopeKind,
   ConversationModeSelectionRole,
   LlmProviderKind,
-  ModeBindingRole,
   ModeIconKey,
   ModeSource,
   ToolPolicyToolConfigRecord
@@ -36,23 +36,45 @@ export interface SystemPromptData {
 }
 export const SystemPrompt = defineComponent<SystemPromptData>('SystemPrompt');
 
+export interface SystemPromptScopeLinkData {
+  id: string;
+  scopeKind: ConfigScopeKind;
+  scopeId?: string;
+  systemPrompt: Entity;
+  agent?: Entity;
+  mode?: Entity;
+  conversation?: Entity;
+  run?: Entity;
+  role: ConfigScopeBindingRole;
+  order?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+export const SystemPromptScopeLink = defineComponent<SystemPromptScopeLinkData>('SystemPromptScopeLink');
+
 export interface ModelProfileData {
   id: string;
   name: string;
-  provider: LlmProviderKind;
+  providerConfigId?: string;
+  provider?: LlmProviderKind;
   model: string;
 }
 export const ModelProfile = defineComponent<ModelProfileData>('ModelProfile');
 
-export interface AgentModeLinkData {
+export interface ModelProfileScopeLinkData {
   id: string;
-  agent: Entity;
-  mode: Entity;
-  role: AgentModeRole;
+  scopeKind: ConfigScopeKind;
+  scopeId?: string;
+  modelProfile: Entity;
+  agent?: Entity;
+  mode?: Entity;
+  conversation?: Entity;
+  run?: Entity;
+  role: ConfigScopeBindingRole;
   createdAt: number;
   updatedAt: number;
 }
-export const AgentModeLink = defineComponent<AgentModeLinkData>('AgentModeLink');
+export const ModelProfileScopeLink = defineComponent<ModelProfileScopeLinkData>('ModelProfileScopeLink');
 
 export interface ConversationModeSelectionData {
   id: string;
@@ -64,33 +86,3 @@ export interface ConversationModeSelectionData {
   updatedAt: number;
 }
 export const ConversationModeSelection = defineComponent<ConversationModeSelectionData>('ConversationModeSelection');
-
-export interface ModeToolPolicyLinkData {
-  id: string;
-  mode: Entity;
-  toolPolicy: Entity;
-  role: ModeBindingRole;
-  createdAt: number;
-  updatedAt: number;
-}
-export const ModeToolPolicyLink = defineComponent<ModeToolPolicyLinkData>('ModeToolPolicyLink');
-
-export interface ModeSystemPromptLinkData {
-  id: string;
-  mode: Entity;
-  systemPrompt: Entity;
-  role: ModeBindingRole;
-  createdAt: number;
-  updatedAt: number;
-}
-export const ModeSystemPromptLink = defineComponent<ModeSystemPromptLinkData>('ModeSystemPromptLink');
-
-export interface ModeModelProfileLinkData {
-  id: string;
-  mode: Entity;
-  modelProfile: Entity;
-  role: ModeBindingRole;
-  createdAt: number;
-  updatedAt: number;
-}
-export const ModeModelProfileLink = defineComponent<ModeModelProfileLinkData>('ModeModelProfileLink');

@@ -50,6 +50,11 @@ export function useBridgeBootstrap(): void {
           return;
         }
         if (session.viewKind === 'modeSettings') {
+          globalSettings.requestChannelSettings();
+          return;
+        }
+        if (session.viewKind === 'agentSettings') {
+          globalSettings.requestChannelSettings();
           return;
         }
         globalSettings.requestChannelSettings();

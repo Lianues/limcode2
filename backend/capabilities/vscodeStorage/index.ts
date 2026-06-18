@@ -202,6 +202,13 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       const activeConfigId = (stored.settings as LlmSettingsRecord).activeProviderConfigId;
       return configs.find((config) => config.id === activeConfigId) ?? configs[0]!;
     },
+    async loadLlmProviderConfigById(configId) {
+      const id = configId.trim();
+      if (!id) return undefined;
+      const paths = getPaths();
+      await ensureLlmSettingsRoots(paths);
+      return (await loadLlmProviderConfigsSettings(paths)).settings.configs.find((config) => config.id === id);
+    },
     async loadConversationSettings(conversationId, section) {
       const paths = getPaths();
       const uri = conversationSettingsUri(paths, conversationId, section);

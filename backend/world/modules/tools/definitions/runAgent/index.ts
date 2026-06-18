@@ -57,6 +57,7 @@ export const runAgentTool: ToolDefinition = {
           properties: {
             modeId: { type: 'string' },
             systemPromptId: { type: 'string' },
+            systemPromptText: { type: 'string', description: 'Run 级临时追加 system prompt 文本。' },
             modelProfileId: { type: 'string' },
             toolPolicyId: { type: 'string' },
             contextPolicyId: { type: 'string' },

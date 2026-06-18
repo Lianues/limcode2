@@ -1,43 +1,39 @@
 import type {
-  AgentModeLinkRecord,
   ClientState,
   ConversationModeSelectionRecord,
-  ModeModelProfileLinkRecord,
   ModeRecord,
-  ModeSystemPromptLinkRecord,
-  ModeToolPolicyLinkRecord,
   ModelProfileRecord,
+  ModelProfileScopeLinkRecord,
   SystemPromptRecord,
+  SystemPromptScopeLinkRecord,
   ToolPolicyRecord
 } from '../../../../shared/protocol';
 import type { AccessDeclaration, WorldReader } from '../../../ecs/types';
 import { Agent } from '../agent/components';
+import { AgentRun } from '../agentRun/components';
 import { Conversation } from '../chat/components';
 import {
-  AgentModeLink,
   ConversationModeSelection,
   Mode,
-  ModeModelProfileLink,
-  ModeSystemPromptLink,
-  ModeToolPolicyLink,
   ModelProfile,
+  ModelProfileScopeLink,
   SystemPrompt,
+  SystemPromptScopeLink,
   ToolPolicy
 } from './components';
 
 export const modeStateProjectionReads: AccessDeclaration = {
   components: [
     Agent,
+    AgentRun,
     Conversation,
     Mode,
     ToolPolicy,
     SystemPrompt,
+    SystemPromptScopeLink,
     ModelProfile,
-    AgentModeLink,
-    ConversationModeSelection,
-    ModeToolPolicyLink,
-    ModeSystemPromptLink,
-    ModeModelProfileLink
+    ModelProfileScopeLink,
+    ConversationModeSelection
   ]
 };
 
@@ -47,47 +43,67 @@ export function projectModeState(world: WorldReader): Partial<ClientState> {
   const systemPrompts: SystemPromptRecord[] = world.query(SystemPrompt).map((entity) => ({ ...world.get(entity, SystemPrompt)! }));
   const modelProfiles: ModelProfileRecord[] = world.query(ModelProfile).map((entity) => ({ ...world.get(entity, ModelProfile)! }));
 
-  const agentModeLinks: AgentModeLinkRecord[] = world
-    .query(AgentModeLink)
-    .map((entity) => buildAgentModeLinkRecord(world, entity))
-    .filter((item): item is AgentModeLinkRecord => item !== undefined);
+  const systemPromptScopeLinks: SystemPromptScopeLinkRecord[] = world
+    .query(SystemPromptScopeLink)
+    .map((entity) => buildSystemPromptScopeLinkRecord(world, entity))
+    .filter((item): item is SystemPromptScopeLinkRecord => item !== undefined);
+
+  const modelProfileScopeLinks: ModelProfileScopeLinkRecord[] = world
+    .query(ModelProfileScopeLink)
+    .map((entity) => buildModelProfileScopeLinkRecord(world, entity))
+    .filter((item): item is ModelProfileScopeLinkRecord => item !== undefined);
+
   const conversationModeSelections: ConversationModeSelectionRecord[] = world
     .query(ConversationModeSelection)
     .map((entity) => buildConversationModeSelectionRecord(world, entity))
     .filter((item): item is ConversationModeSelectionRecord => item !== undefined);
-  const modeToolPolicyLinks: ModeToolPolicyLinkRecord[] = world
-    .query(ModeToolPolicyLink)
-    .map((entity) => buildModeToolPolicyLinkRecord(world, entity))
-    .filter((item): item is ModeToolPolicyLinkRecord => item !== undefined);
-  const modeSystemPromptLinks: ModeSystemPromptLinkRecord[] = world
-    .query(ModeSystemPromptLink)
-    .map((entity) => buildModeSystemPromptLinkRecord(world, entity))
-    .filter((item): item is ModeSystemPromptLinkRecord => item !== undefined);
-  const modeModelProfileLinks: ModeModelProfileLinkRecord[] = world
-    .query(ModeModelProfileLink)
-    .map((entity) => buildModeModelProfileLinkRecord(world, entity))
-    .filter((item): item is ModeModelProfileLinkRecord => item !== undefined);
 
   return {
     modes,
     toolPolicies,
     systemPrompts,
+    systemPromptScopeLinks,
     modelProfiles,
-    agentModeLinks,
-    conversationModeSelections,
-    modeToolPolicyLinks,
-    modeSystemPromptLinks,
-    modeModelProfileLinks
+    modelProfileScopeLinks,
+    conversationModeSelections
   };
 }
 
-function buildAgentModeLinkRecord(world: WorldReader, entity: number): AgentModeLinkRecord | undefined {
-  const link = world.get(entity, AgentModeLink);
+function buildSystemPromptScopeLinkRecord(world: WorldReader, entity: number): SystemPromptScopeLinkRecord | undefined {
+  const link = world.get(entity, SystemPromptScopeLink);
   if (!link) return undefined;
-  const agent = world.get(link.agent, Agent);
-  const mode = world.get(link.mode, Mode);
-  if (!agent || !mode) return undefined;
-  return { id: link.id, agentId: agent.id, modeId: mode.id, role: link.role };
+  const prompt = world.get(link.systemPrompt, SystemPrompt);
+  if (!prompt) return undefined;
+  const scopeId = scopeIdForLink(world, link);
+  if (link.scopeKind !== 'global' && !scopeId) return undefined;
+  return {
+    id: link.id,
+    scopeKind: link.scopeKind,
+    ...(scopeId ? { scopeId } : {}),
+    systemPromptId: prompt.id,
+    role: link.role,
+    ...(link.order !== undefined ? { order: link.order } : {}),
+    createdAt: link.createdAt,
+    updatedAt: link.updatedAt
+  };
+}
+
+function buildModelProfileScopeLinkRecord(world: WorldReader, entity: number): ModelProfileScopeLinkRecord | undefined {
+  const link = world.get(entity, ModelProfileScopeLink);
+  if (!link) return undefined;
+  const profile = world.get(link.modelProfile, ModelProfile);
+  if (!profile) return undefined;
+  const scopeId = scopeIdForLink(world, link);
+  if (link.scopeKind !== 'global' && !scopeId) return undefined;
+  return {
+    id: link.id,
+    scopeKind: link.scopeKind,
+    ...(scopeId ? { scopeId } : {}),
+    modelProfileId: profile.id,
+    role: link.role,
+    createdAt: link.createdAt,
+    updatedAt: link.updatedAt
+  };
 }
 
 function buildConversationModeSelectionRecord(world: WorldReader, entity: number): ConversationModeSelectionRecord | undefined {
@@ -108,29 +124,16 @@ function buildConversationModeSelectionRecord(world: WorldReader, entity: number
   };
 }
 
-function buildModeToolPolicyLinkRecord(world: WorldReader, entity: number): ModeToolPolicyLinkRecord | undefined {
-  const link = world.get(entity, ModeToolPolicyLink);
-  if (!link) return undefined;
-  const mode = world.get(link.mode, Mode);
-  const toolPolicy = world.get(link.toolPolicy, ToolPolicy);
-  if (!mode || !toolPolicy) return undefined;
-  return { id: link.id, modeId: mode.id, toolPolicyId: toolPolicy.id, role: link.role };
-}
+type ScopeLink = { scopeKind: string; scopeId?: string; agent?: number; mode?: number; conversation?: number; run?: number };
 
-function buildModeSystemPromptLinkRecord(world: WorldReader, entity: number): ModeSystemPromptLinkRecord | undefined {
-  const link = world.get(entity, ModeSystemPromptLink);
-  if (!link) return undefined;
-  const mode = world.get(link.mode, Mode);
-  const systemPrompt = world.get(link.systemPrompt, SystemPrompt);
-  if (!mode || !systemPrompt) return undefined;
-  return { id: link.id, modeId: mode.id, systemPromptId: systemPrompt.id, role: link.role };
-}
-
-function buildModeModelProfileLinkRecord(world: WorldReader, entity: number): ModeModelProfileLinkRecord | undefined {
-  const link = world.get(entity, ModeModelProfileLink);
-  if (!link) return undefined;
-  const mode = world.get(link.mode, Mode);
-  const modelProfile = world.get(link.modelProfile, ModelProfile);
-  if (!mode || !modelProfile) return undefined;
-  return { id: link.id, modeId: mode.id, modelProfileId: modelProfile.id, role: link.role };
+function scopeIdForLink(world: WorldReader, link: ScopeLink): string | undefined {
+  if (link.scopeKind === 'global') return undefined;
+  if (link.scopeId) return link.scopeId;
+  switch (link.scopeKind) {
+    case 'agent': return link.agent !== undefined ? world.get(link.agent, Agent)?.id : undefined;
+    case 'mode': return link.mode !== undefined ? world.get(link.mode, Mode)?.id : undefined;
+    case 'conversation': return link.conversation !== undefined ? world.get(link.conversation, Conversation)?.id : undefined;
+    case 'run': return link.run !== undefined ? world.get(link.run, AgentRun)?.id : undefined;
+    default: return undefined;
+  }
 }

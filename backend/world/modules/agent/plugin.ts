@@ -3,12 +3,12 @@ import { ClientStateContributorsKey } from '../../clientSync/resources';
 import { StorageStateContributorsKey } from '../../storageProjection/resources';
 import { agentClientSyncContributor } from './clientSync';
 import { agentStorageStateContributor } from './storageProjection';
-import type { AgentBlueprintRegistry } from './blueprints';
+import type { BuiltinAgentRegistry } from './blueprints';
 import { AgentBlueprintsKey, createDefaultAgentBlueprints } from './blueprints';
 import { registerAgentSystems } from './systems';
 
 export interface AgentPluginOptions {
-  blueprints?: AgentBlueprintRegistry;
+  blueprints?: BuiltinAgentRegistry;
 }
 
 export function agentPlugin(options: AgentPluginOptions = {}): WorldPlugin {

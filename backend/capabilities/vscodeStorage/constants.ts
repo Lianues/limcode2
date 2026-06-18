@@ -9,11 +9,10 @@ export const TOOL_POLICY_SCOPE_LINKS_ROOT_DIR = 'tool-policy-scope-links';
 export const SYSTEM_PROMPTS_ROOT_DIR = 'system-prompts';
 export const MODEL_PROFILES_ROOT_DIR = 'model-profiles';
 export const AGENT_CONVERSATION_LINKS_ROOT_DIR = 'agent-conversation-links';
-export const AGENT_MODE_LINKS_ROOT_DIR = 'agent-mode-links';
-export const MODE_TOOL_POLICY_LINKS_ROOT_DIR = 'mode-tool-policy-links';
-export const MODE_SYSTEM_PROMPT_LINKS_ROOT_DIR = 'mode-system-prompt-links';
-export const MODE_MODEL_PROFILE_LINKS_ROOT_DIR = 'mode-model-profile-links';
+export const SYSTEM_PROMPT_SCOPE_LINKS_ROOT_DIR = 'system-prompt-scope-links';
+export const MODEL_PROFILE_SCOPE_LINKS_ROOT_DIR = 'model-profile-scope-links';
 export const CONVERSATION_MODE_SELECTIONS_ROOT_DIR = 'conversation-mode-selections';
+export const CONVERSATION_AGENT_SELECTIONS_ROOT_DIR = 'conversation-agent-selections';
 export const CONVERSATIONS_ROOT_DIR = 'conversations';
 export const CONVERSATION_HISTORY_ROOT_DIR = 'conversation-history';
 export const PROJECT_CONTEXTS_ROOT_DIR = 'project-contexts';
@@ -38,11 +37,10 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
   SYSTEM_PROMPTS_ROOT_DIR,
   MODEL_PROFILES_ROOT_DIR,
   AGENT_CONVERSATION_LINKS_ROOT_DIR,
-  AGENT_MODE_LINKS_ROOT_DIR,
-  MODE_TOOL_POLICY_LINKS_ROOT_DIR,
-  MODE_SYSTEM_PROMPT_LINKS_ROOT_DIR,
-  MODE_MODEL_PROFILE_LINKS_ROOT_DIR,
+  SYSTEM_PROMPT_SCOPE_LINKS_ROOT_DIR,
+  MODEL_PROFILE_SCOPE_LINKS_ROOT_DIR,
   CONVERSATION_MODE_SELECTIONS_ROOT_DIR,
+  CONVERSATION_AGENT_SELECTIONS_ROOT_DIR,
   CONVERSATIONS_ROOT_DIR,
   CONVERSATION_HISTORY_ROOT_DIR,
   PROJECT_CONTEXTS_ROOT_DIR,

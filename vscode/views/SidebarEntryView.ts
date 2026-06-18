@@ -15,6 +15,7 @@ const OPEN_CONVERSATION_MESSAGE = 'openConversation';
 const NEW_CONVERSATION_MESSAGE = 'newConversation';
 const OPEN_GLOBAL_SETTINGS_MESSAGE = 'openGlobalSettings';
 const OPEN_MODE_SETTINGS_MESSAGE = 'openModeSettings';
+const OPEN_AGENT_SETTINGS_MESSAGE = 'openAgentSettings';
 const HISTORY_PAGE_GET_MESSAGE = 'sidebar.historyPage.get';
 const SIDEBAR_STATE_MESSAGE = 'sidebar.state';
 const SIDEBAR_READY_MESSAGE = 'sidebar.ready';
@@ -107,6 +108,11 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
 
       if (message.type === OPEN_MODE_SETTINGS_MESSAGE) {
         MainPanel.createOrShow(this.extensionUri, this.backendApp, { kind: 'modeSettings', reuse: true });
+        return;
+      }
+
+      if (message.type === OPEN_AGENT_SETTINGS_MESSAGE) {
+        MainPanel.createOrShow(this.extensionUri, this.backendApp, { kind: 'agentSettings', reuse: true });
         return;
       }
 

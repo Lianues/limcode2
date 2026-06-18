@@ -68,6 +68,7 @@ const needsExecutionDecision = computed(() => toolCall.value?.status === 'awaiti
 const needsApplyDecision = computed(() => toolCall.value?.status === 'awaiting_apply');
 const hasDetails = computed(() => hasArgs.value || hasOutput.value || Boolean(toolCall.value?.error) || executionApproved.value);
 const autoExpandDetails = computed(() => toolCall.value?.display?.autoExpand === true);
+const agentRunConversationId = computed(() => conversationIdFromAgentRunResult(toolCall.value?.result ?? toolCall.value?.progress));
 const statusLabel = computed(() => toolCall.value ? labelForToolCall(toolCall.value) : '工具请求已生成');
 const statusTitle = computed(() => toolCall.value ? `工具状态：${toolCall.value.status}` : '等待后端创建工具调用记录');
 const durationLabel = computed(() => {
@@ -138,6 +139,12 @@ function setExpanded(value: boolean): void {
   expanded.value = value;
 }
 
+function openAgentRunConversation(): void {
+  const conversationId = agentRunConversationId.value;
+  if (!conversationId) return;
+  bridge.request(BridgeMessageType.ConversationOpen, { conversationId });
+}
+
 
 function labelForToolCall(call: ToolCallRecord): string {
   if (call.status === 'awaiting_approval' && isExecutionApprovedProgress(call.progress)) return '已批准，等待前序批次';
@@ -175,6 +182,12 @@ function deniedStatusLabel(result: unknown, error: string | undefined): string {
 
 function isAsyncAgentRunResult(result: unknown): boolean {
   return isRecord(result) && result.status === 'async_launched';
+}
+
+function conversationIdFromAgentRunResult(result: unknown): string | undefined {
+  if (!isRecord(result)) return undefined;
+  const conversationId = result.conversationId;
+  return typeof conversationId === 'string' && conversationId.trim() ? conversationId.trim() : undefined;
 }
 
 function isExecutionApprovedProgress(progress: unknown): boolean {
@@ -280,6 +293,9 @@ function isInternalApprovalProgress(progress: unknown): boolean {
   <div v-else-if="needsApplyDecision" class="tool-decision-actions is-external">
     <button type="button" @click="sendToolDecision(BridgeMessageType.ToolResultApply)">应用结果</button>
     <button type="button" class="secondary" @click="sendToolDecision(BridgeMessageType.ToolResultReject)">拒绝应用</button>
+  </div>
+  <div v-if="agentRunConversationId" class="tool-decision-actions is-external">
+    <button type="button" class="secondary" @click="openAgentRunConversation">打开 Agent 对话</button>
   </div>
 </template>
 

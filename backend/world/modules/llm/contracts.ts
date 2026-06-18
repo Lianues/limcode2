@@ -3,7 +3,8 @@ import type { LlmProviderKind, MessageContent } from '../../../../shared/protoco
 export type { LlmProviderKind };
 
 export interface LlmModelSettings {
-  provider: LlmProviderKind;
+  providerConfigId?: string;
+  provider?: LlmProviderKind;
   model: string;
 }
 

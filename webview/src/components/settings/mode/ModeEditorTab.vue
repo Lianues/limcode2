@@ -9,6 +9,8 @@ import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/Co
 import InputPanel from '@webview/components/ui/InputPanel.vue';
 import WorkEnvironmentPolicyEditor from '@webview/components/settings/workEnvironment/WorkEnvironmentPolicyEditor.vue';
 import { useModeStore } from '@webview/stores/useModeStore';
+import SystemPromptScopeEditor from '@webview/components/settings/config/SystemPromptScopeEditor.vue';
+import ModelProfileScopeEditor from '@webview/components/settings/config/ModelProfileScopeEditor.vue';
 
 const modeStore = useModeStore();
 const activeModeId = ref('');
@@ -156,6 +158,22 @@ function escapeHtml(value: string): string {
           <AdvancedScrollbar :scroller="modeDescriptionScroller" :refresh-key="activeMode.id" variant="minimal" />
         </div>
       </label>
+
+      <SystemPromptScopeEditor
+        v-if="activeMode"
+        scope-kind="mode"
+        :scope-id="activeMode.id"
+        title="模式行为 Prompt"
+        description="按 global → agent → mode → conversation → run 顺序拼接。这里定义这个模式的行为段。"
+      />
+
+      <ModelProfileScopeEditor
+        v-if="activeMode"
+        scope-kind="mode"
+        :scope-id="activeMode.id"
+        title="模式模型覆盖"
+        description="当这个模式被选中时，优先覆盖 Agent 默认模型；Run/Conversation 仍可覆盖它。"
+      />
 
       <WorkEnvironmentPolicyEditor
         v-if="activeMode"

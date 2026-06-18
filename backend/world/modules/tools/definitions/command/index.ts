@@ -19,6 +19,10 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
       parameters: {
         type: 'object',
         properties: {
+          explanation: {
+            type: 'string',
+            description: '必填。用一句简体中文向用户概括本次要执行什么、为什么这样做（面向用户，而非罗列技术细节）。该说明会作为工具消息标题展示给用户。'
+          },
           command: {
             type: 'string',
             description: command.toolName === 'shell'
@@ -43,7 +47,7 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
             description: '工具调度提示。auto=后端按命令只读性自动判断；parallel=明确进入并行批次；serial=按原始顺序串行执行。默认 auto。'
           }
         },
-        required: ['command']
+        required: ['explanation', 'command']
       },
       metadata: {
         category: 'command',
@@ -97,13 +101,14 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
 
 type CommandToolArgs = Parameters<CommandCapability['run']>[0] & {
   scheduling?: string;
+  explanation?: string;
 };
 
 function summarizeCommandToolCall(rawArgs: unknown): string | undefined {
   const args = (rawArgs ?? {}) as CommandToolArgs;
-  const commandText = typeof args.command === 'string' ? args.command.trim() : '';
-  if (!commandText) return undefined;
-  return commandText.replace(/\s+/g, ' ');
+  const explanation = typeof args.explanation === 'string' ? args.explanation.trim() : '';
+  if (!explanation) return undefined;
+  return explanation.replace(/\s+/g, ' ');
 }
 
 function resolveCommandScheduling(toolName: 'shell' | 'bash', rawArgs: unknown): { mode: 'parallel' | 'serial'; reason: string } {

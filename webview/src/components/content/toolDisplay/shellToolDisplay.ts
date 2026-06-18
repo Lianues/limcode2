@@ -7,6 +7,7 @@ interface ShellArgs {
   timeout?: number;
   force?: boolean;
   scheduling?: string;
+  explanation?: string;
 }
 
 interface ShellResultOutput {
@@ -26,6 +27,8 @@ export const shellToolDisplay: ToolDisplayResolver = (context) => {
 
 function shellInputSections(args: ShellArgs, context: ToolDisplayContext): ToolDisplaySection[] {
   const sections: ToolDisplaySection[] = [];
+  const explanation = args.explanation?.trim();
+  if (explanation) sections.push({ kind: 'input', title: '说明', text: explanation });
   const command = args.command?.trim();
   if (command) sections.push({ kind: 'input', title: '命令', text: command });
 
@@ -70,7 +73,8 @@ function shellArgs(value: unknown): ShellArgs {
     cwd: stringValue(record.cwd),
     timeout: numberValue(record.timeout),
     force: booleanValue(record.force),
-    scheduling: stringValue(record.scheduling)
+    scheduling: stringValue(record.scheduling),
+    explanation: stringValue(record.explanation)
   };
 }
 

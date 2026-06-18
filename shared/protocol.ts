@@ -677,20 +677,7 @@ export interface FileDataPart {
   fileData: { mimeType?: string; uri: string };
 }
 
-export interface ContextReferencePart {
-  contextReference: {
-    kind: 'conversation' | 'message' | 'run';
-    conversationId: string;
-    messageIds?: string[];
-    runId?: string;
-    title?: string;
-    mode: 'snapshot' | 'link';
-    text?: string;
-    createdAt: number;
-  };
-}
-
-export type ContentPart = TextPart | FunctionCallPart | FunctionResponsePart | InlineDataPart | FileDataPart | ContextReferencePart;
+export type ContentPart = TextPart | FunctionCallPart | FunctionResponsePart | InlineDataPart | FileDataPart;
 
 export function isTextPart(part: ContentPart): part is TextPart { return 'text' in part; }
 export function isVisibleTextPart(part: ContentPart): part is TextPart { return isTextPart(part) && part.thought !== true; }
@@ -698,7 +685,6 @@ export function isFunctionCallPart(part: ContentPart): part is FunctionCallPart 
 export function isFunctionResponsePart(part: ContentPart): part is FunctionResponsePart { return 'functionResponse' in part; }
 export function isInlineDataPart(part: ContentPart): part is InlineDataPart { return 'inlineData' in part; }
 export function isFileDataPart(part: ContentPart): part is FileDataPart { return 'fileData' in part; }
-export function isContextReferencePart(part: ContentPart): part is ContextReferencePart { return 'contextReference' in part; }
 
 export interface MessageContent {
   role: ContentRole;

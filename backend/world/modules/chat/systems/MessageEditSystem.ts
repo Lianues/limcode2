@@ -109,7 +109,6 @@ export const MessageEditSystem = defineSystem({
 function visibleText(content: MessageContent): string {
   return content.parts.map((part) => {
     if ('text' in part && part.thought !== true) return part.text;
-    if ('contextReference' in part) return part.contextReference.text ?? part.contextReference.title ?? '';
     return '';
   }).join('\n');
 }

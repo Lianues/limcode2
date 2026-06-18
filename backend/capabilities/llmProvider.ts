@@ -5,7 +5,6 @@ import {
   isFileDataPart,
   isFunctionCallPart,
   isFunctionResponsePart,
-  isContextReferencePart,
   isInlineDataPart,
   isTextPart
 } from '../../shared/protocol';
@@ -338,26 +337,11 @@ function toUnifiedPart(part: ContentPart): UnifiedPart {
     };
   }
   if (isInlineDataPart(part)) return { inlineData: { mimeType: part.inlineData.mimeType, data: part.inlineData.data } };
-  if (isContextReferencePart(part)) return { text: renderContextReferencePart(part) };
   if (isFileDataPart(part)) {
     // unified-llm-provider 当前统一 Part 没有 fileData；先作为文本占位保留语义。
     return { text: `[fileData:${part.fileData.mimeType ?? 'unknown'}:${part.fileData.uri}]` };
   }
   return assertNever(part);
-}
-
-function renderContextReferencePart(part: Extract<ContentPart, { contextReference: unknown }>): string {
-  const ref = part.contextReference;
-  const title = ref.title?.trim() || `${ref.kind}:${ref.conversationId}`;
-  const lines = [
-    `[Context reference: ${title}]`,
-    `kind: ${ref.kind}`,
-    `conversationId: ${ref.conversationId}`,
-    ...(ref.messageIds?.length ? [`messageIds: ${ref.messageIds.join(', ')}`] : []),
-    ...(ref.runId ? [`runId: ${ref.runId}`] : []),
-    ref.text?.trim() ? `snapshot:\n${ref.text.trim()}` : 'snapshot: [link only]'
-  ];
-  return lines.join('\n');
 }
 
 function toUnifiedFunctionDeclaration(tool: ToolSchema): UnifiedFunctionDeclaration {

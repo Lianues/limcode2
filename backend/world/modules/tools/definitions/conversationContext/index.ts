@@ -57,7 +57,6 @@ function renderMessage(message: MessageRecord): { id: string; role: string; text
     if ('text' in part && part.thought !== true) return part.text;
     if ('functionCall' in part) return `[function_call ${part.functionCall.name}]`;
     if ('functionResponse' in part) return `[function_response ${part.functionResponse.name}]`;
-    if ('contextReference' in part) return `[context_reference ${part.contextReference.title ?? part.contextReference.conversationId}]`;
     return '';
   }).filter(Boolean).join('\n');
   return { id: message.id, role: message.role, text: text.slice(0, 12000), createdAt: message.createdAt };

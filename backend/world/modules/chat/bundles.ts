@@ -83,7 +83,6 @@ export function spawnUserMessage(cmd: CommandSink, conversation: Entity, text: s
 export function spawnUserContentMessage(cmd: CommandSink, conversation: Entity, content: MessageContent): Entity {
   const visibleText = content.parts.map((part) => {
     if ('text' in part && part.thought !== true) return part.text;
-    if ('contextReference' in part) return part.contextReference.text ?? part.contextReference.title ?? '';
     return '';
   }).join('\n');
   return spawnMessage(cmd, { parent: conversation, role: 'user', parts: content.parts, status: 'complete', usageMetadata: estimateUserInputUsage(visibleText) });

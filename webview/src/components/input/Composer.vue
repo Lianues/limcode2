@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { IconFolder, IconLink, IconListDetails, IconPencilExclamation, IconRobot, IconSend2, IconWorld } from '@tabler/icons-vue';
+import { IconFolder, IconListDetails, IconPencilExclamation, IconRobot, IconSend2, IconWorld } from '@tabler/icons-vue';
 import { workEnvironmentDisplayPath, workEnvironmentSortKey as buildWorkEnvironmentSortKey } from '@shared/workEnvironmentCatalog';
-import type { ContextReferencePart, MessageContent, WorkEnvironmentRecord } from '@shared/protocol';
+import type { MessageContent, WorkEnvironmentRecord } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
@@ -37,7 +37,6 @@ const ui = useConversationUiStore();
 const highlighted = ref(false);
 const editorExpanded = ref(false);
 const editor = ref<{ focus: () => void } | null>(null);
-const contextRefs = ref<ContextReferencePart[]>([]);
 const editorShell = ref<HTMLElement | null>(null);
 const expandedEditorHeight = ref(0);
 const collapsedEditorHeight = ref(0);
@@ -149,24 +148,10 @@ function onWindowResize(): void {
 
 function submit(): void {
   const text = draft.value.trim();
-  if ((!text && contextRefs.value.length === 0) || props.disabled) return;
-  const content = contextRefs.value.length > 0 ? buildSubmitContent(text) : undefined;
-  emit('submit', text, content);
+  if (!text || props.disabled) return;
+  emit('submit', text);
   if (!ui.isEditing) ui.clearChatDraft();
-  contextRefs.value = [];
 }
-
-function buildSubmitContent(text: string): MessageContent { return { role: 'user', parts: [...contextRefs.value, ...(text ? [{ text }] : [])] }; }
-
-function insertCurrentConversationContext(): void {
-  const conversationId = clientState.currentConversationId;
-  if (!conversationId) return;
-  const messages = clientState.currentMessages.slice(-8);
-  const text = messages.map((message) => `${message.role} ${message.id}: ${message.content.parts.map((part) => 'text' in part && part.thought !== true ? part.text : '').join('')}`).join('\n\n');
-  contextRefs.value.push({ contextReference: { kind: 'conversation', conversationId, title: '当前对话片段', mode: 'snapshot', text, createdAt: Date.now() } });
-}
-
-function removeContextRef(index: number): void { contextRefs.value.splice(index, 1); }
 
 function toggleEditorExpanded(): void {
   if (!editorExpanded.value) {
@@ -296,24 +281,6 @@ function middleEllipsis(value: string, maxLength: number): string {
         <span class="composer-edit-text">正在编辑消息，发送前需要确认。</span>
         <button type="button" class="composer-edit-cancel" @click="ui.cancelEditMode">取消编辑</button>
       </div>
-      <div v-if="!ui.isEditing" class="composer-context-actions">
-        <button type="button" class="composer-context-button" :disabled="!clientState.currentMessages.length" @click="insertCurrentConversationContext">
-          <IconLink stroke="2" aria-hidden="true" />
-          插入当前对话片段
-        </button>
-      </div>
-      <div v-if="contextRefs.length" class="composer-context-chips">
-        <button
-          v-for="(refPart, index) in contextRefs"
-          :key="`${refPart.contextReference.conversationId}-${refPart.contextReference.createdAt}`"
-          type="button"
-          class="composer-context-chip"
-          @click="removeContextRef(index)"
-        >
-          {{ refPart.contextReference.title || refPart.contextReference.conversationId }} ×
-        </button>
-      </div>
-
     </div>
 
     <div class="composer-input-row">
@@ -439,7 +406,7 @@ function middleEllipsis(value: string, maxLength: number): string {
       <button
         type="button"
         class="composer-send"
-        :disabled="disabled || (!draft.trim() && contextRefs.length === 0)"
+        :disabled="disabled || !draft.trim()"
         :aria-label="sendTitle"
         :title="sendTitle"
         @click="submit"
@@ -462,52 +429,6 @@ function middleEllipsis(value: string, maxLength: number): string {
   align-items: flex-end;
   gap: var(--space-1);
   min-width: 0;
-}
-
-.composer-context-actions,
-.composer-context-chips {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  flex-wrap: wrap;
-}
-
-.composer-context-button,
-.composer-context-chip {
-  min-height: 22px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 1px 6px;
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: var(--radius-sm);
-  color: var(--vscode-descriptionForeground);
-  background: transparent;
-  font-size: var(--font-size-xs);
-}
-
-.composer-context-button:hover:not(:disabled),
-.composer-context-button:focus-visible,
-.composer-context-button:active,
-.composer-context-chip:hover:not(:disabled),
-.composer-context-chip:focus-visible,
-.composer-context-chip:active {
-  color: var(--vscode-foreground);
-  border-color: var(--vscode-panel-border);
-  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%));
-  outline: none;
-}
-
-.composer-context-button:disabled {
-  color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
-  background: transparent;
-  opacity: 0.55;
-}
-
-.composer-context-button :deep(svg) {
-  width: 11px;
-  height: 11px;
-  flex: 0 0 11px;
 }
 
 .composer-zone {

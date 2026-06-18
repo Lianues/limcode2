@@ -384,10 +384,11 @@ export class BackendApplication {
 
   public async ensureConversationDetailLoaded(conversationId: string): Promise<void> {
     if (!conversationId) return;
+    if (!this.hydrated) await this.waitUntilHydrated();
     if (this.renderLoadedConversationDetails.has(conversationId)) return;
     const detail = await this.env.storage.loadConversationDetail(conversationId, { includeRunHistory: false });
-    if (detail) hydrateConversationDetail(this.world, detail, conversationId);
-    this.renderLoadedConversationDetails.add(conversationId);
+    const hydrated = detail ? await hydrateConversationDetail(this.world, detail, conversationId) : false;
+    if (hydrated || this.findConversationEntity(conversationId) !== undefined) this.renderLoadedConversationDetails.add(conversationId);
   }
 
   public getCurrentProjectHistoryScope(): ConversationHistoryScope {
@@ -448,15 +449,12 @@ export class BackendApplication {
   private async initializeClientState(): Promise<void> {
     try {
       await this.env.storage.ensureReady();
-      const restored = await this.env.storage.loadClientStateSkeleton();
-      if (restored && hydrateClientStateSkeleton(this.world, restored)) {
+      const restored = await this.env.storage.loadClientStateSkeleton({ profile: 'startup' });
+      if (restored && await hydrateClientStateSkeleton(this.world, restored)) {
         this.persistence.rememberPersistedState(restored);
       } else {
         requestSpawnAgent(this.world, createDefaultAgentSpawnRequest());
       }
-      const paths = this.env.storage.paths;
-      console.log(`[LimCode] Data root: ${paths.globalStoragePath}`);
-      console.log(`[LimCode] Storage roots: agents=${paths.agentsRootPath}, conversations=${paths.conversationsRootPath}, links=${paths.linksRootPath}`);
     } catch (error) {
       console.warn('[LimCode] Failed to initialize stored chat state. Starting with a fresh conversation.', error);
       requestSpawnAgent(this.world, createDefaultAgentSpawnRequest());
@@ -464,14 +462,26 @@ export class BackendApplication {
       this.hydrated = true;
       this.persistence.enable();
       this.syncWorkEnvironmentsFromWorkspaceFolders();
-      this.requestSnapshot();
       this.flushPendingSnapshots();
       this.flushPendingHydrationMessages();
       for (const section of GLOBAL_SETTINGS_SECTIONS) {
         void this.globalSettingsBridge.postSnapshot(undefined, section);
       }
+      this.startDeferredClientStateSkeletonLoad();
       this.resolveHydrated();
     }
+  }
+
+  private startDeferredClientStateSkeletonLoad(): void {
+    void this.env.storage.loadClientStateSkeleton({ profile: 'deferred' })
+      .then(async (deferred) => {
+        if (!deferred) return;
+        const hydrated = await hydrateClientStateSkeleton(this.world, deferred, { allowDefaults: false, resetMessageSeq: false });
+        if (!hydrated) return;
+        this.requestSnapshot();
+        this.conversationHistoryChangedEmitter.fire();
+      })
+      .catch((error) => console.warn('[LimCode] Failed to lazy-load deferred client state skeleton.', error));
   }
 
   private requestSnapshot(conversationId?: string): void {
@@ -987,6 +997,7 @@ function shouldDeferUntilHydrated(message: WebviewToExtensionMessage): boolean {
     case 'workEnvironment.importFromVscode':
     case 'workEnvironmentPolicy.scope.set':
     case 'workEnvironmentPolicy.scope.clear':
+    case 'client.resync':
       return true;
     default:
       return false;

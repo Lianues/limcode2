@@ -47,6 +47,10 @@ export interface LoadConversationDetailOptions {
   includeRunHistory?: boolean;
 }
 
+export interface LoadClientStateSkeletonOptions {
+  profile?: 'startup' | 'deferred' | 'full';
+}
+
 export interface SaveConversationRunHistoryOptions {
   mode: 'merge' | 'replace';
 }
@@ -128,52 +132,52 @@ const RUN_DETAIL_TABLE_KEYS = [
   'toolCallEvents'
 ] as const;
 
-export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Promise<ClientState | undefined> {
+export async function loadClientStateSkeletonFromStores(paths: StoragePaths, options: LoadClientStateSkeletonOptions = {}): Promise<ClientState | undefined> {
   const state = createEmptyClientState();
+  const profile = options.profile ?? 'full';
+
+  if (profile === 'startup' || profile === 'full') {
+    await loadStartupSkeletonRecords(paths, state);
+  }
+
+  if (profile === 'deferred' || profile === 'full') {
+    await loadDeferredSkeletonRecords(paths, state);
+  }
+
+  return hasAnyState(state) ? state : undefined;
+}
+
+async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientState): Promise<void> {
   const [
     agents,
     modes,
     toolPolicies,
     toolPolicyScopeLinks,
     systemPrompts,
-    modelProfiles,
     systemPromptScopeLinks,
+    modelProfiles,
     modelProfileScopeLinks,
     conversationModeSelections,
     conversations,
     conversationReuseLinks,
     conversationBranchLinks,
     agentConversationLinks,
-    conversationAgentSelections,
-    projectContexts,
-    conversationProjectLinks,
-    workEnvironments,
-    conversationWorkEnvironmentLinks,
-    runWorkEnvironmentLinks,
-    workEnvironmentPolicies,
-    workEnvironmentPolicyScopeLinks
+    conversationAgentSelections
   ] = await Promise.all([
     loadSkeletonRecords<AgentRecord>('agents', [paths.agentsRootUri, paths.agentsIndexUri], 'agent'),
     loadSkeletonRecords<ModeRecord>('modes', [paths.modesRootUri, paths.modesIndexUri], 'mode'),
     loadSkeletonRecords<ToolPolicyRecord>('toolPolicies', [paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri], 'toolPolicy'),
     loadSkeletonRecords<ToolPolicyScopeLinkRecord>('toolPolicyScopeLinks', [paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri], 'link'),
     loadSkeletonRecords<SystemPromptRecord>('systemPrompts', [paths.systemPromptsRootUri, paths.systemPromptsIndexUri], 'systemPrompt'),
-    loadSkeletonRecords<ModelProfileRecord>('modelProfiles', [paths.modelProfilesRootUri, paths.modelProfilesIndexUri], 'modelProfile'),
     loadSkeletonRecords<SystemPromptScopeLinkRecord>('systemPromptScopeLinks', [paths.systemPromptScopeLinksRootUri, paths.systemPromptScopeLinksIndexUri], 'link'),
+    loadSkeletonRecords<ModelProfileRecord>('modelProfiles', [paths.modelProfilesRootUri, paths.modelProfilesIndexUri], 'modelProfile'),
     loadSkeletonRecords<ModelProfileScopeLinkRecord>('modelProfileScopeLinks', [paths.modelProfileScopeLinksRootUri, paths.modelProfileScopeLinksIndexUri], 'link'),
     loadSkeletonRecords<ConversationModeSelectionRecord>('conversationModeSelections', [paths.conversationModeSelectionsRootUri, paths.conversationModeSelectionsIndexUri], 'selection'),
     loadSkeletonRecords<ConversationRecord>('conversations', [paths.conversationsRootUri, paths.conversationsIndexUri], 'conversation'),
     loadSkeletonRecords<ConversationReuseLinkRecord>('conversationReuseLinks', subStore(paths.conversationsRootUri, CONVERSATION_REUSE_LINKS_DIR), 'link'),
     loadSkeletonRecords<ConversationBranchLinkRecord>('conversationBranchLinks', subStore(paths.conversationsRootUri, CONVERSATION_BRANCH_LINKS_DIR), 'link'),
     loadSkeletonRecords<AgentConversationLinkRecord>('agentConversationLinks', [paths.linksRootUri, paths.linksIndexUri], 'link'),
-    loadSkeletonRecords<ConversationAgentSelectionRecord>('conversationAgentSelections', [paths.conversationAgentSelectionsRootUri, paths.conversationAgentSelectionsIndexUri], 'selection'),
-    loadSkeletonRecords<ProjectContextRecord>('projectContexts', [paths.projectContextsRootUri, paths.projectContextsIndexUri], 'projectContext'),
-    loadSkeletonRecords<ConversationProjectLinkRecord>('conversationProjectLinks', [paths.conversationProjectLinksRootUri, paths.conversationProjectLinksIndexUri], 'link'),
-    loadSkeletonRecords<WorkEnvironmentRecord>('workEnvironments', [paths.workEnvironmentsRootUri, paths.workEnvironmentsIndexUri], 'workEnvironment'),
-    loadSkeletonRecords<ConversationWorkEnvironmentLinkRecord>('conversationWorkEnvironmentLinks', [paths.conversationWorkEnvironmentLinksRootUri, paths.conversationWorkEnvironmentLinksIndexUri], 'link'),
-    loadSkeletonRecords<RunWorkEnvironmentLinkRecord>('runWorkEnvironmentLinks', [paths.runWorkEnvironmentLinksRootUri, paths.runWorkEnvironmentLinksIndexUri], 'link'),
-    loadSkeletonRecords<WorkEnvironmentPolicyRecord>('workEnvironmentPolicies', [paths.workEnvironmentPoliciesRootUri, paths.workEnvironmentPoliciesIndexUri], 'policy'),
-    loadSkeletonRecords<WorkEnvironmentPolicyScopeLinkRecord>('workEnvironmentPolicyScopeLinks', [paths.workEnvironmentPolicyScopeLinksRootUri, paths.workEnvironmentPolicyScopeLinksIndexUri], 'link')
+    loadSkeletonRecords<ConversationAgentSelectionRecord>('conversationAgentSelections', [paths.conversationAgentSelectionsRootUri, paths.conversationAgentSelectionsIndexUri], 'selection')
   ]);
 
   state.agents = agents;
@@ -190,15 +194,34 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths): Pr
   state.conversationBranchLinks = conversationBranchLinks;
   state.agentConversationLinks = agentConversationLinks;
   state.conversationAgentSelections = conversationAgentSelections;
+}
+
+async function loadDeferredSkeletonRecords(paths: StoragePaths, state: ClientState): Promise<void> {
+  const [
+    projectContexts,
+    conversationProjectLinks,
+    workEnvironments,
+    conversationWorkEnvironmentLinks,
+    runWorkEnvironmentLinks,
+    workEnvironmentPolicies,
+    workEnvironmentPolicyScopeLinks
+  ] = await Promise.all([
+    loadSkeletonRecords<ProjectContextRecord>('projectContexts', [paths.projectContextsRootUri, paths.projectContextsIndexUri], 'projectContext'),
+    loadSkeletonRecords<ConversationProjectLinkRecord>('conversationProjectLinks', [paths.conversationProjectLinksRootUri, paths.conversationProjectLinksIndexUri], 'link'),
+    loadSkeletonRecords<WorkEnvironmentRecord>('workEnvironments', [paths.workEnvironmentsRootUri, paths.workEnvironmentsIndexUri], 'workEnvironment'),
+    loadSkeletonRecords<ConversationWorkEnvironmentLinkRecord>('conversationWorkEnvironmentLinks', [paths.conversationWorkEnvironmentLinksRootUri, paths.conversationWorkEnvironmentLinksIndexUri], 'link'),
+    loadSkeletonRecords<RunWorkEnvironmentLinkRecord>('runWorkEnvironmentLinks', [paths.runWorkEnvironmentLinksRootUri, paths.runWorkEnvironmentLinksIndexUri], 'link'),
+    loadSkeletonRecords<WorkEnvironmentPolicyRecord>('workEnvironmentPolicies', [paths.workEnvironmentPoliciesRootUri, paths.workEnvironmentPoliciesIndexUri], 'policy'),
+    loadSkeletonRecords<WorkEnvironmentPolicyScopeLinkRecord>('workEnvironmentPolicyScopeLinks', [paths.workEnvironmentPolicyScopeLinksRootUri, paths.workEnvironmentPolicyScopeLinksIndexUri], 'link')
+  ]);
+
   state.projectContexts = projectContexts;
   state.conversationProjectLinks = conversationProjectLinks;
   state.workEnvironments = workEnvironments;
-  state.workEnvironmentPolicies = workEnvironmentPolicies;
-  state.workEnvironmentPolicyScopeLinks = workEnvironmentPolicyScopeLinks;
   state.conversationWorkEnvironmentLinks = conversationWorkEnvironmentLinks;
   state.runWorkEnvironmentLinks = runWorkEnvironmentLinks;
-
-  return hasAnyState(state) ? state : undefined;
+  state.workEnvironmentPolicies = workEnvironmentPolicies;
+  state.workEnvironmentPolicyScopeLinks = workEnvironmentPolicyScopeLinks;
 }
 
 export async function loadConversationDetailFromStores(
@@ -692,7 +715,7 @@ async function loadRecords<TRecord extends StoreRecord>(root: vscode.Uri, indexU
 }
 
 async function loadSkeletonRecords<TRecord extends StoreRecord>(
-  _label: string,
+  label: string,
   location: [vscode.Uri, vscode.Uri],
   recordKey: StoreKey
 ): Promise<TRecord[]> {

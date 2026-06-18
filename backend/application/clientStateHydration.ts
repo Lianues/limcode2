@@ -44,42 +44,56 @@ import {
 import type { ClientState, MessageRecord, ToolCallEventRecord, ToolCallRecord } from '../../shared/protocol';
 import { createDefaultAgentRecord, DEFAULT_AGENT_NAME, DEFAULT_CONVERSATION_ID } from './defaults';
 
-export function hydrateClientStateSkeleton(world: World, state: ClientState): boolean {
-  resetMessageSeqState();
+export interface HydrateClientStateSkeletonOptions {
+  allowDefaults?: boolean;
+  resetMessageSeq?: boolean;
+}
 
-  const hasAnyState = state.agents.length > 0 || state.conversations.length > 0 || state.modes.length > 0;
+export function hydrateClientStateSkeleton(world: World, state: ClientState, options: HydrateClientStateSkeletonOptions = {}): boolean {
+  const allowDefaults = options.allowDefaults ?? true;
+  const resetSeq = options.resetMessageSeq ?? true;
+  if (resetSeq) resetMessageSeqState();
+
+  const hasAnyState = hasClientStateRecords(state);
   if (!hasAnyState) return false;
 
+  const agentEntities = existingRecords(world, Agent);
+  const conversationEntities = existingRecords(world, Conversation);
   const defaultAgent = createDefaultAgentRecord();
-  const agents = state.agents.length > 0 ? state.agents : [defaultAgent];
-  const conversations = state.conversations.length > 0 ? state.conversations : [{ id: DEFAULT_CONVERSATION_ID }];
+  const agents = state.agents.length > 0
+    ? state.agents
+    : allowDefaults && agentEntities.size === 0 ? [defaultAgent] : [];
+  const conversations = state.conversations.length > 0
+    ? state.conversations
+    : allowDefaults && conversationEntities.size === 0 ? [{ id: DEFAULT_CONVERSATION_ID }] : [];
 
-  const agentEntities = new Map<string, Entity>();
   for (const agent of agents) {
-    if (agentEntities.has(agent.id)) continue;
-    const entity = world.spawn();
+    const existing = agentEntities.get(agent.id);
+    const entity = existing ?? world.spawn();
     agentEntities.set(agent.id, entity);
     world.add(entity, Agent, { id: agent.id, name: agent.name || DEFAULT_AGENT_NAME, ...(agent.description ? { description: agent.description } : {}), source: agent.source ?? 'user' });
     world.add(entity, AgentKind, { kind: agent.kind || 'main' });
     world.add(entity, AgentStatus, { status: agent.status ?? 'idle' });
   }
 
-  const modeEntities = hydrateRecords(world, state.modes, Mode);
-  const toolPolicyEntities = hydrateRecords(world, state.toolPolicies, ToolPolicy);
-  const systemPromptEntities = hydrateRecords(world, state.systemPrompts, SystemPrompt);
-  const modelProfileEntities = hydrateRecords(world, state.modelProfiles, ModelProfile);
+  const modeEntities = hydrateRecordsUnique(world, state.modes, Mode);
+  const toolPolicyEntities = hydrateRecordsUnique(world, state.toolPolicies, ToolPolicy);
+  const systemPromptEntities = hydrateRecordsUnique(world, state.systemPrompts, SystemPrompt);
+  const modelProfileEntities = hydrateRecordsUnique(world, state.modelProfiles, ModelProfile);
 
   hydrateSystemPromptScopeLinks(world, state, { agents: agentEntities, conversations: new Map(), modes: modeEntities, runs: new Map(), prompts: systemPromptEntities });
   hydrateModelProfileScopeLinks(world, state, { agents: agentEntities, conversations: new Map(), modes: modeEntities, runs: new Map(), profiles: modelProfileEntities });
 
-  const conversationEntities = new Map<string, Entity>();
   for (const conversation of conversations) {
-    const entity = world.spawn();
+    const existing = conversationEntities.get(conversation.id);
+    const entity = existing ?? world.spawn();
     conversationEntities.set(conversation.id, entity);
     world.add(entity, Conversation, { id: conversation.id, title: conversation.title, visibility: conversation.visibility ?? 'visible' });
   }
 
+  const conversationReuseLinkIds = existingIds(world, ConversationReuseLink);
   for (const record of state.conversationReuseLinks ?? []) {
+    if (conversationReuseLinkIds.has(record.id)) continue;
     const conversation = conversationEntities.get(record.conversationId);
     if (conversation === undefined) continue;
     const agent = record.agentId ? agentEntities.get(record.agentId) : undefined;
@@ -88,11 +102,13 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState): bo
     world.add(entity, ConversationReuseLink, { id: record.id, key: record.key, conversation, ...(agent !== undefined ? { agent } : {}), createdAt: now, updatedAt: now });
   }
 
-  const projectContextEntities = hydrateRecords(world, state.projectContexts ?? [], ProjectContext);
-  const workEnvironmentEntities = hydrateRecords(world, state.workEnvironments ?? [], WorkEnvironment);
-  const workEnvironmentPolicyEntities = hydrateRecords(world, state.workEnvironmentPolicies ?? [], WorkEnvironmentPolicy);
+  const projectContextEntities = hydrateRecordsUnique(world, state.projectContexts ?? [], ProjectContext);
+  const workEnvironmentEntities = hydrateRecordsUnique(world, state.workEnvironments ?? [], WorkEnvironment);
+  const workEnvironmentPolicyEntities = hydrateRecordsUnique(world, state.workEnvironmentPolicies ?? [], WorkEnvironmentPolicy);
 
+  const conversationProjectLinkIds = existingIds(world, ConversationProjectLink);
   for (const link of state.conversationProjectLinks ?? []) {
+    if (conversationProjectLinkIds.has(link.id)) continue;
     const conversation = conversationEntities.get(link.conversationId);
     const projectContext = projectContextEntities.get(link.projectContextId);
     if (conversation === undefined || projectContext === undefined) continue;
@@ -107,7 +123,9 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState): bo
     });
   }
 
+  const conversationWorkEnvironmentLinkIds = existingIds(world, ConversationWorkEnvironmentLink);
   for (const link of state.conversationWorkEnvironmentLinks ?? []) {
+    if (conversationWorkEnvironmentLinkIds.has(link.id)) continue;
     const conversation = conversationEntities.get(link.conversationId);
     const workEnvironment = workEnvironmentEntities.get(link.workEnvironmentId);
     if (conversation === undefined || workEnvironment === undefined) continue;
@@ -124,7 +142,9 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState): bo
 
   hydrateWorkEnvironmentPolicyScopeLinks(world, state, { conversations: conversationEntities, modes: modeEntities, agents: agentEntities, runs: new Map(), policies: workEnvironmentPolicyEntities });
 
+  const agentConversationLinkIds = existingIds(world, AgentConversationLink);
   for (const link of state.agentConversationLinks) {
+    if (agentConversationLinkIds.has(link.id)) continue;
     const agent = agentEntities.get(link.agentId);
     const conversation = conversationEntities.get(link.conversationId);
     if (agent === undefined || conversation === undefined) continue;
@@ -135,7 +155,9 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState): bo
 
   hydrateConversationAgentSelections(world, state, conversationEntities, agentEntities);
 
+  const conversationBranchLinkIds = existingIds(world, ConversationBranchLink);
   for (const record of state.conversationBranchLinks ?? []) {
+    if (conversationBranchLinkIds.has(record.id)) continue;
     const sourceConversation = conversationEntities.get(record.sourceConversationId);
     const targetConversation = conversationEntities.get(record.targetConversationId);
     if (sourceConversation === undefined || targetConversation === undefined) continue;
@@ -159,6 +181,9 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState): bo
   return true;
 }
 
+function hasClientStateRecords(state: ClientState): boolean {
+  return (Object.values(state) as unknown[]).some((value) => Array.isArray(value) && value.length > 0);
+}
 
 export function hydrateConversationDetail(world: World, state: ClientState, conversationId: string): boolean {
   const conversationEntities = existingRecords(world, Conversation);

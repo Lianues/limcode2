@@ -1,4 +1,4 @@
-import { onBeforeUnmount, onMounted, watch } from 'vue';
+import { onBeforeUnmount, watch } from 'vue';
 import { conversationClientStateStreamId } from '@shared/protocol';
 import { bridge, BridgeMessageType } from '@webview/transport';
 import { useSessionStore } from '@webview/stores/useSessionStore';
@@ -41,109 +41,107 @@ export function useBridgeBootstrap(): void {
     }
   }
 
-  onMounted(() => {
-    disposers.push(
-      bridge.on(BridgeMessageType.Hello, (message) => {
-        session.applyHello(message.payload?.meta);
-        if (session.viewKind === 'globalSettings') {
-          globalSettings.requestAll();
-          return;
-        }
-        if (session.viewKind === 'modeSettings') {
-          globalSettings.requestChannelSettings();
-          return;
-        }
-        if (session.viewKind === 'agentSettings') {
-          globalSettings.requestChannelSettings();
-          return;
-        }
+  disposers.push(
+    bridge.on(BridgeMessageType.Hello, (message) => {
+      session.applyHello(message.payload?.meta);
+      if (session.viewKind === 'globalSettings') {
+        globalSettings.requestAll();
+        return;
+      }
+      if (session.viewKind === 'modeSettings') {
         globalSettings.requestChannelSettings();
-        if (message.payload?.meta?.conversationId) {
-          clientState.setCurrentConversation(message.payload.meta.conversationId);
-        }
-      })
-    );
+        return;
+      }
+      if (session.viewKind === 'agentSettings') {
+        globalSettings.requestChannelSettings();
+        return;
+      }
+      globalSettings.requestChannelSettings();
+      if (message.payload?.meta?.conversationId) {
+        clientState.setCurrentConversation(message.payload.meta.conversationId);
+      }
+    })
+  );
 
-    disposers.push(
-      bridge.on(BridgeMessageType.ClientSnapshot, (message) => {
-        if (!message.payload) return;
-        clientState.applyClientSnapshot(message.payload.streamId, message.payload.streamSeq, message.payload.state);
-      })
-    );
+  disposers.push(
+    bridge.on(BridgeMessageType.ClientSnapshot, (message) => {
+      if (!message.payload) return;
+      clientState.applyClientSnapshot(message.payload.streamId, message.payload.streamSeq, message.payload.state);
+    })
+  );
 
-    disposers.push(
-      bridge.on(BridgeMessageType.ClientPatch, (message) => {
-        if (!message.payload) return;
-        const applied = clientState.applyClientPatch(
-          message.payload.streamId,
-          message.payload.streamSeq,
-          message.payload.patches
-        );
-        if (!applied) resync();
-      })
-    );
+  disposers.push(
+    bridge.on(BridgeMessageType.ClientPatch, (message) => {
+      if (!message.payload) return;
+      const applied = clientState.applyClientPatch(
+        message.payload.streamId,
+        message.payload.streamSeq,
+        message.payload.patches
+      );
+      if (!applied) resync();
+    })
+  );
 
-    disposers.push(
-      bridge.on(BridgeMessageType.GlobalSettingsSnapshot, (message) => {
-        if (message.payload) globalSettings.applySnapshot(message.payload);
-      })
-    );
+  disposers.push(
+    bridge.on(BridgeMessageType.GlobalSettingsSnapshot, (message) => {
+      if (message.payload) globalSettings.applySnapshot(message.payload);
+    })
+  );
 
-    disposers.push(
-      bridge.on(BridgeMessageType.ConversationSettingsSnapshot, (message) => {
-        if (message.payload) conversationSettings.applySnapshot(message.payload);
-      })
-    );
+  disposers.push(
+    bridge.on(BridgeMessageType.ConversationSettingsSnapshot, (message) => {
+      if (message.payload) conversationSettings.applySnapshot(message.payload);
+    })
+  );
 
-    disposers.push(
-      bridge.on(BridgeMessageType.RunHistoryPageSnapshot, (message) => {
-        if (message.payload) runHistory.applyPageSnapshot(message.payload);
-      })
-    );
+  disposers.push(
+    bridge.on(BridgeMessageType.RunHistoryPageSnapshot, (message) => {
+      if (message.payload) runHistory.applyPageSnapshot(message.payload);
+    })
+  );
 
-    disposers.push(
-      bridge.on(BridgeMessageType.RunHistoryDetailSnapshot, (message) => {
-        if (message.payload) runHistory.applyDetailSnapshot(message.payload);
-      })
-    );
+  disposers.push(
+    bridge.on(BridgeMessageType.RunHistoryDetailSnapshot, (message) => {
+      if (message.payload) runHistory.applyDetailSnapshot(message.payload);
+    })
+  );
 
-    disposers.push(
-      bridge.on(BridgeMessageType.LlmDryRunSnapshot, (message) => {
-        if (message.payload) runHistory.applyDryRunSnapshot(message.payload);
-      })
-    );
+  disposers.push(
+    bridge.on(BridgeMessageType.LlmDryRunSnapshot, (message) => {
+      if (message.payload) runHistory.applyDryRunSnapshot(message.payload);
+    })
+  );
 
-    disposers.push(
-      bridge.on(BridgeMessageType.LlmProviderModelsSnapshot, (message) => {
-        if (message.payload) globalSettings.applyLlmProviderModelsSnapshot(message.payload);
-      })
-    );
+  disposers.push(
+    bridge.on(BridgeMessageType.LlmProviderModelsSnapshot, (message) => {
+      if (message.payload) globalSettings.applyLlmProviderModelsSnapshot(message.payload);
+    })
+  );
 
-    disposers.push(
-      bridge.on(BridgeMessageType.Error, (message) => {
-        if (message.payload?.requestType === BridgeMessageType.GlobalSettingsUpdate || message.payload?.requestType === BridgeMessageType.LlmProviderModelsGet) {
-          globalSettings.setError(message.payload.message);
-        } else if (message.payload?.requestType === BridgeMessageType.RunHistoryPageGet || message.payload?.requestType === BridgeMessageType.RunHistoryDetailGet || message.payload?.requestType === BridgeMessageType.LlmDryRunGet) {
-          runHistory.setError(message.payload.message);
-        }
-      })
-    );
+  disposers.push(
+    bridge.on(BridgeMessageType.Error, (message) => {
+      if (message.payload?.requestType === BridgeMessageType.GlobalSettingsUpdate || message.payload?.requestType === BridgeMessageType.LlmProviderModelsGet) {
+        globalSettings.setError(message.payload.message);
+      } else if (message.payload?.requestType === BridgeMessageType.RunHistoryPageGet || message.payload?.requestType === BridgeMessageType.RunHistoryDetailGet || message.payload?.requestType === BridgeMessageType.LlmDryRunGet) {
+        runHistory.setError(message.payload.message);
+      }
+    })
+  );
 
-    // 当前对话 id 变化（Hello 指定 / 全局快照默认回落）时：订阅该对话数据流 + 读取对话设置。
-    disposers.push(
-      watch(
-        () => clientState.currentConversationId,
-        (conversationId) => {
-          if (session.viewKind !== 'chat' || !conversationId) return;
-          ensureConversationStream(conversationId);
-          conversationSettings.request(conversationId);
-        },
-        { immediate: true }
-      )
-    );
+  // 当前对话 id 变化（Hello 指定 / 全局快照默认回落）时：订阅该对话数据流 + 读取对话设置。
+  disposers.push(
+    watch(
+      () => clientState.currentConversationId,
+      (conversationId) => {
+        if (session.viewKind !== 'chat' || !conversationId) return;
+        ensureConversationStream(conversationId);
+        conversationSettings.request(conversationId);
+      },
+      { immediate: true }
+    )
+  );
 
-    bridge.ready();
-  });
+  bridge.ready();
 
   onBeforeUnmount(() => {
     for (const dispose of disposers) dispose();

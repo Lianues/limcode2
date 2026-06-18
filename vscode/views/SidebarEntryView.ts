@@ -53,8 +53,8 @@ export function registerSidebarEntryView(context: vscode.ExtensionContext, backe
       }
     })
   );
-  context.subscriptions.push(MainPanel.onDidChangeConversationPanelState(() => provider.refreshPanelStates()));
-  context.subscriptions.push(backendApp.onDidChangeConversationHistory(() => provider.refreshPanelStates()));
+  context.subscriptions.push(MainPanel.onDidChangeConversationPanelState(() => provider.refreshOpenConversationPanelStates()));
+  context.subscriptions.push(backendApp.onDidChangeConversationHistory(() => provider.refreshConversationHistory()));
 }
 
 class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
@@ -65,6 +65,8 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
   private historyWatcher: vscode.FileSystemWatcher | undefined;
   private historyWatcherRoot: string | undefined;
   private historyRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  private historyRequestSeq = 0;
+  private lastStateMessage: SidebarStateMessage | undefined;
 
   public constructor(
     private readonly extensionUri: vscode.Uri,
@@ -149,14 +151,27 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  public refreshPanelStates(): void {
+  public refreshConversationHistory(): void {
     this.scheduleConversationHistoryRefresh();
+  }
+
+  public refreshOpenConversationPanelStates(): void {
+    const target = this.activeWebview;
+    if (!target) return;
+    if (!this.lastStateMessage) {
+      this.scheduleConversationHistoryRefresh();
+      return;
+    }
+    const message = this.withLivePanelState(this.lastStateMessage);
+    this.lastStateMessage = message;
+    void target.postMessage(message);
   }
 
   private postSidebarStateWhenReady(webview: vscode.Webview, scopeKind: SidebarHistoryScopeKind = 'currentProject', cursor?: string, limit?: number, projectFolderUri?: string): void {
     this.activeWebview = webview;
     this.ensureConversationHistoryWatcher();
-    void this.postSidebarState(webview, scopeKind, cursor, limit, projectFolderUri)
+    const requestSeq = ++this.historyRequestSeq;
+    void this.postSidebarState(webview, scopeKind, cursor, limit, projectFolderUri, requestSeq)
       .catch((error) => console.warn('[LimCode] Failed to read sidebar state.', error));
   }
 
@@ -236,22 +251,35 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       .catch((error) => console.warn('[LimCode] Failed to abort sidebar conversation.', error));
   }
 
-  private async postSidebarState(webview: vscode.Webview, scopeKind: SidebarHistoryScopeKind, cursor?: string, limit?: number, projectFolderUri?: string): Promise<void> {
+  private async postSidebarState(webview: vscode.Webview, scopeKind: SidebarHistoryScopeKind, cursor?: string, limit?: number, projectFolderUri?: string, requestSeq = this.historyRequestSeq): Promise<void> {
     this.lastScopeKind = scopeKind;
     this.lastProjectFolderUri = projectFolderUri;
     this.lastCursor = cursor;
     const history = await this.backendApp.getConversationHistoryPage({ scopeKind, projectFolderUri, cursor, limit });
+    if (requestSeq !== this.historyRequestSeq) {
+      return;
+    }
     const activeProjectFolderUri = projectFolderUri
       ?? (history.scope.kind === 'project' ? history.scope.folderUri : undefined);
-    const message: SidebarStateMessage = {
+    const message: SidebarStateMessage = this.withLivePanelState({
       type: SIDEBAR_STATE_MESSAGE,
       history,
       activeScopeKind: scopeKind,
       ...(activeProjectFolderUri ? { activeProjectFolderUri } : {}),
       currentProjectScope: this.backendApp.getCurrentProjectHistoryScope(),
       projectFolders: this.backendApp.getProjectFolderCandidates(),
+      openConversations: []
+    });
+    this.lastStateMessage = message;
+    void webview.postMessage(message);
+  }
+
+  private withLivePanelState(message: SidebarStateMessage): SidebarStateMessage {
+    return {
+      ...message,
+      currentProjectScope: this.backendApp.getCurrentProjectHistoryScope(),
+      projectFolders: this.backendApp.getProjectFolderCandidates(),
       openConversations: MainPanel.getOpenConversationPanelStates()
     };
-    void webview.postMessage(message);
   }
 }

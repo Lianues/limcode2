@@ -278,7 +278,7 @@ export interface StorageCapability {
   /** 当前 active data root 派生出的路径；数据目录切换后 getter 会返回新路径。 */
   readonly paths: RuntimePaths;
   ensureReady(): Promise<void>;
-  loadClientStateSkeleton(): Promise<ClientState | undefined>;
+  loadClientStateSkeleton(options?: { profile?: 'startup' | 'deferred' | 'full' }): Promise<ClientState | undefined>;
   loadConversationDetail(
     conversationId: string,
     options?: { includeRunHistory?: boolean }

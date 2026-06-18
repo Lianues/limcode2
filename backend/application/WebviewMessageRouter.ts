@@ -423,7 +423,7 @@ export class WebviewMessageRouter {
     if (this.findRunEntity(runId) !== undefined) return;
     const detail = await this.deps.storage.loadConversationRunDetail({ conversationId, runId });
     if (!detail) return;
-    hydrateConversationDetail(this.deps.world, detail.state, conversationId);
+    await hydrateConversationDetail(this.deps.world, detail.state, conversationId);
   }
 
   private findRunEntity(runId: string): number | undefined {

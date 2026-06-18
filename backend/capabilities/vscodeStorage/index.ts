@@ -98,9 +98,9 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     async ensureReady() {
       // 读路径懒加载：启动阶段不预创建/读取 settings，避免阻塞侧边栏首屏。
     },
-    async loadClientStateSkeleton() {
+    async loadClientStateSkeleton(options) {
       const paths = getPaths();
-      return loadClientStateSkeletonFromStores(paths);
+      return loadClientStateSkeletonFromStores(paths, options);
     },
     async loadConversationDetail(conversationId, options) {
       const paths = getPaths();

@@ -20,6 +20,8 @@ type RecordFile<TKey extends string, TRecord> = {
   savedAt: string;
 } & Record<TKey, TRecord>;
 
+const LOAD_RECORD_BATCH_SIZE = 32;
+
 export async function loadRecordStore<TRecord extends { id: string }, TKey extends string>(
   root: vscode.Uri,
   indexUri: vscode.Uri,
@@ -28,11 +30,8 @@ export async function loadRecordStore<TRecord extends { id: string }, TKey exten
   const index = await readJson<RecordsIndexFile>(indexUri);
   if (!isRecordsIndexFile(index)) return undefined;
 
+  const files = await loadRecordFilesInBatches<TRecord, TKey>(root, index.records, recordKey);
   const records: TRecord[] = [];
-  const files = await Promise.all(index.records.map(async (record) => {
-    const file = await readJson<RecordFile<TKey, TRecord>>(vscode.Uri.joinPath(root, ...record.file.split('/')));
-    return file?.schemaVersion === STORAGE_VERSION ? file[recordKey] : undefined;
-  }));
   for (const record of files) {
     if (record) records.push(record);
   }
@@ -51,13 +50,9 @@ export async function loadRecordStoreByIds<TRecord extends { id: string }, TKey 
   const wanted = new Set(ids);
   if (wanted.size === 0) return [];
   const indexById = new Map(index.records.map((record) => [record.id, record]));
+  const wantedRecords = [...wanted].map((id) => indexById.get(id)).filter((record): record is RecordIndexRecord => record !== undefined);
+  const files = await loadRecordFilesInBatches<TRecord, TKey>(root, wantedRecords, recordKey);
   const records: TRecord[] = [];
-  const files = await Promise.all([...wanted].map(async (id) => {
-    const record = indexById.get(id);
-    if (!record) return undefined;
-    const file = await readJson<RecordFile<TKey, TRecord>>(vscode.Uri.joinPath(root, ...record.file.split('/')));
-    return file?.schemaVersion === STORAGE_VERSION ? file[recordKey] : undefined;
-  }));
   for (const record of files) {
     if (record) records.push(record);
   }
@@ -158,7 +153,36 @@ export async function removeRecordStoreRecord(
   } satisfies RecordsIndexFile);
 }
 
+async function loadRecordFilesInBatches<TRecord extends { id: string }, TKey extends string>(
+  root: vscode.Uri,
+  records: RecordIndexRecord[],
+  recordKey: TKey
+): Promise<Array<TRecord | undefined>> {
+  const result: Array<TRecord | undefined> = [];
+  for (let index = 0; index < records.length; index += LOAD_RECORD_BATCH_SIZE) {
+    const batch = records.slice(index, index + LOAD_RECORD_BATCH_SIZE);
+    const files = await Promise.all(batch.map(async (record) => {
+      const fileUri = vscode.Uri.joinPath(root, ...record.file.split('/'));
+      const file = await readJson<RecordFile<TKey, TRecord>>(fileUri);
+      return file?.schemaVersion === STORAGE_VERSION ? file[recordKey] : undefined;
+    }));
+    result.push(...files);
+    if (index + batch.length < records.length) {
+      await yieldToExtensionHost();
+    }
+  }
+  return result;
+}
 
+function yieldToExtensionHost(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof setImmediate === 'function') {
+      setImmediate(resolve);
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
+}
 
 function isRecordsIndexFile(value: RecordsIndexFile | undefined): value is RecordsIndexFile {
   if (!value || value.schemaVersion !== STORAGE_VERSION || !Array.isArray(value.records)) return false;

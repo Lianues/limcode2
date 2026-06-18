@@ -91,6 +91,7 @@ const CONVERSATION_TIMELINE_CHUNKS_DIR = 'chunks';
 const CONVERSATION_TIMELINE_SIDECARS_DIR = 'sidecars';
 const CONVERSATION_TIMELINE_PROJECTIONS_DIR = 'projections';
 const CONVERSATION_TIMELINE_CHUNK_SIZE = 100;
+const TIMELINE_LOAD_BATCH_SIZE = 32;
 
 const TIMELINE_SIDECAR_KEYS: readonly TimelineSidecarKey[] = [
   'message-revisions',
@@ -105,17 +106,32 @@ export async function loadConversationTimelineDetail(paths: StoragePaths, conver
   if (!isConversationTimelineIndex(index, conversationId)) return undefined;
 
   const state = createEmptyClientState();
-  const chunkFiles = await Promise.all(index.chunks.map((chunk) => readConversationTimelineChunk(root, chunk)));
-  for (const chunk of chunkFiles) {
-    if (!chunk) continue;
-    state.messages.push(...chunk.messages);
-    state.messageRevisions.push(...chunk.messageRevisions);
-    state.messageCurrentRevisionLinks.push(...chunk.messageCurrentRevisionLinks);
-    state.toolCalls.push(...chunk.toolCalls);
-    state.toolCallEvents.push(...chunk.toolCallEvents);
+  for (let chunkIndex = 0; chunkIndex < index.chunks.length; chunkIndex += TIMELINE_LOAD_BATCH_SIZE) {
+    const chunkFiles = await Promise.all(index.chunks.slice(chunkIndex, chunkIndex + TIMELINE_LOAD_BATCH_SIZE).map((chunk) => readConversationTimelineChunk(root, chunk)));
+    for (const chunk of chunkFiles) {
+      if (!chunk) continue;
+      state.messages.push(...chunk.messages);
+      state.messageRevisions.push(...chunk.messageRevisions);
+      state.messageCurrentRevisionLinks.push(...chunk.messageCurrentRevisionLinks);
+      state.toolCalls.push(...chunk.toolCalls);
+      state.toolCallEvents.push(...chunk.toolCallEvents);
+    }
+    if (chunkIndex + TIMELINE_LOAD_BATCH_SIZE < index.chunks.length) {
+      await yieldToExtensionHost();
+    }
   }
   sortConversationTimelineDetail(state);
   return state;
+}
+
+function yieldToExtensionHost(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof setImmediate === 'function') {
+      setImmediate(resolve);
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
 }
 
 export async function saveConversationTimelineDetail(paths: StoragePaths, conversationId: string, detail: ClientState): Promise<void> {

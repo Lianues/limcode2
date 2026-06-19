@@ -1,4 +1,5 @@
 import type {
+  CheckpointFloorAnchorPosition,
   CheckpointPolicyScopeClearPayload,
   CheckpointPolicyScopeSetPayload,
   CheckpointSkipReason,
@@ -11,6 +12,8 @@ export interface CheckpointRequestedPayload {
   trigger: CheckpointTriggerKind;
   runId?: string;
   toolCallId?: string;
+  floorMessageId?: string;
+  anchorPosition?: CheckpointFloorAnchorPosition;
 }
 
 export interface CheckpointCompletedPayload {
@@ -30,6 +33,10 @@ export interface CheckpointCompletedPayload {
   fileCount?: number;
   byteCount?: number;
   emptyDirectoryCount?: number;
+  floorMessageId?: string;
+  anchorPosition?: CheckpointFloorAnchorPosition;
+  sourceRunId?: string;
+  sourceToolCallId?: string;
 }
 
 export const CheckpointEventType = {

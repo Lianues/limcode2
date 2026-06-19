@@ -30,6 +30,7 @@ import {
   SHADOW_REPOSITORIES_ROOT_DIR,
   CONVERSATION_CHECKPOINT_REPOSITORY_LINKS_ROOT_DIR,
   CHECKPOINTS_ROOT_DIR,
+  CHECKPOINT_TIMELINE_ANCHORS_ROOT_DIR,
   CHECKPOINT_SHADOW_WORKTREES_ROOT_DIR
 } from './constants';
 
@@ -74,6 +75,8 @@ export interface VscodeStorageUris {
   conversationCheckpointRepositoryLinksIndexUri: vscode.Uri;
   checkpointsRootUri: vscode.Uri;
   checkpointsIndexUri: vscode.Uri;
+  checkpointTimelineAnchorsRootUri: vscode.Uri;
+  checkpointTimelineAnchorsIndexUri: vscode.Uri;
   checkpointShadowWorktreesRootUri: vscode.Uri;
   linksRootUri: vscode.Uri;
   linksIndexUri: vscode.Uri;
@@ -117,6 +120,7 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const shadowRepositories = root(globalStorageUri, SHADOW_REPOSITORIES_ROOT_DIR);
   const conversationCheckpointRepositoryLinks = root(globalStorageUri, CONVERSATION_CHECKPOINT_REPOSITORY_LINKS_ROOT_DIR);
   const checkpoints = root(globalStorageUri, CHECKPOINTS_ROOT_DIR);
+  const checkpointTimelineAnchors = root(globalStorageUri, CHECKPOINT_TIMELINE_ANCHORS_ROOT_DIR);
   const checkpointShadowWorktreesRootUri = vscode.Uri.joinPath(globalStorageUri, CHECKPOINT_SHADOW_WORKTREES_ROOT_DIR);
   const links = root(globalStorageUri, AGENT_CONVERSATION_LINKS_ROOT_DIR);
   const systemPromptScopeLinks = root(globalStorageUri, SYSTEM_PROMPT_SCOPE_LINKS_ROOT_DIR);
@@ -210,6 +214,10 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     checkpointsRootPath: checkpoints.rootUri.fsPath,
     checkpointsIndexUri: checkpoints.indexUri,
     checkpointsIndexPath: checkpoints.indexUri.fsPath,
+    checkpointTimelineAnchorsRootUri: checkpointTimelineAnchors.rootUri,
+    checkpointTimelineAnchorsRootPath: checkpointTimelineAnchors.rootUri.fsPath,
+    checkpointTimelineAnchorsIndexUri: checkpointTimelineAnchors.indexUri,
+    checkpointTimelineAnchorsIndexPath: checkpointTimelineAnchors.indexUri.fsPath,
     checkpointShadowWorktreesRootUri,
     checkpointShadowWorktreesRootPath: checkpointShadowWorktreesRootUri.fsPath,
     linksRootUri: links.rootUri,

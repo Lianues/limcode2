@@ -2,6 +2,7 @@ import { defineComponent, type Entity } from '../../../ecs/types';
 import type {
   CheckpointPolicyRecord,
   CheckpointPolicyScopeKind,
+  CheckpointFloorAnchorPosition,
   CheckpointRepositoryLinkRole,
   CheckpointSkipReason,
   CheckpointStatus,
@@ -67,3 +68,19 @@ export interface CheckpointData {
   emptyDirectoryCount?: number;
 }
 export const Checkpoint = defineComponent<CheckpointData>('Checkpoint');
+
+export interface CheckpointTimelineAnchorData {
+  id: string;
+  conversation: Entity;
+  checkpoint: Entity;
+  floorMessage: Entity;
+  position: CheckpointFloorAnchorPosition;
+  order: number;
+  sourceRun?: Entity;
+  sourceRunId?: string;
+  sourceToolCall?: Entity;
+  sourceToolCallId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+export const CheckpointTimelineAnchor = defineComponent<CheckpointTimelineAnchorData>('CheckpointTimelineAnchor');

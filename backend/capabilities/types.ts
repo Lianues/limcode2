@@ -267,6 +267,10 @@ export interface RuntimePaths {
   checkpointsRootPath: string;
   checkpointsIndexUri: vscode.Uri;
   checkpointsIndexPath: string;
+  checkpointTimelineAnchorsRootUri: vscode.Uri;
+  checkpointTimelineAnchorsRootPath: string;
+  checkpointTimelineAnchorsIndexUri: vscode.Uri;
+  checkpointTimelineAnchorsIndexPath: string;
   checkpointShadowWorktreesRootUri: vscode.Uri;
   checkpointShadowWorktreesRootPath: string;
   /** Agent 与 Conversation 的关系数据根目录：<dataRoot>/agent-conversation-links */

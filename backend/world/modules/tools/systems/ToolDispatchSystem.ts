@@ -274,6 +274,7 @@ function executeRuntimeToolCall(world: WorldReader, cmd: CommandSink, entity: En
       conversationId: authorization.conversationId,
       runId: authorization.runId,
       toolCallId: call.id,
+      anchorPosition: 'before',
       trigger: 'tool_execution_before'
     }
   });

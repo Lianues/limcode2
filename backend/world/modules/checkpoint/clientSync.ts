@@ -10,7 +10,8 @@ export const checkpointClientSyncContributor = defineClientStateContributor({
     'checkpointPolicyScopeLinks',
     'shadowRepositories',
     'conversationCheckpointRepositoryLinks',
-    'checkpoints'
+    'checkpoints',
+    'checkpointTimelineAnchors'
   ],
   reads: checkpointStateProjectionReads,
   project: projectCheckpointClientState,

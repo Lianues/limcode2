@@ -3,11 +3,12 @@ import { createMessageId } from '../../../../../shared/protocol';
 import { readEvents } from '../../../events';
 import { Agent } from '../../agent/components';
 import { AgentRun, AgentRunTargetLink } from '../../agentRun/components';
-import { Conversation } from '../../chat/components';
+import { Conversation, Message, PartOf } from '../../chat/components';
 import { Mode, ConversationModeSelection } from '../../mode/components';
 import { ConversationProjectLink, ProjectContext, type ProjectContextData } from '../../project/components';
+import { ToolCall } from '../../tools/components';
 import { CheckpointPolicy, CheckpointPolicyScopeLink, ConversationCheckpointRepositoryLink, ShadowRepository } from '../components';
-import { CheckpointEventType } from '../events';
+import { CheckpointEventType, type CheckpointRequestedPayload } from '../events';
 import {
   CheckpointBundle,
   ensureConversationCheckpointRepositoryLink,
@@ -17,6 +18,7 @@ import {
 } from '../bundles';
 import { effectiveCheckpointPolicyForRequest, findRunById } from '../queries';
 import { triggerConfigKey } from '../policy';
+import type { CheckpointFloorAnchorPosition } from '../../../../../shared/protocol';
 
 const CheckpointRequestQuery = defineQuery({
   name: 'CheckpointRequest',
@@ -30,6 +32,9 @@ const CheckpointRequestQuery = defineQuery({
     ConversationModeSelection,
     ProjectContext,
     ConversationProjectLink,
+    Message,
+    PartOf,
+    ToolCall,
     CheckpointPolicy,
     CheckpointPolicyScopeLink,
     ShadowRepository,
@@ -73,6 +78,7 @@ export const CheckpointRequestSystem = defineSystem({
         shadowRepositoryId: repositoryId
       });
 
+      const anchor = resolveCheckpointAnchor(world, payload, conversation);
       cmd.effect({
         kind: 'checkpoint.create',
         checkpointId: createMessageId(),
@@ -83,7 +89,8 @@ export const CheckpointRequestSystem = defineSystem({
         shadowRepositoryId: repositoryId,
         shadowRepositoryStorageKey: repositoryStorageKey,
         trigger: payload.trigger,
-        policy: resolution.policy
+        policy: resolution.policy,
+        ...anchor
       });
     }
   }
@@ -101,4 +108,44 @@ function primaryProjectForConversation(world: WorldReader, conversation: Entity)
     if (data) return { entity: link.projectContext, data };
   }
   return undefined;
+}
+
+interface CheckpointAnchorResolution {
+  floorMessageId?: string;
+  anchorPosition?: CheckpointFloorAnchorPosition;
+  sourceRunId?: string;
+  sourceToolCallId?: string;
+}
+
+function resolveCheckpointAnchor(world: WorldReader, payload: CheckpointRequestedPayload, conversation: Entity): CheckpointAnchorResolution {
+  const base = {
+    ...(payload.runId ? { sourceRunId: payload.runId } : {}),
+    ...(payload.toolCallId ? { sourceToolCallId: payload.toolCallId } : {})
+  };
+  const explicitMessage = payload.floorMessageId ? findConversationMessageById(world, conversation, payload.floorMessageId) : undefined;
+  if (explicitMessage !== undefined) {
+    return { ...base, floorMessageId: payload.floorMessageId, anchorPosition: payload.anchorPosition ?? 'after' };
+  }
+
+  const toolMessage = payload.toolCallId ? messageForToolCall(world, conversation, payload.toolCallId) : undefined;
+  if (toolMessage) {
+    return { ...base, floorMessageId: toolMessage.id, anchorPosition: payload.anchorPosition ?? 'after' };
+  }
+
+  return base;
+}
+
+function findConversationMessageById(world: WorldReader, conversation: Entity, messageId: string): Entity | undefined {
+  return world.query(Message, PartOf).find((entity) => {
+    const message = world.get(entity, Message);
+    const parent = world.get(entity, PartOf)?.parent;
+    return message?.id === messageId && parent === conversation;
+  });
+}
+
+function messageForToolCall(world: WorldReader, conversation: Entity, toolCallId: string): { id: string } | undefined {
+  const toolCall = world.query(ToolCall, PartOf).find((entity) => world.get(entity, ToolCall)?.id === toolCallId);
+  const messageEntity = toolCall !== undefined ? world.get(toolCall, PartOf)?.parent : undefined;
+  if (messageEntity === undefined || world.get(messageEntity, PartOf)?.parent !== conversation) return undefined;
+  return world.get(messageEntity, Message);
 }

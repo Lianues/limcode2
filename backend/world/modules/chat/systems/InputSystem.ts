@@ -53,7 +53,7 @@ function handleSend(world: WorldReader, cmd: CommandSink, conversation: Entity, 
   const activeRuns = activeRunsForConversation(world, conversation);
   if (activeRuns.length === 0) {
     const message = spawnInputMessage(cmd, conversation, content);
-    requestCheckpoint(cmd, payload.conversationId);
+    requestCheckpoint(cmd, payload.conversationId, message);
     spawnChatRun(cmd, { agent, conversation, message });
     return;
   }
@@ -64,30 +64,34 @@ function handleSend(world: WorldReader, cmd: CommandSink, conversation: Entity, 
       return;
     case 'append_to_target': {
       const target = runTarget(world, activeRuns[0]);
-      const message = spawnInputMessage(cmd, target?.conversation ?? conversation, content);
-      requestCheckpoint(cmd, payload.conversationId);
+      const targetConversation = target?.conversation ?? conversation;
+      const message = spawnInputMessage(cmd, targetConversation, content);
+      requestCheckpoint(cmd, world.get(targetConversation, Conversation)?.id ?? payload.conversationId, message);
       spawnMessageRunLink(cmd, { message, run: activeRuns[0], role: 'input' });
       return;
     }
     case 'interrupt_current': {
       cancelRuns(world, cmd, activeRuns);
       const message = spawnInputMessage(cmd, conversation, content);
-      requestCheckpoint(cmd, payload.conversationId);
+      requestCheckpoint(cmd, payload.conversationId, message);
       spawnChatRun(cmd, { agent, conversation, message });
       return;
     }
     case 'queue_next_run':
     default: {
       const message = spawnInputMessage(cmd, conversation, content);
-      requestCheckpoint(cmd, payload.conversationId);
+      requestCheckpoint(cmd, payload.conversationId, message);
       spawnChatRun(cmd, { agent, conversation, message, needsModel: false });
       return;
     }
   }
 }
 
-function requestCheckpoint(cmd: CommandSink, conversationId: string): void {
-  cmd.enqueue({ type: CheckpointEventType.Requested, payload: { conversationId, trigger: 'user_message_after' } });
+function requestCheckpoint(cmd: CommandSink, conversationId: string, floorMessage: Entity): void {
+  cmd.enqueue({
+    type: CheckpointEventType.Requested,
+    payload: { conversationId, trigger: 'user_message_after', floorMessageId: spawnedMessageId(floorMessage), anchorPosition: 'after' }
+  });
 }
 
 function normalizeInputContent(payload: ChatSendPayload): MessageContent {
@@ -101,6 +105,10 @@ function normalizeInputContent(payload: ChatSendPayload): MessageContent {
 function spawnInputMessage(cmd: CommandSink, conversation: Entity, content: MessageContent): Entity {
   if (content.parts.length === 1 && 'text' in content.parts[0]) return spawnUserMessage(cmd, conversation, content.parts[0].text);
   return spawnUserContentMessage(cmd, conversation, content);
+}
+
+function spawnedMessageId(entity: Entity): string {
+  return `m${entity}`;
 }
 
 function spawnChatRun(

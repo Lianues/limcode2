@@ -29,6 +29,7 @@ export const CHECKPOINT_POLICY_SCOPE_LINKS_ROOT_DIR = 'checkpoint-policy-scope-l
 export const SHADOW_REPOSITORIES_ROOT_DIR = 'shadow-repositories';
 export const CONVERSATION_CHECKPOINT_REPOSITORY_LINKS_ROOT_DIR = 'conversation-checkpoint-repository-links';
 export const CHECKPOINTS_ROOT_DIR = 'checkpoints';
+export const CHECKPOINT_TIMELINE_ANCHORS_ROOT_DIR = 'checkpoint-timeline-anchors';
 export const CHECKPOINT_SHADOW_WORKTREES_ROOT_DIR = 'checkpoint-shadow-worktrees';
 
 /**
@@ -62,6 +63,7 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
   SHADOW_REPOSITORIES_ROOT_DIR,
   CONVERSATION_CHECKPOINT_REPOSITORY_LINKS_ROOT_DIR,
   CHECKPOINTS_ROOT_DIR,
+  CHECKPOINT_TIMELINE_ANCHORS_ROOT_DIR,
   CHECKPOINT_SHADOW_WORKTREES_ROOT_DIR,
   SETTINGS_ROOT_DIR
 ] as const;

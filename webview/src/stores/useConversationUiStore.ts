@@ -1,6 +1,7 @@
 import { computed, ref, shallowRef } from 'vue';
 import { defineStore } from 'pinia';
-import { isVisibleTextPart, type MessageRecord } from '@shared/protocol';
+import { buildConversationTimelineRows, type ConversationCheckpointTimelineRow } from '@shared/conversationTimeline';
+import { isVisibleTextPart, type CheckpointRecord, type CheckpointTimelineAnchorRecord, type MessageRecord } from '@shared/protocol';
 
 export type MessageViewPhase = 'stable' | 'entering' | 'exiting';
 export type ComposerMode = 'chat' | 'edit';
@@ -8,11 +9,19 @@ export type ComposerZone = 'top' | 'left' | 'right' | 'bottom';
 export type ComposerZoneSnapshot = Record<string, unknown>;
 
 export interface MessageViewRow {
+  kind: 'message';
   id: string;
   message: MessageRecord;
+  messageFloorNumber: number;
   deleteCount: number;
   phase: MessageViewPhase;
 }
+
+export interface CheckpointViewRow extends ConversationCheckpointTimelineRow {
+  phase: MessageViewPhase;
+}
+
+export type ConversationTimelineViewRow = MessageViewRow | CheckpointViewRow;
 
 export interface ComposerSnapshot {
   draft: string;
@@ -42,6 +51,7 @@ const MESSAGE_EXIT_ACTION_DELAY_MS = MESSAGE_EXIT_MS;
  */
 export const useConversationUiStore = defineStore('conversationUi', () => {
   const messageRows = shallowRef<MessageViewRow[]>([]);
+  const timelineRows = shallowRef<ConversationTimelineViewRow[]>([]);
   const enteringMessageIds = ref<Set<string>>(new Set());
   const composerSnapshots = ref<Record<ComposerMode, ComposerSnapshot>>({
     chat: createComposerSnapshot(),
@@ -65,6 +75,14 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
   const composerDraft = computed(() => activeComposerSnapshot.value.draft);
 
   function syncMessages(messages: readonly MessageRecord[]): void {
+    syncTimeline(messages, [], []);
+  }
+
+  function syncTimeline(
+    messages: readonly MessageRecord[],
+    checkpoints: readonly CheckpointRecord[],
+    checkpointAnchors: readonly CheckpointTimelineAnchorRecord[]
+  ): void {
     const currentIds = new Set(messages.map((message) => message.id));
     for (const id of [...enterTimers.keys()]) {
       if (!currentIds.has(id)) clearEntering(id);
@@ -85,12 +103,24 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
 
     if (exitingFromId && !currentIds.has(exitingFromId)) clearExitState();
 
-    messageRows.value = messages.map((message, index) => ({
-      id: message.id,
-      message,
-      deleteCount: messages.length - index,
-      phase: phaseForMessage(message.id, index, messages)
-    }));
+    const messageIndexById = new Map(messages.map((message, index) => [message.id, index]));
+    const rows = buildConversationTimelineRows({ messages, checkpoints, checkpointAnchors }).map((row): ConversationTimelineViewRow => {
+      if (row.kind === 'message') {
+        const messageIndex = messageIndexById.get(row.message.id) ?? 0;
+        return {
+          ...row,
+          deleteCount: messages.length - messageIndex,
+          phase: phaseForMessage(row.message.id, messageIndex, messages)
+        };
+      }
+      const floorIndex = messageIndexById.get(row.floorMessageId) ?? -1;
+      return {
+        ...row,
+        phase: floorIndex >= 0 ? phaseForMessage(row.floorMessageId, floorIndex, messages) : 'stable'
+      };
+    });
+    timelineRows.value = rows;
+    messageRows.value = rows.filter((row): row is MessageViewRow => row.kind === 'message');
   }
 
   function playExitFrom(messageId: string, action: () => void, delay = MESSAGE_EXIT_ACTION_DELAY_MS): void {
@@ -142,11 +172,18 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
   }
 
   function refreshRowPhases(): void {
-    const rows = messageRows.value;
-    messageRows.value = rows.map((row, index) => ({
-      ...row,
-      phase: phaseForMessage(row.id, index, rows.map((item) => item.message))
-    }));
+    const messages = messageRows.value.map((item) => item.message);
+    const messageIndexById = new Map(messages.map((message, index) => [message.id, index]));
+    const rows = timelineRows.value.map((row) => {
+      const messageId = row.kind === 'message' ? row.message.id : row.floorMessageId;
+      const index = messageIndexById.get(messageId) ?? -1;
+      return {
+        ...row,
+        phase: index >= 0 ? phaseForMessage(messageId, index, messages) : 'stable'
+      };
+    });
+    timelineRows.value = rows;
+    messageRows.value = rows.filter((row): row is MessageViewRow => row.kind === 'message');
   }
 
   function markEntering(id: string): void {
@@ -186,6 +223,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
 
   return {
     messageRows,
+    timelineRows,
     composerMode,
     composerHighlightKey,
     composerDraft,
@@ -194,6 +232,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     pendingEditText,
     isEditing,
     syncMessages,
+    syncTimeline,
     playExitFrom,
     startEditMessage,
     cancelEditMode,

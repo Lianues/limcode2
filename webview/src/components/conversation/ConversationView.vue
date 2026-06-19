@@ -14,7 +14,7 @@ import RunHistoryDetailPanel from './RunHistoryDetailPanel.vue';
 
 const clientState = useClientStateStore();
 const conversationUi = useConversationUiStore();
-const { currentMessages, currentConversationId, currentConversationDetailLoaded } = storeToRefs(clientState);
+const { currentMessages, currentCheckpoints, currentCheckpointTimelineAnchors, currentConversationId, currentConversationDetailLoaded } = storeToRefs(clientState);
 const { sendMessage, editMessage } = useChat();
 
 const scroller = ref<HTMLElement | null>(null);
@@ -63,8 +63,8 @@ const scrollMarkers = computed(() =>
 );
 
 watch(
-  currentMessages,
-  (messages) => conversationUi.syncMessages(messages),
+  [currentMessages, currentCheckpoints, currentCheckpointTimelineAnchors],
+  ([messages, checkpoints, checkpointAnchors]) => conversationUi.syncTimeline(messages, checkpoints, checkpointAnchors),
   { immediate: true }
 );
 

@@ -1,9 +1,14 @@
 import * as vscode from 'vscode';
 import type {
+  CheckpointRecord,
+  CheckpointTimelineAnchorRecord,
+  ConversationCheckpointRepositoryLinkRecord,
   ClientState,
   MessageCurrentRevisionLinkRecord,
   MessageRecord,
   MessageRevisionRecord,
+  ProjectContextRecord,
+  ShadowRepositoryRecord,
   ToolCallEventRecord,
   ToolCallRecord
 } from '../../../shared/protocol';
@@ -16,7 +21,16 @@ import { BUILTIN_TIMELINE_PROJECTIONS, type ConversationTimelineChunkData, type 
 
 export type StoragePaths = ReturnType<typeof createVscodeStoragePaths>;
 
-type TimelineSidecarKey = 'message-revisions' | 'message-current-revision-links' | 'tool-calls' | 'tool-call-events';
+type TimelineSidecarKey =
+  | 'message-revisions'
+  | 'message-current-revision-links'
+  | 'tool-calls'
+  | 'tool-call-events'
+  | 'project-contexts'
+  | 'shadow-repositories'
+  | 'conversation-checkpoint-repository-links'
+  | 'checkpoints'
+  | 'checkpoint-timeline-anchors';
 
 interface ConversationTimelineIndexFile {
   schemaVersion: typeof STORAGE_VERSION;
@@ -97,7 +111,12 @@ const TIMELINE_SIDECAR_KEYS: readonly TimelineSidecarKey[] = [
   'message-revisions',
   'message-current-revision-links',
   'tool-calls',
-  'tool-call-events'
+  'tool-call-events',
+  'project-contexts',
+  'shadow-repositories',
+  'conversation-checkpoint-repository-links',
+  'checkpoints',
+  'checkpoint-timeline-anchors'
 ] as const;
 
 export async function loadConversationTimelineDetail(paths: StoragePaths, conversationId: string): Promise<ClientState | undefined> {
@@ -115,6 +134,11 @@ export async function loadConversationTimelineDetail(paths: StoragePaths, conver
       state.messageCurrentRevisionLinks.push(...chunk.messageCurrentRevisionLinks);
       state.toolCalls.push(...chunk.toolCalls);
       state.toolCallEvents.push(...chunk.toolCallEvents);
+      state.projectContexts.push(...chunk.projectContexts);
+      state.shadowRepositories.push(...chunk.shadowRepositories);
+      state.conversationCheckpointRepositoryLinks.push(...chunk.conversationCheckpointRepositoryLinks);
+      state.checkpoints.push(...chunk.checkpoints);
+      state.checkpointTimelineAnchors.push(...chunk.checkpointTimelineAnchors);
     }
     if (chunkIndex + TIMELINE_LOAD_BATCH_SIZE < index.chunks.length) {
       await yieldToExtensionHost();
@@ -332,7 +356,12 @@ async function writeTimelineSidecars(input: {
     'message-revisions': await writeTimelineSidecar(input, 'message-revisions', input.chunk.messageRevisions),
     'message-current-revision-links': await writeTimelineSidecar(input, 'message-current-revision-links', input.chunk.messageCurrentRevisionLinks),
     'tool-calls': await writeTimelineSidecar(input, 'tool-calls', input.chunk.toolCalls),
-    'tool-call-events': await writeTimelineSidecar(input, 'tool-call-events', input.chunk.toolCallEvents)
+    'tool-call-events': await writeTimelineSidecar(input, 'tool-call-events', input.chunk.toolCallEvents),
+    'project-contexts': await writeTimelineSidecar(input, 'project-contexts', input.chunk.projectContexts),
+    'shadow-repositories': await writeTimelineSidecar(input, 'shadow-repositories', input.chunk.shadowRepositories),
+    'conversation-checkpoint-repository-links': await writeTimelineSidecar(input, 'conversation-checkpoint-repository-links', input.chunk.conversationCheckpointRepositoryLinks),
+    checkpoints: await writeTimelineSidecar(input, 'checkpoints', input.chunk.checkpoints),
+    'checkpoint-timeline-anchors': await writeTimelineSidecar(input, 'checkpoint-timeline-anchors', input.chunk.checkpointTimelineAnchors)
   };
 }
 
@@ -370,12 +399,32 @@ function conversationTimelineChunks(detail: ClientState): ConversationTimelineCh
     const toolCalls = detail.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId));
     const toolCallIds = new Set(toolCalls.map((toolCall) => toolCall.id));
     const toolCallEvents = detail.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId));
+    const checkpointTimelineAnchors = detail.checkpointTimelineAnchors.filter((anchor) => messageIds.has(anchor.floorMessageId));
+    const checkpointIds = new Set(checkpointTimelineAnchors.map((anchor) => anchor.checkpointId));
+    const checkpoints = detail.checkpoints.filter((checkpoint) => checkpointIds.has(checkpoint.id));
+    const shadowRepositoryIds = new Set(checkpoints.map((checkpoint) => checkpoint.shadowRepositoryId));
+    const projectContextIds = new Set(checkpoints.map((checkpoint) => checkpoint.projectContextId));
+    const conversationCheckpointRepositoryLinks = detail.conversationCheckpointRepositoryLinks.filter((link) => {
+      const matches = shadowRepositoryIds.has(link.shadowRepositoryId) || projectContextIds.has(link.projectContextId);
+      if (matches) {
+        shadowRepositoryIds.add(link.shadowRepositoryId);
+        projectContextIds.add(link.projectContextId);
+      }
+      return matches;
+    });
+    const projectContexts = detail.projectContexts.filter((projectContext) => projectContextIds.has(projectContext.id));
+    const shadowRepositories = detail.shadowRepositories.filter((repository) => shadowRepositoryIds.has(repository.id));
     chunks.push({
       messages,
       messageRevisions: messageRevisions.sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id)),
       messageCurrentRevisionLinks: messageCurrentRevisionLinks.sort((left, right) => left.id.localeCompare(right.id)),
       toolCalls: toolCalls.sort(compareToolCalls),
-      toolCallEvents: toolCallEvents.sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id))
+      toolCallEvents: toolCallEvents.sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id)),
+      projectContexts: projectContexts.sort((left, right) => left.id.localeCompare(right.id)),
+      shadowRepositories: shadowRepositories.sort((left, right) => left.id.localeCompare(right.id)),
+      conversationCheckpointRepositoryLinks: conversationCheckpointRepositoryLinks.sort((left, right) => left.id.localeCompare(right.id)),
+      checkpoints: checkpoints.sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id)),
+      checkpointTimelineAnchors: checkpointTimelineAnchors.sort((left, right) => left.order - right.order || left.id.localeCompare(right.id))
     });
   }
 
@@ -387,20 +436,40 @@ async function readConversationTimelineChunk(root: vscode.Uri, record: Conversat
   if (!file || file.schemaVersion !== STORAGE_VERSION || file.chunkId !== record.id) return undefined;
   if (file.messageHash !== record.messageHash) return undefined;
 
-  const [messageRevisions, messageCurrentRevisionLinks, toolCalls, toolCallEvents] = await Promise.all([
+  const [
+    messageRevisions,
+    messageCurrentRevisionLinks,
+    toolCalls,
+    toolCallEvents,
+    projectContexts,
+    shadowRepositories,
+    conversationCheckpointRepositoryLinks,
+    checkpoints,
+    checkpointTimelineAnchors
+  ] = await Promise.all([
     readTimelineSidecar<MessageRevisionRecord>(root, record, 'message-revisions'),
     readTimelineSidecar<MessageCurrentRevisionLinkRecord>(root, record, 'message-current-revision-links'),
     readTimelineSidecar<ToolCallRecord>(root, record, 'tool-calls'),
-    readTimelineSidecar<ToolCallEventRecord>(root, record, 'tool-call-events')
+    readTimelineSidecar<ToolCallEventRecord>(root, record, 'tool-call-events'),
+    readTimelineSidecar<ProjectContextRecord>(root, record, 'project-contexts'),
+    readTimelineSidecar<ShadowRepositoryRecord>(root, record, 'shadow-repositories'),
+    readTimelineSidecar<ConversationCheckpointRepositoryLinkRecord>(root, record, 'conversation-checkpoint-repository-links'),
+    readTimelineSidecar<CheckpointRecord>(root, record, 'checkpoints'),
+    readTimelineSidecar<CheckpointTimelineAnchorRecord>(root, record, 'checkpoint-timeline-anchors')
   ]);
-  if (!messageRevisions || !messageCurrentRevisionLinks || !toolCalls || !toolCallEvents) return undefined;
+  if (!messageRevisions || !messageCurrentRevisionLinks || !toolCalls || !toolCallEvents || !projectContexts || !shadowRepositories || !conversationCheckpointRepositoryLinks || !checkpoints || !checkpointTimelineAnchors) return undefined;
 
   const chunk: ConversationTimelineChunkData = {
     messages: file.messages,
     messageRevisions,
     messageCurrentRevisionLinks,
     toolCalls,
-    toolCallEvents
+    toolCallEvents,
+    projectContexts,
+    shadowRepositories,
+    conversationCheckpointRepositoryLinks,
+    checkpoints,
+    checkpointTimelineAnchors
   };
   if (shortHash(stableJson(chunk)) !== record.sourceHash) return undefined;
   return chunk;
@@ -437,11 +506,30 @@ function chunkSeqRange(messages: readonly MessageRecord[]): { startSeq: number; 
 }
 
 function sortConversationTimelineDetail(state: ClientState): void {
+  state.messages = uniqueById(state.messages);
+  state.messageRevisions = uniqueById(state.messageRevisions);
+  state.messageCurrentRevisionLinks = uniqueById(state.messageCurrentRevisionLinks);
+  state.toolCalls = uniqueById(state.toolCalls);
+  state.toolCallEvents = uniqueById(state.toolCallEvents);
+  state.projectContexts = uniqueById(state.projectContexts);
+  state.shadowRepositories = uniqueById(state.shadowRepositories);
+  state.conversationCheckpointRepositoryLinks = uniqueById(state.conversationCheckpointRepositoryLinks);
+  state.checkpoints = uniqueById(state.checkpoints);
+  state.checkpointTimelineAnchors = uniqueById(state.checkpointTimelineAnchors);
   state.messages.sort(compareMessagesBySeq);
   state.messageRevisions.sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
   state.messageCurrentRevisionLinks.sort((left, right) => left.id.localeCompare(right.id));
   state.toolCalls.sort(compareToolCalls);
   state.toolCallEvents.sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
+  state.projectContexts.sort((left, right) => left.id.localeCompare(right.id));
+  state.shadowRepositories.sort((left, right) => left.id.localeCompare(right.id));
+  state.conversationCheckpointRepositoryLinks.sort((left, right) => left.id.localeCompare(right.id));
+  state.checkpoints.sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+  state.checkpointTimelineAnchors.sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+}
+
+function uniqueById<TRecord extends { id: string }>(records: TRecord[]): TRecord[] {
+  return [...new Map(records.map((record) => [record.id, record])).values()];
 }
 
 function compareMessagesBySeq(left: MessageRecord, right: MessageRecord): number {

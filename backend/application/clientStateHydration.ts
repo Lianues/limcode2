@@ -31,6 +31,14 @@ import {
   WorkEnvironmentPolicyScopeLink
 } from '../world/modules/workEnvironment/components';
 import {
+  Checkpoint,
+  CheckpointPolicy,
+  CheckpointPolicyScopeLink,
+  CheckpointTimelineAnchor,
+  ConversationCheckpointRepositoryLink,
+  ShadowRepository
+} from '../world/modules/checkpoint/components';
+import {
   AgentRun,
   AgentRunInputRevision,
   AgentRunSourceLink,
@@ -116,6 +124,8 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState, opt
   const projectContextEntities = hydrateRecordsUnique(world, state.projectContexts ?? [], ProjectContext);
   const workEnvironmentEntities = hydrateRecordsUnique(world, state.workEnvironments ?? [], WorkEnvironment);
   const workEnvironmentPolicyEntities = hydrateRecordsUnique(world, state.workEnvironmentPolicies ?? [], WorkEnvironmentPolicy);
+  const checkpointPolicyEntities = hydrateRecordsUnique(world, state.checkpointPolicies ?? [], CheckpointPolicy);
+  const shadowRepositoryEntities = hydrateRecordsUnique(world, state.shadowRepositories ?? [], ShadowRepository);
 
   const conversationProjectLinkIds = existingIds(world, ConversationProjectLink);
   for (const link of state.conversationProjectLinks ?? []) {
@@ -152,6 +162,8 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState, opt
   }
 
   hydrateWorkEnvironmentPolicyScopeLinks(world, state, { conversations: conversationEntities, modes: modeEntities, agents: agentEntities, runs: new Map(), policies: workEnvironmentPolicyEntities });
+  hydrateCheckpointPolicyScopeLinks(world, state, { conversations: conversationEntities, modes: modeEntities, agents: agentEntities, runs: new Map(), policies: checkpointPolicyEntities });
+  hydrateCheckpointRecords(world, state, { conversations: conversationEntities, projectContexts: projectContextEntities, shadowRepositories: shadowRepositoryEntities, messages: new Map(), runs: new Map(), toolCalls: new Map() });
 
   const agentConversationLinkIds = existingIds(world, AgentConversationLink);
   for (const link of state.agentConversationLinks) {
@@ -206,8 +218,11 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
   const toolPolicyEntities = existingRecords(world, ToolPolicy);
   const systemPromptEntities = existingRecords(world, SystemPrompt);
   const modelProfileEntities = existingRecords(world, ModelProfile);
+  const projectContextEntities = existingRecords(world, ProjectContext);
   const workEnvironmentEntities = existingRecords(world, WorkEnvironment);
   const workEnvironmentPolicyEntities = existingRecords(world, WorkEnvironmentPolicy);
+  const checkpointPolicyEntities = hydrateRecordsUnique(world, state.checkpointPolicies ?? [], CheckpointPolicy);
+  const shadowRepositoryEntities = hydrateRecordsUnique(world, state.shadowRepositories ?? [], ShadowRepository);
 
   const messageEntities = existingRecords(world, Message);
   for (const record of state.messages.filter((message) => message.conversationId === conversationId)) {
@@ -318,6 +333,8 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
   for (const link of state.runEditPolicyLinks ?? []) spawnRunLink(world, runEntities, editPolicyEntities, link, RunEditPolicyLink, 'run', 'policy');
   for (const link of state.runWorkEnvironmentLinks ?? []) spawnRunLink(world, runEntities, workEnvironmentEntities, link, RunWorkEnvironmentLink, 'run', 'workEnvironment');
   hydrateWorkEnvironmentPolicyScopeLinks(world, state, { conversations: conversationEntities, modes: modeEntities, agents: agentEntities, runs: runEntities, policies: workEnvironmentPolicyEntities });
+  hydrateCheckpointPolicyScopeLinks(world, state, { conversations: conversationEntities, modes: modeEntities, agents: agentEntities, runs: runEntities, policies: checkpointPolicyEntities });
+  hydrateCheckpointRecords(world, state, { conversations: conversationEntities, projectContexts: projectContextEntities, shadowRepositories: shadowRepositoryEntities, messages: messageEntities, runs: runEntities, toolCalls: toolCallEntities });
 
 
   hydrateConversationModeSelections(world, state, conversationEntities, modeEntities);
@@ -733,6 +750,129 @@ function resolveHydratedWorkEnvironmentPolicyScope(
     }
     case 'agentSystem':
       return scopeId ? { ok: true, data: { agentSystemId: scopeId } } : { ok: false };
+  }
+}
+
+interface CheckpointPolicyScopeHydrationMaps {
+  conversations: Map<string, Entity>;
+  agents: Map<string, Entity>;
+  modes: Map<string, Entity>;
+  runs: Map<string, Entity>;
+  policies: Map<string, Entity>;
+}
+
+function hydrateCheckpointPolicyScopeLinks(world: World, state: ClientState, maps: CheckpointPolicyScopeHydrationMaps): void {
+  const existing = existingIds(world, CheckpointPolicyScopeLink);
+  for (const record of state.checkpointPolicyScopeLinks ?? []) {
+    if (existing.has(record.id)) continue;
+    const checkpointPolicy = maps.policies.get(record.checkpointPolicyId);
+    if (checkpointPolicy === undefined) continue;
+    const scope = resolveHydratedConfigScope(record.scopeKind, record.scopeId, {
+      agents: maps.agents,
+      conversations: maps.conversations,
+      modes: maps.modes,
+      runs: maps.runs
+    });
+    if (!scope.ok) continue;
+    const entity = world.spawn();
+    existing.add(record.id);
+    world.add(entity, CheckpointPolicyScopeLink, {
+      id: record.id,
+      scopeKind: record.scopeKind,
+      ...(record.scopeId ? { scopeId: record.scopeId } : {}),
+      checkpointPolicy,
+      ...scope.data,
+      role: record.role,
+      createdAt: record.createdAt || Date.now(),
+      updatedAt: record.updatedAt || record.createdAt || Date.now()
+    });
+  }
+}
+
+interface CheckpointHydrationMaps {
+  conversations: Map<string, Entity>;
+  projectContexts: Map<string, Entity>;
+  shadowRepositories: Map<string, Entity>;
+  messages: Map<string, Entity>;
+  runs: Map<string, Entity>;
+  toolCalls: Map<string, Entity>;
+}
+
+function hydrateCheckpointRecords(world: World, state: ClientState, maps: CheckpointHydrationMaps): void {
+  const repositoryLinkIds = existingIds(world, ConversationCheckpointRepositoryLink);
+  for (const record of state.conversationCheckpointRepositoryLinks ?? []) {
+    if (repositoryLinkIds.has(record.id)) continue;
+    const conversation = maps.conversations.get(record.conversationId);
+    const projectContext = maps.projectContexts.get(record.projectContextId);
+    const shadowRepository = maps.shadowRepositories.get(record.shadowRepositoryId);
+    if (conversation === undefined || projectContext === undefined || shadowRepository === undefined) continue;
+    const entity = world.spawn();
+    repositoryLinkIds.add(record.id);
+    world.add(entity, ConversationCheckpointRepositoryLink, {
+      id: record.id,
+      conversation,
+      projectContext,
+      shadowRepository,
+      projectUri: record.projectUri,
+      projectDisplayPath: record.projectDisplayPath,
+      role: record.role,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt
+    });
+  }
+
+  const checkpointEntities = existingRecords(world, Checkpoint);
+  for (const record of state.checkpoints ?? []) {
+    if (checkpointEntities.has(record.id)) continue;
+    const conversation = maps.conversations.get(record.conversationId);
+    const projectContext = maps.projectContexts.get(record.projectContextId);
+    const shadowRepository = maps.shadowRepositories.get(record.shadowRepositoryId);
+    if (conversation === undefined || projectContext === undefined || shadowRepository === undefined) continue;
+    const entity = world.spawn();
+    checkpointEntities.set(record.id, entity);
+    world.add(entity, Checkpoint, {
+      id: record.id,
+      conversation,
+      projectContext,
+      shadowRepository,
+      trigger: record.trigger,
+      status: record.status,
+      projectUri: record.projectUri,
+      projectDisplayPath: record.projectDisplayPath,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+      ...(record.commitSha ? { commitSha: record.commitSha } : {}),
+      ...(record.skipReason ? { skipReason: record.skipReason } : {}),
+      ...(record.message ? { message: record.message } : {}),
+      ...(record.fileCount !== undefined ? { fileCount: record.fileCount } : {}),
+      ...(record.byteCount !== undefined ? { byteCount: record.byteCount } : {}),
+      ...(record.emptyDirectoryCount !== undefined ? { emptyDirectoryCount: record.emptyDirectoryCount } : {})
+    });
+  }
+
+  const anchorIds = existingIds(world, CheckpointTimelineAnchor);
+  for (const record of state.checkpointTimelineAnchors ?? []) {
+    if (anchorIds.has(record.id)) continue;
+    const conversation = maps.conversations.get(record.conversationId);
+    const checkpoint = checkpointEntities.get(record.checkpointId);
+    const floorMessage = maps.messages.get(record.floorMessageId);
+    if (conversation === undefined || checkpoint === undefined || floorMessage === undefined) continue;
+    const entity = world.spawn();
+    anchorIds.add(record.id);
+    world.add(entity, CheckpointTimelineAnchor, {
+      id: record.id,
+      conversation,
+      checkpoint,
+      floorMessage,
+      position: record.position,
+      order: record.order,
+      ...(record.sourceRunId ? { sourceRunId: record.sourceRunId } : {}),
+      ...(record.sourceToolCallId ? { sourceToolCallId: record.sourceToolCallId } : {}),
+      ...(record.sourceRunId && maps.runs.has(record.sourceRunId) ? { sourceRun: maps.runs.get(record.sourceRunId)! } : {}),
+      ...(record.sourceToolCallId && maps.toolCalls.has(record.sourceToolCallId) ? { sourceToolCall: maps.toolCalls.get(record.sourceToolCallId)! } : {}),
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt
+    });
   }
 }
 

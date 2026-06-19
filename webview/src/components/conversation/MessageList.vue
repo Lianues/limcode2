@@ -4,6 +4,7 @@ import { useConversationUiStore, type MessageViewRow } from '@webview/stores/use
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useChat } from '@webview/composables/useChat';
 import { useRunHistoryStore } from '@webview/stores/useRunHistoryStore';
+import CheckpointTimelineCard from './CheckpointTimelineCard.vue';
 import MessageItem from './MessageItem.vue';
 
 withDefaults(
@@ -54,22 +55,30 @@ function isEditingTarget(row: MessageViewRow): boolean {
 
 <template>
   <div class="message-list">
-    <MessageItem
-      v-for="(row, index) in ui.messageRows"
-      :key="row.id"
-      :message="row.message"
-      :run-id="runIdForMessage(row.message)"
-      :run-detail-loading="isRunDetailLoading(row.message)"
-      :delete-count="row.deleteCount"
-      :floor-number="index + 1"
-      :deleting="row.phase === 'exiting'"
-      :entering="row.phase === 'entering'"
-      :editing-highlighted="isEditingTarget(row)"
-      @edit-message="onEditMessage(row)"
-      @retry-from="onRetryFrom"
-      @delete-from="onDeleteFrom"
-      @view-run-detail="onViewRunDetail"
-    />
+    <template v-for="row in ui.timelineRows" :key="row.id">
+      <MessageItem
+        v-if="row.kind === 'message'"
+        :message="row.message"
+        :run-id="runIdForMessage(row.message)"
+        :run-detail-loading="isRunDetailLoading(row.message)"
+        :delete-count="row.deleteCount"
+        :floor-number="row.messageFloorNumber"
+        :deleting="row.phase === 'exiting'"
+        :entering="row.phase === 'entering'"
+        :editing-highlighted="isEditingTarget(row)"
+        @edit-message="onEditMessage(row)"
+        @retry-from="onRetryFrom"
+        @delete-from="onDeleteFrom"
+        @view-run-detail="onViewRunDetail"
+      />
+      <CheckpointTimelineCard
+        v-else
+        :checkpoint="row.checkpoint"
+        :anchor="row.anchor"
+        :message-floor-number="row.messageFloorNumber"
+        :phase="row.phase"
+      />
+    </template>
     <div v-if="!ui.messageRows.length" class="message-empty-container">
       <p class="message-empty">{{ emptyHint }}</p>
     </div>

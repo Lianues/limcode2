@@ -199,7 +199,7 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
       if (!errorMessage && conversation) {
         cmd.enqueue({
           type: CheckpointEventType.Requested,
-          payload: { conversationId: conversation.id, runId: run.id, trigger: 'llm_response_after' }
+          payload: { conversationId: conversation.id, runId: run.id, floorMessageId: current.id, anchorPosition: 'after', trigger: 'llm_response_after' }
         });
       }
       cmd.add(requestData.run, AgentRun, {

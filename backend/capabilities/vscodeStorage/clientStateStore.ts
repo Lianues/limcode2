@@ -5,6 +5,7 @@ import type {
   CheckpointPolicyRecord,
   CheckpointPolicyScopeLinkRecord,
   CheckpointRecord,
+  CheckpointTimelineAnchorRecord,
   ClientState,
   ConversationCheckpointRepositoryLinkRecord,
   ConversationBranchLinkRecord,
@@ -219,7 +220,8 @@ async function loadDeferredSkeletonRecords(paths: StoragePaths, state: ClientSta
     checkpointPolicyScopeLinks,
     shadowRepositories,
     conversationCheckpointRepositoryLinks,
-    checkpoints
+    checkpoints,
+    checkpointTimelineAnchors
   ] = await Promise.all([
     loadSkeletonRecords<ProjectContextRecord>('projectContexts', [paths.projectContextsRootUri, paths.projectContextsIndexUri], 'projectContext'),
     loadSkeletonRecords<ConversationProjectLinkRecord>('conversationProjectLinks', [paths.conversationProjectLinksRootUri, paths.conversationProjectLinksIndexUri], 'link'),
@@ -232,7 +234,8 @@ async function loadDeferredSkeletonRecords(paths: StoragePaths, state: ClientSta
     loadSkeletonRecords<CheckpointPolicyScopeLinkRecord>('checkpointPolicyScopeLinks', [paths.checkpointPolicyScopeLinksRootUri, paths.checkpointPolicyScopeLinksIndexUri], 'link'),
     loadSkeletonRecords<ShadowRepositoryRecord>('shadowRepositories', [paths.shadowRepositoriesRootUri, paths.shadowRepositoriesIndexUri], 'shadowRepository'),
     loadSkeletonRecords<ConversationCheckpointRepositoryLinkRecord>('conversationCheckpointRepositoryLinks', [paths.conversationCheckpointRepositoryLinksRootUri, paths.conversationCheckpointRepositoryLinksIndexUri], 'link'),
-    loadSkeletonRecords<CheckpointRecord>('checkpoints', [paths.checkpointsRootUri, paths.checkpointsIndexUri], 'checkpoint')
+    loadSkeletonRecords<CheckpointRecord>('checkpoints', [paths.checkpointsRootUri, paths.checkpointsIndexUri], 'checkpoint'),
+    loadSkeletonRecords<CheckpointTimelineAnchorRecord>('checkpointTimelineAnchors', [paths.checkpointTimelineAnchorsRootUri, paths.checkpointTimelineAnchorsIndexUri], 'anchor')
   ]);
 
   state.projectContexts = projectContexts;
@@ -247,6 +250,7 @@ async function loadDeferredSkeletonRecords(paths: StoragePaths, state: ClientSta
   state.shadowRepositories = shadowRepositories;
   state.conversationCheckpointRepositoryLinks = conversationCheckpointRepositoryLinks;
   state.checkpoints = checkpoints;
+  state.checkpointTimelineAnchors = checkpointTimelineAnchors;
 }
 
 export async function loadConversationDetailFromStores(
@@ -359,7 +363,8 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
     saveRecords(paths.checkpointPolicyScopeLinksRootUri, paths.checkpointPolicyScopeLinksIndexUri, state.checkpointPolicyScopeLinks, 'link'),
     saveRecords(paths.shadowRepositoriesRootUri, paths.shadowRepositoriesIndexUri, state.shadowRepositories, 'shadowRepository'),
     saveRecords(paths.conversationCheckpointRepositoryLinksRootUri, paths.conversationCheckpointRepositoryLinksIndexUri, state.conversationCheckpointRepositoryLinks, 'link'),
-    saveRecords(paths.checkpointsRootUri, paths.checkpointsIndexUri, state.checkpoints, 'checkpoint', (record) => record.projectDisplayPath || record.id)
+    saveRecords(paths.checkpointsRootUri, paths.checkpointsIndexUri, state.checkpoints, 'checkpoint', (record) => record.projectDisplayPath || record.id),
+    saveRecords(paths.checkpointTimelineAnchorsRootUri, paths.checkpointTimelineAnchorsIndexUri, state.checkpointTimelineAnchors, 'anchor')
   ]);
 }
 
@@ -426,6 +431,22 @@ export function conversationRenderDetailSlice(state: ClientState, conversationId
   detail.toolCalls = state.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId));
   const toolCallIds = new Set(detail.toolCalls.map((toolCall) => toolCall.id));
   detail.toolCallEvents = state.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId));
+  detail.checkpointTimelineAnchors = state.checkpointTimelineAnchors.filter((anchor) => anchor.conversationId === conversationId);
+  const checkpointIds = new Set(detail.checkpointTimelineAnchors.map((anchor) => anchor.checkpointId));
+  detail.checkpoints = state.checkpoints.filter((checkpoint) => checkpoint.conversationId === conversationId || checkpointIds.has(checkpoint.id));
+  for (const checkpoint of detail.checkpoints) checkpointIds.add(checkpoint.id);
+  const shadowRepositoryIds = new Set(detail.checkpoints.map((checkpoint) => checkpoint.shadowRepositoryId));
+  const projectContextIds = new Set(detail.checkpoints.map((checkpoint) => checkpoint.projectContextId));
+  detail.conversationCheckpointRepositoryLinks = state.conversationCheckpointRepositoryLinks.filter((link) => {
+    const matches = link.conversationId === conversationId || shadowRepositoryIds.has(link.shadowRepositoryId) || projectContextIds.has(link.projectContextId);
+    if (matches) {
+      shadowRepositoryIds.add(link.shadowRepositoryId);
+      projectContextIds.add(link.projectContextId);
+    }
+    return matches;
+  });
+  detail.shadowRepositories = state.shadowRepositories.filter((repository) => shadowRepositoryIds.has(repository.id));
+  detail.projectContexts = state.projectContexts.filter((projectContext) => projectContextIds.has(projectContext.id));
   return detail;
 }
 

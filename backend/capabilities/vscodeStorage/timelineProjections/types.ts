@@ -1,7 +1,12 @@
 import type {
+  CheckpointRecord,
+  CheckpointTimelineAnchorRecord,
+  ConversationCheckpointRepositoryLinkRecord,
   MessageCurrentRevisionLinkRecord,
   MessageRecord,
   MessageRevisionRecord,
+  ProjectContextRecord,
+  ShadowRepositoryRecord,
   ToolCallEventRecord,
   ToolCallRecord
 } from '../../../../shared/protocol';
@@ -13,6 +18,11 @@ export interface ConversationTimelineChunkData {
   messageCurrentRevisionLinks: MessageCurrentRevisionLinkRecord[];
   toolCalls: ToolCallRecord[];
   toolCallEvents: ToolCallEventRecord[];
+  projectContexts: ProjectContextRecord[];
+  shadowRepositories: ShadowRepositoryRecord[];
+  conversationCheckpointRepositoryLinks: ConversationCheckpointRepositoryLinkRecord[];
+  checkpoints: CheckpointRecord[];
+  checkpointTimelineAnchors: CheckpointTimelineAnchorRecord[];
 }
 
 export interface TimelineProjectionReduceInput<TSnapshot> {

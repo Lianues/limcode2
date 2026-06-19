@@ -1,8 +1,10 @@
 import { defineSystem, type Entity, type WorldReader } from '../../../../ecs/types';
 import { readEvents } from '../../../events';
-import { Conversation } from '../../chat/components';
+import { AgentRun } from '../../agentRun/components';
+import { Conversation, Message } from '../../chat/components';
 import { ProjectContext } from '../../project/components';
-import { Checkpoint, ShadowRepository } from '../components';
+import { ToolCall } from '../../tools/components';
+import { Checkpoint, CheckpointTimelineAnchor, ShadowRepository } from '../components';
 import { CheckpointEventType } from '../events';
 import { CheckpointBundle } from '../bundles';
 
@@ -12,7 +14,7 @@ export const CheckpointResultSystem = defineSystem({
     return readEvents(ctx, CheckpointEventType.Completed).length > 0;
   },
   access: {
-    reads: { components: [Conversation, ProjectContext, ShadowRepository, Checkpoint] },
+    reads: { components: [AgentRun, Conversation, Message, ProjectContext, ShadowRepository, ToolCall, Checkpoint, CheckpointTimelineAnchor] },
     bundles: [CheckpointBundle],
     events: { read: [CheckpointEventType.Completed] }
   },
@@ -44,9 +46,45 @@ export const CheckpointResultSystem = defineSystem({
         ...(payload.byteCount !== undefined ? { byteCount: payload.byteCount } : {}),
         ...(payload.emptyDirectoryCount !== undefined ? { emptyDirectoryCount: payload.emptyDirectoryCount } : {})
       });
+
+      if (payload.floorMessageId) {
+        const floorMessage = findByRecordId(world, Message, payload.floorMessageId);
+        if (floorMessage !== undefined) {
+          const anchor = findByRecordId(world, CheckpointTimelineAnchor, checkpointTimelineAnchorId(payload.checkpointId));
+          const anchorEntity = anchor ?? cmd.spawn();
+          cmd.add(anchorEntity, CheckpointTimelineAnchor, {
+            id: checkpointTimelineAnchorId(payload.checkpointId),
+            conversation,
+            checkpoint: entity,
+            floorMessage,
+            position: payload.anchorPosition ?? 'after',
+            order: payload.createdAt,
+            ...(payload.sourceRunId ? { sourceRunId: payload.sourceRunId } : {}),
+            ...(payload.sourceToolCallId ? { sourceToolCallId: payload.sourceToolCallId } : {}),
+            ...(payload.sourceRunId ? entityByRecordId(world, AgentRun, payload.sourceRunId, 'sourceRun') : {}),
+            ...(payload.sourceToolCallId ? entityByRecordId(world, ToolCall, payload.sourceToolCallId, 'sourceToolCall') : {}),
+            createdAt: payload.createdAt,
+            updatedAt: payload.updatedAt
+          });
+        }
+      }
     }
   }
 });
+
+function checkpointTimelineAnchorId(checkpointId: string): string {
+  return `checkpoint-timeline-anchor:${checkpointId}`;
+}
+
+function entityByRecordId<TKey extends string>(
+  world: WorldReader,
+  component: { id: symbol },
+  id: string,
+  key: TKey
+): Record<TKey, Entity> | Record<string, never> {
+  const entity = findByRecordId(world, component, id);
+  return entity === undefined ? {} : { [key]: entity } as Record<TKey, Entity>;
+}
 
 function findByRecordId<T extends { id: string }>(world: WorldReader, component: { id: symbol }, id: string): Entity | undefined {
   return world.query(component as never).find((entity) => (world.get(entity, component as never) as T | undefined)?.id === id);

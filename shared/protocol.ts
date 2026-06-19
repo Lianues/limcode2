@@ -764,6 +764,21 @@ export interface CheckpointRecord {
   emptyDirectoryCount?: number;
 }
 
+export type CheckpointFloorAnchorPosition = 'before' | 'after';
+
+export interface CheckpointTimelineAnchorRecord {
+  id: string;
+  conversationId: string;
+  checkpointId: string;
+  floorMessageId: string;
+  position: CheckpointFloorAnchorPosition;
+  order: number;
+  sourceRunId?: string;
+  sourceToolCallId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface AgentConversationLinkRecord {
   id: string;
   agentId: string;
@@ -1091,6 +1106,7 @@ export interface ClientStateRecordByTable {
   shadowRepositories: ShadowRepositoryRecord;
   conversationCheckpointRepositoryLinks: ConversationCheckpointRepositoryLinkRecord;
   checkpoints: CheckpointRecord;
+  checkpointTimelineAnchors: CheckpointTimelineAnchorRecord;
   messages: MessageRecord;
   messageRevisions: MessageRevisionRecord;
   messageCurrentRevisionLinks: MessageCurrentRevisionLinkRecord;

@@ -5,6 +5,8 @@ import {
   isFunctionResponsePart,
   type AgentRunRecord,
   type AgentRunStatus,
+  type CheckpointRecord,
+  type CheckpointTimelineAnchorRecord,
   type ClientPatchOp,
   type ClientState,
   type ConversationRecord,
@@ -101,6 +103,16 @@ export const useClientStateStore = defineStore('clientState', {
             !message.content.parts.some(isFunctionResponsePart)
         )
         .sort((left, right) => left.seq - right.seq);
+    },
+    currentCheckpoints(state): CheckpointRecord[] {
+      return state.checkpoints
+        .filter((checkpoint) => checkpoint.conversationId === state.currentConversationId)
+        .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+    },
+    currentCheckpointTimelineAnchors(state): CheckpointTimelineAnchorRecord[] {
+      return state.checkpointTimelineAnchors
+        .filter((anchor) => anchor.conversationId === state.currentConversationId)
+        .sort((left, right) => left.order - right.order || left.createdAt - right.createdAt || left.id.localeCompare(right.id));
     },
     currentActiveRuns(state): AgentRunRecord[] {
       return activeRunsForConversation(state, state.currentConversationId);

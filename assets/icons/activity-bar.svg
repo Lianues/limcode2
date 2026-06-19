@@ -1,6 +1,11 @@
-<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <path fill="currentColor" d="M4 3.75C4 2.784 4.784 2 5.75 2h12.5C19.216 2 20 2.784 20 3.75v16.5A1.75 1.75 0 0 1 18.25 22H5.75A1.75 1.75 0 0 1 4 20.25V3.75Zm1.75-.25a.25.25 0 0 0-.25.25v16.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V3.75a.25.25 0 0 0-.25-.25H5.75Z"/>
-  <path fill="currentColor" d="M7.5 6.25A.75.75 0 0 1 8.25 5.5h7.5a.75.75 0 0 1 0 1.5h-7.5a.75.75 0 0 1-.75-.75Zm0 3A.75.75 0 0 1 8.25 8.5h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1-.75-.75Z"/>
-  <path fill="currentColor" d="M11.22 12.22a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06l-3.25 3.25a.75.75 0 1 1-1.06-1.06L13.19 16l-1.97-1.97a.75.75 0 0 1 0-1.06Z"/>
-  <path fill="currentColor" d="M7.75 15.25h6.5a.75.75 0 0 1 0 1.5h-6.5a.75.75 0 0 1 0-1.5Z"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M 5.5 9 L 4.5 6.5" stroke-width="1.5" />
+  <path d="M 18.5 9 L 19.5 6.5" stroke-width="1.5" />
+
+  <path d="M 12 20 C 6 20 4 17 4 12 L 3 5 L 9 8 Q 12 7 15 8 L 21 5 L 20 12 C 20 17 18 20 12 20 Z" />
+
+  <circle cx="8.5" cy="12" r="1.2" fill="currentColor" stroke="none" />
+  <circle cx="15.5" cy="12" r="1.2" fill="currentColor" stroke="none" />
+
+  <path d="M 10 14.5 Q 11 15.5 12 14.5 Q 13 15.5 14 14.5" stroke-width="1.5" />
 </svg>

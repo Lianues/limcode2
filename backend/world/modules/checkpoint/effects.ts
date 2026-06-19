@@ -1,4 +1,5 @@
 import type {
+  CheckpointFloorAnchorPosition,
   CheckpointPolicyRecord,
   CheckpointTriggerKind
 } from '../../../../shared/protocol';
@@ -14,6 +15,10 @@ export interface CheckpointCreateEffect {
   shadowRepositoryStorageKey: string;
   trigger: CheckpointTriggerKind;
   policy: CheckpointPolicyRecord;
+  floorMessageId?: string;
+  anchorPosition?: CheckpointFloorAnchorPosition;
+  sourceRunId?: string;
+  sourceToolCallId?: string;
 }
 
 declare module '@backend/world/effects' {

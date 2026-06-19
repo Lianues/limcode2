@@ -2,6 +2,7 @@ import type {
   CheckpointPolicyRecord,
   CheckpointPolicyScopeLinkRecord,
   CheckpointRecord,
+  CheckpointTimelineAnchorRecord,
   ClientState,
   ConversationCheckpointRepositoryLinkRecord,
   ShadowRepositoryRecord
@@ -9,13 +10,15 @@ import type {
 import type { AccessDeclaration, WorldReader } from '../../../ecs/types';
 import { Agent } from '../agent/components';
 import { AgentRun } from '../agentRun/components';
-import { Conversation } from '../chat/components';
+import { Conversation, Message } from '../chat/components';
 import { Mode } from '../mode/components';
 import { ProjectContext } from '../project/components';
+import { ToolCall } from '../tools/components';
 import {
   Checkpoint,
   CheckpointPolicy,
   CheckpointPolicyScopeLink,
+  CheckpointTimelineAnchor,
   ConversationCheckpointRepositoryLink,
   ShadowRepository,
   type CheckpointPolicyScopeLinkData
@@ -32,7 +35,10 @@ export const checkpointStateProjectionReads: AccessDeclaration = {
     CheckpointPolicyScopeLink,
     ShadowRepository,
     ConversationCheckpointRepositoryLink,
-    Checkpoint
+    Checkpoint,
+    CheckpointTimelineAnchor,
+    Message,
+    ToolCall
   ]
 };
 
@@ -51,8 +57,12 @@ export function checkpointStateProjection(world: WorldReader): Partial<ClientSta
     .query(Checkpoint)
     .map((entity) => buildCheckpointRecord(world, entity))
     .filter((item): item is CheckpointRecord => item !== undefined);
+  const checkpointTimelineAnchors: CheckpointTimelineAnchorRecord[] = world
+    .query(CheckpointTimelineAnchor)
+    .map((entity) => buildCheckpointTimelineAnchorRecord(world, entity))
+    .filter((item): item is CheckpointTimelineAnchorRecord => item !== undefined);
 
-  return { checkpointPolicies, checkpointPolicyScopeLinks, shadowRepositories, conversationCheckpointRepositoryLinks, checkpoints };
+  return { checkpointPolicies, checkpointPolicyScopeLinks, shadowRepositories, conversationCheckpointRepositoryLinks, checkpoints, checkpointTimelineAnchors };
 }
 
 function buildCheckpointPolicyScopeLinkRecord(world: WorldReader, entity: number): CheckpointPolicyScopeLinkRecord | undefined {
@@ -117,6 +127,29 @@ function buildCheckpointRecord(world: WorldReader, entity: number): CheckpointRe
     ...(checkpoint.fileCount !== undefined ? { fileCount: checkpoint.fileCount } : {}),
     ...(checkpoint.byteCount !== undefined ? { byteCount: checkpoint.byteCount } : {}),
     ...(checkpoint.emptyDirectoryCount !== undefined ? { emptyDirectoryCount: checkpoint.emptyDirectoryCount } : {})
+  };
+}
+
+function buildCheckpointTimelineAnchorRecord(world: WorldReader, entity: number): CheckpointTimelineAnchorRecord | undefined {
+  const anchor = world.get(entity, CheckpointTimelineAnchor);
+  if (!anchor) return undefined;
+  const conversation = world.get(anchor.conversation, Conversation);
+  const checkpoint = world.get(anchor.checkpoint, Checkpoint);
+  const floorMessage = world.get(anchor.floorMessage, Message);
+  if (!conversation || !checkpoint || !floorMessage) return undefined;
+  const sourceRun = anchor.sourceRun !== undefined ? world.get(anchor.sourceRun, AgentRun) : undefined;
+  const sourceToolCall = anchor.sourceToolCall !== undefined ? world.get(anchor.sourceToolCall, ToolCall) : undefined;
+  return {
+    id: anchor.id,
+    conversationId: conversation.id,
+    checkpointId: checkpoint.id,
+    floorMessageId: floorMessage.id,
+    position: anchor.position,
+    order: anchor.order,
+    ...(sourceRun?.id ?? anchor.sourceRunId ? { sourceRunId: sourceRun?.id ?? anchor.sourceRunId } : {}),
+    ...(sourceToolCall?.id ?? anchor.sourceToolCallId ? { sourceToolCallId: sourceToolCall?.id ?? anchor.sourceToolCallId } : {}),
+    createdAt: anchor.createdAt,
+    updatedAt: anchor.updatedAt
   };
 }
 

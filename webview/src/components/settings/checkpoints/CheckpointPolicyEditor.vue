@@ -206,6 +206,17 @@ textarea {
   padding: var(--space-2);
 }
 
+input[type='number'] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 textarea {
   resize: vertical;
   min-height: 92px;

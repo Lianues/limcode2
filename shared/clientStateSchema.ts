@@ -224,6 +224,7 @@ const messageTable = {
     { table: 'messageRevisions', foreignKey: 'messageId' },
     { table: 'messageCurrentRevisionLinks', foreignKey: 'messageId' },
     { table: 'messageRunLinks', foreignKey: 'messageId' },
+    { table: 'checkpointTimelineAnchors', foreignKey: 'floorMessageId' },
     { table: 'toolCalls', foreignKey: 'messageId', cascade: true }
   ],
   globalSnapshot: false,
@@ -321,6 +322,7 @@ export const CLIENT_STATE_TABLES = {
       { table: 'conversationWorkEnvironmentLinks', foreignKey: 'conversationId' },
       { table: 'conversationCheckpointRepositoryLinks', foreignKey: 'conversationId' },
       { table: 'checkpoints', foreignKey: 'conversationId' },
+      { table: 'checkpointTimelineAnchors', foreignKey: 'conversationId' },
       { table: 'checkpointPolicyScopeLinks', foreignKey: 'scopeId' },
       { table: 'workEnvironmentPolicyScopeLinks', foreignKey: 'scopeId' },
       { table: 'systemPromptScopeLinks', foreignKey: 'scopeId' },
@@ -379,7 +381,13 @@ export const CLIENT_STATE_TABLES = {
   }),
   conversationCheckpointRepositoryLinks: upsertRemoveTable('conversationCheckpointRepositoryLink', 'link', { scope: { kind: 'conversation', field: 'conversationId' }, globalSnapshot: true }),
   checkpoints: upsertRemoveTable('checkpoint', 'checkpoint', {
+    cascadeRemove: [{ table: 'checkpointTimelineAnchors', foreignKey: 'checkpointId' }],
     orderBy: [{ field: 'createdAt', direction: 'desc' }, { field: 'id' }],
+    globalSnapshot: true,
+    scope: { kind: 'conversation', field: 'conversationId' }
+  }),
+  checkpointTimelineAnchors: upsertRemoveTable('checkpointTimelineAnchor', 'anchor', {
+    orderBy: [{ field: 'order' }, { field: 'createdAt' }, { field: 'id' }],
     globalSnapshot: true,
     scope: { kind: 'conversation', field: 'conversationId' }
   }),

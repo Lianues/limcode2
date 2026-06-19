@@ -24,7 +24,11 @@ export function registerCheckpointEffectHandlers(registry: EffectHandlerRegistry
             ...(record.message ? { message: record.message } : {}),
             ...(record.fileCount !== undefined ? { fileCount: record.fileCount } : {}),
             ...(record.byteCount !== undefined ? { byteCount: record.byteCount } : {}),
-            ...(record.emptyDirectoryCount !== undefined ? { emptyDirectoryCount: record.emptyDirectoryCount } : {})
+            ...(record.emptyDirectoryCount !== undefined ? { emptyDirectoryCount: record.emptyDirectoryCount } : {}),
+            ...(effect.floorMessageId ? { floorMessageId: effect.floorMessageId } : {}),
+            ...(effect.anchorPosition ? { anchorPosition: effect.anchorPosition } : {}),
+            ...(effect.sourceRunId ? { sourceRunId: effect.sourceRunId } : {}),
+            ...(effect.sourceToolCallId ? { sourceToolCallId: effect.sourceToolCallId } : {})
           }
         });
       })
@@ -44,7 +48,11 @@ export function registerCheckpointEffectHandlers(registry: EffectHandlerRegistry
             createdAt: now,
             updatedAt: now,
             skipReason: 'io_error',
-            message: error instanceof Error ? error.message : String(error)
+            message: error instanceof Error ? error.message : String(error),
+            ...(effect.floorMessageId ? { floorMessageId: effect.floorMessageId } : {}),
+            ...(effect.anchorPosition ? { anchorPosition: effect.anchorPosition } : {}),
+            ...(effect.sourceRunId ? { sourceRunId: effect.sourceRunId } : {}),
+            ...(effect.sourceToolCallId ? { sourceToolCallId: effect.sourceToolCallId } : {})
           }
         });
       });

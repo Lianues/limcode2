@@ -39,9 +39,14 @@ export interface CheckpointCompletedPayload {
   sourceToolCallId?: string;
 }
 
+export interface CheckpointDismissRequestedPayload {
+  checkpointId: string;
+}
+
 export const CheckpointEventType = {
   Requested: 'checkpoint:requested',
   Completed: 'checkpoint:completed',
+  DismissRequested: 'checkpoint:dismissRequested',
   PolicyScopeSetRequested: 'checkpointPolicy:scopeSetRequested',
   PolicyScopeClearRequested: 'checkpointPolicy:scopeClearRequested'
 } as const;
@@ -50,6 +55,7 @@ declare module '@backend/world/events' {
   interface WorldEventPayloadMap {
     'checkpoint:requested': CheckpointRequestedPayload;
     'checkpoint:completed': CheckpointCompletedPayload;
+    'checkpoint:dismissRequested': CheckpointDismissRequestedPayload;
     'checkpointPolicy:scopeSetRequested': CheckpointPolicyScopeSetPayload;
     'checkpointPolicy:scopeClearRequested': CheckpointPolicyScopeClearPayload;
   }

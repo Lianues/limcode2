@@ -1,10 +1,11 @@
 import * as vscode from 'vscode';
 import type {
+  CheckpointMaintenanceSettingsRecord,
   GlobalSettingsSection,
   GlobalSettingsSectionValue,
   LlmSettingsRecord
 } from '../../../shared/protocol';
-import { LLM_SETTINGS_FILE, STORAGE_VERSION } from './constants';
+import { CHECKPOINT_MAINTENANCE_SETTINGS_FILE, LLM_SETTINGS_FILE, STORAGE_VERSION } from './constants';
 import { readJson, writeJson } from './json';
 import { createDefaultLlmSettings, normalizeLlmSettings } from './llmSettings';
 
@@ -25,8 +26,42 @@ const GLOBAL_SETTINGS_SECTION_SPECS: Record<FileBackedGlobalSettingsSection, {
     fileName: LLM_SETTINGS_FILE,
     createDefault: createDefaultLlmSettings,
     normalize: (input) => normalizeLlmSettings(input as Partial<LlmSettingsRecord> | undefined)
+  },
+  checkpointMaintenance: {
+    fileName: CHECKPOINT_MAINTENANCE_SETTINGS_FILE,
+    createDefault: createDefaultCheckpointMaintenanceSettings,
+    normalize: (input) => normalizeCheckpointMaintenanceSettings(input as Partial<CheckpointMaintenanceSettingsRecord> | undefined)
   }
 };
+
+const DEFAULT_CHECKPOINT_AUTO_CLEANUP_DAYS = 7;
+const DEFAULT_CHECKPOINT_AUTO_DISMISS_SECONDS = 5;
+
+export function createDefaultCheckpointMaintenanceSettings(): CheckpointMaintenanceSettingsRecord {
+  return {
+    autoCleanupEnabled: true,
+    autoCleanupDays: DEFAULT_CHECKPOINT_AUTO_CLEANUP_DAYS,
+    autoDismissEnabled: true,
+    autoDismissSeconds: DEFAULT_CHECKPOINT_AUTO_DISMISS_SECONDS
+  };
+}
+
+export function normalizeCheckpointMaintenanceSettings(input: Partial<CheckpointMaintenanceSettingsRecord> | undefined): CheckpointMaintenanceSettingsRecord {
+  const autoCleanupEnabled = typeof input?.autoCleanupEnabled === 'boolean' ? input.autoCleanupEnabled : true;
+  const rawDays = typeof input?.autoCleanupDays === 'number' && Number.isFinite(input.autoCleanupDays)
+    ? Math.floor(input.autoCleanupDays)
+    : DEFAULT_CHECKPOINT_AUTO_CLEANUP_DAYS;
+  const autoDismissEnabled = typeof input?.autoDismissEnabled === 'boolean' ? input.autoDismissEnabled : true;
+  const rawSeconds = typeof input?.autoDismissSeconds === 'number' && Number.isFinite(input.autoDismissSeconds)
+    ? Math.floor(input.autoDismissSeconds)
+    : DEFAULT_CHECKPOINT_AUTO_DISMISS_SECONDS;
+  return {
+    autoCleanupEnabled,
+    autoCleanupDays: Math.min(3650, Math.max(1, rawDays)),
+    autoDismissEnabled,
+    autoDismissSeconds: Math.min(600, Math.max(1, rawSeconds))
+  };
+}
 
 export async function ensureGlobalSettingsFile(root: vscode.Uri, section: GlobalSettingsSection): Promise<void> {
   const spec = getFileBackedSpec(section);

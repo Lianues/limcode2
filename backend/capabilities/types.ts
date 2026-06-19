@@ -19,6 +19,7 @@ import type {
   LlmProviderModelRecord,
   CheckpointRecord,
   CheckpointGitStatusRecord,
+  ShadowRepositoryDiskStatRecord,
   CheckpointPolicyRecord,
   CheckpointTriggerKind,
   ToolCallEventRecord,
@@ -333,6 +334,9 @@ export interface StorageCapability {
   appendToolCallEvent(conversationId: string, event: ToolCallEventRecord): Promise<void>;
   detectSystemGit(): Promise<CheckpointGitStatusRecord>;
   createShadowCheckpoint(request: ShadowCheckpointCreateRequest): Promise<CheckpointRecord>;
+  collectShadowWorktreeStats(): Promise<ShadowRepositoryDiskStatRecord[]>;
+  deleteShadowWorktrees(storageKeys: string[]): Promise<{ deletedStorageKeys: string[] }>;
+  cleanupUnusedShadowWorktrees(maxAgeDays: number): Promise<{ deletedStorageKeys: string[] }>;
   loadGlobalSettings(section: GlobalSettingsSection): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
   saveGlobalSettings(section: GlobalSettingsSection, settings: GlobalSettingsSectionValue): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
   loadActiveLlmProviderConfig(conversationId?: string): Promise<LlmProviderConfigRecord>;

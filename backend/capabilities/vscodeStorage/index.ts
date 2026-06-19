@@ -41,6 +41,7 @@ import {
   upsertConversationHistoryEntryInStore
 } from './conversationHistoryStore';
 import { createShadowCheckpoint, detectSystemGit as detectSystemGitCommand } from './shadowCheckpoint';
+import { cleanupUnusedShadowWorktrees, collectShadowWorktreeStats, deleteShadowWorktrees } from './shadowCheckpointMaintenance';
 
 type StoragePaths = ReturnType<typeof createVscodeStoragePaths>;
 
@@ -170,6 +171,18 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     async createShadowCheckpoint(request) {
       const paths = getPaths();
       return createShadowCheckpoint(paths, request);
+    },
+    async collectShadowWorktreeStats() {
+      const paths = getPaths();
+      return collectShadowWorktreeStats(paths);
+    },
+    async deleteShadowWorktrees(storageKeys) {
+      const paths = getPaths();
+      return deleteShadowWorktrees(paths, storageKeys);
+    },
+    async cleanupUnusedShadowWorktrees(maxAgeDays) {
+      const paths = getPaths();
+      return cleanupUnusedShadowWorktrees(paths, maxAgeDays);
     },
     async loadGlobalSettings(section) {
       if (section === 'common') return loadCommonGlobalSettings();

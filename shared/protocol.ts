@@ -20,7 +20,7 @@ export interface WebviewClientMeta {
 
 export const GLOBAL_CLIENT_STATE_STREAM_ID = 'global:state';
 export const GLOBAL_SETTINGS_STREAM_PREFIX = 'settings:global:';
-export const GLOBAL_SETTINGS_SECTIONS = ['common', 'llm', 'llmProviderConfigs'] as const;
+export const GLOBAL_SETTINGS_SECTIONS = ['common', 'llm', 'llmProviderConfigs', 'checkpointMaintenance'] as const;
 export type GlobalSettingsSection = typeof GLOBAL_SETTINGS_SECTIONS[number];
 
 export function globalSettingsStreamId(section: GlobalSettingsSection): string {
@@ -125,7 +125,11 @@ export enum BridgeMessageType {
   CheckpointPolicyScopeSet = 'checkpointPolicy.scope.set',
   CheckpointPolicyScopeClear = 'checkpointPolicy.scope.clear',
   CheckpointGitStatusGet = 'checkpoint.gitStatus.get',
-  CheckpointGitStatusSnapshot = 'checkpoint.gitStatus.snapshot'
+  CheckpointGitStatusSnapshot = 'checkpoint.gitStatus.snapshot',
+  CheckpointShadowStatsGet = 'checkpoint.shadowStats.get',
+  CheckpointShadowStatsSnapshot = 'checkpoint.shadowStats.snapshot',
+  CheckpointShadowDelete = 'checkpoint.shadow.delete',
+  CheckpointDismiss = 'checkpoint.dismiss'
 }
 
 export interface BridgeEnvelope<TType extends string = string, TPayload = unknown> {
@@ -715,6 +719,20 @@ export interface CheckpointGitStatusRecord {
 }
 
 export interface CheckpointGitStatusSnapshotPayload { status: CheckpointGitStatusRecord }
+
+export interface ShadowRepositoryDiskStatRecord {
+  storageKey: string;
+  exists: boolean;
+  sizeBytes: number;
+  fileCount: number;
+  lastActiveAt?: number;
+}
+
+export interface CheckpointShadowStatsSnapshotPayload { stats: ShadowRepositoryDiskStatRecord[] }
+
+export interface CheckpointShadowDeletePayload { storageKeys: string[] }
+
+export interface CheckpointDismissPayload { checkpointId: string; conversationId: string }
 
 export interface CheckpointPolicyScopeLinkRecord {
   id: string;
@@ -1394,7 +1412,13 @@ export interface GlobalSettingsRecord {
   activeDataRootPath: string;
   defaultDataRootPath: string;
 }
-export type GlobalSettingsSectionValue = GlobalSettingsRecord | LlmSettingsRecord | LlmProviderConfigsRecord;
+export interface CheckpointMaintenanceSettingsRecord {
+  autoCleanupEnabled: boolean;
+  autoCleanupDays: number;
+  autoDismissEnabled: boolean;
+  autoDismissSeconds: number;
+}
+export type GlobalSettingsSectionValue = GlobalSettingsRecord | LlmSettingsRecord | LlmProviderConfigsRecord | CheckpointMaintenanceSettingsRecord;
 export interface GlobalSettingsGetPayload {
   section: GlobalSettingsSection;
 }
@@ -1520,6 +1544,9 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.LlmDryRunGet, LlmDryRunGetPayload>
   | BridgeEnvelope<BridgeMessageType.LlmProviderModelsGet, LlmProviderModelsGetPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointGitStatusGet, undefined>
+  | BridgeEnvelope<BridgeMessageType.CheckpointShadowStatsGet, undefined>
+  | BridgeEnvelope<BridgeMessageType.CheckpointShadowDelete, CheckpointShadowDeletePayload>
+  | BridgeEnvelope<BridgeMessageType.CheckpointDismiss, CheckpointDismissPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsGet, GlobalSettingsGetPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsUpdate, GlobalSettingsUpdatePayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsGet, ConversationSettingsGetPayload>
@@ -1549,6 +1576,7 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.LlmDryRunSnapshot, LlmDryRunSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.LlmProviderModelsSnapshot, LlmProviderModelsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointGitStatusSnapshot, CheckpointGitStatusSnapshotPayload>
+  | BridgeEnvelope<BridgeMessageType.CheckpointShadowStatsSnapshot, CheckpointShadowStatsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsSnapshot, GlobalSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsSnapshot, ConversationSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ProjectFoldersSnapshot, ProjectFoldersSnapshotPayload>;

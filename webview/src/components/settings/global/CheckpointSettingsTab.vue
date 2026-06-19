@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue';
 import CheckpointPolicyEditor from '@webview/components/settings/checkpoints/CheckpointPolicyEditor.vue';
+import ShadowRepositoryManager from '@webview/components/settings/checkpoints/ShadowRepositoryManager.vue';
 import { useCheckpointPolicyStore } from '@webview/stores/useCheckpointPolicyStore';
 
 const checkpointStore = useCheckpointPolicyStore();
@@ -35,6 +36,8 @@ onMounted(() => {
       title="全局默认存档点策略"
       description="未配置对话、Agent 或模式覆盖时使用。shadow 仓库保存在插件数据目录中，不修改真实项目。"
     />
+
+    <ShadowRepositoryManager />
   </section>
 </template>
 

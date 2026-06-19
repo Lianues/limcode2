@@ -69,6 +69,7 @@ import { GLOBAL_SETTINGS_SECTIONS, createMessageId } from '../../shared/protocol
 import type {
   AgentRunSourceKind,
   AgentRunStatus,
+  CheckpointMaintenanceSettingsRecord,
   BridgeClientId,
   ConversationHistoryPageRecord,
   ConversationHistoryScope,
@@ -488,6 +489,7 @@ export class BackendApplication {
         void this.globalSettingsBridge.postSnapshot(undefined, section);
       }
       this.startDeferredClientStateSkeletonLoad();
+      this.startCheckpointShadowAutoCleanup();
       this.resolveHydrated();
     }
   }
@@ -502,6 +504,22 @@ export class BackendApplication {
         this.conversationHistoryChangedEmitter.fire();
       })
       .catch((error) => console.warn('[LimCode] Failed to lazy-load deferred client state skeleton.', error));
+  }
+
+  private startCheckpointShadowAutoCleanup(): void {
+    void (async () => {
+      try {
+        const loaded = await this.env.storage.loadGlobalSettings('checkpointMaintenance');
+        const settings = loaded.settings as CheckpointMaintenanceSettingsRecord;
+        if (!settings.autoCleanupEnabled) return;
+        const result = await this.env.storage.cleanupUnusedShadowWorktrees(settings.autoCleanupDays);
+        if (result.deletedStorageKeys.length > 0) {
+          console.info(`[LimCode] Auto-cleaned ${result.deletedStorageKeys.length} unused shadow worktrees (>${settings.autoCleanupDays}d).`);
+        }
+      } catch (error) {
+        console.warn('[LimCode] Failed to auto-clean unused shadow worktrees.', error);
+      }
+    })();
   }
 
   private requestSnapshot(conversationId?: string): void {

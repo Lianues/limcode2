@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import {
   GLOBAL_SETTINGS_SECTIONS,
   createMessageId,
+  type CheckpointMaintenanceSettingsRecord,
   type GlobalSettingsRecord,
   type GlobalSettingsSection,
   type GlobalSettingsSnapshotPayload,
@@ -31,6 +32,8 @@ interface GlobalSettingsState {
   llm: LlmSettingsRecord;
   /** 全局范围内可复用的渠道配置集合。 */
   llmProviderConfigs: LlmProviderConfigsRecord;
+  /** 存档点维护：自动清理未使用 shadow 仓库的设置。 */
+  checkpointMaintenance: CheckpointMaintenanceSettingsRecord;
   /** 各 section 的来源文件路径，用于在 UI 展示。 */
   filePaths: Partial<Record<GlobalSettingsSection, string>>;
   /** 等待 llmProviderConfigs 保存完成后再持久化的 active provider id，避免 active id 先于新配置到达后端。 */
@@ -54,6 +57,10 @@ function emptyLlm(): LlmSettingsRecord {
 
 function emptyLlmProviderConfigs(): LlmProviderConfigsRecord {
   return { configs: [] };
+}
+
+function emptyCheckpointMaintenance(): CheckpointMaintenanceSettingsRecord {
+  return { autoCleanupEnabled: true, autoCleanupDays: 7, autoDismissEnabled: true, autoDismissSeconds: 5 };
 }
 
 function emptyFetchedModelsDialog(): FetchedModelsDialogState {
@@ -261,6 +268,7 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
     common: emptyCommon(),
     llm: emptyLlm(),
     llmProviderConfigs: emptyLlmProviderConfigs(),
+    checkpointMaintenance: emptyCheckpointMaintenance(),
     filePaths: {},
     pendingActiveProviderConfigIdAfterConfigsSave: '',
     loadedSections: {},
@@ -327,6 +335,31 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
         section: 'llm',
         settings: {
           activeProviderConfigId: this.llm.activeProviderConfigId
+        }
+      });
+    },
+    ensureCheckpointMaintenance(): void {
+      if (this.loadedSections.checkpointMaintenance || this.pendingSettingsSections.checkpointMaintenance) return;
+      this.markPendingSettingSection('checkpointMaintenance');
+      bridge.request(BridgeMessageType.GlobalSettingsGet, { section: 'checkpointMaintenance' });
+    },
+    setCheckpointMaintenance(patch: Partial<CheckpointMaintenanceSettingsRecord>): void {
+      const next = { ...this.checkpointMaintenance, ...patch };
+      next.autoCleanupDays = Math.min(3650, Math.max(1, Math.floor(next.autoCleanupDays || 7)));
+      next.autoDismissSeconds = Math.min(600, Math.max(1, Math.floor(next.autoDismissSeconds || 5)));
+      this.checkpointMaintenance = next;
+      this.saveCheckpointMaintenance();
+    },
+    saveCheckpointMaintenance(): void {
+      this.markPendingSettingSection('checkpointMaintenance');
+      this.status = '正在保存存档点维护设置...';
+      bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
+        section: 'checkpointMaintenance',
+        settings: {
+          autoCleanupEnabled: this.checkpointMaintenance.autoCleanupEnabled,
+          autoCleanupDays: this.checkpointMaintenance.autoCleanupDays,
+          autoDismissEnabled: this.checkpointMaintenance.autoDismissEnabled,
+          autoDismissSeconds: this.checkpointMaintenance.autoDismissSeconds
         }
       });
     },
@@ -498,6 +531,8 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
           this.llm.activeProviderConfigId = nextActiveId;
           this.saveLlm();
         }
+      } else if (payload.section === 'checkpointMaintenance') {
+        this.checkpointMaintenance = { ...emptyCheckpointMaintenance(), ...(payload.settings as CheckpointMaintenanceSettingsRecord) };
       } else {
         this.common = payload.settings as GlobalSettingsRecord;
       }

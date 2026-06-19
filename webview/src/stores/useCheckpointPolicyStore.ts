@@ -6,7 +6,8 @@ import type {
   CheckpointPolicyScopeLinkRecord,
   CheckpointPolicyScopeSetPayload,
   ExtensionToWebviewMessage,
-  CheckpointTriggerConfigRecord
+  CheckpointTriggerConfigRecord,
+  ShadowRepositoryDiskStatRecord
 } from '@shared/protocol';
 import { bridge, BridgeMessageType } from '@webview/transport';
 import { useClientStateStore } from './useClientStateStore';
@@ -71,7 +72,11 @@ function upsertById<T extends { id: string }>(list: T[], record: T): void {
 export const useCheckpointPolicyStore = defineStore('checkpointPolicy', {
   state: () => ({
     gitStatus: undefined as CheckpointGitStatusRecord | undefined,
-    gitStatusListening: false
+    gitStatusListening: false,
+    shadowStats: [] as ShadowRepositoryDiskStatRecord[],
+    shadowStatsListening: false,
+    shadowStatsLoading: false,
+    shadowStatsLoaded: false
   }),
   actions: {
     ensureGitStatusListener(): void {
@@ -84,6 +89,35 @@ export const useCheckpointPolicyStore = defineStore('checkpointPolicy', {
     requestGitStatus(): void {
       this.ensureGitStatusListener();
       bridge.request(BridgeMessageType.CheckpointGitStatusGet);
+    },
+    ensureShadowStatsListener(): void {
+      if (this.shadowStatsListening) return;
+      this.shadowStatsListening = true;
+      bridge.on(BridgeMessageType.CheckpointShadowStatsSnapshot, (message: Extract<ExtensionToWebviewMessage, { type: BridgeMessageType.CheckpointShadowStatsSnapshot }>) => {
+        this.shadowStats = message.payload?.stats ?? [];
+        this.shadowStatsLoading = false;
+        this.shadowStatsLoaded = true;
+      });
+    },
+    requestShadowStats(): void {
+      this.ensureShadowStatsListener();
+      this.shadowStatsLoading = true;
+      bridge.request(BridgeMessageType.CheckpointShadowStatsGet);
+    },
+    ensureShadowStats(): void {
+      if (this.shadowStatsLoaded || this.shadowStatsLoading) return;
+      this.requestShadowStats();
+    },
+    deleteShadowRepositories(storageKeys: string[]): void {
+      const keys = [...new Set(storageKeys.map((key) => key.trim()).filter((key) => key.length > 0))];
+      if (keys.length === 0) return;
+      this.ensureShadowStatsListener();
+      this.shadowStatsLoading = true;
+      bridge.request(BridgeMessageType.CheckpointShadowDelete, { storageKeys: keys });
+    },
+    dismissCheckpoint(checkpointId: string, conversationId: string): void {
+      if (!checkpointId.trim() || !conversationId.trim()) return;
+      bridge.request(BridgeMessageType.CheckpointDismiss, { checkpointId, conversationId });
     },
     localPolicyFor(scopeKind: CheckpointPolicyScopeKind, scopeId?: string): CheckpointPolicyResolution {
       const clientState = useClientStateStore();

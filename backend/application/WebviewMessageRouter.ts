@@ -215,6 +215,12 @@ export class WebviewMessageRouter {
       case BridgeMessageType.CheckpointGitStatusGet:
         void this.postCheckpointGitStatus(clientId, message.id);
         break;
+      case BridgeMessageType.CheckpointShadowStatsGet:
+        void this.postCheckpointShadowStats(clientId, message.id);
+        break;
+      case BridgeMessageType.CheckpointShadowDelete:
+        if (message.payload) void this.handleCheckpointShadowDelete(clientId, message.payload.storageKeys, message.id);
+        break;
       case BridgeMessageType.GlobalSettingsGet:
         if (!message.payload) return;
         this.deps.webview.subscribe(clientId, globalSettingsStreamId(message.payload.section));
@@ -293,6 +299,12 @@ export class WebviewMessageRouter {
       case BridgeMessageType.CheckpointPolicyScopeClear:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: CheckpointEventType.PolicyScopeClearRequested, payload: message.payload });
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.CheckpointDismiss:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: CheckpointEventType.DismissRequested, payload: { checkpointId: message.payload.checkpointId } });
+        this.deps.requestSnapshot(message.payload.conversationId);
         this.deps.requestSnapshot();
         break;
       case BridgeMessageType.Ready:
@@ -453,6 +465,30 @@ export class WebviewMessageRouter {
       });
     } catch (error) {
       this.postRequestError(clientId, BridgeMessageType.CheckpointGitStatusGet, error instanceof Error ? error.message : '无法检测系统 Git。', correlationId);
+    }
+  }
+
+  private async postCheckpointShadowStats(clientId: BridgeClientId, correlationId?: string): Promise<void> {
+    try {
+      const stats = await this.deps.storage.collectShadowWorktreeStats();
+      this.deps.webview.post(clientId, {
+        id: createMessageId(),
+        type: BridgeMessageType.CheckpointShadowStatsSnapshot,
+        channel: 'state',
+        correlationId,
+        payload: { stats }
+      });
+    } catch (error) {
+      this.postRequestError(clientId, BridgeMessageType.CheckpointShadowStatsGet, error instanceof Error ? error.message : '无法读取 shadow 仓库统计。', correlationId);
+    }
+  }
+
+  private async handleCheckpointShadowDelete(clientId: BridgeClientId, storageKeys: string[], correlationId?: string): Promise<void> {
+    try {
+      await this.deps.storage.deleteShadowWorktrees(storageKeys);
+      await this.postCheckpointShadowStats(clientId, correlationId);
+    } catch (error) {
+      this.postRequestError(clientId, BridgeMessageType.CheckpointShadowDelete, error instanceof Error ? error.message : '无法删除 shadow 仓库。', correlationId);
     }
   }
 

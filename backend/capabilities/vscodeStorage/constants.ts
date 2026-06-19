@@ -69,3 +69,4 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
 ] as const;
 
 export const LLM_SETTINGS_FILE = 'llm.json';
+export const CHECKPOINT_MAINTENANCE_SETTINGS_FILE = 'checkpoint-maintenance.json';

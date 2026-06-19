@@ -1,33 +1,11 @@
-import type { ConversationHistoryScope, MessageRecord } from '../../../../../../shared/protocol';
+import type { MessageRecord } from '../../../../../../shared/protocol';
 import type { ToolDefinition } from '../../registry';
 import { staticToolScheduling } from '../../scheduling';
 import { defineToolDefinitionModule } from '../types';
 
-interface ListConversationsArgs { query?: string; limit?: number; scopeKind?: 'all' | 'unbound' }
 interface ReadConversationArgs { conversationId?: string; lastN?: number; messageIds?: string[] }
 
-export const listConversationsToolModule = defineToolDefinitionModule({ id: 'list_conversations', create() { return listConversationsTool; } });
 export const readConversationToolModule = defineToolDefinitionModule({ id: 'read_conversation', create() { return readConversationTool; } });
-
-export const listConversationsTool: ToolDefinition = {
-  declaration: {
-    name: 'list_conversations',
-    description: 'List saved LimCode conversations so an agent can discover cross-conversation context. Read-only.',
-    parameters: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number' }, scopeKind: { type: 'string', description: 'all | unbound. Defaults to all.' } } },
-    metadata: { category: 'general', riskLevel: 'read', readonly: true, defaultEnabled: true }
-  },
-  execution: 'runtime',
-  scheduling: staticToolScheduling('parallel', 'readonly_conversation_list'),
-  async execute(rawArgs, deps) {
-    const args = (rawArgs ?? {}) as ListConversationsArgs;
-    const scope: ConversationHistoryScope = args.scopeKind === 'unbound' ? { kind: 'unbound' } : { kind: 'all' };
-    const limit = Math.max(1, Math.min(100, Math.floor(args.limit ?? 30)));
-    const page = await deps.storage.loadConversationHistoryPage({ scope, limit });
-    const query = args.query?.trim().toLowerCase();
-    const entries = query ? page.entries.filter((entry) => `${entry.title}\n${entry.preview}\n${entry.agentName ?? ''}`.toLowerCase().includes(query)) : page.entries;
-    return { ok: true, output: { entries: entries.slice(0, limit), pageInfo: page.pageInfo } };
-  }
-};
 
 export const readConversationTool: ToolDefinition = {
   declaration: {

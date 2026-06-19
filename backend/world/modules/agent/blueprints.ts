@@ -43,8 +43,8 @@ export interface BuiltinAgentRegistry {
 export const AgentBlueprintsKey = defineResource<BuiltinAgentRegistry>('AgentBlueprints');
 
 export const DEFAULT_SYSTEM_PROMPT = 'You are LimCode, a concise and helpful AI coding assistant running inside VS Code. Reply in the user\'s language unless asked otherwise.';
-const DEFAULT_TOOLS = [TASK_LIST_TOOL_NAME, SWITCH_WORK_ENVIRONMENT_TOOL_NAME, TRANSFER_FILES_TOOL_NAME, 'read_file', 'shell', 'bash', 'run_agent', 'list_conversations', 'read_conversation'];
-const READONLY_TOOLS = [TASK_LIST_TOOL_NAME, SWITCH_WORK_ENVIRONMENT_TOOL_NAME, 'read_file', 'shell', 'bash', 'list_conversations', 'read_conversation'];
+const DEFAULT_TOOLS = [TASK_LIST_TOOL_NAME, SWITCH_WORK_ENVIRONMENT_TOOL_NAME, TRANSFER_FILES_TOOL_NAME, 'read_file', 'shell', 'bash', 'run_agent', 'read_conversation'];
+const READONLY_TOOLS = [TASK_LIST_TOOL_NAME, SWITCH_WORK_ENVIRONMENT_TOOL_NAME, 'read_file', 'shell', 'bash', 'read_conversation'];
 const DEFAULT_TOOL_CONFIGS = {
   [TASK_LIST_TOOL_NAME]: { config: {}, display: { autoExpand: true } }
 } satisfies Record<string, ToolPolicyToolConfigRecord>;

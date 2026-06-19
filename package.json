@@ -13,9 +13,6 @@
   ],
   "main": "./dist/extension/vscode/extension.js",
   "activationEvents": [
-    "onCommand:limcode.openPanel",
-    "onCommand:limcode.revealGlobalStorage",
-    "onView:limcode-entry-view",
     "onWebviewPanel:limcode.mainPanel"
   ],
   "contributes": {
@@ -45,7 +42,8 @@
         {
           "id": "limcode-entry-view",
           "name": "AI 对话",
-          "type": "webview"
+          "type": "webview",
+          "icon": "assets/icons/activity-bar.svg"
         }
       ]
     },

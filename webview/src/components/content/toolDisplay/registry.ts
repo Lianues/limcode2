@@ -1,5 +1,6 @@
 import { TASK_LIST_TOOL_NAME } from '@shared/protocol';
 import { readFileToolDisplay } from './readFileToolDisplay';
+import { runAgentToolDisplay } from './runAgentToolDisplay';
 import { shellToolDisplay } from './shellToolDisplay';
 import { taskListToolDisplay } from './taskListToolDisplay';
 import type { ToolDisplayContext, ToolDisplayResolver, ToolDisplayResult, ToolDisplaySection } from './types';
@@ -7,6 +8,7 @@ import type { ToolDisplayContext, ToolDisplayResolver, ToolDisplayResult, ToolDi
 const TOOL_DISPLAY_RESOLVERS: Record<string, ToolDisplayResolver> = {
   [TASK_LIST_TOOL_NAME]: taskListToolDisplay,
   read_file: readFileToolDisplay,
+  run_agent: runAgentToolDisplay,
   shell: shellToolDisplay,
   bash: shellToolDisplay
 };
@@ -17,7 +19,8 @@ export function resolveToolDisplay(context: ToolDisplayContext): ToolDisplayResu
 
   return {
     inputSections: custom?.inputSections ?? fallback.inputSections,
-    outputSections: custom?.outputSections ?? fallback.outputSections
+    outputSections: custom?.outputSections ?? fallback.outputSections,
+    headerActions: custom?.headerActions ?? fallback.headerActions
   };
 }
 
@@ -37,7 +40,7 @@ function defaultToolDisplay(context: ToolDisplayContext): ToolDisplayResult {
     if (eventText) outputSections.push({ kind: 'output', title: '事件', text: eventText });
   }
 
-  return { inputSections, outputSections };
+  return { inputSections, outputSections, headerActions: [] };
 }
 
 function defaultEventText(context: ToolDisplayContext): string {
@@ -47,4 +50,4 @@ function defaultEventText(context: ToolDisplayContext): string {
     .join('');
 }
 
-export type { ToolDisplayContext, ToolDisplayResult, ToolDisplaySection } from './types';
+export type { ToolDisplayContext, ToolDisplayResult, ToolDisplaySection, ToolHeaderAction } from './types';

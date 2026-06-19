@@ -35,29 +35,34 @@ function toggleExpanded(): void {
     class="lc-collapsible-block"
     :class="[`is-${kind}`, { 'is-expanded': isExpanded, 'is-empty': !collapsible }]"
   >
-    <button
-      type="button"
-      class="lc-collapsible-summary"
-      :aria-expanded="isExpanded"
-      :aria-label="ariaLabel"
-      @click="toggleExpanded"
-    >
-      <IconChevronRight
-        class="lc-collapsible-chevron lc-collapse-chevron"
-        :class="{ 'is-expanded': isExpanded }"
-        stroke="2"
-        aria-hidden="true"
-      />
-      <span class="lc-collapsible-icon" :class="{ 'is-active': iconActive }" aria-hidden="true">
-        <slot name="icon" />
+    <div class="lc-collapsible-header" :class="{ 'has-actions': $slots.actions }">
+      <button
+        type="button"
+        class="lc-collapsible-summary"
+        :aria-expanded="isExpanded"
+        :aria-label="ariaLabel"
+        @click="toggleExpanded"
+      >
+        <IconChevronRight
+          class="lc-collapsible-chevron lc-collapse-chevron"
+          :class="{ 'is-expanded': isExpanded }"
+          stroke="2"
+          aria-hidden="true"
+        />
+        <span class="lc-collapsible-icon" :class="{ 'is-active': iconActive }" aria-hidden="true">
+          <slot name="icon" />
+        </span>
+        <span class="lc-collapsible-main">
+          <slot name="summary" />
+        </span>
+        <span v-if="$slots.trail" class="lc-collapsible-trail">
+          <slot name="trail" />
+        </span>
+      </button>
+      <span v-if="$slots.actions" class="lc-collapsible-actions" @click.stop @keydown.stop>
+        <slot name="actions" />
       </span>
-      <span class="lc-collapsible-main">
-        <slot name="summary" />
-      </span>
-      <span v-if="$slots.trail" class="lc-collapsible-trail">
-        <slot name="trail" />
-      </span>
-    </button>
+    </div>
 
     <div
       v-if="$slots.default && collapsible"
@@ -78,8 +83,16 @@ function toggleExpanded(): void {
   font-size: var(--font-size-sm);
 }
 
+.lc-collapsible-header {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+}
+
 .lc-collapsible-summary {
   width: 100%;
+  flex: 1 1 auto;
   box-sizing: border-box;
   min-width: 0;
   min-height: 0;
@@ -101,6 +114,31 @@ function toggleExpanded(): void {
 }
 
 .lc-collapsible-block.is-output .lc-collapsible-summary {
+  background: var(--lc-content-output-background);
+}
+
+.lc-collapsible-header.has-actions .lc-collapsible-summary {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right-width: 0;
+}
+
+.lc-collapsible-actions {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  min-height: 0;
+  padding: 0 4px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.22));
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--vscode-descriptionForeground);
+  background: var(--lc-content-input-background);
+  font-size: var(--font-size-xs);
+}
+
+.lc-collapsible-block.is-output .lc-collapsible-actions {
   background: var(--lc-content-output-background);
 }
 

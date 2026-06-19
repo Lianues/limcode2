@@ -14,6 +14,7 @@ import TaskListDisplay from '@webview/components/taskList/TaskListDisplay.vue';
 import { resolveToolDisplay } from '../toolDisplay/registry';
 import ContentBlockSection from '../ContentBlockSection.vue';
 import CollapsibleContentBlock from '../CollapsibleContentBlock.vue';
+import type { ToolHeaderAction } from '../toolDisplay/types';
 
 const props = defineProps<{
   part: FunctionCallPart;
@@ -56,11 +57,14 @@ const toolDisplay = computed(() => resolveToolDisplay({
   toolCall: toolCall.value,
   messages: clientState.messages,
   toolCalls: clientState.toolCalls,
+  agentRunSourceLinks: clientState.agentRunSourceLinks,
+  agentRunTargetLinks: clientState.agentRunTargetLinks,
   currentConversationId: clientState.currentConversationId,
   stringifyValue
 }));
 const inputSections = computed(() => toolDisplay.value.inputSections);
 const outputSections = computed(() => toolDisplay.value.outputSections);
+const headerActions = computed(() => toolDisplay.value.headerActions);
 const hasArgs = computed(() => inputSections.value.length > 0);
 const hasOutput = computed(() => outputSections.value.length > 0);
 const executionApproved = computed(() => isExecutionApprovedProgress(toolCall.value?.progress));
@@ -68,7 +72,6 @@ const needsExecutionDecision = computed(() => toolCall.value?.status === 'awaiti
 const needsApplyDecision = computed(() => toolCall.value?.status === 'awaiting_apply');
 const hasDetails = computed(() => hasArgs.value || hasOutput.value || Boolean(toolCall.value?.error) || executionApproved.value);
 const autoExpandDetails = computed(() => toolCall.value?.display?.autoExpand === true);
-const agentRunConversationId = computed(() => conversationIdFromAgentRunResult(toolCall.value?.result ?? toolCall.value?.progress));
 const statusLabel = computed(() => toolCall.value ? labelForToolCall(toolCall.value) : '工具请求已生成');
 const statusTitle = computed(() => toolCall.value ? `工具状态：${toolCall.value.status}` : '等待后端创建工具调用记录');
 const durationLabel = computed(() => {
@@ -139,12 +142,10 @@ function setExpanded(value: boolean): void {
   expanded.value = value;
 }
 
-function openAgentRunConversation(): void {
-  const conversationId = agentRunConversationId.value;
-  if (!conversationId) return;
-  bridge.request(BridgeMessageType.ConversationOpen, { conversationId });
+function invokeHeaderAction(action: ToolHeaderAction): void {
+  if (action.disabled) return;
+  action.invoke();
 }
-
 
 function labelForToolCall(call: ToolCallRecord): string {
   if (call.status === 'awaiting_approval' && isExecutionApprovedProgress(call.progress)) return '已批准，等待前序批次';
@@ -182,12 +183,6 @@ function deniedStatusLabel(result: unknown, error: string | undefined): string {
 
 function isAsyncAgentRunResult(result: unknown): boolean {
   return isRecord(result) && result.status === 'async_launched';
-}
-
-function conversationIdFromAgentRunResult(result: unknown): string | undefined {
-  if (!isRecord(result)) return undefined;
-  const conversationId = result.conversationId;
-  return typeof conversationId === 'string' && conversationId.trim() ? conversationId.trim() : undefined;
 }
 
 function isExecutionApprovedProgress(progress: unknown): boolean {
@@ -234,6 +229,21 @@ function isInternalApprovalProgress(progress: unknown): boolean {
     <template #trail>
       <span class="part-card-status" :title="statusTitle">{{ statusLabel }}</span>
       <span v-if="durationLabel" class="part-card-meta">{{ durationLabel }}</span>
+    </template>
+    <template v-if="headerActions.length > 0" #actions>
+      <button
+        v-for="action in headerActions"
+        :key="action.id"
+        type="button"
+        class="tool-header-action"
+        :title="action.title"
+        :aria-label="action.title ?? action.label"
+        :disabled="action.disabled"
+        @click.stop="invokeHeaderAction(action)"
+      >
+        <component :is="action.icon" v-if="action.icon" class="tool-header-action-icon" stroke="2" aria-hidden="true" />
+        <span class="tool-header-action-label">{{ action.label }}</span>
+      </button>
     </template>
 
     <div class="part-card-details">
@@ -293,9 +303,6 @@ function isInternalApprovalProgress(progress: unknown): boolean {
   <div v-else-if="needsApplyDecision" class="tool-decision-actions is-external">
     <button type="button" @click="sendToolDecision(BridgeMessageType.ToolResultApply)">应用结果</button>
     <button type="button" class="secondary" @click="sendToolDecision(BridgeMessageType.ToolResultReject)">拒绝应用</button>
-  </div>
-  <div v-if="agentRunConversationId" class="tool-decision-actions is-external">
-    <button type="button" class="secondary" @click="openAgentRunConversation">打开 Agent 对话</button>
   </div>
 </template>
 
@@ -416,6 +423,51 @@ function isInternalApprovalProgress(progress: unknown): boolean {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum';
+}
+
+.tool-header-action {
+  max-width: 12em;
+  min-height: 22px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tool-header-action:hover,
+.tool-header-action:focus-visible {
+  color: var(--vscode-foreground);
+  border-color: var(--vscode-panel-border, rgba(128, 128, 128, 0.22));
+  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%));
+  outline: none;
+}
+
+.tool-header-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.tool-header-action-icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+.tool-header-action-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tool-display-rows {

@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { IconChevronRight, IconListNumbers } from '@tabler/icons-vue';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import TaskListDisplay from './TaskListDisplay.vue';
 import { buildTaskListTimeline, formatTaskListProgress } from './taskListModel';
 
 const clientState = useClientStateStore();
-const expanded = ref(true);
+const expanded = ref(false);
 const listScroller = ref<HTMLElement | null>(null);
 
 const timeline = computed(() => buildTaskListTimeline({
@@ -28,7 +29,7 @@ const statsLabel = computed(() => {
 const refreshKey = computed(() => snapshot.value.items.map((item) => `${item.key}:${item.status}:${item.updatedOrder}`).join('|'));
 
 watch(() => clientState.currentConversationId, () => {
-  expanded.value = true;
+  expanded.value = false;
 });
 
 function toggleExpanded(): void {
@@ -45,18 +46,28 @@ function toggleExpanded(): void {
       aria-label="展开或收起任务清单"
       @click="toggleExpanded"
     >
+      <IconListNumbers class="task-list-top-icon" stroke="2" aria-hidden="true" />
       <span class="task-list-top-title">任务清单</span>
       <span class="task-list-top-stats">{{ statsLabel }}</span>
       <span v-if="activeLabel" class="task-list-top-active">当前：{{ activeLabel }}</span>
-      <span class="task-list-top-toggle" aria-hidden="true">{{ expanded ? '收起' : '展开' }}</span>
+      <IconChevronRight
+        class="task-list-top-chevron lc-collapse-chevron"
+        :class="{ 'is-expanded': expanded }"
+        stroke="2"
+        aria-hidden="true"
+      />
     </button>
 
-    <div v-show="expanded" class="task-list-top-body">
-      <div class="task-list-top-scroll-shell">
-        <div ref="listScroller" class="task-list-top-scroll">
-          <TaskListDisplay :items="snapshot.items" density="compact" :show-description="false" />
+    <div class="task-list-top-body lc-collapse-shell" :class="{ 'is-expanded': expanded }" :aria-hidden="!expanded">
+      <div class="task-list-top-body-frame lc-collapse-frame">
+        <div class="task-list-top-body-content">
+          <div class="task-list-top-scroll-shell">
+            <div ref="listScroller" class="task-list-top-scroll">
+              <TaskListDisplay :items="snapshot.items" density="compact" :show-description="false" />
+            </div>
+            <AdvancedScrollbar :scroller="listScroller" :refresh-key="refreshKey" variant="minimal" />
+          </div>
         </div>
-        <AdvancedScrollbar :scroller="listScroller" :refresh-key="refreshKey" variant="minimal" />
       </div>
     </div>
   </section>
@@ -97,8 +108,7 @@ function toggleExpanded(): void {
 }
 
 .task-list-top-stats,
-.task-list-top-active,
-.task-list-top-toggle {
+.task-list-top-active {
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-xs);
   white-space: nowrap;
@@ -111,12 +121,22 @@ function toggleExpanded(): void {
   text-overflow: ellipsis;
 }
 
-.task-list-top-toggle {
+.task-list-top-icon {
+  width: 16px;
+  height: 16px;
   flex: 0 0 auto;
-  margin-left: auto;
+  color: var(--vscode-descriptionForeground);
 }
 
-.task-list-top-body {
+.task-list-top-chevron {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--vscode-descriptionForeground);
+}
+
+.task-list-top-body-content {
   padding: 0 var(--conversation-content-padding-right, calc(var(--space-4) + 24px)) 8px
     var(--conversation-content-padding-left, var(--space-4));
 }

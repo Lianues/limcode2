@@ -8,6 +8,7 @@ import ToolPolicyEditor from '@webview/components/settings/tools/ToolPolicyEdito
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
 import WorkEnvironmentPolicyEditor from '@webview/components/settings/workEnvironment/WorkEnvironmentPolicyEditor.vue';
+import CheckpointPolicyEditor from '@webview/components/settings/checkpoints/CheckpointPolicyEditor.vue';
 import { useModeStore } from '@webview/stores/useModeStore';
 import SystemPromptScopeEditor from '@webview/components/settings/config/SystemPromptScopeEditor.vue';
 import ModelProfileScopeEditor from '@webview/components/settings/config/ModelProfileScopeEditor.vue';
@@ -189,6 +190,14 @@ function escapeHtml(value: string): string {
         :scope-id="activeMode.id"
         title="模式工具策略"
         description="这个模式启用时会优先使用这里的工具策略；未配置时继承全局策略。"
+      />
+
+      <CheckpointPolicyEditor
+        v-if="activeMode"
+        scope-kind="mode"
+        :scope-id="activeMode.id"
+        title="模式存档点策略"
+        description="这个模式启用时会优先使用这里的存档点策略；未配置时继承全局策略。"
       />
 
       <div v-else class="global-settings-empty">等待后端返回模式列表...</div>

@@ -2,7 +2,11 @@ import * as vscode from 'vscode';
 import type {
   AgentConversationLinkRecord,
   AgentRecord,
+  CheckpointPolicyRecord,
+  CheckpointPolicyScopeLinkRecord,
+  CheckpointRecord,
   ClientState,
+  ConversationCheckpointRepositoryLinkRecord,
   ConversationBranchLinkRecord,
   ConversationAgentSelectionRecord,
   ConversationModeSelectionRecord,
@@ -27,6 +31,7 @@ import type {
   ToolPolicyRecord,
   ToolPolicyScopeLinkRecord,
   WorkEnvironmentRecord,
+  ShadowRepositoryRecord,
   ConversationWorkEnvironmentLinkRecord,
   RunWorkEnvironmentLinkRecord,
   WorkEnvironmentPolicyRecord,
@@ -209,7 +214,12 @@ async function loadDeferredSkeletonRecords(paths: StoragePaths, state: ClientSta
     conversationWorkEnvironmentLinks,
     runWorkEnvironmentLinks,
     workEnvironmentPolicies,
-    workEnvironmentPolicyScopeLinks
+    workEnvironmentPolicyScopeLinks,
+    checkpointPolicies,
+    checkpointPolicyScopeLinks,
+    shadowRepositories,
+    conversationCheckpointRepositoryLinks,
+    checkpoints
   ] = await Promise.all([
     loadSkeletonRecords<ProjectContextRecord>('projectContexts', [paths.projectContextsRootUri, paths.projectContextsIndexUri], 'projectContext'),
     loadSkeletonRecords<ConversationProjectLinkRecord>('conversationProjectLinks', [paths.conversationProjectLinksRootUri, paths.conversationProjectLinksIndexUri], 'link'),
@@ -217,7 +227,12 @@ async function loadDeferredSkeletonRecords(paths: StoragePaths, state: ClientSta
     loadSkeletonRecords<ConversationWorkEnvironmentLinkRecord>('conversationWorkEnvironmentLinks', [paths.conversationWorkEnvironmentLinksRootUri, paths.conversationWorkEnvironmentLinksIndexUri], 'link'),
     loadSkeletonRecords<RunWorkEnvironmentLinkRecord>('runWorkEnvironmentLinks', [paths.runWorkEnvironmentLinksRootUri, paths.runWorkEnvironmentLinksIndexUri], 'link'),
     loadSkeletonRecords<WorkEnvironmentPolicyRecord>('workEnvironmentPolicies', [paths.workEnvironmentPoliciesRootUri, paths.workEnvironmentPoliciesIndexUri], 'policy'),
-    loadSkeletonRecords<WorkEnvironmentPolicyScopeLinkRecord>('workEnvironmentPolicyScopeLinks', [paths.workEnvironmentPolicyScopeLinksRootUri, paths.workEnvironmentPolicyScopeLinksIndexUri], 'link')
+    loadSkeletonRecords<WorkEnvironmentPolicyScopeLinkRecord>('workEnvironmentPolicyScopeLinks', [paths.workEnvironmentPolicyScopeLinksRootUri, paths.workEnvironmentPolicyScopeLinksIndexUri], 'link'),
+    loadSkeletonRecords<CheckpointPolicyRecord>('checkpointPolicies', [paths.checkpointPoliciesRootUri, paths.checkpointPoliciesIndexUri], 'policy'),
+    loadSkeletonRecords<CheckpointPolicyScopeLinkRecord>('checkpointPolicyScopeLinks', [paths.checkpointPolicyScopeLinksRootUri, paths.checkpointPolicyScopeLinksIndexUri], 'link'),
+    loadSkeletonRecords<ShadowRepositoryRecord>('shadowRepositories', [paths.shadowRepositoriesRootUri, paths.shadowRepositoriesIndexUri], 'shadowRepository'),
+    loadSkeletonRecords<ConversationCheckpointRepositoryLinkRecord>('conversationCheckpointRepositoryLinks', [paths.conversationCheckpointRepositoryLinksRootUri, paths.conversationCheckpointRepositoryLinksIndexUri], 'link'),
+    loadSkeletonRecords<CheckpointRecord>('checkpoints', [paths.checkpointsRootUri, paths.checkpointsIndexUri], 'checkpoint')
   ]);
 
   state.projectContexts = projectContexts;
@@ -227,6 +242,11 @@ async function loadDeferredSkeletonRecords(paths: StoragePaths, state: ClientSta
   state.runWorkEnvironmentLinks = runWorkEnvironmentLinks;
   state.workEnvironmentPolicies = workEnvironmentPolicies;
   state.workEnvironmentPolicyScopeLinks = workEnvironmentPolicyScopeLinks;
+  state.checkpointPolicies = checkpointPolicies;
+  state.checkpointPolicyScopeLinks = checkpointPolicyScopeLinks;
+  state.shadowRepositories = shadowRepositories;
+  state.conversationCheckpointRepositoryLinks = conversationCheckpointRepositoryLinks;
+  state.checkpoints = checkpoints;
 }
 
 export async function loadConversationDetailFromStores(
@@ -334,7 +354,12 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
     saveRecords(paths.workEnvironmentPoliciesRootUri, paths.workEnvironmentPoliciesIndexUri, state.workEnvironmentPolicies, 'policy', (record) => record.name || record.id),
     saveRecords(paths.workEnvironmentPolicyScopeLinksRootUri, paths.workEnvironmentPolicyScopeLinksIndexUri, state.workEnvironmentPolicyScopeLinks, 'link'),
     saveRecords(paths.conversationWorkEnvironmentLinksRootUri, paths.conversationWorkEnvironmentLinksIndexUri, state.conversationWorkEnvironmentLinks, 'link'),
-    saveRecords(paths.runWorkEnvironmentLinksRootUri, paths.runWorkEnvironmentLinksIndexUri, state.runWorkEnvironmentLinks, 'link')
+    saveRecords(paths.runWorkEnvironmentLinksRootUri, paths.runWorkEnvironmentLinksIndexUri, state.runWorkEnvironmentLinks, 'link'),
+    saveRecords(paths.checkpointPoliciesRootUri, paths.checkpointPoliciesIndexUri, state.checkpointPolicies, 'policy', (record) => record.name || record.id),
+    saveRecords(paths.checkpointPolicyScopeLinksRootUri, paths.checkpointPolicyScopeLinksIndexUri, state.checkpointPolicyScopeLinks, 'link'),
+    saveRecords(paths.shadowRepositoriesRootUri, paths.shadowRepositoriesIndexUri, state.shadowRepositories, 'shadowRepository'),
+    saveRecords(paths.conversationCheckpointRepositoryLinksRootUri, paths.conversationCheckpointRepositoryLinksIndexUri, state.conversationCheckpointRepositoryLinks, 'link'),
+    saveRecords(paths.checkpointsRootUri, paths.checkpointsIndexUri, state.checkpoints, 'checkpoint', (record) => record.projectDisplayPath || record.id)
   ]);
 }
 

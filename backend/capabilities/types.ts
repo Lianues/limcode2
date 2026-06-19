@@ -17,6 +17,10 @@ import type {
   GlobalSettingsSectionValue,
   LlmProviderConfigRecord,
   LlmProviderModelRecord,
+  CheckpointRecord,
+  CheckpointGitStatusRecord,
+  CheckpointPolicyRecord,
+  CheckpointTriggerKind,
   ToolCallEventRecord,
   ToolCallRecord,
   WebviewClientMeta,
@@ -243,6 +247,28 @@ export interface RuntimePaths {
   runWorkEnvironmentLinksRootPath: string;
   runWorkEnvironmentLinksIndexUri: vscode.Uri;
   runWorkEnvironmentLinksIndexPath: string;
+  checkpointPoliciesRootUri: vscode.Uri;
+  checkpointPoliciesRootPath: string;
+  checkpointPoliciesIndexUri: vscode.Uri;
+  checkpointPoliciesIndexPath: string;
+  checkpointPolicyScopeLinksRootUri: vscode.Uri;
+  checkpointPolicyScopeLinksRootPath: string;
+  checkpointPolicyScopeLinksIndexUri: vscode.Uri;
+  checkpointPolicyScopeLinksIndexPath: string;
+  shadowRepositoriesRootUri: vscode.Uri;
+  shadowRepositoriesRootPath: string;
+  shadowRepositoriesIndexUri: vscode.Uri;
+  shadowRepositoriesIndexPath: string;
+  conversationCheckpointRepositoryLinksRootUri: vscode.Uri;
+  conversationCheckpointRepositoryLinksRootPath: string;
+  conversationCheckpointRepositoryLinksIndexUri: vscode.Uri;
+  conversationCheckpointRepositoryLinksIndexPath: string;
+  checkpointsRootUri: vscode.Uri;
+  checkpointsRootPath: string;
+  checkpointsIndexUri: vscode.Uri;
+  checkpointsIndexPath: string;
+  checkpointShadowWorktreesRootUri: vscode.Uri;
+  checkpointShadowWorktreesRootPath: string;
   /** Agent 与 Conversation 的关系数据根目录：<dataRoot>/agent-conversation-links */
   linksRootUri: vscode.Uri;
   linksRootPath: string;
@@ -301,10 +327,24 @@ export interface StorageCapability {
   removeMessage(conversationId: string, messageId: string): Promise<void>;
   saveToolCallSnapshot(conversationId: string, toolCall: ToolCallRecord): Promise<void>;
   appendToolCallEvent(conversationId: string, event: ToolCallEventRecord): Promise<void>;
+  detectSystemGit(): Promise<CheckpointGitStatusRecord>;
+  createShadowCheckpoint(request: ShadowCheckpointCreateRequest): Promise<CheckpointRecord>;
   loadGlobalSettings(section: GlobalSettingsSection): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
   saveGlobalSettings(section: GlobalSettingsSection, settings: GlobalSettingsSectionValue): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
   loadActiveLlmProviderConfig(conversationId?: string): Promise<LlmProviderConfigRecord>;
   loadLlmProviderConfigById(configId: string): Promise<LlmProviderConfigRecord | undefined>;
   loadConversationSettings(conversationId: string, section: ConversationSettingsSection): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string } | undefined>;
   saveConversationSettings(section: ConversationSettingsSection, settings: ConversationSettingsSectionValue): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }>;
+}
+
+export interface ShadowCheckpointCreateRequest {
+  checkpointId: string;
+  conversationId: string;
+  projectContextId: string;
+  projectUri: string;
+  projectDisplayPath: string;
+  shadowRepositoryId: string;
+  shadowRepositoryStorageKey: string;
+  trigger: CheckpointTriggerKind;
+  policy: CheckpointPolicyRecord;
 }

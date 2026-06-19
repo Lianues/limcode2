@@ -20,6 +20,7 @@ import { ToolEventType } from '../events';
 import { isTerminalToolStatus, toolStateToResponse, transitionToolState } from '../state';
 import { readEvents } from '../../../events';
 import type { ToolCallStatus } from '../../../../../shared/protocol';
+import { CheckpointEventType } from '../../checkpoint/events';
 
 const SettledToolCallsQuery = defineQuery({
   name: 'SettledToolCalls',
@@ -60,7 +61,7 @@ export const ToolResultSystem = defineSystem({
     queries: [SettledToolCallsQuery, ActiveToolWorkLookupQuery],
     bundles: [ToolResultMessageBundle, ToolCallEventBundle],
     writes: { components: [AgentRun, AgentRunNeedsModel, MessageRunLink, ToolState] },
-    events: { read: [ToolEventType.ResultSubmitRequested, ToolEventType.ResultRejectRequested] }
+    events: { read: [ToolEventType.ResultSubmitRequested, ToolEventType.ResultRejectRequested], emit: [CheckpointEventType.Requested] }
   },
   run(ctx) {
     const { world, cmd } = ctx;
@@ -139,6 +140,18 @@ export const ToolResultSystem = defineSystem({
         durationMs: state.durationMs
       });
       spawnMessageRunLink(cmd, { message: responseMessage, run, role: 'tool_response' });
+      const conversationData = world.get(target.conversation, Conversation);
+      if (conversationData) {
+        cmd.enqueue({
+          type: CheckpointEventType.Requested,
+          payload: {
+            conversationId: conversationData.id,
+            runId: runData.id,
+            toolCallId: call.id,
+            trigger: 'tool_execution_after'
+          }
+        });
+      }
       cmd.add(entity, ToolResultConsumed, true);
       consumedThisPass.add(entity);
       touchedRuns.add(run);

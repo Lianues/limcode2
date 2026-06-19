@@ -5,6 +5,7 @@ import type { AgentRecord } from '@shared/protocol';
 import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
 import ToolPolicyEditor from '@webview/components/settings/tools/ToolPolicyEditor.vue';
 import WorkEnvironmentPolicyEditor from '@webview/components/settings/workEnvironment/WorkEnvironmentPolicyEditor.vue';
+import CheckpointPolicyEditor from '@webview/components/settings/checkpoints/CheckpointPolicyEditor.vue';
 import SystemPromptScopeEditor from '@webview/components/settings/config/SystemPromptScopeEditor.vue';
 import ModelProfileScopeEditor from '@webview/components/settings/config/ModelProfileScopeEditor.vue';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
@@ -71,6 +72,7 @@ function confirmDelete(): void { const agent = activeAgent.value; deleteOpen.val
     <ModelProfileScopeEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 默认模型" description="当 conversation/mode/run 没有更近覆盖时使用。" />
     <ToolPolicyEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 工具能力上限" description="Agent 的工具策略作为能力上限，Mode/Conversation/Run 只能继续收窄，不能放大。" />
     <WorkEnvironmentPolicyEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 工作环境策略" description="限制这个 Agent 可使用的工作环境。" />
+    <CheckpointPolicyEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 存档点策略" description="限制这个 Agent 触发存档点的时机和 shadow 仓库过滤规则。" />
 
     <p class="global-settings-status">{{ agentStore.status }}</p>
 

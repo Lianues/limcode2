@@ -7,3 +7,4 @@ export * from './project';
 export * from './workEnvironment';
 export * from './llm';
 export * from './tools';
+export * from './checkpoint';

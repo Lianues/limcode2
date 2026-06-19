@@ -124,7 +124,7 @@ export async function startLlmProvider(
     let latestUsageMetadata: LlmUsageMetadataRecord | undefined;
     let firstStreamChunkAt: number | undefined;
     let firstStreamChunkMark: number | undefined;
-    let streamOutputChunkCount = 0;
+    let streamTimingChunkCount = 0;
     let activeThoughtBlock: ActiveThoughtBlock | undefined;
     for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(toUnifiedRequest(request, settings.generationConfig), {
       inputFormat: 'unified',
@@ -137,10 +137,10 @@ export async function startLlmProvider(
       if (activeThoughtBlock && shouldCloseThoughtBlock(chunk)) activeThoughtBlock = finishThoughtBlock(request.id, activeThoughtBlock, chunkAt, emit);
       const chunkUsageMetadata = usageMetadataFromChunk(chunk);
       if (chunkUsageMetadata) latestUsageMetadata = mergeUsageMetadata(latestUsageMetadata, chunkUsageMetadata);
-      if (hasStreamOutput(chunk)) {
+      if (hasStreamTimingChunk(chunk)) {
         firstStreamChunkAt ??= chunkAt;
         firstStreamChunkMark ??= chunkMark;
-        streamOutputChunkCount += 1;
+        streamTimingChunkCount += 1;
       }
       emitUnifiedChunk(request.id, chunk, emit);
     }
@@ -150,7 +150,7 @@ export async function startLlmProvider(
     if (activeThoughtBlock) finishThoughtBlock(request.id, activeThoughtBlock, finishedAt, emit);
     emit({
       type: LlmEventType.Done,
-      payload: { requestId: request.id, ...createDoneTiming(firstStreamChunkAt, finishedAt, firstStreamChunkMark, finishedMark, streamOutputChunkCount), ...(latestUsageMetadata ? { usageMetadata: latestUsageMetadata } : {}) }
+      payload: { requestId: request.id, ...createDoneTiming(firstStreamChunkAt, finishedAt, firstStreamChunkMark, finishedMark, streamTimingChunkCount), ...(latestUsageMetadata ? { usageMetadata: latestUsageMetadata } : {}) }
     });
   } catch (error) {
     if (isAbortError(error)) return;
@@ -387,7 +387,7 @@ function createDoneTiming(
   finishedAt = Date.now(),
   firstChunkMark?: number,
   finishedMark?: number,
-  outputChunkCount = 0
+  streamChunkCount = 0
 ): LlmDoneTiming {
   const rawDurationMs = firstChunkAt === undefined
     ? undefined
@@ -395,7 +395,7 @@ function createDoneTiming(
       ? finishedMark - firstChunkMark
       : finishedAt - firstChunkAt;
 
-  const streamOutputDurationMs = outputChunkCount >= 3 && rawDurationMs !== undefined && rawDurationMs >= 2
+  const streamOutputDurationMs = streamChunkCount >= 3 && rawDurationMs !== undefined && rawDurationMs >= 2
     ? Math.round(rawDurationMs)
     : undefined;
 
@@ -440,6 +440,14 @@ function stripUndefined(value: unknown): unknown {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasStreamTimingChunk(chunk: UnifiedLLMStreamChunk): boolean {
+  return hasStreamOutput(chunk) || hasThoughtOutput(chunk);
+}
+
+function hasThoughtOutput(chunk: UnifiedLLMStreamChunk): boolean {
+  return (chunk.partsDelta ?? []).some((part) => isUnifiedThoughtTextPart(part) && !!part.text);
 }
 
 function hasStreamOutput(chunk: UnifiedLLMStreamChunk): boolean {

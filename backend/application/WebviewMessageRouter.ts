@@ -8,6 +8,7 @@ import { buildLlmStartRequestForRun } from '../world/modules/chat/systems/LlmDis
 import { ToolEventType } from '../world/modules/tools/events';
 import { ModeEventType } from '../world/modules/mode/events';
 import { WorkEnvironmentEventType } from '../world/modules/workEnvironment/events';
+import { CheckpointEventType } from '../world/modules/checkpoint/events';
 import { AgentEventType } from '../world/modules/agent/events';
 import {
   BridgeMessageType,
@@ -211,6 +212,9 @@ export class WebviewMessageRouter {
       case BridgeMessageType.LlmProviderModelsGet:
         if (message.payload) void this.postLlmProviderModels(clientId, message.payload, message.id);
         break;
+      case BridgeMessageType.CheckpointGitStatusGet:
+        void this.postCheckpointGitStatus(clientId, message.id);
+        break;
       case BridgeMessageType.GlobalSettingsGet:
         if (!message.payload) return;
         this.deps.webview.subscribe(clientId, globalSettingsStreamId(message.payload.section));
@@ -279,6 +283,16 @@ export class WebviewMessageRouter {
       case BridgeMessageType.WorkEnvironmentPolicyScopeClear:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: WorkEnvironmentEventType.PolicyScopeClearRequested, payload: message.payload });
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.CheckpointPolicyScopeSet:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: CheckpointEventType.PolicyScopeSetRequested, payload: message.payload });
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.CheckpointPolicyScopeClear:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: CheckpointEventType.PolicyScopeClearRequested, payload: message.payload });
         this.deps.requestSnapshot();
         break;
       case BridgeMessageType.Ready:
@@ -424,6 +438,21 @@ export class WebviewMessageRouter {
     } catch (error) {
       console.warn('[LimCode] Failed to fetch LLM provider models.', error);
       this.postRequestError(clientId, BridgeMessageType.LlmProviderModelsGet, error instanceof Error ? error.message : '无法获取模型列表。', correlationId);
+    }
+  }
+
+  private async postCheckpointGitStatus(clientId: BridgeClientId, correlationId?: string): Promise<void> {
+    try {
+      const status = await this.deps.storage.detectSystemGit();
+      this.deps.webview.post(clientId, {
+        id: createMessageId(),
+        type: BridgeMessageType.CheckpointGitStatusSnapshot,
+        channel: 'state',
+        correlationId,
+        payload: { status }
+      });
+    } catch (error) {
+      this.postRequestError(clientId, BridgeMessageType.CheckpointGitStatusGet, error instanceof Error ? error.message : '无法检测系统 Git。', correlationId);
     }
   }
 

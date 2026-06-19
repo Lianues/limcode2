@@ -24,7 +24,13 @@ import {
   CONVERSATION_WORK_ENVIRONMENT_LINKS_ROOT_DIR,
   RUN_WORK_ENVIRONMENT_LINKS_ROOT_DIR,
   WORK_ENVIRONMENT_POLICIES_ROOT_DIR,
-  WORK_ENVIRONMENT_POLICY_SCOPE_LINKS_ROOT_DIR
+  WORK_ENVIRONMENT_POLICY_SCOPE_LINKS_ROOT_DIR,
+  CHECKPOINT_POLICIES_ROOT_DIR,
+  CHECKPOINT_POLICY_SCOPE_LINKS_ROOT_DIR,
+  SHADOW_REPOSITORIES_ROOT_DIR,
+  CONVERSATION_CHECKPOINT_REPOSITORY_LINKS_ROOT_DIR,
+  CHECKPOINTS_ROOT_DIR,
+  CHECKPOINT_SHADOW_WORKTREES_ROOT_DIR
 } from './constants';
 
 export interface VscodeStorageUris {
@@ -58,6 +64,17 @@ export interface VscodeStorageUris {
   conversationWorkEnvironmentLinksIndexUri: vscode.Uri;
   runWorkEnvironmentLinksRootUri: vscode.Uri;
   runWorkEnvironmentLinksIndexUri: vscode.Uri;
+  checkpointPoliciesRootUri: vscode.Uri;
+  checkpointPoliciesIndexUri: vscode.Uri;
+  checkpointPolicyScopeLinksRootUri: vscode.Uri;
+  checkpointPolicyScopeLinksIndexUri: vscode.Uri;
+  shadowRepositoriesRootUri: vscode.Uri;
+  shadowRepositoriesIndexUri: vscode.Uri;
+  conversationCheckpointRepositoryLinksRootUri: vscode.Uri;
+  conversationCheckpointRepositoryLinksIndexUri: vscode.Uri;
+  checkpointsRootUri: vscode.Uri;
+  checkpointsIndexUri: vscode.Uri;
+  checkpointShadowWorktreesRootUri: vscode.Uri;
   linksRootUri: vscode.Uri;
   linksIndexUri: vscode.Uri;
   systemPromptScopeLinksRootUri: vscode.Uri;
@@ -95,6 +112,12 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const workEnvironmentPolicyScopeLinks = root(globalStorageUri, WORK_ENVIRONMENT_POLICY_SCOPE_LINKS_ROOT_DIR);
   const conversationWorkEnvironmentLinks = root(globalStorageUri, CONVERSATION_WORK_ENVIRONMENT_LINKS_ROOT_DIR);
   const runWorkEnvironmentLinks = root(globalStorageUri, RUN_WORK_ENVIRONMENT_LINKS_ROOT_DIR);
+  const checkpointPolicies = root(globalStorageUri, CHECKPOINT_POLICIES_ROOT_DIR);
+  const checkpointPolicyScopeLinks = root(globalStorageUri, CHECKPOINT_POLICY_SCOPE_LINKS_ROOT_DIR);
+  const shadowRepositories = root(globalStorageUri, SHADOW_REPOSITORIES_ROOT_DIR);
+  const conversationCheckpointRepositoryLinks = root(globalStorageUri, CONVERSATION_CHECKPOINT_REPOSITORY_LINKS_ROOT_DIR);
+  const checkpoints = root(globalStorageUri, CHECKPOINTS_ROOT_DIR);
+  const checkpointShadowWorktreesRootUri = vscode.Uri.joinPath(globalStorageUri, CHECKPOINT_SHADOW_WORKTREES_ROOT_DIR);
   const links = root(globalStorageUri, AGENT_CONVERSATION_LINKS_ROOT_DIR);
   const systemPromptScopeLinks = root(globalStorageUri, SYSTEM_PROMPT_SCOPE_LINKS_ROOT_DIR);
   const modelProfileScopeLinks = root(globalStorageUri, MODEL_PROFILE_SCOPE_LINKS_ROOT_DIR);
@@ -167,6 +190,28 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     runWorkEnvironmentLinksRootPath: runWorkEnvironmentLinks.rootUri.fsPath,
     runWorkEnvironmentLinksIndexUri: runWorkEnvironmentLinks.indexUri,
     runWorkEnvironmentLinksIndexPath: runWorkEnvironmentLinks.indexUri.fsPath,
+    checkpointPoliciesRootUri: checkpointPolicies.rootUri,
+    checkpointPoliciesRootPath: checkpointPolicies.rootUri.fsPath,
+    checkpointPoliciesIndexUri: checkpointPolicies.indexUri,
+    checkpointPoliciesIndexPath: checkpointPolicies.indexUri.fsPath,
+    checkpointPolicyScopeLinksRootUri: checkpointPolicyScopeLinks.rootUri,
+    checkpointPolicyScopeLinksRootPath: checkpointPolicyScopeLinks.rootUri.fsPath,
+    checkpointPolicyScopeLinksIndexUri: checkpointPolicyScopeLinks.indexUri,
+    checkpointPolicyScopeLinksIndexPath: checkpointPolicyScopeLinks.indexUri.fsPath,
+    shadowRepositoriesRootUri: shadowRepositories.rootUri,
+    shadowRepositoriesRootPath: shadowRepositories.rootUri.fsPath,
+    shadowRepositoriesIndexUri: shadowRepositories.indexUri,
+    shadowRepositoriesIndexPath: shadowRepositories.indexUri.fsPath,
+    conversationCheckpointRepositoryLinksRootUri: conversationCheckpointRepositoryLinks.rootUri,
+    conversationCheckpointRepositoryLinksRootPath: conversationCheckpointRepositoryLinks.rootUri.fsPath,
+    conversationCheckpointRepositoryLinksIndexUri: conversationCheckpointRepositoryLinks.indexUri,
+    conversationCheckpointRepositoryLinksIndexPath: conversationCheckpointRepositoryLinks.indexUri.fsPath,
+    checkpointsRootUri: checkpoints.rootUri,
+    checkpointsRootPath: checkpoints.rootUri.fsPath,
+    checkpointsIndexUri: checkpoints.indexUri,
+    checkpointsIndexPath: checkpoints.indexUri.fsPath,
+    checkpointShadowWorktreesRootUri,
+    checkpointShadowWorktreesRootPath: checkpointShadowWorktreesRootUri.fsPath,
     linksRootUri: links.rootUri,
     linksRootPath: links.rootUri.fsPath,
     linksIndexUri: links.indexUri,

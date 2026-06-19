@@ -319,6 +319,9 @@ export const CLIENT_STATE_TABLES = {
       { table: 'conversationModeSelections', foreignKey: 'conversationId' },
       { table: 'conversationProjectLinks', foreignKey: 'conversationId' },
       { table: 'conversationWorkEnvironmentLinks', foreignKey: 'conversationId' },
+      { table: 'conversationCheckpointRepositoryLinks', foreignKey: 'conversationId' },
+      { table: 'checkpoints', foreignKey: 'conversationId' },
+      { table: 'checkpointPolicyScopeLinks', foreignKey: 'scopeId' },
       { table: 'workEnvironmentPolicyScopeLinks', foreignKey: 'scopeId' },
       { table: 'systemPromptScopeLinks', foreignKey: 'scopeId' },
       { table: 'modelProfileScopeLinks', foreignKey: 'scopeId' },
@@ -332,7 +335,9 @@ export const CLIENT_STATE_TABLES = {
   conversationAgentSelections: upsertRemoveTable('conversationAgentSelection', 'selection', { scope: { kind: 'conversation', field: 'conversationId' }, globalSnapshot: true }),
   projectContexts: upsertRemoveTable('projectContext', 'projectContext', {
     cascadeRemove: [
-      { table: 'conversationProjectLinks', foreignKey: 'projectContextId' }
+      { table: 'conversationProjectLinks', foreignKey: 'projectContextId' },
+      { table: 'conversationCheckpointRepositoryLinks', foreignKey: 'projectContextId' },
+      { table: 'checkpoints', foreignKey: 'projectContextId' }
     ],
     globalSnapshot: true,
     scope: {
@@ -359,6 +364,25 @@ export const CLIENT_STATE_TABLES = {
   }),
   workEnvironmentPolicyScopeLinks: upsertRemoveTable('workEnvironmentPolicyScopeLink', 'link', { globalSnapshot: true }),
   conversationWorkEnvironmentLinks: upsertRemoveTable('conversationWorkEnvironmentLink', 'link', { scope: { kind: 'conversation', field: 'conversationId' }, globalSnapshot: true }),
+  runWorkEnvironmentLinks: upsertRemoveTable('runWorkEnvironmentLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
+  checkpointPolicies: upsertRemoveTable('checkpointPolicy', 'policy', {
+    cascadeRemove: [{ table: 'checkpointPolicyScopeLinks', foreignKey: 'checkpointPolicyId' }],
+    globalSnapshot: true
+  }),
+  checkpointPolicyScopeLinks: upsertRemoveTable('checkpointPolicyScopeLink', 'link', { globalSnapshot: true }),
+  shadowRepositories: upsertRemoveTable('shadowRepository', 'shadowRepository', {
+    cascadeRemove: [
+      { table: 'conversationCheckpointRepositoryLinks', foreignKey: 'shadowRepositoryId' },
+      { table: 'checkpoints', foreignKey: 'shadowRepositoryId' }
+    ],
+    globalSnapshot: true
+  }),
+  conversationCheckpointRepositoryLinks: upsertRemoveTable('conversationCheckpointRepositoryLink', 'link', { scope: { kind: 'conversation', field: 'conversationId' }, globalSnapshot: true }),
+  checkpoints: upsertRemoveTable('checkpoint', 'checkpoint', {
+    orderBy: [{ field: 'createdAt', direction: 'desc' }, { field: 'id' }],
+    globalSnapshot: true,
+    scope: { kind: 'conversation', field: 'conversationId' }
+  }),
   messages: {
     patch: {
       upsert: { kind: 'message.upsert', payloadField: 'message' },
@@ -387,7 +411,6 @@ export const CLIENT_STATE_TABLES = {
   runContextPolicyLinks: upsertRemoveTable('runContextPolicyLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
   runDeliveryPolicyLinks: upsertRemoveTable('runDeliveryPolicyLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
   runEditPolicyLinks: upsertRemoveTable('runEditPolicyLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
-  runWorkEnvironmentLinks: upsertRemoveTable('runWorkEnvironmentLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
   agentRunInputRevisions: upsertRemoveTable('agentRunInputRevision', 'inputRevision', { scope: { kind: 'conversationAnyOf', scopes: [{ kind: 'conversation', field: 'conversationId' }, { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' }] } })
 } as const satisfies ClientStateTableRegistry;
 

@@ -9,6 +9,7 @@ import { AgentRunBundle, spawnAgentRun, spawnMessageRunLink } from '../../agentR
 import { cleanupRunLlmRequests } from '../../agentRun/llmRequestCleanup';
 import { defaultAgentForConversation, effectiveEditPolicyForRun, findAgentById, runTarget } from '../../agentRun/queries';
 import type { ChatSendPayload, MessageContent } from '../../../../../shared/protocol';
+import { CheckpointEventType } from '../../checkpoint/events';
 
 const ConversationsByIdQuery = defineQuery({
   name: 'ConversationsById',
@@ -23,7 +24,7 @@ export const InputSystem = defineSystem({
   name: 'InputSystem',
   access: {
     queries: [ConversationsByIdQuery],
-    events: { read: [ChatEventType.Send, ChatEventType.Abort] },
+    events: { read: [ChatEventType.Send, ChatEventType.Abort], emit: [CheckpointEventType.Requested] },
     effects: { emit: ['llm.abort'] },
     writes: { components: [Aborted] },
     bundles: [UserMessageBundle, AgentRunBundle]
@@ -52,6 +53,7 @@ function handleSend(world: WorldReader, cmd: CommandSink, conversation: Entity, 
   const activeRuns = activeRunsForConversation(world, conversation);
   if (activeRuns.length === 0) {
     const message = spawnInputMessage(cmd, conversation, content);
+    requestCheckpoint(cmd, payload.conversationId);
     spawnChatRun(cmd, { agent, conversation, message });
     return;
   }
@@ -63,22 +65,29 @@ function handleSend(world: WorldReader, cmd: CommandSink, conversation: Entity, 
     case 'append_to_target': {
       const target = runTarget(world, activeRuns[0]);
       const message = spawnInputMessage(cmd, target?.conversation ?? conversation, content);
+      requestCheckpoint(cmd, payload.conversationId);
       spawnMessageRunLink(cmd, { message, run: activeRuns[0], role: 'input' });
       return;
     }
     case 'interrupt_current': {
       cancelRuns(world, cmd, activeRuns);
       const message = spawnInputMessage(cmd, conversation, content);
+      requestCheckpoint(cmd, payload.conversationId);
       spawnChatRun(cmd, { agent, conversation, message });
       return;
     }
     case 'queue_next_run':
     default: {
       const message = spawnInputMessage(cmd, conversation, content);
+      requestCheckpoint(cmd, payload.conversationId);
       spawnChatRun(cmd, { agent, conversation, message, needsModel: false });
       return;
     }
   }
+}
+
+function requestCheckpoint(cmd: CommandSink, conversationId: string): void {
+  cmd.enqueue({ type: CheckpointEventType.Requested, payload: { conversationId, trigger: 'user_message_after' } });
 }
 
 function normalizeInputContent(payload: ChatSendPayload): MessageContent {

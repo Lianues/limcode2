@@ -12,8 +12,9 @@ import { ToolCall } from '../../tools/components';
 import { spawnToolCall, ToolCallBundle } from '../../tools/bundles';
 import { AgentRun } from '../../agentRun/components';
 import { spawnToolCallRunLink } from '../../agentRun/bundles';
-import { LlmRequest, Message, Streaming, type MessageData } from '../components';
+import { LlmRequest, Message, Streaming, Conversation, type MessageData } from '../components';
 import { isFunctionCallPart, isTextPart, isVisibleTextPart, type ContentPart } from '../../../../../shared/protocol';
+import { CheckpointEventType } from '../../checkpoint/events';
 
 type PendingOperation =
   | { kind: 'thoughtDelta'; payload: LlmThoughtDeltaPayload }
@@ -30,7 +31,7 @@ interface PendingRequestUpdate {
 const LlmRequestsByIdQuery = defineQuery({
   name: 'LlmRequestsById',
   all: [LlmRequest],
-  read: [LlmRequest],
+  read: [LlmRequest, Conversation],
   remove: [LlmRequest],
   mutationMode: 'consume',
   role: 'lookup'
@@ -57,7 +58,7 @@ export const LlmPollSystem = defineSystem({
   access: {
     queries: [LlmRequestsByIdQuery, ModelMessagesQuery, ToolCallLookupQuery],
     writes: { components: [Streaming, AgentRun] },
-    events: { read: [LlmEventType.ThoughtDelta, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error] },
+    events: { read: [LlmEventType.ThoughtDelta, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error], emit: [CheckpointEventType.Requested] },
     bundles: [ToolCallBundle]
   },
   run(ctx) {
@@ -194,6 +195,13 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
       const now = Date.now();
       const waitsForTool = sawToolCall || next.content.parts.some(isFunctionCallPart);
       const nextStatus = errorMessage ? 'failed' : waitsForTool ? 'waiting_tool' : 'delivering';
+      const conversation = world.get(requestData.conversation, Conversation);
+      if (!errorMessage && conversation) {
+        cmd.enqueue({
+          type: CheckpointEventType.Requested,
+          payload: { conversationId: conversation.id, runId: run.id, trigger: 'llm_response_after' }
+        });
+      }
       cmd.add(requestData.run, AgentRun, {
         ...run,
         status: nextStatus,

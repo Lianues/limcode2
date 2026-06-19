@@ -17,6 +17,7 @@ import { isVisibleTextPart, type LlmUsageMetadataRecord, type MessageRecord, typ
 import RichContentView from '@webview/components/content/RichContentView.vue';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 import HoverTooltipPanel from '@webview/components/ui/HoverTooltipPanel.vue';
+import { normalizeTokenUsage } from './tokenUsageModel';
 
 const props = withDefaults(
   defineProps<{
@@ -103,9 +104,10 @@ const tokenUsageItems = computed<TokenUsageItem[]>(() => {
   const usage = props.message.usageMetadata;
   if (!usage) return [];
 
-  const input = usageNumber(usage, ['promptTokenCount', 'prompt_tokens', 'input_tokens', 'inputTokens']);
-  const output = usageNumber(usage, ['candidatesTokenCount', 'completion_tokens', 'output_tokens', 'outputTokens']);
-  const total = usageNumber(usage, ['totalTokenCount', 'total_tokens', 'totalTokens']);
+  const normalized = normalizeTokenUsage(usage);
+  const input = normalized.input;
+  const output = normalized.output;
+  const total = normalized.total;
 
   return [
     createTokenUsageItem('total', '总', total, usage),
@@ -132,7 +134,7 @@ const runMetricItems = computed<RunMetricItem[]>(() => {
 
   const durationMs = normalizeDurationMs(props.message.streamOutputDurationMs);
   const outputTokens = props.message.usageMetadata
-    ? usageNumber(props.message.usageMetadata, ['candidatesTokenCount', 'completion_tokens', 'output_tokens', 'outputTokens'])
+    ? normalizeTokenUsage(props.message.usageMetadata).output
     : undefined;
   const tokenSpeed = durationMs !== undefined && durationMs > 0 && outputTokens !== undefined
     ? outputTokens / (durationMs / 1000)
@@ -145,8 +147,8 @@ const runMetricItems = computed<RunMetricItem[]>(() => {
           key: 'duration' as const,
           label: '耗时',
           value: formatDurationMs(durationMs),
-          tooltipTitle: '流式输出耗时',
-          details: [{ label: '耗时', value: formatDurationMs(durationMs) }]
+          tooltipTitle: '总输出耗时',
+          details: [{ label: '总耗时', value: formatDurationMs(durationMs) }]
         }
       : undefined,
     tokenSpeed !== undefined
@@ -154,10 +156,10 @@ const runMetricItems = computed<RunMetricItem[]>(() => {
           key: 'speed' as const,
           label: '速度',
           value: formatTokenSpeed(tokenSpeed),
-          tooltipTitle: '输出 token 速度',
+          tooltipTitle: '输出 token 速度（含思考）',
           details: [
-            { label: '输出 token', value: formatExactNumber(outputTokens!) },
-            { label: '流式耗时', value: formatDurationMs(durationMs!) },
+            { label: '输出 token（含思考）', value: formatExactNumber(outputTokens!) },
+            { label: '总耗时', value: formatDurationMs(durationMs!) },
             { label: '速度', value: formatTokenSpeedExact(tokenSpeed) }
           ]
         }
@@ -234,7 +236,7 @@ function titleForStopReason(reason: MessageStopReason | undefined): string | und
   }
 }
 
-function usageNumber(usage: LlmUsageMetadataRecord, keys: string[]): number | undefined {
+function usageNumber(usage: LlmUsageMetadataRecord, keys: readonly string[]): number | undefined {
   for (const key of keys) {
     if (!hasOwn.call(usage, key)) continue;
     const value = usage[key];
@@ -369,7 +371,7 @@ function tokenUsageSuffix(key: TokenUsageKind, usage: LlmUsageMetadataRecord): s
   }
 
   if (key === 'output') {
-    const thoughts = usageNumber(usage, ['thoughtsTokenCount', 'reasoning_tokens']);
+    const thoughts = normalizeTokenUsage(usage).reasoning;
     return thoughts !== undefined ? `(${formatCompactNumber(thoughts)})` : undefined;
   }
 
@@ -386,15 +388,12 @@ function tokenUsageDetails(key: TokenUsageKind, usage: LlmUsageMetadataRecord): 
         ...recordUsageDetailItems(usage.cacheCreationInputTokensDetails, 0)
       ];
     case 'output':
-      return [
-        ...outputBodyTokenDetail(usage),
-        ...usageDetailItems(usage, ['thoughtsTokenCount', 'reasoning_tokens'])
-      ];
+      return outputTokenDetails(usage);
   }
   return [];
 }
 
-function usageDetailItems(usage: LlmUsageMetadataRecord, keys: string[]): TokenUsageDetailItem[] {
+function usageDetailItems(usage: LlmUsageMetadataRecord, keys: readonly string[]): TokenUsageDetailItem[] {
   const details: TokenUsageDetailItem[] = [];
   for (const key of keys) {
     if (!hasOwn.call(usage, key)) continue;
@@ -404,14 +403,16 @@ function usageDetailItems(usage: LlmUsageMetadataRecord, keys: string[]): TokenU
   return details;
 }
 
-function outputBodyTokenDetail(usage: LlmUsageMetadataRecord): TokenUsageDetailItem[] {
-  const output = usageNumber(usage, ['candidatesTokenCount', 'completion_tokens', 'output_tokens', 'outputTokens']);
-  const thoughts = usageNumber(usage, ['thoughtsTokenCount', 'reasoning_tokens']);
-  if (output === undefined || thoughts === undefined) return [];
-  return [{
-    label: '正文 token',
-    value: formatExactNumber(output - thoughts)
-  }];
+function outputTokenDetails(usage: LlmUsageMetadataRecord): TokenUsageDetailItem[] {
+  const normalized = normalizeTokenUsage(usage);
+  const thoughts = normalized.reasoning;
+  if (thoughts === undefined) return [];
+
+  const bodyTokens = normalized.output !== undefined ? Math.max(0, normalized.output - thoughts) : undefined;
+  return [
+    ...(bodyTokens !== undefined ? [{ label: '正文 token', value: formatExactNumber(bodyTokens) }] : []),
+    ...usageDetailItems(usage, ['thoughtsTokenCount', 'reasoning_tokens'])
+  ];
 }
 
 function recordUsageDetailItems(value: unknown, depth: number): TokenUsageDetailItem[] {

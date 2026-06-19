@@ -121,7 +121,11 @@ export enum BridgeMessageType {
   WorkEnvironmentRemove = 'workEnvironment.remove',
   WorkEnvironmentImportFromVscode = 'workEnvironment.importFromVscode',
   WorkEnvironmentPolicyScopeSet = 'workEnvironmentPolicy.scope.set',
-  WorkEnvironmentPolicyScopeClear = 'workEnvironmentPolicy.scope.clear'
+  WorkEnvironmentPolicyScopeClear = 'workEnvironmentPolicy.scope.clear',
+  CheckpointPolicyScopeSet = 'checkpointPolicy.scope.set',
+  CheckpointPolicyScopeClear = 'checkpointPolicy.scope.clear',
+  CheckpointGitStatusGet = 'checkpoint.gitStatus.get',
+  CheckpointGitStatusSnapshot = 'checkpoint.gitStatus.snapshot'
 }
 
 export interface BridgeEnvelope<TType extends string = string, TPayload = unknown> {
@@ -660,6 +664,106 @@ export interface RunWorkEnvironmentLinkRecord {
   updatedAt: number;
 }
 
+export type CheckpointPolicyScopeKind = ConfigScopeKind;
+export type CheckpointRepositoryLinkRole = 'active' | 'history';
+export type CheckpointStatus = 'created' | 'skipped' | 'failed';
+export type CheckpointSkipReason =
+  | 'disabled'
+  | 'trigger_disabled'
+  | 'no_project'
+  | 'workspace_not_containing_project'
+  | 'initial_size_exceeded'
+  | 'no_changes'
+  | 'git_unavailable'
+  | 'unsupported_project_uri'
+  | 'io_error';
+export type CheckpointTriggerKind =
+  | 'user_message_after'
+  | 'llm_response_after'
+  | 'tool_execution_before'
+  | 'tool_execution_after'
+  | 'agent_run_completed_after'
+  | 'manual';
+
+export interface CheckpointTriggerConfigRecord {
+  userMessageAfter: boolean;
+  llmResponseAfter: boolean;
+  toolExecutionBefore: boolean;
+  toolExecutionAfter: boolean;
+  agentRunCompletedAfter: boolean;
+  manual: boolean;
+}
+
+export interface CheckpointPolicyRecord {
+  id: string;
+  name: string;
+  enabled: boolean;
+  initialSnapshotMaxBytes: number;
+  preserveEmptyDirectories: boolean;
+  useGitignore: boolean;
+  skipPatterns: string[];
+  triggers: CheckpointTriggerConfigRecord;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CheckpointGitStatusRecord {
+  available: boolean;
+  checkedAt: number;
+  version?: string;
+  message?: string;
+}
+
+export interface CheckpointGitStatusSnapshotPayload { status: CheckpointGitStatusRecord }
+
+export interface CheckpointPolicyScopeLinkRecord {
+  id: string;
+  scopeKind: CheckpointPolicyScopeKind;
+  scopeId?: string;
+  checkpointPolicyId: string;
+  role: ConfigScopeBindingRole;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ShadowRepositoryRecord {
+  id: string;
+  storageKey: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ConversationCheckpointRepositoryLinkRecord {
+  id: string;
+  conversationId: string;
+  projectContextId: string;
+  shadowRepositoryId: string;
+  projectUri: string;
+  projectDisplayPath: string;
+  role: CheckpointRepositoryLinkRole;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CheckpointRecord {
+  id: string;
+  conversationId: string;
+  projectContextId: string;
+  shadowRepositoryId: string;
+  trigger: CheckpointTriggerKind;
+  status: CheckpointStatus;
+  projectUri: string;
+  projectDisplayPath: string;
+  createdAt: number;
+  updatedAt: number;
+  commitSha?: string;
+  skipReason?: CheckpointSkipReason;
+  message?: string;
+  fileCount?: number;
+  byteCount?: number;
+  emptyDirectoryCount?: number;
+}
+
 export interface AgentConversationLinkRecord {
   id: string;
   agentId: string;
@@ -982,6 +1086,11 @@ export interface ClientStateRecordByTable {
   workEnvironmentPolicyScopeLinks: WorkEnvironmentPolicyScopeLinkRecord;
   conversationWorkEnvironmentLinks: ConversationWorkEnvironmentLinkRecord;
   runWorkEnvironmentLinks: RunWorkEnvironmentLinkRecord;
+  checkpointPolicies: CheckpointPolicyRecord;
+  checkpointPolicyScopeLinks: CheckpointPolicyScopeLinkRecord;
+  shadowRepositories: ShadowRepositoryRecord;
+  conversationCheckpointRepositoryLinks: ConversationCheckpointRepositoryLinkRecord;
+  checkpoints: CheckpointRecord;
   messages: MessageRecord;
   messageRevisions: MessageRevisionRecord;
   messageCurrentRevisionLinks: MessageCurrentRevisionLinkRecord;
@@ -1091,6 +1200,21 @@ export interface ToolPolicyScopeSetPayload {
 }
 export interface ToolPolicyScopeClearPayload {
   scopeKind: ToolPolicyScopeKind;
+  scopeId?: string;
+}
+export interface CheckpointPolicyScopeSetPayload {
+  scopeKind: CheckpointPolicyScopeKind;
+  scopeId?: string;
+  name?: string;
+  enabled?: boolean;
+  initialSnapshotMaxBytes?: number;
+  preserveEmptyDirectories?: boolean;
+  useGitignore?: boolean;
+  skipPatterns?: string[];
+  triggers?: Partial<CheckpointTriggerConfigRecord>;
+}
+export interface CheckpointPolicyScopeClearPayload {
+  scopeKind: CheckpointPolicyScopeKind;
   scopeId?: string;
 }
 export interface SystemPromptScopeSetPayload {
@@ -1366,6 +1490,8 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.AgentRunMarkStale, AgentRunControlPayload>
   | BridgeEnvelope<BridgeMessageType.ToolPolicyScopeSet, ToolPolicyScopeSetPayload>
   | BridgeEnvelope<BridgeMessageType.ToolPolicyScopeClear, ToolPolicyScopeClearPayload>
+  | BridgeEnvelope<BridgeMessageType.CheckpointPolicyScopeSet, CheckpointPolicyScopeSetPayload>
+  | BridgeEnvelope<BridgeMessageType.CheckpointPolicyScopeClear, CheckpointPolicyScopeClearPayload>
   | BridgeEnvelope<BridgeMessageType.ToolExecutionApprove, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ToolExecutionReject, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ToolChangeApply, ToolDecisionPayload>
@@ -1377,6 +1503,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.RunHistoryDetailGet, ConversationRunDetailRequest>
   | BridgeEnvelope<BridgeMessageType.LlmDryRunGet, LlmDryRunGetPayload>
   | BridgeEnvelope<BridgeMessageType.LlmProviderModelsGet, LlmProviderModelsGetPayload>
+  | BridgeEnvelope<BridgeMessageType.CheckpointGitStatusGet, undefined>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsGet, GlobalSettingsGetPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsUpdate, GlobalSettingsUpdatePayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsGet, ConversationSettingsGetPayload>
@@ -1405,6 +1532,7 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.RunHistoryDetailSnapshot, ConversationRunDetailRecord>
   | BridgeEnvelope<BridgeMessageType.LlmDryRunSnapshot, LlmDryRunSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.LlmProviderModelsSnapshot, LlmProviderModelsSnapshotPayload>
+  | BridgeEnvelope<BridgeMessageType.CheckpointGitStatusSnapshot, CheckpointGitStatusSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsSnapshot, GlobalSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsSnapshot, ConversationSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ProjectFoldersSnapshot, ProjectFoldersSnapshotPayload>;

@@ -24,6 +24,12 @@ export const CONVERSATION_WORK_ENVIRONMENT_LINKS_ROOT_DIR = 'conversation-work-e
 export const RUN_WORK_ENVIRONMENT_LINKS_ROOT_DIR = 'run-work-environment-links';
 export const WORK_ENVIRONMENT_POLICIES_ROOT_DIR = 'work-environment-policies';
 export const WORK_ENVIRONMENT_POLICY_SCOPE_LINKS_ROOT_DIR = 'work-environment-policy-scope-links';
+export const CHECKPOINT_POLICIES_ROOT_DIR = 'checkpoint-policies';
+export const CHECKPOINT_POLICY_SCOPE_LINKS_ROOT_DIR = 'checkpoint-policy-scope-links';
+export const SHADOW_REPOSITORIES_ROOT_DIR = 'shadow-repositories';
+export const CONVERSATION_CHECKPOINT_REPOSITORY_LINKS_ROOT_DIR = 'conversation-checkpoint-repository-links';
+export const CHECKPOINTS_ROOT_DIR = 'checkpoints';
+export const CHECKPOINT_SHADOW_WORKTREES_ROOT_DIR = 'checkpoint-shadow-worktrees';
 
 /**
  * 当前插件明确注册的数据根目录名。
@@ -51,6 +57,12 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
   RUN_WORK_ENVIRONMENT_LINKS_ROOT_DIR,
   WORK_ENVIRONMENT_POLICIES_ROOT_DIR,
   WORK_ENVIRONMENT_POLICY_SCOPE_LINKS_ROOT_DIR,
+  CHECKPOINT_POLICIES_ROOT_DIR,
+  CHECKPOINT_POLICY_SCOPE_LINKS_ROOT_DIR,
+  SHADOW_REPOSITORIES_ROOT_DIR,
+  CONVERSATION_CHECKPOINT_REPOSITORY_LINKS_ROOT_DIR,
+  CHECKPOINTS_ROOT_DIR,
+  CHECKPOINT_SHADOW_WORKTREES_ROOT_DIR,
   SETTINGS_ROOT_DIR
 ] as const;
 

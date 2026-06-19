@@ -193,7 +193,7 @@ function messageTooltipRows(item: TokenUsageMessageEntry): TooltipPanelItem[] {
 function tokenDetailTooltipRows(item: TokenUsageMessageEntry): TooltipPanelRow[] {
   return [
     tokenTooltipRow('思考 token', item.reasoning),
-    tokenTooltipRow('输出 token', item.output),
+    tokenTooltipRow('输出 token（含思考）', item.output),
     tokenTooltipRow('工具 token', item.tool),
     tokenTooltipRow('输入 token', item.input)
   ].filter((row): row is TooltipPanelRow => row !== undefined);
@@ -206,7 +206,7 @@ function tokenTooltipRow(label: string, value: number | undefined): TooltipPanel
 function optionalTokenRows(item: TokenUsageMessageEntry): string[] {
   return [
     tokenRow('思考', item.reasoning),
-    tokenRow('输出', item.output),
+    tokenRow('输出（含思考）', item.output),
     tokenRow('工具', item.tool),
     tokenRow('输入', item.input)
   ].filter((row): row is string => row !== undefined);

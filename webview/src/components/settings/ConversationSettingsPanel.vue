@@ -3,6 +3,8 @@ import { computed } from 'vue';
 import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
 import ToolPolicyEditor from '@webview/components/settings/tools/ToolPolicyEditor.vue';
 import WorkEnvironmentPolicyEditor from '@webview/components/settings/workEnvironment/WorkEnvironmentPolicyEditor.vue';
+import CheckpointPolicyEditor from '@webview/components/settings/checkpoints/CheckpointPolicyEditor.vue';
+import CheckpointListPanel from '@webview/components/settings/checkpoints/CheckpointListPanel.vue';
 
 const settings = useConversationSettingsStore();
 
@@ -43,6 +45,19 @@ function reload(): void {
       :scope-id="settings.common.conversationId"
       title="对话工具策略"
       description="默认继承全局工具策略；修改任一工具后会为当前对话创建独立覆盖。"
+    />
+
+    <CheckpointPolicyEditor
+      v-if="hasConversation"
+      scope-kind="conversation"
+      :scope-id="settings.common.conversationId"
+      title="对话存档点策略"
+      description="默认继承全局存档点策略；修改后只影响当前对话。"
+    />
+
+    <CheckpointListPanel
+      v-if="hasConversation"
+      :conversation-id="settings.common.conversationId"
     />
   </section>
 </template>

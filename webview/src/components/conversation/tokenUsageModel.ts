@@ -16,6 +16,7 @@ const CACHED_TOKEN_KEYS = ['cachedContentTokenCount', 'cached_content_token_coun
 export interface NormalizedTokenUsage {
   total?: number;
   input?: number;
+  /** 模型输出 token，优先按 total - input 计算，因此会包含思考/推理 token。 */
   output?: number;
   reasoning?: number;
   cached?: number;
@@ -91,11 +92,12 @@ export function buildTokenUsageMessages(messages: MessageRecord[]): TokenUsageMe
 
 export function normalizeTokenUsage(usage: LlmUsageMetadataRecord): NormalizedTokenUsage {
   const input = usageNumber(usage, INPUT_TOKEN_KEYS);
-  const output = usageNumber(usage, OUTPUT_TOKEN_KEYS);
+  const rawOutput = usageNumber(usage, OUTPUT_TOKEN_KEYS);
   const reasoning = usageNumber(usage, REASONING_TOKEN_KEYS);
   const cached = usageNumber(usage, CACHED_TOKEN_KEYS);
   const explicitTotal = usageNumber(usage, TOTAL_TOKEN_KEYS);
-  const fallbackTotal = explicitTotal === undefined ? sumDefined([input, output, reasoning]) : undefined;
+  const output = outputTokensIncludingReasoning(input, rawOutput, reasoning, explicitTotal);
+  const fallbackTotal = explicitTotal === undefined ? sumDefined([input, output]) : undefined;
   const sourceEstimated = usage.estimated === true || usage.tokenEstimator === 'tokenx';
 
   return {
@@ -106,6 +108,14 @@ export function normalizeTokenUsage(usage: LlmUsageMetadataRecord): NormalizedTo
     ...(cached !== undefined ? { cached } : {}),
     ...(sourceEstimated ? { sourceEstimated: true } : {})
   };
+}
+
+function outputTokensIncludingReasoning(input: number | undefined, rawOutput: number | undefined, reasoning: number | undefined, total: number | undefined): number | undefined {
+  if (total !== undefined && input !== undefined) {
+    return Math.max(0, total - input);
+  }
+
+  return sumDefined([rawOutput, reasoning]);
 }
 
 export function formatTokenNumber(value: number): string {

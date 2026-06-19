@@ -1,11 +1,12 @@
 import type { Component } from 'vue';
-import { IconServer, IconSettings2, IconSettingsAi, IconTool } from '@tabler/icons-vue';
+import { IconArchive, IconServer, IconSettings2, IconSettingsAi, IconTool } from '@tabler/icons-vue';
 import ChannelSettingsTab from './ChannelSettingsTab.vue';
+import CheckpointSettingsTab from './CheckpointSettingsTab.vue';
 import OtherSettingsTab from './OtherSettingsTab.vue';
 import ToolSettingsTab from './ToolSettingsTab.vue';
 import WorkEnvironmentSettingsTab from './WorkEnvironmentSettingsTab.vue';
 
-export type GlobalSettingsTabKey = 'channels' | 'tools' | 'work-environments' | 'other';
+export type GlobalSettingsTabKey = 'channels' | 'tools' | 'checkpoints' | 'work-environments' | 'other';
 
 export interface GlobalSettingsTabDefinition {
   key: GlobalSettingsTabKey;
@@ -29,6 +30,13 @@ export const GLOBAL_SETTINGS_TABS: readonly GlobalSettingsTabDefinition[] = [
     description: '工具注册与默认策略',
     icon: IconTool,
     component: ToolSettingsTab
+  },
+  {
+    key: 'checkpoints',
+    label: '存档点',
+    description: '内部 shadow git 存档策略',
+    icon: IconArchive,
+    component: CheckpointSettingsTab
   },
   {
     key: 'work-environments',

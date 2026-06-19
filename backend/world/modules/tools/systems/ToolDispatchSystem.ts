@@ -61,6 +61,7 @@ import {
   RunWorkEnvironmentLink
 } from '../../workEnvironment/components';
 import { ConversationProjectLink, ProjectContext } from '../../project/components';
+import { CheckpointEventType } from '../../checkpoint/events';
 import { ConversationProjectLinkBundle } from '../../project/bundles';
 import {
   activeWorkEnvironmentForRun,
@@ -140,7 +141,7 @@ export const ToolDispatchSystem = defineSystem({
     queries: [QueuedToolCallsQuery],
     resources: { read: [AgentBlueprintsKey, ToolSchemasKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey] },
     bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentFromBlueprintBundle, ModeBundle, ConversationProjectLinkBundle, WorkEnvironmentBundle],
-    events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested] },
+    events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested], emit: [CheckpointEventType.Requested] },
     effects: { emit: ['tool.run'] }
   },
   run(ctx) {
@@ -267,6 +268,15 @@ function dispatchToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, 
 function executeRuntimeToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
   const workEnvironment = activeWorkEnvironmentForRun(world, authorization.run)?.data;
   const workEnvironments = allowedWorkEnvironmentsForRun(world, authorization.run).map((item) => toPublicWorkEnvironmentRecord(item.data));
+  cmd.enqueue({
+    type: CheckpointEventType.Requested,
+    payload: {
+      conversationId: authorization.conversationId,
+      runId: authorization.runId,
+      toolCallId: call.id,
+      trigger: 'tool_execution_before'
+    }
+  });
   cmd.effect({
     kind: 'tool.run',
     toolCallId: call.id,

@@ -32,6 +32,7 @@ import {
   type RunDeliveryPolicyData
 } from '../components';
 import { activeDeliveryPolicyForRun, defaultAgentForConversation, runSource, runTarget } from '../queries';
+import { CheckpointEventType } from '../../checkpoint/events';
 
 const MAX_SUMMARY_CHARS = 4_000;
 const MAX_RESULT_CHARS = 16_000;
@@ -95,7 +96,8 @@ export const AgentRunDeliverySystem = defineSystem({
   name: 'AgentRunDeliverySystem',
   access: {
     queries: [DeliveringRunsQuery],
-    bundles: [UserMessageBundle, ToolCallEventBundle, AgentRunBundle]
+    bundles: [UserMessageBundle, ToolCallEventBundle, AgentRunBundle],
+    events: { emit: [CheckpointEventType.Requested] }
   },
   run({ world, cmd }) {
     for (const runEntity of world.query(AgentRun)) {
@@ -119,6 +121,14 @@ export const AgentRunDeliverySystem = defineSystem({
 
       const now = Date.now();
       const usageMetadata = runUsageMetadata(world, runEntity);
+      const target = runTarget(world, runEntity);
+      const conversation = target ? world.get(target.conversation, Conversation) : undefined;
+      if (conversation) {
+        cmd.enqueue({
+          type: CheckpointEventType.Requested,
+          payload: { conversationId: conversation.id, runId: run.id, trigger: 'agent_run_completed_after' }
+        });
+      }
       cmd.add(runEntity, AgentRun, { ...run, status: 'completed', updatedAt: now, completedAt: now, endReason: 'completed', ...(usageMetadata ? { usageMetadata } : {}) });
     }
   }

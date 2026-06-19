@@ -27,6 +27,8 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
     case BridgeMessageType.WorkEnvironmentPolicyScopeClear:
     case BridgeMessageType.ToolPolicyScopeSet:
     case BridgeMessageType.ToolPolicyScopeClear:
+    case BridgeMessageType.CheckpointPolicyScopeSet:
+    case BridgeMessageType.CheckpointPolicyScopeClear:
     case BridgeMessageType.ToolExecutionApprove:
     case BridgeMessageType.ToolExecutionReject:
     case BridgeMessageType.ToolChangeApply:
@@ -40,6 +42,7 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
     case BridgeMessageType.RunHistoryDetailGet:
     case BridgeMessageType.LlmDryRunGet:
     case BridgeMessageType.LlmProviderModelsGet:
+    case BridgeMessageType.CheckpointGitStatusGet:
       return 'state';
     case BridgeMessageType.GlobalSettingsGet:
     case BridgeMessageType.GlobalSettingsUpdate:

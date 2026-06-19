@@ -94,9 +94,17 @@ export class WebviewMessageRouter {
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ToolEventType.ExecutionRejectRequested, payload: message.payload });
         break;
-      case BridgeMessageType.ToolResultApply:
+      case BridgeMessageType.ToolChangeApply:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: ToolEventType.ResultApplyRequested, payload: message.payload });
+        this.deps.world.enqueue({ type: ToolEventType.ChangeApplyRequested, payload: message.payload });
+        break;
+      case BridgeMessageType.ToolChangeReject:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: ToolEventType.ChangeRejectRequested, payload: message.payload });
+        break;
+      case BridgeMessageType.ToolResultSubmit:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: ToolEventType.ResultSubmitRequested, payload: message.payload });
         break;
       case BridgeMessageType.ToolResultReject:
         if (!this.deps.isHydrated() || !message.payload) return;

@@ -13,13 +13,17 @@ export interface ToolStateTransitionPayload {
 
 const VALID_TRANSITIONS: Record<ToolCallStatus, readonly ToolCallStatus[]> = {
   streaming: ['queued', 'error'],
-  queued: ['awaiting_approval', 'awaiting_apply', 'executing', 'error'],
-  awaiting_approval: ['awaiting_apply', 'executing', 'success', 'warning', 'error'],
-  executing: ['executing', 'awaiting_approval', 'awaiting_apply', 'success', 'warning', 'error'],
-  awaiting_apply: ['executing', 'success', 'warning', 'error'],
-  success: ['awaiting_apply'],
-  warning: ['awaiting_apply'],
-  error: ['awaiting_apply']
+  queued: ['awaiting_approval', 'executing', 'error'],
+  awaiting_approval: ['executing', 'error'],
+  executing: ['executing', 'awaiting_approval', 'awaiting_change_apply', 'success', 'warning', 'error'],
+  awaiting_change_apply: ['applying_change', 'change_rejected', 'error'],
+  applying_change: ['applying_change', 'change_applied', 'change_rejected', 'error'],
+  change_applied: ['success', 'warning', 'error'],
+  change_rejected: ['success', 'warning', 'error'],
+  awaiting_result_submit: ['success', 'warning', 'error'],
+  success: ['awaiting_result_submit'],
+  warning: ['awaiting_result_submit'],
+  error: ['awaiting_result_submit']
 };
 
 export function createToolState(status: ToolCallStatus = 'queued', now = Date.now()): ToolStateData {

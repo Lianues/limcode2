@@ -1,16 +1,22 @@
-import { TASK_LIST_TOOL_NAME } from '@shared/protocol';
+import { SWITCH_WORK_ENVIRONMENT_TOOL_NAME, TASK_LIST_TOOL_NAME, TRANSFER_FILES_TOOL_NAME } from '@shared/protocol';
+import { readConversationToolDisplay } from './readConversationToolDisplay';
 import { readFileToolDisplay } from './readFileToolDisplay';
 import { runAgentToolDisplay } from './runAgentToolDisplay';
 import { shellToolDisplay } from './shellToolDisplay';
+import { switchWorkEnvironmentToolDisplay } from './switchWorkEnvironmentToolDisplay';
 import { taskListToolDisplay } from './taskListToolDisplay';
+import { transferFilesToolDisplay } from './transferFilesToolDisplay';
 import type { ToolDisplayContext, ToolDisplayResolver, ToolDisplayResult, ToolDisplaySection } from './types';
 
 const TOOL_DISPLAY_RESOLVERS: Record<string, ToolDisplayResolver> = {
   [TASK_LIST_TOOL_NAME]: taskListToolDisplay,
   read_file: readFileToolDisplay,
+  read_conversation: readConversationToolDisplay,
   run_agent: runAgentToolDisplay,
   shell: shellToolDisplay,
-  bash: shellToolDisplay
+  bash: shellToolDisplay,
+  [SWITCH_WORK_ENVIRONMENT_TOOL_NAME]: switchWorkEnvironmentToolDisplay,
+  [TRANSFER_FILES_TOOL_NAME]: transferFilesToolDisplay
 };
 
 export function resolveToolDisplay(context: ToolDisplayContext): ToolDisplayResult {
@@ -20,6 +26,7 @@ export function resolveToolDisplay(context: ToolDisplayContext): ToolDisplayResu
   return {
     inputSections: custom?.inputSections ?? fallback.inputSections,
     outputSections: custom?.outputSections ?? fallback.outputSections,
+    ...(custom?.headerIcon ? { headerIcon: custom.headerIcon } : fallback.headerIcon ? { headerIcon: fallback.headerIcon } : {}),
     headerActions: custom?.headerActions ?? fallback.headerActions
   };
 }

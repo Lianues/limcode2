@@ -138,7 +138,11 @@ function isBlockingToolCall(call: ToolCallRecord): boolean {
     || call.status === 'queued'
     || call.status === 'awaiting_approval'
     || call.status === 'executing'
-    || call.status === 'awaiting_apply';
+    || call.status === 'awaiting_change_apply'
+    || call.status === 'applying_change'
+    || call.status === 'change_applied'
+    || call.status === 'change_rejected'
+    || call.status === 'awaiting_result_submit';
 }
 </script>
 

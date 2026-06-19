@@ -1,3 +1,4 @@
+import { IconFileDescription } from '@tabler/icons-vue';
 import type { ToolDisplayContext, ToolDisplayResolver, ToolDisplaySection } from './types';
 
 interface ReadFileArgs {
@@ -26,6 +27,7 @@ export const readFileToolDisplay: ToolDisplayResolver = (context) => {
   const outputSections = readFileOutputSections(args, context);
 
   return {
+    headerIcon: IconFileDescription,
     ...(inputSections ? { inputSections } : {}),
     ...(outputSections ? { outputSections } : {})
   };

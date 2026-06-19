@@ -60,19 +60,19 @@ export const ToolResultSystem = defineSystem({
     queries: [SettledToolCallsQuery, ActiveToolWorkLookupQuery],
     bundles: [ToolResultMessageBundle, ToolCallEventBundle],
     writes: { components: [AgentRun, AgentRunNeedsModel, MessageRunLink, ToolState] },
-    events: { read: [ToolEventType.ResultApplyRequested, ToolEventType.ResultRejectRequested] }
+    events: { read: [ToolEventType.ResultSubmitRequested, ToolEventType.ResultRejectRequested] }
   },
   run(ctx) {
     const { world, cmd } = ctx;
 
-    for (const payload of readEvents(ctx, ToolEventType.ResultApplyRequested)) {
+    for (const payload of readEvents(ctx, ToolEventType.ResultSubmitRequested)) {
       const entity = findToolCallById(world, payload.toolCallId);
       const call = entity === undefined ? undefined : world.get(entity, ToolCall);
       const state = entity === undefined ? undefined : world.get(entity, ToolState);
-      if (entity === undefined || !call || !state || state.status !== 'awaiting_apply') continue;
-      const nextStatus = pendingApplyStatus(state) ?? 'success';
+      if (entity === undefined || !call || !state || state.status !== 'awaiting_result_submit') continue;
+      const nextStatus = pendingResultSubmitStatus(state) ?? 'success';
       const now = Date.now();
-      cmd.add(entity, ToolState, transitionToolState(state, nextStatus, { progress: { applyApproved: true } }, now));
+      cmd.add(entity, ToolState, transitionToolState(state, nextStatus, { progress: { resultSubmitApproved: true } }, now));
       spawnToolCallEvent(cmd, {
         toolCall: entity,
         toolCallId: call.id,
@@ -88,10 +88,10 @@ export const ToolResultSystem = defineSystem({
       const entity = findToolCallById(world, payload.toolCallId);
       const call = entity === undefined ? undefined : world.get(entity, ToolCall);
       const state = entity === undefined ? undefined : world.get(entity, ToolState);
-      if (entity === undefined || !call || !state || state.status !== 'awaiting_apply') continue;
-      const reason = payload.reason?.trim() || '用户拒绝应用工具结果。';
+      if (entity === undefined || !call || !state || state.status !== 'awaiting_result_submit') continue;
+      const reason = payload.reason?.trim() || '用户拒绝使用工具结果。';
       const now = Date.now();
-      cmd.add(entity, ToolState, transitionToolState(state, 'error', { error: reason, result: { denied: true, reason }, progress: { applyApproved: true }, durationMs: state.durationMs }, now));
+      cmd.add(entity, ToolState, transitionToolState(state, 'error', { error: reason, result: { denied: true, reason }, progress: { resultSubmitApproved: true }, durationMs: state.durationMs }, now));
       spawnToolCallEvent(cmd, {
         toolCall: entity,
         toolCallId: call.id,
@@ -125,8 +125,8 @@ export const ToolResultSystem = defineSystem({
       const target = runTarget(world, run);
       if (!target) continue;
 
-      if (requiresApplyApproval(world, run, call.name, state)) {
-        awaitApply(world, cmd, entity, call, state);
+      if (requiresResultSubmitApproval(world, run, call.name, state)) {
+        awaitResultSubmit(world, cmd, entity, call, state);
         continue;
       }
 
@@ -156,38 +156,38 @@ export const ToolResultSystem = defineSystem({
   }
 });
 
-function requiresApplyApproval(world: WorldReader, run: Entity, toolName: string, state: ToolStateData): boolean {
-  if (hasApplyApproved(state)) return false;
+function requiresResultSubmitApproval(world: WorldReader, run: Entity, toolName: string, state: ToolStateData): boolean {
+  if (hasResultSubmitDecision(state)) return false;
   const policy = activeToolPolicyForRun(world, run);
-  return policy?.toolConfigs?.[toolName]?.autoApplyResult === false;
+  return policy?.toolConfigs?.[toolName]?.autoSubmitResult === false;
 }
 
-function awaitApply(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData): void {
+function awaitResultSubmit(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData): void {
   const now = Date.now();
-  const next = transitionToolState(state, 'awaiting_apply', { progress: { pendingApplyStatus: state.status }, durationMs: state.durationMs }, now);
+  const next = transitionToolState(state, 'awaiting_result_submit', { progress: { pendingResultSubmitStatus: state.status }, durationMs: state.durationMs }, now);
   cmd.add(entity, ToolState, next);
   spawnToolCallEvent(cmd, {
     toolCall: entity,
     toolCallId: call.id,
     kind: 'state',
-    status: 'awaiting_apply',
+    status: 'awaiting_result_submit',
     at: now,
     elapsedMs: Math.max(0, now - call.createdAt),
     durationMs: state.durationMs,
-    payload: { pendingApplyStatus: state.status }
+    payload: { pendingResultSubmitStatus: state.status }
   });
 }
 
-function pendingApplyStatus(state: ToolStateData): Extract<ToolCallStatus, 'success' | 'warning' | 'error'> | undefined {
+function pendingResultSubmitStatus(state: ToolStateData): Extract<ToolCallStatus, 'success' | 'warning' | 'error'> | undefined {
   const progress = state.progress;
   if (!progress || typeof progress !== 'object' || Array.isArray(progress)) return undefined;
-  const status = (progress as { pendingApplyStatus?: unknown }).pendingApplyStatus;
+  const status = (progress as { pendingResultSubmitStatus?: unknown }).pendingResultSubmitStatus;
   return status === 'success' || status === 'warning' || status === 'error' ? status : undefined;
 }
 
-function hasApplyApproved(state: ToolStateData): boolean {
+function hasResultSubmitDecision(state: ToolStateData): boolean {
   const progress = state.progress;
-  return !!progress && typeof progress === 'object' && !Array.isArray(progress) && (progress as { applyApproved?: unknown }).applyApproved === true;
+  return !!progress && typeof progress === 'object' && !Array.isArray(progress) && (progress as { resultSubmitApproved?: unknown }).resultSubmitApproved === true;
 }
 
 function findToolCallById(world: WorldReader, toolCallId: string): Entity | undefined {

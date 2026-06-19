@@ -109,7 +109,8 @@ function cloneToolConfigs(): Record<string, ToolPolicyToolConfigRecord> {
     result[toolName] = {
       config: { ...(record.config ?? {}) },
       ...(typeof record.autoApproveExecution === 'boolean' ? { autoApproveExecution: record.autoApproveExecution } : {}),
-      ...(typeof record.autoApplyResult === 'boolean' ? { autoApplyResult: record.autoApplyResult } : {}),
+      ...(typeof record.autoApplyChange === 'boolean' ? { autoApplyChange: record.autoApplyChange } : {}),
+      ...(typeof record.autoSubmitResult === 'boolean' ? { autoSubmitResult: record.autoSubmitResult } : {}),
       ...(record.display ? { display: { ...record.display } } : {})
     };
   }
@@ -150,7 +151,9 @@ function updateScalarField(tool: ToolDefinitionRecord, field: ToolConfigFieldRec
   store.setPolicyForScope(props.scopeKind, props.scopeId, effectivePolicy.value?.allowedTools ?? [], effectivePolicy.value?.name, nextConfigs);
 }
 
-function updateGateSetting(tool: ToolDefinitionRecord, key: 'autoApproveExecution' | 'autoApplyResult', value: boolean): void {
+type ToolGateSettingKey = 'autoApproveExecution' | 'autoApplyChange' | 'autoSubmitResult';
+
+function updateGateSetting(tool: ToolDefinitionRecord, key: ToolGateSettingKey, value: boolean): void {
   if (props.readonly) return;
   const nextConfigs = cloneToolConfigs();
   nextConfigs[tool.name] = {
@@ -160,7 +163,7 @@ function updateGateSetting(tool: ToolDefinitionRecord, key: 'autoApproveExecutio
   store.setPolicyForScope(props.scopeKind, props.scopeId, effectivePolicy.value?.allowedTools ?? [], effectivePolicy.value?.name, nextConfigs);
 }
 
-function toolGateValue(tool: ToolDefinitionRecord, key: 'autoApproveExecution' | 'autoApplyResult'): boolean {
+function toolGateValue(tool: ToolDefinitionRecord, key: ToolGateSettingKey): boolean {
   return effectivePolicy.value?.toolConfigs?.[tool.name]?.[key] !== false;
 }
 
@@ -270,7 +273,7 @@ function inputNumber(event: Event): number {
                     <div class="tool-config-group tool-config-permissions">
                     <div class="tool-config-group-heading">
                       <span class="tool-config-group-title">权限与显示</span>
-                      <small>控制执行确认、结果应用，以及聊天区工具卡片的默认展开行为。</small>
+                      <small>控制执行确认、更改应用、结果回传，以及聊天区工具卡片的默认展开行为。</small>
                     </div>
                     <div class="tool-permission-options">
                       <LcCheckbox
@@ -287,14 +290,26 @@ function inputNumber(event: Event): number {
                       </LcCheckbox>
                       <LcCheckbox
                         class="tool-permission-card"
-                        :class="{ 'is-enabled': toolGateValue(tool, 'autoApplyResult') }"
-                        :model-value="toolGateValue(tool, 'autoApplyResult')"
+                        :class="{ 'is-enabled': toolGateValue(tool, 'autoApplyChange') }"
+                        :model-value="toolGateValue(tool, 'autoApplyChange')"
                         :disabled="readonly"
-                        @update:model-value="updateGateSetting(tool, 'autoApplyResult', $event)"
+                        @update:model-value="updateGateSetting(tool, 'autoApplyChange', $event)"
                       >
                         <span class="permission-copy">
-                          <span class="permission-title">自动应用结果</span>
-                          <span class="permission-desc">开启时结果自动回传给 LLM；关闭时先确认是否应用。</span>
+                          <span class="permission-title">自动应用更改</span>
+                          <span class="permission-desc">仅对预览型工具生效；开启时生成的更改提案会自动落盘。</span>
+                        </span>
+                      </LcCheckbox>
+                      <LcCheckbox
+                        class="tool-permission-card"
+                        :class="{ 'is-enabled': toolGateValue(tool, 'autoSubmitResult') }"
+                        :model-value="toolGateValue(tool, 'autoSubmitResult')"
+                        :disabled="readonly"
+                        @update:model-value="updateGateSetting(tool, 'autoSubmitResult', $event)"
+                      >
+                        <span class="permission-copy">
+                          <span class="permission-title">自动回传结果</span>
+                          <span class="permission-desc">开启时工具结果自动发给 AI；关闭时先确认是否回传。</span>
                         </span>
                       </LcCheckbox>
                       <LcCheckbox

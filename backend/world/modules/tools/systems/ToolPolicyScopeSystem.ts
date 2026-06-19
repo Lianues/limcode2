@@ -112,13 +112,15 @@ function sanitizeToolConfigs(
     const nextRecord: ToolPolicyToolConfigRecord = {
       config,
       ...(typeof rawRecord.autoApproveExecution === 'boolean' ? { autoApproveExecution: rawRecord.autoApproveExecution } : {}),
-      ...(typeof rawRecord.autoApplyResult === 'boolean' ? { autoApplyResult: rawRecord.autoApplyResult } : {}),
+      ...(typeof rawRecord.autoApplyChange === 'boolean' ? { autoApplyChange: rawRecord.autoApplyChange } : {}),
+      ...(typeof rawRecord.autoSubmitResult === 'boolean' ? { autoSubmitResult: rawRecord.autoSubmitResult } : {}),
       ...(isDisplayPolicy(rawRecord.display) ? { display: rawRecord.display } : {})
     };
     if (
       Object.keys(config).length > 0
       || nextRecord.autoApproveExecution !== undefined
-      || nextRecord.autoApplyResult !== undefined
+      || nextRecord.autoApplyChange !== undefined
+      || nextRecord.autoSubmitResult !== undefined
       || nextRecord.display !== undefined
     ) result[toolName] = nextRecord;
   }

@@ -1,4 +1,4 @@
-import { IconMessage } from '@tabler/icons-vue';
+import { IconMessage2, IconUsers } from '@tabler/icons-vue';
 import { bridge, BridgeMessageType } from '@webview/transport';
 import type { ToolDisplayContext, ToolDisplayResolver } from './types';
 
@@ -7,11 +7,12 @@ export const runAgentToolDisplay: ToolDisplayResolver = (context) => {
   if (!conversationId) return undefined;
 
   return {
+    headerIcon: IconUsers,
     headerActions: [{
       id: 'open-agent-run-conversation',
       label: '打开对话',
       title: '打开这个 AgentRun 对应的聊天标签页',
-      icon: IconMessage,
+      icon: IconMessage2,
       invoke: () => {
         bridge.request(BridgeMessageType.ConversationOpen, { conversationId });
       }

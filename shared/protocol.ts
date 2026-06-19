@@ -87,7 +87,9 @@ export enum BridgeMessageType {
   ToolPolicyScopeClear = 'toolPolicy.scope.clear',
   ToolExecutionApprove = 'tool.execution.approve',
   ToolExecutionReject = 'tool.execution.reject',
-  ToolResultApply = 'tool.result.apply',
+  ToolChangeApply = 'tool.change.apply',
+  ToolChangeReject = 'tool.change.reject',
+  ToolResultSubmit = 'tool.result.submit',
   ToolResultReject = 'tool.result.reject',
   ClientResync = 'client.resync',
   ClientSnapshot = 'state.snapshot',
@@ -213,7 +215,11 @@ export const TOOL_CALL_STATUSES = [
   'queued',
   'awaiting_approval',
   'executing',
-  'awaiting_apply',
+  'awaiting_change_apply',
+  'applying_change',
+  'change_applied',
+  'change_rejected',
+  'awaiting_result_submit',
   'success',
   'warning',
   'error'
@@ -427,8 +433,20 @@ export interface ToolDisplayPolicyRecord {
 }
 
 export interface ToolPolicyToolConfigRecord {
+  /** 是否自动批准工具进入执行阶段。关闭时会先等待用户批准执行。 */
   autoApproveExecution?: boolean;
-  autoApplyResult?: boolean;
+  /**
+   * 是否自动应用工具生成的可预览更改。
+   * 仅对“执行阶段只生成更改提案、应用阶段才产生副作用”的工具有意义；
+   * 对 read_file、shell、switch_work_environment 等无更改提案或立即副作用工具无影响。
+   */
+  autoApplyChange?: boolean;
+  /**
+   * 是否自动把工具结果提交给 AI，作为后续模型上下文的一部分。
+   * 关闭时工具执行/更改应用完成后会等待用户确认结果回传；
+   * 用户拒绝时仍会向 AI 回传“用户拒绝使用该结果”的工具响应，避免 AgentRun 永久等待。
+   */
+  autoSubmitResult?: boolean;
   display?: ToolDisplayPolicyRecord;
   config: ToolConfigRecord;
 }
@@ -1350,7 +1368,9 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ToolPolicyScopeClear, ToolPolicyScopeClearPayload>
   | BridgeEnvelope<BridgeMessageType.ToolExecutionApprove, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ToolExecutionReject, ToolDecisionPayload>
-  | BridgeEnvelope<BridgeMessageType.ToolResultApply, ToolDecisionPayload>
+  | BridgeEnvelope<BridgeMessageType.ToolChangeApply, ToolDecisionPayload>
+  | BridgeEnvelope<BridgeMessageType.ToolChangeReject, ToolDecisionPayload>
+  | BridgeEnvelope<BridgeMessageType.ToolResultSubmit, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ToolResultReject, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ClientResync, ClientResyncPayload>
   | BridgeEnvelope<BridgeMessageType.RunHistoryPageGet, ConversationRunHistoryPageRequest>

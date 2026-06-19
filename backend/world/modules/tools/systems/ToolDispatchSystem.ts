@@ -324,18 +324,25 @@ function executeSwitchWorkEnvironmentTool(world: WorldReader, cmd: CommandSink, 
     return;
   }
 
+  const started = startInlineToolExecution(cmd, entity, call, state, {
+    executorAgentId: authorization.agentId,
+    runId: authorization.runId,
+    workEnvironmentId: target.data.id
+  });
+
   selectRunWorkEnvironment(world, cmd, authorization.run, target.entity);
   selectConversationWorkEnvironment(world, cmd, runTargetInfo.conversation, target.entity);
 
   const record = toPublicWorkEnvironmentRecord(target.data);
   const now = Date.now();
+  const durationMs = Math.max(0, now - started.startedAt);
   const result = {
     ok: true,
     kind: 'work_environment.switch',
     workEnvironment: record,
     message: `已切换到工作环境：${record.name}`
   };
-  cmd.add(entity, ToolState, transitionToolState(state, 'success', { result, durationMs: 0 }, now));
+  cmd.add(entity, ToolState, transitionToolState(started.state, 'success', { result, durationMs }, now));
   spawnToolCallEvent(cmd, {
     toolCall: entity,
     toolCallId: call.id,
@@ -343,7 +350,7 @@ function executeSwitchWorkEnvironmentTool(world: WorldReader, cmd: CommandSink, 
     status: 'success',
     at: now,
     elapsedMs: Math.max(0, now - call.createdAt),
-    durationMs: 0,
+    durationMs,
     payload: result
   });
 }
@@ -588,15 +595,18 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
   applyRunEditPolicy(cmd, childRun, policyDefaults.editPolicy);
   applyRunModeOverrides(world, cmd, childRun, args.mode);
 
-  const now = Date.now();
   const childRunId = `run${childRun}`;
   if (deliveryMode === 'notification' || deliveryMode === 'silent' || deliveryMode === 'append_to_source_conversation') {
+    const started = startInlineToolExecution(cmd, entity, call, state, { childRunId, runId: childRunId, conversationId: resolved.value.conversationId, deliveryMode });
+    const now = Date.now();
+    const durationMs = Math.max(0, now - started.startedAt);
     const result = { status: 'async_launched', runId: childRunId, conversationId: resolved.value.conversationId, message: 'AgentRun 已在后台启动，完成后会按 delivery policy 回流。' };
-    cmd.add(entity, ToolState, transitionToolState(state, 'success', { result, durationMs: 0 }, now));
-    spawnToolCallEvent(cmd, { toolCall: entity, toolCallId: call.id, kind: 'completed', status: 'success', at: now, elapsedMs: Math.max(0, now - call.createdAt), payload: result });
+    cmd.add(entity, ToolState, transitionToolState(started.state, 'success', { result, durationMs }, now));
+    spawnToolCallEvent(cmd, { toolCall: entity, toolCallId: call.id, kind: 'completed', status: 'success', at: now, elapsedMs: Math.max(0, now - call.createdAt), durationMs, payload: result });
     return;
   }
 
+  const now = Date.now();
   const progress = { childRunId, runId: childRunId, conversationId: resolved.value.conversationId };
   cmd.add(entity, ToolState, transitionToolState(state, 'executing', { progress }, now));
   spawnToolCallEvent(cmd, {
@@ -1120,16 +1130,39 @@ function effectiveToolConfig(world: WorldReader, policy: ToolPolicyData, toolNam
   return Object.keys(config).length > 0 ? config : undefined;
 }
 
-function toolGateSettings(policy: ToolPolicyData, toolName: string): { autoApproveExecution: boolean; autoApplyResult: boolean } {
+function toolGateSettings(policy: ToolPolicyData, toolName: string): { autoApproveExecution: boolean; autoApplyChange: boolean; autoSubmitResult: boolean } {
   const config = policy.toolConfigs?.[toolName];
   return {
     autoApproveExecution: config?.autoApproveExecution ?? true,
-    autoApplyResult: config?.autoApplyResult ?? true
+    autoApplyChange: config?.autoApplyChange ?? true,
+    autoSubmitResult: config?.autoSubmitResult ?? true
   };
 }
 
 function requiresExecutionApproval(toolPolicy: ToolPolicyData, toolName: string): boolean {
   return toolGateSettings(toolPolicy, toolName).autoApproveExecution === false;
+}
+
+function startInlineToolExecution(
+  cmd: CommandSink,
+  entity: Entity,
+  call: ToolCallData,
+  state: ToolStateData,
+  payload?: unknown
+): { state: ToolStateData; startedAt: number } {
+  const startedAt = Date.now();
+  const executing = transitionToolState(state, 'executing', {}, startedAt);
+  cmd.add(entity, ToolState, executing);
+  spawnToolCallEvent(cmd, {
+    toolCall: entity,
+    toolCallId: call.id,
+    kind: 'started',
+    status: 'executing',
+    at: startedAt,
+    elapsedMs: Math.max(0, startedAt - call.createdAt),
+    ...(payload !== undefined ? { payload } : {})
+  });
+  return { state: executing, startedAt };
 }
 
 function awaitApproval(cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, executorAgentId: string, runId: string): void {

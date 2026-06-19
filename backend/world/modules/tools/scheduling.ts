@@ -97,7 +97,11 @@ function isExecutionBlockingToolCall(world: WorldReader, entity: Entity): boolea
     || state.status === 'queued'
     || state.status === 'awaiting_approval'
     || state.status === 'executing'
-    || state.status === 'awaiting_apply';
+    || state.status === 'awaiting_change_apply'
+    || state.status === 'applying_change'
+    || state.status === 'change_applied'
+    || state.status === 'change_rejected'
+    || state.status === 'awaiting_result_submit';
 }
 
 export function toolSchedulingDecision(world: WorldReader, entity: Entity): ToolSchedulingDecision {

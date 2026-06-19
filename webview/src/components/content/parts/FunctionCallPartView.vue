@@ -64,12 +64,14 @@ const toolDisplay = computed(() => resolveToolDisplay({
 }));
 const inputSections = computed(() => toolDisplay.value.inputSections);
 const outputSections = computed(() => toolDisplay.value.outputSections);
+const toolIcon = computed(() => toolDisplay.value.headerIcon ?? IconTool);
 const headerActions = computed(() => toolDisplay.value.headerActions);
 const hasArgs = computed(() => inputSections.value.length > 0);
 const hasOutput = computed(() => outputSections.value.length > 0);
 const executionApproved = computed(() => isExecutionApprovedProgress(toolCall.value?.progress));
 const needsExecutionDecision = computed(() => toolCall.value?.status === 'awaiting_approval' && !executionApproved.value);
-const needsApplyDecision = computed(() => toolCall.value?.status === 'awaiting_apply');
+const needsChangeApplyDecision = computed(() => toolCall.value?.status === 'awaiting_change_apply');
+const needsResultSubmitDecision = computed(() => toolCall.value?.status === 'awaiting_result_submit');
 const hasDetails = computed(() => hasArgs.value || hasOutput.value || Boolean(toolCall.value?.error) || executionApproved.value);
 const autoExpandDetails = computed(() => toolCall.value?.display?.autoExpand === true);
 const statusLabel = computed(() => toolCall.value ? labelForToolCall(toolCall.value) : '工具请求已生成');
@@ -131,7 +133,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-function sendToolDecision(type: BridgeMessageType.ToolExecutionApprove | BridgeMessageType.ToolExecutionReject | BridgeMessageType.ToolResultApply | BridgeMessageType.ToolResultReject): void {
+function sendToolDecision(type:
+  | BridgeMessageType.ToolExecutionApprove
+  | BridgeMessageType.ToolExecutionReject
+  | BridgeMessageType.ToolChangeApply
+  | BridgeMessageType.ToolChangeReject
+  | BridgeMessageType.ToolResultSubmit
+  | BridgeMessageType.ToolResultReject
+): void {
   const call = toolCall.value;
   if (!call) return;
   bridge.request(type, { toolCallId: call.id, conversationId: clientState.currentConversationId });
@@ -162,7 +171,11 @@ function labelForStatus(status: ToolCallStatus): string {
     queued: '等待调度执行',
     awaiting_approval: '等待批准执行',
     executing: '工具执行中',
-    awaiting_apply: '等待应用结果',
+    awaiting_change_apply: '等待应用更改',
+    applying_change: '正在应用更改',
+    change_applied: '更改已应用',
+    change_rejected: '更改已拒绝',
+    awaiting_result_submit: '等待确认结果回传',
     success: '工具执行成功',
     warning: '执行完成（有警告）',
     error: '工具执行失败'
@@ -176,7 +189,8 @@ function isDeniedResult(result: unknown): boolean {
 
 function deniedStatusLabel(result: unknown, error: string | undefined): string {
   const reason = isRecord(result) && typeof result.reason === 'string' ? result.reason : error ?? '';
-  if (reason.includes('应用')) return '已拒绝应用结果';
+  if (reason.includes('更改')) return '已拒绝更改';
+  if (reason.includes('结果') || reason.includes('使用')) return '已拒绝结果';
   if (reason.includes('执行')) return '已拒绝执行';
   return '已拒绝工具调用';
 }
@@ -217,7 +231,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
     :title="batchTitle"
   >
     <template #icon>
-      <IconTool stroke="2" aria-hidden="true" />
+      <component :is="toolIcon" :stroke="2" aria-hidden="true" />
     </template>
     <template #summary>
       <span class="part-card-name" :class="{ 'has-summary': summaryLabel }">{{ part.functionCall.name }}</span>
@@ -241,7 +255,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
         :disabled="action.disabled"
         @click.stop="invokeHeaderAction(action)"
       >
-        <component :is="action.icon" v-if="action.icon" class="tool-header-action-icon" stroke="2" aria-hidden="true" />
+        <component :is="action.icon" v-if="action.icon" class="tool-header-action-icon" :stroke="2" aria-hidden="true" />
         <span class="tool-header-action-label">{{ action.label }}</span>
       </button>
     </template>
@@ -300,9 +314,13 @@ function isInternalApprovalProgress(progress: unknown): boolean {
     <button type="button" @click="sendToolDecision(BridgeMessageType.ToolExecutionApprove)">批准执行</button>
     <button type="button" class="secondary" @click="sendToolDecision(BridgeMessageType.ToolExecutionReject)">拒绝</button>
   </div>
-  <div v-else-if="needsApplyDecision" class="tool-decision-actions is-external">
-    <button type="button" @click="sendToolDecision(BridgeMessageType.ToolResultApply)">应用结果</button>
-    <button type="button" class="secondary" @click="sendToolDecision(BridgeMessageType.ToolResultReject)">拒绝应用</button>
+  <div v-else-if="needsChangeApplyDecision" class="tool-decision-actions is-external">
+    <button type="button" @click="sendToolDecision(BridgeMessageType.ToolChangeApply)">应用更改</button>
+    <button type="button" class="secondary" @click="sendToolDecision(BridgeMessageType.ToolChangeReject)">拒绝更改</button>
+  </div>
+  <div v-else-if="needsResultSubmitDecision" class="tool-decision-actions is-external">
+    <button type="button" @click="sendToolDecision(BridgeMessageType.ToolResultSubmit)">回传结果给 AI</button>
+    <button type="button" class="secondary" @click="sendToolDecision(BridgeMessageType.ToolResultReject)">拒绝结果并告知 AI</button>
   </div>
 </template>
 
@@ -319,6 +337,14 @@ function isInternalApprovalProgress(progress: unknown): boolean {
 .tool-call-card.batch-color-3 { --tool-batch-color: #b5cea8; }
 .tool-call-card.batch-color-4 { --tool-batch-color: #ce9178; }
 .tool-call-card.batch-color-5 { --tool-batch-color: #4ec9b0; }
+
+.tool-call-card :deep(.lc-collapsible-summary) {
+  flex-grow: 1;
+  /* 摘要区优先让出空间；工具名自身在内部保持更高优先级。 */
+  flex-shrink: 999;
+  flex-basis: auto;
+  min-width: 0;
+}
 
 .tool-call-card.batch-color-1 :deep(.lc-collapsible-summary),
 .tool-call-card.batch-color-2 :deep(.lc-collapsible-summary),
@@ -352,16 +378,13 @@ function isInternalApprovalProgress(progress: unknown): boolean {
 
 .part-card-name {
   min-width: 0;
-  flex: 0 1 auto;
+  max-width: 100%;
+  flex: 0 0 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
   color: inherit;
-}
-
-.part-card-name.has-summary {
-  max-width: 100%;
 }
 
 .part-card-summary {
@@ -393,12 +416,21 @@ function isInternalApprovalProgress(progress: unknown): boolean {
   opacity: 0.82;
 }
 
+.tool-call-card :deep(.lc-collapsible-actions) {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: max-content;
+  justify-content: center;
+}
+
 .tool-call-card :deep(.lc-collapsible-trail) {
   flex: 0 0 auto;
+  width: auto;
+  min-width: max-content;
   display: grid;
-  grid-template-columns: minmax(8em, max-content) 5.5ch;
+  grid-template-columns: max-content max-content;
   align-items: center;
-  column-gap: 4px;
+  column-gap: 6px;
 }
 
 .part-card-status,
@@ -409,16 +441,17 @@ function isInternalApprovalProgress(progress: unknown): boolean {
 }
 
 .part-card-status {
-  min-width: 0;
-  overflow: hidden;
+  min-width: max-content;
+  overflow: visible;
   text-align: left;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .part-card-meta {
-  width: 5.5ch;
+  min-width: max-content;
+  max-width: none;
   justify-self: end;
+  overflow: visible;
   text-align: right;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -426,7 +459,9 @@ function isInternalApprovalProgress(progress: unknown): boolean {
 }
 
 .tool-header-action {
-  max-width: 12em;
+  width: auto;
+  max-width: none;
+  min-width: max-content;
   min-height: 22px;
   padding: 0 6px;
   border: 1px solid transparent;
@@ -464,9 +499,9 @@ function isInternalApprovalProgress(progress: unknown): boolean {
 }
 
 .tool-header-action-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: 1 1 auto;
+  min-width: max-content;
+  overflow: visible;
   white-space: nowrap;
 }
 

@@ -1,3 +1,4 @@
+import { IconTerminal2 } from '@tabler/icons-vue';
 import type { ToolCallEventRecord } from '@shared/protocol';
 import type { ToolDisplayContext, ToolDisplayResolver, ToolDisplaySection } from './types';
 
@@ -20,6 +21,7 @@ interface ShellResultOutput {
 
 export const shellToolDisplay: ToolDisplayResolver = (context) => {
   return {
+    headerIcon: IconTerminal2,
     inputSections: shellInputSections(shellArgs(context.args), context),
     outputSections: shellOutputSections(context)
   };

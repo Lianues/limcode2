@@ -35,7 +35,7 @@ function toggleExpanded(): void {
     class="lc-collapsible-block"
     :class="[`is-${kind}`, { 'is-expanded': isExpanded, 'is-empty': !collapsible }]"
   >
-    <div class="lc-collapsible-header" :class="{ 'has-actions': $slots.actions }">
+    <div class="lc-collapsible-header" :class="{ 'has-actions': $slots.actions, 'has-trail': $slots.trail }">
       <button
         type="button"
         class="lc-collapsible-summary"
@@ -55,13 +55,20 @@ function toggleExpanded(): void {
         <span class="lc-collapsible-main">
           <slot name="summary" />
         </span>
-        <span v-if="$slots.trail" class="lc-collapsible-trail">
-          <slot name="trail" />
-        </span>
       </button>
       <span v-if="$slots.actions" class="lc-collapsible-actions" @click.stop @keydown.stop>
         <slot name="actions" />
       </span>
+      <button
+        v-if="$slots.trail"
+        type="button"
+        class="lc-collapsible-trail"
+        :aria-expanded="isExpanded"
+        :aria-label="ariaLabel"
+        @click="toggleExpanded"
+      >
+        <slot name="trail" />
+      </button>
     </div>
 
     <div
@@ -91,8 +98,8 @@ function toggleExpanded(): void {
 }
 
 .lc-collapsible-summary {
-  width: 100%;
-  flex: 1 1 auto;
+  width: auto;
+  flex: 1 1 0;
   box-sizing: border-box;
   min-width: 0;
   min-height: 0;
@@ -117,25 +124,36 @@ function toggleExpanded(): void {
   background: var(--lc-content-output-background);
 }
 
-.lc-collapsible-header.has-actions .lc-collapsible-summary {
+.lc-collapsible-header.has-actions .lc-collapsible-summary,
+.lc-collapsible-header.has-trail .lc-collapsible-summary {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
   border-right-width: 0;
 }
 
 .lc-collapsible-actions {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   box-sizing: border-box;
+  min-width: 0;
   min-height: 0;
   padding: 0 4px;
   border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.22));
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-radius: 0;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   color: var(--vscode-descriptionForeground);
   background: var(--lc-content-input-background);
   font-size: var(--font-size-xs);
+}
+
+.lc-collapsible-header.has-actions:not(.has-trail) .lc-collapsible-actions {
+  border-top-right-radius: var(--radius-sm);
+  border-bottom-right-radius: var(--radius-sm);
+}
+
+.lc-collapsible-header.has-actions.has-trail .lc-collapsible-actions {
+  border-right-width: 0;
 }
 
 .lc-collapsible-block.is-output .lc-collapsible-actions {
@@ -210,12 +228,50 @@ function toggleExpanded(): void {
 }
 
 .lc-collapsible-trail {
-  flex: 0 0 auto;
-  margin-left: auto;
+  flex: 0 1 auto;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  padding: 4px 7px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.22));
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--vscode-descriptionForeground);
+  background: var(--lc-content-input-background);
+  cursor: pointer;
+  text-align: left;
+  line-height: 1.6;
+  font: inherit;
+  font-size: var(--font-size-xs);
+  appearance: none;
+  user-select: none;
+  -webkit-user-select: none;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--vscode-descriptionForeground);
-  font-size: var(--font-size-xs);
+}
+
+.lc-collapsible-block.is-output .lc-collapsible-trail {
+  background: var(--lc-content-output-background);
+}
+
+.lc-collapsible-trail:hover,
+.lc-collapsible-trail:focus-visible {
+  color: var(--vscode-foreground);
+  background: var(--lc-content-input-background);
+}
+
+.lc-collapsible-block.is-output .lc-collapsible-trail:hover,
+.lc-collapsible-block.is-output .lc-collapsible-trail:focus-visible,
+.lc-collapsible-block.is-output .lc-collapsible-trail:active {
+  background: var(--lc-content-output-background);
+}
+
+.lc-collapsible-trail:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, currentColor);
+  outline-offset: 2px;
+}
+
+.lc-collapsible-block.is-empty .lc-collapsible-trail {
+  cursor: default;
 }
 </style>

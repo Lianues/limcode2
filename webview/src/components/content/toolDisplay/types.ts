@@ -55,6 +55,7 @@ export interface ToolHeaderAction {
 export interface ToolDisplayResult {
   inputSections: ToolDisplaySection[];
   outputSections: ToolDisplaySection[];
+  headerIcon?: Component;
   headerActions: ToolHeaderAction[];
 }
 

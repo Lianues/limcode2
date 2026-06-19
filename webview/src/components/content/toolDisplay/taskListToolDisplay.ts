@@ -1,3 +1,4 @@
+import { IconPlaylistAdd } from '@tabler/icons-vue';
 import type { TaskListToolOperationRecord } from '@shared/protocol';
 import {
   formatTaskListProgress,
@@ -16,6 +17,7 @@ export const taskListToolDisplay: ToolDisplayResolver = (context) => {
   if (!operation) return undefined;
 
   return {
+    headerIcon: IconPlaylistAdd,
     inputSections: inputSections(operation),
     outputSections: outputSections(operation, context)
   };

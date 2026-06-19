@@ -290,7 +290,11 @@ function toolStatusLabel(status: ToolCallStatus): string {
     case 'queued': return '排队中';
     case 'awaiting_approval': return '等待批准';
     case 'executing': return '执行中';
-    case 'awaiting_apply': return '等待应用';
+    case 'awaiting_change_apply': return '等待应用更改';
+    case 'applying_change': return '应用更改中';
+    case 'change_applied': return '更改已应用';
+    case 'change_rejected': return '更改已拒绝';
+    case 'awaiting_result_submit': return '等待结果回传';
     case 'success': return '成功';
     case 'warning': return '警告';
     case 'error': return '失败';

@@ -1021,7 +1021,9 @@ function shouldDeferUntilHydrated(message: WebviewToExtensionMessage): boolean {
     case 'toolPolicy.scope.clear':
     case 'tool.execution.approve':
     case 'tool.execution.reject':
-    case 'tool.result.apply':
+    case 'tool.change.apply':
+    case 'tool.change.reject':
+    case 'tool.result.submit':
     case 'tool.result.reject':
     case 'agentRun.cancel':
     case 'agentRun.pause':

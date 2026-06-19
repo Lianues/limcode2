@@ -29,7 +29,9 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
     case BridgeMessageType.ToolPolicyScopeClear:
     case BridgeMessageType.ToolExecutionApprove:
     case BridgeMessageType.ToolExecutionReject:
-    case BridgeMessageType.ToolResultApply:
+    case BridgeMessageType.ToolChangeApply:
+    case BridgeMessageType.ToolChangeReject:
+    case BridgeMessageType.ToolResultSubmit:
     case BridgeMessageType.ToolResultReject:
       return 'command';
     case BridgeMessageType.ClientResync:

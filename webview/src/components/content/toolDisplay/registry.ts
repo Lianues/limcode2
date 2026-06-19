@@ -1,3 +1,14 @@
+import type { Component } from 'vue';
+import {
+  IconFileDescription,
+  IconMessageDots,
+  IconPlaylistAdd,
+  IconSwitch,
+  IconTerminal2,
+  IconTool,
+  IconTransfer,
+  IconUsers
+} from '@tabler/icons-vue';
 import { SWITCH_WORK_ENVIRONMENT_TOOL_NAME, TASK_LIST_TOOL_NAME, TRANSFER_FILES_TOOL_NAME } from '@shared/protocol';
 import { readConversationToolDisplay } from './readConversationToolDisplay';
 import { readFileToolDisplay } from './readFileToolDisplay';
@@ -19,6 +30,21 @@ const TOOL_DISPLAY_RESOLVERS: Record<string, ToolDisplayResolver> = {
   [TRANSFER_FILES_TOOL_NAME]: transferFilesToolDisplay
 };
 
+const TOOL_HEADER_ICONS: Record<string, Component> = {
+  [TASK_LIST_TOOL_NAME]: IconPlaylistAdd,
+  read_file: IconFileDescription,
+  read_conversation: IconMessageDots,
+  run_agent: IconUsers,
+  shell: IconTerminal2,
+  bash: IconTerminal2,
+  [SWITCH_WORK_ENVIRONMENT_TOOL_NAME]: IconSwitch,
+  [TRANSFER_FILES_TOOL_NAME]: IconTransfer
+};
+
+export function resolveToolHeaderIcon(toolName: string): Component {
+  return TOOL_HEADER_ICONS[toolName] ?? IconTool;
+}
+
 export function resolveToolDisplay(context: ToolDisplayContext): ToolDisplayResult {
   const fallback = defaultToolDisplay(context);
   const custom = TOOL_DISPLAY_RESOLVERS[context.toolName]?.(context);
@@ -26,7 +52,7 @@ export function resolveToolDisplay(context: ToolDisplayContext): ToolDisplayResu
   return {
     inputSections: custom?.inputSections ?? fallback.inputSections,
     outputSections: custom?.outputSections ?? fallback.outputSections,
-    ...(custom?.headerIcon ? { headerIcon: custom.headerIcon } : fallback.headerIcon ? { headerIcon: fallback.headerIcon } : {}),
+    headerIcon: custom?.headerIcon ?? fallback.headerIcon ?? resolveToolHeaderIcon(context.toolName),
     headerActions: custom?.headerActions ?? fallback.headerActions
   };
 }

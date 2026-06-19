@@ -11,6 +11,7 @@ import type {
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import LcCheckbox from '@webview/components/ui/LcCheckbox.vue';
 import { useToolPolicyStore } from '@webview/stores/useToolPolicyStore';
+import { resolveToolHeaderIcon } from '@webview/components/content/toolDisplay/registry';
 
 const props = withDefaults(defineProps<{
   scopeKind: ToolPolicyScopeKind;
@@ -101,6 +102,10 @@ function executionLabel(tool: ToolDefinitionRecord): string {
 
 function toolDescription(tool: ToolDefinitionRecord): string {
   return tool.description || '后端未提供描述。';
+}
+
+function toolIcon(tool: ToolDefinitionRecord) {
+  return resolveToolHeaderIcon(tool.name);
 }
 
 function cloneToolConfigs(): Record<string, ToolPolicyToolConfigRecord> {
@@ -233,6 +238,9 @@ function inputNumber(event: Event): number {
             <div class="tool-item-header">
               <button type="button" class="tool-item-main" :disabled="readonly" @click="toggleTool(tool)">
                 <span class="tool-toggle" aria-hidden="true"></span>
+                <span class="tool-icon" aria-hidden="true">
+                  <component :is="toolIcon(tool)" :stroke="2" />
+                </span>
                 <span class="tool-main">
                   <span class="tool-name-row">
                     <span class="tool-name">{{ tool.name }}</span>
@@ -505,13 +513,16 @@ function inputNumber(event: Event): number {
   border: 0;
   padding: var(--space-2) var(--space-3);
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
+  grid-template-columns: 16px 24px minmax(0, 1fr);
   gap: var(--space-2);
   align-items: center;
   color: var(--vscode-foreground);
+  border-radius: 0;
   background: transparent;
   text-align: left;
   min-width: 0;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .tool-item-main:hover:not(:disabled),
@@ -524,6 +535,7 @@ function inputNumber(event: Event): number {
   min-width: 72px;
   min-height: 0;
   border: 0;
+  border-radius: 0;
   border-left: 1px solid var(--vscode-panel-border);
   padding: 0 var(--space-3);
   display: inline-flex;
@@ -589,6 +601,25 @@ function inputNumber(event: Event): number {
 .tool-item.is-enabled .tool-toggle {
   border-color: var(--vscode-foreground);
   background: var(--vscode-foreground);
+}
+
+.tool-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--vscode-descriptionForeground);
+}
+
+.tool-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.tool-item.is-enabled .tool-icon {
+  color: var(--vscode-foreground);
 }
 
 .tool-main {
@@ -749,7 +780,7 @@ function inputNumber(event: Event): number {
 }
 
 .tool-config-panel {
-  padding: calc(var(--space-3) + 2px) var(--space-3) var(--space-3) calc(var(--space-3) + 28px);
+  padding: calc(var(--space-3) + 2px) var(--space-3) var(--space-3) calc(var(--space-3) + 60px);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);

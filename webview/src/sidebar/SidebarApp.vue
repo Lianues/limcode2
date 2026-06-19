@@ -284,6 +284,12 @@ function historyMeta(entry: SidebarConversationHistoryEntry): string {
   return `${project}${entry.agentName || '默认 Agent'} · ${entry.messageCount || 0} 条消息 · ${formatTime(entry.updatedAt)}`;
 }
 
+function originBadgeText(entry: SidebarConversationHistoryEntry): string | undefined {
+  if (entry.originKind === 'agent') return entry.originSourceKind === 'toolCall' ? 'AI 触发' : 'Agent 创建';
+  if (entry.originKind === 'system') return '系统创建';
+  return undefined;
+}
+
 function displayConversationTitle(entry: SidebarConversationHistoryEntry | undefined): string {
   return entry ? formatConversationTitle({ id: entry.id, title: entry.title }) : '';
 }
@@ -440,6 +446,7 @@ function ensureActiveScopeVisible(): void {
             <div class="history-main">
               <div class="history-title-row">
                 <div class="history-title">{{ displayConversationTitle(entry) }}</div>
+                <span v-if="originBadgeText(entry)" class="origin-badge">{{ originBadgeText(entry) }}</span>
               </div>
               <div class="history-preview" :class="{ 'is-pending': entry.previewState === 'pending', 'is-empty': entry.previewState === 'empty' }">{{ entry.preview || '暂无消息，点击继续对话。' }}</div>
               <div class="history-meta">

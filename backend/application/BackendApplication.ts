@@ -21,6 +21,7 @@ import { Agent, AgentConversationLink, ConversationAgentSelection } from '../wor
 import {
   Conversation,
   ConversationBranchLink,
+  ConversationOriginLink,
   ConversationReuseLink,
   LlmRequest,
   Message,
@@ -65,12 +66,14 @@ import { flushEffects, flushEffectsWhere } from './executeEffects';
 import type { RuntimeEnv } from './RuntimeEnv';
 import { GLOBAL_SETTINGS_SECTIONS, createMessageId } from '../../shared/protocol';
 import type {
+  AgentRunSourceKind,
   AgentRunStatus,
   BridgeClientId,
   ConversationHistoryPageRecord,
   ConversationHistoryScope,
   MessageContent,
   ProjectFolderCandidateRecord,
+  ConversationOriginKind,
   SidebarHistoryScopeKind,
   SidebarConversationHistoryEntry,
   WebviewClientMeta,
@@ -206,8 +209,18 @@ export class BackendApplication {
     const conversation = this.world.spawn();
     this.world.add(conversation, Conversation, { id: conversationId, title, visibility: 'visible' });
 
-    const link = this.world.spawn();
     const now = Date.now();
+    const origin = this.world.spawn();
+    this.world.add(origin, ConversationOriginLink, {
+      id: `col${origin}`,
+      conversation,
+      originKind: 'user',
+      sourceKind: 'user',
+      createdAt: now,
+      updatedAt: now
+    });
+
+    const link = this.world.spawn();
     this.world.add(link, AgentConversationLink, {
       id: `acl${link}`,
       agent,
@@ -246,6 +259,7 @@ export class BackendApplication {
     const agentNamesByConversation = this.collectAgentNamesByConversation();
     const runSummariesByConversation = this.collectRunSummariesByConversation();
     const projectsByConversation = this.collectProjectsByConversation();
+    const originsByConversation = this.collectConversationOriginsByConversation();
     const entries: SidebarConversationHistoryEntry[] = [];
 
     for (const entity of this.world.query(Conversation)) {
@@ -256,6 +270,7 @@ export class BackendApplication {
       const agentName = agentNamesByConversation.get(entity);
       const runSummary = runSummariesByConversation.get(entity);
       const project = projectsByConversation.get(entity);
+      const origin = originsByConversation.get(entity);
       const preview = latest ? messagePreview(latest) : '暂无消息，点击开始新的交流。';
       const entry: SidebarConversationHistoryEntry = {
         id: conversation.id,
@@ -273,6 +288,10 @@ export class BackendApplication {
       if (project) {
         entry.projectFolderUri = project.uri;
         entry.projectName = project.name;
+      }
+      if (origin) {
+        entry.originKind = origin.originKind;
+        if (origin.originSourceKind) entry.originSourceKind = origin.originSourceKind;
       }
       if (runSummary) {
         entry.runStatus = runSummary.status;
@@ -612,6 +631,11 @@ export class BackendApplication {
       if (link?.conversation === conversation) entities.add(entity);
     }
 
+    for (const entity of this.world.query(ConversationOriginLink)) {
+      const link = this.world.get(entity, ConversationOriginLink);
+      if (link?.conversation === conversation) entities.add(entity);
+    }
+
     for (const entity of this.world.query(ConversationReuseLink)) {
       const link = this.world.get(entity, ConversationReuseLink);
       if (link?.conversation === conversation) entities.add(entity);
@@ -781,6 +805,25 @@ export class BackendApplication {
       addRun(link.run);
       addRunPolicy(link.policy);
     }
+  }
+
+  private collectConversationOriginsByConversation(): Map<Entity, { originKind: ConversationOriginKind; originSourceKind?: AgentRunSourceKind }> {
+    const result = new Map<Entity, { originKind: ConversationOriginKind; originSourceKind?: AgentRunSourceKind; createdAt: number }>();
+    for (const entity of this.world.query(ConversationOriginLink)) {
+      const link = this.world.get(entity, ConversationOriginLink);
+      if (!link) continue;
+      const existing = result.get(link.conversation);
+      if (existing && existing.createdAt <= link.createdAt) continue;
+      result.set(link.conversation, {
+        originKind: link.originKind,
+        ...(link.sourceKind ? { originSourceKind: link.sourceKind } : {}),
+        createdAt: link.createdAt
+      });
+    }
+    return new Map([...result].map(([conversation, origin]) => [conversation, {
+      originKind: origin.originKind,
+      ...(origin.originSourceKind ? { originSourceKind: origin.originSourceKind } : {})
+    }]));
   }
 
   private collectRunOwnedEntities(runs: ReadonlySet<Entity>, runPolicies: ReadonlySet<Entity>, entities: Set<Entity>): void {

@@ -10,7 +10,16 @@ import {
   ToolPolicy
 } from '../world/modules/mode/components';
 import { rememberHydratedMessageSeq, resetMessageSeqState } from '../world/modules/chat/bundles';
-import { Conversation, ConversationBranchLink, ConversationReuseLink, Message, MessageCurrentRevisionLink, MessageRevision, PartOf } from '../world/modules/chat/components';
+import {
+  Conversation,
+  ConversationBranchLink,
+  ConversationOriginLink,
+  ConversationReuseLink,
+  Message,
+  MessageCurrentRevisionLink,
+  MessageRevision,
+  PartOf
+} from '../world/modules/chat/components';
 import { ConversationProjectLink, ProjectContext } from '../world/modules/project/components';
 import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolResultConsumed, ToolState } from '../world/modules/tools/components';
 import { isTerminalToolStatus } from '../world/modules/tools/state';
@@ -90,6 +99,8 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState, opt
     conversationEntities.set(conversation.id, entity);
     world.add(entity, Conversation, { id: conversation.id, title: conversation.title, visibility: conversation.visibility ?? 'visible' });
   }
+
+  hydrateConversationOriginLinks(world, state, { conversations: conversationEntities, agents: agentEntities });
 
   const conversationReuseLinkIds = existingIds(world, ConversationReuseLink);
   for (const record of state.conversationReuseLinks ?? []) {
@@ -293,6 +304,8 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
     world.add(entity, AgentRunTargetLink, { id: link.id, run, agent, conversation: targetConversation, role: link.role, createdAt: now, updatedAt: now });
   }
 
+  hydrateConversationOriginLinks(world, state, { conversations: conversationEntities, agents: agentEntities, messages: messageEntities, toolCalls: toolCallEntities, runs: runEntities });
+
   for (const link of state.messageRunLinks ?? []) spawnRunLink(world, messageEntities, runEntities, link, MessageRunLink, 'message', 'run');
   for (const link of state.toolCallRunLinks ?? []) spawnRunLink(world, toolCallEntities, runEntities, link, ToolCallRunLink, 'toolCall', 'run');
   for (const link of state.runModeLinks ?? []) spawnRunLink(world, runEntities, modeEntities, link, RunModeLink, 'run', 'mode');
@@ -417,6 +430,53 @@ function existingRecords<T extends { id: string }>(world: World, component: { id
 function existingIds<T extends { id: string }>(world: World, component: { id: symbol }): Set<string> {
   return new Set([...existingRecords<T>(world, component).keys()]);
 }
+
+interface ConversationOriginHydrationMaps {
+  conversations: Map<string, Entity>;
+  agents: Map<string, Entity>;
+  messages?: Map<string, Entity>;
+  toolCalls?: Map<string, Entity>;
+  runs?: Map<string, Entity>;
+}
+
+function hydrateConversationOriginLinks(world: World, state: ClientState, maps: ConversationOriginHydrationMaps): void {
+  const existing = existingIds(world, ConversationOriginLink);
+  for (const record of state.conversationOriginLinks ?? []) {
+    if (existing.has(record.id)) continue;
+    const conversation = maps.conversations.get(record.conversationId);
+    if (conversation === undefined) continue;
+    const entity = world.spawn();
+    existing.add(record.id);
+    world.add(entity, ConversationOriginLink, {
+      id: record.id,
+      conversation,
+      originKind: record.originKind,
+      ...(record.sourceKind !== undefined ? { sourceKind: record.sourceKind } : {}),
+      ...sourceEntityAndId('sourceAgent', 'sourceAgentId', record.sourceAgentId, maps.agents),
+      ...sourceEntityAndId('sourceConversation', 'sourceConversationId', record.sourceConversationId, maps.conversations),
+      ...sourceEntityAndId('sourceMessage', 'sourceMessageId', record.sourceMessageId, maps.messages),
+      ...sourceEntityAndId('sourceToolCall', 'sourceToolCallId', record.sourceToolCallId, maps.toolCalls),
+      ...sourceEntityAndId('sourceRun', 'sourceRunId', record.sourceRunId, maps.runs),
+      createdAt: record.createdAt || Date.now(),
+      updatedAt: record.updatedAt || record.createdAt || Date.now()
+    });
+  }
+}
+
+function sourceEntityAndId<TEntityKey extends string, TIdKey extends string>(
+  entityKey: TEntityKey,
+  idKey: TIdKey,
+  id: string | undefined,
+  entities: Map<string, Entity> | undefined
+): Partial<Record<TEntityKey, Entity> & Record<TIdKey, string>> {
+  if (!id) return {};
+  const entity = entities?.get(id);
+  return {
+    ...(entity !== undefined ? { [entityKey]: entity } : {}),
+    [idKey]: id
+  } as Partial<Record<TEntityKey, Entity> & Record<TIdKey, string>>;
+}
+
 
 function hydrateConversationModeSelections(
   world: World,

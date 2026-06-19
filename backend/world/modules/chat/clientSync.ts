@@ -17,6 +17,7 @@ export const chatClientSyncContributor = defineClientStateContributor({
     'conversations',
     'conversationReuseLinks',
     'conversationBranchLinks',
+    'conversationOriginLinks',
     'messages',
     'messageRevisions',
     'messageCurrentRevisionLinks'

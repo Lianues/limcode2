@@ -11,6 +11,7 @@ import type {
   ConversationRunDetailRecord,
   ConversationRunHistoryPageRecord,
   ConversationRunSummaryRecord,
+  ConversationOriginLinkRecord,
   ConversationReuseLinkRecord,
   MessageCurrentRevisionLinkRecord,
   MessageRecord,
@@ -94,6 +95,7 @@ interface RunHistoryDetailFile {
 
 const CONVERSATION_REUSE_LINKS_DIR = 'reuse-links';
 const CONVERSATION_BRANCH_LINKS_DIR = 'branch-links';
+const CONVERSATION_ORIGIN_LINKS_DIR = 'origin-links';
 const CONVERSATION_DETAILS_DIR = 'details';
 const RUN_HISTORY_CONVERSATIONS_DIR = 'conversations';
 const RUN_HISTORY_PAGES_DIR = 'pages';
@@ -161,6 +163,7 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
     conversations,
     conversationReuseLinks,
     conversationBranchLinks,
+    conversationOriginLinks,
     agentConversationLinks,
     conversationAgentSelections
   ] = await Promise.all([
@@ -176,6 +179,7 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
     loadSkeletonRecords<ConversationRecord>('conversations', [paths.conversationsRootUri, paths.conversationsIndexUri], 'conversation'),
     loadSkeletonRecords<ConversationReuseLinkRecord>('conversationReuseLinks', subStore(paths.conversationsRootUri, CONVERSATION_REUSE_LINKS_DIR), 'link'),
     loadSkeletonRecords<ConversationBranchLinkRecord>('conversationBranchLinks', subStore(paths.conversationsRootUri, CONVERSATION_BRANCH_LINKS_DIR), 'link'),
+    loadSkeletonRecords<ConversationOriginLinkRecord>('conversationOriginLinks', subStore(paths.conversationsRootUri, CONVERSATION_ORIGIN_LINKS_DIR), 'link'),
     loadSkeletonRecords<AgentConversationLinkRecord>('agentConversationLinks', [paths.linksRootUri, paths.linksIndexUri], 'link'),
     loadSkeletonRecords<ConversationAgentSelectionRecord>('conversationAgentSelections', [paths.conversationAgentSelectionsRootUri, paths.conversationAgentSelectionsIndexUri], 'selection')
   ]);
@@ -192,6 +196,7 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
   state.conversations = conversations;
   state.conversationReuseLinks = conversationReuseLinks;
   state.conversationBranchLinks = conversationBranchLinks;
+  state.conversationOriginLinks = conversationOriginLinks;
   state.agentConversationLinks = agentConversationLinks;
   state.conversationAgentSelections = conversationAgentSelections;
 }
@@ -320,6 +325,7 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
     saveRecords(paths.conversationsRootUri, paths.conversationsIndexUri, state.conversations, 'conversation', (record) => record.title || record.id),
     saveRecords(...subStore(paths.conversationsRootUri, CONVERSATION_REUSE_LINKS_DIR), state.conversationReuseLinks, 'link'),
     saveRecords(...subStore(paths.conversationsRootUri, CONVERSATION_BRANCH_LINKS_DIR), state.conversationBranchLinks, 'link'),
+    saveRecords(...subStore(paths.conversationsRootUri, CONVERSATION_ORIGIN_LINKS_DIR), state.conversationOriginLinks, 'link'),
     saveRecords(paths.linksRootUri, paths.linksIndexUri, state.agentConversationLinks, 'link'),
     saveRecords(paths.conversationAgentSelectionsRootUri, paths.conversationAgentSelectionsIndexUri, state.conversationAgentSelections, 'selection'),
     saveRecords(paths.projectContextsRootUri, paths.projectContextsIndexUri, state.projectContexts, 'projectContext', (record) => record.name || record.id),

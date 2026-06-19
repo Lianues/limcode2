@@ -1,10 +1,23 @@
 import { estimateTokenCount } from 'tokenx';
 import { defineBundle, type CommandSink, type Entity } from '../../../ecs/types';
 import type { ContentPart, ContentRole, LlmUsageMetadataRecord, MessageContent, MessageRevisionReason, MsgRole, MsgStatus } from '../../../../shared/protocol';
-import { Conversation, ConversationBranchLink, ConversationReuseLink, LlmRequest, Message, MessageCurrentRevisionLink, MessageRevision, PartOf, Streaming, type MessageData } from './components';
+import {
+  Conversation,
+  ConversationBranchLink,
+  ConversationOriginLink,
+  ConversationReuseLink,
+  LlmRequest,
+  Message,
+  MessageCurrentRevisionLink,
+  MessageRevision,
+  PartOf,
+  Streaming,
+  type ConversationOriginLinkData,
+  type MessageData
+} from './components';
 
 export const ConversationBundle = defineBundle({ name: 'ConversationBundle', writes: [Conversation], mutationMode: 'create', spawns: true });
-export const ConversationLinkBundle = defineBundle({ name: 'ConversationLinkBundle', writes: [ConversationReuseLink, ConversationBranchLink], mutationMode: 'create', spawns: true });
+export const ConversationLinkBundle = defineBundle({ name: 'ConversationLinkBundle', writes: [ConversationReuseLink, ConversationBranchLink, ConversationOriginLink], mutationMode: 'create', spawns: true });
 export const MessageBundle = defineBundle({ name: 'MessageBundle', writes: [Message, PartOf, MessageRevision, MessageCurrentRevisionLink], mutationMode: 'create', spawns: true });
 export const UserMessageBundle = MessageBundle;
 export const ModelMessageBundle = defineBundle({ name: 'ModelMessageBundle', writes: [Message, PartOf, Streaming, MessageRevision, MessageCurrentRevisionLink], mutationMode: 'create', spawns: true });
@@ -28,6 +41,33 @@ export function spawnConversationBranchLink(cmd: CommandSink, input: { sourceCon
   const entity = cmd.spawn();
   const now = Date.now();
   cmd.add(entity, ConversationBranchLink, { id: `cbl${entity}`, sourceConversation: input.sourceConversation, targetConversation: input.targetConversation, ...(input.sourceRevision !== undefined ? { sourceRevision: input.sourceRevision } : {}), kind: input.kind, createdAt: now, updatedAt: now });
+  return entity;
+}
+
+export function spawnConversationOriginLink(
+  cmd: CommandSink,
+  input: Omit<ConversationOriginLinkData, 'id' | 'createdAt' | 'updatedAt'> & { id?: string; createdAt?: number; updatedAt?: number }
+): Entity {
+  const entity = cmd.spawn();
+  const now = Date.now();
+  cmd.add(entity, ConversationOriginLink, {
+    id: input.id ?? `col${entity}`,
+    conversation: input.conversation,
+    originKind: input.originKind,
+    ...(input.sourceKind !== undefined ? { sourceKind: input.sourceKind } : {}),
+    ...(input.sourceAgent !== undefined ? { sourceAgent: input.sourceAgent } : {}),
+    ...(input.sourceAgentId !== undefined ? { sourceAgentId: input.sourceAgentId } : {}),
+    ...(input.sourceConversation !== undefined ? { sourceConversation: input.sourceConversation } : {}),
+    ...(input.sourceConversationId !== undefined ? { sourceConversationId: input.sourceConversationId } : {}),
+    ...(input.sourceMessage !== undefined ? { sourceMessage: input.sourceMessage } : {}),
+    ...(input.sourceMessageId !== undefined ? { sourceMessageId: input.sourceMessageId } : {}),
+    ...(input.sourceToolCall !== undefined ? { sourceToolCall: input.sourceToolCall } : {}),
+    ...(input.sourceToolCallId !== undefined ? { sourceToolCallId: input.sourceToolCallId } : {}),
+    ...(input.sourceRun !== undefined ? { sourceRun: input.sourceRun } : {}),
+    ...(input.sourceRunId !== undefined ? { sourceRunId: input.sourceRunId } : {}),
+    createdAt: input.createdAt ?? now,
+    updatedAt: input.updatedAt ?? input.createdAt ?? now
+  });
   return entity;
 }
 

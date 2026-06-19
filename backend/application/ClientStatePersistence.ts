@@ -185,7 +185,12 @@ export class ClientStatePersistence {
 
   private renderLoadedConversationIds(state: ClientState): string[] {
     const explicit = this.options.renderLoadedConversationIds?.();
-    if (explicit) return uniqueIds(explicit).filter((id) => this.options.isConversationRenderDetailLoaded?.(id) ?? true);
+    if (explicit) {
+      const ids = new Set(uniqueIds(explicit).filter((id) => this.options.isConversationRenderDetailLoaded?.(id) ?? true));
+      // 当前 world 中已经有消息的对话一定是本轮运行创建或已加载的详情，允许保存渲染时间线；避免 run_agent 后台新会话重启后只剩 history 无正文。
+      for (const message of state.messages) ids.add(message.conversationId);
+      return [...ids];
+    }
 
     const ids = new Set(state.messages.map((message) => message.conversationId));
     for (const conversation of state.conversations) {
@@ -336,6 +341,7 @@ function projectConversationHistoryEntry(state: ClientState, conversationId: str
   const latest = latestMessage(messages);
   const runSummary = activeRunSummary(state, conversationId);
   const project = projectInfoForConversation(state, conversationId);
+  const origin = originInfoForConversation(state, conversationId);
   const title = displayConversationTitle({ id: conversation.id, title: conversation.title, messages });
   const fallbackUpdatedAt = conversationCreatedAtFromId(conversation.id);
   const preview = latest ? messagePreview(latest) : '暂无消息，点击开始新的交流。';
@@ -349,7 +355,9 @@ function projectConversationHistoryEntry(state: ClientState, conversationId: str
     ...(latest ? { updatedAt: latest.createdAt } : fallbackUpdatedAt !== undefined ? { updatedAt: fallbackUpdatedAt } : {}),
     ...(agentNameForConversation(state, conversationId) ? { agentName: agentNameForConversation(state, conversationId) } : {}),
     ...(project?.uri ? { projectFolderUri: project.uri } : {}),
-    ...(project?.name ? { projectName: project.name } : {})
+    ...(project?.name ? { projectName: project.name } : {}),
+    ...(origin?.originKind ? { originKind: origin.originKind } : {}),
+    ...(origin?.originSourceKind ? { originSourceKind: origin.originSourceKind } : {})
   };
   const previewState = latest ? aiPreviewState(latest) : undefined;
   if (previewState) entry.previewState = previewState;
@@ -413,6 +421,13 @@ function projectInfoForConversation(state: ClientState, conversationId: string):
   const link = state.conversationProjectLinks.find((candidate) => candidate.conversationId === conversationId && candidate.role === 'primary');
   const project = state.projectContexts.find((candidate) => candidate.id === link?.projectContextId);
   return project ? { uri: project.uri, name: project.name } : undefined;
+}
+
+function originInfoForConversation(state: ClientState, conversationId: string): Pick<SidebarConversationHistoryEntry, 'originKind' | 'originSourceKind'> | undefined {
+  const origin = state.conversationOriginLinks
+    .filter((candidate) => candidate.conversationId === conversationId)
+    .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))[0];
+  return origin ? { originKind: origin.originKind, ...(origin.sourceKind ? { originSourceKind: origin.sourceKind } : {}) } : undefined;
 }
 
 function normalizeText(text: string): string {

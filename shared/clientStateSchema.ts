@@ -313,6 +313,7 @@ export const CLIENT_STATE_TABLES = {
     cascadeRemove: [
       { table: 'conversationReuseLinks', foreignKey: 'conversationId' },
       { table: 'conversationBranchLinks', foreignKeys: ['sourceConversationId', 'targetConversationId'] },
+      { table: 'conversationOriginLinks', foreignKey: 'conversationId' },
       { table: 'agentConversationLinks', foreignKey: 'conversationId' },
       { table: 'conversationAgentSelections', foreignKey: 'conversationId' },
       { table: 'conversationModeSelections', foreignKey: 'conversationId' },
@@ -326,6 +327,7 @@ export const CLIENT_STATE_TABLES = {
   }),
   conversationReuseLinks: upsertRemoveTable('conversationReuseLink', 'link', { scope: { kind: 'conversation', field: 'conversationId' }, globalSnapshot: true }),
   conversationBranchLinks: upsertRemoveTable('conversationBranchLink', 'link', { scope: { kind: 'conversationAny', fields: ['sourceConversationId', 'targetConversationId'] }, globalSnapshot: true }),
+  conversationOriginLinks: upsertRemoveTable('conversationOriginLink', 'link', { scope: { kind: 'conversation', field: 'conversationId' }, globalSnapshot: true }),
   agentConversationLinks: upsertRemoveTable('agentConversationLink', 'link', { scope: { kind: 'conversation', field: 'conversationId', replace: 'removeOnly' }, globalSnapshot: true }),
   conversationAgentSelections: upsertRemoveTable('conversationAgentSelection', 'selection', { scope: { kind: 'conversation', field: 'conversationId' }, globalSnapshot: true }),
   projectContexts: upsertRemoveTable('projectContext', 'projectContext', {

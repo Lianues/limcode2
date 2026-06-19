@@ -1,6 +1,6 @@
 import { defineBundle, type CommandSink, type Entity, type WorldReader } from '../../../ecs/types';
-import { Conversation, PartOf, Message } from '../chat/components';
-import { spawnConversation, spawnUserMessage } from '../chat/bundles';
+import { Conversation, ConversationOriginLink, PartOf, Message } from '../chat/components';
+import { spawnConversation, spawnConversationOriginLink, spawnUserMessage } from '../chat/bundles';
 import {
   Agent,
   AgentConversationLink,
@@ -36,6 +36,7 @@ export const AgentFromBlueprintBundle = defineBundle({
     ModelProfileScopeLink,
     ToolPolicyScopeLink,
     Conversation,
+    ConversationOriginLink,
     ConversationModeSelection,
     AgentConversationLink,
     ConversationAgentSelection,
@@ -155,6 +156,7 @@ export function spawnModeFromDefinition(cmd: CommandSink, definition: BuiltinMod
 export function spawnAgentFromBlueprint(cmd: CommandSink, input: SpawnAgentWithConversationInput): SpawnAgentWithConversationResult {
   const agent = spawnAgentProfileFromBlueprint(cmd, input);
   const conversation = spawnConversation(cmd, { id: input.conversationId, title: input.conversationTitle });
+  spawnConversationOriginLink(cmd, { conversation, originKind: 'user', sourceKind: 'user' });
   const link = linkAgentToConversation(cmd, { agent, conversation, role: 'default' });
   const selection = selectAgentForConversation(cmd, { agent, conversation, conversationId: input.conversationId, agentId: input.agentId ?? input.definition.id });
   selectGlobalModeForConversation(cmd, conversation, input.conversationId);

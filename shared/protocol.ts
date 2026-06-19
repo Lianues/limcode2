@@ -164,6 +164,8 @@ export interface SidebarConversationHistoryEntry {
   runStatusLabel?: string;
   projectFolderUri?: string;
   projectName?: string;
+  originKind?: ConversationOriginKind;
+  originSourceKind?: AgentRunSourceKind;
 }
 
 export interface OpenConversationPanelRecord {
@@ -394,6 +396,7 @@ export type AgentRunStatus = 'queued' | 'preparing' | 'running' | 'waiting_tool'
 export type AgentRunEndReason = 'completed' | 'failed' | 'cancelled_by_user' | 'cancelled_by_policy' | 'stale_source_edited' | 'retry_requested' | 'regenerate_requested';
 export type AgentRunErrorType = 'llm' | 'tool' | 'policy' | 'cancelled' | 'stale' | 'unknown';
 export type AgentRunSourceKind = 'user' | 'toolCall' | 'agentRun' | 'schedule' | 'system';
+export type ConversationOriginKind = 'user' | 'agent' | 'system';
 export type AgentRunTargetRole = 'executor';
 export type MessageRunRole = 'input' | 'model' | 'tool_response' | 'notification';
 export type ToolCallRunRole = 'produced_by';
@@ -515,6 +518,21 @@ export interface ConversationBranchLinkRecord {
   targetConversationId: string;
   sourceRevisionId?: string;
   kind: ConversationBranchKind;
+}
+
+
+export interface ConversationOriginLinkRecord {
+  id: string;
+  conversationId: string;
+  originKind: ConversationOriginKind;
+  sourceKind?: AgentRunSourceKind;
+  sourceAgentId?: string;
+  sourceConversationId?: string;
+  sourceMessageId?: string;
+  sourceToolCallId?: string;
+  sourceRunId?: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 
@@ -936,6 +954,7 @@ export interface ClientStateRecordByTable {
   conversations: ConversationRecord;
   conversationReuseLinks: ConversationReuseLinkRecord;
   conversationBranchLinks: ConversationBranchLinkRecord;
+  conversationOriginLinks: ConversationOriginLinkRecord;
   agentConversationLinks: AgentConversationLinkRecord;
   conversationAgentSelections: ConversationAgentSelectionRecord;
   projectContexts: ProjectContextRecord;

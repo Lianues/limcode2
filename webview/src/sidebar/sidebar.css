@@ -491,6 +491,22 @@ button {
   text-overflow: ellipsis;
 }
 
+.origin-badge {
+  flex: 0 0 auto;
+  max-width: 70px;
+  height: 14px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--vscode-descriptionForeground);
+  background: color-mix(in srgb, var(--vscode-sideBar-background) 90%, var(--vscode-foreground) 10%);
+  font-size: 10px;
+  line-height: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .status-dot {
   width: 8px;
   height: 8px;

@@ -154,6 +154,7 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
     conversations: state.conversations.filter((conversation) => conversation.id === conversationId || conversationReferencedByRuns(state, conversation.id, runIds)),
     conversationReuseLinks: state.conversationReuseLinks.filter((link) => link.conversationId === conversationId),
     conversationBranchLinks: state.conversationBranchLinks.filter((link) => link.sourceConversationId === conversationId || link.targetConversationId === conversationId),
+    conversationOriginLinks: state.conversationOriginLinks.filter((link) => link.conversationId === conversationId),
     projectContexts: state.projectContexts.filter((projectContext) => projectContextIds.has(projectContext.id)),
     conversationProjectLinks,
     conversationModeSelections,

@@ -1,5 +1,15 @@
 import { defineComponent, type Entity } from '../../../ecs/types';
-import type { ConversationBranchKind, LlmUsageMetadataRecord, MessageContent, MessageRevisionReason, MessageStopReason, MsgRole, MsgStatus } from '../../../../shared/protocol';
+import type {
+  AgentRunSourceKind,
+  ConversationBranchKind,
+  ConversationOriginKind,
+  LlmUsageMetadataRecord,
+  MessageContent,
+  MessageRevisionReason,
+  MessageStopReason,
+  MsgRole,
+  MsgStatus
+} from '../../../../shared/protocol';
 
 export interface ConversationData {
   id: string;
@@ -28,6 +38,26 @@ export interface ConversationBranchLinkData {
   updatedAt: number;
 }
 export const ConversationBranchLink = defineComponent<ConversationBranchLinkData>('ConversationBranchLink');
+
+export interface ConversationOriginLinkData {
+  id: string;
+  conversation: Entity;
+  originKind: ConversationOriginKind;
+  sourceKind?: AgentRunSourceKind;
+  sourceAgent?: Entity;
+  sourceAgentId?: string;
+  sourceConversation?: Entity;
+  sourceConversationId?: string;
+  sourceMessage?: Entity;
+  sourceMessageId?: string;
+  sourceToolCall?: Entity;
+  sourceToolCallId?: string;
+  sourceRun?: Entity;
+  sourceRunId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+export const ConversationOriginLink = defineComponent<ConversationOriginLinkData>('ConversationOriginLink');
 
 export const Aborted = defineComponent<true>('Aborted');
 

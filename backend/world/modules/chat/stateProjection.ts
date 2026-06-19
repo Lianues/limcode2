@@ -1,10 +1,21 @@
-import type { ClientState, ConversationBranchLinkRecord, ConversationRecord, ConversationReuseLinkRecord, MessageCurrentRevisionLinkRecord, MessageRecord, MessageRevisionRecord } from '../../../../shared/protocol';
+import type {
+  ClientState,
+  ConversationBranchLinkRecord,
+  ConversationOriginLinkRecord,
+  ConversationRecord,
+  ConversationReuseLinkRecord,
+  MessageCurrentRevisionLinkRecord,
+  MessageRecord,
+  MessageRevisionRecord
+} from '../../../../shared/protocol';
 import type { AccessDeclaration, WorldReader } from '../../../ecs/types';
 import { Agent } from '../agent/components';
-import { Conversation, ConversationBranchLink, ConversationReuseLink, Message, MessageCurrentRevisionLink, MessageRevision, PartOf } from './components';
+import { AgentRun } from '../agentRun/components';
+import { ToolCall } from '../tools/components';
+import { Conversation, ConversationBranchLink, ConversationOriginLink, ConversationReuseLink, Message, MessageCurrentRevisionLink, MessageRevision, PartOf } from './components';
 
 export const chatStateProjectionReads: AccessDeclaration = {
-  components: [Agent, Message, MessageRevision, MessageCurrentRevisionLink, PartOf, Conversation, ConversationReuseLink, ConversationBranchLink]
+  components: [Agent, AgentRun, ToolCall, Message, MessageRevision, MessageCurrentRevisionLink, PartOf, Conversation, ConversationReuseLink, ConversationBranchLink, ConversationOriginLink]
 };
 
 export function projectChatState(world: WorldReader): Partial<ClientState> {
@@ -23,6 +34,11 @@ export function projectChatState(world: WorldReader): Partial<ClientState> {
     .query(ConversationBranchLink)
     .map((entity) => buildConversationBranchLinkRecord(world, entity))
     .filter((item): item is ConversationBranchLinkRecord => item !== undefined);
+
+  const conversationOriginLinks: ConversationOriginLinkRecord[] = world
+    .query(ConversationOriginLink)
+    .map((entity) => buildConversationOriginLinkRecord(world, entity))
+    .filter((item): item is ConversationOriginLinkRecord => item !== undefined);
 
   const messages: MessageRecord[] = world
     .query(Message, PartOf)
@@ -55,7 +71,7 @@ export function projectChatState(world: WorldReader): Partial<ClientState> {
     .map((entity) => buildMessageCurrentRevisionLinkRecord(world, entity))
     .filter((item): item is MessageCurrentRevisionLinkRecord => item !== undefined);
 
-  return { conversations, conversationReuseLinks, conversationBranchLinks, messages, messageRevisions, messageCurrentRevisionLinks };
+  return { conversations, conversationReuseLinks, conversationBranchLinks, conversationOriginLinks, messages, messageRevisions, messageCurrentRevisionLinks };
 }
 
 function buildConversationReuseLinkRecord(world: WorldReader, entity: number): ConversationReuseLinkRecord | undefined {
@@ -75,6 +91,30 @@ function buildConversationBranchLinkRecord(world: WorldReader, entity: number): 
   const sourceRevision = link.sourceRevision !== undefined ? world.get(link.sourceRevision, MessageRevision) : undefined;
   if (!sourceConversation || !targetConversation) return undefined;
   return { id: link.id, sourceConversationId: sourceConversation.id, targetConversationId: targetConversation.id, ...(sourceRevision ? { sourceRevisionId: sourceRevision.id } : {}), kind: link.kind };
+}
+
+function buildConversationOriginLinkRecord(world: WorldReader, entity: number): ConversationOriginLinkRecord | undefined {
+  const link = world.get(entity, ConversationOriginLink);
+  if (!link) return undefined;
+  const conversation = world.get(link.conversation, Conversation);
+  if (!conversation) return undefined;
+  return {
+    id: link.id,
+    conversationId: conversation.id,
+    originKind: link.originKind,
+    ...(link.sourceKind !== undefined ? { sourceKind: link.sourceKind } : {}),
+    ...optionalId('sourceAgentId', link.sourceAgent !== undefined ? world.get(link.sourceAgent, Agent)?.id : link.sourceAgentId),
+    ...optionalId('sourceConversationId', link.sourceConversation !== undefined ? world.get(link.sourceConversation, Conversation)?.id : link.sourceConversationId),
+    ...optionalId('sourceMessageId', link.sourceMessage !== undefined ? world.get(link.sourceMessage, Message)?.id : link.sourceMessageId),
+    ...optionalId('sourceToolCallId', link.sourceToolCall !== undefined ? world.get(link.sourceToolCall, ToolCall)?.id : link.sourceToolCallId),
+    ...optionalId('sourceRunId', link.sourceRun !== undefined ? world.get(link.sourceRun, AgentRun)?.id : link.sourceRunId),
+    createdAt: link.createdAt,
+    updatedAt: link.updatedAt
+  };
+}
+
+function optionalId<TKey extends 'sourceAgentId' | 'sourceConversationId' | 'sourceMessageId' | 'sourceToolCallId' | 'sourceRunId'>(key: TKey, value: string | undefined): Record<TKey, string> | Record<string, never> {
+  return value ? { [key]: value } as Record<TKey, string> : {};
 }
 
 function buildMessageRevisionRecord(world: WorldReader, entity: number): MessageRevisionRecord | undefined {

@@ -74,6 +74,7 @@ export function spawnConversationOriginLink(
 export interface SpawnMessageInput {
   parent: Entity;
   role: MsgRole;
+  model?: string;
   parts?: ContentPart[];
   status?: MsgStatus;
   revisionReason?: MessageRevisionReason;
@@ -91,6 +92,7 @@ export function spawnMessage(cmd: CommandSink, input: SpawnMessageInput): Entity
   cmd.add(entity, Message, {
     id: `m${entity}`,
     role: input.role,
+    ...(input.model !== undefined ? { model: input.model } : {}),
     content,
     status: input.status ?? 'complete',
     seq,
@@ -135,7 +137,7 @@ export function estimateUserInputUsage(text: string): LlmUsageMetadataRecord | u
 }
 
 export function cloneMessageToConversation(cmd: CommandSink, conversation: Entity, message: MessageData, overrideContent?: MessageContent): Entity {
-  return spawnMessage(cmd, { parent: conversation, role: message.role, parts: overrideContent?.parts ?? message.content.parts, status: message.status === 'streaming' ? 'error' : message.status, usageMetadata: message.usageMetadata, revisionReason: 'created' });
+  return spawnMessage(cmd, { parent: conversation, role: message.role, model: message.model, parts: overrideContent?.parts ?? message.content.parts, status: message.status === 'streaming' ? 'error' : message.status, usageMetadata: message.usageMetadata, revisionReason: 'created' });
 }
 
 export function spawnModelMessage(cmd: CommandSink, conversation: Entity): Entity {

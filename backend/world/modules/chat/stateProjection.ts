@@ -50,6 +50,7 @@ export function projectChatState(world: WorldReader): Partial<ClientState> {
         id: message.id,
         conversationId: world.get(conversationEntity, Conversation)!.id,
         role: message.role,
+        ...(message.model !== undefined ? { model: message.model } : {}),
         content: message.content,
         status: message.status,
         createdAt: message.createdAt,

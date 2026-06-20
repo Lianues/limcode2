@@ -64,6 +64,7 @@ export const Aborted = defineComponent<true>('Aborted');
 export interface MessageData {
   id: string;
   role: MsgRole;
+  model?: string;
   content: MessageContent;
   status: MsgStatus;
   seq: number;

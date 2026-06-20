@@ -1,6 +1,7 @@
 import type { LlmUsageMetadataRecord } from '../../../../shared/protocol';
 
 export const LlmEventType = {
+  Started: 'llm:started',
   Delta: 'llm:delta',
   ThoughtDelta: 'llm:thoughtDelta',
   ThoughtDone: 'llm:thoughtDone',
@@ -9,6 +10,10 @@ export const LlmEventType = {
   Error: 'llm:error'
 } as const;
 
+export interface LlmStartedPayload {
+  requestId: string;
+  model?: string;
+}
 export interface LlmDeltaPayload {
   requestId: string;
   text: string;
@@ -42,6 +47,7 @@ export interface LlmErrorPayload {
 
 declare module '@backend/world/events' {
   interface WorldEventPayloadMap {
+    'llm:started': LlmStartedPayload;
     'llm:delta': LlmDeltaPayload;
     'llm:thoughtDelta': LlmThoughtDeltaPayload;
     'llm:thoughtDone': LlmThoughtDonePayload;

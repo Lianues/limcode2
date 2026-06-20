@@ -909,6 +909,7 @@ export interface MessageRecord {
   id: string;
   conversationId: string;
   role: MsgRole;
+  model?: string;
   content: MessageContent;
   status: MsgStatus;
   createdAt: number;

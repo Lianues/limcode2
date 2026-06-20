@@ -100,6 +100,7 @@ export async function startLlmProvider(
 ): Promise<void> {
   try {
     const settings = normalizeSettings(await resolveMaybe(options.settings, request));
+    emitLlmStarted(emit, request.id, resolveModelDisplayName(settings));
     if (!settings.apiKey) {
       emitLlmError(emit, request.id, '缺少 LLM API Key。请在全局设置的“渠道”页签里填写并保存。');
       return;
@@ -257,6 +258,13 @@ function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmPr
     createdAt: settings?.createdAt ?? 0,
     updatedAt: settings?.updatedAt ?? 0
   };
+}
+
+function resolveModelDisplayName(settings: LlmProviderConfigRecord): string | undefined {
+  const modelId = settings.model.trim();
+  if (!modelId) return undefined;
+  const catalogName = settings.models.find((model) => model.id === modelId)?.name.trim();
+  return catalogName || modelId;
 }
 
 function normalizeProvider(provider: LlmProviderKind | undefined): LlmProviderKind {
@@ -569,6 +577,10 @@ function createAbortError(message: string): Error {
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
+function emitLlmStarted(emit: Emit, requestId: string, model: string | undefined): void {
+  emit({ type: LlmEventType.Started, payload: { requestId, ...(model ? { model } : {}) } });
+}
+
 function emitLlmError(emit: Emit, requestId: string, message: string): void {
   emit({ type: LlmEventType.Error, payload: { requestId, message } });
 }

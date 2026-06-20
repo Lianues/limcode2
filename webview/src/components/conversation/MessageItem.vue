@@ -43,7 +43,11 @@ const emit = defineEmits<{
   (event: 'view-run-detail', message: MessageRecord): void;
 }>();
 
-const roleLabel = computed(() => (props.message.role === 'user' ? '你' : 'AI'));
+const roleLabel = computed(() => {
+  if (props.message.role === 'user') return '你';
+  const model = props.message.model?.trim();
+  return model || 'AI';
+});
 type RunMetricKey = 'time' | 'duration' | 'speed';
 interface RunMetricDetailItem {
   label: string;

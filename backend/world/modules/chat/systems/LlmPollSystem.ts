@@ -4,6 +4,7 @@ import {
   type LlmDeltaPayload,
   type LlmDonePayload,
   type LlmErrorPayload,
+  type LlmStartedPayload,
   type LlmThoughtDeltaPayload,
   type LlmThoughtDonePayload,
   type LlmToolCallPayload
@@ -17,6 +18,7 @@ import { isFunctionCallPart, isTextPart, isVisibleTextPart, type ContentPart } f
 import { CheckpointEventType } from '../../checkpoint/events';
 
 type PendingOperation =
+  | { kind: 'started'; payload: LlmStartedPayload }
   | { kind: 'thoughtDelta'; payload: LlmThoughtDeltaPayload }
   | { kind: 'thoughtDone'; payload: LlmThoughtDonePayload }
   | { kind: 'delta'; payload: LlmDeltaPayload }
@@ -58,7 +60,7 @@ export const LlmPollSystem = defineSystem({
   access: {
     queries: [LlmRequestsByIdQuery, ModelMessagesQuery, ToolCallLookupQuery],
     writes: { components: [Streaming, AgentRun] },
-    events: { read: [LlmEventType.ThoughtDelta, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error], emit: [CheckpointEventType.Requested] },
+    events: { read: [LlmEventType.Started, LlmEventType.ThoughtDelta, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error], emit: [CheckpointEventType.Requested] },
     bundles: [ToolCallBundle]
   },
   run(ctx) {
@@ -67,6 +69,9 @@ export const LlmPollSystem = defineSystem({
 
     for (const event of ctx.events) {
       switch (event.type) {
+        case LlmEventType.Started:
+          pushOperation(updates, { kind: 'started', payload: event.payload as LlmStartedPayload });
+          break;
         case LlmEventType.ThoughtDelta:
           pushOperation(updates, { kind: 'thoughtDelta', payload: event.payload as LlmThoughtDeltaPayload });
           break;
@@ -142,6 +147,9 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
 
   for (const operation of update.operations) {
     switch (operation.kind) {
+      case 'started':
+        next = withModelName(next, operation.payload.model);
+        break;
       case 'thoughtDelta':
         next = appendThoughtDelta(next, operation.payload);
         break;
@@ -211,6 +219,15 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
       });
     }
   }
+}
+
+function withModelName(message: MessageData, model: string | undefined): MessageData {
+  const normalized = model?.trim();
+  if (!normalized || message.model === normalized) return message;
+  return {
+    ...message,
+    model: normalized
+  };
 }
 
 function withLlmTiming(message: MessageData, update: LlmDonePayload | LlmErrorPayload): MessageData {

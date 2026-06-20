@@ -68,6 +68,7 @@ function diffMessages(prev: MessageRecord[], next: MessageRecord[]): ClientPatch
 function messageMetadataChanged(prev: MessageRecord, next: MessageRecord): boolean {
   return prev.conversationId !== next.conversationId
     || prev.role !== next.role
+    || prev.model !== next.model
     || prev.createdAt !== next.createdAt
     || prev.streamOutputDurationMs !== next.streamOutputDurationMs
     || prev.seq !== next.seq

@@ -369,6 +369,7 @@ function spawnHydratedMessage(world: World, conversation: Entity, record: Messag
   world.add(entity, Message, {
     id: record.id,
     role: record.role,
+    model: record.model,
     content: record.content,
     status: record.status === 'streaming' ? 'error' : record.status,
     seq: record.seq,

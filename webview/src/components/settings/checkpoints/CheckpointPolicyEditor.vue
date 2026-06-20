@@ -45,7 +45,7 @@ const triggerOptions: Array<{ key: keyof CheckpointTriggerConfigRecord; label: s
 ];
 
 const defaultTriggers: CheckpointTriggerConfigRecord = {
-  conversationInitial: true,
+  conversationInitial: false,
   userMessageBefore: true,
   userMessageAfter: false,
   llmResponseBefore: false,

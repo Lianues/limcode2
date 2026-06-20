@@ -11,7 +11,7 @@ import { STORAGE_VERSION } from '../../../capabilities/vscodeStorage/constants';
 export const DEFAULT_CHECKPOINT_MAX_BYTES = 50 * 1024 * 1024;
 
 export const DEFAULT_CHECKPOINT_TRIGGERS: CheckpointTriggerConfigRecord = {
-  conversationInitial: true,
+  conversationInitial: false,
   userMessageBefore: true,
   userMessageAfter: false,
   llmResponseBefore: false,

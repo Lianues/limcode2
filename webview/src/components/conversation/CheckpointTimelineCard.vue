@@ -22,18 +22,41 @@ const clientState = useClientStateStore();
 const settings = useGlobalSettingsStore();
 
 const shadowRepository = computed(() => clientState.shadowRepositories.find((item) => item.id === props.checkpoint.shadowRepositoryId));
+const shadowRepositoryStat = computed(() => {
+  if (!shadowRepository.value) return undefined;
+  return checkpointStore.shadowStats.find((item) => item.storageKey === shadowRepository.value?.storageKey);
+});
 
-const shadowMissing = computed(() => {
-  if (!checkpointStore.shadowStatsLoaded || props.checkpoint.status !== 'created') return false;
-  if (!shadowRepository.value) return false;
-  const stat = checkpointStore.shadowStats.find((item) => item.storageKey === shadowRepository.value?.storageKey);
-  return !stat || !stat.exists;
+const shadowStatsConfirmationRequestedAt = ref(0);
+
+const shadowRepositoryStatus = computed<'available' | 'checking' | 'missing'>(() => {
+  if (props.checkpoint.status !== 'created') return 'available';
+  if (!shadowRepository.value) return 'available';
+  if (shadowRepositoryStat.value?.exists) return 'available';
+  if (shadowRepositoryStat.value && !shadowRepositoryStat.value.exists) return 'missing';
+  if (!checkpointStore.shadowStatsLoaded) return 'checking';
+  if (shadowStatsConfirmationRequestedAt.value <= 0) return 'checking';
+  if (checkpointStore.shadowStatsLoadedAt < shadowStatsConfirmationRequestedAt.value) return 'checking';
+  return 'missing';
+});
+
+const shadowChecking = computed(() => shadowRepositoryStatus.value === 'checking');
+const shadowMissing = computed(() => shadowRepositoryStatus.value === 'missing');
+const shadowRepositoryStatusLabel = computed(() => {
+  if (shadowChecking.value) return '检查中';
+  if (shadowMissing.value) return '仓库已删除';
+  return undefined;
+});
+const shadowRepositoryStatusTitle = computed(() => {
+  if (shadowChecking.value) return '正在确认此存档点的 shadow 仓库状态。';
+  if (shadowMissing.value) return '该存档点的 shadow 仓库已被删除，无法回档。';
+  return undefined;
 });
 
 const isPending = computed(() => props.checkpoint.status === 'pending');
 const canDismiss = computed(() => props.checkpoint.trigger === 'conversation_initial' && !isPending.value);
 const canAutoDismiss = computed(() => props.checkpoint.status === 'failed' || (props.checkpoint.status === 'skipped' && props.checkpoint.skipReason !== 'no_changes'));
-const canRestore = computed(() => props.checkpoint.status === 'created' && !!props.checkpoint.commitSha && !!shadowRepository.value && !shadowMissing.value);
+const canRestore = computed(() => props.checkpoint.status === 'created' && !!props.checkpoint.commitSha && !!shadowRepository.value && shadowRepositoryStatus.value === 'available');
 const projectLabel = computed(() => props.checkpoint.projectDisplayPath || props.checkpoint.projectUri);
 const commitLabel = computed(() => props.checkpoint.commitSha?.slice(0, 8));
 const sizeLabel = computed(() => props.checkpoint.byteCount === undefined ? undefined : formatBytes(props.checkpoint.byteCount));
@@ -45,6 +68,7 @@ const restoreButtonTitle = computed(() => {
   if (props.checkpoint.status !== 'created') return '只有已创建的存档点可以回档。';
   if (!props.checkpoint.commitSha) return '该存档点没有可回档的快照。';
   if (!shadowRepository.value) return '未找到此存档点关联的 shadow 仓库。';
+  if (shadowChecking.value) return '正在确认 shadow 仓库状态，请稍候。';
   if (shadowMissing.value) return 'shadow 仓库已删除，无法回档。';
   return '将当前工作区恢复到此存档点';
 });
@@ -55,7 +79,6 @@ const restoreConfirmDescription = computed(() => {
 
 const dismissCountdown = ref(0);
 const restoreConfirmOpen = ref(false);
-const shadowMissingRefreshRequested = ref(false);
 let dismissTimer: ReturnType<typeof setInterval> | undefined;
 
 const restoreConfirmActions: ConfirmPanelAction[] = [
@@ -85,9 +108,12 @@ function clearDismissTimer(): void {
   }
 }
 
-function refreshShadowStatsIfMissing(): void {
-  if (!shadowMissing.value || shadowMissingRefreshRequested.value || checkpointStore.shadowStatsLoading) return;
-  shadowMissingRefreshRequested.value = true;
+function refreshShadowStatsIfNeeded(): void {
+  if (shadowRepositoryStatus.value !== 'checking') return;
+  if (!shadowRepository.value) return;
+  if (shadowStatsConfirmationRequestedAt.value > 0) return;
+  if (checkpointStore.shadowStatsLoading) return;
+  shadowStatsConfirmationRequestedAt.value = Date.now();
   checkpointStore.requestShadowStats();
 }
 
@@ -110,7 +136,7 @@ function refreshAutoDismiss(): void {
 onMounted(() => {
   checkpointStore.ensureShadowStats();
   settings.ensureCheckpointMaintenance();
-  refreshShadowStatsIfMissing();
+  refreshShadowStatsIfNeeded();
   refreshAutoDismiss();
 });
 
@@ -126,7 +152,24 @@ watch(
   () => refreshAutoDismiss()
 );
 
-watch(() => shadowMissing.value, () => refreshShadowStatsIfMissing());
+let lastShadowRepositoryStorageKey = shadowRepository.value?.storageKey;
+
+watch(
+  [
+    () => props.checkpoint.status,
+    () => shadowRepository.value?.storageKey,
+    () => shadowRepositoryStat.value?.exists,
+    () => checkpointStore.shadowStatsLoaded,
+    () => checkpointStore.shadowStatsLoading,
+    () => checkpointStore.shadowStatsLoadedAt
+  ],
+  () => {
+    const storageKey = shadowRepository.value?.storageKey;
+    if (storageKey !== lastShadowRepositoryStorageKey) shadowStatsConfirmationRequestedAt.value = 0;
+    lastShadowRepositoryStorageKey = storageKey;
+    refreshShadowStatsIfNeeded();
+  }
+);
 
 onUnmounted(() => clearDismissTimer());
 
@@ -222,7 +265,12 @@ function pad2(value: number): string {
         <span class="checkpoint-summary checkpoint-result-field">{{ triggerLabel }}</span>
         <span class="checkpoint-time checkpoint-result-field" :title="timeTitle">{{ timeLabel }}</span>
       </template>
-      <span v-if="shadowMissing" class="checkpoint-missing" title="该存档点的 shadow 仓库已被删除，无法回档。">仓库已删除</span>
+      <span
+        v-if="shadowRepositoryStatusLabel"
+        class="checkpoint-repository-status"
+        :class="`is-${shadowRepositoryStatus}`"
+        :aria-label="shadowRepositoryStatusTitle"
+      >{{ shadowRepositoryStatusLabel }}</span>
       <span
         v-if="dismissCountdown > 0"
         class="checkpoint-dismiss-countdown"
@@ -349,13 +397,24 @@ function pad2(value: number): string {
   gap: 4px;
 }
 
-.checkpoint-missing {
-  color: var(--vscode-errorForeground);
+.checkpoint-repository-status {
   font-size: var(--font-size-xs);
   line-height: 16px;
-  border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-panel-border));
+  border: 1px solid var(--vscode-panel-border);
   border-radius: var(--radius-sm);
   padding: 0 6px;
+  animation: checkpoint-result-in 140ms ease-out;
+}
+
+.checkpoint-repository-status.is-checking {
+  color: var(--vscode-descriptionForeground);
+  background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-foreground) 8%);
+}
+
+.checkpoint-repository-status.is-missing {
+  color: var(--vscode-errorForeground);
+  border-color: var(--vscode-inputValidation-errorBorder, var(--vscode-panel-border));
+  background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-errorForeground) 6%);
 }
 
 .checkpoint-actions {

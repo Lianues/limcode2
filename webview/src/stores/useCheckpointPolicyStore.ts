@@ -23,7 +23,7 @@ export interface CheckpointPolicyResolution {
 }
 
 const DEFAULT_TRIGGERS: CheckpointTriggerConfigRecord = {
-  conversationInitial: true,
+  conversationInitial: false,
   userMessageBefore: true,
   userMessageAfter: false,
   llmResponseBefore: false,
@@ -86,7 +86,8 @@ export const useCheckpointPolicyStore = defineStore('checkpointPolicy', {
     shadowStats: [] as ShadowRepositoryDiskStatRecord[],
     shadowStatsListening: false,
     shadowStatsLoading: false,
-    shadowStatsLoaded: false
+    shadowStatsLoaded: false,
+    shadowStatsLoadedAt: 0
   }),
   actions: {
     ensureGitStatusListener(): void {
@@ -107,6 +108,7 @@ export const useCheckpointPolicyStore = defineStore('checkpointPolicy', {
         this.shadowStats = message.payload?.stats ?? [];
         this.shadowStatsLoading = false;
         this.shadowStatsLoaded = true;
+        this.shadowStatsLoadedAt = Date.now();
       });
     },
     requestShadowStats(): void {

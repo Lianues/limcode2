@@ -126,6 +126,9 @@ const RUN_HISTORY_TABLE_KEYS = [
   'runContextPolicyLinks',
   'runDeliveryPolicyLinks',
   'runEditPolicyLinks',
+  'llmInvocations',
+  'runLlmInvocationLinks',
+  'messageLlmInvocationLinks',
   'runWorkEnvironmentLinks',
   'agentRunInputRevisions'
 ] as const;
@@ -483,6 +486,14 @@ export function conversationRunHistorySlice(state: ClientState, conversationId: 
   detail.runContextPolicyLinks = state.runContextPolicyLinks.filter((link) => runIds.has(link.runId));
   detail.runDeliveryPolicyLinks = state.runDeliveryPolicyLinks.filter((link) => runIds.has(link.runId));
   detail.runEditPolicyLinks = state.runEditPolicyLinks.filter((link) => runIds.has(link.runId));
+  detail.runLlmInvocationLinks = state.runLlmInvocationLinks.filter((link) => runIds.has(link.runId));
+  const invocationIds = new Set(detail.runLlmInvocationLinks.map((link) => link.invocationId));
+  detail.messageLlmInvocationLinks = state.messageLlmInvocationLinks.filter((link) => {
+    const matches = messageIds.has(link.messageId) || invocationIds.has(link.invocationId);
+    if (matches) invocationIds.add(link.invocationId);
+    return matches;
+  });
+  detail.llmInvocations = state.llmInvocations.filter((invocation) => invocationIds.has(invocation.id));
   detail.runWorkEnvironmentLinks = state.runWorkEnvironmentLinks.filter((link) => runIds.has(link.runId));
   detail.agentRunInputRevisions = state.agentRunInputRevisions.filter((input) => runIds.has(input.runId) || input.conversationId === conversationId || revisionIds.has(input.revisionId));
   return detail;
@@ -512,6 +523,9 @@ function copyRunHistoryTables(target: ClientState, source: ClientState): void {
   target.runContextPolicyLinks = source.runContextPolicyLinks;
   target.runDeliveryPolicyLinks = source.runDeliveryPolicyLinks;
   target.runEditPolicyLinks = source.runEditPolicyLinks;
+  target.llmInvocations = source.llmInvocations;
+  target.runLlmInvocationLinks = source.runLlmInvocationLinks;
+  target.messageLlmInvocationLinks = source.messageLlmInvocationLinks;
   target.runWorkEnvironmentLinks = source.runWorkEnvironmentLinks;
   target.agentRunInputRevisions = source.agentRunInputRevisions;
 }
@@ -541,6 +555,7 @@ function runDetailSlice(state: ClientState, runId: string): ClientState {
   detail.runContextPolicyLinks = state.runContextPolicyLinks.filter((link) => link.runId === runId);
   detail.runDeliveryPolicyLinks = state.runDeliveryPolicyLinks.filter((link) => link.runId === runId);
   detail.runEditPolicyLinks = state.runEditPolicyLinks.filter((link) => link.runId === runId);
+  detail.runLlmInvocationLinks = state.runLlmInvocationLinks.filter((link) => link.runId === runId);
   detail.runWorkEnvironmentLinks = state.runWorkEnvironmentLinks.filter((link) => link.runId === runId);
   detail.agentRunInputRevisions = state.agentRunInputRevisions.filter((input) => input.runId === runId);
 
@@ -573,6 +588,14 @@ function runDetailSlice(state: ClientState, runId: string): ClientState {
   detail.toolCalls = state.toolCalls.filter((toolCall) => toolCallIds.has(toolCall.id) || messageIds.has(toolCall.messageId));
   for (const toolCall of detail.toolCalls) toolCallIds.add(toolCall.id);
   detail.toolCallEvents = state.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId));
+
+  const invocationIds = new Set(detail.runLlmInvocationLinks.map((link) => link.invocationId));
+  detail.messageLlmInvocationLinks = state.messageLlmInvocationLinks.filter((link) => {
+    const matches = messageIds.has(link.messageId) || invocationIds.has(link.invocationId);
+    if (matches) invocationIds.add(link.invocationId);
+    return matches;
+  });
+  detail.llmInvocations = state.llmInvocations.filter((invocation) => invocationIds.has(invocation.id));
 
   const conversationIds = new Set<string>();
   for (const link of detail.agentRunTargetLinks) conversationIds.add(link.conversationId);

@@ -1,5 +1,6 @@
 import type { CommandSink, Entity, WorldReader } from '../../../ecs/types';
 import { LlmRequest, Message, Streaming } from '../chat/components';
+import { LlmInvocation } from '../llm/components';
 import type { ContentPart, MessageContent, MessageStopReason } from '../../../../shared/protocol';
 
 export type RunLlmCleanupReasonKind =
@@ -39,6 +40,13 @@ export function cleanupRunLlmRequests(world: WorldReader, cmd: CommandSink, run:
         stopReason,
         content: appendStopNote(modelMessage.content, stopNote)
       });
+    }
+
+    if (data.invocation !== undefined) {
+      const invocation = world.get(data.invocation, LlmInvocation);
+      if (invocation) {
+        cmd.add(data.invocation, LlmInvocation, { ...invocation, status: 'cancelled', completedAt: Date.now(), error: stopNote });
+      }
     }
 
     cmd.remove(data.modelMessage, Streaming);

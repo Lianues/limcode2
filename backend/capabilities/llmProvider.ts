@@ -1,5 +1,11 @@
 import { LlmEventType } from '../world/modules/llm/events';
-import type { LlmDryRunOptions, LlmDryRunResult, LlmStartRequest, ToolSchema } from '../world/modules/llm/contracts';
+import type {
+  LlmDryRunOptions,
+  LlmDryRunResult,
+  LlmResolveInvocationRequest,
+  LlmStartRequest,
+  ToolSchema
+} from '../world/modules/llm/contracts';
 import type { Emit, LlmCapability } from './types';
 import {
   isFileDataPart,
@@ -11,6 +17,7 @@ import {
 import type {
   ContentPart,
   LlmGenerationConfigRecord,
+  LlmInvocationSettingsSnapshotRecord,
   LlmProviderConfigRecord,
   LlmProviderHeadersRecord,
   LlmProviderKind,
@@ -23,6 +30,7 @@ import type {
 export const DEFAULT_LLM_BASE_URL = 'https://api.openai.com/v1';
 
 type MaybeProvider<T, TArg = void> = T | undefined | ((arg: TArg) => T | undefined | Promise<T | undefined>);
+type LlmSettingsRequest = LlmStartRequest | LlmResolveInvocationRequest | undefined;
 
 type UnifiedModule = typeof import('unified-llm-provider');
 type UnifiedContent = import('unified-llm-provider').Content;
@@ -52,7 +60,7 @@ interface UnifiedDryRunCapable {
 }
 
 export interface LlmProviderOptions {
-  settings: MaybeProvider<LlmProviderConfigRecord, LlmStartRequest | undefined>;
+  settings: MaybeProvider<LlmProviderConfigRecord, LlmSettingsRequest>;
   headers?: MaybeProvider<Record<string, string>>;
 }
 
@@ -62,23 +70,28 @@ export interface LlmProviderOptions {
  */
 export function createLlmProviderCapability(options: LlmProviderOptions): LlmCapability {
   const controllers = new Map<string, AbortController>();
+  const resolvedRuntimeSettingsByInvocationId = new Map<string, LlmProviderConfigRecord>();
 
   return {
+    resolveInvocation(request, emit) {
+      void resolveLlmInvocationProvider(request, emit, options, resolvedRuntimeSettingsByInvocationId);
+    },
     start(request, emit) {
       controllers.get(request.id)?.abort(createAbortError(`Superseded LLM request: ${request.id}`));
 
       const controller = new AbortController();
       controllers.set(request.id, controller);
 
-      void startLlmProvider(request, emit, options, controller.signal)
+      void startLlmProvider(request, emit, options, controller.signal, resolvedRuntimeSettingsByInvocationId)
         .finally(() => {
           if (controllers.get(request.id) === controller) {
             controllers.delete(request.id);
           }
+          if (request.invocationId) resolvedRuntimeSettingsByInvocationId.delete(request.invocationId);
         });
     },
     dryRun(request, dryRunOptions) {
-      return dryRunLlmProvider(request, options, dryRunOptions);
+      return dryRunLlmProvider(request, options, dryRunOptions, resolvedRuntimeSettingsByInvocationId);
     },
     listModels(config) {
       return listLlmProviderModels(config, options);
@@ -96,11 +109,12 @@ export async function startLlmProvider(
   request: LlmStartRequest,
   emit: Emit,
   options: LlmProviderOptions,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  resolvedRuntimeSettingsByInvocationId?: Map<string, LlmProviderConfigRecord>
 ): Promise<void> {
   try {
-    const settings = normalizeSettings(await resolveMaybe(options.settings, request));
-    emitLlmStarted(emit, request.id, resolveModelDisplayName(settings));
+    const settings = await resolveRuntimeSettings(request, options, resolvedRuntimeSettingsByInvocationId);
+    emitLlmStarted(emit, request.id, request.invocationId, resolveModelDisplayName(settings));
     if (!settings.apiKey) {
       emitLlmError(emit, request.id, '缺少 LLM API Key。请在全局设置的“渠道”页签里填写并保存。');
       return;
@@ -159,23 +173,37 @@ export async function startLlmProvider(
   }
 }
 
-export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmProviderOptions, dryRunOptions: LlmDryRunOptions = {}): Promise<LlmDryRunResult> {
-  const settings = normalizeSettings(await resolveMaybe(options.settings, request));
-  if (!settings.apiKey) {
-    throw new Error('缺少 LLM API Key，无法构建真实 provider 请求。');
+export async function resolveLlmInvocationProvider(
+  request: LlmResolveInvocationRequest,
+  emit: Emit,
+  options: LlmProviderOptions,
+  resolvedRuntimeSettingsByInvocationId?: Map<string, LlmProviderConfigRecord>
+): Promise<void> {
+  try {
+    const settings = normalizeSettings(await resolveMaybe(options.settings, request));
+    resolvedRuntimeSettingsByInvocationId?.set(request.invocationId, settings);
+    emit({ type: LlmEventType.InvocationResolved, payload: { invocationId: request.invocationId, requestId: request.requestId, settings: snapshotFromSettings(settings), resolvedAt: Date.now() } });
+  } catch (error) {
+    emit({ type: LlmEventType.InvocationResolveError, payload: { invocationId: request.invocationId, requestId: request.requestId, message: error instanceof Error ? error.message : String(error), resolvedAt: Date.now() } });
   }
+}
+
+export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmProviderOptions, dryRunOptions: LlmDryRunOptions = {}, resolvedRuntimeSettingsByInvocationId?: Map<string, LlmProviderConfigRecord>): Promise<LlmDryRunResult> {
+  const settings = await resolveRuntimeSettings(request, options, resolvedRuntimeSettingsByInvocationId);
+  const apiKeyAvailable = !!settings.apiKey;
+  const runtimeSettings = apiKeyAvailable ? settings : { ...settings, apiKey: 'limcode-dry-run-placeholder-key' };
 
   const unified = await importUnifiedLlmProvider();
   const registry = unified.createBootstrapExtensionRegistry();
-  const proxy = normalizeOptionalString(settings.proxy);
-  const headers = mergeHeaders(await resolveMaybe(options.headers), settings.headers);
+  const proxy = normalizeOptionalString(runtimeSettings.proxy);
+  const headers = mergeHeaders(await resolveMaybe(options.headers), runtimeSettings.headers);
   const provider = unified.createLLMFromConfig({
-    provider: settings.provider,
-    model: settings.model,
-    apiKey: settings.apiKey,
-    baseUrl: settings.baseUrl,
+    provider: runtimeSettings.provider,
+    model: runtimeSettings.model,
+    apiKey: runtimeSettings.apiKey,
+    baseUrl: runtimeSettings.baseUrl,
     ...(headers ? { headers } : {}),
-    ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
+    ...(runtimeSettings.requestBody ? { requestBody: runtimeSettings.requestBody } : {}),
     ...(proxy ? { proxy } : {})
   }, registry.llmProviders);
 
@@ -184,7 +212,7 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
     throw new Error('当前 unified-llm-provider 版本不支持 provider.dryRun，请更新依赖。');
   }
 
-  const result = await dryRun.call(provider, toUnifiedRequest(request, settings.generationConfig), {
+  const result = await dryRun.call(provider, toUnifiedRequest(request, runtimeSettings.generationConfig), {
     inputFormat: 'unified',
     outputFormat: 'unified',
     stream: true,
@@ -192,8 +220,8 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
   });
 
   return {
-    provider: settings.provider,
-    model: settings.model,
+    provider: runtimeSettings.provider,
+    model: runtimeSettings.model,
     providerName: result.providerName,
     url: result.url,
     method: result.method,
@@ -206,7 +234,8 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
     inputFormat: result.inputFormat,
     outputFormat: result.outputFormat,
     generatedAt: result.timestamp,
-    maskedSecrets: dryRunOptions.includeApiKey !== true
+    maskedSecrets: dryRunOptions.includeApiKey !== true || !apiKeyAvailable,
+    apiKeyAvailable
   };
 }
 
@@ -260,11 +289,57 @@ function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmPr
   };
 }
 
+async function resolveRuntimeSettings(
+  request: LlmStartRequest,
+  options: LlmProviderOptions,
+  resolvedRuntimeSettingsByInvocationId?: Map<string, LlmProviderConfigRecord>
+): Promise<LlmProviderConfigRecord> {
+  const cached = request.invocationId ? resolvedRuntimeSettingsByInvocationId?.get(request.invocationId) : undefined;
+  if (cached) return normalizeSettings(cached);
+  return normalizeSettings(await resolveMaybe(options.settings, request));
+}
+
+function snapshotFromSettings(settings: LlmProviderConfigRecord): LlmInvocationSettingsSnapshotRecord {
+  const modelId = settings.model.trim();
+  const modelName = modelId ? settings.models.find((model) => model.id === modelId)?.name.trim() || modelId : undefined;
+  return {
+    providerConfigId: settings.id,
+    providerConfigName: settings.name,
+    provider: settings.provider,
+    baseUrl: settings.baseUrl,
+    ...(modelId ? { modelId } : {}),
+    ...(modelName ? { modelName, displayModelName: modelName } : {}),
+    toolCallFormat: settings.toolCallFormat,
+    ...(settings.generationConfig ? { generationConfig: settings.generationConfig } : {}),
+    ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
+    ...(settings.headers ? { headers: maskSensitiveHeaders(settings.headers) } : {})
+  };
+}
+
 function resolveModelDisplayName(settings: LlmProviderConfigRecord): string | undefined {
   const modelId = settings.model.trim();
   if (!modelId) return undefined;
   const catalogName = settings.models.find((model) => model.id === modelId)?.name.trim();
   return catalogName || modelId;
+}
+
+function maskSensitiveHeaders(headers: LlmProviderHeadersRecord): LlmProviderHeadersRecord {
+  const masked: LlmProviderHeadersRecord = {};
+  for (const [key, value] of Object.entries(headers)) {
+    masked[key] = isSensitiveHeaderName(key) ? maskSecretValue(value) : value;
+  }
+  return masked;
+}
+
+function isSensitiveHeaderName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return normalized === 'authorization' || normalized === 'x-api-key' || normalized === 'x-goog-api-key' || normalized === 'api-key' || normalized === 'openai-key' || normalized.includes('token') || normalized.includes('secret') || normalized.includes('key');
+}
+
+function maskSecretValue(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return trimmed.length <= 8 ? '••••••••' : `${trimmed.slice(0, 4)}••••${trimmed.slice(-4)}`;
 }
 
 function normalizeProvider(provider: LlmProviderKind | undefined): LlmProviderKind {
@@ -577,8 +652,8 @@ function createAbortError(message: string): Error {
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
-function emitLlmStarted(emit: Emit, requestId: string, model: string | undefined): void {
-  emit({ type: LlmEventType.Started, payload: { requestId, ...(model ? { model } : {}) } });
+function emitLlmStarted(emit: Emit, requestId: string, invocationId: string | undefined, model: string | undefined): void {
+  emit({ type: LlmEventType.Started, payload: { requestId, ...(invocationId ? { invocationId } : {}), ...(model ? { model } : {}), startedAt: Date.now() } });
 }
 
 function emitLlmError(emit: Emit, requestId: string, message: string): void {

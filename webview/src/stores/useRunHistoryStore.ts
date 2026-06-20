@@ -24,10 +24,11 @@ interface ActiveRunDetailSelection {
   conversationId: string;
   runId?: string;
   messageId?: string;
+  invocationId?: string;
 }
 
 function activeRequestKey(active: ActiveRunDetailSelection): string | undefined {
-  return active.runId ?? active.messageId;
+  return active.invocationId ?? active.runId ?? active.messageId;
 }
 
 interface RunHistoryStoreState {
@@ -74,7 +75,8 @@ export const useRunHistoryStore = defineStore('runHistory', {
     },
     activeDryRun(state): LlmDryRunSnapshotPayload | undefined {
       const active = state.activeDetail;
-      return active?.runId ? state.byConversationId[active.conversationId]?.dryRunByRunId[active.runId] : undefined;
+      const key = active ? activeRequestKey(active) : undefined;
+      return active && key ? state.byConversationId[active.conversationId]?.dryRunByRunId[key] : undefined;
     },
     activeDryRunLoading(state): boolean {
       const active = state.activeDetail;
@@ -108,13 +110,14 @@ export const useRunHistoryStore = defineStore('runHistory', {
       this.detailPanelOpen = true;
       this.requestDetail(conversationId, runId, messageId);
     },
-    requestDryRun(conversationId: string, runId: string | undefined, includeApiKey = false, messageId?: string): void {
-      if (!conversationId || (!runId && !messageId)) return;
-      const key = runId ?? messageId!;
+    requestDryRun(conversationId: string, runId: string | undefined, includeApiKey = false, messageId?: string, invocationId?: string): void {
+      if (!conversationId || (!runId && !messageId && !invocationId)) return;
+      const key = invocationId ?? runId ?? messageId!;
       const target = this.ensureConversationState(conversationId);
       target.dryRunLoadingByRunId[key] = true;
       target.dryRunErrorByRunId[key] = undefined;
-      bridge.request(BridgeMessageType.LlmDryRunGet, { conversationId, ...(runId ? { runId } : {}), ...(messageId ? { messageId } : {}), includeApiKey }, { channel: 'state' });
+      if (this.activeDetail?.conversationId === conversationId) this.activeDetail = { ...this.activeDetail, ...(invocationId ? { invocationId } : {}) };
+      bridge.request(BridgeMessageType.LlmDryRunGet, { conversationId, ...(runId ? { runId } : {}), ...(messageId ? { messageId } : {}), ...(invocationId ? { invocationId } : {}), includeApiKey }, { channel: 'state' });
     },
     applyPageSnapshot(payload: { conversationId: string; runs: ConversationRunSummaryRecord[]; pageInfo: ConversationRunHistoryPageInfo }): void {
       const target = this.ensureConversationState(payload.conversationId);
@@ -137,10 +140,11 @@ export const useRunHistoryStore = defineStore('runHistory', {
       const target = this.ensureConversationState(payload.conversationId);
       const previousKey = this.activeDetail?.conversationId === payload.conversationId ? activeRequestKey(this.activeDetail) : undefined;
       if (previousKey) target.dryRunLoadingByRunId[previousKey] = false;
-      target.dryRunByRunId[payload.runId] = payload;
-      target.dryRunLoadingByRunId[payload.runId] = false;
-      target.dryRunErrorByRunId[payload.runId] = undefined;
-      this.activeDetail = { conversationId: payload.conversationId, runId: payload.runId, ...(this.activeDetail?.messageId ? { messageId: this.activeDetail.messageId } : {}) };
+      const key = payload.invocationId ?? payload.runId;
+      target.dryRunByRunId[key] = payload;
+      target.dryRunLoadingByRunId[key] = false;
+      target.dryRunErrorByRunId[key] = undefined;
+      this.activeDetail = { conversationId: payload.conversationId, runId: payload.runId, ...(this.activeDetail?.messageId ? { messageId: this.activeDetail.messageId } : {}), ...(payload.invocationId ? { invocationId: payload.invocationId } : {}) };
       if (!target.detailByRunId[payload.runId]) this.requestDetail(payload.conversationId, payload.runId);
     },
     setError(message: string): void {

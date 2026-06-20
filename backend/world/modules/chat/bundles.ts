@@ -140,8 +140,8 @@ export function cloneMessageToConversation(cmd: CommandSink, conversation: Entit
   return spawnMessage(cmd, { parent: conversation, role: message.role, model: message.model, parts: overrideContent?.parts ?? message.content.parts, status: message.status === 'streaming' ? 'error' : message.status, usageMetadata: message.usageMetadata, revisionReason: 'created' });
 }
 
-export function spawnModelMessage(cmd: CommandSink, conversation: Entity): Entity {
-  const entity = spawnMessage(cmd, { parent: conversation, role: 'model', parts: [], status: 'streaming' });
+export function spawnModelMessage(cmd: CommandSink, conversation: Entity, model?: string): Entity {
+  const entity = spawnMessage(cmd, { parent: conversation, role: 'model', model, parts: [], status: 'streaming' });
   cmd.add(entity, Streaming, true);
   return entity;
 }
@@ -164,13 +164,14 @@ export function spawnToolResponseMessage(
   });
 }
 
-export function spawnLlmRequest(cmd: CommandSink, input: { run: Entity; conversation: Entity; modelMessage: Entity }): Entity {
+export function spawnLlmRequest(cmd: CommandSink, input: { run: Entity; conversation: Entity; modelMessage: Entity; invocation?: Entity; requestId?: string }): Entity {
   const entity = cmd.spawn();
   cmd.add(entity, LlmRequest, {
-    id: `req${entity}`,
+    id: input.requestId ?? `req${entity}`,
     run: input.run,
     conversation: input.conversation,
-    modelMessage: input.modelMessage
+    modelMessage: input.modelMessage,
+    ...(input.invocation !== undefined ? { invocation: input.invocation } : {})
   });
   return entity;
 }

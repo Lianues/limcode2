@@ -1,5 +1,5 @@
 import type * as vscode from 'vscode';
-import type { LlmDryRunOptions, LlmDryRunResult, LlmStartRequest } from '../world/modules/llm/contracts';
+import type { LlmDryRunOptions, LlmDryRunResult, LlmResolveInvocationRequest, LlmStartRequest } from '../world/modules/llm/contracts';
 import type { WorldEvent } from '../ecs/types';
 import type {
   BridgeClientId,
@@ -35,6 +35,7 @@ export type Emit = (event: WorldEvent) => void;
 
 /** LLM 能力：无状态函数根据 request 启动流式执行，并通过 emit 回灌事件。 */
 export interface LlmCapability {
+  resolveInvocation(request: LlmResolveInvocationRequest, emit: Emit): void;
   start(request: LlmStartRequest, emit: Emit): void;
   dryRun(request: LlmStartRequest, options?: LlmDryRunOptions): Promise<LlmDryRunResult>;
   listModels(config: LlmProviderConfigRecord): Promise<LlmProviderModelRecord[]>;

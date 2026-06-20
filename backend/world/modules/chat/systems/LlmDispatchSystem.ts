@@ -27,6 +27,7 @@ import { buildRuntimeToolSchemas, TOOL_SCHEMA_CONTRIBUTOR_READS } from '../../to
 import { Conversation, InFlight, LlmRequest, Message, MessageCurrentRevisionLink, PartOf } from '../components';
 import { textContent } from '../../../../../shared/protocol';
 import type { LlmModelSettings, LlmStartRequest, ToolSchema } from '../../llm/contracts';
+import { LlmInvocation } from '../../llm/components';
 import {
   activeContextPolicyForRun,
   activeModelProfileForRun,
@@ -71,6 +72,7 @@ const LlmContextLookupComponents = [
   ToolPolicyScopeLink,
   ToolCall,
   ToolState,
+  LlmInvocation,
   ...(TOOL_SCHEMA_CONTRIBUTOR_READS.components ?? [])
 ] as const;
 
@@ -78,6 +80,7 @@ export interface BuildLlmStartRequestForRunInput {
   run: Entity;
   conversation?: Entity;
   modelMessage?: Entity;
+  invocation?: Entity;
   requestId?: string;
   tools?: ToolSchema[];
 }
@@ -113,7 +116,7 @@ export const LlmDispatchSystem = defineSystem({
         policy: contextPolicy
       };
       recordInputRevisions(world, cmd, contextInput.run, selectRunContextMessageEntities(world, contextInput));
-      const llmRequest = buildLlmStartRequestForRun(world, { run: data.run, conversation: data.conversation, modelMessage: data.modelMessage, requestId: data.id, tools: allTools });
+      const llmRequest = buildLlmStartRequestForRun(world, { run: data.run, conversation: data.conversation, modelMessage: data.modelMessage, invocation: data.invocation, requestId: data.id, tools: allTools });
       if (!llmRequest) continue;
 
       cmd.effect({
@@ -130,9 +133,13 @@ export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmSt
   if (!context) return undefined;
 
   const systemPrompt = composeSystemInstruction(systemPromptsForRun(world, input.run));
+  const invocation = input.invocation !== undefined ? world.get(input.invocation, LlmInvocation) : undefined;
+  const settingsSnapshot = invocation?.settings;
   const modelProfile = activeModelProfileForRun(world, input.run);
   const conversation = world.get(context.conversation, Conversation);
-  const model = modelProfile === undefined
+  const model = settingsSnapshot?.modelId
+    ? { providerConfigId: settingsSnapshot.providerConfigId, provider: settingsSnapshot.provider, model: settingsSnapshot.modelId } satisfies LlmModelSettings
+    : modelProfile === undefined
     ? undefined
     : { providerConfigId: modelProfile.providerConfigId, provider: modelProfile.provider, model: modelProfile.model } satisfies LlmModelSettings;
   const toolPolicy = activeToolPolicyForRun(world, input.run);
@@ -147,11 +154,13 @@ export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmSt
 
   return {
     id: input.requestId ?? `dryrun-${input.run}-${Date.now()}`,
+    ...(invocation ? { invocationId: invocation.id } : {}),
     systemInstruction: systemText ? textContent('user', systemText) : undefined,
     contents,
     tools,
     conversationId: conversation?.id,
-    model
+    model,
+    ...(settingsSnapshot ? { settingsSnapshot } : {})
   };
 }
 

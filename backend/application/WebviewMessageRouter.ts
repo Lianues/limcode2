@@ -4,6 +4,8 @@ import type { LlmCapability, StorageCapability, WebviewCapability } from '../cap
 import { ChatEventType } from '../world/modules/chat/events';
 import { AgentRunEventType } from '../world/modules/agentRun/events';
 import { AgentRun } from '../world/modules/agentRun/components';
+import { Message } from '../world/modules/chat/components';
+import { LlmInvocation, MessageLlmInvocationLink, RunLlmInvocationLink } from '../world/modules/llm/components';
 import { buildLlmStartRequestForRun } from '../world/modules/chat/systems/LlmDispatchSystem';
 import { ToolEventType } from '../world/modules/tools/events';
 import { ModeEventType } from '../world/modules/mode/events';
@@ -401,7 +403,7 @@ export class WebviewMessageRouter {
     }
   }
 
-  private async postLlmDryRun(clientId: BridgeClientId, payload: { conversationId: string; runId?: string; messageId?: string; includeApiKey?: boolean }, correlationId?: string): Promise<void> {
+  private async postLlmDryRun(clientId: BridgeClientId, payload: { conversationId: string; runId?: string; messageId?: string; invocationId?: string; includeApiKey?: boolean }, correlationId?: string): Promise<void> {
     try {
       const runId = payload.runId ?? (payload.messageId ? await this.deps.storage.resolveConversationRunIdForMessage(payload.conversationId, payload.messageId) : undefined);
       if (!runId) {
@@ -416,7 +418,14 @@ export class WebviewMessageRouter {
         return;
       }
 
-      const request = buildLlmStartRequestForRun(this.deps.world, { run, requestId: `dryrun-${runId}-${Date.now()}` });
+      const invocation = this.findInvocationForDryRun({ run, messageId: payload.messageId, invocationId: payload.invocationId });
+      if (invocation === undefined) {
+        this.postRequestError(clientId, BridgeMessageType.LlmDryRunGet, '无法找到本次 LLM 调用快照，不能构建历史 dry-run 请求。', correlationId);
+        return;
+      }
+
+      const invocationData = this.deps.world.get(invocation, LlmInvocation);
+      const request = buildLlmStartRequestForRun(this.deps.world, { run, invocation, requestId: `dryrun-${invocationData?.id ?? runId}-${Date.now()}` });
       if (!request) {
         this.postRequestError(clientId, BridgeMessageType.LlmDryRunGet, '无法从当前 ECS 状态构建本次 LLM 请求。', correlationId);
         return;
@@ -428,7 +437,7 @@ export class WebviewMessageRouter {
         type: BridgeMessageType.LlmDryRunSnapshot,
         channel: 'state',
         correlationId,
-        payload: { conversationId: payload.conversationId, runId, ...dryRun }
+        payload: { conversationId: payload.conversationId, runId, ...(invocationData ? { invocationId: invocationData.id, settingsSnapshot: invocationData.settings } : {}), ...dryRun }
       });
     } catch (error) {
       console.warn('[LimCode] Failed to dry-run LLM request.', error);
@@ -531,6 +540,34 @@ export class WebviewMessageRouter {
 
   private findRunEntity(runId: string): number | undefined {
     return this.deps.world.query(AgentRun).find((entity) => this.deps.world.get(entity, AgentRun)?.id === runId);
+  }
+
+  private findInvocationForDryRun(input: { run: number; messageId?: string; invocationId?: string }): number | undefined {
+    if (input.invocationId) {
+      const direct = this.deps.world.query(LlmInvocation).find((entity) => this.deps.world.get(entity, LlmInvocation)?.id === input.invocationId);
+      if (direct !== undefined) return direct;
+    }
+
+    if (input.messageId) {
+      const message = this.deps.world.query(Message).find((entity) => this.deps.world.get(entity, Message)?.id === input.messageId);
+      if (message !== undefined) {
+        const link = this.deps.world
+          .query(MessageLlmInvocationLink)
+          .map((entity) => this.deps.world.get(entity, MessageLlmInvocationLink))
+          .find((candidate) => candidate?.message === message);
+        if (link) return link.invocation;
+      }
+    }
+
+    return this.deps.world
+      .query(RunLlmInvocationLink)
+      .map((entity) => this.deps.world.get(entity, RunLlmInvocationLink))
+      .filter((link): link is NonNullable<typeof link> => !!link && link.run === input.run)
+      .sort((left, right) => {
+        const leftInvocation = this.deps.world.get(left.invocation, LlmInvocation);
+        const rightInvocation = this.deps.world.get(right.invocation, LlmInvocation);
+        return (rightInvocation?.createdAt ?? 0) - (leftInvocation?.createdAt ?? 0) || right.id.localeCompare(left.id);
+      })[0]?.invocation;
   }
 
 

@@ -400,6 +400,22 @@ export const CLIENT_STATE_TABLES = {
   },
   messageRevisions: upsertRemoveTable('messageRevision', 'revision', { ...conversationScopedTable, orderBy: [{ field: 'createdAt' }, { field: 'id' }] }),
   messageCurrentRevisionLinks: upsertRemoveTable('messageCurrentRevisionLink', 'link', { ...conversationScopedTable, scope: { kind: 'conversationVia', table: 'messages', localField: 'messageId', foreignField: 'id' } }),
+  llmInvocations: upsertRemoveTable('llmInvocation', 'invocation', {
+    cascadeRemove: [
+      { table: 'runLlmInvocationLinks', foreignKey: 'invocationId' },
+      { table: 'messageLlmInvocationLinks', foreignKey: 'invocationId' }
+    ],
+    orderBy: [{ field: 'createdAt' }, { field: 'id' }],
+    scope: {
+      kind: 'conversationAnyOf',
+      scopes: [
+        { kind: 'conversationReverseVia', table: 'runLlmInvocationLinks', localField: 'id', foreignField: 'invocationId' },
+        { kind: 'conversationReverseVia', table: 'messageLlmInvocationLinks', localField: 'id', foreignField: 'invocationId' }
+      ]
+    }
+  }),
+  runLlmInvocationLinks: upsertRemoveTable('runLlmInvocationLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
+  messageLlmInvocationLinks: upsertRemoveTable('messageLlmInvocationLink', 'link', { scope: { kind: 'conversationVia', table: 'messages', localField: 'messageId', foreignField: 'id' } }),
   toolCalls: upsertRemoveTable('toolcall', 'toolCall', toolCallsTable),
   toolCallEvents: appendRemoveTable('toolcallEvent', 'event', toolCallEventsTable),
   agentRuns: upsertRemoveTable('agentRun', 'run', agentRunsTable),

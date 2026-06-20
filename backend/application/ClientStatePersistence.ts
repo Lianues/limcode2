@@ -27,6 +27,9 @@ const RUN_HISTORY_TABLE_KEYS = [
   'runContextPolicyLinks',
   'runDeliveryPolicyLinks',
   'runEditPolicyLinks',
+  'llmInvocations',
+  'runLlmInvocationLinks',
+  'messageLlmInvocationLinks',
   'runWorkEnvironmentLinks',
   'agentRunInputRevisions'
 ] as const;
@@ -292,6 +295,9 @@ function skeletonPersistenceSlice(state: ClientState): ClientState {
     runContextPolicyLinks: [],
     runDeliveryPolicyLinks: [],
     runEditPolicyLinks: [],
+    llmInvocations: [],
+    runLlmInvocationLinks: [],
+    messageLlmInvocationLinks: [],
     agentRunInputRevisions: []
   };
 }

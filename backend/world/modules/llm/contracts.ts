@@ -1,4 +1,4 @@
-import type { LlmProviderKind, MessageContent } from '../../../../shared/protocol';
+import type { LlmInvocationSettingsSnapshotRecord, LlmProviderKind, MessageContent } from '../../../../shared/protocol';
 
 export type { LlmProviderKind };
 
@@ -16,9 +16,18 @@ export interface ToolSchema {
 
 export interface LlmStartRequest {
   id: string;
+  invocationId?: string;
   systemInstruction?: MessageContent;
   contents: MessageContent[];
   tools: ToolSchema[];
+  conversationId?: string;
+  model?: LlmModelSettings;
+  settingsSnapshot?: LlmInvocationSettingsSnapshotRecord;
+}
+
+export interface LlmResolveInvocationRequest {
+  invocationId: string;
+  requestId: string;
   conversationId?: string;
   model?: LlmModelSettings;
 }
@@ -46,4 +55,6 @@ export interface LlmDryRunResult {
   generatedAt: number;
   /** curl 中是否隐藏了 API Key 等敏感 header。 */
   maskedSecrets: boolean;
+  /** 当前是否能从配置中取到真实 API Key；false 时 dry-run 使用占位 key 生成请求结构。 */
+  apiKeyAvailable?: boolean;
 }

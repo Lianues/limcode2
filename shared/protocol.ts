@@ -397,6 +397,57 @@ export interface LlmProviderConfigRecord {
   updatedAt: number;
 }
 
+export type LlmInvocationStatus = 'resolving' | 'ready' | 'streaming' | 'complete' | 'error' | 'cancelled';
+export type RunLlmInvocationRole = 'primary';
+export type MessageLlmInvocationRole = 'modelOutput';
+
+export interface LlmInvocationSettingsSnapshotRecord {
+  providerConfigId?: string;
+  providerConfigName?: string;
+  provider?: LlmProviderKind;
+  baseUrl?: string;
+  modelId?: string;
+  modelName?: string;
+  displayModelName?: string;
+  toolCallFormat?: LlmToolCallFormat;
+  generationConfig?: LlmGenerationConfigRecord;
+  requestBody?: LlmRequestBodyRecord;
+  /** header 名保留；敏感值会被 mask，不持久化真实 secret。 */
+  headers?: LlmProviderHeadersRecord;
+}
+
+export interface LlmInvocationRecord {
+  id: string;
+  requestId: string;
+  status: LlmInvocationStatus;
+  settings?: LlmInvocationSettingsSnapshotRecord;
+  createdAt: number;
+  resolvedAt?: number;
+  startedAt?: number;
+  completedAt?: number;
+  streamOutputDurationMs?: number;
+  usageMetadata?: LlmUsageMetadataRecord;
+  error?: string;
+}
+
+export interface RunLlmInvocationLinkRecord {
+  id: string;
+  runId: string;
+  invocationId: string;
+  role: RunLlmInvocationRole;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface MessageLlmInvocationLinkRecord {
+  id: string;
+  messageId: string;
+  invocationId: string;
+  role: MessageLlmInvocationRole;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export type AgentSource = 'builtin' | 'user';
 
 export interface AgentRecord {
@@ -1166,6 +1217,9 @@ export interface ClientStateRecordByTable {
   messages: MessageRecord;
   messageRevisions: MessageRevisionRecord;
   messageCurrentRevisionLinks: MessageCurrentRevisionLinkRecord;
+  llmInvocations: LlmInvocationRecord;
+  runLlmInvocationLinks: RunLlmInvocationLinkRecord;
+  messageLlmInvocationLinks: MessageLlmInvocationLinkRecord;
   toolCalls: ToolCallRecord;
   toolCallEvents: ToolCallEventRecord;
   agentRuns: AgentRunRecord;
@@ -1409,6 +1463,7 @@ export interface LlmDryRunGetPayload {
   conversationId: string;
   runId?: string;
   messageId?: string;
+  invocationId?: string;
   /** true 时 curl 中显示 API Key；默认 false，避免泄漏密钥。 */
   includeApiKey?: boolean;
 }
@@ -1416,6 +1471,8 @@ export interface LlmDryRunGetPayload {
 export interface LlmDryRunSnapshotPayload {
   conversationId: string;
   runId: string;
+  invocationId?: string;
+  settingsSnapshot?: LlmInvocationSettingsSnapshotRecord;
   provider?: LlmProviderKind;
   model?: string;
   providerName?: string;
@@ -1432,6 +1489,8 @@ export interface LlmDryRunSnapshotPayload {
   outputFormat?: string;
   generatedAt: number;
   maskedSecrets: boolean;
+  /** 当前是否能从配置中取到真实 API Key；false 时 dry-run 使用占位 key 生成请求结构。 */
+  apiKeyAvailable?: boolean;
 }
 
 export interface LlmProviderModelsGetPayload {

@@ -1,6 +1,8 @@
-import type { LlmUsageMetadataRecord } from '../../../../shared/protocol';
+import type { LlmInvocationSettingsSnapshotRecord, LlmUsageMetadataRecord } from '../../../../shared/protocol';
 
 export const LlmEventType = {
+  InvocationResolved: 'llm:invocationResolved',
+  InvocationResolveError: 'llm:invocationResolveError',
   Started: 'llm:started',
   Delta: 'llm:delta',
   ThoughtDelta: 'llm:thoughtDelta',
@@ -12,7 +14,21 @@ export const LlmEventType = {
 
 export interface LlmStartedPayload {
   requestId: string;
+  invocationId?: string;
   model?: string;
+  startedAt?: number;
+}
+export interface LlmInvocationResolvedPayload {
+  invocationId: string;
+  requestId: string;
+  settings: LlmInvocationSettingsSnapshotRecord;
+  resolvedAt: number;
+}
+export interface LlmInvocationResolveErrorPayload {
+  invocationId: string;
+  requestId: string;
+  message: string;
+  resolvedAt: number;
 }
 export interface LlmDeltaPayload {
   requestId: string;
@@ -47,6 +63,8 @@ export interface LlmErrorPayload {
 
 declare module '@backend/world/events' {
   interface WorldEventPayloadMap {
+    'llm:invocationResolved': LlmInvocationResolvedPayload;
+    'llm:invocationResolveError': LlmInvocationResolveErrorPayload;
     'llm:started': LlmStartedPayload;
     'llm:delta': LlmDeltaPayload;
     'llm:thoughtDelta': LlmThoughtDeltaPayload;

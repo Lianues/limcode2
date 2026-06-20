@@ -9,6 +9,7 @@ import {
   type LlmThoughtDonePayload,
   type LlmToolCallPayload
 } from '../../llm/events';
+import { LlmInvocation, type LlmInvocationData } from '../../llm/components';
 import { ToolCall } from '../../tools/components';
 import { spawnToolCall, ToolCallBundle } from '../../tools/bundles';
 import { AgentRun } from '../../agentRun/components';
@@ -29,6 +30,15 @@ type PendingOperation =
 interface PendingRequestUpdate {
   operations: PendingOperation[];
 }
+
+const LlmInvocationsByIdQuery = defineQuery({
+  name: 'LlmInvocationsById',
+  all: [LlmInvocation],
+  read: [LlmInvocation],
+  write: [LlmInvocation],
+  mutationMode: 'update',
+  role: 'lookup'
+});
 
 const LlmRequestsByIdQuery = defineQuery({
   name: 'LlmRequestsById',
@@ -58,7 +68,7 @@ const ToolCallLookupQuery = defineQuery({
 export const LlmPollSystem = defineSystem({
   name: 'LlmPollSystem',
   access: {
-    queries: [LlmRequestsByIdQuery, ModelMessagesQuery, ToolCallLookupQuery],
+    queries: [LlmInvocationsByIdQuery, LlmRequestsByIdQuery, ModelMessagesQuery, ToolCallLookupQuery],
     writes: { components: [Streaming, AgentRun] },
     events: { read: [LlmEventType.Started, LlmEventType.ThoughtDelta, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error], emit: [CheckpointEventType.Requested] },
     bundles: [ToolCallBundle]
@@ -128,11 +138,12 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
   if (!current) return;
 
   if (isRunCancelledOrStale(world, requestData.run)) {
-    if (hasTerminalOperation(update)) cleanupCancelledRequest(cmd, request, modelMessage, current);
+    if (hasTerminalOperation(update)) cleanupCancelledRequest(world, cmd, request, modelMessage, current, requestData.invocation);
     return;
   }
 
   let next = current;
+  let nextInvocation = requestData.invocation !== undefined ? world.get(requestData.invocation, LlmInvocation) : undefined;
   const existingFunctionCallIds = new Set(
     next.content.parts
       .filter(isFunctionCallPart)
@@ -148,7 +159,7 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
   for (const operation of update.operations) {
     switch (operation.kind) {
       case 'started':
-        next = withModelName(next, operation.payload.model);
+        nextInvocation = markInvocationStreaming(nextInvocation, operation.payload.startedAt);
         break;
       case 'thoughtDelta':
         next = appendThoughtDelta(next, operation.payload);
@@ -181,11 +192,13 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
         errorMessage = operation.payload.message;
         next = appendTextToMessage(next, `\n[error] ${operation.payload.message}`);
         next = withLlmTiming({ ...next, status: 'error' }, operation.payload);
+        nextInvocation = markInvocationError(nextInvocation, operation.payload.message, operation.payload);
         shouldFinish = true;
         break;
       case 'done':
         usageMetadata = operation.payload.usageMetadata;
         next = withLlmTiming({ ...next, status: 'complete' }, operation.payload);
+        nextInvocation = markInvocationComplete(nextInvocation, operation.payload);
         shouldFinish = true;
         break;
     }
@@ -193,6 +206,10 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
 
   if (next !== current) {
     cmd.add(modelMessage, Message, next);
+  }
+
+  if (requestData.invocation !== undefined && nextInvocation !== undefined && nextInvocation !== world.get(requestData.invocation, LlmInvocation)) {
+    cmd.add(requestData.invocation, LlmInvocation, nextInvocation);
   }
 
   if (shouldFinish) {
@@ -221,12 +238,33 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
   }
 }
 
-function withModelName(message: MessageData, model: string | undefined): MessageData {
-  const normalized = model?.trim();
-  if (!normalized || message.model === normalized) return message;
+function markInvocationStreaming(invocation: LlmInvocationData | undefined, startedAt = Date.now()): LlmInvocationData | undefined {
+  if (!invocation) return undefined;
+  if (invocation.status === 'streaming' && invocation.startedAt !== undefined) return invocation;
+  return { ...invocation, status: 'streaming', startedAt };
+}
+
+function markInvocationComplete(invocation: LlmInvocationData | undefined, update: LlmDonePayload): LlmInvocationData | undefined {
+  if (!invocation) return undefined;
+  const completedAt = Date.now();
   return {
-    ...message,
-    model: normalized
+    ...invocation,
+    status: 'complete',
+    completedAt,
+    ...(update.streamOutputDurationMs !== undefined ? { streamOutputDurationMs: update.streamOutputDurationMs } : {}),
+    ...(update.usageMetadata !== undefined ? { usageMetadata: update.usageMetadata } : {})
+  };
+}
+
+function markInvocationError(invocation: LlmInvocationData | undefined, message: string, update: LlmErrorPayload): LlmInvocationData | undefined {
+  if (!invocation) return undefined;
+  const completedAt = Date.now();
+  return {
+    ...invocation,
+    status: 'error',
+    completedAt,
+    error: message,
+    ...(update.streamOutputDurationMs !== undefined ? { streamOutputDurationMs: update.streamOutputDurationMs } : {})
   };
 }
 
@@ -334,8 +372,12 @@ function hasTerminalOperation(update: PendingRequestUpdate): boolean {
   return update.operations.some((operation) => operation.kind === 'done' || operation.kind === 'error');
 }
 
-function cleanupCancelledRequest(cmd: CommandSink, request: Entity, modelMessage: Entity, current: MessageData): void {
+function cleanupCancelledRequest(world: WorldReader, cmd: CommandSink, request: Entity, modelMessage: Entity, current: MessageData, invocation: Entity | undefined): void {
   cmd.add(modelMessage, Message, { ...current, status: 'error' });
+  if (invocation !== undefined) {
+    const currentInvocation = world.get(invocation, LlmInvocation);
+    if (currentInvocation) cmd.add(invocation, LlmInvocation, { ...currentInvocation, status: 'cancelled', completedAt: Date.now() });
+  }
   cmd.remove(modelMessage, Streaming);
   cmd.despawn(request);
 }

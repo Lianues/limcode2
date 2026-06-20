@@ -7,6 +7,7 @@ import {
   isVisibleTextPart,
   type AgentRunStatus,
   type ContentPart,
+  type LlmInvocationRecord,
   type MessageRecord,
   type ToolCallRecord,
   type ToolCallStatus
@@ -36,9 +37,15 @@ const detailJson = computed(() => rawDetailOpen.value && activeDetail.value ? JS
 const dryRun = computed(() => runHistory.activeDryRun);
 const dryRunLoading = computed(() => runHistory.activeDryRunLoading);
 const dryRunError = computed(() => runHistory.activeDryRunError);
-const activeKey = computed(() => runHistory.activeDetail ? `${runHistory.activeDetail.conversationId}:${runHistory.activeDetail.runId ?? ''}:${runHistory.activeDetail.messageId ?? ''}` : '');
 const selectedMessageId = computed(() => runHistory.activeDetail?.messageId);
 const selectedMessage = computed(() => activeState.value?.messages.find((message) => message.id === selectedMessageId.value));
+const selectedInvocation = computed(() => selectActiveInvocation());
+const selectedInvocationSettings = computed(() => selectedInvocation.value?.settings);
+const activeKey = computed(() => runHistory.activeDetail ? `${runHistory.activeDetail.conversationId}:${runHistory.activeDetail.runId ?? ''}:${runHistory.activeDetail.messageId ?? ''}:${selectedInvocation.value?.id ?? ''}` : '');
+const invocationGenerationConfigJson = computed(() => selectedInvocationSettings.value?.generationConfig ? stringifyJson(selectedInvocationSettings.value.generationConfig) : '');
+const invocationRequestBodyJson = computed(() => selectedInvocationSettings.value?.requestBody ? stringifyJson(selectedInvocationSettings.value.requestBody) : '');
+const invocationHeadersJson = computed(() => selectedInvocationSettings.value?.headers ? stringifyJson(selectedInvocationSettings.value.headers) : '');
+const invocationUsageJson = computed(() => selectedInvocation.value?.usageMetadata ? stringifyJson(selectedInvocation.value.usageMetadata) : '');
 const selectedToolCallIdentity = computed(() => {
   const message = selectedMessage.value;
   const ids = new Set<string>();
@@ -91,10 +98,37 @@ function toggleApiKeyVisibility(): void {
 function ensureDryRun(): void {
   const active = runHistory.activeDetail;
   if (!active) return;
-  if (dryRunLoading.value) return;
-  if (dryRun.value) return;
+  const invocationId = selectedInvocation.value?.id;
+  const key = invocationId ?? active.runId ?? active.messageId;
+  const state = runHistory.conversationRunHistory(active.conversationId);
+  if (key && (state.dryRunLoadingByRunId[key] || state.dryRunByRunId[key])) return;
   // 提前获取包含真实 key + maskedCurl 的 dry-run；显示/隐藏只在前端本地切换，避免重复请求造成抖动。
-  runHistory.requestDryRun(active.conversationId, active.runId, true, active.messageId);
+  runHistory.requestDryRun(active.conversationId, active.runId, true, active.messageId, invocationId);
+}
+
+function selectActiveInvocation(): LlmInvocationRecord | undefined {
+  const state = activeState.value;
+  if (!state) return undefined;
+  const byId = new Map(state.llmInvocations.map((invocation) => [invocation.id, invocation]));
+
+  const messageId = selectedMessageId.value;
+  if (messageId) {
+    const messageLink = state.messageLlmInvocationLinks.find((link) => link.messageId === messageId);
+    const invocation = messageLink ? byId.get(messageLink.invocationId) : undefined;
+    if (invocation) return invocation;
+  }
+
+  const runId = activeDetail.value?.runId;
+  if (!runId) return [...byId.values()].sort(compareInvocationsByCreatedAtDesc)[0];
+  return state.runLlmInvocationLinks
+    .filter((link) => link.runId === runId)
+    .map((link) => byId.get(link.invocationId))
+    .filter((invocation): invocation is LlmInvocationRecord => invocation !== undefined)
+    .sort(compareInvocationsByCreatedAtDesc)[0];
+}
+
+function compareInvocationsByCreatedAtDesc(left: LlmInvocationRecord, right: LlmInvocationRecord): number {
+  return right.createdAt - left.createdAt || right.id.localeCompare(left.id);
 }
 
 async function copyCurl(): Promise<void> {
@@ -337,6 +371,18 @@ function statusLabel(status: AgentRunStatus | undefined): string {
   }
 }
 
+function invocationStatusLabel(status: LlmInvocationRecord['status'] | undefined): string {
+  switch (status) {
+    case 'resolving': return '解析配置中';
+    case 'ready': return '已准备';
+    case 'streaming': return '生成中';
+    case 'complete': return '已完成';
+    case 'error': return '失败';
+    case 'cancelled': return '已取消';
+    default: return '未知';
+  }
+}
+
 function sensitiveHeader(headers: Record<string, string> | undefined): { name: string; value: string } | undefined {
   if (!headers) return undefined;
   const sensitiveNames = new Set(['authorization', 'x-api-key', 'x-goog-api-key', 'api-key', 'openai-key']);
@@ -378,6 +424,45 @@ function sensitiveHeader(headers: Record<string, string> | undefined): { name: s
                   <div><dt>目标 Agent</dt><dd>{{ activeSummary?.targetAgentId ?? '—' }}</dd></div>
                   <div><dt>目标对话</dt><dd>{{ activeSummary?.targetConversationId ?? activeDetail.conversationId }}</dd></div>
                 </dl>
+              </section>
+
+              <section v-if="selectedInvocation" class="run-detail-section">
+                <h3>调用快照</h3>
+                <dl class="run-detail-grid">
+                  <div><dt>Invocation ID</dt><dd>{{ selectedInvocation.id }}</dd></div>
+                  <div><dt>Request ID</dt><dd>{{ selectedInvocation.requestId }}</dd></div>
+                  <div><dt>状态</dt><dd>{{ invocationStatusLabel(selectedInvocation.status) }} · {{ selectedInvocation.status }}</dd></div>
+                  <div><dt>渠道配置</dt><dd>{{ selectedInvocationSettings?.providerConfigName ?? '—' }}</dd></div>
+                  <div><dt>渠道 ID</dt><dd>{{ selectedInvocationSettings?.providerConfigId ?? '—' }}</dd></div>
+                  <div><dt>Provider</dt><dd>{{ selectedInvocationSettings?.provider ?? '—' }}</dd></div>
+                  <div><dt>Base URL</dt><dd>{{ selectedInvocationSettings?.baseUrl ?? '—' }}</dd></div>
+                  <div><dt>Model ID</dt><dd>{{ selectedInvocationSettings?.modelId ?? '—' }}</dd></div>
+                  <div><dt>Model Name</dt><dd>{{ selectedInvocationSettings?.modelName ?? selectedInvocationSettings?.displayModelName ?? '—' }}</dd></div>
+                  <div><dt>显示名称</dt><dd>{{ selectedInvocationSettings?.displayModelName ?? '—' }}</dd></div>
+                  <div><dt>Tool Call Format</dt><dd>{{ selectedInvocationSettings?.toolCallFormat ?? '—' }}</dd></div>
+                  <div><dt>创建时间</dt><dd>{{ formatTime(selectedInvocation.createdAt) }}</dd></div>
+                  <div><dt>解析时间</dt><dd>{{ formatTime(selectedInvocation.resolvedAt) }}</dd></div>
+                  <div><dt>开始时间</dt><dd>{{ formatTime(selectedInvocation.startedAt) }}</dd></div>
+                  <div><dt>完成时间</dt><dd>{{ formatTime(selectedInvocation.completedAt) }}</dd></div>
+                  <div><dt>输出耗时</dt><dd>{{ selectedInvocation.streamOutputDurationMs !== undefined ? formatDuration(selectedInvocation.streamOutputDurationMs) : '—' }}</dd></div>
+                </dl>
+                <div v-if="invocationGenerationConfigJson" class="run-detail-tool-json-block">
+                  <span>Generation Config</span>
+                  <pre class="run-detail-json">{{ invocationGenerationConfigJson }}</pre>
+                </div>
+                <div v-if="invocationRequestBodyJson" class="run-detail-tool-json-block">
+                  <span>Request Body 覆盖</span>
+                  <pre class="run-detail-json">{{ invocationRequestBodyJson }}</pre>
+                </div>
+                <div v-if="invocationHeadersJson" class="run-detail-tool-json-block">
+                  <span>Headers 快照（敏感值已隐藏）</span>
+                  <pre class="run-detail-json">{{ invocationHeadersJson }}</pre>
+                </div>
+                <div v-if="invocationUsageJson" class="run-detail-tool-json-block">
+                  <span>Usage Metadata</span>
+                  <pre class="run-detail-json">{{ invocationUsageJson }}</pre>
+                </div>
+                <p v-if="selectedInvocation.error" class="run-detail-empty is-error">{{ selectedInvocation.error }}</p>
               </section>
 
               <section v-if="inputMessages.length" class="run-detail-section">

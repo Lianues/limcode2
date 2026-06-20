@@ -58,6 +58,11 @@ import {
   RunToolPolicyLink,
   ToolCallRunLink
 } from '../world/modules/agentRun/components';
+import {
+  LlmInvocation,
+  MessageLlmInvocationLink,
+  RunLlmInvocationLink
+} from '../world/modules/llm/components';
 import type { ClientState, MessageRecord, ToolCallEventRecord, ToolCallRecord } from '../../shared/protocol';
 import { createDefaultAgentRecord, DEFAULT_AGENT_NAME, DEFAULT_CONVERSATION_ID } from './defaults';
 
@@ -267,6 +272,7 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
   }
 
   const runEntities = hydrateRecordsUnique(world, state.agentRuns ?? [], AgentRun);
+  const llmInvocationEntities = hydrateRecordsUnique(world, state.llmInvocations ?? [], LlmInvocation);
   const conversationPolicyEntities = hydrateRecordsUnique(world, state.runConversationPolicies, RunConversationPolicy);
   const contextPolicyEntities = hydrateRecordsUnique(world, state.runContextPolicies, RunContextPolicy);
   const deliveryPolicyEntities = existingRecords(world, RunDeliveryPolicy);
@@ -332,6 +338,8 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
   for (const link of state.runDeliveryPolicyLinks ?? []) spawnRunLink(world, runEntities, deliveryPolicyEntities, link, RunDeliveryPolicyLink, 'run', 'policy');
   for (const link of state.runEditPolicyLinks ?? []) spawnRunLink(world, runEntities, editPolicyEntities, link, RunEditPolicyLink, 'run', 'policy');
   for (const link of state.runWorkEnvironmentLinks ?? []) spawnRunLink(world, runEntities, workEnvironmentEntities, link, RunWorkEnvironmentLink, 'run', 'workEnvironment');
+  for (const link of state.runLlmInvocationLinks ?? []) spawnRunLink(world, runEntities, llmInvocationEntities, link, RunLlmInvocationLink, 'run', 'invocation');
+  for (const link of state.messageLlmInvocationLinks ?? []) spawnRunLink(world, messageEntities, llmInvocationEntities, link, MessageLlmInvocationLink, 'message', 'invocation');
   hydrateWorkEnvironmentPolicyScopeLinks(world, state, { conversations: conversationEntities, modes: modeEntities, agents: agentEntities, runs: runEntities, policies: workEnvironmentPolicyEntities });
   hydrateCheckpointPolicyScopeLinks(world, state, { conversations: conversationEntities, modes: modeEntities, agents: agentEntities, runs: runEntities, policies: checkpointPolicyEntities });
   hydrateCheckpointRecords(world, state, { conversations: conversationEntities, projectContexts: projectContextEntities, shadowRepositories: shadowRepositoryEntities, messages: messageEntities, runs: runEntities, toolCalls: toolCallEntities });

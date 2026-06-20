@@ -91,6 +91,7 @@ export interface LlmRequestData {
   run: Entity;
   conversation: Entity;
   modelMessage: Entity;
+  invocation?: Entity;
 }
 export const LlmRequest = defineComponent<LlmRequestData>('LlmRequest');
 

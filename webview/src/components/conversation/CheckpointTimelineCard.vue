@@ -55,6 +55,7 @@ const restoreConfirmDescription = computed(() => {
 
 const dismissCountdown = ref(0);
 const restoreConfirmOpen = ref(false);
+const shadowMissingRefreshRequested = ref(false);
 let dismissTimer: ReturnType<typeof setInterval> | undefined;
 
 const restoreConfirmActions: ConfirmPanelAction[] = [
@@ -84,6 +85,12 @@ function clearDismissTimer(): void {
   }
 }
 
+function refreshShadowStatsIfMissing(): void {
+  if (!shadowMissing.value || shadowMissingRefreshRequested.value || checkpointStore.shadowStatsLoading) return;
+  shadowMissingRefreshRequested.value = true;
+  checkpointStore.requestShadowStats();
+}
+
 function refreshAutoDismiss(): void {
   clearDismissTimer();
   dismissCountdown.value = 0;
@@ -103,6 +110,7 @@ function refreshAutoDismiss(): void {
 onMounted(() => {
   checkpointStore.ensureShadowStats();
   settings.ensureCheckpointMaintenance();
+  refreshShadowStatsIfMissing();
   refreshAutoDismiss();
 });
 
@@ -117,6 +125,8 @@ watch(
   ],
   () => refreshAutoDismiss()
 );
+
+watch(() => shadowMissing.value, () => refreshShadowStatsIfMissing());
 
 onUnmounted(() => clearDismissTimer());
 
@@ -197,15 +207,10 @@ function pad2(value: number): string {
 <template>
   <section class="checkpoint-timeline-card" :class="[`is-${checkpoint.status}`, phase ? `is-${phase}` : undefined]">
     <div class="checkpoint-card-main">
-      <span v-if="isPending" class="checkpoint-loading-spinner" aria-hidden="true"></span>
-      <IconGitCommit v-else class="checkpoint-leading-icon" stroke="2" aria-hidden="true" />
+      <IconGitCommit class="checkpoint-leading-icon" stroke="2" aria-hidden="true" />
       <span class="checkpoint-project" :title="projectLabel">{{ projectLabel }}</span>
       <template v-if="isPending">
-        <span class="checkpoint-skeleton is-commit"></span>
-        <span class="checkpoint-skeleton is-size"></span>
-        <span class="checkpoint-skeleton is-files"></span>
-        <span class="checkpoint-summary">{{ triggerLabel }}</span>
-        <span class="checkpoint-time" :title="timeTitle">创建中...</span>
+        <span class="checkpoint-pending-text">创建中...</span>
       </template>
       <template v-else>
         <span v-if="commitLabel" class="checkpoint-commit checkpoint-result-field">{{ commitLabel }}</span>
@@ -298,39 +303,10 @@ function pad2(value: number): string {
   color: var(--vscode-descriptionForeground);
 }
 
-.checkpoint-loading-spinner {
-  width: 14px;
-  height: 14px;
-  flex: 0 0 auto;
-  border: 2px solid color-mix(in srgb, var(--vscode-descriptionForeground) 30%, transparent);
-  border-top-color: var(--vscode-descriptionForeground);
-  border-radius: 999px;
-  animation: checkpoint-spin 0.8s linear infinite;
-}
-
-.checkpoint-skeleton {
-  height: 12px;
-  border-radius: 999px;
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--vscode-descriptionForeground) 14%, transparent),
-    color-mix(in srgb, var(--vscode-descriptionForeground) 28%, transparent),
-    color-mix(in srgb, var(--vscode-descriptionForeground) 14%, transparent)
-  );
-  background-size: 180% 100%;
-  animation: checkpoint-skeleton 1.1s ease-in-out infinite;
-}
-
-.checkpoint-skeleton.is-commit {
-  width: 58px;
-}
-
-.checkpoint-skeleton.is-size {
-  width: 42px;
-}
-
-.checkpoint-skeleton.is-files {
-  width: 48px;
+.checkpoint-pending-text {
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+  line-height: 16px;
 }
 
 .checkpoint-result-field {
@@ -452,15 +428,6 @@ function pad2(value: number): string {
   font-size: var(--font-size-xs);
   line-height: 16px;
   font-variant-numeric: tabular-nums;
-}
-
-@keyframes checkpoint-spin {
-  to { transform: rotate(360deg); }
-}
-
-@keyframes checkpoint-skeleton {
-  0% { background-position: 180% 0; }
-  100% { background-position: -180% 0; }
 }
 
 @keyframes checkpoint-result-in {

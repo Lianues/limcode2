@@ -195,20 +195,26 @@ let copiedResetTimer: number | undefined;
 const rollbackConfirmAction = computed<ConfirmPanelAction>(() => ({
   key: 'rollback-confirm',
   label: rollbackPending.value ? '正在回档...' : '回档并确认',
-  variant: 'secondary',
+  variant: rollbackPending.value || !props.rollbackCheckpoint ? 'secondary' : 'default',
   disabled: rollbackPending.value || !props.rollbackCheckpoint,
   title: rollbackConfirmActionTitle(props.rollbackCheckpoint)
 }));
-const deleteConfirmActions = computed<ConfirmPanelAction[]>(() => [
-  { key: 'cancel', label: '取消', variant: 'secondary', disabled: rollbackPending.value },
-  rollbackConfirmAction.value,
-  { key: 'confirm', label: '删除', disabled: rollbackPending.value }
-]);
-const retryConfirmActions = computed<ConfirmPanelAction[]>(() => [
-  { key: 'cancel', label: '取消', variant: 'secondary', disabled: rollbackPending.value },
-  rollbackConfirmAction.value,
-  { key: 'confirm', label: '确认', disabled: rollbackPending.value }
-]);
+const deleteConfirmActions = computed<ConfirmPanelAction[]>(() => {
+  const actions: ConfirmPanelAction[] = [
+    { key: 'cancel', label: '取消', variant: 'secondary', disabled: rollbackPending.value }
+  ];
+  if (props.rollbackCheckpoint || rollbackPending.value) actions.push(rollbackConfirmAction.value);
+  actions.push({ key: 'confirm', label: '删除', disabled: rollbackPending.value });
+  return actions;
+});
+const retryConfirmActions = computed<ConfirmPanelAction[]>(() => {
+  const actions: ConfirmPanelAction[] = [
+    { key: 'cancel', label: '取消', variant: 'secondary', disabled: rollbackPending.value }
+  ];
+  if (props.rollbackCheckpoint || rollbackPending.value) actions.push(rollbackConfirmAction.value);
+  actions.push({ key: 'confirm', label: '确认', disabled: rollbackPending.value });
+  return actions;
+});
 
 onBeforeUnmount(() => {
   if (copiedResetTimer !== undefined) window.clearTimeout(copiedResetTimer);
@@ -726,6 +732,18 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
     </div>
     <div class="message-actions" aria-label="消息操作">
       <button
+        v-if="message.role !== 'user'"
+        type="button"
+        class="message-action-button"
+        :class="{ 'is-loading': runDetailLoading }"
+        :disabled="runDetailLoading"
+        aria-label="查看本次 LLM 调用详情"
+        title="查看本次 LLM 调用详情"
+        @click="viewRunDetail"
+      >
+        <IconEye class="message-action-icon" stroke="2" aria-hidden="true" />
+      </button>
+      <button
         v-if="message.role === 'user'"
         type="button"
         class="message-action-button"
@@ -765,18 +783,6 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
         @click="openDeleteConfirm"
       >
         <IconTrash class="message-action-icon" stroke="2" aria-hidden="true" />
-      </button>
-      <button
-        v-if="message.role !== 'user'"
-        type="button"
-        class="message-action-button"
-        :class="{ 'is-loading': runDetailLoading }"
-        :disabled="runDetailLoading"
-        aria-label="查看本次 LLM 调用详情"
-        title="查看本次 LLM 调用详情"
-        @click="viewRunDetail"
-      >
-        <IconEye class="message-action-icon" stroke="2" aria-hidden="true" />
       </button>
     </div>
     <ConfirmPanel

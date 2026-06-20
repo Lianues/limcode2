@@ -81,7 +81,20 @@ export async function createShadowCheckpoint(paths: StoragePaths, request: Shado
     await ensureGitRepository(worktreePath);
     await syncWorktree(worktreePath, snapshot, request.policy.preserveEmptyDirectories);
     const commit = await commitWorktree(worktreePath, request);
-    if (!commit.created) return skipped(base, 'no_changes', '项目内容没有变化，未创建新存档点。', snapshot);
+    if (!commit.created) {
+      if (commit.sha) {
+        return {
+          ...base,
+          status: 'created',
+          commitSha: commit.sha,
+          message: '项目内容没有变化，复用上一存档快照。',
+          fileCount: snapshot.files.length,
+          byteCount: snapshot.byteCount,
+          emptyDirectoryCount: snapshot.emptyDirectories.length
+        };
+      }
+      return skipped(base, 'no_changes', '项目内容没有变化，未创建新存档点。', snapshot);
+    }
     return {
       ...base,
       status: 'created',
@@ -400,7 +413,11 @@ async function ensureGitRepository(worktreePath: string): Promise<void> {
 async function commitWorktree(worktreePath: string, request: ShadowCheckpointCreateRequest): Promise<{ created: boolean; sha?: string }> {
   await runGit(worktreePath, ['add', '-A', '-f']);
   const diff = await runGit(worktreePath, ['diff', '--cached', '--quiet'], { allowExitCodes: [0, 1] });
-  if (diff.exitCode === 0) return { created: false };
+  if (diff.exitCode === 0) {
+    const head = await runGit(worktreePath, ['rev-parse', 'HEAD'], { allowExitCodes: [0, 128] });
+    const sha = head.exitCode === 0 ? head.stdout.trim() : '';
+    return { created: false, ...(sha ? { sha } : {}) };
+  }
   await runGit(worktreePath, [
     '-c', 'user.name=LimCode Checkpoint',
     '-c', 'user.email=limcode-checkpoint@example.invalid',

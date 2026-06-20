@@ -18,6 +18,8 @@ import { AgentRunBundle, markRunNeedsModel, spawnAgentRun, spawnMessageRunLink }
 import { cleanupRunLlmRequests } from '../../agentRun/llmRequestCleanup';
 import { activeDeliveryPolicyForRun, defaultAgentForConversation, effectiveEditPolicyForRun, runSource, runTarget } from '../../agentRun/queries';
 import type { MessageContent } from '../../../../../shared/protocol';
+import { Checkpoint, CheckpointTimelineAnchor } from '../../checkpoint/components';
+import { CheckpointEventType } from '../../checkpoint/events';
 import {
   cloneMessageToConversation,
   ConversationBundle,
@@ -55,10 +57,12 @@ const MessageEditQuery = defineQuery({
     RunEditPolicyLink,
     RunDeliveryPolicy,
     RunDeliveryPolicyLink,
-    LlmRequest
+    LlmRequest,
+    Checkpoint,
+    CheckpointTimelineAnchor
   ],
   write: [Message, AgentRun],
-  remove: [MessageCurrentRevisionLink, AgentRunNeedsModel, Streaming, LlmRequest],
+  remove: [MessageCurrentRevisionLink, AgentRunNeedsModel, Streaming, LlmRequest, CheckpointTimelineAnchor, Checkpoint],
   mutationMode: 'update',
   role: 'work'
 });
@@ -68,7 +72,7 @@ export const MessageEditSystem = defineSystem({
   access: {
     queries: [MessageEditQuery],
     effects: { emit: ['llm.abort'] },
-    events: { read: [ChatEventType.Edit] },
+    events: { read: [ChatEventType.Edit], emit: [CheckpointEventType.Requested] },
     bundles: [MessageBundle, UserMessageBundle, ConversationBundle, ConversationLinkBundle, AgentRunBundle, AgentFromBlueprintBundle]
   },
   run(ctx) {
@@ -92,6 +96,7 @@ export const MessageEditSystem = defineSystem({
       cmd.add(message, Message, { ...current, content, status: 'complete', usageMetadata });
       const newRevision = spawnMessageRevision(cmd, message, content, 'edited');
       applySourceEditedPolicies(world, cmd, { message, conversation, oldRevision, newRevision, content });
+      if (current.role === 'user') replaceMessageAfterCheckpoints(world, cmd, conversation, message);
 
       if (payload.deleteFollowing) {
         const messages = conversationMessages(world, conversation);
@@ -100,11 +105,40 @@ export const MessageEditSystem = defineSystem({
       }
 
       if (payload.runAfterEdit && current.role === 'user') {
+        requestCheckpointAfterEdit(cmd, payload.conversationId, current.id);
         spawnEditedMessageRun(world, cmd, conversation, message);
       }
     }
   }
 });
+
+function replaceMessageAfterCheckpoints(world: WorldReader, cmd: CommandSink, conversation: Entity, message: Entity): void {
+  const deletedAnchors = new Set<Entity>();
+  const candidateCheckpoints = new Set<Entity>();
+  for (const anchorEntity of world.query(CheckpointTimelineAnchor)) {
+    const anchor = world.get(anchorEntity, CheckpointTimelineAnchor);
+    if (!anchor || anchor.floorMessage !== message || anchor.position !== 'after') continue;
+    const checkpoint = world.get(anchor.checkpoint, Checkpoint);
+    if (checkpoint?.conversation !== conversation) continue;
+    deletedAnchors.add(anchorEntity);
+    candidateCheckpoints.add(anchor.checkpoint);
+  }
+  for (const anchorEntity of deletedAnchors) cmd.despawn(anchorEntity);
+  for (const checkpointEntity of candidateCheckpoints) {
+    const stillReferenced = world.query(CheckpointTimelineAnchor).some((anchorEntity) => {
+      if (deletedAnchors.has(anchorEntity)) return false;
+      return world.get(anchorEntity, CheckpointTimelineAnchor)?.checkpoint === checkpointEntity;
+    });
+    if (!stillReferenced) cmd.despawn(checkpointEntity);
+  }
+}
+
+function requestCheckpointAfterEdit(cmd: CommandSink, conversationId: string, floorMessageId: string): void {
+  cmd.enqueue({
+    type: CheckpointEventType.Requested,
+    payload: { conversationId, trigger: 'user_message_after', floorMessageId, anchorPosition: 'after' }
+  });
+}
 
 function visibleText(content: MessageContent): string {
   return content.parts.map((part) => {

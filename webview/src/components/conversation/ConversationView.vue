@@ -44,17 +44,22 @@ const editRollbackCheckpoint = computed(() => {
   const editing = conversationUi.editingMessage;
   return editing ? checkpointBeforeMessageFloor(currentCheckpoints.value, currentCheckpointTimelineAnchors.value, editing.message.id) : undefined;
 });
-const editConfirmActions = computed<ConfirmPanelAction[]>(() => [
-  { key: 'cancel', label: '取消', variant: 'secondary', disabled: editRollbackPending.value },
-  {
-    key: 'rollback-confirm',
-    label: editRollbackPending.value ? '正在回档...' : '回档并确认',
-    variant: 'secondary',
-    disabled: editRollbackPending.value || !editRollbackCheckpoint.value,
-    title: rollbackConfirmActionTitle(editRollbackCheckpoint.value)
-  },
-  { key: 'direct-confirm', label: '直接确认', disabled: editRollbackPending.value }
-]);
+const editConfirmActions = computed<ConfirmPanelAction[]>(() => {
+  const actions: ConfirmPanelAction[] = [
+    { key: 'cancel', label: '取消', variant: 'secondary', disabled: editRollbackPending.value }
+  ];
+  if (editRollbackCheckpoint.value || editRollbackPending.value) {
+    actions.push({
+      key: 'rollback-confirm',
+      label: editRollbackPending.value ? '正在回档...' : '回档并确认',
+      variant: editRollbackPending.value || !editRollbackCheckpoint.value ? 'secondary' : 'default',
+      disabled: editRollbackPending.value || !editRollbackCheckpoint.value,
+      title: rollbackConfirmActionTitle(editRollbackCheckpoint.value)
+    });
+  }
+  actions.push({ key: 'direct-confirm', label: '直接确认', disabled: editRollbackPending.value });
+  return actions;
+});
 
 const scrollMarkers = computed(() =>
   currentMessages.value

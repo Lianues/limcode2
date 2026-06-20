@@ -90,6 +90,9 @@ export const MessageEditSystem = defineSystem({
         ? { role: current.content.role, parts: payload.content.parts }
         : { role: current.content.role, parts: text ? [{ text }] : [] };
       if (content.parts.length === 0) continue;
+      const messagesBeforeEdit = conversationMessages(world, conversation);
+      const isFirstUserMessage = current.role === 'user' && messagesBeforeEdit[0] === message;
+      const needsInitialCheckpoint = isFirstUserMessage && !hasInitialCheckpoint(world, conversation);
       const oldRevision = currentRevisionForMessage(world, message);
       for (const link of currentRevisionLinksForMessage(world, message)) cmd.remove(link, MessageCurrentRevisionLink);
       const usageMetadata = current.role === 'user' ? estimateUserInputUsage(visibleText(content)) : current.usageMetadata;
@@ -99,12 +102,12 @@ export const MessageEditSystem = defineSystem({
       if (current.role === 'user') replaceMessageAfterCheckpoints(world, cmd, conversation, message);
 
       if (payload.deleteFollowing) {
-        const messages = conversationMessages(world, conversation);
-        const editedIndex = messages.indexOf(message);
-        if (editedIndex >= 0) deleteMessagesFromIndex(world, cmd, messages, editedIndex + 1);
+        const editedIndex = messagesBeforeEdit.indexOf(message);
+        if (editedIndex >= 0) deleteMessagesFromIndex(world, cmd, messagesBeforeEdit, editedIndex + 1);
       }
 
       if (payload.runAfterEdit && current.role === 'user') {
+        if (needsInitialCheckpoint) requestInitialCheckpoint(cmd, payload.conversationId);
         requestCheckpointAfterEdit(cmd, payload.conversationId, current.id);
         spawnEditedMessageRun(world, cmd, conversation, message);
       }
@@ -131,6 +134,20 @@ function replaceMessageAfterCheckpoints(world: WorldReader, cmd: CommandSink, co
     });
     if (!stillReferenced) cmd.despawn(checkpointEntity);
   }
+}
+
+function hasInitialCheckpoint(world: WorldReader, conversation: Entity): boolean {
+  return world.query(Checkpoint).some((entity) => {
+    const checkpoint = world.get(entity, Checkpoint);
+    return checkpoint?.conversation === conversation && checkpoint.trigger === 'conversation_initial';
+  });
+}
+
+function requestInitialCheckpoint(cmd: CommandSink, conversationId: string): void {
+  cmd.enqueue({
+    type: CheckpointEventType.Requested,
+    payload: { conversationId, trigger: 'conversation_initial' }
+  });
 }
 
 function requestCheckpointAfterEdit(cmd: CommandSink, conversationId: string, floorMessageId: string): void {

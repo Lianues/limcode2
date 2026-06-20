@@ -2,7 +2,9 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import type {
   CheckpointPolicyRecord,
-  CheckpointTriggerConfigRecord
+  CheckpointToolTriggerConfigRecord,
+  CheckpointTriggerConfigRecord,
+  ToolDefinitionRecord
 } from '../../../../shared/protocol';
 import { STORAGE_VERSION } from '../../../capabilities/vscodeStorage/constants';
 
@@ -14,11 +16,14 @@ export const DEFAULT_CHECKPOINT_TRIGGERS: CheckpointTriggerConfigRecord = {
   userMessageAfter: false,
   llmResponseBefore: false,
   llmResponseAfter: false,
-  toolExecutionBefore: true,
-  toolExecutionAfter: true,
   agentRunCompletedBefore: false,
   agentRunCompletedAfter: true,
   manual: true
+};
+
+export const DEFAULT_CHECKPOINT_TOOL_TRIGGER: CheckpointToolTriggerConfigRecord = {
+  before: true,
+  after: false
 };
 
 export interface EmptyDirectoryManifest {
@@ -37,6 +42,7 @@ export function normalizeCheckpointPolicy(input: Partial<CheckpointPolicyRecord>
     useGitignore: input.useGitignore ?? true,
     skipPatterns: uniquePatterns(input.skipPatterns),
     triggers: { ...DEFAULT_CHECKPOINT_TRIGGERS, ...(input.triggers ?? {}) },
+    toolTriggers: normalizeCheckpointToolTriggers(input.toolTriggers),
     createdAt: input.createdAt ?? now,
     updatedAt: input.updatedAt ?? now
   };
@@ -68,13 +74,59 @@ export function triggerConfigKey(trigger: string): keyof CheckpointTriggerConfig
     case 'user_message_after': return 'userMessageAfter';
     case 'llm_response_before': return 'llmResponseBefore';
     case 'llm_response_after': return 'llmResponseAfter';
-    case 'tool_execution_before': return 'toolExecutionBefore';
-    case 'tool_execution_after': return 'toolExecutionAfter';
     case 'agent_run_completed_before': return 'agentRunCompletedBefore';
     case 'agent_run_completed_after': return 'agentRunCompletedAfter';
     case 'manual': return 'manual';
     default: return undefined;
   }
+}
+
+export function normalizeCheckpointToolTriggers(
+  input: Record<string, Partial<CheckpointToolTriggerConfigRecord>> | undefined
+): Record<string, CheckpointToolTriggerConfigRecord> {
+  const result: Record<string, CheckpointToolTriggerConfigRecord> = {};
+  for (const [rawName, config] of Object.entries(input ?? {})) {
+    const toolName = rawName.trim();
+    if (!toolName) continue;
+    result[toolName] = normalizeCheckpointToolTriggerConfig(config);
+  }
+  return result;
+}
+
+export function mergeCheckpointToolTriggers(
+  base: Record<string, Partial<CheckpointToolTriggerConfigRecord>> | undefined,
+  override: Record<string, Partial<CheckpointToolTriggerConfigRecord>> | undefined
+): Record<string, CheckpointToolTriggerConfigRecord> {
+  const result = normalizeCheckpointToolTriggers(base);
+  for (const [rawName, config] of Object.entries(override ?? {})) {
+    const toolName = rawName.trim();
+    if (!toolName) continue;
+    result[toolName] = normalizeCheckpointToolTriggerConfig({ ...(result[toolName] ?? {}), ...config });
+  }
+  return result;
+}
+
+export function defaultCheckpointToolTriggerForDefinition(tool: ToolDefinitionRecord | undefined): CheckpointToolTriggerConfigRecord {
+  return normalizeCheckpointToolTriggerConfig(tool?.metadata?.checkpoint);
+}
+
+export function effectiveCheckpointToolTriggerConfig(
+  toolName: string,
+  input: Record<string, Partial<CheckpointToolTriggerConfigRecord>> | undefined,
+  tool: ToolDefinitionRecord | undefined
+): CheckpointToolTriggerConfigRecord {
+  const normalizedToolName = toolName.trim();
+  if (!normalizedToolName) return { ...DEFAULT_CHECKPOINT_TOOL_TRIGGER };
+  const defaults = defaultCheckpointToolTriggerForDefinition(tool);
+  const configured = input?.[normalizedToolName];
+  return normalizeCheckpointToolTriggerConfig({ ...defaults, ...(configured ?? {}) });
+}
+
+function normalizeCheckpointToolTriggerConfig(input: Partial<CheckpointToolTriggerConfigRecord> | undefined): CheckpointToolTriggerConfigRecord {
+  return {
+    before: input?.before ?? DEFAULT_CHECKPOINT_TOOL_TRIGGER.before,
+    after: input?.after ?? DEFAULT_CHECKPOINT_TOOL_TRIGGER.after
+  };
 }
 
 export function safeStorageKey(input: string): string {

@@ -114,7 +114,8 @@ export const runAgentTool: ToolDefinition = {
       category: 'agent',
       riskLevel: 'agent',
       readonly: false,
-      defaultEnabled: true
+      defaultEnabled: true,
+      checkpoint: { before: true, after: true }
     }
   },
   scheduling: resolveRunAgentScheduling

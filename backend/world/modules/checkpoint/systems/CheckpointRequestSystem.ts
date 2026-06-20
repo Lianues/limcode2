@@ -17,8 +17,9 @@ import {
   shadowRepositoryStorageKeyFor
 } from '../bundles';
 import { effectiveCheckpointPolicyForRequest, findRunById } from '../queries';
-import { triggerConfigKey } from '../policy';
-import type { CheckpointFloorAnchorPosition } from '../../../../../shared/protocol';
+import { effectiveCheckpointToolTriggerConfig, triggerConfigKey } from '../policy';
+import type { CheckpointFloorAnchorPosition, CheckpointPolicyRecord } from '../../../../../shared/protocol';
+import { ToolDefinitionsKey } from '../../tools/resources';
 
 const CheckpointRequestQuery = defineQuery({
   name: 'CheckpointRequest',
@@ -48,6 +49,7 @@ export const CheckpointRequestSystem = defineSystem({
   access: {
     queries: [CheckpointRequestQuery],
     bundles: [CheckpointBundle],
+    resources: { read: [ToolDefinitionsKey] },
     events: { read: [CheckpointEventType.Requested] },
     effects: { emit: ['checkpoint.create'] }
   },
@@ -61,8 +63,7 @@ export const CheckpointRequestSystem = defineSystem({
       const run = findRunById(world, payload.runId);
       const resolution = effectiveCheckpointPolicyForRequest(world, { conversation, ...(run !== undefined ? { run } : {}) });
       if (!resolution.policy.enabled) continue;
-      const triggerKey = triggerConfigKey(payload.trigger);
-      if (!triggerKey || resolution.policy.triggers[triggerKey] !== true) continue;
+      if (!checkpointTriggerEnabled(world, payload, resolution.policy)) continue;
 
       const repository = ensureShadowRepository(world, cmd, { conversationId: payload.conversationId, projectUri: project.data.uri });
       const repositoryId = shadowRepositoryIdFor(payload.conversationId, project.data.uri);
@@ -152,6 +153,27 @@ function resolveCheckpointAnchor(world: WorldReader, payload: CheckpointRequeste
   }
 
   return base;
+}
+
+function checkpointTriggerEnabled(world: WorldReader, payload: CheckpointRequestedPayload, policy: CheckpointPolicyRecord): boolean {
+  if (payload.trigger === 'tool_execution_before' || payload.trigger === 'tool_execution_after') {
+    const toolName = toolNameForCheckpointRequest(world, payload);
+    if (!toolName) return false;
+    const toolDefinition = (world.tryGetResource(ToolDefinitionsKey) ?? []).find((tool) => tool.name === toolName);
+    const config = effectiveCheckpointToolTriggerConfig(toolName, policy.toolTriggers, toolDefinition);
+    return payload.trigger === 'tool_execution_before' ? config.before : config.after;
+  }
+
+  const triggerKey = triggerConfigKey(payload.trigger);
+  return !!triggerKey && policy.triggers[triggerKey] === true;
+}
+
+function toolNameForCheckpointRequest(world: WorldReader, payload: CheckpointRequestedPayload): string | undefined {
+  const explicit = payload.toolName?.trim();
+  if (explicit) return explicit;
+  const id = payload.toolCallId?.trim();
+  if (!id) return undefined;
+  return world.query(ToolCall).map((entity) => world.get(entity, ToolCall)).find((toolCall) => toolCall?.id === id)?.name;
 }
 
 function addCheckpointTimelineAnchor(

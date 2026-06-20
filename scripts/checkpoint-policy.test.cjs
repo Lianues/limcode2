@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const {
   workspaceContainsProject,
   normalizeCheckpointPolicy,
+  defaultCheckpointToolTriggerForDefinition,
+  effectiveCheckpointToolTriggerConfig,
   emptyDirectoryManifest
 } = require('../dist/extension/backend/world/modules/checkpoint/policy');
 
@@ -30,7 +32,7 @@ function testPolicyNormalizationKeepsGitIgnoreSettings() {
   assert.equal(policy.triggers.userMessageBefore, true);
   assert.equal(policy.triggers.llmResponseBefore, false);
   assert.equal(policy.triggers.agentRunCompletedBefore, false);
-  assert.equal(policy.triggers.toolExecutionBefore, true);
+  assert.deepEqual(policy.toolTriggers, {});
 }
 
 function testPolicyNormalizationUsesNewTriggerDefaults() {
@@ -39,6 +41,34 @@ function testPolicyNormalizationUsesNewTriggerDefaults() {
   assert.equal(policy.triggers.userMessageAfter, false);
   assert.equal(policy.triggers.llmResponseBefore, false);
   assert.equal(policy.triggers.agentRunCompletedBefore, false);
+}
+
+function testPolicyNormalizationUsesToolTriggerDefaults() {
+  const policy = normalizeCheckpointPolicy({
+    id: 'tool-defaults',
+    name: 'tool-defaults',
+    toolTriggers: { custom_tool: { after: true } }
+  });
+  assert.deepEqual(policy.toolTriggers.custom_tool, { before: true, after: true });
+}
+
+function testToolDefinitionCheckpointDefaults() {
+  const readTool = { name: 'read_file', metadata: { checkpoint: { before: false, after: false } } };
+  const shellTool = { name: 'shell', metadata: { checkpoint: { before: true, after: true } } };
+  const switchTool = { name: 'switch_work_environment', metadata: { checkpoint: { before: false, after: false } } };
+  const unknownTool = { name: 'custom' };
+
+  assert.deepEqual(defaultCheckpointToolTriggerForDefinition(readTool), { before: false, after: false });
+  assert.deepEqual(defaultCheckpointToolTriggerForDefinition(shellTool), { before: true, after: true });
+  assert.deepEqual(defaultCheckpointToolTriggerForDefinition(switchTool), { before: false, after: false });
+  assert.deepEqual(defaultCheckpointToolTriggerForDefinition(unknownTool), { before: true, after: false });
+}
+
+function testEffectiveToolCheckpointConfigMergesOverrides() {
+  const tool = { name: 'read_file', metadata: { checkpoint: { before: false, after: false } } };
+  assert.deepEqual(effectiveCheckpointToolTriggerConfig('read_file', undefined, tool), { before: false, after: false });
+  assert.deepEqual(effectiveCheckpointToolTriggerConfig('read_file', { read_file: { after: true } }, tool), { before: false, after: true });
+  assert.deepEqual(effectiveCheckpointToolTriggerConfig('unknown_tool', undefined, undefined), { before: true, after: false });
 }
 
 function testEmptyDirectoryManifest() {
@@ -50,6 +80,9 @@ function testEmptyDirectoryManifest() {
 testWorkspaceContainsProject();
 testPolicyNormalizationKeepsGitIgnoreSettings();
 testPolicyNormalizationUsesNewTriggerDefaults();
+testPolicyNormalizationUsesToolTriggerDefaults();
+testToolDefinitionCheckpointDefaults();
+testEffectiveToolCheckpointConfigMergesOverrides();
 testEmptyDirectoryManifest();
 
 console.log('checkpoint-policy tests passed');

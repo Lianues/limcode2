@@ -30,7 +30,8 @@ export const switchWorkEnvironmentTool: ToolDefinition = {
       category: 'general',
       riskLevel: 'read',
       readonly: true,
-      defaultEnabled: true
+      defaultEnabled: true,
+      checkpoint: { before: false, after: false }
     }
   },
   execution: 'runtime',

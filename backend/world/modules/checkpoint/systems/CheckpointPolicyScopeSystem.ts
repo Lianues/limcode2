@@ -15,7 +15,7 @@ import {
   upsertCheckpointPolicy,
   upsertCheckpointPolicyScopeLink
 } from '../bundles';
-import { DEFAULT_CHECKPOINT_TRIGGERS } from '../policy';
+import { DEFAULT_CHECKPOINT_TRIGGERS, mergeCheckpointToolTriggers } from '../policy';
 
 export const CheckpointPolicyScopeSystem = defineSystem({
   name: 'CheckpointPolicyScopeSystem',
@@ -44,7 +44,8 @@ export const CheckpointPolicyScopeSystem = defineSystem({
         ...(payload.preserveEmptyDirectories !== undefined ? { preserveEmptyDirectories: payload.preserveEmptyDirectories } : {}),
         ...(payload.useGitignore !== undefined ? { useGitignore: payload.useGitignore } : {}),
         ...(payload.skipPatterns !== undefined ? { skipPatterns: payload.skipPatterns } : {}),
-        ...(payload.triggers !== undefined ? { triggers: { ...DEFAULT_CHECKPOINT_TRIGGERS, ...(currentPolicy?.triggers ?? {}), ...payload.triggers } } : {})
+        ...(payload.triggers !== undefined ? { triggers: { ...DEFAULT_CHECKPOINT_TRIGGERS, ...(currentPolicy?.triggers ?? {}), ...payload.triggers } } : {}),
+        ...(payload.toolTriggers !== undefined ? { toolTriggers: mergeCheckpointToolTriggers(currentPolicy?.toolTriggers, payload.toolTriggers) } : {})
       });
       upsertCheckpointPolicyScopeLink(world, cmd, { scopeKind: payload.scopeKind, scopeId: scope.scopeId, policy, data: scope.data });
     }

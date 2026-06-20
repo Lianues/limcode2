@@ -54,7 +54,8 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
         riskLevel: 'command',
         readonly: false,
         defaultEnabled: true,
-        requiresApproval: true
+        requiresApproval: true,
+        checkpoint: { before: true, after: true }
       },
       configSchema: {
         fields: [

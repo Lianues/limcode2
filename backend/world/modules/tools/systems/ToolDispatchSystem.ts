@@ -272,6 +272,7 @@ function requestToolExecutionBeforeCheckpoint(cmd: CommandSink, authorization: E
       conversationId: authorization.conversationId,
       runId: authorization.runId,
       toolCallId: call.id,
+      toolName: call.name,
       anchorPosition: 'before',
       trigger: 'tool_execution_before'
     }

@@ -32,7 +32,8 @@ export const readFileTool: ToolDefinition = {
       category: 'filesystem',
       riskLevel: 'read',
       readonly: true,
-      defaultEnabled: true
+      defaultEnabled: true,
+      checkpoint: { before: false, after: false }
     }
   },
   execution: 'runtime',

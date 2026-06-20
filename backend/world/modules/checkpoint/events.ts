@@ -12,6 +12,7 @@ export interface CheckpointRequestedPayload {
   trigger: CheckpointTriggerKind;
   runId?: string;
   toolCallId?: string;
+  toolName?: string;
   floorMessageId?: string;
   anchorPosition?: CheckpointFloorAnchorPosition;
 }
@@ -37,6 +38,7 @@ export interface CheckpointCompletedPayload {
   anchorPosition?: CheckpointFloorAnchorPosition;
   sourceRunId?: string;
   sourceToolCallId?: string;
+  sourceToolName?: string;
 }
 
 export interface CheckpointDismissRequestedPayload {

@@ -273,6 +273,7 @@ export interface ToolDefinitionMetadataRecord {
   readonly?: boolean;
   defaultEnabled?: boolean;
   requiresApproval?: boolean;
+  checkpoint?: Partial<CheckpointToolTriggerConfigRecord>;
 }
 
 export interface ToolDefinitionRecord {
@@ -701,11 +702,14 @@ export interface CheckpointTriggerConfigRecord {
   userMessageAfter: boolean;
   llmResponseBefore: boolean;
   llmResponseAfter: boolean;
-  toolExecutionBefore: boolean;
-  toolExecutionAfter: boolean;
   agentRunCompletedBefore: boolean;
   agentRunCompletedAfter: boolean;
   manual: boolean;
+}
+
+export interface CheckpointToolTriggerConfigRecord {
+  before: boolean;
+  after: boolean;
 }
 
 export interface CheckpointPolicyRecord {
@@ -717,6 +721,7 @@ export interface CheckpointPolicyRecord {
   useGitignore: boolean;
   skipPatterns: string[];
   triggers: CheckpointTriggerConfigRecord;
+  toolTriggers: Record<string, CheckpointToolTriggerConfigRecord>;
   createdAt: number;
   updatedAt: number;
 }
@@ -1278,6 +1283,7 @@ export interface CheckpointPolicyScopeSetPayload {
   useGitignore?: boolean;
   skipPatterns?: string[];
   triggers?: Partial<CheckpointTriggerConfigRecord>;
+  toolTriggers?: Record<string, Partial<CheckpointToolTriggerConfigRecord>>;
 }
 export interface CheckpointPolicyScopeClearPayload {
   scopeKind: CheckpointPolicyScopeKind;

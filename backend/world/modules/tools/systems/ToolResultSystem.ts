@@ -148,6 +148,7 @@ export const ToolResultSystem = defineSystem({
             conversationId: conversationData.id,
             runId: runData.id,
             toolCallId: call.id,
+            toolName: call.name,
             anchorPosition: 'after',
             trigger: 'tool_execution_after'
           }

@@ -50,7 +50,8 @@ export const transferFilesTool: ToolDefinition = {
       riskLevel: 'write',
       readonly: false,
       defaultEnabled: true,
-      requiresApproval: true
+      requiresApproval: true,
+      checkpoint: { before: true, after: true }
     }
   },
   execution: 'runtime',

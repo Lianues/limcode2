@@ -9,6 +9,7 @@ import type {
   CheckpointRestoreResultPayload,
   ExtensionToWebviewMessage,
   CheckpointTriggerConfigRecord,
+  CheckpointToolTriggerConfigRecord,
   ShadowCheckpointRestoreResult,
   ShadowRepositoryDiskStatRecord
 } from '@shared/protocol';
@@ -27,8 +28,6 @@ const DEFAULT_TRIGGERS: CheckpointTriggerConfigRecord = {
   userMessageAfter: false,
   llmResponseBefore: false,
   llmResponseAfter: false,
-  toolExecutionBefore: true,
-  toolExecutionAfter: true,
   agentRunCompletedBefore: false,
   agentRunCompletedAfter: true,
   manual: true
@@ -68,6 +67,7 @@ function defaultPolicy(scopeKind: CheckpointPolicyScopeKind, scopeId?: string): 
     useGitignore: true,
     skipPatterns: ['node_modules/', 'dist/', 'out/', 'build/'],
     triggers: { ...DEFAULT_TRIGGERS },
+    toolTriggers: {},
     createdAt: now,
     updatedAt: now
   };
@@ -196,6 +196,7 @@ export const useCheckpointPolicyStore = defineStore('checkpointPolicy', {
         id: resolution.link?.checkpointPolicyId ?? base.id,
         name: next.name?.trim() || base.name,
         triggers: { ...base.triggers, ...(next.triggers ?? {}) },
+        toolTriggers: mergeCheckpointToolTriggers(base.toolTriggers, next.toolTriggers),
         skipPatterns: sanitizePatterns(next.skipPatterns ?? base.skipPatterns),
         initialSnapshotMaxBytes: Math.max(1, Math.floor(next.initialSnapshotMaxBytes ?? base.initialSnapshotMaxBytes)),
         updatedAt: Date.now()
@@ -210,7 +211,8 @@ export const useCheckpointPolicyStore = defineStore('checkpointPolicy', {
         preserveEmptyDirectories: policy.preserveEmptyDirectories,
         useGitignore: policy.useGitignore,
         skipPatterns: policy.skipPatterns,
-        triggers: policy.triggers
+        triggers: policy.triggers,
+        toolTriggers: policy.toolTriggers
       };
       bridge.request(BridgeMessageType.CheckpointPolicyScopeSet, payload);
     },
@@ -250,4 +252,26 @@ function sanitizePatterns(patterns: readonly string[]): string[] {
     result.push(pattern);
   }
   return result;
+}
+
+
+function mergeCheckpointToolTriggers(
+  base: Record<string, Partial<CheckpointToolTriggerConfigRecord>> | undefined,
+  override: Record<string, Partial<CheckpointToolTriggerConfigRecord>> | undefined
+): Record<string, CheckpointToolTriggerConfigRecord> {
+  const result: Record<string, CheckpointToolTriggerConfigRecord> = {};
+  for (const [toolName, config] of Object.entries(base ?? {})) {
+    result[toolName] = normalizeCheckpointToolTriggerConfig(config);
+  }
+  for (const [toolName, config] of Object.entries(override ?? {})) {
+    result[toolName] = normalizeCheckpointToolTriggerConfig({ ...(result[toolName] ?? {}), ...config });
+  }
+  return result;
+}
+
+function normalizeCheckpointToolTriggerConfig(input: Partial<CheckpointToolTriggerConfigRecord> | undefined): CheckpointToolTriggerConfigRecord {
+  return {
+    before: input?.before ?? true,
+    after: input?.after ?? false
+  };
 }

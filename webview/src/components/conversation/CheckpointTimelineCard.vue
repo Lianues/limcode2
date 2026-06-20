@@ -6,7 +6,6 @@ import { useCheckpointPolicyStore } from '@webview/stores/useCheckpointPolicySto
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
-import { checkpointTimelineActions } from './checkpointTimelineActions';
 
 const LOCAL_DAY_MS = 86_400_000;
 
@@ -16,7 +15,6 @@ const props = defineProps<{
   phase?: 'stable' | 'entering' | 'exiting';
 }>();
 
-const actions = checkpointTimelineActions();
 const checkpointStore = useCheckpointPolicyStore();
 const clientState = useClientStateStore();
 const settings = useGlobalSettingsStore();
@@ -277,17 +275,6 @@ function pad2(value: number): string {
         :title="`${dismissCountdown} 秒后自动移除`"
       >{{ dismissCountdown }}s</span>
       <div v-if="!isPending" class="checkpoint-actions" aria-label="存档点操作">
-        <button
-          v-for="action in actions"
-          :key="action.id"
-          type="button"
-          class="checkpoint-action-button"
-          :disabled="!action.enabled({ checkpoint, anchor })"
-          :title="action.description"
-          @click="action.run({ checkpoint, anchor })"
-        >
-          {{ action.label }}
-        </button>
         <button
           type="button"
           class="checkpoint-action-button"

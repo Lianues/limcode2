@@ -72,6 +72,14 @@ export class WebviewHub implements WebviewCapability {
   public clientIds(): BridgeClientId[] {
     return [...this.clients.keys()];
   }
+
+  public clientRecords(): Array<{ id: BridgeClientId; meta: WebviewClientMeta; attachedAt: number }> {
+    return [...this.clients.values()].map((client) => ({
+      id: client.id,
+      meta: client.meta,
+      attachedAt: client.attachedAt
+    }));
+  }
 }
 
 export function createWebviewCapability(): WebviewCapability {

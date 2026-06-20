@@ -11,10 +11,10 @@ export interface ConversationCheckpointTimelineRow {
   kind: 'checkpoint';
   id: string;
   checkpoint: CheckpointRecord;
-  anchor: CheckpointTimelineAnchorRecord;
-  floorMessageId: string;
-  position: CheckpointTimelineAnchorRecord['position'];
-  messageFloorNumber: number;
+  anchor?: CheckpointTimelineAnchorRecord;
+  floorMessageId?: string;
+  position?: CheckpointTimelineAnchorRecord['position'] | 'start';
+  messageFloorNumber?: number;
 }
 
 export type ConversationTimelineRow = ConversationMessageTimelineRow | ConversationCheckpointTimelineRow;
@@ -27,9 +27,11 @@ export interface BuildConversationTimelineRowsInput {
 
 export function buildConversationTimelineRows(input: BuildConversationTimelineRowsInput): ConversationTimelineRow[] {
   const checkpointsById = new Map(input.checkpoints.map((checkpoint) => [checkpoint.id, checkpoint]));
+  const anchoredCheckpointIds = new Set(input.checkpointAnchors.map((anchor) => anchor.checkpointId));
   const messages = [...input.messages].sort(compareMessages);
-  const anchorsByMessage = groupAnchorsByFloorMessage(dedupeCheckpointAnchors(input.checkpointAnchors, checkpointsById, messages), checkpointsById);
+  const anchorsByMessage = groupAnchorsByFloorMessage(input.checkpointAnchors, checkpointsById);
   const rows: ConversationTimelineRow[] = [];
+  appendInitialCheckpointRows(rows, input.checkpoints, anchoredCheckpointIds);
 
   messages.forEach((message, index) => {
     const messageFloorNumber = index + 1;
@@ -60,99 +62,22 @@ function groupAnchorsByFloorMessage(
   return grouped;
 }
 
-function dedupeCheckpointAnchors(
-  anchors: readonly CheckpointTimelineAnchorRecord[],
-  checkpointsById: ReadonlyMap<string, CheckpointRecord>,
-  messages: readonly MessageRecord[]
-): CheckpointTimelineAnchorRecord[] {
-  const messageIndexById = new Map(messages.map((message, index) => [message.id, index]));
-  const passthrough: CheckpointTimelineAnchorRecord[] = [];
-  const anchorsByContentGap = new Map<number, CheckpointAnchorCandidate[]>();
-
-  for (const anchor of anchors) {
-    const checkpoint = checkpointsById.get(anchor.checkpointId);
-    const contentGapIndex = timelineContentGapIndex(anchor, messageIndexById);
-    if (!checkpoint || contentGapIndex === undefined) {
-      passthrough.push(anchor);
-      continue;
-    }
-
-    const bucket = anchorsByContentGap.get(contentGapIndex) ?? [];
-    bucket.push({ anchor, checkpoint });
-    anchorsByContentGap.set(contentGapIndex, bucket);
+function appendInitialCheckpointRows(
+  rows: ConversationTimelineRow[],
+  checkpoints: readonly CheckpointRecord[],
+  anchoredCheckpointIds: ReadonlySet<string>
+): void {
+  const initialCheckpoints = checkpoints
+    .filter((checkpoint) => checkpoint.trigger === 'conversation_initial' && !anchoredCheckpointIds.has(checkpoint.id))
+    .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+  for (const checkpoint of initialCheckpoints) {
+    rows.push({
+      kind: 'checkpoint',
+      id: `checkpoint:initial:${checkpoint.id}`,
+      checkpoint,
+      position: 'start'
+    });
   }
-
-  const result = [...passthrough];
-  for (const bucket of anchorsByContentGap.values()) {
-    result.push(...dedupeAdjacentNoChangeCheckpoints(bucket).map((item) => item.anchor));
-  }
-  return result;
-}
-
-interface CheckpointAnchorCandidate {
-  anchor: CheckpointTimelineAnchorRecord;
-  checkpoint: CheckpointRecord;
-}
-
-function timelineContentGapIndex(
-  anchor: CheckpointTimelineAnchorRecord,
-  messageIndexById: ReadonlyMap<string, number>
-): number | undefined {
-  const messageIndex = messageIndexById.get(anchor.floorMessageId);
-  if (messageIndex === undefined) return undefined;
-  // before 第 N 楼与 after 第 N-1 楼同属一个楼层间隙，才算相邻位置；
-  // before/after 同一楼之间隔着消息楼层，不能为了去重跳楼层合并。
-  return anchor.position === 'before' ? messageIndex : messageIndex + 1;
-}
-
-function dedupeAdjacentNoChangeCheckpoints(bucket: CheckpointAnchorCandidate[]): CheckpointAnchorCandidate[] {
-  const sorted = [...bucket].sort(compareAnchorCandidatesInContentGap);
-  const result: CheckpointAnchorCandidate[] = [];
-
-  for (const candidate of sorted) {
-    const previous = result[result.length - 1];
-    if (previous && canMergeAdjacentCheckpoints(previous.checkpoint, candidate.checkpoint)) {
-      result[result.length - 1] = preferredMergedCheckpointAnchor(previous, candidate);
-      continue;
-    }
-    result.push(candidate);
-  }
-
-  return result;
-}
-
-function compareAnchorCandidatesInContentGap(left: CheckpointAnchorCandidate, right: CheckpointAnchorCandidate): number {
-  const positionOrder = contentGapPositionOrder(left.anchor) - contentGapPositionOrder(right.anchor);
-  return positionOrder || compareAnchors(left.anchor, right.anchor);
-}
-
-function contentGapPositionOrder(anchor: CheckpointTimelineAnchorRecord): number {
-  return anchor.position === 'after' ? 0 : 1;
-}
-
-function canMergeAdjacentCheckpoints(previous: CheckpointRecord, next: CheckpointRecord): boolean {
-  if (!isSameCheckpointTarget(previous, next)) return false;
-  if (previous.status === 'failed') return false;
-  // 相邻只表示候选；必须由后一条 checkpoint 明确确认项目内容没有变化，才去重合并。
-  return next.status === 'skipped' && next.skipReason === 'no_changes';
-}
-
-function isSameCheckpointTarget(left: CheckpointRecord, right: CheckpointRecord): boolean {
-  return left.conversationId === right.conversationId
-    && left.projectContextId === right.projectContextId
-    && left.shadowRepositoryId === right.shadowRepositoryId
-    && left.projectUri === right.projectUri;
-}
-
-function preferredMergedCheckpointAnchor(
-  previous: CheckpointAnchorCandidate,
-  next: CheckpointAnchorCandidate
-): CheckpointAnchorCandidate {
-  // 如果其中一条是真正创建的存档点，保留可回档的实际快照；
-  // 都是 no_changes 时保留较新的展示位置，避免重复提示。
-  if (previous.checkpoint.status === 'created') return previous;
-  if (next.checkpoint.status === 'created') return next;
-  return compareAnchors(previous.anchor, next.anchor) <= 0 ? next : previous;
 }
 
 function appendCheckpointRows(

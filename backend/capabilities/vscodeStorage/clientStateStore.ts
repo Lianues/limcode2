@@ -433,7 +433,9 @@ export function conversationRenderDetailSlice(state: ClientState, conversationId
   detail.toolCallEvents = state.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId));
   detail.checkpointTimelineAnchors = state.checkpointTimelineAnchors.filter((anchor) => anchor.conversationId === conversationId);
   const checkpointIds = new Set(detail.checkpointTimelineAnchors.map((anchor) => anchor.checkpointId));
-  detail.checkpoints = state.checkpoints.filter((checkpoint) => checkpoint.conversationId === conversationId || checkpointIds.has(checkpoint.id));
+  detail.checkpoints = state.checkpoints.filter((checkpoint) => checkpoint.status !== 'pending' && (checkpoint.conversationId === conversationId || checkpointIds.has(checkpoint.id)));
+  const persistedCheckpointIds = new Set(detail.checkpoints.map((checkpoint) => checkpoint.id));
+  detail.checkpointTimelineAnchors = detail.checkpointTimelineAnchors.filter((anchor) => persistedCheckpointIds.has(anchor.checkpointId));
   for (const checkpoint of detail.checkpoints) checkpointIds.add(checkpoint.id);
   const shadowRepositoryIds = new Set(detail.checkpoints.map((checkpoint) => checkpoint.shadowRepositoryId));
   const projectContextIds = new Set(detail.checkpoints.map((checkpoint) => checkpoint.projectContextId));

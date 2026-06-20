@@ -13,10 +13,12 @@ import {
   IconRefresh,
   IconTrash
 } from '@tabler/icons-vue';
-import { isVisibleTextPart, type LlmUsageMetadataRecord, type MessageRecord, type MessageStopReason } from '@shared/protocol';
+import { isVisibleTextPart, type CheckpointRecord, type LlmUsageMetadataRecord, type MessageRecord, type MessageStopReason } from '@shared/protocol';
 import RichContentView from '@webview/components/content/RichContentView.vue';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 import HoverTooltipPanel from '@webview/components/ui/HoverTooltipPanel.vue';
+import { useCheckpointPolicyStore } from '@webview/stores/useCheckpointPolicyStore';
+import { rollbackConfirmActionTitle } from './checkpointRollback';
 import { normalizeTokenUsage } from './tokenUsageModel';
 
 const props = withDefaults(
@@ -26,11 +28,12 @@ const props = withDefaults(
     runDetailLoading?: boolean;
     deleteCount?: number;
     floorNumber?: number;
+    rollbackCheckpoint?: CheckpointRecord;
     deleting?: boolean;
     entering?: boolean;
     editingHighlighted?: boolean;
   }>(),
-  { runId: undefined, runDetailLoading: false, deleteCount: 1, floorNumber: 0, deleting: false, entering: false, editingHighlighted: false }
+  { runId: undefined, runDetailLoading: false, deleteCount: 1, floorNumber: 0, rollbackCheckpoint: undefined, deleting: false, entering: false, editingHighlighted: false }
 );
 
 const emit = defineEmits<{
@@ -83,9 +86,11 @@ interface TokenUsageItem {
 const hasOwn = Object.prototype.hasOwnProperty;
 const LOCAL_DAY_MS = 86_400_000;
 const streaming = computed(() => props.message.status === 'streaming');
+const checkpointStore = useCheckpointPolicyStore();
 const copied = ref(false);
 const confirmRetryOpen = ref(false);
 const confirmDeleteOpen = ref(false);
+const rollbackPending = ref(false);
 const deleteDescriptionHtml = computed(
   () => `将删除这条消息以及它之后的所有共 ${props.deleteCount} 条消息，此操作<strong>无法撤销</strong>。`
 );
@@ -187,14 +192,23 @@ function createTokenUsageItem(key: TokenUsageKind, label: string, value: number 
 
 let copiedResetTimer: number | undefined;
 
-const deleteConfirmActions: ConfirmPanelAction[] = [
-  { key: 'cancel', label: '取消', variant: 'secondary' },
-  { key: 'confirm', label: '删除' }
-];
-const retryConfirmActions: ConfirmPanelAction[] = [
-  { key: 'cancel', label: '取消', variant: 'secondary' },
-  { key: 'confirm', label: '确认' }
-];
+const rollbackConfirmAction = computed<ConfirmPanelAction>(() => ({
+  key: 'rollback-confirm',
+  label: rollbackPending.value ? '正在回档...' : '回档并确认',
+  variant: 'secondary',
+  disabled: rollbackPending.value || !props.rollbackCheckpoint,
+  title: rollbackConfirmActionTitle(props.rollbackCheckpoint)
+}));
+const deleteConfirmActions = computed<ConfirmPanelAction[]>(() => [
+  { key: 'cancel', label: '取消', variant: 'secondary', disabled: rollbackPending.value },
+  rollbackConfirmAction.value,
+  { key: 'confirm', label: '删除', disabled: rollbackPending.value }
+]);
+const retryConfirmActions = computed<ConfirmPanelAction[]>(() => [
+  { key: 'cancel', label: '取消', variant: 'secondary', disabled: rollbackPending.value },
+  rollbackConfirmAction.value,
+  { key: 'confirm', label: '确认', disabled: rollbackPending.value }
+]);
 
 onBeforeUnmount(() => {
   if (copiedResetTimer !== undefined) window.clearTimeout(copiedResetTimer);
@@ -591,9 +605,27 @@ function cancelRetry(): void {
   confirmRetryOpen.value = false;
 }
 
+async function restoreBeforeConfirm(): Promise<boolean> {
+  if (!props.rollbackCheckpoint || rollbackPending.value) return false;
+  rollbackPending.value = true;
+  try {
+    const checkpoint = props.rollbackCheckpoint;
+    const result = await checkpointStore.restoreCheckpoint(checkpoint);
+    if (result.status !== 'restored') return false;
+    checkpointStore.dismissCheckpoint(checkpoint.id, checkpoint.conversationId);
+    return true;
+  } finally {
+    rollbackPending.value = false;
+  }
+}
+
 function confirmRetry(): void {
   emit('retry-from', props.message);
   confirmRetryOpen.value = false;
+}
+
+async function rollbackAndConfirmRetry(): Promise<void> {
+  if (await restoreBeforeConfirm()) confirmRetry();
 }
 
 function cancelDelete(): void {
@@ -605,13 +637,19 @@ function confirmDelete(): void {
   confirmDeleteOpen.value = false;
 }
 
+async function rollbackAndConfirmDelete(): Promise<void> {
+  if (await restoreBeforeConfirm()) confirmDelete();
+}
+
 function onDeleteConfirmAction(action: ConfirmPanelAction): void {
   if (action.key === 'cancel') cancelDelete();
+  if (action.key === 'rollback-confirm') void rollbackAndConfirmDelete();
   if (action.key === 'confirm') confirmDelete();
 }
 
 function onRetryConfirmAction(action: ConfirmPanelAction): void {
   if (action.key === 'cancel') cancelRetry();
+  if (action.key === 'rollback-confirm') void rollbackAndConfirmRetry();
   if (action.key === 'confirm') confirmRetry();
 }
 </script>
@@ -747,6 +785,7 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
       :description-html="retryDescriptionHtml"
       :actions="retryConfirmActions"
       @action="onRetryConfirmAction"
+      @cancel="cancelRetry"
     />
     <ConfirmPanel
       :open="confirmDeleteOpen"
@@ -754,6 +793,7 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
       :description-html="deleteDescriptionHtml"
       :actions="deleteConfirmActions"
       @action="onDeleteConfirmAction"
+      @cancel="cancelDelete"
     />
   </article>
 </template>

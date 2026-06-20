@@ -14,6 +14,7 @@ const checkpoints = computed<CheckpointRecord[]>(() =>
 
 function statusLabel(status: CheckpointRecord['status']): string {
   switch (status) {
+    case 'pending': return '创建中';
     case 'created': return '已创建';
     case 'skipped': return '已跳过';
     case 'failed': return '失败';
@@ -22,6 +23,7 @@ function statusLabel(status: CheckpointRecord['status']): string {
 
 function triggerLabel(trigger: CheckpointRecord['trigger']): string {
   switch (trigger) {
+    case 'conversation_initial': return '初始存档';
     case 'user_message_after': return '用户消息后';
     case 'llm_response_after': return 'AI 单轮回复后';
     case 'tool_execution_before': return '工具执行前';

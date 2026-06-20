@@ -129,7 +129,9 @@ export enum BridgeMessageType {
   CheckpointShadowStatsGet = 'checkpoint.shadowStats.get',
   CheckpointShadowStatsSnapshot = 'checkpoint.shadowStats.snapshot',
   CheckpointShadowDelete = 'checkpoint.shadow.delete',
-  CheckpointDismiss = 'checkpoint.dismiss'
+  CheckpointDismiss = 'checkpoint.dismiss',
+  CheckpointRestore = 'checkpoint.restore',
+  CheckpointRestoreResult = 'checkpoint.restore.result'
 }
 
 export interface BridgeEnvelope<TType extends string = string, TPayload = unknown> {
@@ -670,7 +672,7 @@ export interface RunWorkEnvironmentLinkRecord {
 
 export type CheckpointPolicyScopeKind = ConfigScopeKind;
 export type CheckpointRepositoryLinkRole = 'active' | 'history';
-export type CheckpointStatus = 'created' | 'skipped' | 'failed';
+export type CheckpointStatus = 'pending' | 'created' | 'skipped' | 'failed';
 export type CheckpointSkipReason =
   | 'disabled'
   | 'trigger_disabled'
@@ -682,6 +684,7 @@ export type CheckpointSkipReason =
   | 'unsupported_project_uri'
   | 'io_error';
 export type CheckpointTriggerKind =
+  | 'conversation_initial'
   | 'user_message_after'
   | 'llm_response_after'
   | 'tool_execution_before'
@@ -690,6 +693,7 @@ export type CheckpointTriggerKind =
   | 'manual';
 
 export interface CheckpointTriggerConfigRecord {
+  conversationInitial: boolean;
   userMessageAfter: boolean;
   llmResponseAfter: boolean;
   toolExecutionBefore: boolean;
@@ -733,6 +737,28 @@ export interface CheckpointShadowStatsSnapshotPayload { stats: ShadowRepositoryD
 export interface CheckpointShadowDeletePayload { storageKeys: string[] }
 
 export interface CheckpointDismissPayload { checkpointId: string; conversationId: string }
+
+export interface CheckpointRestorePayload {
+  checkpointId: string;
+  conversationId: string;
+  shadowRepositoryStorageKey: string;
+  commitSha: string;
+  projectUri: string;
+  policy: CheckpointPolicyRecord;
+}
+
+export interface ShadowCheckpointRestoreResult {
+  status: 'restored' | 'failed';
+  message: string;
+  restoredFileCount?: number;
+  removedFileCount?: number;
+}
+
+export interface CheckpointRestoreResultPayload {
+  checkpointId: string;
+  conversationId: string;
+  result: ShadowCheckpointRestoreResult;
+}
 
 export interface CheckpointPolicyScopeLinkRecord {
   id: string;
@@ -1547,6 +1573,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.CheckpointShadowStatsGet, undefined>
   | BridgeEnvelope<BridgeMessageType.CheckpointShadowDelete, CheckpointShadowDeletePayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointDismiss, CheckpointDismissPayload>
+  | BridgeEnvelope<BridgeMessageType.CheckpointRestore, CheckpointRestorePayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsGet, GlobalSettingsGetPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsUpdate, GlobalSettingsUpdatePayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsGet, ConversationSettingsGetPayload>
@@ -1577,6 +1604,7 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.LlmProviderModelsSnapshot, LlmProviderModelsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointGitStatusSnapshot, CheckpointGitStatusSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointShadowStatsSnapshot, CheckpointShadowStatsSnapshotPayload>
+  | BridgeEnvelope<BridgeMessageType.CheckpointRestoreResult, CheckpointRestoreResultPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsSnapshot, GlobalSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsSnapshot, ConversationSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ProjectFoldersSnapshot, ProjectFoldersSnapshotPayload>;

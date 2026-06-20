@@ -9,6 +9,7 @@ import {
   ToolCallRunLink
 } from '../../agentRun/components';
 import { cleanupRunLlmRequests } from '../../agentRun/llmRequestCleanup';
+import { Checkpoint, CheckpointTimelineAnchor } from '../../checkpoint/components';
 import { ToolCall, ToolCallEvent, ToolResultConsumed, ToolState } from '../../tools/components';
 import { ChatEventType } from '../events';
 import { conversationMessages } from '../queries';
@@ -41,7 +42,9 @@ const DELETE_READ_COMPONENTS = [
   ToolCall,
   ToolState,
   ToolCallEvent,
-  ToolResultConsumed
+  ToolResultConsumed,
+  Checkpoint,
+  CheckpointTimelineAnchor
 ] as const;
 
 /** 删除指定消息及其后的所有消息，并清理消息关联的修订、工具调用和运行链接。 */
@@ -75,6 +78,8 @@ export function deleteMessagesFromIndex(world: WorldReader, cmd: CommandSink, me
   const deletedRevisions = entitiesWithParent(world, MessageRevision, deletedMessages);
   const deletedToolCalls = entitiesWithParent(world, ToolCall, deletedMessages);
   const deletedToolEvents = entitiesWithParent(world, ToolCallEvent, deletedToolCalls);
+  const deletedCheckpointAnchors = checkpointAnchorsForMessages(world, deletedMessages);
+  const deletedCheckpoints = checkpointsOrphanedByDeletedAnchors(world, deletedCheckpointAnchors);
   const affectedRuns = runsAffectedByDeletion(world, deletedMessages, deletedRevisions, deletedToolCalls);
 
   for (const run of affectedRuns) markRunStale(world, cmd, run);
@@ -84,6 +89,8 @@ export function deleteMessagesFromIndex(world: WorldReader, cmd: CommandSink, me
   for (const entity of deletedRevisions) entitiesToDespawn.add(entity);
   for (const entity of deletedToolCalls) entitiesToDespawn.add(entity);
   for (const entity of deletedToolEvents) entitiesToDespawn.add(entity);
+  for (const entity of deletedCheckpointAnchors) entitiesToDespawn.add(entity);
+  for (const entity of deletedCheckpoints) entitiesToDespawn.add(entity);
 
   for (const entity of world.query(MessageCurrentRevisionLink)) {
     const link = world.get(entity, MessageCurrentRevisionLink);
@@ -112,6 +119,31 @@ export function deleteMessagesFromIndex(world: WorldReader, cmd: CommandSink, me
   }
 
   for (const entity of entitiesToDespawn) cmd.despawn(entity);
+}
+
+function checkpointAnchorsForMessages(world: WorldReader, deletedMessages: ReadonlySet<Entity>): Set<Entity> {
+  const result = new Set<Entity>();
+  for (const entity of world.query(CheckpointTimelineAnchor)) {
+    const anchor = world.get(entity, CheckpointTimelineAnchor);
+    if (anchor && deletedMessages.has(anchor.floorMessage)) result.add(entity);
+  }
+  return result;
+}
+
+function checkpointsOrphanedByDeletedAnchors(world: WorldReader, deletedAnchors: ReadonlySet<Entity>): Set<Entity> {
+  const candidates = new Set<Entity>();
+  for (const entity of deletedAnchors) {
+    const anchor = world.get(entity, CheckpointTimelineAnchor);
+    if (anchor) candidates.add(anchor.checkpoint);
+  }
+  if (candidates.size === 0) return candidates;
+
+  for (const entity of world.query(CheckpointTimelineAnchor)) {
+    if (deletedAnchors.has(entity)) continue;
+    const anchor = world.get(entity, CheckpointTimelineAnchor);
+    if (anchor) candidates.delete(anchor.checkpoint);
+  }
+  return candidates;
 }
 
 function runsAffectedByDeletion(

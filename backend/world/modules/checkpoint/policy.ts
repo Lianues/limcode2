@@ -9,6 +9,7 @@ import { STORAGE_VERSION } from '../../../capabilities/vscodeStorage/constants';
 export const DEFAULT_CHECKPOINT_MAX_BYTES = 50 * 1024 * 1024;
 
 export const DEFAULT_CHECKPOINT_TRIGGERS: CheckpointTriggerConfigRecord = {
+  conversationInitial: true,
   userMessageAfter: true,
   llmResponseAfter: false,
   toolExecutionBefore: true,
@@ -59,6 +60,7 @@ export function emptyDirectoryManifest(paths: readonly string[]): EmptyDirectory
 
 export function triggerConfigKey(trigger: string): keyof CheckpointTriggerConfigRecord | undefined {
   switch (trigger) {
+    case 'conversation_initial': return 'conversationInitial';
     case 'user_message_after': return 'userMessageAfter';
     case 'llm_response_after': return 'llmResponseAfter';
     case 'tool_execution_before': return 'toolExecutionBefore';

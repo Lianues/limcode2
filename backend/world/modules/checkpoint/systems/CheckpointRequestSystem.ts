@@ -1,4 +1,4 @@
-import { defineQuery, defineSystem, type Entity, type WorldReader } from '../../../../ecs/types';
+import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
 import { createMessageId } from '../../../../../shared/protocol';
 import { readEvents } from '../../../events';
 import { Agent } from '../../agent/components';
@@ -7,7 +7,7 @@ import { Conversation, Message, PartOf } from '../../chat/components';
 import { Mode, ConversationModeSelection } from '../../mode/components';
 import { ConversationProjectLink, ProjectContext, type ProjectContextData } from '../../project/components';
 import { ToolCall } from '../../tools/components';
-import { CheckpointPolicy, CheckpointPolicyScopeLink, ConversationCheckpointRepositoryLink, ShadowRepository } from '../components';
+import { Checkpoint, CheckpointPolicy, CheckpointPolicyScopeLink, CheckpointTimelineAnchor, ConversationCheckpointRepositoryLink, ShadowRepository } from '../components';
 import { CheckpointEventType, type CheckpointRequestedPayload } from '../events';
 import {
   CheckpointBundle,
@@ -79,9 +79,28 @@ export const CheckpointRequestSystem = defineSystem({
       });
 
       const anchor = resolveCheckpointAnchor(world, payload, conversation);
+      const checkpointId = createMessageId();
+      const now = Date.now();
+      const pendingCheckpoint = cmd.spawn();
+      cmd.add(pendingCheckpoint, Checkpoint, {
+        id: checkpointId,
+        conversation,
+        projectContext: project.entity,
+        shadowRepository: repository,
+        trigger: payload.trigger,
+        status: 'pending',
+        projectUri: project.data.uri,
+        projectDisplayPath: project.data.name || project.data.uri,
+        createdAt: now,
+        updatedAt: now
+      });
+      if (anchor.floorMessageId) {
+        const floorMessage = findConversationMessageById(world, conversation, anchor.floorMessageId);
+        if (floorMessage !== undefined) addCheckpointTimelineAnchor(world, cmd, { checkpoint: pendingCheckpoint, checkpointId, conversation, floorMessage, anchor, now });
+      }
       cmd.effect({
         kind: 'checkpoint.create',
-        checkpointId: createMessageId(),
+        checkpointId,
         conversationId: payload.conversationId,
         projectContextId: project.data.id,
         projectUri: project.data.uri,
@@ -134,6 +153,43 @@ function resolveCheckpointAnchor(world: WorldReader, payload: CheckpointRequeste
 
   return base;
 }
+
+function addCheckpointTimelineAnchor(
+  world: WorldReader,
+  cmd: CommandSink,
+  input: { checkpoint: Entity; checkpointId: string; conversation: Entity; floorMessage: Entity; anchor: CheckpointAnchorResolution; now: number }
+): void {
+  const anchorEntity = cmd.spawn();
+  cmd.add(anchorEntity, CheckpointTimelineAnchor, {
+    id: checkpointTimelineAnchorId(input.checkpointId),
+    conversation: input.conversation,
+    checkpoint: input.checkpoint,
+    floorMessage: input.floorMessage,
+    position: input.anchor.anchorPosition ?? 'after',
+    order: input.now,
+    ...(input.anchor.sourceRunId ? { sourceRunId: input.anchor.sourceRunId } : {}),
+    ...(input.anchor.sourceToolCallId ? { sourceToolCallId: input.anchor.sourceToolCallId } : {}),
+    ...(input.anchor.sourceRunId ? entityByRecordId(world, AgentRun, input.anchor.sourceRunId, 'sourceRun') : {}),
+    ...(input.anchor.sourceToolCallId ? entityByRecordId(world, ToolCall, input.anchor.sourceToolCallId, 'sourceToolCall') : {}),
+    createdAt: input.now,
+    updatedAt: input.now
+  });
+}
+
+function checkpointTimelineAnchorId(checkpointId: string): string {
+  return `checkpoint-timeline-anchor:${checkpointId}`;
+}
+
+function entityByRecordId<TKey extends string>(
+  world: WorldReader,
+  component: { id: symbol },
+  id: string,
+  key: TKey
+): Record<TKey, Entity> | Record<string, never> {
+  const entity = world.query(component as never).find((candidate) => (world.get(candidate, component as never) as { id: string } | undefined)?.id === id);
+  return entity === undefined ? {} : { [key]: entity } as Record<TKey, Entity>;
+}
+
 
 function findConversationMessageById(world: WorldReader, conversation: Entity, messageId: string): Entity | undefined {
   return world.query(Message, PartOf).find((entity) => {

@@ -31,6 +31,7 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
     case BridgeMessageType.CheckpointPolicyScopeClear:
     case BridgeMessageType.CheckpointShadowDelete:
     case BridgeMessageType.CheckpointDismiss:
+    case BridgeMessageType.CheckpointRestore:
     case BridgeMessageType.ToolExecutionApprove:
     case BridgeMessageType.ToolExecutionReject:
     case BridgeMessageType.ToolChangeApply:

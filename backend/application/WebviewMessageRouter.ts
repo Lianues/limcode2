@@ -20,6 +20,7 @@ import {
   globalSettingsStreamId,
   createMessageId,
   type BridgeClientId,
+  type CheckpointRestorePayload,
   type LlmProviderModelsGetPayload,
   type ProjectFolderCandidateRecord,
   type WebviewToExtensionMessage
@@ -307,6 +308,9 @@ export class WebviewMessageRouter {
         this.deps.requestSnapshot(message.payload.conversationId);
         this.deps.requestSnapshot();
         break;
+      case BridgeMessageType.CheckpointRestore:
+        if (message.payload) void this.handleCheckpointRestore(clientId, message.payload, message.id);
+        break;
       case BridgeMessageType.Ready:
         this.sendBridgeHello(clientId, message.id);
         if (!this.deps.isHydrated()) break;
@@ -490,6 +494,32 @@ export class WebviewMessageRouter {
     } catch (error) {
       this.postRequestError(clientId, BridgeMessageType.CheckpointShadowDelete, error instanceof Error ? error.message : '无法删除 shadow 仓库。', correlationId);
     }
+  }
+
+  private async handleCheckpointRestore(clientId: BridgeClientId, payload: CheckpointRestorePayload, correlationId?: string): Promise<void> {
+    try {
+      const result = await this.deps.storage.restoreShadowCheckpoint(payload);
+      if (result.status === 'restored') {
+        void vscode.window.showInformationMessage(`LimCode 回档完成：${result.message}`);
+      } else {
+        void vscode.window.showWarningMessage(`LimCode ${result.message}`);
+      }
+      this.postCheckpointRestoreResult(clientId, payload, result, correlationId);
+    } catch (error) {
+      const result = { status: 'failed' as const, message: error instanceof Error ? error.message : '回档失败。' };
+      void vscode.window.showWarningMessage(`LimCode ${result.message}`);
+      this.postCheckpointRestoreResult(clientId, payload, result, correlationId);
+    }
+  }
+
+  private postCheckpointRestoreResult(clientId: BridgeClientId, payload: CheckpointRestorePayload, result: { status: 'restored' | 'failed'; message: string; restoredFileCount?: number; removedFileCount?: number }, correlationId?: string): void {
+    this.deps.webview.post(clientId, {
+      id: createMessageId(),
+      type: BridgeMessageType.CheckpointRestoreResult,
+      channel: 'command',
+      correlationId,
+      payload: { checkpointId: payload.checkpointId, conversationId: payload.conversationId, result }
+    });
   }
 
   private async ensureRunDetailHydrated(conversationId: string, runId: string): Promise<void> {

@@ -389,6 +389,10 @@ function conversationTimelineChunks(detail: ClientState): ConversationTimelineCh
   if (detail.messages.length === 0) return [];
   const chunks: ConversationTimelineChunkData[] = [];
   const orderedMessages = [...detail.messages].sort(compareMessagesBySeq);
+  const anchoredCheckpointIds = new Set(detail.checkpointTimelineAnchors.map((anchor) => anchor.checkpointId));
+  const initialCheckpoints = detail.checkpoints.filter((checkpoint) =>
+    checkpoint.trigger === 'conversation_initial' && !anchoredCheckpointIds.has(checkpoint.id)
+  );
 
   for (let offset = 0; offset < orderedMessages.length; offset += CONVERSATION_TIMELINE_CHUNK_SIZE) {
     const messages = orderedMessages.slice(offset, offset + CONVERSATION_TIMELINE_CHUNK_SIZE);
@@ -401,7 +405,11 @@ function conversationTimelineChunks(detail: ClientState): ConversationTimelineCh
     const toolCallEvents = detail.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId));
     const checkpointTimelineAnchors = detail.checkpointTimelineAnchors.filter((anchor) => messageIds.has(anchor.floorMessageId));
     const checkpointIds = new Set(checkpointTimelineAnchors.map((anchor) => anchor.checkpointId));
-    const checkpoints = detail.checkpoints.filter((checkpoint) => checkpointIds.has(checkpoint.id));
+    const checkpoints = detail.checkpoints.filter((checkpoint) =>
+      checkpointIds.has(checkpoint.id)
+      || (offset === 0 && initialCheckpoints.some((candidate) => candidate.id === checkpoint.id))
+    );
+    for (const checkpoint of checkpoints) checkpointIds.add(checkpoint.id);
     const shadowRepositoryIds = new Set(checkpoints.map((checkpoint) => checkpoint.shadowRepositoryId));
     const projectContextIds = new Set(checkpoints.map((checkpoint) => checkpoint.projectContextId));
     const conversationCheckpointRepositoryLinks = detail.conversationCheckpointRepositoryLinks.filter((link) => {

@@ -2,7 +2,7 @@ import type { CheckpointRecord, CheckpointTimelineAnchorRecord } from '@shared/p
 
 export interface CheckpointTimelineActionContext {
   checkpoint: CheckpointRecord;
-  anchor: CheckpointTimelineAnchorRecord;
+  anchor?: CheckpointTimelineAnchorRecord;
 }
 
 export interface CheckpointTimelineAction {
@@ -24,14 +24,6 @@ export function registerCheckpointTimelineAction(action: CheckpointTimelineActio
 export function checkpointTimelineActions(): readonly CheckpointTimelineAction[] {
   return actions;
 }
-
-registerCheckpointTimelineAction({
-  id: 'rollback',
-  label: '回档',
-  description: '恢复工作区到此存档点',
-  enabled: () => false,
-  run: () => undefined
-});
 
 registerCheckpointTimelineAction({
   id: 'diff-from-previous',

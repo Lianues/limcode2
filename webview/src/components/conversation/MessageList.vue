@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import type { MessageRecord } from '@shared/protocol';
+import type { CheckpointRecord, MessageRecord } from '@shared/protocol';
 import { useConversationUiStore, type MessageViewRow } from '@webview/stores/useConversationUiStore';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useChat } from '@webview/composables/useChat';
 import { useRunHistoryStore } from '@webview/stores/useRunHistoryStore';
 import CheckpointTimelineCard from './CheckpointTimelineCard.vue';
+import { checkpointBeforeMessageFloor } from './checkpointRollback';
 import MessageItem from './MessageItem.vue';
 
 withDefaults(
@@ -51,6 +52,10 @@ function onViewRunDetail(message: MessageRecord): void {
 function isEditingTarget(row: MessageViewRow): boolean {
   return ui.editingMessage?.message.id === row.message.id;
 }
+
+function rollbackCheckpointForMessage(message: MessageRecord): CheckpointRecord | undefined {
+  return checkpointBeforeMessageFloor(clientState.currentCheckpoints, clientState.currentCheckpointTimelineAnchors, message.id);
+}
 </script>
 
 <template>
@@ -66,6 +71,7 @@ function isEditingTarget(row: MessageViewRow): boolean {
         :deleting="row.phase === 'exiting'"
         :entering="row.phase === 'entering'"
         :editing-highlighted="isEditingTarget(row)"
+        :rollback-checkpoint="rollbackCheckpointForMessage(row.message)"
         @edit-message="onEditMessage(row)"
         @retry-from="onRetryFrom"
         @delete-from="onDeleteFrom"
@@ -75,11 +81,10 @@ function isEditingTarget(row: MessageViewRow): boolean {
         v-else
         :checkpoint="row.checkpoint"
         :anchor="row.anchor"
-        :message-floor-number="row.messageFloorNumber"
         :phase="row.phase"
       />
     </template>
-    <div v-if="!ui.messageRows.length" class="message-empty-container">
+    <div v-if="!ui.timelineRows.length" class="message-empty-container">
       <p class="message-empty">{{ emptyHint }}</p>
     </div>
   </div>

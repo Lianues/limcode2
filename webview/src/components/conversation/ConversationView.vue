@@ -6,14 +6,17 @@ import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
 import { useChat } from '@webview/composables/useChat';
 import { useBottomStickyScroller } from '@webview/composables/useBottomStickyScroller';
+import { useCheckpointPolicyStore } from '@webview/stores/useCheckpointPolicyStore';
 import MessageList from './MessageList.vue';
 import Composer from '@webview/components/input/Composer.vue';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 import RunHistoryDetailPanel from './RunHistoryDetailPanel.vue';
+import { checkpointBeforeMessageFloor, rollbackConfirmActionTitle } from './checkpointRollback';
 
 const clientState = useClientStateStore();
 const conversationUi = useConversationUiStore();
+const checkpointStore = useCheckpointPolicyStore();
 const { currentMessages, currentCheckpoints, currentCheckpointTimelineAnchors, currentConversationId, currentConversationDetailLoaded } = storeToRefs(clientState);
 const { sendMessage, editMessage } = useChat();
 
@@ -36,11 +39,22 @@ const editFollowupCount = computed(() => Math.max(0, (conversationUi.editingMess
 const editConfirmDescriptionHtml = computed(
   () => `是否编辑此消息？将同时删除后续 ${editFollowupCount.value} 条消息，此操作<strong>不可撤销</strong>`
 );
-const editConfirmActions: ConfirmPanelAction[] = [
-  { key: 'cancel', label: '取消', variant: 'secondary' },
-  { key: 'rollback-confirm', label: '回档并确认（占位，之后会做存档点功能）', variant: 'secondary' },
-  { key: 'direct-confirm', label: '直接确认' }
-];
+const editRollbackPending = ref(false);
+const editRollbackCheckpoint = computed(() => {
+  const editing = conversationUi.editingMessage;
+  return editing ? checkpointBeforeMessageFloor(currentCheckpoints.value, currentCheckpointTimelineAnchors.value, editing.message.id) : undefined;
+});
+const editConfirmActions = computed<ConfirmPanelAction[]>(() => [
+  { key: 'cancel', label: '取消', variant: 'secondary', disabled: editRollbackPending.value },
+  {
+    key: 'rollback-confirm',
+    label: editRollbackPending.value ? '正在回档...' : '回档并确认',
+    variant: 'secondary',
+    disabled: editRollbackPending.value || !editRollbackCheckpoint.value,
+    title: rollbackConfirmActionTitle(editRollbackCheckpoint.value)
+  },
+  { key: 'direct-confirm', label: '直接确认', disabled: editRollbackPending.value }
+]);
 
 const scrollMarkers = computed(() =>
   currentMessages.value
@@ -77,13 +91,28 @@ function onSubmit(text: string, content?: MessageContent): void {
   sendMessage(text, content);
 }
 
-function handleEditConfirmAction(action: ConfirmPanelAction): void {
+async function handleEditConfirmAction(action: ConfirmPanelAction): Promise<void> {
   if (action.key === 'cancel') {
     conversationUi.editConfirmOpen = false;
     return;
   }
 
-  if (action.key === 'rollback-confirm' || action.key === 'direct-confirm') {
+  if (action.key === 'rollback-confirm') {
+    if (!editRollbackCheckpoint.value || editRollbackPending.value) return;
+    editRollbackPending.value = true;
+    try {
+      const checkpoint = editRollbackCheckpoint.value;
+      const result = await checkpointStore.restoreCheckpoint(checkpoint);
+      if (result.status !== 'restored') return;
+      checkpointStore.dismissCheckpoint(checkpoint.id, checkpoint.conversationId);
+    } finally {
+      editRollbackPending.value = false;
+    }
+    commitEditMessage();
+    return;
+  }
+
+  if (action.key === 'direct-confirm') {
     commitEditMessage();
   }
 }
@@ -142,6 +171,7 @@ function truncatePreview(text: string): string {
       :description-html="editConfirmDescriptionHtml"
       :actions="editConfirmActions"
       @action="handleEditConfirmAction"
+      @cancel="conversationUi.editConfirmOpen = false"
     />
     <RunHistoryDetailPanel />
   </div>

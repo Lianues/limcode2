@@ -19,6 +19,8 @@ import type {
   LlmProviderModelRecord,
   CheckpointRecord,
   CheckpointGitStatusRecord,
+  CheckpointRestorePayload,
+  ShadowCheckpointRestoreResult,
   ShadowRepositoryDiskStatRecord,
   CheckpointPolicyRecord,
   CheckpointTriggerKind,
@@ -146,6 +148,12 @@ export interface CommandCapability {
   run(args: CommandRunArgs, observer?: CommandRunObserver, options?: WorkEnvironmentCapabilityOptions): Promise<CommandRunResult>;
 }
 
+export interface WebviewClientRuntimeRecord {
+  id: BridgeClientId;
+  meta: WebviewClientMeta;
+  attachedAt: number;
+}
+
 /** Webview 能力：集中管理多个 Webview client，真实 vscode.Webview 句柄不进入 ECS world。 */
 export interface WebviewCapability {
   attach(webview: vscode.Webview, meta?: WebviewClientMeta): BridgeClientId;
@@ -157,6 +165,7 @@ export interface WebviewCapability {
   broadcast(message: ExtensionToWebviewMessage): void;
   broadcastToStream(streamId: string, message: ExtensionToWebviewMessage): void;
   clientIds(): BridgeClientId[];
+  clientRecords(): WebviewClientRuntimeRecord[];
 }
 
 /** 插件数据目录：集中记录所有持久化数据的当前根位置；可由扩展级 globalState 指向自定义目录。 */
@@ -334,6 +343,7 @@ export interface StorageCapability {
   appendToolCallEvent(conversationId: string, event: ToolCallEventRecord): Promise<void>;
   detectSystemGit(): Promise<CheckpointGitStatusRecord>;
   createShadowCheckpoint(request: ShadowCheckpointCreateRequest): Promise<CheckpointRecord>;
+  restoreShadowCheckpoint(request: CheckpointRestorePayload): Promise<ShadowCheckpointRestoreResult>;
   collectShadowWorktreeStats(): Promise<ShadowRepositoryDiskStatRecord[]>;
   deleteShadowWorktrees(storageKeys: string[]): Promise<{ deletedStorageKeys: string[] }>;
   cleanupUnusedShadowWorktrees(maxAgeDays: number): Promise<{ deletedStorageKeys: string[] }>;

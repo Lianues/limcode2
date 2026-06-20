@@ -2,11 +2,14 @@ import { defineStore } from 'pinia';
 import type {
   CheckpointGitStatusRecord,
   CheckpointPolicyRecord,
+  CheckpointRecord,
   CheckpointPolicyScopeKind,
   CheckpointPolicyScopeLinkRecord,
   CheckpointPolicyScopeSetPayload,
+  CheckpointRestoreResultPayload,
   ExtensionToWebviewMessage,
   CheckpointTriggerConfigRecord,
+  ShadowCheckpointRestoreResult,
   ShadowRepositoryDiskStatRecord
 } from '@shared/protocol';
 import { bridge, BridgeMessageType } from '@webview/transport';
@@ -19,6 +22,7 @@ export interface CheckpointPolicyResolution {
 }
 
 const DEFAULT_TRIGGERS: CheckpointTriggerConfigRecord = {
+  conversationInitial: true,
   userMessageAfter: true,
   llmResponseAfter: false,
   toolExecutionBefore: true,
@@ -26,6 +30,9 @@ const DEFAULT_TRIGGERS: CheckpointTriggerConfigRecord = {
   agentRunCompletedAfter: true,
   manual: true
 };
+
+const CHECKPOINT_RESTORE_TIMEOUT_MS = 120_000;
+
 
 function scopeIdFor(scopeKind: CheckpointPolicyScopeKind, scopeId?: string): string | undefined {
   return scopeKind === 'global' ? undefined : scopeId?.trim();
@@ -118,6 +125,48 @@ export const useCheckpointPolicyStore = defineStore('checkpointPolicy', {
     dismissCheckpoint(checkpointId: string, conversationId: string): void {
       if (!checkpointId.trim() || !conversationId.trim()) return;
       bridge.request(BridgeMessageType.CheckpointDismiss, { checkpointId, conversationId });
+    },
+    restoreCheckpoint(checkpoint: CheckpointRecord): Promise<ShadowCheckpointRestoreResult> {
+      const commitSha = checkpoint.commitSha;
+      if (!commitSha) return Promise.resolve({ status: 'failed', message: '该存档点没有可回档的快照。' });
+      const clientState = useClientStateStore();
+      const repository = clientState.shadowRepositories.find((item) => item.id === checkpoint.shadowRepositoryId);
+      if (!repository) return Promise.resolve({ status: 'failed', message: '未找到此存档点关联的 shadow 仓库。' });
+      const policy = this.effectivePolicyFor('conversation', checkpoint.conversationId).policy ?? defaultPolicy('conversation', checkpoint.conversationId);
+      return new Promise((resolve) => {
+        let requestId = '';
+        let unsubscribe: (() => void) | undefined;
+        let timeoutId: number | undefined;
+
+        const cleanup = (): void => {
+          unsubscribe?.();
+          unsubscribe = undefined;
+          if (timeoutId !== undefined) {
+            window.clearTimeout(timeoutId);
+            timeoutId = undefined;
+          }
+        };
+
+        unsubscribe = bridge.on(BridgeMessageType.CheckpointRestoreResult, (message: Extract<ExtensionToWebviewMessage, { type: BridgeMessageType.CheckpointRestoreResult }>) => {
+          if (message.correlationId !== requestId) return;
+          cleanup();
+          resolve((message.payload as CheckpointRestoreResultPayload | undefined)?.result ?? { status: 'failed', message: '回档失败：未收到结果。' });
+        });
+
+        timeoutId = window.setTimeout(() => {
+          cleanup();
+          resolve({ status: 'failed', message: '回档请求超时。' });
+        }, CHECKPOINT_RESTORE_TIMEOUT_MS);
+
+        requestId = bridge.request(BridgeMessageType.CheckpointRestore, {
+          checkpointId: checkpoint.id,
+          conversationId: checkpoint.conversationId,
+          shadowRepositoryStorageKey: repository.storageKey,
+          commitSha,
+          projectUri: checkpoint.projectUri,
+          policy
+        });
+      });
     },
     localPolicyFor(scopeKind: CheckpointPolicyScopeKind, scopeId?: string): CheckpointPolicyResolution {
       const clientState = useClientStateStore();

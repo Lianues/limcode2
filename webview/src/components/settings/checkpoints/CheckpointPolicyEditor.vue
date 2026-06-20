@@ -31,6 +31,7 @@ const sourceLabel = computed(() => {
 });
 
 const triggerOptions: Array<{ key: keyof CheckpointTriggerConfigRecord; label: string; description: string }> = [
+  { key: 'conversationInitial', label: '首次用户消息前', description: '用户发送第一条消息时，先捕获对话开始前的项目状态。' },
   { key: 'userMessageAfter', label: '用户发消息后', description: '用户消息实际写入对话后创建存档点。' },
   { key: 'llmResponseAfter', label: 'AI 单轮回复后', description: '每次模型流式回复结束后触发，默认关闭以避免重复。' },
   { key: 'toolExecutionBefore', label: '工具执行前', description: '捕获工具可能修改文件前的状态。' },
@@ -40,6 +41,7 @@ const triggerOptions: Array<{ key: keyof CheckpointTriggerConfigRecord; label: s
 ];
 
 const defaultTriggers: CheckpointTriggerConfigRecord = {
+  conversationInitial: true,
   userMessageAfter: true,
   llmResponseAfter: false,
   toolExecutionBefore: true,

@@ -113,10 +113,10 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
           phase: phaseForMessage(row.message.id, messageIndex, messages)
         };
       }
-      const floorIndex = messageIndexById.get(row.floorMessageId) ?? -1;
+      const floorIndex = row.floorMessageId ? messageIndexById.get(row.floorMessageId) ?? -1 : -1;
       return {
         ...row,
-        phase: floorIndex >= 0 ? phaseForMessage(row.floorMessageId, floorIndex, messages) : 'stable'
+        phase: floorIndex >= 0 && row.floorMessageId ? phaseForMessage(row.floorMessageId, floorIndex, messages) : 'stable'
       };
     });
     timelineRows.value = rows;
@@ -176,10 +176,10 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     const messageIndexById = new Map(messages.map((message, index) => [message.id, index]));
     const rows = timelineRows.value.map((row) => {
       const messageId = row.kind === 'message' ? row.message.id : row.floorMessageId;
-      const index = messageIndexById.get(messageId) ?? -1;
+      const index = messageId ? messageIndexById.get(messageId) ?? -1 : -1;
       return {
         ...row,
-        phase: index >= 0 ? phaseForMessage(messageId, index, messages) : 'stable'
+        phase: index >= 0 && messageId ? phaseForMessage(messageId, index, messages) : 'stable'
       };
     });
     timelineRows.value = rows;

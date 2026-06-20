@@ -4,7 +4,7 @@ import { Checkpoint, CheckpointTimelineAnchor } from '../components';
 import { CheckpointEventType } from '../events';
 import { CheckpointBundle } from '../bundles';
 
-/** 移除单个存档点记录及其时间线锚点（用于用户手动叉掉跳过/失败的存档点）。shadow 仓库与 link 不动。 */
+/** 移除单个存档点记录及其时间线锚点。shadow 仓库与 link 不动。 */
 export const CheckpointDismissSystem = defineSystem({
   name: 'CheckpointDismissSystem',
   shouldRun(ctx) {

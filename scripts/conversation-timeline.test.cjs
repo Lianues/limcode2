@@ -14,7 +14,7 @@ function message(id, seq) {
   };
 }
 
-function checkpoint(id, createdAt) {
+function checkpoint(id, createdAt, patch = {}) {
   return {
     id,
     conversationId: 'conversation-1',
@@ -25,8 +25,13 @@ function checkpoint(id, createdAt) {
     projectUri: 'file:///workspace',
     projectDisplayPath: 'workspace',
     createdAt,
-    updatedAt: createdAt
+    updatedAt: createdAt,
+    ...patch
   };
+}
+
+function initialCheckpoint(id, createdAt) {
+  return checkpoint(id, createdAt, { trigger: 'conversation_initial' });
 }
 
 function skippedCheckpoint(id, createdAt) {
@@ -38,22 +43,25 @@ function skippedCheckpoint(id, createdAt) {
   };
 }
 
+function anchor(id, checkpointId, floorMessageId, position, order, extra = {}) {
+  return {
+    id,
+    conversationId: 'conversation-1',
+    checkpointId,
+    floorMessageId,
+    position,
+    order,
+    createdAt: order,
+    updatedAt: order,
+    ...extra
+  };
+}
+
 function testCheckpointAttachesToMessageFloorWithoutTakingFloorNumber() {
   const rows = buildConversationTimelineRows({
     messages: [message('message-1', 1), message('message-2', 2)],
     checkpoints: [checkpoint('checkpoint-1', 10)],
-    checkpointAnchors: [
-      {
-        id: 'anchor-1',
-        conversationId: 'conversation-1',
-        checkpointId: 'checkpoint-1',
-        floorMessageId: 'message-1',
-        position: 'after',
-        order: 0,
-        createdAt: 10,
-        updatedAt: 10
-      }
-    ]
+    checkpointAnchors: [anchor('anchor-1', 'checkpoint-1', 'message-1', 'after', 10)]
   });
 
   assert.deepEqual(rows.map((row) => row.kind), ['message', 'checkpoint', 'message']);
@@ -67,18 +75,7 @@ function testCheckpointCanRenderBeforeMessageFloor() {
   const rows = buildConversationTimelineRows({
     messages: [message('message-1', 1), message('message-2', 2)],
     checkpoints: [checkpoint('checkpoint-1', 10)],
-    checkpointAnchors: [
-      {
-        id: 'anchor-1',
-        conversationId: 'conversation-1',
-        checkpointId: 'checkpoint-1',
-        floorMessageId: 'message-2',
-        position: 'before',
-        order: 0,
-        createdAt: 10,
-        updatedAt: 10
-      }
-    ]
+    checkpointAnchors: [anchor('anchor-1', 'checkpoint-1', 'message-2', 'before', 10)]
   });
 
   assert.deepEqual(rows.map((row) => row.kind), ['message', 'checkpoint', 'message']);
@@ -87,75 +84,40 @@ function testCheckpointCanRenderBeforeMessageFloor() {
   assert.equal(rows[2].messageFloorNumber, 2);
 }
 
-function testDuplicateNoChangeToolCheckpointsCollapseAtAdjacentGap() {
+function testAdjacentNoChangeCheckpointsDoNotCollapseAtAdjacentGap() {
   const rows = buildConversationTimelineRows({
     messages: [message('message-1', 1), message('message-2', 2)],
     checkpoints: [skippedCheckpoint('checkpoint-after-current', 10), skippedCheckpoint('checkpoint-before-next', 20)],
     checkpointAnchors: [
-      {
-        id: 'anchor-after-current',
-        conversationId: 'conversation-1',
-        checkpointId: 'checkpoint-after-current',
-        floorMessageId: 'message-1',
-        position: 'after',
-        order: 10,
-        sourceToolCallId: 'tool-1',
-        createdAt: 10,
-        updatedAt: 10
-      },
-      {
-        id: 'anchor-before-next',
-        conversationId: 'conversation-1',
-        checkpointId: 'checkpoint-before-next',
-        floorMessageId: 'message-2',
-        position: 'before',
-        order: 20,
-        sourceToolCallId: 'tool-1',
-        createdAt: 20,
-        updatedAt: 20
-      }
+      anchor('anchor-after-current', 'checkpoint-after-current', 'message-1', 'after', 10, { sourceToolCallId: 'tool-1' }),
+      anchor('anchor-before-next', 'checkpoint-before-next', 'message-2', 'before', 20, { sourceToolCallId: 'tool-1' })
     ]
   });
 
   const checkpointRows = rows.filter((row) => row.kind === 'checkpoint');
-  assert.equal(checkpointRows.length, 1);
-  assert.equal(checkpointRows[0].checkpoint.id, 'checkpoint-before-next');
-  assert.equal(checkpointRows[0].floorMessageId, 'message-2');
-  assert.equal(checkpointRows[0].position, 'before');
+  assert.equal(checkpointRows.length, 2);
+  assert.equal(checkpointRows[0].checkpoint.id, 'checkpoint-after-current');
+  assert.equal(checkpointRows[0].position, 'after');
+  assert.equal(checkpointRows[1].checkpoint.id, 'checkpoint-before-next');
+  assert.equal(checkpointRows[1].position, 'before');
 }
 
-function testAdjacentNoChangeCheckpointKeepsCreatedSnapshot() {
+function testAdjacentNoChangeCheckpointKeepsBothRowsEvenWithCreatedSnapshot() {
   const rows = buildConversationTimelineRows({
     messages: [message('message-1', 1), message('message-2', 2)],
     checkpoints: [checkpoint('checkpoint-created', 10), skippedCheckpoint('checkpoint-no-change', 20)],
     checkpointAnchors: [
-      {
-        id: 'anchor-created',
-        conversationId: 'conversation-1',
-        checkpointId: 'checkpoint-created',
-        floorMessageId: 'message-1',
-        position: 'after',
-        order: 10,
-        createdAt: 10,
-        updatedAt: 10
-      },
-      {
-        id: 'anchor-no-change',
-        conversationId: 'conversation-1',
-        checkpointId: 'checkpoint-no-change',
-        floorMessageId: 'message-2',
-        position: 'before',
-        order: 20,
-        createdAt: 20,
-        updatedAt: 20
-      }
+      anchor('anchor-created', 'checkpoint-created', 'message-1', 'after', 10),
+      anchor('anchor-no-change', 'checkpoint-no-change', 'message-2', 'before', 20)
     ]
   });
 
   const checkpointRows = rows.filter((row) => row.kind === 'checkpoint');
-  assert.equal(checkpointRows.length, 1);
+  assert.equal(checkpointRows.length, 2);
   assert.equal(checkpointRows[0].checkpoint.id, 'checkpoint-created');
   assert.equal(checkpointRows[0].position, 'after');
+  assert.equal(checkpointRows[1].checkpoint.id, 'checkpoint-no-change');
+  assert.equal(checkpointRows[1].position, 'before');
 }
 
 function testAdjacentCheckpointsDoNotCollapseWhenContentChanged() {
@@ -163,26 +125,8 @@ function testAdjacentCheckpointsDoNotCollapseWhenContentChanged() {
     messages: [message('message-1', 1), message('message-2', 2)],
     checkpoints: [skippedCheckpoint('checkpoint-no-change', 10), checkpoint('checkpoint-created', 20)],
     checkpointAnchors: [
-      {
-        id: 'anchor-no-change',
-        conversationId: 'conversation-1',
-        checkpointId: 'checkpoint-no-change',
-        floorMessageId: 'message-1',
-        position: 'after',
-        order: 10,
-        createdAt: 10,
-        updatedAt: 10
-      },
-      {
-        id: 'anchor-created',
-        conversationId: 'conversation-1',
-        checkpointId: 'checkpoint-created',
-        floorMessageId: 'message-2',
-        position: 'before',
-        order: 20,
-        createdAt: 20,
-        updatedAt: 20
-      }
+      anchor('anchor-no-change', 'checkpoint-no-change', 'message-1', 'after', 10),
+      anchor('anchor-created', 'checkpoint-created', 'message-2', 'before', 20)
     ]
   });
 
@@ -199,28 +143,8 @@ function testDuplicateNoChangeToolCheckpointsDoNotCollapseAcrossFloor() {
     messages: [message('message-1', 1)],
     checkpoints: [skippedCheckpoint('checkpoint-before', 10), skippedCheckpoint('checkpoint-after', 20)],
     checkpointAnchors: [
-      {
-        id: 'anchor-before',
-        conversationId: 'conversation-1',
-        checkpointId: 'checkpoint-before',
-        floorMessageId: 'message-1',
-        position: 'before',
-        order: 10,
-        sourceToolCallId: 'tool-1',
-        createdAt: 10,
-        updatedAt: 10
-      },
-      {
-        id: 'anchor-after',
-        conversationId: 'conversation-1',
-        checkpointId: 'checkpoint-after',
-        floorMessageId: 'message-1',
-        position: 'after',
-        order: 20,
-        sourceToolCallId: 'tool-1',
-        createdAt: 20,
-        updatedAt: 20
-      }
+      anchor('anchor-before', 'checkpoint-before', 'message-1', 'before', 10, { sourceToolCallId: 'tool-1' }),
+      anchor('anchor-after', 'checkpoint-after', 'message-1', 'after', 20, { sourceToolCallId: 'tool-1' })
     ]
   });
 
@@ -232,11 +156,38 @@ function testDuplicateNoChangeToolCheckpointsDoNotCollapseAcrossFloor() {
   assert.equal(checkpointRows[1].position, 'after');
 }
 
+function testUnanchoredInitialCheckpointRendersAtStart() {
+  const rows = buildConversationTimelineRows({
+    messages: [message('message-1', 1)],
+    checkpoints: [initialCheckpoint('checkpoint-initial', 0)],
+    checkpointAnchors: []
+  });
+
+  assert.deepEqual(rows.map((row) => row.kind), ['checkpoint', 'message']);
+  assert.equal(rows[0].checkpoint.id, 'checkpoint-initial');
+  assert.equal(rows[0].position, 'start');
+  assert.equal(rows[0].floorMessageId, undefined);
+  assert.equal(rows[1].messageFloorNumber, 1);
+}
+
+function testUnanchoredNonInitialCheckpointDoesNotRenderAtStart() {
+  const rows = buildConversationTimelineRows({
+    messages: [message('message-1', 1)],
+    checkpoints: [checkpoint('checkpoint-unbound-task-completed', 0, { trigger: 'agent_run_completed_after' })],
+    checkpointAnchors: []
+  });
+
+  assert.deepEqual(rows.map((row) => row.kind), ['message']);
+  assert.equal(rows[0].messageFloorNumber, 1);
+}
+
 testCheckpointAttachesToMessageFloorWithoutTakingFloorNumber();
 testCheckpointCanRenderBeforeMessageFloor();
-testDuplicateNoChangeToolCheckpointsCollapseAtAdjacentGap();
-testAdjacentNoChangeCheckpointKeepsCreatedSnapshot();
+testAdjacentNoChangeCheckpointsDoNotCollapseAtAdjacentGap();
+testAdjacentNoChangeCheckpointKeepsBothRowsEvenWithCreatedSnapshot();
 testAdjacentCheckpointsDoNotCollapseWhenContentChanged();
 testDuplicateNoChangeToolCheckpointsDoNotCollapseAcrossFloor();
+testUnanchoredInitialCheckpointRendersAtStart();
+testUnanchoredNonInitialCheckpointDoesNotRenderAtStart();
 
 console.log('conversation timeline tests passed');

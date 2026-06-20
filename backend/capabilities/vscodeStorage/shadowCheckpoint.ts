@@ -2,7 +2,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import * as vscode from 'vscode';
-import type { CheckpointGitStatusRecord, CheckpointRecord, CheckpointSkipReason } from '../../../shared/protocol';
+import type { CheckpointGitStatusRecord, CheckpointRecord, CheckpointSkipReason, CheckpointRestorePayload, ShadowCheckpointRestoreResult } from '../../../shared/protocol';
 import type { CheckpointPolicyRecord } from '../../../shared/protocol';
 import type { ShadowCheckpointCreateRequest } from '../types';
 import type { StoragePaths } from './clientStateStore';
@@ -94,6 +94,85 @@ export async function createShadowCheckpoint(paths: StoragePaths, request: Shado
   } catch (error) {
     const reason: CheckpointSkipReason = isGitUnavailable(error) ? 'git_unavailable' : 'io_error';
     return skipped(base, reason, error instanceof Error ? error.message : String(error), snapshot);
+  }
+}
+
+export async function restoreShadowCheckpoint(paths: StoragePaths, request: CheckpointRestorePayload): Promise<ShadowCheckpointRestoreResult> {
+  const projectPath = fsPathFromProjectUri(request.projectUri);
+  if (!projectPath) return { status: 'failed', message: '当前只支持本地 file:// 项目归属，无法回档。' };
+
+  const workspaceFolderUris = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.toString());
+  if (!workspaceContainsProject(workspaceFolderUris, request.projectUri)) {
+    return { status: 'failed', message: '当前 VS Code 工作区未包含对话归属文件夹，无法回档。' };
+  }
+  if (!request.commitSha) return { status: 'failed', message: '该存档点没有可回档的快照。' };
+
+  const worktreePath = path.join(paths.checkpointShadowWorktreesRootPath, request.shadowRepositoryStorageKey);
+  if (!(await exists(path.join(worktreePath, '.git')))) {
+    return { status: 'failed', message: 'shadow 仓库已被删除，无法回档。' };
+  }
+
+  let originalHead: string | undefined;
+  try {
+    await ensureSystemGitAvailable(projectPath);
+    const commitCheck = await runGit(worktreePath, ['cat-file', '-e', `${request.commitSha}^{commit}`], { allowExitCodes: [0, 128] });
+    if (commitCheck.exitCode !== 0) return { status: 'failed', message: '存档点对应的快照已不存在，无法回档。' };
+
+    originalHead = (await runGit(worktreePath, ['rev-parse', 'HEAD'], { allowExitCodes: [0, 128] })).stdout.trim() || undefined;
+    await runGit(worktreePath, ['checkout', '-f', request.commitSha]);
+
+    const targetFiles = await listShadowTrackedFiles(worktreePath);
+    const targetSet = new Set(targetFiles);
+
+    const tempRoot = await fs.mkdtemp(path.join(paths.checkpointShadowWorktreesRootPath, '.checkpoint-restore-'));
+    let removedFileCount = 0;
+    try {
+      const excludeFilePath = await writeCheckpointExcludeFile(tempRoot, request.policy.skipPatterns);
+      const source = await createGitSourceContext(projectPath, tempRoot);
+      const visibleFiles = await listSourceVisibleFiles(source, request.policy.useGitignore, excludeFilePath);
+      for (const relativePath of visibleFiles) {
+        if (targetSet.has(relativePath)) continue;
+        await fs.rm(toAbsolutePath(projectPath, relativePath), { force: true }).catch(() => undefined);
+        removedFileCount += 1;
+      }
+      for (const relativePath of targetFiles) {
+        const sourceFile = toAbsolutePath(worktreePath, relativePath);
+        const destFile = toAbsolutePath(projectPath, relativePath);
+        await fs.mkdir(path.dirname(destFile), { recursive: true });
+        await fs.copyFile(sourceFile, destFile);
+      }
+      if (request.policy.preserveEmptyDirectories) {
+        for (const relativeDir of await readEmptyDirectoryManifest(worktreePath)) {
+          await fs.mkdir(toAbsolutePath(projectPath, relativeDir), { recursive: true }).catch(() => undefined);
+        }
+      }
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
+
+    return {
+      status: 'restored',
+      message: `已回档 ${targetFiles.length} 个文件${removedFileCount ? `，并移除 ${removedFileCount} 个存档后新增的文件` : ''}。`,
+      restoredFileCount: targetFiles.length,
+      removedFileCount
+    };
+  } catch (error) {
+    const reason = isGitUnavailable(error) ? '未检测到系统 git 命令，请安装 Git 并确保 git 位于 PATH。' : (error instanceof Error ? error.message : String(error));
+    return { status: 'failed', message: `回档失败：${reason}` };
+  } finally {
+    if (originalHead) await runGit(worktreePath, ['checkout', '-f', originalHead]).catch(() => undefined);
+  }
+}
+
+async function readEmptyDirectoryManifest(worktreePath: string): Promise<string[]> {
+  try {
+    const raw = await fs.readFile(path.join(worktreePath, ...EMPTY_DIRECTORY_MANIFEST_RELATIVE_PATH.split('/')), 'utf8');
+    const parsed = JSON.parse(raw) as { emptyDirectories?: unknown };
+    return Array.isArray(parsed.emptyDirectories)
+      ? parsed.emptyDirectories.filter((item): item is string => typeof item === 'string')
+      : [];
+  } catch {
+    return [];
   }
 }
 

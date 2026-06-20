@@ -10,11 +10,13 @@ import { cleanupRunLlmRequests } from '../../agentRun/llmRequestCleanup';
 import { defaultAgentForConversation, effectiveEditPolicyForRun, findAgentById, runTarget } from '../../agentRun/queries';
 import type { ChatSendPayload, MessageContent } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
+import { Checkpoint } from '../../checkpoint/components';
+import { conversationMessages } from '../queries';
 
 const ConversationsByIdQuery = defineQuery({
   name: 'ConversationsById',
   all: [Conversation],
-  read: [Conversation, Agent, AgentConversationLink, ConversationAgentSelection, AgentRun, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink, LlmRequest, Message],
+  read: [Conversation, Agent, AgentConversationLink, ConversationAgentSelection, AgentRun, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink, LlmRequest, Message, Checkpoint],
   write: [AgentRun, Message],
   remove: [AgentRunNeedsModel, Streaming, LlmRequest],
   role: 'work'
@@ -52,7 +54,10 @@ function handleSend(world: WorldReader, cmd: CommandSink, conversation: Entity, 
 
   const activeRuns = activeRunsForConversation(world, conversation);
   if (activeRuns.length === 0) {
+    const isFirstMessage = conversationMessages(world, conversation).length === 0;
+    const needsInitialCheckpoint = isFirstMessage && !hasInitialCheckpoint(world, conversation);
     const message = spawnInputMessage(cmd, conversation, content);
+    if (needsInitialCheckpoint) requestInitialCheckpoint(cmd, payload.conversationId);
     requestCheckpoint(cmd, payload.conversationId, message);
     spawnChatRun(cmd, { agent, conversation, message });
     return;
@@ -65,26 +70,50 @@ function handleSend(world: WorldReader, cmd: CommandSink, conversation: Entity, 
     case 'append_to_target': {
       const target = runTarget(world, activeRuns[0]);
       const targetConversation = target?.conversation ?? conversation;
+      const targetConversationId = world.get(targetConversation, Conversation)?.id ?? payload.conversationId;
+      const isFirstMessage = conversationMessages(world, targetConversation).length === 0;
+      const needsInitialCheckpoint = isFirstMessage && !hasInitialCheckpoint(world, targetConversation);
       const message = spawnInputMessage(cmd, targetConversation, content);
-      requestCheckpoint(cmd, world.get(targetConversation, Conversation)?.id ?? payload.conversationId, message);
+      if (needsInitialCheckpoint) requestInitialCheckpoint(cmd, targetConversationId);
+      requestCheckpoint(cmd, targetConversationId, message);
       spawnMessageRunLink(cmd, { message, run: activeRuns[0], role: 'input' });
       return;
     }
     case 'interrupt_current': {
       cancelRuns(world, cmd, activeRuns);
+      const isFirstMessage = conversationMessages(world, conversation).length === 0;
+      const needsInitialCheckpoint = isFirstMessage && !hasInitialCheckpoint(world, conversation);
       const message = spawnInputMessage(cmd, conversation, content);
+      if (needsInitialCheckpoint) requestInitialCheckpoint(cmd, payload.conversationId);
       requestCheckpoint(cmd, payload.conversationId, message);
       spawnChatRun(cmd, { agent, conversation, message });
       return;
     }
     case 'queue_next_run':
     default: {
+      const isFirstMessage = conversationMessages(world, conversation).length === 0;
+      const needsInitialCheckpoint = isFirstMessage && !hasInitialCheckpoint(world, conversation);
       const message = spawnInputMessage(cmd, conversation, content);
+      if (needsInitialCheckpoint) requestInitialCheckpoint(cmd, payload.conversationId);
       requestCheckpoint(cmd, payload.conversationId, message);
       spawnChatRun(cmd, { agent, conversation, message, needsModel: false });
       return;
     }
   }
+}
+
+function hasInitialCheckpoint(world: WorldReader, conversation: Entity): boolean {
+  return world.query(Checkpoint).some((entity) => {
+    const checkpoint = world.get(entity, Checkpoint);
+    return checkpoint?.conversation === conversation && checkpoint.trigger === 'conversation_initial';
+  });
+}
+
+function requestInitialCheckpoint(cmd: CommandSink, conversationId: string): void {
+  cmd.enqueue({
+    type: CheckpointEventType.Requested,
+    payload: { conversationId, trigger: 'conversation_initial' }
+  });
 }
 
 function requestCheckpoint(cmd: CommandSink, conversationId: string, floorMessage: Entity): void {

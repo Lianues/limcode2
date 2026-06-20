@@ -268,6 +268,8 @@ export class ClientStatePersistence {
 function skeletonPersistenceSlice(state: ClientState): ClientState {
   return {
     ...state,
+    checkpoints: state.checkpoints.filter((checkpoint) => checkpoint.status !== 'pending'),
+    checkpointTimelineAnchors: state.checkpointTimelineAnchors.filter((anchor) => state.checkpoints.some((checkpoint) => checkpoint.id === anchor.checkpointId && checkpoint.status !== 'pending')),
     messages: [],
     messageRevisions: [],
     messageCurrentRevisionLinks: [],

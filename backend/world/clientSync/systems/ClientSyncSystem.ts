@@ -148,6 +148,22 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
   const conversationProjectLinks = state.conversationProjectLinks.filter((link) => link.conversationId === conversationId);
   const projectContextIds = new Set(conversationProjectLinks.map((link) => link.projectContextId));
   const conversationModeSelections = state.conversationModeSelections.filter((selection) => selection.conversationId === conversationId);
+  const checkpointTimelineAnchors = state.checkpointTimelineAnchors.filter((anchor) => anchor.conversationId === conversationId);
+  const checkpointIds = new Set(checkpointTimelineAnchors.map((anchor) => anchor.checkpointId));
+  const checkpoints = state.checkpoints.filter((checkpoint) => checkpoint.conversationId === conversationId || checkpointIds.has(checkpoint.id));
+  for (const checkpoint of checkpoints) {
+    checkpointIds.add(checkpoint.id);
+    projectContextIds.add(checkpoint.projectContextId);
+  }
+  const shadowRepositoryIds = new Set(checkpoints.map((checkpoint) => checkpoint.shadowRepositoryId));
+  const conversationCheckpointRepositoryLinks = state.conversationCheckpointRepositoryLinks.filter((link) => {
+    const matches = link.conversationId === conversationId || shadowRepositoryIds.has(link.shadowRepositoryId) || projectContextIds.has(link.projectContextId);
+    if (matches) {
+      shadowRepositoryIds.add(link.shadowRepositoryId);
+      projectContextIds.add(link.projectContextId);
+    }
+    return matches;
+  });
 
   return {
     ...createEmptyClientState(),
@@ -157,6 +173,10 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
     conversationOriginLinks: state.conversationOriginLinks.filter((link) => link.conversationId === conversationId),
     projectContexts: state.projectContexts.filter((projectContext) => projectContextIds.has(projectContext.id)),
     conversationProjectLinks,
+    shadowRepositories: state.shadowRepositories.filter((repository) => shadowRepositoryIds.has(repository.id)),
+    conversationCheckpointRepositoryLinks,
+    checkpoints,
+    checkpointTimelineAnchors,
     conversationModeSelections,
     messages,
     messageRevisions: state.messageRevisions.filter((revision) => revision.conversationId === conversationId),

@@ -3,11 +3,12 @@ import { AgentRun, AgentRunNeedsModel, AgentRunTargetLink, MessageRunLink } from
 import { spawnMessageRunLink } from '../../agentRun/bundles';
 import { LlmRequest, Conversation } from '../components';
 import { ModelMessageBundle, LlmRequestBundle, spawnModelMessage, spawnLlmRequest } from '../bundles';
+import { CheckpointEventType } from '../../checkpoint/events';
 
 const RunsNeedingModelQuery = defineQuery({
   name: 'RunsNeedingModel',
   all: [AgentRun, AgentRunNeedsModel],
-  read: [AgentRun, AgentRunNeedsModel, AgentRunTargetLink, LlmRequest],
+  read: [AgentRun, AgentRunNeedsModel, AgentRunTargetLink, LlmRequest, Conversation],
   remove: [AgentRunNeedsModel],
   mutationMode: 'consume',
   role: 'work'
@@ -25,7 +26,8 @@ export const ContextAssemblySystem = defineSystem({
   access: {
     queries: [RunsNeedingModelQuery, ActiveLlmRequestsQuery],
     bundles: [ModelMessageBundle, LlmRequestBundle],
-    writes: { components: [AgentRun, MessageRunLink] }
+    writes: { components: [AgentRun, MessageRunLink] },
+    events: { emit: [CheckpointEventType.Requested] }
   },
   run({ world, cmd }) {
     for (const run of world.query(AgentRun, AgentRunNeedsModel)) {
@@ -38,11 +40,26 @@ export const ContextAssemblySystem = defineSystem({
       const modelMessage = spawnModelMessage(cmd, target.conversation);
       spawnMessageRunLink(cmd, { message: modelMessage, run, role: 'model' });
       spawnLlmRequest(cmd, { run, conversation: target.conversation, modelMessage });
+      requestLlmResponseBeforeCheckpoint(world, cmd, run, target.conversation, modelMessage);
       markRunRunning(world, cmd, run);
       cmd.remove(run, AgentRunNeedsModel);
     }
   }
 });
+
+function requestLlmResponseBeforeCheckpoint(world: WorldReader, cmd: CommandSink, run: Entity, conversation: Entity, modelMessage: Entity): void {
+  const runData = world.get(run, AgentRun);
+  const conversationData = world.get(conversation, Conversation);
+  if (!runData || !conversationData) return;
+  cmd.enqueue({
+    type: CheckpointEventType.Requested,
+    payload: { conversationId: conversationData.id, runId: runData.id, floorMessageId: spawnedMessageId(modelMessage), anchorPosition: 'before', trigger: 'llm_response_before' }
+  });
+}
+
+function spawnedMessageId(entity: Entity): string {
+  return `m${entity}`;
+}
 
 function markRunRunning(world: WorldReader, cmd: CommandSink, run: Entity): void {
   const data = world.get(run, AgentRun);

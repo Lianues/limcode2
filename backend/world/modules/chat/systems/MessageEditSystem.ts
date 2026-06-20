@@ -93,6 +93,10 @@ export const MessageEditSystem = defineSystem({
       const messagesBeforeEdit = conversationMessages(world, conversation);
       const isFirstUserMessage = current.role === 'user' && messagesBeforeEdit[0] === message;
       const needsInitialCheckpoint = isFirstUserMessage && !hasInitialCheckpoint(world, conversation);
+      if (payload.runAfterEdit && current.role === 'user') {
+        if (needsInitialCheckpoint) requestInitialCheckpoint(cmd, payload.conversationId);
+        requestCheckpointBeforeEdit(cmd, payload.conversationId, current.id);
+      }
       const oldRevision = currentRevisionForMessage(world, message);
       for (const link of currentRevisionLinksForMessage(world, message)) cmd.remove(link, MessageCurrentRevisionLink);
       const usageMetadata = current.role === 'user' ? estimateUserInputUsage(visibleText(content)) : current.usageMetadata;
@@ -107,7 +111,6 @@ export const MessageEditSystem = defineSystem({
       }
 
       if (payload.runAfterEdit && current.role === 'user') {
-        if (needsInitialCheckpoint) requestInitialCheckpoint(cmd, payload.conversationId);
         requestCheckpointAfterEdit(cmd, payload.conversationId, current.id);
         spawnEditedMessageRun(world, cmd, conversation, message);
       }
@@ -147,6 +150,13 @@ function requestInitialCheckpoint(cmd: CommandSink, conversationId: string): voi
   cmd.enqueue({
     type: CheckpointEventType.Requested,
     payload: { conversationId, trigger: 'conversation_initial' }
+  });
+}
+
+function requestCheckpointBeforeEdit(cmd: CommandSink, conversationId: string, floorMessageId: string): void {
+  cmd.enqueue({
+    type: CheckpointEventType.Requested,
+    payload: { conversationId, trigger: 'user_message_before', floorMessageId, anchorPosition: 'before' }
   });
 }
 

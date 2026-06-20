@@ -685,19 +685,25 @@ export type CheckpointSkipReason =
   | 'io_error';
 export type CheckpointTriggerKind =
   | 'conversation_initial'
+  | 'user_message_before'
   | 'user_message_after'
+  | 'llm_response_before'
   | 'llm_response_after'
   | 'tool_execution_before'
   | 'tool_execution_after'
+  | 'agent_run_completed_before'
   | 'agent_run_completed_after'
   | 'manual';
 
 export interface CheckpointTriggerConfigRecord {
   conversationInitial: boolean;
+  userMessageBefore: boolean;
   userMessageAfter: boolean;
+  llmResponseBefore: boolean;
   llmResponseAfter: boolean;
   toolExecutionBefore: boolean;
   toolExecutionAfter: boolean;
+  agentRunCompletedBefore: boolean;
   agentRunCompletedAfter: boolean;
   manual: boolean;
 }

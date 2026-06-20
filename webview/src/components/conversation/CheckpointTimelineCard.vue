@@ -133,11 +133,14 @@ onUnmounted(() => clearDismissTimer());
 const triggerLabel = computed(() => {
   switch (props.checkpoint.trigger) {
     case 'conversation_initial': return '初始存档';
+    case 'user_message_before': return '用户消息前';
     case 'user_message_after': return '用户消息后';
-    case 'llm_response_after': return 'AI 回复后';
+    case 'llm_response_before': return '每次调用 AI 前';
+    case 'llm_response_after': return '每次调用 AI 后';
     case 'tool_execution_before': return '工具执行前';
     case 'tool_execution_after': return '工具执行后';
-    case 'agent_run_completed_after': return '任务完成后';
+    case 'agent_run_completed_before': return '整回合回复完成前';
+    case 'agent_run_completed_after': return '整回合回复完成后';
     case 'manual': return '手动';
   }
 });

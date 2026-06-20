@@ -265,9 +265,7 @@ function dispatchToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, 
   executeRuntimeToolCall(world, cmd, entity, call, state, authorization);
 }
 
-function executeRuntimeToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
-  const workEnvironment = activeWorkEnvironmentForRun(world, authorization.run)?.data;
-  const workEnvironments = allowedWorkEnvironmentsForRun(world, authorization.run).map((item) => toPublicWorkEnvironmentRecord(item.data));
+function requestToolExecutionBeforeCheckpoint(cmd: CommandSink, authorization: Extract<AuthorizationResult, { ok: true }>, call: ToolCallData): void {
   cmd.enqueue({
     type: CheckpointEventType.Requested,
     payload: {
@@ -278,6 +276,12 @@ function executeRuntimeToolCall(world: WorldReader, cmd: CommandSink, entity: En
       trigger: 'tool_execution_before'
     }
   });
+}
+
+function executeRuntimeToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
+  const workEnvironment = activeWorkEnvironmentForRun(world, authorization.run)?.data;
+  const workEnvironments = allowedWorkEnvironmentsForRun(world, authorization.run).map((item) => toPublicWorkEnvironmentRecord(item.data));
+  requestToolExecutionBeforeCheckpoint(cmd, authorization, call);
   cmd.effect({
     kind: 'tool.run',
     toolCallId: call.id,
@@ -335,6 +339,7 @@ function executeSwitchWorkEnvironmentTool(world: WorldReader, cmd: CommandSink, 
     return;
   }
 
+  requestToolExecutionBeforeCheckpoint(cmd, authorization, call);
   const started = startInlineToolExecution(cmd, entity, call, state, {
     executorAgentId: authorization.agentId,
     runId: authorization.runId,
@@ -554,6 +559,8 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     rejectToolCall(cmd, entity, call, state, resolved.reason);
     return;
   }
+
+  requestToolExecutionBeforeCheckpoint(cmd, authorization, call);
   if (resolved.value.created) {
     const sourceConversation = world.get(parentTarget.conversation, Conversation);
     const sourceAgent = world.get(parentTarget.agent, Agent);

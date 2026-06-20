@@ -27,7 +27,18 @@ function testPolicyNormalizationKeepsGitIgnoreSettings() {
   assert.equal(policy.useGitignore, true);
   assert.deepEqual(policy.skipPatterns, ['node_modules/', 'dist/**', '*.log']);
   assert.equal(policy.triggers.userMessageAfter, true);
+  assert.equal(policy.triggers.userMessageBefore, true);
+  assert.equal(policy.triggers.llmResponseBefore, false);
+  assert.equal(policy.triggers.agentRunCompletedBefore, false);
   assert.equal(policy.triggers.toolExecutionBefore, true);
+}
+
+function testPolicyNormalizationUsesNewTriggerDefaults() {
+  const policy = normalizeCheckpointPolicy({ id: 'defaults', name: 'defaults' });
+  assert.equal(policy.triggers.userMessageBefore, true);
+  assert.equal(policy.triggers.userMessageAfter, false);
+  assert.equal(policy.triggers.llmResponseBefore, false);
+  assert.equal(policy.triggers.agentRunCompletedBefore, false);
 }
 
 function testEmptyDirectoryManifest() {
@@ -38,6 +49,7 @@ function testEmptyDirectoryManifest() {
 
 testWorkspaceContainsProject();
 testPolicyNormalizationKeepsGitIgnoreSettings();
+testPolicyNormalizationUsesNewTriggerDefaults();
 testEmptyDirectoryManifest();
 
 console.log('checkpoint-policy tests passed');

@@ -23,10 +23,13 @@ export interface CheckpointPolicyResolution {
 
 const DEFAULT_TRIGGERS: CheckpointTriggerConfigRecord = {
   conversationInitial: true,
-  userMessageAfter: true,
+  userMessageBefore: true,
+  userMessageAfter: false,
+  llmResponseBefore: false,
   llmResponseAfter: false,
   toolExecutionBefore: true,
   toolExecutionAfter: true,
+  agentRunCompletedBefore: false,
   agentRunCompletedAfter: true,
   manual: true
 };

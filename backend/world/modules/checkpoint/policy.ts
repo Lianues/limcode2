@@ -10,10 +10,13 @@ export const DEFAULT_CHECKPOINT_MAX_BYTES = 50 * 1024 * 1024;
 
 export const DEFAULT_CHECKPOINT_TRIGGERS: CheckpointTriggerConfigRecord = {
   conversationInitial: true,
-  userMessageAfter: true,
+  userMessageBefore: true,
+  userMessageAfter: false,
+  llmResponseBefore: false,
   llmResponseAfter: false,
   toolExecutionBefore: true,
   toolExecutionAfter: true,
+  agentRunCompletedBefore: false,
   agentRunCompletedAfter: true,
   manual: true
 };
@@ -61,10 +64,13 @@ export function emptyDirectoryManifest(paths: readonly string[]): EmptyDirectory
 export function triggerConfigKey(trigger: string): keyof CheckpointTriggerConfigRecord | undefined {
   switch (trigger) {
     case 'conversation_initial': return 'conversationInitial';
+    case 'user_message_before': return 'userMessageBefore';
     case 'user_message_after': return 'userMessageAfter';
+    case 'llm_response_before': return 'llmResponseBefore';
     case 'llm_response_after': return 'llmResponseAfter';
     case 'tool_execution_before': return 'toolExecutionBefore';
     case 'tool_execution_after': return 'toolExecutionAfter';
+    case 'agent_run_completed_before': return 'agentRunCompletedBefore';
     case 'agent_run_completed_after': return 'agentRunCompletedAfter';
     case 'manual': return 'manual';
     default: return undefined;

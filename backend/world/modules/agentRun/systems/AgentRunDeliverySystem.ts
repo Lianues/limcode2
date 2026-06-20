@@ -124,15 +124,30 @@ export const AgentRunDeliverySystem = defineSystem({
       const target = runTarget(world, runEntity);
       const conversation = target ? world.get(target.conversation, Conversation) : undefined;
       if (conversation) {
-        cmd.enqueue({
-          type: CheckpointEventType.Requested,
-          payload: { conversationId: conversation.id, runId: run.id, trigger: 'agent_run_completed_after' }
-        });
+        requestRunCompletionCheckpoints(cmd, conversation.id, run.id, runCompletionFloorMessageId(world, runEntity));
       }
       cmd.add(runEntity, AgentRun, { ...run, status: 'completed', updatedAt: now, completedAt: now, endReason: 'completed', ...(usageMetadata ? { usageMetadata } : {}) });
     }
   }
 });
+
+function requestRunCompletionCheckpoints(cmd: CommandSink, conversationId: string, runId: string, floorMessageId: string | undefined): void {
+  cmd.enqueue({
+    type: CheckpointEventType.Requested,
+    payload: { conversationId, runId, trigger: 'agent_run_completed_before', ...(floorMessageId ? { floorMessageId, anchorPosition: 'before' as const } : {}) }
+  });
+
+  cmd.enqueue({
+    type: CheckpointEventType.Requested,
+    payload: { conversationId, runId, trigger: 'agent_run_completed_after', ...(floorMessageId ? { floorMessageId, anchorPosition: 'after' as const } : {}) }
+  });
+}
+
+function runCompletionFloorMessageId(world: WorldReader, runEntity: Entity): string | undefined {
+  const modelMessages = runModelMessages(world, runEntity);
+  const finalModelMessage = modelMessages[modelMessages.length - 1];
+  return finalModelMessage === undefined ? undefined : world.get(finalModelMessage, Message)?.id;
+}
 
 function deliverToolResponse(world: WorldReader, cmd: CommandSink, runEntity: Entity, policy: RunDeliveryPolicyData | undefined): boolean {
   const source = runSource(world, runEntity);

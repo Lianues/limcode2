@@ -32,20 +32,26 @@ const sourceLabel = computed(() => {
 
 const triggerOptions: Array<{ key: keyof CheckpointTriggerConfigRecord; label: string; description: string }> = [
   { key: 'conversationInitial', label: '首次用户消息前', description: '用户发送第一条消息时，先捕获对话开始前的项目状态。' },
+  { key: 'userMessageBefore', label: '用户发消息前', description: '每次用户消息写入对话前创建存档点。' },
   { key: 'userMessageAfter', label: '用户发消息后', description: '用户消息实际写入对话后创建存档点。' },
-  { key: 'llmResponseAfter', label: 'AI 单轮回复后', description: '每次模型流式回复结束后触发，默认关闭以避免重复。' },
+  { key: 'llmResponseBefore', label: '每次调用 AI 前', description: '每次模型调用开始前创建存档点，默认关闭以避免重复。' },
+  { key: 'llmResponseAfter', label: '每次调用 AI 后', description: '每次模型调用流式回复结束后触发，默认关闭以避免重复。' },
   { key: 'toolExecutionBefore', label: '工具执行前', description: '捕获工具可能修改文件前的状态。' },
   { key: 'toolExecutionAfter', label: '工具执行后', description: '工具结果写回对话后记录新状态。' },
-  { key: 'agentRunCompletedAfter', label: 'AI 回复完成后', description: '整轮 AgentRun 完成交付后触发。' },
+  { key: 'agentRunCompletedBefore', label: '整回合回复完成前', description: '整回合回复进入最终完成阶段前触发，默认关闭以避免重复。' },
+  { key: 'agentRunCompletedAfter', label: '整回合回复完成后', description: '整回合回复完成交付后触发。' },
   { key: 'manual', label: '手动触发', description: '保留后续手动创建存档点入口。' }
 ];
 
 const defaultTriggers: CheckpointTriggerConfigRecord = {
   conversationInitial: true,
-  userMessageAfter: true,
+  userMessageBefore: true,
+  userMessageAfter: false,
+  llmResponseBefore: false,
   llmResponseAfter: false,
   toolExecutionBefore: true,
   toolExecutionAfter: true,
+  agentRunCompletedBefore: false,
   agentRunCompletedAfter: true,
   manual: true
 };

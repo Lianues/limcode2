@@ -51,7 +51,7 @@ const defaultTriggers: CheckpointTriggerConfigRecord = {
   llmResponseBefore: false,
   llmResponseAfter: false,
   agentRunCompletedBefore: false,
-  agentRunCompletedAfter: true,
+  agentRunCompletedAfter: false,
   manual: true
 };
 

@@ -41,6 +41,7 @@ function testPolicyNormalizationUsesNewTriggerDefaults() {
   assert.equal(policy.triggers.userMessageAfter, false);
   assert.equal(policy.triggers.llmResponseBefore, false);
   assert.equal(policy.triggers.agentRunCompletedBefore, false);
+  assert.equal(policy.triggers.agentRunCompletedAfter, false);
 }
 
 function testPolicyNormalizationUsesToolTriggerDefaults() {

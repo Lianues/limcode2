@@ -29,6 +29,7 @@ interface GitSourceContext {
 
 interface GitRunOptions {
   allowExitCodes?: number[];
+  input?: string | Buffer;
 }
 
 class GitUnavailableError extends Error {
@@ -142,7 +143,7 @@ export async function restoreShadowCheckpoint(paths: StoragePaths, request: Chec
     try {
       const excludeFilePath = await writeCheckpointExcludeFile(tempRoot, request.policy.skipPatterns);
       const source = await createGitSourceContext(projectPath, tempRoot);
-      const visibleFiles = await listSourceVisibleFiles(source, request.policy.useGitignore, excludeFilePath);
+      const visibleFiles = await listSourceVisibleFiles(source, projectPath, request.policy.useGitignore, excludeFilePath, request.policy.skipPatterns);
       for (const relativePath of visibleFiles) {
         if (targetSet.has(relativePath)) continue;
         await fs.rm(toAbsolutePath(projectPath, relativePath), { force: true }).catch(() => undefined);
@@ -236,7 +237,7 @@ async function scanSourceWithGit(
   try {
     const excludeFilePath = await writeCheckpointExcludeFile(tempRoot, policy.skipPatterns);
     const source = await createGitSourceContext(projectPath, tempRoot);
-    const sourceVisibleFiles = await listSourceVisibleFiles(source, policy.useGitignore, excludeFilePath);
+    const sourceVisibleFiles = await listSourceVisibleFiles(source, projectPath, policy.useGitignore, excludeFilePath, policy.skipPatterns);
     const shadowTrackedFiles = isInitial ? [] : await listShadowTrackedFiles(worktreePath);
     const mergedFiles = await mergeSourceVisibleAndShadowTrackedFiles(projectPath, sourceVisibleFiles, shadowTrackedFiles);
     const files = await buildSourceFileEntries(projectPath, mergedFiles);
@@ -255,13 +256,15 @@ async function scanSourceWithGit(
 }
 
 async function createGitSourceContext(projectPath: string, tempRoot: string): Promise<GitSourceContext> {
-  const revParse = await runGit(projectPath, ['rev-parse', '--is-inside-work-tree'], { allowExitCodes: [0, 128] });
-  if (revParse.exitCode === 0 && revParse.stdout.trim() === 'true') {
+  if (await exists(path.join(projectPath, '.git'))) {
     return { cwd: projectPath, baseArgs: [] };
   }
 
   const gitDir = path.join(tempRoot, 'source.git');
   await runGit(projectPath, ['init', '--bare', gitDir]);
+  // 用户选择的项目目录可能只是某个更大 Git 仓库里的子目录，甚至被父级 .gitignore 整体忽略。
+  // checkpoint 的边界应是当前 projectPath，而不是父仓库；因此当 projectPath 自身不是 Git root 时，
+  // 使用临时 bare git + --work-tree 隔离父级仓库配置和 ignore 规则。
   return {
     cwd: projectPath,
     baseArgs: [`--git-dir=${gitDir}`, `--work-tree=${projectPath}`]
@@ -278,9 +281,86 @@ async function writeCheckpointExcludeFile(tempRoot: string, skipPatterns: readon
   return excludeFilePath;
 }
 
-async function listSourceVisibleFiles(source: GitSourceContext, useGitignore: boolean, excludeFilePath: string): Promise<string[]> {
+async function listSourceVisibleFiles(
+  source: GitSourceContext,
+  projectPath: string,
+  useGitignore: boolean,
+  excludeFilePath: string,
+  skipPatterns: readonly string[]
+): Promise<string[]> {
   const result = await runSourceGit(source, sourceLsFilesArgs(['-c', '-o'], useGitignore, excludeFilePath, ['--', '.']));
-  return uniqueSortedGitPaths(parseGitPathList(result.stdout).filter((relativePath) => !relativePath.endsWith('/')));
+  const gitFiles = parseGitPathList(result.stdout).filter((relativePath) => !relativePath.endsWith('/'));
+  const fsFiles = await filterGitIgnoredFiles(source, await listFilesystemFiles(projectPath, skipPatterns), useGitignore);
+  return uniqueSortedGitPaths([...gitFiles, ...fsFiles]);
+}
+
+async function listFilesystemFiles(rootPath: string, skipPatterns: readonly string[]): Promise<string[]> {
+  const files: string[] = [];
+  async function visit(directoryPath: string, relativeDirectory: string): Promise<void> {
+    const children = await fs.readdir(directoryPath, { withFileTypes: true }).catch(() => []);
+    for (const child of children) {
+      if (child.name === '.git') continue;
+      const relativePath = joinRelativePath(relativeDirectory, child.name);
+      if (!relativePath || matchesSkipPattern(relativePath, child.isDirectory(), skipPatterns)) continue;
+      const absolutePath = path.join(directoryPath, child.name);
+      if (child.isDirectory()) {
+        await visit(absolutePath, relativePath);
+        continue;
+      }
+      if (child.isFile()) files.push(relativePath);
+    }
+  }
+  await visit(rootPath, '');
+  return uniqueSortedGitPaths(files);
+}
+
+async function filterGitIgnoredFiles(source: GitSourceContext, files: readonly string[], useGitignore: boolean): Promise<string[]> {
+  if (!useGitignore || files.length === 0) return [...files];
+  const ignored = new Set<string>();
+  const chunkSize = 500;
+  for (let index = 0; index < files.length; index += chunkSize) {
+    const chunk = files.slice(index, index + chunkSize);
+    const result = await runSourceGit(source, ['check-ignore', '--no-index', '-z', '--stdin'], {
+      allowExitCodes: [0, 1, 128],
+      input: `${chunk.join('\0')}\0`
+    }).catch(() => undefined);
+    if (!result || result.exitCode !== 0) continue;
+    for (const relativePath of parseGitPathList(result.stdout)) ignored.add(relativePath);
+  }
+  return files.filter((file) => !ignored.has(file));
+}
+
+function matchesSkipPattern(relativePath: string, isDirectory: boolean, patterns: readonly string[]): boolean {
+  const normalized = normalizeGitRelativePath(relativePath);
+  if (!normalized) return true;
+  for (const raw of patterns) {
+    const pattern = normalizeSkipPattern(raw);
+    if (!pattern) continue;
+    if (skipPatternMatches(pattern, normalized, isDirectory)) return true;
+  }
+  return false;
+}
+
+function normalizeSkipPattern(pattern: string): string | undefined {
+  const normalized = pattern.replace(/\r?\n/g, '').replace(/\\/g, '/').trim().replace(/^\.\//, '');
+  return normalized || undefined;
+}
+
+function skipPatternMatches(pattern: string, relativePath: string, isDirectory: boolean): boolean {
+  const directoryPattern = pattern.endsWith('/');
+  const trimmedPattern = pattern.replace(/\/+$/, '');
+  if (!trimmedPattern) return false;
+  if (!pattern.includes('*') && !pattern.includes('?')) {
+    if (directoryPattern) return relativePath === trimmedPattern || relativePath.startsWith(`${trimmedPattern}/`) || relativePath.endsWith(`/${trimmedPattern}`) || relativePath.includes(`/${trimmedPattern}/`);
+    return relativePath === trimmedPattern || path.posix.basename(relativePath) === trimmedPattern || (isDirectory && relativePath.startsWith(`${trimmedPattern}/`));
+  }
+  const regex = globPatternToRegExp(pattern);
+  return regex.test(relativePath) || (isDirectory && regex.test(`${relativePath}/`));
+}
+
+function globPatternToRegExp(pattern: string): RegExp {
+  const source = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]');
+  return new RegExp(`(^|/)${source}($|/)`);
 }
 
 async function listShadowTrackedFiles(worktreePath: string): Promise<string[]> {
@@ -450,6 +530,11 @@ async function runGit(cwd: string, args: string[], options: GitRunOptions = {}):
     let stdout = '';
     let stderr = '';
     let settled = false;
+    if (options.input !== undefined) {
+      child.stdin.end(options.input);
+    } else {
+      child.stdin.end();
+    }
     child.stdout.on('data', (chunk) => { stdout += String(chunk); });
     child.stderr.on('data', (chunk) => { stderr += String(chunk); });
     child.on('error', (error) => {

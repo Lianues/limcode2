@@ -65,6 +65,7 @@ export function createDefaultLlmProviderConfig(input: { name?: string } = {}): L
     models: [],
     apiKey: '',
     toolCallFormat: 'function-call',
+    stream: true,
     createdAt: now,
     updatedAt: now
   };
@@ -88,6 +89,7 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
     models,
     apiKey: typeof input?.apiKey === 'string' ? input.apiKey.trim() : fallback.apiKey,
     toolCallFormat: isKnownToolCallFormat(input?.toolCallFormat) ? input.toolCallFormat : fallback.toolCallFormat,
+    stream: typeof input?.stream === 'boolean' ? input.stream : true,
     ...(optionalString(input?.proxy) ? { proxy: optionalString(input?.proxy) } : {}),
     ...(headers ? { headers } : {}),
     ...(generationConfig ? { generationConfig } : {}),

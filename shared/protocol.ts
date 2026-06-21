@@ -469,6 +469,7 @@ export interface LlmProviderConfigRecord {
   models: LlmProviderModelRecord[];
   apiKey: string;
   toolCallFormat: LlmToolCallFormat;
+  stream: boolean;
   proxy?: string;
   headers?: LlmProviderHeadersRecord;
   generationConfig?: LlmGenerationConfigRecord;
@@ -490,6 +491,7 @@ export interface LlmInvocationSettingsSnapshotRecord {
   modelName?: string;
   displayModelName?: string;
   toolCallFormat?: LlmToolCallFormat;
+  stream?: boolean;
   generationConfig?: LlmGenerationConfigRecord;
   requestBody?: LlmRequestBodyRecord;
   compressionConfigId?: string;

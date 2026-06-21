@@ -153,6 +153,19 @@ export async function startLlmProvider(
     let firstStreamChunkMark: number | undefined;
     let streamTimingChunkCount = 0;
     let activeThoughtBlock: ActiveThoughtBlock | undefined;
+    if (settings.stream === false) {
+      const response = await provider.chat<UnifiedLLMResponse>(toUnifiedRequest(request, settings.generationConfig), {
+        inputFormat: 'unified',
+        outputFormat: 'unified',
+        signal
+      });
+      emitUnifiedResponse(request.id, response, emit);
+      emit({
+        type: LlmEventType.Done,
+        payload: { requestId: request.id, createdAt: Date.now(), ...(usageMetadataFromCompact(response.usageMetadata) ? { usageMetadata: usageMetadataFromCompact(response.usageMetadata) } : {}) }
+      });
+      return;
+    }
     for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(toUnifiedRequest(request, settings.generationConfig), {
       inputFormat: 'unified',
       outputFormat: 'unified',
@@ -228,7 +241,7 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
   const result = await dryRun.call(provider, toUnifiedRequest(request, runtimeSettings.generationConfig), {
     inputFormat: 'unified',
     outputFormat: 'unified',
-    stream: true,
+    stream: runtimeSettings.stream !== false,
     curl: { includeApiKey: dryRunOptions.includeApiKey === true, prettyBody: true }
   });
 
@@ -443,11 +456,21 @@ async function generateSummaryText(
   const systemPrompt = summarySettings?.systemPrompt?.trim() || '你是上下文压缩助手。请保留任务目标、关键约束、已完成工作、工具结果、错误、决策和下一步计划。';
   const userPrompt = summarySettings?.userPrompt?.trim() || '请将以下对话历史压缩为后续模型可继续工作的摘要：';
   const transcript = renderContentsForSummary(request.contents);
-  const response = await provider.chat<UnifiedLLMResponse>({
+  const summaryRequest = {
     contents: [{ role: 'user', parts: [{ text: `${userPrompt}\n\n${transcript}` }] }],
     systemInstruction: { parts: [{ text: systemPrompt }] },
     generationConfig: summarySettings?.generationConfig ?? settings.generationConfig
-  }, { inputFormat: 'unified', outputFormat: 'unified' });
+  };
+
+  if (settings.stream !== false) {
+    let text = '';
+    for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified' })) {
+      text += chunk.textDelta ?? visibleTextFromParts(chunk.partsDelta ?? []);
+    }
+    return text.trim() || deterministicSummary(request.contents);
+  }
+
+  const response = await provider.chat<UnifiedLLMResponse>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified' });
 
   const text = visibleTextFromParts(response.content?.parts ?? []).trim();
   return text || deterministicSummary(request.contents);
@@ -550,6 +573,7 @@ function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmPr
     models: settings?.models ?? [],
     apiKey: settings?.apiKey?.trim() ?? '',
     toolCallFormat: normalizeToolCallFormat(settings?.toolCallFormat),
+    stream: settings?.stream !== false,
     ...(proxy ? { proxy } : {}),
     ...(headers ? { headers } : {}),
     ...(nonEmptyRecord(generationConfig) ? { generationConfig } : {}),
@@ -580,6 +604,7 @@ function snapshotFromSettings(settings: LlmProviderConfigRecord, compressionConf
     ...(modelId ? { modelId } : {}),
     ...(modelName ? { modelName, displayModelName: modelName } : {}),
     toolCallFormat: settings.toolCallFormat,
+    stream: settings.stream !== false,
     ...(settings.generationConfig ? { generationConfig: settings.generationConfig } : {}),
     ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
     ...(compressionConfig?.id ? { compressionConfigId: compressionConfig.id } : {}),
@@ -732,6 +757,33 @@ function emitUnifiedChunk(requestId: string, chunk: UnifiedLLMStreamChunk, emit:
     emit({ type: LlmEventType.ToolCall, payload: { requestId, calls } });
   }
 }
+
+function emitUnifiedResponse(requestId: string, response: UnifiedLLMResponse, emit: Emit): void {
+  const parts = response.content?.parts ?? [];
+  const visibleText = visibleTextFromParts(parts);
+  if (visibleText) emit({ type: LlmEventType.Delta, payload: { requestId, text: visibleText } });
+
+  const thoughtParts = parts.filter((part) => 'text' in part && (part as { thought?: unknown }).thought === true);
+  for (const part of thoughtParts) {
+    const text = typeof (part as { text?: unknown }).text === 'string' ? (part as { text: string }).text : '';
+    const signature = thoughtSignatureFromPart(part);
+    if (text) emit({ type: LlmEventType.ThoughtDelta, payload: { requestId, text, ...(signature ? { thoughtSignature: signature } : {}) } });
+    emit({ type: LlmEventType.ThoughtDone, payload: { requestId, thoughtDurationMs: 0, ...(signature ? { thoughtSignature: signature } : {}) } });
+  }
+
+  const calls = parts.filter(isUnifiedFunctionCallPart).map((part, index) => {
+    const thoughtSignature = thoughtSignatureFromPart(part);
+    return {
+      id: part.functionCall.callId ?? `tool_call_${index}`,
+      name: part.functionCall.name,
+      argsJson: stringifyJson(part.functionCall.args ?? {}),
+      ...(thoughtSignature ? { thoughtSignature } : {})
+    };
+  });
+  if (calls.length > 0) emit({ type: LlmEventType.ToolCall, payload: { requestId, calls } });
+}
+
+
 
 interface LlmDoneTiming {
   createdAt: number;

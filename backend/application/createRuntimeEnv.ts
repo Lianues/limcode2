@@ -103,6 +103,7 @@ async function resolveSnapshotLlmProviderConfig(
     model: modelId,
     models: modelId ? [{ id: modelId, name: modelName }, ...base.models.filter((model) => model.id !== modelId)] : base.models,
     ...(snapshot.toolCallFormat ? { toolCallFormat: snapshot.toolCallFormat } : {}),
+    ...(snapshot.stream !== undefined ? { stream: snapshot.stream } : {}),
     ...(snapshot.generationConfig ? { generationConfig: snapshot.generationConfig } : {}),
     ...(snapshot.requestBody ? { requestBody: snapshot.requestBody } : {})
   };

@@ -109,6 +109,7 @@ function createDefaultProviderConfig(name = '新渠道配置', provider: LlmProv
     models: [],
     apiKey: '',
     toolCallFormat: 'function-call',
+    stream: true,
     proxy: '',
     headers: {},
     generationConfig: {},
@@ -125,6 +126,7 @@ function normalizeProviderConfigForUi(config: LlmProviderConfigRecord): LlmProvi
     model,
     models: normalizeModelsForUi(config.models, model),
     proxy: config.proxy ?? '',
+    stream: config.stream !== false,
     headers: sanitizeHeaders(config.headers) ?? {},
     generationConfig: normalizeGenerationConfigForUi(config.generationConfig) ?? {},
     requestBody: sanitizeRequestBody(config.requestBody) ?? {}
@@ -256,6 +258,7 @@ function toPlainProviderConfig(config: LlmProviderConfigRecord): LlmProviderConf
     models: sanitizeModels(config.models),
     apiKey: config.apiKey,
     toolCallFormat: config.toolCallFormat,
+    stream: config.stream !== false,
     ...(config.proxy?.trim() ? { proxy: config.proxy.trim() } : {}),
     ...(sanitizeHeaders(config.headers) ? { headers: sanitizeHeaders(config.headers) } : {}),
     ...(sanitizeGenerationConfig(config.generationConfig) ? { generationConfig: sanitizeGenerationConfig(config.generationConfig) } : {}),
@@ -471,6 +474,28 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       this.saveLlmCompressionConfigs();
       this.selectCompressionConfigForActiveProvider(config.id);
     },
+    setActiveCompressionProviderConfig(providerConfigId: string): void {
+      let config = this.activeCompressionConfig;
+      if (!config) {
+        config = createDefaultLlmCompressionConfig('默认压缩方法');
+        this.llmCompressionConfigs.configs.push(config);
+        this.llmCompression.defaultConfigId = config.id;
+      }
+      const id = providerConfigId.trim();
+      const applyProvider = <T extends { providerConfigId?: string }>(target: T): T => {
+        if (id) target.providerConfigId = id;
+        else delete target.providerConfigId;
+        return target;
+      };
+      config.openaiResponsesCompact = applyProvider({ ...(config.openaiResponsesCompact ?? {}), createSummaryFallback: config.openaiResponsesCompact?.createSummaryFallback ?? true });
+      config.llmSummary = applyProvider({ ...(config.llmSummary ?? createDefaultLlmCompressionConfig('临时').llmSummary ?? {}) });
+      const selectedProvider = id ? this.llmProviderConfigs.configs.find((item) => item.id === id) : this.activeLlmProviderConfig;
+      if (selectedProvider?.provider !== 'openai-responses' && config.kind === 'openai_responses_compact') config.kind = 'llm_summary';
+      config.updatedAt = Date.now();
+      this.saveLlmCompressionConfigs();
+      this.selectCompressionConfigForActiveProvider(config.id);
+    },
+
 
 
     selectLlmProviderConfig(configId: string): void {

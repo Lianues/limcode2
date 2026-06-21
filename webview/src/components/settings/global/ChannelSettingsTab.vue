@@ -14,6 +14,7 @@ import type {
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import ConfirmPanel from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
+import LcCheckbox from '@webview/components/ui/LcCheckbox.vue';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import ModelFetchDialog from './ModelFetchDialog.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from './SettingsDropdown.vue';
@@ -52,7 +53,7 @@ const activeConfigId = computed({
 });
 const activeCompressionMethodKind = computed<SelectableCompressionMethodKind>(() => {
   const kind = settings.activeCompressionConfig?.kind ?? 'llm_summary';
-  if (kind === 'openai_responses_compact' && activeConfig.value?.provider !== 'openai-responses') return 'llm_summary';
+  if (kind === 'openai_responses_compact' && compressionProviderConfig.value?.provider !== 'openai-responses') return 'llm_summary';
   if (kind === 'disabled' || kind === 'manual_summary') return 'llm_summary';
   return kind;
 });
@@ -60,12 +61,28 @@ const configPageOptions = computed<SettingsDropdownOption[]>(() =>
   settings.llmProviderConfigs.configs.map((config) => ({ value: config.id, label: config.name, description: providerLabel(config.provider) }))
 );
 const activeProviderLabel = computed(() => providerLabel(activeConfig.value?.provider));
+const compressionProviderConfigId = computed({
+  get: () => settings.activeCompressionConfig?.openaiResponsesCompact?.providerConfigId
+    ?? settings.activeCompressionConfig?.llmSummary?.providerConfigId
+    ?? '__current__',
+  set: (configId: string) => settings.setActiveCompressionProviderConfig(configId === '__current__' ? '' : configId)
+});
+const compressionProviderConfig = computed(() => {
+  const id = compressionProviderConfigId.value;
+  return id === '__current__'
+    ? activeConfig.value
+    : settings.llmProviderConfigs.configs.find((config) => config.id === id) ?? activeConfig.value;
+});
+const compressionProviderOptions = computed<SettingsDropdownOption[]>(() => [
+  { value: '__current__', label: '跟随当前渠道', description: activeConfig.value ? `${activeConfig.value.name} · ${providerLabel(activeConfig.value.provider)}` : '使用当前聊天渠道' },
+  ...settings.llmProviderConfigs.configs.map((config) => ({ value: config.id, label: config.name, description: config.model ? `${providerLabel(config.provider)} · ${config.model}` : providerLabel(config.provider) }))
+]);
 const compressionMethodOptions = computed<SettingsDropdownOption[]>(() => {
   const base: SettingsDropdownOption[] = [
     { value: 'llm_summary', label: 'LLM 总结' },
     { value: 'deterministic_summary', label: '确定性摘要' }
   ];
-  if (activeConfig.value?.provider === 'openai-responses') {
+  if (compressionProviderConfig.value?.provider === 'openai-responses') {
     base.splice(1, 0, { value: 'openai_responses_compact', label: 'OpenAI 原生压缩' });
   }
   return base;
@@ -297,6 +314,17 @@ function cancelDelete(): void {
         <input :value="activeConfig.apiKey" type="text" placeholder="sk-..." autocomplete="off" spellcheck="false" @input="updateActiveConfigField('apiKey', inputValue($event))" />
       </label>
 
+      <label class="global-settings-field global-settings-field-wide stream-field">
+        <span>流式生成</span>
+        <LcCheckbox
+          :model-value="activeConfig.stream !== false"
+          aria-label="启用流式生成"
+          @update:model-value="updateActiveConfigField('stream', $event)"
+        >
+          <span class="stream-checkbox-text">启用流式生成。普通回复和上下文压缩会复用此配置。</span>
+        </LcCheckbox>
+      </label>
+
       <section class="model-manager global-settings-field-wide" aria-label="模型列表">
         <header class="model-manager-header">
           <label>模型列表</label>
@@ -368,6 +396,16 @@ function cancelDelete(): void {
           </div>
         </header>
         <div class="global-settings-grid compression-settings-grid">
+          <label class="global-settings-field">
+            <span>压缩渠道</span>
+            <SettingsDropdown
+              v-model="compressionProviderConfigId"
+              :options="compressionProviderOptions"
+              title="选择压缩使用的渠道配置"
+              searchable
+              search-placeholder="筛选渠道..."
+            />
+          </label>
           <label class="global-settings-field">
             <span>压缩方法</span>
             <SettingsDropdown

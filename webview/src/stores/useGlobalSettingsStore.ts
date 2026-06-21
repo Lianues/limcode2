@@ -269,6 +269,25 @@ function toPlainProviderConfig(config: LlmProviderConfigRecord): LlmProviderConf
 }
 
 let modelFetchTimeout: number | undefined;
+const LLM_PROVIDER_CONFIGS_AUTOSAVE_DELAY_MS = 400;
+let llmProviderConfigsAutoSaveTimer: number | undefined;
+let llmProviderConfigsEditRevision = 0;
+const llmProviderConfigsSaveRequestRevisions = new Map<string, number>();
+
+function touchLlmProviderConfigsRevision(): number {
+  llmProviderConfigsEditRevision += 1;
+  return llmProviderConfigsEditRevision;
+}
+
+function clearLlmProviderConfigsAutoSaveTimer(): void {
+  if (llmProviderConfigsAutoSaveTimer === undefined) return;
+  window.clearTimeout(llmProviderConfigsAutoSaveTimer);
+  llmProviderConfigsAutoSaveTimer = undefined;
+}
+
+function hasPendingLlmProviderConfigsSave(): boolean {
+  return llmProviderConfigsAutoSaveTimer !== undefined || llmProviderConfigsSaveRequestRevisions.size > 0;
+}
 
 function clearModelFetchTimeout(): void {
   if (modelFetchTimeout === undefined) return;
@@ -333,6 +352,8 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       delete this.pendingSettingsSections[section];
     },
     requestAll(): void {
+      clearLlmProviderConfigsAutoSaveTimer();
+      llmProviderConfigsSaveRequestRevisions.clear();
       this.status = '正在读取设置...';
       this.loadedSections = {};
       this.pendingSettingsSections = {};
@@ -394,10 +415,22 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
         }
       });
     },
-    saveLlmProviderConfigs(): void {
+    queueLlmProviderConfigsAutoSave(): void {
+      touchLlmProviderConfigsRevision();
+      clearLlmProviderConfigsAutoSaveTimer();
       this.markPendingSettingSection('llmProviderConfigs');
-      this.status = '正在保存渠道配置...';
-      bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
+      this.status = '正在自动保存渠道配置...';
+      llmProviderConfigsAutoSaveTimer = window.setTimeout(() => {
+        llmProviderConfigsAutoSaveTimer = undefined;
+        this.saveLlmProviderConfigs();
+      }, LLM_PROVIDER_CONFIGS_AUTOSAVE_DELAY_MS);
+    },
+    saveLlmProviderConfigs(): void {
+      clearLlmProviderConfigsAutoSaveTimer();
+      const requestRevision = touchLlmProviderConfigsRevision();
+      this.markPendingSettingSection('llmProviderConfigs');
+      this.status = '正在自动保存渠道配置...';
+      const requestId = bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
         section: 'llmProviderConfigs',
         settings: {
           configs: this.llmProviderConfigs.configs.map((config) => {
@@ -413,6 +446,7 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
           })
         }
       });
+      llmProviderConfigsSaveRequestRevisions.set(requestId, requestRevision);
     },
     saveLlmCompression(): void {
       this.markPendingSettingSection('llmCompression');
@@ -521,24 +555,28 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       const config = this.activeLlmProviderConfig;
       if (!config) return;
       Object.assign(config, patch, { updatedAt: Date.now() });
+      this.queueLlmProviderConfigsAutoSave();
     },
     updateActiveLlmGenerationConfig(generationConfig: LlmGenerationConfigRecord | undefined): void {
       const config = this.activeLlmProviderConfig;
       if (!config) return;
       config.generationConfig = normalizeGenerationConfigForUi(generationConfig) ?? {};
       config.updatedAt = Date.now();
+      this.queueLlmProviderConfigsAutoSave();
     },
     updateActiveLlmRequestBody(requestBody: LlmRequestBodyRecord | undefined): void {
       const config = this.activeLlmProviderConfig;
       if (!config) return;
       config.requestBody = sanitizeRequestBody(requestBody) ?? {};
       config.updatedAt = Date.now();
+      this.queueLlmProviderConfigsAutoSave();
     },
     updateActiveLlmHeaders(headers: LlmProviderHeadersRecord | undefined): void {
       const config = this.activeLlmProviderConfig;
       if (!config) return;
       config.headers = sanitizeHeaders(headers) ?? {};
       config.updatedAt = Date.now();
+      this.queueLlmProviderConfigsAutoSave();
     },
     requestModelsForActiveConfig(): void {
       const config = this.activeLlmProviderConfig;
@@ -627,9 +665,24 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       }
       this.saveLlmProviderConfigs();
     },
-    applySnapshot(payload: GlobalSettingsSnapshotPayload): void {
+    applySnapshot(payload: GlobalSettingsSnapshotPayload, correlationId?: string): void {
+      const isLlmProviderConfigsSnapshot = payload.section === 'llmProviderConfigs';
+      const providerConfigsRequestRevision = isLlmProviderConfigsSnapshot && correlationId
+        ? llmProviderConfigsSaveRequestRevisions.get(correlationId)
+        : undefined;
+      if (providerConfigsRequestRevision !== undefined && correlationId) {
+        llmProviderConfigsSaveRequestRevisions.delete(correlationId);
+      }
+
       this.loadedSections[payload.section] = true;
-      this.clearPendingSettingSection(payload.section);
+      this.filePaths[payload.section] = payload.filePath;
+
+      if (providerConfigsRequestRevision !== undefined && providerConfigsRequestRevision < llmProviderConfigsEditRevision) {
+        if (!hasPendingLlmProviderConfigsSave()) this.clearPendingSettingSection(payload.section);
+        if (Object.keys(this.pendingSettingsSections).length === 0) this.status = '设置已同步';
+        return;
+      }
+
       if (payload.section === 'llm') {
         this.llm = { ...emptyLlm(), ...(payload.settings as LlmSettingsRecord) };
       } else if (payload.section === 'llmProviderConfigs') {
@@ -656,8 +709,8 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       } else {
         this.common = payload.settings as GlobalSettingsRecord;
       }
-      this.filePaths[payload.section] = payload.filePath;
-      this.status = '设置已同步';
+      if (!isLlmProviderConfigsSnapshot || !hasPendingLlmProviderConfigsSave()) this.clearPendingSettingSection(payload.section);
+      if (Object.keys(this.pendingSettingsSections).length === 0) this.status = '设置已同步';
     },
     applyLlmProviderModelsSnapshot(payload: LlmProviderModelsSnapshotPayload): void {
       clearModelFetchTimeout();
@@ -669,6 +722,8 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
     },
     setError(message: string): void {
       clearModelFetchTimeout();
+      clearLlmProviderConfigsAutoSaveTimer();
+      llmProviderConfigsSaveRequestRevisions.clear();
       this.closeFetchedModelsDialog();
       this.pendingSettingsSections = {};
       this.status = `设置保存失败：${message}`;

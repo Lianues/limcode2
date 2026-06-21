@@ -84,7 +84,7 @@ export function useBridgeBootstrap(): void {
 
   disposers.push(
     bridge.on(BridgeMessageType.GlobalSettingsSnapshot, (message) => {
-      if (message.payload) globalSettings.applySnapshot(message.payload);
+      if (message.payload) globalSettings.applySnapshot(message.payload, message.correlationId);
     })
   );
 

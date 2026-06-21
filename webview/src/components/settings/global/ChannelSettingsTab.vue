@@ -435,9 +435,8 @@ function cancelDelete(): void {
     <div v-else class="global-settings-empty">暂无渠道配置，请新建一个配置页。</div>
 
     <div class="global-settings-actions">
-      <button type="button" :disabled="!activeConfig" @click="settings.saveLlmProviderConfigs()">保存渠道配置</button>
       <button type="button" class="secondary" @click="settings.requestAll()">重新读取</button>
-      <span class="global-settings-status">{{ settings.status }}</span>
+      <span class="global-settings-status">{{ settings.status || '渠道配置会自动保存' }}</span>
     </div>
 
     <div class="global-settings-path-list" aria-label="渠道配置路径信息">

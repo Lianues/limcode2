@@ -1,12 +1,19 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import {
+  DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT,
+  type LlmCompressionConfigRecord,
+  type MessageRecord
+} from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import HoverTooltipPanel from '@webview/components/ui/HoverTooltipPanel.vue';
 import {
   buildTokenUsageMessages,
   formatCompactTokenNumber,
   formatFloorNumber,
   formatTokenNumber,
+  normalizeTokenUsage,
   type TokenUsageMessageEntry
 } from './tokenUsageModel';
 
@@ -33,6 +40,7 @@ interface TokenBarSegment {
 }
 
 const clientState = useClientStateStore();
+const globalSettings = useGlobalSettingsStore();
 const root = ref<HTMLElement | null>(null);
 const expanded = ref(false);
 const chartScroller = ref<HTMLElement | null>(null);
@@ -54,10 +62,25 @@ const usageItems = computed(() => buildTokenUsageMessages(clientState.currentMes
 const latestUsage = computed(() => usageItems.value[usageItems.value.length - 1]);
 const hasUsage = computed(() => usageItems.value.length > 0);
 const refreshKey = computed(() => usageItems.value.map((item) => `${item.id}:${item.total}:${item.ratio}`).join('|'));
-const summaryPercent = computed(() => latestUsage.value ? latestUsage.value.ratio * 100 : 0);
-const summaryPercentText = computed(() => `${summaryPercent.value.toFixed(1)}%`);
-const summaryTitle = computed(() => latestUsage.value ? messageTitle(latestUsage.value) : '当前对话暂未收到 token usage 数据');
-const summaryFillStyle = computed(() => ({ width: usageBarWidth(latestUsage.value?.ratio ?? 0, hasUsage.value) }));
+const activeProviderConfig = computed(() => globalSettings.activeLlmProviderConfig);
+const activeCompressionTrigger = computed(() => globalSettings.activeCompressionConfig?.trigger);
+const contextWindowTokens = computed(() => normalizeTokenCount(activeProviderConfig.value?.contextWindowTokens) ?? 0);
+const actualContextTokens = computed(() => latestActualModelTotalTokens(clientState.currentMessages) ?? 0);
+const hasContextUsage = computed(() => contextWindowTokens.value > 0 && actualContextTokens.value > 0);
+const contextUsageRatio = computed(() => hasContextUsage.value ? actualContextTokens.value / contextWindowTokens.value : 0);
+const contextUsageFillRatio = computed(() => clamp(contextUsageRatio.value, 0, 1));
+const contextUsagePercent = computed(() => contextUsageRatio.value * 100);
+const contextUsagePercentText = computed(() => formatPercent(contextUsagePercent.value));
+const compressionThresholdPercent = computed(() => resolveCompressionThresholdPercent(activeCompressionTrigger.value, contextWindowTokens.value));
+const compressionThresholdTokens = computed(() => resolveCompressionThresholdTokens(activeCompressionTrigger.value, contextWindowTokens.value, compressionThresholdPercent.value));
+const compressionThresholdPercentText = computed(() => formatPercent(compressionThresholdPercent.value));
+const hasThresholdZone = computed(() => compressionThresholdPercent.value < 100);
+const contextOverThreshold = computed(() => hasContextUsage.value && contextUsagePercent.value >= compressionThresholdPercent.value);
+const summaryPercentText = computed(() => `${contextUsagePercentText.value}（${compressionThresholdPercentText.value}）`);
+const summaryTitle = computed(() => contextSummaryTitle());
+const summaryFillStyle = computed(() => ({ width: usageBarWidth(contextUsageFillRatio.value, hasContextUsage.value) }));
+const summaryThresholdZoneStyle = computed(() => ({ left: `${compressionThresholdPercent.value}%`, width: `${Math.max(0, 100 - compressionThresholdPercent.value)}%` }));
+const summaryThresholdMarkerStyle = computed(() => ({ left: `calc(${compressionThresholdPercent.value}% - 0.5px)` }));
 const maxScrollLeft = computed(() => Math.max(0, scrollWidth.value - clientWidth.value));
 const canScrollX = computed(() => maxScrollLeft.value > 1);
 const horizontalThumbWidth = computed(() => {
@@ -119,11 +142,78 @@ function messageBarStyle(item: TokenUsageMessageEntry): Record<string, string> {
   return { height: usageBarHeight(item.ratio, item.total > 0) };
 }
 
+function latestActualModelTotalTokens(messages: MessageRecord[]): number | undefined {
+  const sortedMessages = [...messages].sort((left, right) => left.seq - right.seq || left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+  for (let index = sortedMessages.length - 1; index >= 0; index -= 1) {
+    const message = sortedMessages[index];
+    if (message.role !== 'model' || !message.usageMetadata) continue;
+    const usage = normalizeTokenUsage(message.usageMetadata);
+    if (usage.sourceEstimated) continue;
+    if (usage.total !== undefined && usage.total > 0) return usage.total;
+  }
+  return undefined;
+}
+
+function contextSummaryTitle(): string {
+  const lines: string[] = [];
+  const providerName = activeProviderConfig.value?.name?.trim();
+  if (providerName) lines.push(`渠道：${providerName}`);
+  lines.push(contextWindowTokens.value > 0 ? `上下文窗口：${formatTokenNumber(contextWindowTokens.value)} token` : '上下文窗口：未设置');
+  lines.push(
+    hasContextUsage.value
+      ? `当前上下文：${formatTokenNumber(actualContextTokens.value)} token（${contextUsagePercentText.value}）`
+      : '当前上下文：暂无实际模型 total token'
+  );
+  lines.push(`触发阈值：${formatTokenNumber(compressionThresholdTokens.value)} token（${compressionThresholdPercentText.value}）`);
+  lines.push('用户消息预估 token 不参与此进度条，仅用于明细估算显示');
+  if (latestUsage.value) {
+    lines.push('');
+    lines.push('最近 token 明细：');
+    lines.push(messageTitle(latestUsage.value));
+  }
+  return lines.join('\n');
+}
+
+function resolveCompressionThresholdTokens(
+  trigger: LlmCompressionConfigRecord['trigger'] | undefined,
+  contextWindow: number,
+  fallbackPercent = DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT
+): number {
+  const tokenValue = normalizeTokenCount(trigger?.thresholdTokens);
+  if (tokenValue !== undefined) return contextWindow > 0 ? Math.min(tokenValue, contextWindow) : tokenValue;
+  if (contextWindow <= 0) return 0;
+  return Math.round((contextWindow * fallbackPercent) / 100);
+}
+
+function resolveCompressionThresholdPercent(
+  trigger: LlmCompressionConfigRecord['trigger'] | undefined,
+  contextWindow: number
+): number {
+  const tokenValue = normalizeTokenCount(trigger?.thresholdTokens);
+  if (contextWindow > 0 && tokenValue !== undefined) return clampPercent((Math.min(tokenValue, contextWindow) / contextWindow) * 100);
+  return clampPercent(trigger?.thresholdPercent ?? DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT);
+}
+
+function normalizeTokenCount(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
+}
+
+function clampPercent(value: unknown): number {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT;
+  return Math.min(100, Math.max(1, number));
+}
+
+function formatPercent(value: number): string {
+  return `${value.toFixed(1)}%`;
+}
+
 function usageBarWidth(ratio: number, hasValue: boolean): string {
   if (!hasValue) return '0%';
   const clamped = Math.max(0, Math.min(1, ratio));
   if (clamped <= 0) return '0%';
-  return `${Math.max(4, clamped * 100)}%`;
+  return `${clamped * 100}%`;
 }
 
 function usageBarHeight(ratio: number, hasValue: boolean): string {
@@ -371,7 +461,7 @@ function clamp(value: number, min: number, max: number): number {
 </script>
 
 <template>
-  <span ref="root" class="context-token-usage-panel" :class="{ 'is-expanded': expanded, 'is-empty': !hasUsage }">
+  <span ref="root" class="context-token-usage-panel" :class="{ 'is-expanded': expanded, 'is-empty': !hasUsage, 'is-over-threshold': contextOverThreshold }">
     <button
       type="button"
       class="context-token-summary"
@@ -380,7 +470,9 @@ function clamp(value: number, min: number, max: number): number {
       @click="toggleExpanded"
     >
       <span class="context-token-summary-track" role="img" :aria-label="summaryTitle">
+        <span v-if="hasThresholdZone" class="context-token-summary-threshold-zone" :style="summaryThresholdZoneStyle" aria-hidden="true"></span>
         <span class="context-token-summary-fill" :style="summaryFillStyle" aria-hidden="true"></span>
+        <span class="context-token-summary-threshold-marker" :style="summaryThresholdMarkerStyle" aria-hidden="true"></span>
       </span>
       <span class="context-token-summary-percent">{{ summaryPercentText }}</span>
     </button>
@@ -445,8 +537,8 @@ function clamp(value: number, min: number, max: number): number {
 .context-token-usage-panel {
   position: relative;
   flex: 0 0 auto;
-  width: 112px;
-  min-width: 96px;
+  width: 164px;
+  min-width: 148px;
   display: inline-flex;
   justify-content: flex-end;
   --lc-dropdown-transform-origin: bottom right;
@@ -523,14 +615,44 @@ function clamp(value: number, min: number, max: number): number {
   background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-foreground) 10%);
 }
 
+.context-token-summary-threshold-zone,
 .context-token-summary-fill {
   position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.context-token-summary-threshold-zone {
+  z-index: 2;
+  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 22%, transparent);
+  box-shadow: inset 1px 0 0 color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 46%, transparent);
+  pointer-events: none;
+}
+
+.context-token-summary-fill {
+  z-index: 1;
   inset: 0 auto 0 0;
   background: color-mix(in srgb, var(--vscode-foreground) 24%, transparent);
+  transition: width 0.16s ease, background-color 0.16s ease;
+}
+
+.context-token-summary-threshold-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 3;
+  width: 1px;
+  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 72%, var(--vscode-editor-background) 28%);
+  opacity: 0.78;
+  pointer-events: none;
+}
+
+.context-token-usage-panel.is-over-threshold .context-token-summary-fill {
+  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 36%, var(--vscode-foreground) 16%, transparent);
 }
 
 .context-token-summary-percent {
-  flex: 0 0 42px;
+  flex: 0 0 92px;
   overflow: hidden;
   color: currentColor;
   font-size: var(--font-size-xs);

@@ -54,7 +54,7 @@ const draft = computed({
 const expandTitle = computed(() => (editorExpanded.value ? '恢复输入框高度' : '扩大输入框'));
 const sendTitle = computed(() => (ui.isEditing ? '提交编辑' : '发送'));
 const compacting = computed(() => clientState.currentCompressionBlocks.some((block) => block.status === 'pending' || block.status === 'running'));
-const compactTitle = computed(() => compacting.value ? '上下文正在压缩...' : '压缩当前上下文');
+const compactTitle = computed(() => compacting.value ? '取消上下文压缩' : '压缩当前上下文');
 const channelOptions = computed<SettingsDropdownOption[]>(() =>
   globalSettings.llmProviderConfigs.configs.map((config) => ({
     value: config.id,
@@ -417,7 +417,7 @@ function middleEllipsis(value: string, maxLength: number): string {
         type="button"
         class="composer-compact"
         :class="{ 'is-compacting': compacting }"
-        :disabled="disabled || compacting || clientState.currentMessages.length < 2"
+        :disabled="disabled || (!compacting && clientState.currentMessages.length < 2)"
         aria-label="压缩上下文"
         :title="compactTitle"
         @click="compactConversation"

@@ -100,7 +100,13 @@ export function createLlmProviderCapability(options: LlmProviderOptions): LlmCap
         });
     },
     compact(request, emit) {
-      void compactLlmProvider(request, emit, options);
+      controllers.get(request.id)?.abort(createAbortError(`Superseded LLM compact request: ${request.id}`));
+      const controller = new AbortController();
+      controllers.set(request.id, controller);
+      void compactLlmProvider(request, emit, options, controller.signal)
+        .finally(() => {
+          if (controllers.get(request.id) === controller) controllers.delete(request.id);
+        });
     },
     dryRun(request, dryRunOptions) {
       return dryRunLlmProvider(request, options, dryRunOptions, resolvedRuntimeSettingsByInvocationId);
@@ -287,7 +293,8 @@ export async function listLlmProviderModels(config: LlmProviderConfigRecord, opt
 export type LlmCompressionMethodHandler = (
   request: LlmCompactRequest,
   methodConfig: LlmCompressionConfigRecord,
-  options: LlmProviderOptions
+  options: LlmProviderOptions,
+  signal?: AbortSignal
 ) => Promise<LlmCompactResult>;
 
 const compressionMethodHandlers = new Map<LlmCompressionConfigRecord['kind'], LlmCompressionMethodHandler>();
@@ -304,7 +311,7 @@ function ensureDefaultCompressionMethodsRegistered(): void {
   registerLlmCompressionMethod('manual_summary', compactWithSummary);
 }
 
-export async function compactLlmProvider(request: LlmCompactRequest, emit: Emit, options: LlmProviderOptions): Promise<void> {
+export async function compactLlmProvider(request: LlmCompactRequest, emit: Emit, options: LlmProviderOptions, signal?: AbortSignal): Promise<void> {
   try {
     ensureDefaultCompressionMethodsRegistered();
     const methodConfig = normalizeCompressionConfig(await options.compressionSettings?.(request), request.methodKind);
@@ -314,7 +321,7 @@ export async function compactLlmProvider(request: LlmCompactRequest, emit: Emit,
 
     const handler = compressionMethodHandlers.get(methodConfig.kind);
     if (!handler) throw new Error(`未注册的压缩方法：${methodConfig.kind}`);
-    const result = await handler(request, methodConfig, options);
+    const result = await handler(request, methodConfig, options, signal);
 
     emit({
       type: LlmEventType.CompactDone,
@@ -327,6 +334,7 @@ export async function compactLlmProvider(request: LlmCompactRequest, emit: Emit,
       }
     });
   } catch (error) {
+    if (isAbortError(error)) return;
     emit({
       type: LlmEventType.CompactError,
       payload: {
@@ -343,7 +351,8 @@ export async function compactLlmProvider(request: LlmCompactRequest, emit: Emit,
 async function compactWithOpenAIResponses(
   request: LlmCompactRequest,
   methodConfig: LlmCompressionConfigRecord,
-  options: LlmProviderOptions
+  options: LlmProviderOptions,
+  signal?: AbortSignal
 ): Promise<LlmCompactResult> {
   const modelOverride = methodConfig.openaiResponsesCompact?.model?.trim();
   const providerConfigId = methodConfig.openaiResponsesCompact?.providerConfigId?.trim();
@@ -386,7 +395,7 @@ async function compactWithOpenAIResponses(
 
   const compacted = await provider.compact(
     { contents: request.contents.map(toUnifiedContent) },
-    { inputFormat: 'unified', outputFormat: 'unified' }
+    { inputFormat: 'unified', outputFormat: 'unified', signal }
   );
 
   return {
@@ -403,9 +412,10 @@ async function compactWithOpenAIResponses(
 async function compactWithSummary(
   request: LlmCompactRequest,
   methodConfig: LlmCompressionConfigRecord,
-  options: LlmProviderOptions
+  options: LlmProviderOptions,
+  signal?: AbortSignal
 ): Promise<LlmCompactResult> {
-  const summary = await generateSummaryText(request, methodConfig, options);
+  const summary = await generateSummaryText(request, methodConfig, options, signal);
   const contents: MessageContent[] = [{ role: 'user', parts: [{ text: `[Context Summary]\n\n${summary}` }] }];
   return {
     id: `summary-${request.blockId}`,
@@ -419,7 +429,8 @@ async function compactWithSummary(
 async function generateSummaryText(
   request: LlmCompactRequest,
   methodConfig: LlmCompressionConfigRecord,
-  options: LlmProviderOptions
+  options: LlmProviderOptions,
+  signal?: AbortSignal
 ): Promise<string> {
   if (methodConfig.kind === 'deterministic_summary' || methodConfig.kind === 'manual_summary') {
     return deterministicSummary(request.contents);
@@ -464,13 +475,13 @@ async function generateSummaryText(
 
   if (settings.stream !== false) {
     let text = '';
-    for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified' })) {
+    for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified', signal })) {
       text += chunk.textDelta ?? visibleTextFromParts(chunk.partsDelta ?? []);
     }
     return text.trim() || deterministicSummary(request.contents);
   }
 
-  const response = await provider.chat<UnifiedLLMResponse>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified' });
+  const response = await provider.chat<UnifiedLLMResponse>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified', signal });
 
   const text = visibleTextFromParts(response.content?.parts ?? []).trim();
   return text || deterministicSummary(request.contents);

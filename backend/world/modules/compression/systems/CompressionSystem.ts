@@ -42,7 +42,7 @@ export const CompressionSystem = defineSystem({
       ],
       emit: [CompressionEventType.Create]
     },
-    effects: { emit: ['llm.compact'] }
+    effects: { emit: ['llm.compact', 'llm.abort'] }
   },
   run(ctx) {
     const { world, cmd } = ctx;
@@ -228,6 +228,10 @@ function setBlockDisabled(world: WorldReader, cmd: CommandSink, blockId: string,
 function deleteCompressionBlock(world: WorldReader, cmd: CommandSink, blockId: string): void {
   const blockEntity = findBlock(world, blockId);
   if (blockEntity === undefined) return;
+  const block = world.get(blockEntity, CompressionBlock);
+  if (block?.status === 'pending' || block?.status === 'running') {
+    cmd.effect({ kind: 'llm.abort', requestId: `compact-${block.id}` });
+  }
   for (const entity of world.query(CompressionBlockSourceLink)) if (world.get(entity, CompressionBlockSourceLink)?.block === blockEntity) cmd.despawn(entity);
   for (const entity of world.query(CompressionContextVariant)) if (world.get(entity, CompressionContextVariant)?.block === blockEntity) cmd.despawn(entity);
   for (const entity of world.query(RunCompressionBlockLink)) if (world.get(entity, RunCompressionBlockLink)?.block === blockEntity) cmd.despawn(entity);

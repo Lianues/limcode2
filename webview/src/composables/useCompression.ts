@@ -8,9 +8,10 @@ export function useCompression() {
   function createCompression(methodConfigId?: string): boolean {
     const conversationId = clientState.currentConversationId;
     if (!conversationId) return false;
-    if (clientState.currentCompressionBlocks.some((block) => block.status === 'pending' || block.status === 'running')) {
-      bridge.request(BridgeMessageType.ShowInfo, { message: '上下文正在压缩，请等待完成后再发起新的压缩。' });
-      return false;
+    const runningBlocks = clientState.currentCompressionBlocks.filter((block) => block.status === 'pending' || block.status === 'running');
+    if (runningBlocks.length > 0) {
+      for (const block of runningBlocks) deleteCompression(block);
+      return true;
     }
     if (clientState.currentMessages.some((message) => message.status === 'streaming')) {
       bridge.request(BridgeMessageType.ShowInfo, { message: '请等待 AI 响应结束后再压缩上下文。' });

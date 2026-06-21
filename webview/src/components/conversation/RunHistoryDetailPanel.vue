@@ -57,13 +57,32 @@ const detailJson = computed(() => {
   }
   return activeDetail.value ? stringifyJson(activeDetail.value.state) : '';
 });
-const dryRun = computed(() => runHistory.activeDryRun);
-const dryRunLoading = computed(() => runHistory.activeDryRunLoading);
-const dryRunError = computed(() => runHistory.activeDryRunError);
 const selectedMessageId = computed(() => runHistory.activeDetail?.messageId);
 const selectedMessage = computed(() => activeState.value?.messages.find((message) => message.id === selectedMessageId.value));
 const selectedInvocation = computed(() => selectActiveInvocation());
 const selectedInvocationSettings = computed(() => selectedInvocation.value?.settings);
+const dryRun = computed(() => {
+  const active = runHistory.activeDetail;
+  if (!active) return undefined;
+  const state = runHistory.conversationRunHistory(active.conversationId);
+  for (const key of activeDryRunSelectionKeys()) {
+    const snapshot = state.dryRunByRunId[key];
+    if (snapshot) return snapshot;
+  }
+  return undefined;
+});
+const dryRunLoading = computed(() => {
+  const active = runHistory.activeDetail;
+  if (!active) return false;
+  const state = runHistory.conversationRunHistory(active.conversationId);
+  return activeDryRunSelectionKeys().some((key) => !!state.dryRunLoadingByRunId[key]);
+});
+const dryRunError = computed(() => {
+  const active = runHistory.activeDetail;
+  if (!active) return undefined;
+  const state = runHistory.conversationRunHistory(active.conversationId);
+  return activeDryRunSelectionKeys().map((key) => state.dryRunErrorByRunId[key]).find((message) => message !== undefined);
+});
 const activeKey = computed(() => runHistory.activeDetail ? `${runHistory.activeDetail.conversationId}:${runHistory.activeDetail.runId ?? ''}:${runHistory.activeDetail.messageId ?? ''}:${runHistory.activeDetail.compressionBlockId ?? ''}:${selectedInvocation.value?.id ?? ''}` : '');
 const invocationGenerationConfigJson = computed(() => selectedInvocationSettings.value?.generationConfig ? stringifyJson(selectedInvocationSettings.value.generationConfig) : '');
 const invocationRequestBodyJson = computed(() => selectedInvocationSettings.value?.requestBody ? stringifyJson(selectedInvocationSettings.value.requestBody) : '');
@@ -116,6 +135,14 @@ function toggleRawDetailOpen(): void {
 
 function toggleApiKeyVisibility(): void {
   includeApiKey.value = !includeApiKey.value;
+}
+
+function activeDryRunSelectionKeys(): string[] {
+  const active = runHistory.activeDetail;
+  if (!active) return [];
+  const keys = [selectedInvocation.value?.id, active.invocationId, active.runId, active.messageId, active.compressionBlockId]
+    .filter((key): key is string => !!key);
+  return [...new Set(keys)];
 }
 
 function ensureDryRun(): void {

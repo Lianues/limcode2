@@ -32,6 +32,27 @@ function activeRequestKey(active: ActiveRunDetailSelection): string | undefined 
   return active.invocationId ?? active.runId ?? active.messageId ?? active.compressionBlockId;
 }
 
+function invocationIdForDetail(payload: ConversationRunDetailRecord, messageId?: string, fallbackInvocationId?: string): string | undefined {
+  const messageLink = messageId
+    ? payload.state.messageLlmInvocationLinks.find((link) => link.messageId === messageId)
+    : undefined;
+  if (messageLink) return messageLink.invocationId;
+
+  const invocationById = new Map(payload.state.llmInvocations.map((invocation) => [invocation.id, invocation]));
+  let selectedId = fallbackInvocationId;
+  let selectedCreatedAt = selectedId ? invocationById.get(selectedId)?.createdAt ?? -Infinity : -Infinity;
+  for (const link of payload.state.runLlmInvocationLinks) {
+    if (link.runId !== payload.runId) continue;
+    const invocation = invocationById.get(link.invocationId);
+    if (!invocation) continue;
+    if (invocation.createdAt > selectedCreatedAt || (invocation.createdAt === selectedCreatedAt && invocation.id.localeCompare(selectedId ?? '') > 0)) {
+      selectedId = invocation.id;
+      selectedCreatedAt = invocation.createdAt;
+    }
+  }
+  return selectedId;
+}
+
 interface RunHistoryStoreState {
   byConversationId: Record<string, ConversationRunHistoryUiState>;
   activeDetail?: ActiveRunDetailSelection;
@@ -138,8 +159,10 @@ export const useRunHistoryStore = defineStore('runHistory', {
       const target = this.ensureConversationState(payload.conversationId);
       target.detailByRunId[payload.runId] = payload;
       if (payload.summary) target.runById[payload.runId] = payload.summary;
-      const messageId = this.activeDetail?.conversationId === payload.conversationId ? this.activeDetail.messageId : undefined;
-      this.activeDetail = { conversationId: payload.conversationId, runId: payload.runId, ...(messageId ? { messageId } : {}) };
+      const previousActive = this.activeDetail?.conversationId === payload.conversationId ? this.activeDetail : undefined;
+      const messageId = previousActive?.messageId;
+      const invocationId = invocationIdForDetail(payload, messageId, previousActive?.invocationId);
+      this.activeDetail = { conversationId: payload.conversationId, runId: payload.runId, ...(messageId ? { messageId } : {}), ...(invocationId ? { invocationId } : {}) };
       target.status = 'idle';
       target.error = undefined;
     },

@@ -4,7 +4,6 @@ import { IconMessage } from '@tabler/icons-vue';
 import type { ProjectFolderCandidateRecord } from '@shared/protocol';
 import { displayConversationTitle } from '@shared/conversationTitle';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
-import { useChat } from '@webview/composables/useChat';
 import { bridge, BridgeMessageType } from '@webview/transport';
 
 const props = defineProps<{
@@ -16,7 +15,6 @@ const emit = defineEmits<{
 }>();
 
 const clientState = useClientStateStore();
-const { abortCurrentConversation } = useChat();
 
 const headerRoot = ref<HTMLElement | null>(null);
 const projectDropdownOpen = ref(false);
@@ -49,10 +47,6 @@ onBeforeUnmount(() => {
   disposeProjectFolders?.();
   document.removeEventListener('click', onDocumentClick);
 });
-
-function onAbort(): void {
-  abortCurrentConversation();
-}
 
 function toggleProjectDropdown(): void {
   projectDropdownOpen.value = !projectDropdownOpen.value;
@@ -150,15 +144,6 @@ function middleEllipsis(value: string, maxLength: number): string {
       </div>
     </div>
     <div class="tab-actions">
-      <button
-        v-if="runSummary.isRunning"
-        type="button"
-        class="tab-abort-button"
-        title="手动终止当前对话的后台任务"
-        @click="onAbort"
-      >
-        终止
-      </button>
       <button
         type="button"
         class="tab-settings-toggle secondary"
@@ -359,18 +344,6 @@ function middleEllipsis(value: string, maxLength: number): string {
   height: var(--tab-header-row-height);
 }
 
-.tab-abort-button {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: var(--tab-header-row-height);
-  min-height: var(--tab-header-row-height);
-  padding: 0 var(--space-2);
-  font-size: var(--font-size-xs);
-  line-height: 1;
-}
-
 .tab-settings-toggle {
   flex: 0 0 auto;
   display: inline-flex;
@@ -398,17 +371,5 @@ function middleEllipsis(value: string, maxLength: number): string {
   height: 16px;
   color: currentColor;
   pointer-events: none;
-}
-
-.tab-abort-button {
-  border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-panel-border));
-  border-radius: var(--radius-sm);
-  color: var(--vscode-errorForeground);
-  background: transparent;
-  cursor: pointer;
-}
-
-.tab-abort-button:hover {
-  background: var(--vscode-inputValidation-errorBackground, var(--vscode-list-hoverBackground));
 }
 </style>

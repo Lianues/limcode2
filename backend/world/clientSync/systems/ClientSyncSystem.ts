@@ -167,6 +167,10 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
   const compressionBlocks = state.compressionBlocks.filter((block) => block.conversationId === conversationId);
   const compressionBlockIds = new Set(compressionBlocks.map((block) => block.id));
   const compressionVariantIds = new Set(state.runCompressionBlockLinks.filter((link) => compressionBlockIds.has(link.blockId)).map((link) => link.variantId).filter((id): id is string => !!id));
+  const compressionBlockLlmInvocationLinks = state.compressionBlockLlmInvocationLinks.filter((link) => compressionBlockIds.has(link.blockId));
+  const invocationIds = new Set(compressionBlockLlmInvocationLinks.map((link) => link.invocationId));
+  for (const link of state.runLlmInvocationLinks.filter((link) => runIds.has(link.runId))) invocationIds.add(link.invocationId);
+  for (const link of state.messageLlmInvocationLinks.filter((link) => messageIds.has(link.messageId))) invocationIds.add(link.invocationId);
 
   return {
     ...createEmptyClientState(),
@@ -188,6 +192,10 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
     compressionBlockSourceLinks: state.compressionBlockSourceLinks.filter((link) => compressionBlockIds.has(link.blockId)),
     compressionContextVariants: state.compressionContextVariants.filter((variant) => compressionBlockIds.has(variant.blockId) || compressionVariantIds.has(variant.id)),
     runCompressionBlockLinks: state.runCompressionBlockLinks.filter((link) => runIds.has(link.runId) || compressionBlockIds.has(link.blockId)),
+    compressionBlockLlmInvocationLinks,
+    llmInvocations: state.llmInvocations.filter((invocation) => invocationIds.has(invocation.id)),
+    runLlmInvocationLinks: state.runLlmInvocationLinks.filter((link) => runIds.has(link.runId) || invocationIds.has(link.invocationId)),
+    messageLlmInvocationLinks: state.messageLlmInvocationLinks.filter((link) => messageIds.has(link.messageId) || invocationIds.has(link.invocationId)),
     toolCalls,
     toolCallEvents: state.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId)),
     agentRuns: state.agentRuns.filter((run) => runIds.has(run.id)),

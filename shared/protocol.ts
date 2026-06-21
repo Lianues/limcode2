@@ -498,6 +498,7 @@ export interface LlmProviderConfigRecord {
 export type LlmInvocationStatus = 'resolving' | 'ready' | 'streaming' | 'complete' | 'error' | 'cancelled';
 export type RunLlmInvocationRole = 'primary';
 export type MessageLlmInvocationRole = 'modelOutput';
+export type CompressionBlockLlmInvocationRole = 'compact';
 
 export interface LlmInvocationSettingsSnapshotRecord {
   providerConfigId?: string;
@@ -550,6 +551,16 @@ export interface MessageLlmInvocationLinkRecord {
   createdAt: number;
   updatedAt: number;
 }
+
+export interface CompressionBlockLlmInvocationLinkRecord {
+  id: string;
+  blockId: string;
+  invocationId: string;
+  role: CompressionBlockLlmInvocationRole;
+  createdAt: number;
+  updatedAt: number;
+}
+
 
 export type AgentSource = 'builtin' | 'user';
 
@@ -1425,6 +1436,7 @@ export interface ClientStateRecordByTable {
   compressionBlockSourceLinks: CompressionBlockSourceLinkRecord;
   compressionContextVariants: CompressionContextVariantRecord;
   runCompressionBlockLinks: RunCompressionBlockLinkRecord;
+  compressionBlockLlmInvocationLinks: CompressionBlockLlmInvocationLinkRecord;
   toolCalls: ToolCallRecord;
   toolCallEvents: ToolCallEventRecord;
   agentRuns: AgentRunRecord;
@@ -1669,13 +1681,15 @@ export interface LlmDryRunGetPayload {
   runId?: string;
   messageId?: string;
   invocationId?: string;
+  compressionBlockId?: string;
   /** true 时 curl 中显示 API Key；默认 false，避免泄漏密钥。 */
   includeApiKey?: boolean;
 }
 
 export interface LlmDryRunSnapshotPayload {
   conversationId: string;
-  runId: string;
+  runId?: string;
+  compressionBlockId?: string;
   invocationId?: string;
   settingsSnapshot?: LlmInvocationSettingsSnapshotRecord;
   provider?: LlmProviderKind;

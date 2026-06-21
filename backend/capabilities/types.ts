@@ -298,6 +298,16 @@ export interface RuntimePaths {
   compressionContextVariantsRootPath: string;
   compressionContextVariantsIndexUri: vscode.Uri;
   compressionContextVariantsIndexPath: string;
+  compressionBlockLlmInvocationLinksRootUri: vscode.Uri;
+  compressionBlockLlmInvocationLinksRootPath: string;
+  compressionBlockLlmInvocationLinksIndexUri: vscode.Uri;
+  compressionBlockLlmInvocationLinksIndexPath: string;
+
+  compressionLlmInvocationsRootUri: vscode.Uri;
+  compressionLlmInvocationsRootPath: string;
+  compressionLlmInvocationsIndexUri: vscode.Uri;
+  compressionLlmInvocationsIndexPath: string;
+
   /** Agent 与 Conversation 的关系数据根目录：<dataRoot>/agent-conversation-links */
   linksRootUri: vscode.Uri;
   linksRootPath: string;

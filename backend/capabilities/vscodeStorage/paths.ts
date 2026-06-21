@@ -32,7 +32,9 @@ import {
   CHECKPOINTS_ROOT_DIR,
   CHECKPOINT_TIMELINE_ANCHORS_ROOT_DIR,
   CHECKPOINT_SHADOW_WORKTREES_ROOT_DIR,
+  COMPRESSION_BLOCK_LLM_INVOCATION_LINKS_ROOT_DIR,
   COMPRESSION_BLOCKS_ROOT_DIR,
+  COMPRESSION_LLM_INVOCATIONS_ROOT_DIR,
   COMPRESSION_BLOCK_SOURCE_LINKS_ROOT_DIR,
   COMPRESSION_CONTEXT_VARIANTS_ROOT_DIR
 } from './constants';
@@ -87,6 +89,10 @@ export interface VscodeStorageUris {
   compressionBlockSourceLinksIndexUri: vscode.Uri;
   compressionContextVariantsRootUri: vscode.Uri;
   compressionContextVariantsIndexUri: vscode.Uri;
+  compressionBlockLlmInvocationLinksRootUri: vscode.Uri;
+  compressionBlockLlmInvocationLinksIndexUri: vscode.Uri;
+  compressionLlmInvocationsRootUri: vscode.Uri;
+  compressionLlmInvocationsIndexUri: vscode.Uri;
   linksRootUri: vscode.Uri;
   linksIndexUri: vscode.Uri;
   systemPromptScopeLinksRootUri: vscode.Uri;
@@ -134,6 +140,8 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const compressionBlocks = root(globalStorageUri, COMPRESSION_BLOCKS_ROOT_DIR);
   const compressionBlockSourceLinks = root(globalStorageUri, COMPRESSION_BLOCK_SOURCE_LINKS_ROOT_DIR);
   const compressionContextVariants = root(globalStorageUri, COMPRESSION_CONTEXT_VARIANTS_ROOT_DIR);
+  const compressionBlockLlmInvocationLinks = root(globalStorageUri, COMPRESSION_BLOCK_LLM_INVOCATION_LINKS_ROOT_DIR);
+  const compressionLlmInvocations = root(globalStorageUri, COMPRESSION_LLM_INVOCATIONS_ROOT_DIR);
   const links = root(globalStorageUri, AGENT_CONVERSATION_LINKS_ROOT_DIR);
   const systemPromptScopeLinks = root(globalStorageUri, SYSTEM_PROMPT_SCOPE_LINKS_ROOT_DIR);
   const modelProfileScopeLinks = root(globalStorageUri, MODEL_PROFILE_SCOPE_LINKS_ROOT_DIR);
@@ -244,6 +252,14 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     compressionContextVariantsRootPath: compressionContextVariants.rootUri.fsPath,
     compressionContextVariantsIndexUri: compressionContextVariants.indexUri,
     compressionContextVariantsIndexPath: compressionContextVariants.indexUri.fsPath,
+    compressionBlockLlmInvocationLinksRootUri: compressionBlockLlmInvocationLinks.rootUri,
+    compressionBlockLlmInvocationLinksRootPath: compressionBlockLlmInvocationLinks.rootUri.fsPath,
+    compressionBlockLlmInvocationLinksIndexUri: compressionBlockLlmInvocationLinks.indexUri,
+    compressionBlockLlmInvocationLinksIndexPath: compressionBlockLlmInvocationLinks.indexUri.fsPath,
+    compressionLlmInvocationsRootUri: compressionLlmInvocations.rootUri,
+    compressionLlmInvocationsRootPath: compressionLlmInvocations.rootUri.fsPath,
+    compressionLlmInvocationsIndexUri: compressionLlmInvocations.indexUri,
+    compressionLlmInvocationsIndexPath: compressionLlmInvocations.indexUri.fsPath,
     linksRootUri: links.rootUri,
     linksRootPath: links.rootUri.fsPath,
     linksIndexUri: links.indexUri,

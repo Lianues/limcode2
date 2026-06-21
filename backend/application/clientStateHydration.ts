@@ -65,6 +65,7 @@ import {
 } from '../world/modules/llm/components';
 import {
   CompressionBlock,
+  CompressionBlockLlmInvocationLink,
   CompressionBlockSourceLink,
   CompressionContextVariant,
   RunCompressionBlockLink
@@ -362,7 +363,7 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
   });
   hydrateSystemPromptScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, modes: modeEntities, runs: runEntities, prompts: systemPromptEntities });
   hydrateModelProfileScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, modes: modeEntities, runs: runEntities, profiles: modelProfileEntities });
-  hydrateCompressionRecords(world, state, { conversations: conversationEntities, messages: messageEntities, runs: runEntities });
+  hydrateCompressionRecords(world, state, { conversations: conversationEntities, messages: messageEntities, runs: runEntities, invocations: llmInvocationEntities });
 
   const inputRevisionIds = existingIds(world, AgentRunInputRevision);
   for (const record of state.agentRunInputRevisions ?? []) {
@@ -382,7 +383,7 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
 function hydrateCompressionRecords(
   world: World,
   state: ClientState,
-  maps: { conversations: Map<string, Entity>; messages: Map<string, Entity>; runs: Map<string, Entity> }
+  maps: { conversations: Map<string, Entity>; messages: Map<string, Entity>; runs: Map<string, Entity>; invocations: Map<string, Entity> }
 ): void {
   const blockEntities = existingRecords(world, CompressionBlock);
   for (const record of state.compressionBlocks ?? []) {
@@ -429,6 +430,18 @@ function hydrateCompressionRecords(
     runLinkIds.add(record.id);
     const { runId: _runId, blockId: _blockId, variantId: _variantId, ...rest } = record;
     world.add(entity, RunCompressionBlockLink, { ...rest, run, block, ...(variant !== undefined ? { variant } : {}) });
+  }
+
+  const invocationLinkIds = existingIds(world, CompressionBlockLlmInvocationLink);
+  for (const record of state.compressionBlockLlmInvocationLinks ?? []) {
+    if (invocationLinkIds.has(record.id)) continue;
+    const block = blockEntities.get(record.blockId);
+    const invocation = maps.invocations.get(record.invocationId);
+    if (block === undefined || invocation === undefined) continue;
+    const entity = world.spawn();
+    invocationLinkIds.add(record.id);
+    const { blockId: _blockId, invocationId: _invocationId, ...rest } = record;
+    world.add(entity, CompressionBlockLlmInvocationLink, { ...rest, block, invocation });
   }
 }
 

@@ -28,11 +28,16 @@ export class GlobalSettingsBridge {
     const streamId = globalSettingsStreamId(section);
     if (clientId) this.deps.webview.subscribe(clientId, streamId);
 
-    const stored = await this.deps.storage.loadGlobalSettings(section);
-    const message = this.createSnapshotMessage(stored, correlationId);
+    try {
+      const stored = await this.deps.storage.loadGlobalSettings(section);
+      const message = this.createSnapshotMessage(stored, correlationId);
 
-    if (clientId) this.deps.webview.post(clientId, message);
-    else this.deps.webview.broadcastToStream(streamId, message);
+      if (clientId) this.deps.webview.post(clientId, message);
+      else this.deps.webview.broadcastToStream(streamId, message);
+    } catch (error) {
+      console.warn('[LimCode] Failed to load global settings:', error);
+      this.postSettingsError(BridgeMessageType.GlobalSettingsGet, section, error, correlationId, clientId);
+    }
   }
 
   public async update(payload: GlobalSettingsUpdatePayload | undefined, correlationId?: string): Promise<void> {
@@ -60,20 +65,32 @@ export class GlobalSettingsBridge {
         }
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
       console.warn('[LimCode] Failed to update global settings:', error);
-      this.deps.webview.broadcast({
-        id: createMessageId(),
-        type: BridgeMessageType.Error,
-        channel: 'settings',
-        scope: { kind: 'settings', level: 'global', id: payload.section },
-        correlationId,
-        payload: {
-          requestType: BridgeMessageType.GlobalSettingsUpdate,
-          message
-        }
-      });
+      this.postSettingsError(BridgeMessageType.GlobalSettingsUpdate, payload.section, error, correlationId);
     }
+  }
+
+  private postSettingsError(
+    requestType: BridgeMessageType.GlobalSettingsGet | BridgeMessageType.GlobalSettingsUpdate,
+    section: GlobalSettingsSection,
+    error: unknown,
+    correlationId?: string,
+    clientId?: BridgeClientId
+  ): void {
+    const message = error instanceof Error ? error.message : String(error);
+    const envelope: ExtensionToWebviewMessage = {
+      id: createMessageId(),
+      type: BridgeMessageType.Error,
+      channel: 'settings',
+      scope: { kind: 'settings', level: 'global', id: section },
+      correlationId,
+      payload: {
+        requestType,
+        message
+      }
+    };
+    if (clientId) this.deps.webview.post(clientId, envelope);
+    else this.deps.webview.broadcast(envelope);
   }
 
   private createSnapshotMessage(

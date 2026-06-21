@@ -1,6 +1,7 @@
 import type {
   ClientState,
   CompressionBlockRecord,
+  CompressionBlockLlmInvocationLinkRecord,
   CompressionBlockSourceLinkRecord,
   CompressionContextVariantRecord,
   RunCompressionBlockLinkRecord
@@ -8,10 +9,11 @@ import type {
 import type { AccessDeclaration, WorldReader } from '../../../ecs/types';
 import { AgentRun } from '../agentRun/components';
 import { Conversation } from '../chat/components';
-import { CompressionBlock, CompressionBlockSourceLink, CompressionContextVariant, RunCompressionBlockLink } from './components';
+import { LlmInvocation } from '../llm/components';
+import { CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSourceLink, CompressionContextVariant, RunCompressionBlockLink } from './components';
 
 export const compressionStateProjectionReads: AccessDeclaration = {
-  components: [Conversation, AgentRun, CompressionBlock, CompressionBlockSourceLink, CompressionContextVariant, RunCompressionBlockLink]
+  components: [Conversation, AgentRun, LlmInvocation, CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSourceLink, CompressionContextVariant, RunCompressionBlockLink]
 };
 
 export function projectCompressionState(world: WorldReader): Partial<ClientState> {
@@ -19,7 +21,8 @@ export function projectCompressionState(world: WorldReader): Partial<ClientState
     compressionBlocks: world.query(CompressionBlock).map((entity) => buildBlockRecord(world, entity)).filter(isDefined),
     compressionBlockSourceLinks: world.query(CompressionBlockSourceLink).map((entity) => buildSourceLinkRecord(world, entity)).filter(isDefined),
     compressionContextVariants: world.query(CompressionContextVariant).map((entity) => buildVariantRecord(world, entity)).filter(isDefined),
-    runCompressionBlockLinks: world.query(RunCompressionBlockLink).map((entity) => buildRunLinkRecord(world, entity)).filter(isDefined)
+    runCompressionBlockLinks: world.query(RunCompressionBlockLink).map((entity) => buildRunLinkRecord(world, entity)).filter(isDefined),
+    compressionBlockLlmInvocationLinks: world.query(CompressionBlockLlmInvocationLink).map((entity) => buildInvocationLinkRecord(world, entity)).filter(isDefined)
   };
 }
 
@@ -59,6 +62,16 @@ function buildRunLinkRecord(world: WorldReader, entity: number): RunCompressionB
   if (!run || !block) return undefined;
   const { run: _run, block: _block, variant: _variant, ...rest } = link;
   return { ...rest, runId: run.id, blockId: block.id, ...(variant ? { variantId: variant.id } : {}) };
+}
+
+function buildInvocationLinkRecord(world: WorldReader, entity: number): CompressionBlockLlmInvocationLinkRecord | undefined {
+  const link = world.get(entity, CompressionBlockLlmInvocationLink);
+  if (!link) return undefined;
+  const block = world.get(link.block, CompressionBlock);
+  const invocation = world.get(link.invocation, LlmInvocation);
+  if (!block || !invocation) return undefined;
+  const { block: _block, invocation: _invocation, ...rest } = link;
+  return { ...rest, blockId: block.id, invocationId: invocation.id };
 }
 
 function isDefined<T>(value: T | undefined): value is T { return value !== undefined; }

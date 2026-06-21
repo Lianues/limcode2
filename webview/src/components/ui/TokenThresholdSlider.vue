@@ -93,11 +93,13 @@ function updateFromRange(event: Event): void {
   if (!enabled.value) return;
   const value = Number((event.target as HTMLInputElement).value);
   if (!Number.isFinite(value)) return;
-  emit('update:modelValue', clampTokenCount(value));
+  const nextValue = clampTokenCount(value);
+  if (nextValue !== currentTokens.value) emit('update:modelValue', nextValue);
 }
 
 function applyRecommended(): void {
   if (recommendedValue.value === undefined) return;
+  if (recommendedValue.value === currentTokens.value) return;
   emit('update:modelValue', recommendedValue.value);
   emit('applyRecommended', recommendedValue.value);
 }

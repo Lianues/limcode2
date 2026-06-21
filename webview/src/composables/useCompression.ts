@@ -24,7 +24,8 @@ export function useCompression() {
       bridge.request(BridgeMessageType.ShowInfo, { message: '请等待 AI 响应结束后再压缩上下文。' });
       return false;
     }
-    if (clientState.currentMessages.length < 2) return false;
+    const minimumMessageCount = input.startMessageId || input.endMessageId ? 1 : 2;
+    if (clientState.currentMessages.length < minimumMessageCount) return false;
     bridge.request(BridgeMessageType.CompressionCreate, {
       conversationId,
       ...(input.startMessageId ? { startMessageId: input.startMessageId } : {}),

@@ -6,6 +6,7 @@ import {
   isFunctionResponsePart,
   isVisibleTextPart,
   type AgentRunStatus,
+  type CompressionBlockRecord,
   type ContentPart,
   type LlmInvocationRecord,
   type MessageRecord,
@@ -13,9 +14,11 @@ import {
   type ToolCallStatus
 } from '@shared/protocol';
 import { useRunHistoryStore } from '@webview/stores/useRunHistoryStore';
+import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 
 const runHistory = useRunHistoryStore();
+const clientState = useClientStateStore();
 const detailScroller = ref<HTMLElement | null>(null);
 const curlCopied = ref(false);
 const detailCopied = ref(false);
@@ -24,16 +27,36 @@ const curlOpen = ref(false);
 const rawDetailOpen = ref(false);
 const includeApiKey = ref(false);
 
+const compressionDetailMode = computed(() => !!runHistory.activeDetail?.compressionBlockId);
+const activeCompressionBlock = computed(() => {
+  const blockId = runHistory.activeDetail?.compressionBlockId;
+  return blockId ? clientState.compressionBlocks.find((block) => block.id === blockId) : undefined;
+});
+const activeCompressionVariants = computed(() => {
+  const block = activeCompressionBlock.value;
+  return block ? clientState.compressionContextVariants.filter((variant) => variant.blockId === block.id) : [];
+});
+const activeCompressionSummaryVariant = computed(() => activeCompressionVariants.value.find((variant) => variant.kind === 'provider_neutral_summary') ?? activeCompressionVariants.value[0]);
+const activeCompressionSummaryText = computed(() => activeCompressionSummaryVariant.value?.contents.map(visibleContentText).filter(Boolean).join('\n\n').trim() ?? '');
+const activeCompressionUsageJson = computed(() => activeCompressionSummaryVariant.value?.usageMetadata ? stringifyJson(activeCompressionSummaryVariant.value.usageMetadata) : '');
+const activeCompressionRawResponseJson = computed(() => activeCompressionSummaryVariant.value?.rawResponse !== undefined ? stringifyJson(activeCompressionSummaryVariant.value.rawResponse) : '');
+const panelTitle = computed(() => compressionDetailMode.value ? '压缩调用详情' : 'LLM 调用详情');
 const activeDetail = computed(() => runHistory.activeDetailRecord);
 const activeSummary = computed(() => runHistory.activeDetailSummary ?? activeDetail.value?.summary);
 const activeState = computed(() => activeDetail.value?.state);
 const activeConversationState = computed(() => runHistory.activeDetailState);
-const loading = computed(() => activeConversationState.value?.status === 'loadingDetail' && !activeDetail.value);
-const error = computed(() => activeConversationState.value?.error);
+const loading = computed(() => !compressionDetailMode.value && activeConversationState.value?.status === 'loadingDetail' && !activeDetail.value);
+const error = computed(() => compressionDetailMode.value ? undefined : activeConversationState.value?.error);
 const run = computed(() => activeState.value?.agentRuns[0]);
 const inputMessages = computed(() => messagesForRoles(['input']));
 const outputMessages = computed(() => messagesForRoles(['model', 'tool_response', 'notification']));
-const detailJson = computed(() => rawDetailOpen.value && activeDetail.value ? JSON.stringify(activeDetail.value.state, null, 2) : '');
+const detailJson = computed(() => {
+  if (!rawDetailOpen.value) return '';
+  if (compressionDetailMode.value && activeCompressionBlock.value) {
+    return stringifyJson({ block: activeCompressionBlock.value, variants: activeCompressionVariants.value });
+  }
+  return activeDetail.value ? stringifyJson(activeDetail.value.state) : '';
+});
 const dryRun = computed(() => runHistory.activeDryRun);
 const dryRunLoading = computed(() => runHistory.activeDryRunLoading);
 const dryRunError = computed(() => runHistory.activeDryRunError);
@@ -41,7 +64,7 @@ const selectedMessageId = computed(() => runHistory.activeDetail?.messageId);
 const selectedMessage = computed(() => activeState.value?.messages.find((message) => message.id === selectedMessageId.value));
 const selectedInvocation = computed(() => selectActiveInvocation());
 const selectedInvocationSettings = computed(() => selectedInvocation.value?.settings);
-const activeKey = computed(() => runHistory.activeDetail ? `${runHistory.activeDetail.conversationId}:${runHistory.activeDetail.runId ?? ''}:${runHistory.activeDetail.messageId ?? ''}:${selectedInvocation.value?.id ?? ''}` : '');
+const activeKey = computed(() => runHistory.activeDetail ? `${runHistory.activeDetail.conversationId}:${runHistory.activeDetail.runId ?? ''}:${runHistory.activeDetail.messageId ?? ''}:${runHistory.activeDetail.compressionBlockId ?? ''}:${selectedInvocation.value?.id ?? ''}` : '');
 const invocationGenerationConfigJson = computed(() => selectedInvocationSettings.value?.generationConfig ? stringifyJson(selectedInvocationSettings.value.generationConfig) : '');
 const invocationRequestBodyJson = computed(() => selectedInvocationSettings.value?.requestBody ? stringifyJson(selectedInvocationSettings.value.requestBody) : '');
 const invocationHeadersJson = computed(() => selectedInvocationSettings.value?.headers ? stringifyJson(selectedInvocationSettings.value.headers) : '');
@@ -99,14 +122,23 @@ function ensureDryRun(): void {
   const active = runHistory.activeDetail;
   if (!active) return;
   const invocationId = selectedInvocation.value?.id;
-  const key = invocationId ?? active.runId ?? active.messageId;
+  const key = invocationId ?? active.runId ?? active.messageId ?? active.compressionBlockId;
   const state = runHistory.conversationRunHistory(active.conversationId);
   if (key && (state.dryRunLoadingByRunId[key] || state.dryRunByRunId[key])) return;
   // 提前获取包含真实 key + maskedCurl 的 dry-run；显示/隐藏只在前端本地切换，避免重复请求造成抖动。
-  runHistory.requestDryRun(active.conversationId, active.runId, true, active.messageId, invocationId);
+  runHistory.requestDryRun(active.conversationId, active.runId, true, active.messageId, invocationId, active.compressionBlockId);
 }
 
 function selectActiveInvocation(): LlmInvocationRecord | undefined {
+  if (compressionDetailMode.value) {
+    const blockId = runHistory.activeDetail?.compressionBlockId;
+    if (!blockId) return undefined;
+    const linkedInvocationId = runHistory.activeDetail?.invocationId
+      ?? clientState.compressionBlockLlmInvocationLinks
+        .filter((link) => link.blockId === blockId)
+        .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id))[0]?.invocationId;
+    return linkedInvocationId ? clientState.llmInvocations.find((invocation) => invocation.id === linkedInvocationId) : undefined;
+  }
   const state = activeState.value;
   if (!state) return undefined;
   const byId = new Map(state.llmInvocations.map((invocation) => [invocation.id, invocation]));
@@ -312,6 +344,38 @@ function toolResponseExecutionInfo(call: ToolCallRecord | undefined): string {
 function toolInfoForPart(part: ContentPart, call: ToolCallRecord | undefined): string {
   return isFunctionResponsePart(part) ? toolResponseExecutionInfo(call) : toolExecutionInfo(call);
 }
+function compressionStatusLabel(status: CompressionBlockRecord['status'] | undefined): string {
+  switch (status) {
+    case 'pending': return '等待中';
+    case 'running': return '压缩中';
+    case 'complete': return '可用';
+    case 'error': return '失败';
+    case 'stale': return '已失效';
+    case 'disabled': return '已禁用';
+    default: return '未知';
+  }
+}
+
+function compressionMethodLabel(kind: CompressionBlockRecord['methodKind'] | undefined): string {
+  switch (kind) {
+    case 'openai_responses_compact': return 'OpenAI 原生压缩';
+    case 'llm_summary': return 'LLM 总结';
+    case 'deterministic_summary': return '确定性摘要';
+    case 'manual_summary': return '手动摘要';
+    case 'disabled': return '已关闭';
+    default: return '未知';
+  }
+}
+
+function visibleContentText(content: { parts: ContentPart[] }): string {
+  return content.parts
+    .filter(isVisibleTextPart)
+    .map((part) => part.text)
+    .join('')
+    .trim();
+}
+
+
 
 function toolCallIdLines(call: ToolCallRecord): string[] {
   if (!call.functionCallId || call.functionCallId === call.id) return [`调用 ID：${call.id}`];
@@ -396,11 +460,11 @@ function sensitiveHeader(headers: Record<string, string> | undefined): { name: s
 <template>
   <Teleport to="body">
     <div v-if="runHistory.detailPanelOpen" class="run-detail-backdrop" @click.self="close">
-      <section class="run-detail-panel" role="dialog" aria-modal="true" aria-label="LLM 调用详情">
+      <section class="run-detail-panel" role="dialog" aria-modal="true" :aria-label="panelTitle">
         <header class="run-detail-header">
           <h2 class="run-detail-title">
             <IconEye class="run-detail-title-icon" stroke="2" aria-hidden="true" />
-            <span>LLM 调用详情</span>
+            <span>{{ panelTitle }}</span>
           </h2>
           <button type="button" class="run-detail-close" aria-label="关闭" title="关闭" @click="close">
             <IconX stroke="2" aria-hidden="true" />
@@ -411,6 +475,148 @@ function sensitiveHeader(headers: Record<string, string> | undefined): { name: s
           <div ref="detailScroller" class="run-detail-body">
             <p v-if="loading" class="run-detail-empty">正在加载本次调用详情...</p>
             <p v-else-if="error && !activeDetail" class="run-detail-empty is-error">{{ error }}</p>
+            <template v-else-if="compressionDetailMode">
+              <template v-if="activeCompressionBlock">
+                <section class="run-detail-section">
+                  <h3>概要</h3>
+                  <dl class="run-detail-grid">
+                    <div><dt>Compression Block ID</dt><dd>{{ activeCompressionBlock.id }}</dd></div>
+                    <div><dt>状态</dt><dd>{{ compressionStatusLabel(activeCompressionBlock.status) }} · {{ activeCompressionBlock.status }}</dd></div>
+                    <div><dt>压缩方法</dt><dd>{{ compressionMethodLabel(activeCompressionBlock.methodKind) }}</dd></div>
+                    <div><dt>方法配置 ID</dt><dd>{{ activeCompressionBlock.methodConfigId ?? '—' }}</dd></div>
+                    <div><dt>标题</dt><dd>{{ activeCompressionBlock.title }}</dd></div>
+                    <div><dt>目标对话</dt><dd>{{ activeCompressionBlock.conversationId }}</dd></div>
+                    <div><dt>Anchor Message</dt><dd>{{ activeCompressionBlock.anchorMessageId ?? '—' }}</dd></div>
+                    <div><dt>Seq 范围</dt><dd>{{ activeCompressionBlock.startSeq ?? '—' }} → {{ activeCompressionBlock.endSeq ?? '—' }}</dd></div>
+                    <div><dt>来源消息数</dt><dd>{{ activeCompressionBlock.sourceMessageCount ?? '—' }}</dd></div>
+                    <div><dt>压缩前 token</dt><dd>{{ activeCompressionBlock.tokenCountBefore ?? '—' }}</dd></div>
+                    <div><dt>压缩后 token</dt><dd>{{ activeCompressionBlock.tokenCountAfter ?? '—' }}</dd></div>
+                    <div><dt>节省 token</dt><dd>{{ activeCompressionBlock.tokenSaved ?? '—' }}</dd></div>
+                    <div><dt>创建时间</dt><dd>{{ formatTime(activeCompressionBlock.createdAt) }}</dd></div>
+                    <div><dt>更新时间</dt><dd>{{ formatTime(activeCompressionBlock.updatedAt) }}</dd></div>
+                    <div><dt>完成时间</dt><dd>{{ formatTime(activeCompressionBlock.completedAt) }}</dd></div>
+                  </dl>
+                  <p v-if="activeCompressionBlock.error" class="run-detail-empty is-error">{{ activeCompressionBlock.error }}</p>
+                  <p v-if="activeCompressionBlock.staleReason" class="run-detail-empty">{{ activeCompressionBlock.staleReason }}</p>
+                </section>
+
+                <section class="run-detail-section">
+                  <h3>压缩结果</h3>
+                  <dl class="run-detail-grid">
+                    <div><dt>结果变体数</dt><dd>{{ activeCompressionVariants.length }}</dd></div>
+                    <div><dt>当前展示变体</dt><dd>{{ activeCompressionSummaryVariant?.kind ?? '—' }}</dd></div>
+                    <div><dt>变体创建时间</dt><dd>{{ formatTime(activeCompressionSummaryVariant?.createdAt) }}</dd></div>
+                    <div><dt>变体更新时间</dt><dd>{{ formatTime(activeCompressionSummaryVariant?.updatedAt) }}</dd></div>
+                  </dl>
+                  <div v-if="activeCompressionSummaryText" class="run-detail-tool-json-block">
+                    <span>摘要内容</span>
+                    <pre class="run-detail-json">{{ activeCompressionSummaryText }}</pre>
+                  </div>
+                  <div v-if="activeCompressionUsageJson" class="run-detail-tool-json-block">
+                    <span>Usage Metadata</span>
+                    <pre class="run-detail-json">{{ activeCompressionUsageJson }}</pre>
+                  </div>
+                  <div v-if="activeCompressionRawResponseJson" class="run-detail-tool-json-block">
+                    <span>Raw Response</span>
+                    <pre class="run-detail-json">{{ activeCompressionRawResponseJson }}</pre>
+                  </div>
+                  <p v-if="!activeCompressionVariants.length" class="run-detail-empty">暂无压缩调用结果，可能仍在运行或已经失败。</p>
+                </section>
+
+
+                <section v-if="selectedInvocation" class="run-detail-section">
+                  <h3>调用快照</h3>
+                  <dl class="run-detail-grid">
+                    <div><dt>Invocation ID</dt><dd>{{ selectedInvocation.id }}</dd></div>
+                    <div><dt>Request ID</dt><dd>{{ selectedInvocation.requestId }}</dd></div>
+                    <div><dt>状态</dt><dd>{{ invocationStatusLabel(selectedInvocation.status) }} · {{ selectedInvocation.status }}</dd></div>
+                    <div><dt>渠道配置</dt><dd>{{ selectedInvocationSettings?.providerConfigName ?? '—' }}</dd></div>
+                    <div><dt>渠道 ID</dt><dd>{{ selectedInvocationSettings?.providerConfigId ?? '—' }}</dd></div>
+                    <div><dt>Provider</dt><dd>{{ selectedInvocationSettings?.provider ?? '—' }}</dd></div>
+                    <div><dt>Base URL</dt><dd>{{ selectedInvocationSettings?.baseUrl ?? '—' }}</dd></div>
+                    <div><dt>Model ID</dt><dd>{{ selectedInvocationSettings?.modelId ?? '—' }}</dd></div>
+                    <div><dt>Model Name</dt><dd>{{ selectedInvocationSettings?.modelName ?? selectedInvocationSettings?.displayModelName ?? '—' }}</dd></div>
+                    <div><dt>创建时间</dt><dd>{{ formatTime(selectedInvocation.createdAt) }}</dd></div>
+                    <div><dt>开始时间</dt><dd>{{ formatTime(selectedInvocation.startedAt) }}</dd></div>
+                    <div><dt>完成时间</dt><dd>{{ formatTime(selectedInvocation.completedAt) }}</dd></div>
+                  </dl>
+                  <div v-if="invocationGenerationConfigJson" class="run-detail-tool-json-block">
+                    <span>Generation Config</span>
+                    <pre class="run-detail-json">{{ invocationGenerationConfigJson }}</pre>
+                  </div>
+                  <div v-if="invocationUsageJson" class="run-detail-tool-json-block">
+                    <span>Invocation Usage Metadata</span>
+                    <pre class="run-detail-json">{{ invocationUsageJson }}</pre>
+                  </div>
+                  <p v-if="selectedInvocation.error" class="run-detail-empty is-error">{{ selectedInvocation.error }}</p>
+                </section>
+
+                <section class="run-detail-section">
+                  <div class="run-detail-section-head">
+                    <h3>真实压缩 LLM 请求 dry-run</h3>
+                    <div class="run-detail-head-actions">
+                      <button
+                        type="button"
+                        class="run-detail-icon-button"
+                        :title="curlOpen ? '隐藏 curl' : '显示 curl'"
+                        :aria-label="curlOpen ? '隐藏 curl' : '显示 curl'"
+                        @click="toggleCurlOpen"
+                      >
+                        <IconEye v-if="curlOpen" stroke="2" aria-hidden="true" />
+                        <IconEyeOff v-else stroke="2" aria-hidden="true" />
+                      </button>
+                      <button
+                        v-if="curlOpen && dryRun?.curl"
+                        type="button"
+                        class="run-detail-copy"
+                        :title="curlCopied ? '已复制' : '复制 curl'"
+                        :aria-label="curlCopied ? '已复制 curl' : '复制 curl'"
+                        @click="copyCurl"
+                      >
+                        <IconCheck v-if="curlCopied" stroke="2" aria-hidden="true" />
+                        <IconCopy v-else stroke="2" aria-hidden="true" />
+                        <span>{{ curlCopied ? '已复制' : '复制' }}</span>
+                      </button>
+                    </div>
+                  </div>
+                  <template v-if="curlOpen">
+                    <p v-if="dryRunLoading" class="run-detail-empty">正在通过 unified-llm-provider dry-run 构建 curl...</p>
+                    <p v-else-if="dryRunError" class="run-detail-empty is-error">{{ dryRunError }}</p>
+                    <template v-else-if="dryRun">
+                      <dl class="run-detail-grid run-detail-dryrun-meta">
+                        <div><dt>Provider</dt><dd>{{ dryRun.provider ?? '—' }}</dd></div>
+                        <div><dt>Model</dt><dd>{{ dryRun.model ?? '—' }}</dd></div>
+                        <div><dt>URL</dt><dd>{{ dryRun.url }}</dd></div>
+                      </dl>
+                      <pre class="run-detail-json run-detail-curl">{{ displayCurl }}</pre>
+                    </template>
+                    <p v-else class="run-detail-empty">点击眼睛后会构建压缩 dry-run curl，不发送网络请求。</p>
+                  </template>
+                  <p v-else class="run-detail-empty">curl 默认隐藏，点击闭眼按钮后再构建并显示。</p>
+                </section>
+
+                <section class="run-detail-section">
+                  <div class="run-detail-section-head">
+                    <h3>原始压缩详情</h3>
+                    <div class="run-detail-head-actions">
+                      <button
+                        type="button"
+                        class="run-detail-icon-button"
+                        :title="rawDetailOpen ? '隐藏原始详情' : '显示原始详情'"
+                        :aria-label="rawDetailOpen ? '隐藏原始详情' : '显示原始详情'"
+                        @click="toggleRawDetailOpen"
+                      >
+                        <IconEye v-if="rawDetailOpen" stroke="2" aria-hidden="true" />
+                        <IconEyeOff v-else stroke="2" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
+                  <pre v-if="rawDetailOpen" class="run-detail-json">{{ detailJson }}</pre>
+                  <p v-else class="run-detail-empty">原始压缩详情默认隐藏，点击闭眼按钮后再渲染。</p>
+                </section>
+              </template>
+              <p v-else class="run-detail-empty is-error">无法找到该压缩记录。</p>
+            </template>
             <template v-else-if="activeDetail">
               <section class="run-detail-section">
                 <h3>概要</h3>

@@ -1,5 +1,5 @@
 import { onBeforeUnmount, watch } from 'vue';
-import { conversationClientStateStreamId } from '@shared/protocol';
+import { GLOBAL_SETTINGS_SECTIONS, conversationClientStateStreamId, type BridgeScope, type GlobalSettingsSection } from '@shared/protocol';
 import { bridge, BridgeMessageType } from '@webview/transport';
 import { useSessionStore } from '@webview/stores/useSessionStore';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
@@ -11,6 +11,15 @@ import { useRunHistoryStore } from '@webview/stores/useRunHistoryStore';
  * 在 App 根组件挂载时调用一次：集中注册所有入站桥接监听并接入对应 store，
  * 卸载时清理。组件层不再直接监听 bridge。
  */
+
+function globalSettingsSectionFromScope(scope: BridgeScope | undefined): GlobalSettingsSection | undefined {
+  if (scope?.kind !== 'settings' || scope.level !== 'global') return undefined;
+  const section = scope.id;
+  return GLOBAL_SETTINGS_SECTIONS.includes(section as GlobalSettingsSection)
+    ? section as GlobalSettingsSection
+    : undefined;
+}
+
 export function useBridgeBootstrap(): void {
   const session = useSessionStore();
   const clientState = useClientStateStore();
@@ -120,8 +129,15 @@ export function useBridgeBootstrap(): void {
 
   disposers.push(
     bridge.on(BridgeMessageType.Error, (message) => {
-      if (message.payload?.requestType === BridgeMessageType.GlobalSettingsUpdate || message.payload?.requestType === BridgeMessageType.LlmProviderModelsGet) {
-        globalSettings.setError(message.payload.message);
+      if (
+        message.payload?.requestType === BridgeMessageType.GlobalSettingsGet
+        || message.payload?.requestType === BridgeMessageType.GlobalSettingsUpdate
+        || message.payload?.requestType === BridgeMessageType.LlmProviderModelsGet
+      ) {
+        globalSettings.setError(message.payload.message, {
+          requestType: message.payload.requestType,
+          section: globalSettingsSectionFromScope(message.scope)
+        });
       } else if (message.payload?.requestType === BridgeMessageType.RunHistoryPageGet || message.payload?.requestType === BridgeMessageType.RunHistoryDetailGet || message.payload?.requestType === BridgeMessageType.LlmDryRunGet) {
         runHistory.setError(message.payload.message);
       }

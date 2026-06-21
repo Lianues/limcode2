@@ -409,7 +409,8 @@ export const CLIENT_STATE_TABLES = {
     cascadeRemove: [
       { table: 'compressionBlockSourceLinks', foreignKey: 'blockId' },
       { table: 'compressionContextVariants', foreignKey: 'blockId' },
-      { table: 'runCompressionBlockLinks', foreignKey: 'blockId' }
+      { table: 'runCompressionBlockLinks', foreignKey: 'blockId' },
+      { table: 'compressionBlockLlmInvocationLinks', foreignKey: 'blockId' }
     ]
   }),
   compressionBlockSourceLinks: upsertRemoveTable('compressionBlockSourceLink', 'link', {
@@ -423,17 +424,20 @@ export const CLIENT_STATE_TABLES = {
     orderBy: [{ field: 'createdAt' }, { field: 'id' }]
   }),
   runCompressionBlockLinks: upsertRemoveTable('runCompressionBlockLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
+  compressionBlockLlmInvocationLinks: upsertRemoveTable('compressionBlockLlmInvocationLink', 'link', { scope: { kind: 'conversationVia', table: 'compressionBlocks', localField: 'blockId', foreignField: 'id' } }),
   llmInvocations: upsertRemoveTable('llmInvocation', 'invocation', {
     cascadeRemove: [
       { table: 'runLlmInvocationLinks', foreignKey: 'invocationId' },
-      { table: 'messageLlmInvocationLinks', foreignKey: 'invocationId' }
+      { table: 'messageLlmInvocationLinks', foreignKey: 'invocationId' },
+      { table: 'compressionBlockLlmInvocationLinks', foreignKey: 'invocationId' }
     ],
     orderBy: [{ field: 'createdAt' }, { field: 'id' }],
     scope: {
       kind: 'conversationAnyOf',
       scopes: [
         { kind: 'conversationReverseVia', table: 'runLlmInvocationLinks', localField: 'id', foreignField: 'invocationId' },
-        { kind: 'conversationReverseVia', table: 'messageLlmInvocationLinks', localField: 'id', foreignField: 'invocationId' }
+        { kind: 'conversationReverseVia', table: 'messageLlmInvocationLinks', localField: 'id', foreignField: 'invocationId' },
+        { kind: 'conversationReverseVia', table: 'compressionBlockLlmInvocationLinks', localField: 'id', foreignField: 'invocationId' }
       ]
     }
   }),

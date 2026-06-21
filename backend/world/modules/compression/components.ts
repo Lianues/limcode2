@@ -1,6 +1,7 @@
 import { defineComponent, type Entity } from '../../../ecs/types';
 import type {
   CompressionBlockRecord,
+  CompressionBlockLlmInvocationLinkRecord,
   CompressionBlockSourceLinkRecord,
   CompressionContextVariantRecord,
   RunCompressionBlockLinkRecord
@@ -17,3 +18,6 @@ export const CompressionContextVariant = defineComponent<CompressionContextVaria
 
 export type RunCompressionBlockLinkData = Omit<RunCompressionBlockLinkRecord, 'runId' | 'blockId'> & { run: Entity; block: Entity; variant?: Entity };
 export const RunCompressionBlockLink = defineComponent<RunCompressionBlockLinkData>('RunCompressionBlockLink');
+
+export type CompressionBlockLlmInvocationLinkData = Omit<CompressionBlockLlmInvocationLinkRecord, 'blockId' | 'invocationId'> & { block: Entity; invocation: Entity };
+export const CompressionBlockLlmInvocationLink = defineComponent<CompressionBlockLlmInvocationLinkData>('CompressionBlockLlmInvocationLink');

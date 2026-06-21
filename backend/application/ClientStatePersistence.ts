@@ -303,6 +303,7 @@ function skeletonPersistenceSlice(state: ClientState): ClientState {
     compressionBlocks: [],
     compressionBlockSourceLinks: [],
     compressionContextVariants: [],
+    compressionBlockLlmInvocationLinks: [],
     runCompressionBlockLinks: []
   };
 }

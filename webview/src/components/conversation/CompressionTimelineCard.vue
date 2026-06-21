@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue';
-import { IconCheck, IconChevronRight, IconCopy, IconRefresh, IconTrash, IconPlayerPause, IconPlayerPlay } from '@tabler/icons-vue';
+import { IconCheck, IconChevronRight, IconCopy, IconEye, IconRefresh, IconTrash, IconPlayerPause, IconPlayerPlay } from '@tabler/icons-vue';
 import {
   isFileDataPart,
   isFunctionCallPart,
@@ -24,6 +24,7 @@ const emit = defineEmits<{
   (event: 'delete', block: CompressionBlockRecord): void;
   (event: 'regenerate', block: CompressionBlockRecord): void;
   (event: 'toggle-enabled', block: CompressionBlockRecord, enabled: boolean): void;
+  (event: 'view-detail', block: CompressionBlockRecord): void;
 }>();
 
 const clientState = useClientStateStore();
@@ -194,6 +195,9 @@ function formatCompactNumber(value: number): string {
     </button>
 
     <div class="compression-actions" aria-label="压缩记录操作">
+      <button type="button" class="compression-action-button" title="查看本次压缩调用详情" aria-label="查看本次压缩调用详情" @click="emit('view-detail', block)">
+        <IconEye class="compression-action-icon" size="15" stroke="1.8" />
+      </button>
       <button type="button" class="compression-action-button" :disabled="isWorking" :title="block.status === 'disabled' ? '启用压缩块' : '禁用压缩块'" @click="emit('toggle-enabled', block, block.status === 'disabled')">
         <IconPlayerPlay v-if="block.status === 'disabled'" class="compression-action-icon" size="15" stroke="1.8" />
         <IconPlayerPause v-else class="compression-action-icon" size="15" stroke="1.8" />

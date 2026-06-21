@@ -7,6 +7,7 @@ import { AgentRun } from '../world/modules/agentRun/components';
 import { Message } from '../world/modules/chat/components';
 import { LlmInvocation, MessageLlmInvocationLink, RunLlmInvocationLink } from '../world/modules/llm/components';
 import { buildLlmStartRequestForRun } from '../world/modules/chat/systems/LlmDispatchSystem';
+import { CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSourceLink } from '../world/modules/compression/components';
 import { ToolEventType } from '../world/modules/tools/events';
 import { ModeEventType } from '../world/modules/mode/events';
 import { WorkEnvironmentEventType } from '../world/modules/workEnvironment/events';
@@ -22,8 +23,17 @@ import {
   conversationSettingsStreamId,
   globalSettingsStreamId,
   createMessageId,
+  isFileDataPart,
+  isFunctionCallPart,
+  isFunctionResponsePart,
+  isInlineDataPart,
+  isProviderContextPart,
+  isTextPart,
   type BridgeClientId,
   type CheckpointRestorePayload,
+  type ContentPart,
+  type LlmInvocationSettingsSnapshotRecord,
+  type MessageContent,
   type LlmProviderModelsGetPayload,
   type ProjectFolderCandidateRecord,
   type WebviewToExtensionMessage
@@ -428,8 +438,13 @@ export class WebviewMessageRouter {
     }
   }
 
-  private async postLlmDryRun(clientId: BridgeClientId, payload: { conversationId: string; runId?: string; messageId?: string; invocationId?: string; includeApiKey?: boolean }, correlationId?: string): Promise<void> {
+  private async postLlmDryRun(clientId: BridgeClientId, payload: { conversationId: string; runId?: string; messageId?: string; invocationId?: string; compressionBlockId?: string; includeApiKey?: boolean }, correlationId?: string): Promise<void> {
     try {
+      if (payload.compressionBlockId) {
+        await this.postCompressionLlmDryRun(clientId, payload as { conversationId: string; compressionBlockId: string; invocationId?: string; includeApiKey?: boolean }, correlationId);
+        return;
+      }
+
       const runId = payload.runId ?? (payload.messageId ? await this.deps.storage.resolveConversationRunIdForMessage(payload.conversationId, payload.messageId) : undefined);
       if (!runId) {
         this.postRequestError(clientId, BridgeMessageType.LlmDryRunGet, '无法根据这条消息找到对应的 run。', correlationId);
@@ -469,6 +484,85 @@ export class WebviewMessageRouter {
       this.postRequestError(clientId, BridgeMessageType.LlmDryRunGet, error instanceof Error ? error.message : '无法生成 LLM dry-run curl。', correlationId);
     }
   }
+
+  private async postCompressionLlmDryRun(
+    clientId: BridgeClientId,
+    payload: { conversationId: string; compressionBlockId: string; invocationId?: string; includeApiKey?: boolean },
+    correlationId?: string
+  ): Promise<void> {
+    try {
+      await this.deps.ensureConversationDetailLoaded(payload.conversationId);
+      const blockEntity = this.findCompressionBlockEntity(payload.compressionBlockId);
+      const block = blockEntity !== undefined ? this.deps.world.get(blockEntity, CompressionBlock) : undefined;
+      if (blockEntity === undefined || !block) {
+        this.postRequestError(clientId, BridgeMessageType.LlmDryRunGet, '无法找到该压缩块，不能构建 dry-run 请求。', correlationId);
+        return;
+      }
+      if (block.methodKind === 'openai_responses_compact') {
+        this.postRequestError(clientId, BridgeMessageType.LlmDryRunGet, 'OpenAI 原生压缩暂不支持 curl dry-run。', correlationId);
+        return;
+      }
+
+      const invocationEntity = this.findCompressionInvocation(blockEntity, payload.invocationId);
+      const invocation = invocationEntity !== undefined ? this.deps.world.get(invocationEntity, LlmInvocation) : undefined;
+      if (!invocation?.settings) {
+        this.postRequestError(clientId, BridgeMessageType.LlmDryRunGet, '无法找到本次压缩调用快照，不能构建 dry-run 请求。', correlationId);
+        return;
+      }
+
+      const request = this.buildCompressionSummaryDryRunRequest(payload.conversationId, payload.compressionBlockId, invocation.id, invocation.settings);
+      if (!request) {
+        this.postRequestError(clientId, BridgeMessageType.LlmDryRunGet, '无法从压缩块来源构建 dry-run 请求。', correlationId);
+        return;
+      }
+
+      const dryRun = await this.deps.llm.dryRun(request, { includeApiKey: payload.includeApiKey === true });
+      this.deps.webview.post(clientId, {
+        id: createMessageId(),
+        type: BridgeMessageType.LlmDryRunSnapshot,
+        channel: 'state',
+        correlationId,
+        payload: { conversationId: payload.conversationId, compressionBlockId: payload.compressionBlockId, invocationId: invocation.id, settingsSnapshot: invocation.settings, ...dryRun }
+      });
+    } catch (error) {
+      console.warn('[LimCode] Failed to dry-run compression LLM request.', error);
+      this.postRequestError(clientId, BridgeMessageType.LlmDryRunGet, error instanceof Error ? error.message : '无法生成压缩 LLM dry-run curl。', correlationId);
+    }
+  }
+
+  private buildCompressionSummaryDryRunRequest(
+    conversationId: string,
+    blockId: string,
+    invocationId: string,
+    settingsSnapshot: LlmInvocationSettingsSnapshotRecord
+  ): import('../world/modules/llm/contracts').LlmStartRequest | undefined {
+    const blockEntity = this.findCompressionBlockEntity(blockId);
+    if (blockEntity === undefined) return undefined;
+    const contents = this.compressionSourceContents(blockEntity);
+    if (contents.length === 0) return undefined;
+    const systemPrompt = 'You have written a partial transcript for the initial task above. Please write a summary of the transcript. The purpose of this summary is to provide continuity so you can continue to make progress towards solving the task in a future context, where the raw history above may not be accessible and will be replaced with this summary. Write down anything that would be helpful, including the state, next steps, learnings etc. You must wrap your summary in a <summary></summary> block.';
+    const transcript = renderContentsForSummary(contents);
+    return {
+      id: `dryrun-${invocationId}-${Date.now()}`,
+      invocationId,
+      systemInstruction: { role: 'user', parts: [{ text: systemPrompt }] },
+      contents: [{ role: 'user', parts: [{ text: `Transcript:\n\n${transcript}` }] }],
+      tools: [],
+      conversationId,
+      settingsSnapshot
+    };
+  }
+
+  private compressionSourceContents(block: number): MessageContent[] {
+    return this.deps.world.query(CompressionBlockSourceLink)
+      .map((entity) => this.deps.world.get(entity, CompressionBlockSourceLink))
+      .filter((link): link is NonNullable<typeof link> => !!link && link.block === block && link.source !== undefined)
+      .sort((left, right) => left.order - right.order)
+      .map((link) => link.source !== undefined ? this.deps.world.get(link.source, Message)?.content : undefined)
+      .filter((content): content is MessageContent => !!content);
+  }
+
+
 
   private async postLlmProviderModels(clientId: BridgeClientId, payload: LlmProviderModelsGetPayload, correlationId?: string): Promise<void> {
     try {
@@ -623,6 +717,23 @@ export class WebviewMessageRouter {
     });
   }
 
+  private findCompressionBlockEntity(blockId: string): number | undefined {
+    return this.deps.world.query(CompressionBlock).find((entity) => this.deps.world.get(entity, CompressionBlock)?.id === blockId);
+  }
+
+  private findCompressionInvocation(block: number, invocationId?: string): number | undefined {
+    if (invocationId) {
+      const direct = this.deps.world.query(LlmInvocation).find((entity) => this.deps.world.get(entity, LlmInvocation)?.id === invocationId);
+      if (direct !== undefined) return direct;
+    }
+    return this.deps.world
+      .query(CompressionBlockLlmInvocationLink)
+      .map((entity) => this.deps.world.get(entity, CompressionBlockLlmInvocationLink))
+      .filter((link): link is NonNullable<typeof link> => !!link && link.block === block)
+      .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id))[0]?.invocation;
+  }
+
+
   private postRequestError(clientId: BridgeClientId, requestType: string, message: string, correlationId?: string): void {
     this.deps.webview.post(clientId, {
       id: createMessageId(),
@@ -633,6 +744,25 @@ export class WebviewMessageRouter {
     });
   }
 }
+
+function renderContentsForSummary(contents: MessageContent[]): string {
+  return contents.map((content, index) => `${index + 1}. ${content.role}: ${content.parts.map(renderSummaryPart).filter(Boolean).join('\n') || '[empty]'}`).join('\n\n');
+}
+
+function renderSummaryPart(part: ContentPart): string {
+  if (isTextPart(part)) return part.thought === true ? '' : part.text;
+  if (isFunctionCallPart(part)) return `[tool call] ${part.functionCall.name}: ${safeStringifyJson(part.functionCall.args)}`;
+  if (isFunctionResponsePart(part)) return `[tool result] ${part.functionResponse.name}: ${safeStringifyJson(part.functionResponse.response)}`;
+  if (isInlineDataPart(part)) return `[inline data] ${part.inlineData.mimeType}`;
+  if (isFileDataPart(part)) return `[file] ${part.fileData.uri}`;
+  if (isProviderContextPart(part)) return `[provider context] ${part.providerContext.format}:${part.providerContext.itemType ?? 'context'}`;
+  return '';
+}
+
+function safeStringifyJson(value: unknown): string {
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
+
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;

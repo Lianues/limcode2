@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { CheckpointRecord, MessageRecord } from '@shared/protocol';
+import type { CheckpointRecord, CompressionBlockRecord, MessageRecord } from '@shared/protocol';
 import { useConversationUiStore, type MessageViewRow } from '@webview/stores/useConversationUiStore';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useChat } from '@webview/composables/useChat';
@@ -65,6 +65,10 @@ function onViewRunDetail(message: MessageRecord): void {
   runHistory.openDetail(message.conversationId, runId, message.id);
 }
 
+function onViewCompressionDetail(block: CompressionBlockRecord): void {
+  runHistory.openCompressionDetail(block.conversationId, block.id);
+}
+
 function isEditingTarget(row: MessageViewRow): boolean {
   return ui.editingMessage?.message.id === row.message.id;
 }
@@ -108,6 +112,7 @@ function rollbackCheckpointForMessage(message: MessageRecord): CheckpointRecord 
         @delete="deleteCompression"
         @regenerate="regenerateCompression"
         @toggle-enabled="setCompressionEnabled"
+        @view-detail="onViewCompressionDetail"
       />
     </template>
     <div v-if="!ui.timelineRows.length" class="message-empty-container">

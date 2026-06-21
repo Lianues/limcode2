@@ -5,7 +5,7 @@ export const projectCompressionClientState = projectCompressionState;
 
 export const compressionClientSyncContributor = defineClientStateContributor({
   key: 'compression',
-  tables: ['compressionBlocks', 'compressionBlockSourceLinks', 'compressionContextVariants', 'runCompressionBlockLinks'],
+  tables: ['compressionBlocks', 'compressionBlockSourceLinks', 'compressionContextVariants', 'runCompressionBlockLinks', 'compressionBlockLlmInvocationLinks'],
   reads: compressionStateProjectionReads,
   project: projectCompressionClientState,
   worker: {

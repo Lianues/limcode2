@@ -110,6 +110,11 @@ function toggle(): void {
 
 function select(option: SettingsDropdownOption): void {
   if (option.disabled) return;
+  if (option.value === props.modelValue) {
+    open.value = false;
+    filterText.value = '';
+    return;
+  }
   emit('update:modelValue', option.value);
   emit('change', option);
   open.value = false;

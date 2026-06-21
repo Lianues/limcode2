@@ -409,6 +409,7 @@ async function compactWithOpenAIResponses(
     createdAt: compacted.createdAt,
     contents: (compacted.contents ?? []).map(fromUnifiedContent),
     usageMetadata: usageMetadataFromCompact(compacted.usageMetadata),
+    settingsSnapshot: snapshotFromSettings(settings, methodConfig),
     rawResponse: compacted.rawResponse,
     methodConfig
   };
@@ -421,24 +422,27 @@ async function compactWithSummary(
   signal?: AbortSignal
 ): Promise<LlmCompactResult> {
   const summary = await generateSummaryText(request, methodConfig, options, signal);
-  const contents: MessageContent[] = [{ role: 'user', parts: [{ text: `[Context Summary]\n\n${summary}` }] }];
+  const contents: MessageContent[] = [{ role: 'user', parts: [{ text: `[Context Summary]\n\n${summary.text}` }] }];
   return {
     id: `summary-${request.blockId}`,
     object: 'limcode.context_summary',
     createdAt: Date.now(),
     contents,
+    ...(summary.settings ? { settingsSnapshot: snapshotFromSettings(summary.settings, methodConfig) } : {}),
     methodConfig
   };
 }
+
+interface GeneratedSummaryTextResult { text: string; settings?: LlmProviderConfigRecord }
 
 async function generateSummaryText(
   request: LlmCompactRequest,
   methodConfig: LlmCompressionConfigRecord,
   options: LlmProviderOptions,
   signal?: AbortSignal
-): Promise<string> {
+): Promise<GeneratedSummaryTextResult> {
   if (methodConfig.kind === 'deterministic_summary' || methodConfig.kind === 'manual_summary') {
-    return deterministicSummary(request.contents);
+    return { text: deterministicSummary(request.contents) };
   }
 
   const summarySettings = methodConfig.llmSummary;
@@ -452,7 +456,7 @@ async function generateSummaryText(
     ...(providerConfigId || model ? { model: { ...(providerConfigId ? { providerConfigId } : {}), model: model || '' } } : {})
   }, options);
 
-  if (!settings.apiKey) return deterministicSummary(request.contents);
+  if (!settings.apiKey) return { text: deterministicSummary(request.contents), settings };
 
   const unified = await importUnifiedLlmProvider();
   const registry = unified.createBootstrapExtensionRegistry();
@@ -484,13 +488,13 @@ async function generateSummaryText(
     for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified', signal })) {
       text += chunk.textDelta ?? visibleTextFromParts(chunk.partsDelta ?? []);
     }
-    return text.trim() || deterministicSummary(request.contents);
+    return { text: text.trim() || deterministicSummary(request.contents), settings };
   }
 
   const response = await provider.chat<UnifiedLLMResponse>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified', signal });
 
   const text = visibleTextFromParts(response.content?.parts ?? []).trim();
-  return text || deterministicSummary(request.contents);
+  return { text: text || deterministicSummary(request.contents), settings };
 }
 
 function normalizeCompressionConfig(input: LlmCompressionConfigRecord | undefined, fallbackKind?: LlmCompressionConfigRecord['kind']): LlmCompressionConfigRecord {

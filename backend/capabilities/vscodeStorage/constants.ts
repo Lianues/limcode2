@@ -34,6 +34,8 @@ export const CHECKPOINT_SHADOW_WORKTREES_ROOT_DIR = 'checkpoint-shadow-worktrees
 export const COMPRESSION_BLOCKS_ROOT_DIR = 'compression-blocks';
 export const COMPRESSION_BLOCK_SOURCE_LINKS_ROOT_DIR = 'compression-block-source-links';
 export const COMPRESSION_CONTEXT_VARIANTS_ROOT_DIR = 'compression-context-variants';
+export const COMPRESSION_BLOCK_LLM_INVOCATION_LINKS_ROOT_DIR = 'compression-block-llm-invocation-links';
+export const COMPRESSION_LLM_INVOCATIONS_ROOT_DIR = 'compression-llm-invocations';
 
 /**
  * 当前插件明确注册的数据根目录名。
@@ -71,6 +73,8 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
   COMPRESSION_BLOCKS_ROOT_DIR,
   COMPRESSION_BLOCK_SOURCE_LINKS_ROOT_DIR,
   COMPRESSION_CONTEXT_VARIANTS_ROOT_DIR,
+  COMPRESSION_BLOCK_LLM_INVOCATION_LINKS_ROOT_DIR,
+  COMPRESSION_LLM_INVOCATIONS_ROOT_DIR,
   SETTINGS_ROOT_DIR
 ] as const;
 

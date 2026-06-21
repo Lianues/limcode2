@@ -145,7 +145,9 @@ const RUN_DETAIL_TABLE_KEYS = [
   'toolCallEvents',
   'compressionBlocks',
   'compressionBlockSourceLinks',
-  'compressionContextVariants'
+  'compressionContextVariants',
+  'compressionBlockLlmInvocationLinks',
+  'llmInvocations'
 ] as const;
 
 export async function loadClientStateSkeletonFromStores(paths: StoragePaths, options: LoadClientStateSkeletonOptions = {}): Promise<ClientState | undefined> {
@@ -466,6 +468,9 @@ export function conversationRenderDetailSlice(state: ClientState, conversationId
   const compressionBlockIds = new Set(detail.compressionBlocks.map((block) => block.id));
   detail.compressionBlockSourceLinks = state.compressionBlockSourceLinks.filter((link) => compressionBlockIds.has(link.blockId));
   detail.compressionContextVariants = state.compressionContextVariants.filter((variant) => compressionBlockIds.has(variant.blockId));
+  detail.compressionBlockLlmInvocationLinks = state.compressionBlockLlmInvocationLinks.filter((link) => compressionBlockIds.has(link.blockId));
+  const invocationIds = new Set(detail.compressionBlockLlmInvocationLinks.map((link) => link.invocationId));
+  detail.llmInvocations = state.llmInvocations.filter((invocation) => invocationIds.has(invocation.id));
   return detail;
 }
 
@@ -502,6 +507,7 @@ export function conversationRunHistorySlice(state: ClientState, conversationId: 
   detail.runEditPolicyLinks = state.runEditPolicyLinks.filter((link) => runIds.has(link.runId));
   detail.runLlmInvocationLinks = state.runLlmInvocationLinks.filter((link) => runIds.has(link.runId));
   const invocationIds = new Set(detail.runLlmInvocationLinks.map((link) => link.invocationId));
+  detail.compressionBlockLlmInvocationLinks = state.compressionBlockLlmInvocationLinks.filter((link) => invocationIds.has(link.invocationId));
   detail.messageLlmInvocationLinks = state.messageLlmInvocationLinks.filter((link) => {
     const matches = messageIds.has(link.messageId) || invocationIds.has(link.invocationId);
     if (matches) invocationIds.add(link.invocationId);
@@ -541,6 +547,7 @@ function copyRunHistoryTables(target: ClientState, source: ClientState): void {
   target.llmInvocations = source.llmInvocations;
   target.runLlmInvocationLinks = source.runLlmInvocationLinks;
   target.messageLlmInvocationLinks = source.messageLlmInvocationLinks;
+  target.compressionBlockLlmInvocationLinks = mergeUniqueById(target.compressionBlockLlmInvocationLinks, source.compressionBlockLlmInvocationLinks);
   target.runWorkEnvironmentLinks = source.runWorkEnvironmentLinks;
   target.agentRunInputRevisions = source.agentRunInputRevisions;
   target.runCompressionBlockLinks = source.runCompressionBlockLinks;
@@ -550,6 +557,8 @@ function copyCompressionTables(target: ClientState, source: ClientState): void {
   target.compressionBlocks = source.compressionBlocks;
   target.compressionBlockSourceLinks = source.compressionBlockSourceLinks;
   target.compressionContextVariants = source.compressionContextVariants;
+  target.compressionBlockLlmInvocationLinks = source.compressionBlockLlmInvocationLinks;
+  target.llmInvocations = mergeUniqueById(target.llmInvocations, source.llmInvocations);
 }
 
 function conversationRunDetailRecord(state: ClientState, conversationId: string, runId: string): ConversationRunDetailRecord | undefined {
@@ -625,6 +634,9 @@ function runDetailSlice(state: ClientState, runId: string): ClientState {
   detail.compressionBlocks = state.compressionBlocks.filter((block) => compressionBlockIds.has(block.id));
   detail.compressionBlockSourceLinks = state.compressionBlockSourceLinks.filter((link) => compressionBlockIds.has(link.blockId));
   detail.compressionContextVariants = state.compressionContextVariants.filter((variant) => compressionBlockIds.has(variant.blockId) || compressionVariantIds.has(variant.id));
+  detail.compressionBlockLlmInvocationLinks = state.compressionBlockLlmInvocationLinks.filter((link) => compressionBlockIds.has(link.blockId) || invocationIds.has(link.invocationId));
+  for (const link of detail.compressionBlockLlmInvocationLinks) invocationIds.add(link.invocationId);
+  detail.llmInvocations = state.llmInvocations.filter((invocation) => invocationIds.has(invocation.id));
 
   const conversationIds = new Set<string>();
   for (const link of detail.agentRunTargetLinks) conversationIds.add(link.conversationId);
@@ -857,6 +869,14 @@ function runHistoryRoot(paths: StoragePaths, conversationId: string): vscode.Uri
 function runDetailUri(paths: StoragePaths, runId: string): vscode.Uri {
   return vscode.Uri.joinPath(paths.runHistoryRootUri, RUN_HISTORY_RUNS_DIR, `${safeShardName(runId)}.json`);
 }
+
+function mergeUniqueById<T extends StoreRecord>(left: T[], right: T[]): T[] {
+  const byId = new Map<string, T>();
+  for (const item of left) byId.set(item.id, item);
+  for (const item of right) byId.set(item.id, item);
+  return [...byId.values()];
+}
+
 
 function upsertById<T extends StoreRecord>(items: T[], item: T): T[] {
   const index = items.findIndex((candidate) => candidate.id === item.id);

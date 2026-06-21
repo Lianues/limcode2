@@ -6,7 +6,8 @@ import { Conversation, Message, MessageCurrentRevisionLink, MessageRevision, Par
 import { conversationMessages } from '../../chat/queries';
 import { LlmEventType } from '../../llm/events';
 import type { LlmCompactDonePayload, LlmCompactErrorPayload } from '../../llm/events';
-import { CompressionBlock, CompressionBlockSourceLink, CompressionContextVariant, RunCompressionBlockLink } from '../components';
+import { LlmInvocation } from '../../llm/components';
+import { CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSourceLink, CompressionContextVariant, RunCompressionBlockLink } from '../components';
 import { CompressionEventType } from '../events';
 import type { CompressionBlockRecord, ContentPart, MessageContent } from '../../../../../shared/protocol';
 import { isFileDataPart, isFunctionCallPart, isFunctionResponsePart, isInlineDataPart, isProviderContextPart, isTextPart } from '../../../../../shared/protocol';
@@ -21,7 +22,9 @@ const COMPRESSION_COMPONENTS = [
   CompressionBlock,
   CompressionBlockSourceLink,
   CompressionContextVariant,
-  RunCompressionBlockLink
+  RunCompressionBlockLink,
+  LlmInvocation,
+  CompressionBlockLlmInvocationLink
 ] as const;
 
 export const CompressionSystem = defineSystem({
@@ -76,6 +79,7 @@ function createCompressionBlock(
 
   const block = cmd.spawn();
   const blockId = `compression-block-${block}`;
+  const compactRequestId = `compact-${blockId}`;
   cmd.add(block, CompressionBlock, {
     id: blockId,
     conversation,
@@ -112,12 +116,32 @@ function createCompressionBlock(
     });
   });
 
+  const invocation = cmd.spawn();
+  const invocationId = `llmi${invocation}`;
+  cmd.add(invocation, LlmInvocation, {
+    id: invocationId,
+    requestId: compactRequestId,
+    status: 'streaming',
+    createdAt: now,
+    startedAt: now
+  });
+  const invocationLink = cmd.spawn();
+  cmd.add(invocationLink, CompressionBlockLlmInvocationLink, {
+    id: `compression-invocation-${invocationLink}`,
+    block,
+    invocation,
+    role: 'compact',
+    createdAt: now,
+    updatedAt: now
+  });
+
   cmd.effect({
     kind: 'llm.compact',
     request: {
-      id: `compact-${blockId}`,
+      id: compactRequestId,
       blockId,
       conversationId: payload.conversationId,
+      invocationId,
       ...(payload.methodConfigId ? { methodConfigId: payload.methodConfigId } : {}),
       ...(payload.methodKind ? { methodKind: payload.methodKind } : {}),
       contents,
@@ -146,6 +170,7 @@ function completeCompressionBlock(world: WorldReader, cmd: CommandSink, payload:
     updatedAt: now,
     completedAt: now
   });
+  completeCompressionInvocation(world, cmd, blockEntity, payload);
   const nativeVariant = cmd.spawn();
   const isNative = methodKind === 'openai_responses_compact';
   cmd.add(nativeVariant, CompressionContextVariant, {
@@ -180,7 +205,43 @@ function failCompressionBlock(world: WorldReader, cmd: CommandSink, payload: Llm
   const block = blockEntity !== undefined ? world.get(blockEntity, CompressionBlock) : undefined;
   if (blockEntity === undefined || !block) return;
   cmd.add(blockEntity, CompressionBlock, { ...block, status: 'error', error: payload.message, updatedAt: payload.completedAt, completedAt: payload.completedAt });
+  failCompressionInvocation(world, cmd, blockEntity, payload);
 }
+
+function completeCompressionInvocation(world: WorldReader, cmd: CommandSink, block: Entity, payload: LlmCompactDonePayload): void {
+  const invocationEntity = compressionInvocationForBlock(world, block);
+  const invocation = invocationEntity !== undefined ? world.get(invocationEntity, LlmInvocation) : undefined;
+  if (invocationEntity === undefined || !invocation) return;
+  const now = payload.completedAt;
+  cmd.add(invocationEntity, LlmInvocation, {
+    ...invocation,
+    status: 'complete',
+    ...(payload.result.settingsSnapshot ? { settings: payload.result.settingsSnapshot, resolvedAt: invocation.resolvedAt ?? invocation.startedAt ?? invocation.createdAt } : {}),
+    ...(payload.result.usageMetadata ? { usageMetadata: payload.result.usageMetadata } : {}),
+    completedAt: now
+  });
+}
+
+function failCompressionInvocation(world: WorldReader, cmd: CommandSink, block: Entity, payload: LlmCompactErrorPayload): void {
+  const invocationEntity = compressionInvocationForBlock(world, block);
+  const invocation = invocationEntity !== undefined ? world.get(invocationEntity, LlmInvocation) : undefined;
+  if (invocationEntity === undefined || !invocation) return;
+  cmd.add(invocationEntity, LlmInvocation, {
+    ...invocation,
+    status: 'error',
+    error: payload.message,
+    completedAt: payload.completedAt
+  });
+}
+
+function compressionInvocationForBlock(world: WorldReader, block: Entity): Entity | undefined {
+  return world
+    .query(CompressionBlockLlmInvocationLink)
+    .map((entity) => world.get(entity, CompressionBlockLlmInvocationLink))
+    .filter((link): link is NonNullable<typeof link> => !!link && link.block === block)
+    .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id))[0]?.invocation;
+}
+
 
 function updateCompressionBlock(world: WorldReader, cmd: CommandSink, payload: { blockId: string; title?: string; summaryPreview?: string; summaryContents?: MessageContent[] }): void {
   const blockEntity = findBlock(world, payload.blockId);
@@ -233,6 +294,12 @@ function deleteCompressionBlock(world: WorldReader, cmd: CommandSink, blockId: s
     cmd.effect({ kind: 'llm.abort', requestId: `compact-${block.id}` });
   }
   for (const entity of world.query(CompressionBlockSourceLink)) if (world.get(entity, CompressionBlockSourceLink)?.block === blockEntity) cmd.despawn(entity);
+  for (const entity of world.query(CompressionBlockLlmInvocationLink)) {
+    const link = world.get(entity, CompressionBlockLlmInvocationLink);
+    if (link?.block !== blockEntity) continue;
+    cmd.despawn(link.invocation);
+    cmd.despawn(entity);
+  }
   for (const entity of world.query(CompressionContextVariant)) if (world.get(entity, CompressionContextVariant)?.block === blockEntity) cmd.despawn(entity);
   for (const entity of world.query(RunCompressionBlockLink)) if (world.get(entity, RunCompressionBlockLink)?.block === blockEntity) cmd.despawn(entity);
   cmd.despawn(blockEntity);
@@ -244,7 +311,7 @@ function selectMessagesForCompression(world: WorldReader, conversation: Entity, 
   const messages = allMessages.filter((entity) => !containsOnlyProviderContext(world.get(entity, Message)?.content));
   const startIndex = startMessageId ? messages.findIndex((entity) => world.get(entity, Message)?.id === startMessageId) : 0;
   const endIndex = endMessageId ? messages.findIndex((entity) => world.get(entity, Message)?.id === endMessageId) : messages.length - 1;
-  if (messages.length <= 1) return [];
+  if (messages.length === 0) return [];
   const from = Math.max(0, startIndex < 0 ? 0 : startIndex);
   const to = Math.max(from, endIndex < 0 ? messages.length - 1 : endIndex);
   return messages.slice(from, to + 1);

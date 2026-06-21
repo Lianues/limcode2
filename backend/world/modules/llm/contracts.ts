@@ -63,6 +63,7 @@ export interface LlmCompactRequest {
   id: string;
   blockId: string;
   conversationId: string;
+  invocationId?: string;
   methodConfigId?: string;
   methodKind?: LlmCompressionConfigRecord['kind'];
   contents: MessageContent[];
@@ -75,6 +76,7 @@ export interface LlmCompactResult {
   createdAt?: number;
   contents: MessageContent[];
   usageMetadata?: LlmUsageMetadataRecord;
+  settingsSnapshot?: LlmInvocationSettingsSnapshotRecord;
   rawResponse?: unknown;
   methodConfig?: LlmCompressionConfigRecord;
 }

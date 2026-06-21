@@ -790,7 +790,7 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
       <button
         type="button"
         class="message-action-button"
-        :disabled="streaming || compactCount < 2"
+        :disabled="streaming || compactCount < 1"
         aria-label="总结到此处"
         title="总结到此处"
         @click="openCompactConfirm"

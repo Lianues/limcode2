@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { ClientState, CompressionBlockRecord, CompressionBlockSourceLinkRecord, CompressionContextVariantRecord } from '../../../shared/protocol';
+import type { ClientState, CompressionBlockLlmInvocationLinkRecord, CompressionBlockRecord, CompressionBlockSourceLinkRecord, CompressionContextVariantRecord, LlmInvocationRecord } from '../../../shared/protocol';
 import { createEmptyClientState } from '../../../shared/clientStateSchema';
 import { INDEX_FILE } from './constants';
 import type { StoragePaths } from './clientStateStore';
@@ -16,7 +16,12 @@ export async function loadConversationCompressionDetail(paths: StoragePaths, con
   state.compressionBlockSourceLinks = links.filter((link) => blockIds.has(link.blockId));
   const variants = await loadRecordStore<CompressionContextVariantRecord, 'variant'>(conversationScopedRoot(paths.compressionContextVariantsRootUri, conversationId), conversationScopedIndex(paths.compressionContextVariantsRootUri, conversationId), 'variant') ?? [];
   state.compressionContextVariants = variants.filter((variant) => blockIds.has(variant.blockId));
-  return state.compressionBlocks.length || state.compressionBlockSourceLinks.length || state.compressionContextVariants.length ? state : undefined;
+  const invocationLinks = await loadRecordStore<CompressionBlockLlmInvocationLinkRecord, 'link'>(conversationScopedRoot(paths.compressionBlockLlmInvocationLinksRootUri, conversationId), conversationScopedIndex(paths.compressionBlockLlmInvocationLinksRootUri, conversationId), 'link') ?? [];
+  state.compressionBlockLlmInvocationLinks = invocationLinks.filter((link) => blockIds.has(link.blockId));
+  const invocationIds = new Set(state.compressionBlockLlmInvocationLinks.map((link) => link.invocationId));
+  const invocations = await loadRecordStore<LlmInvocationRecord, 'invocation'>(conversationScopedRoot(paths.compressionLlmInvocationsRootUri, conversationId), conversationScopedIndex(paths.compressionLlmInvocationsRootUri, conversationId), 'invocation') ?? [];
+  state.llmInvocations = invocations.filter((invocation) => invocationIds.has(invocation.id));
+  return state.compressionBlocks.length || state.compressionBlockSourceLinks.length || state.compressionContextVariants.length || state.compressionBlockLlmInvocationLinks.length || state.llmInvocations.length ? state : undefined;
 }
 
 export async function saveConversationCompressionDetail(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
@@ -24,10 +29,15 @@ export async function saveConversationCompressionDetail(paths: StoragePaths, con
   const blockIds = new Set(blocks.map((block) => block.id));
   const links = state.compressionBlockSourceLinks.filter((link) => blockIds.has(link.blockId));
   const variants = state.compressionContextVariants.filter((variant) => blockIds.has(variant.blockId));
+  const invocationLinks = state.compressionBlockLlmInvocationLinks.filter((link) => blockIds.has(link.blockId));
+  const invocationIds = new Set(invocationLinks.map((link) => link.invocationId));
+  const invocations = state.llmInvocations.filter((invocation) => invocationIds.has(invocation.id));
   await Promise.all([
     saveRecordStore(conversationScopedRoot(paths.compressionBlocksRootUri, conversationId), conversationScopedIndex(paths.compressionBlocksRootUri, conversationId), blocks, 'block', (record) => record.title || record.id),
     saveRecordStore(conversationScopedRoot(paths.compressionBlockSourceLinksRootUri, conversationId), conversationScopedIndex(paths.compressionBlockSourceLinksRootUri, conversationId), links, 'link'),
-    saveRecordStore(conversationScopedRoot(paths.compressionContextVariantsRootUri, conversationId), conversationScopedIndex(paths.compressionContextVariantsRootUri, conversationId), variants, 'variant')
+    saveRecordStore(conversationScopedRoot(paths.compressionContextVariantsRootUri, conversationId), conversationScopedIndex(paths.compressionContextVariantsRootUri, conversationId), variants, 'variant'),
+    saveRecordStore(conversationScopedRoot(paths.compressionBlockLlmInvocationLinksRootUri, conversationId), conversationScopedIndex(paths.compressionBlockLlmInvocationLinksRootUri, conversationId), invocationLinks, 'link'),
+    saveRecordStore(conversationScopedRoot(paths.compressionLlmInvocationsRootUri, conversationId), conversationScopedIndex(paths.compressionLlmInvocationsRootUri, conversationId), invocations, 'invocation')
   ]);
 }
 

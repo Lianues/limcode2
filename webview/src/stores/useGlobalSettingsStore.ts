@@ -2,6 +2,9 @@ import { defineStore } from 'pinia';
 import {
   GLOBAL_SETTINGS_SECTIONS,
   createMessageId,
+  DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS,
+  DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT,
+  DEFAULT_LLM_CONTEXT_WINDOW_TOKENS,
   type CheckpointMaintenanceSettingsRecord,
   type GlobalSettingsRecord,
   type GlobalSettingsSection,
@@ -9,6 +12,7 @@ import {
   type LlmGenerationConfigRecord,
   type LlmCompressionConfigRecord,
   type LlmCompressionConfigsRecord,
+  type LlmCompressionThresholdUnit,
   type LlmCompressionSettingsRecord,
   type LlmProviderKind,
   type LlmProviderHeadersRecord,
@@ -24,6 +28,7 @@ import { createDefaultLlmCompressionConfig } from '@shared/protocol';
 import { bridge, BridgeMessageType } from '@webview/transport';
 
 type SelectableCompressionMethodKind = 'openai_responses_compact' | 'llm_summary' | 'deterministic_summary';
+const TOKEN_STEP = 1_000;
 
 interface FetchedModelsDialogState {
   open: boolean;
@@ -98,6 +103,10 @@ function providerDefaultBaseUrl(provider: LlmProviderKind): string {
   }
 }
 
+function providerDefaultContextWindow(_provider: LlmProviderKind): number {
+  return DEFAULT_LLM_CONTEXT_WINDOW_TOKENS;
+}
+
 function createDefaultProviderConfig(name = '新渠道配置', provider: LlmProviderKind = 'openai-compatible'): LlmProviderConfigRecord {
   const now = Date.now();
   return {
@@ -110,6 +119,7 @@ function createDefaultProviderConfig(name = '新渠道配置', provider: LlmProv
     apiKey: '',
     toolCallFormat: 'function-call',
     stream: true,
+    contextWindowTokens: providerDefaultContextWindow(provider),
     proxy: '',
     headers: {},
     generationConfig: {},
@@ -121,12 +131,15 @@ function createDefaultProviderConfig(name = '新渠道配置', provider: LlmProv
 
 function normalizeProviderConfigForUi(config: LlmProviderConfigRecord): LlmProviderConfigRecord {
   const model = config.model?.trim() ?? '';
+  const provider = config.provider;
   return {
     ...config,
+    provider,
     model,
     models: normalizeModelsForUi(config.models, model),
     proxy: config.proxy ?? '',
     stream: config.stream !== false,
+    contextWindowTokens: normalizeTokenCount(config.contextWindowTokens) ?? providerDefaultContextWindow(provider),
     headers: sanitizeHeaders(config.headers) ?? {},
     generationConfig: normalizeGenerationConfigForUi(config.generationConfig) ?? {},
     requestBody: sanitizeRequestBody(config.requestBody) ?? {}
@@ -248,6 +261,99 @@ function sanitizeJsonValue(value: unknown): LlmRequestBodyJsonValue | undefined 
   return undefined;
 }
 
+function normalizeTokenCount(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
+}
+
+function alignTokenCountToK(value: number): number {
+  return Math.max(TOKEN_STEP, Math.round(value / TOKEN_STEP) * TOKEN_STEP);
+}
+
+function clampTokenCount(value: number, contextWindowTokens?: number): number {
+  const aligned = alignTokenCountToK(value);
+  return contextWindowTokens !== undefined ? Math.min(contextWindowTokens, aligned) : aligned;
+}
+
+function clampPercent(value: unknown): number | undefined {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return undefined;
+  return Math.min(100, Math.max(1, number));
+}
+
+function percentFromTokens(tokens: number | undefined, contextWindowTokens: number | undefined): number | undefined {
+  if (!tokens || !contextWindowTokens) return undefined;
+  return Math.min(100, Math.max(1, (tokens / contextWindowTokens) * 100));
+}
+
+function tokensFromPercent(percent: number | undefined, contextWindowTokens: number | undefined): number | undefined {
+  if (!percent || !contextWindowTokens) return undefined;
+  return clampTokenCount((contextWindowTokens * percent) / 100, contextWindowTokens);
+}
+
+function resolveThresholdTokens(trigger: LlmCompressionConfigRecord['trigger'] | undefined, contextWindowTokens: number | undefined): number | undefined {
+  const thresholdTokens = normalizeTokenCount(trigger?.thresholdTokens);
+  if (thresholdTokens !== undefined) return contextWindowTokens ? Math.min(thresholdTokens, contextWindowTokens) : thresholdTokens;
+  return tokensFromPercent(clampPercent(trigger?.thresholdPercent) ?? DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT, contextWindowTokens);
+}
+
+function normalizeCompressionTriggerForUi(
+  input: LlmCompressionConfigRecord['trigger'] | undefined,
+  contextWindowTokens?: number
+): LlmCompressionConfigRecord['trigger'] {
+  const hasExplicitTriggerChoice = input?.thresholdUnit !== undefined
+    || input?.thresholdPercent !== undefined
+    || input?.thresholdTokens !== undefined
+    || input?.reserveLatestUserMessageTokens !== undefined;
+  const mode = input?.mode === 'manual' && hasExplicitTriggerChoice ? 'manual' : 'token_threshold';
+  const thresholdUnit: LlmCompressionThresholdUnit = input?.thresholdUnit === 'tokens' ? 'tokens' : 'percent';
+  const normalizedWindow = normalizeTokenCount(contextWindowTokens);
+  const inputPercent = clampPercent(input?.thresholdPercent) ?? DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT;
+  const inputTokens = normalizeTokenCount(input?.thresholdTokens);
+  const thresholdTokens = inputTokens !== undefined
+    ? clampTokenCount(inputTokens, normalizedWindow)
+    : tokensFromPercent(inputPercent, normalizedWindow);
+  const thresholdPercent = percentFromTokens(thresholdTokens, normalizedWindow) ?? inputPercent;
+  const preserveLatestMessages = normalizeTokenCount(input?.preserveLatestMessages) ?? 8;
+  const reserveLatestUserMessageTokens = normalizeTokenCount(input?.reserveLatestUserMessageTokens) ?? DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS;
+  return {
+    mode,
+    thresholdUnit,
+    thresholdPercent,
+    ...(thresholdTokens !== undefined ? { thresholdTokens } : {}),
+    preserveLatestMessages,
+    reserveLatestUserMessageTokens
+  };
+}
+
+function normalizeCompressionConfigForUi(
+  config: LlmCompressionConfigRecord,
+  contextWindowTokens?: number
+): LlmCompressionConfigRecord {
+  return {
+    ...config,
+    trigger: normalizeCompressionTriggerForUi(config.trigger, contextWindowTokens)
+  };
+}
+
+function thresholdAfterContextWindowChange(
+  trigger: LlmCompressionConfigRecord['trigger'],
+  previousWindowTokens: number | undefined,
+  nextWindowTokens: number | undefined
+): LlmCompressionConfigRecord['trigger'] {
+  if (!previousWindowTokens || !nextWindowTokens) return normalizeCompressionTriggerForUi(trigger, nextWindowTokens);
+  const previousThresholdTokens = resolveThresholdTokens(trigger, previousWindowTokens);
+  if (!previousThresholdTokens) return normalizeCompressionTriggerForUi(trigger, nextWindowTokens);
+  const previousReservedTokens = Math.max(0, previousWindowTokens - previousThresholdTokens);
+  const nextThresholdTokens = clampTokenCount(nextWindowTokens - previousReservedTokens, nextWindowTokens);
+  return normalizeCompressionTriggerForUi({
+    ...trigger,
+    thresholdTokens: nextThresholdTokens,
+    thresholdPercent: percentFromTokens(nextThresholdTokens, nextWindowTokens)
+  }, nextWindowTokens);
+}
+
+
 function toPlainProviderConfig(config: LlmProviderConfigRecord): LlmProviderConfigRecord {
   return {
     id: config.id,
@@ -259,6 +365,7 @@ function toPlainProviderConfig(config: LlmProviderConfigRecord): LlmProviderConf
     apiKey: config.apiKey,
     toolCallFormat: config.toolCallFormat,
     stream: config.stream !== false,
+    ...(normalizeTokenCount(config.contextWindowTokens) ? { contextWindowTokens: normalizeTokenCount(config.contextWindowTokens) } : {}),
     ...(config.proxy?.trim() ? { proxy: config.proxy.trim() } : {}),
     ...(sanitizeHeaders(config.headers) ? { headers: sanitizeHeaders(config.headers) } : {}),
     ...(sanitizeGenerationConfig(config.generationConfig) ? { generationConfig: sanitizeGenerationConfig(config.generationConfig) } : {}),
@@ -454,7 +561,15 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
     },
     saveLlmCompressionConfigs(): void {
       this.markPendingSettingSection('llmCompressionConfigs');
-      bridge.request(BridgeMessageType.GlobalSettingsUpdate, { section: 'llmCompressionConfigs', settings: { configs: this.llmCompressionConfigs.configs.map((config) => ({ ...config, updatedAt: Date.now() })) } });
+      bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
+        section: 'llmCompressionConfigs',
+        settings: {
+          configs: this.llmCompressionConfigs.configs.map((config) => ({
+            ...normalizeCompressionConfigForUi(config),
+            updatedAt: Date.now()
+          }))
+        }
+      });
     },
     selectCompressionConfigForActiveProvider(configId: string): void {
       if (!this.llmCompressionConfigs.configs.some((config) => config.id === configId)) return;
@@ -485,6 +600,21 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       if (!config) return;
       Object.assign(config, patch, { updatedAt: Date.now() });
       this.saveLlmCompressionConfigs();
+    },
+    updateActiveCompressionTrigger(patch: Partial<LlmCompressionConfigRecord['trigger']>): void {
+      let config = this.activeCompressionConfig;
+      if (!config) {
+        config = createDefaultLlmCompressionConfig('默认压缩方法');
+        this.llmCompressionConfigs.configs.push(config);
+        this.llmCompression.defaultConfigId = config.id;
+      }
+      config.trigger = normalizeCompressionTriggerForUi(
+        { ...config.trigger, ...patch },
+        this.activeLlmProviderConfig?.contextWindowTokens
+      );
+      config.updatedAt = Date.now();
+      this.saveLlmCompressionConfigs();
+      this.selectCompressionConfigForActiveProvider(config.id);
     },
     setActiveCompressionMethodKind(kind: SelectableCompressionMethodKind): void {
       const activeProvider = this.activeLlmProviderConfig;
@@ -556,6 +686,27 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       if (!config) return;
       Object.assign(config, patch, { updatedAt: Date.now() });
       this.queueLlmProviderConfigsAutoSave();
+    },
+    updateActiveLlmContextWindowTokens(value: number | undefined): void {
+      const config = this.activeLlmProviderConfig;
+      if (!config) return;
+      const previousWindowTokens = normalizeTokenCount(config.contextWindowTokens);
+      const nextWindowTokens = normalizeTokenCount(value);
+      if (nextWindowTokens !== undefined) config.contextWindowTokens = nextWindowTokens;
+      else delete config.contextWindowTokens;
+      config.updatedAt = Date.now();
+      this.queueLlmProviderConfigsAutoSave();
+
+      const compressionConfig = this.activeCompressionConfig;
+      if (!compressionConfig || nextWindowTokens === undefined) return;
+      compressionConfig.trigger = thresholdAfterContextWindowChange(
+        compressionConfig.trigger,
+        previousWindowTokens,
+        nextWindowTokens
+      );
+      compressionConfig.updatedAt = Date.now();
+      this.saveLlmCompressionConfigs();
+      this.selectCompressionConfigForActiveProvider(compressionConfig.id);
     },
     updateActiveLlmGenerationConfig(generationConfig: LlmGenerationConfigRecord | undefined): void {
       const config = this.activeLlmProviderConfig;
@@ -703,7 +854,7 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
         this.llmCompression = { ...emptyLlmCompression(), ...(payload.settings as LlmCompressionSettingsRecord) };
       } else if (payload.section === 'llmCompressionConfigs') {
         const settings = payload.settings as LlmCompressionConfigsRecord;
-        this.llmCompressionConfigs = { configs: settings.configs };
+        this.llmCompressionConfigs = { configs: settings.configs.map((config) => normalizeCompressionConfigForUi(config)) };
       } else if (payload.section === 'checkpointMaintenance') {
         this.checkpointMaintenance = { ...emptyCheckpointMaintenance(), ...(payload.settings as CheckpointMaintenanceSettingsRecord) };
       } else {

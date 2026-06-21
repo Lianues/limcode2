@@ -383,6 +383,11 @@ export interface LlmProviderConfigsRecord {
 export type LlmCompressionMethodKind = 'disabled' | 'openai_responses_compact' | 'llm_summary' | 'deterministic_summary' | 'manual_summary';
 export type LlmCompressionTriggerMode = 'manual' | 'token_threshold';
 export type LlmCompressionFallbackMode = 'use_summary' | 'use_raw_history' | 'block_and_ask' | 'auto_generate_summary';
+export type LlmCompressionThresholdUnit = 'percent' | 'tokens';
+
+export const DEFAULT_LLM_CONTEXT_WINDOW_TOKENS = 200_000;
+export const DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT = 80;
+export const DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS = 20_000;
 
 export interface LlmCompressionSettingsRecord {
   defaultConfigId?: string;
@@ -409,7 +414,10 @@ export interface LlmCompressionConfigRecord {
   trigger: {
     mode: LlmCompressionTriggerMode;
     thresholdTokens?: number;
+    thresholdPercent?: number;
+    thresholdUnit?: LlmCompressionThresholdUnit;
     preserveLatestMessages?: number;
+    reserveLatestUserMessageTokens?: number;
   };
   openaiResponsesCompact?: {
     providerConfigId?: string;
@@ -442,7 +450,13 @@ export function createDefaultLlmCompressionConfig(name = '默认压缩方法'): 
     id: `llm-compression-config-${createMessageId()}`,
     name,
     kind: 'llm_summary',
-    trigger: { mode: 'manual', preserveLatestMessages: 8 },
+    trigger: {
+      mode: 'token_threshold',
+      thresholdUnit: 'percent',
+      thresholdPercent: DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT,
+      preserveLatestMessages: 8,
+      reserveLatestUserMessageTokens: DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS
+    },
     llmSummary: {
       systemPrompt: '你是上下文压缩助手。请保留用户目标、关键约束、已完成工作、工具结果、未解决问题和后续待办，用简洁但完整的中文总结历史对话。',
       userPrompt: '请压缩以下对话历史，输出后续模型可以继续工作的上下文摘要。',
@@ -471,6 +485,7 @@ export interface LlmProviderConfigRecord {
   toolCallFormat: LlmToolCallFormat;
   stream: boolean;
   proxy?: string;
+  contextWindowTokens?: number;
   headers?: LlmProviderHeadersRecord;
   generationConfig?: LlmGenerationConfigRecord;
   requestBody?: LlmRequestBodyRecord;
@@ -492,6 +507,7 @@ export interface LlmInvocationSettingsSnapshotRecord {
   displayModelName?: string;
   toolCallFormat?: LlmToolCallFormat;
   stream?: boolean;
+  contextWindowTokens?: number;
   generationConfig?: LlmGenerationConfigRecord;
   requestBody?: LlmRequestBodyRecord;
   compressionConfigId?: string;

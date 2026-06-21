@@ -12,7 +12,7 @@ import type {
   LlmThinkingLevel,
   LlmToolCallFormat
 } from '../../../shared/protocol';
-import { createMessageId } from '../../../shared/protocol';
+import { DEFAULT_LLM_CONTEXT_WINDOW_TOKENS, createMessageId } from '../../../shared/protocol';
 import { DEFAULT_LLM_BASE_URL } from '../llmProvider';
 import type { StoragePaths } from './clientStateStore';
 import { INDEX_FILE } from './constants';
@@ -66,6 +66,7 @@ export function createDefaultLlmProviderConfig(input: { name?: string } = {}): L
     apiKey: '',
     toolCallFormat: 'function-call',
     stream: true,
+    contextWindowTokens: DEFAULT_LLM_CONTEXT_WINDOW_TOKENS,
     createdAt: now,
     updatedAt: now
   };
@@ -80,16 +81,19 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
   const headers = normalizeHeaders(input?.headers);
   const generationConfig = normalizeGenerationConfig(input?.generationConfig);
   const requestBody = normalizeRequestBody(input?.requestBody);
+  const provider = isKnownProvider(input?.provider) ? input.provider : fallback.provider;
+  const contextWindowTokens = finitePositiveInteger(input?.contextWindowTokens) ?? providerDefaultContextWindow(provider);
   return {
     id: stringOrDefault(input?.id, fallback.id),
     name: stringOrDefault(input?.name, fallback.name),
-    provider: isKnownProvider(input?.provider) ? input.provider : fallback.provider,
+    provider,
     baseUrl: stringOrDefault(input?.baseUrl, fallback.baseUrl),
     model,
     models,
     apiKey: typeof input?.apiKey === 'string' ? input.apiKey.trim() : fallback.apiKey,
     toolCallFormat: isKnownToolCallFormat(input?.toolCallFormat) ? input.toolCallFormat : fallback.toolCallFormat,
     stream: typeof input?.stream === 'boolean' ? input.stream : true,
+    contextWindowTokens,
     ...(optionalString(input?.proxy) ? { proxy: optionalString(input?.proxy) } : {}),
     ...(headers ? { headers } : {}),
     ...(generationConfig ? { generationConfig } : {}),
@@ -164,6 +168,10 @@ function isKnownProvider(provider: unknown): provider is LlmProviderKind {
   return provider === 'openai-compatible' || provider === 'openai-responses' || provider === 'claude' || provider === 'gemini' || provider === 'deepseek';
 }
 
+function providerDefaultContextWindow(_provider: LlmProviderKind): number {
+  return DEFAULT_LLM_CONTEXT_WINDOW_TOKENS;
+}
+
 function isKnownToolCallFormat(format: unknown): format is LlmToolCallFormat {
   return format === 'function-call';
 }
@@ -180,6 +188,11 @@ function optionalString(value: unknown): string | undefined {
 function finiteTimestamp(value: unknown, fallback: number): number {
   const timestamp = Number(value);
   return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : fallback;
+}
+
+function finitePositiveInteger(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
 }
 
 function normalizeHeaders(input: unknown): LlmProviderHeadersRecord | undefined {

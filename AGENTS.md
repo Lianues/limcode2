@@ -331,7 +331,26 @@ webview/src/components/ui/HoverTooltipPanel.vue
 5. 需要输入名称、重命名等简单文本输入弹窗时，优先复用 webview/src/components/ui/InputPanel.vue。
 6. 需要勾选框 / 复选框 / 列表选中标记时，必须复用 webview/src/components/ui/LcCheckbox.vue；不要临时使用原生 checkbox 默认样式，也不要用 span + “✓” 拼接勾选图形。纯展示选中标记使用 presentation 模式，交互式复选框使用 v-model / update:model-value。
 7. 设置页签内容较多时按页签拆分 Vue 组件，主面板只负责布局与页签切换。
+8. 需要 token 数阈值 / 上下文窗口阈值滑条时，优先复用 webview/src/components/ui/TokenThresholdSlider.vue；不要在业务组件中临时编写 range 滑条样式。该组件已内置 1k 对齐、顶部 token 标签、底部百分比标签、推荐阈值标签与中性灰视觉风格。
 ```
+
+`TokenThresholdSlider` 基础用法：
+
+```vue
+<TokenThresholdSlider
+  :model-value="thresholdTokens"
+  :max-tokens="contextWindowTokens"
+  :step-tokens="1000"
+  :recommended-tokens="contextWindowTokens - 20000"
+  label-variant="tag"
+  :show-top-label="true"
+  :show-bottom-label="true"
+  aria-label="拖拽调整自动压缩触发阈值"
+  @update:model-value="updateThresholdTokens"
+/>
+```
+
+要求：业务组件只负责计算 `model-value`、`max-tokens`、`recommended-tokens` 并在 `update:model-value` 中写回配置；滑条的 token / 百分比展示、推荐标签、hover / focus 样式由组件统一维护。如需标签样式，使用 `label-variant="tag"`；如需隐藏上下数字，使用 `:show-top-label="false"` / `:show-bottom-label="false"`；如需隐藏推荐标签，使用 `:show-recommended-tag="false"`。
 
 ### 5.7 配置项数据对接标准
 

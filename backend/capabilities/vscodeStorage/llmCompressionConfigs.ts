@@ -5,9 +5,10 @@ import type {
   LlmCompressionFallbackMode,
   LlmCompressionMethodKind,
   LlmCompressionSettingsRecord,
+  LlmCompressionThresholdUnit,
   LlmCompressionTriggerMode
 } from '../../../shared/protocol';
-import { createDefaultLlmCompressionConfig } from '../../../shared/protocol';
+import { DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS, DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT, createDefaultLlmCompressionConfig } from '../../../shared/protocol';
 import type { StoragePaths } from './clientStateStore';
 import { INDEX_FILE } from './constants';
 import { loadRecordStore, removeRecordStoreRecord, saveRecordStore } from './recordStore';
@@ -117,13 +118,22 @@ function sortConfigs(records: LlmCompressionConfigRecord[]): LlmCompressionConfi
 
 function normalizeTrigger(input: unknown): LlmCompressionConfigRecord['trigger'] {
   const record = isPlainObject(input) ? input : {};
-  const mode: LlmCompressionTriggerMode = record.mode === 'token_threshold' ? 'token_threshold' : 'manual';
+  const thresholdUnit: LlmCompressionThresholdUnit = isKnownThresholdUnit(record.thresholdUnit) ? record.thresholdUnit : 'percent';
   const thresholdTokens = finitePositiveNumber(record.thresholdTokens);
+  const inputThresholdPercent = finitePercent(record.thresholdPercent);
   const preserveLatestMessages = finitePositiveNumber(record.preserveLatestMessages);
+  const inputReserveLatestUserMessageTokens = finitePositiveNumber(record.reserveLatestUserMessageTokens);
+  const hasExplicitTriggerChoice = isKnownThresholdUnit(record.thresholdUnit) || inputThresholdPercent !== undefined || thresholdTokens !== undefined || inputReserveLatestUserMessageTokens !== undefined;
+  const mode: LlmCompressionTriggerMode = record.mode === 'manual' && hasExplicitTriggerChoice ? 'manual' : 'token_threshold';
+  const thresholdPercent = inputThresholdPercent ?? DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT;
+  const reserveLatestUserMessageTokens = inputReserveLatestUserMessageTokens ?? DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS;
   return {
     mode,
+    thresholdUnit,
+    thresholdPercent,
     ...(thresholdTokens !== undefined ? { thresholdTokens } : {}),
-    ...(preserveLatestMessages !== undefined ? { preserveLatestMessages } : {})
+    ...(preserveLatestMessages !== undefined ? { preserveLatestMessages } : {}),
+    reserveLatestUserMessageTokens
   };
 }
 
@@ -163,6 +173,10 @@ function isKnownFallbackMode(value: unknown): value is LlmCompressionFallbackMod
   return value === 'use_summary' || value === 'use_raw_history' || value === 'block_and_ask' || value === 'auto_generate_summary';
 }
 
+function isKnownThresholdUnit(value: unknown): value is LlmCompressionThresholdUnit {
+  return value === 'percent' || value === 'tokens';
+}
+
 function stringOrDefault(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
@@ -180,6 +194,12 @@ function finiteTimestamp(value: unknown, fallback: number): number {
 function finitePositiveNumber(value: unknown): number | undefined {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
+}
+
+function finitePercent(value: unknown): number | undefined {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return undefined;
+  return Math.min(100, Math.max(1, number));
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

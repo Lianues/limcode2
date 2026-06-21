@@ -1,20 +1,22 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { IconCloudDown, IconPencil, IconPlus, IconSearch, IconTrash } from '@tabler/icons-vue';
-import type {
-  LlmGenerationConfigRecord,
-  LlmProviderConfigRecord,
-  LlmProviderHeadersRecord,
-  LlmProviderKind,
-  LlmCompressionMethodKind,
-  LlmProviderModelRecord,
-  LlmRequestBodyRecord,
-  LlmToolCallFormat
+import {
+  DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS,
+  type LlmGenerationConfigRecord,
+  type LlmProviderConfigRecord,
+  type LlmProviderHeadersRecord,
+  type LlmProviderKind,
+  type LlmCompressionMethodKind,
+  type LlmProviderModelRecord,
+  type LlmRequestBodyRecord,
+  type LlmToolCallFormat
 } from '@shared/protocol';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import ConfirmPanel from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
 import LcCheckbox from '@webview/components/ui/LcCheckbox.vue';
+import TokenThresholdSlider from '@webview/components/ui/TokenThresholdSlider.vue';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import ModelFetchDialog from './ModelFetchDialog.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from './SettingsDropdown.vue';
@@ -23,6 +25,7 @@ import LlmParameterSettings from './parameters/LlmParameterSettings.vue';
 
 const settings = useGlobalSettingsStore();
 type SelectableCompressionMethodKind = 'openai_responses_compact' | 'llm_summary' | 'deterministic_summary';
+const TOKEN_STEP = 1_000;
 const createOpen = ref(false);
 const createProvider = ref<LlmProviderKind>('openai-compatible');
 const renameOpen = ref(false);
@@ -95,6 +98,32 @@ const filteredModels = computed<LlmProviderModelRecord[]>(() => {
     return model.id.toLowerCase().includes(keyword) || model.name.toLowerCase().includes(keyword);
   });
 });
+const contextWindowTokens = computed(() => normalizeTokenCount(activeConfig.value?.contextWindowTokens) ?? 0);
+const activeCompressionTrigger = computed(() => settings.activeCompressionConfig?.trigger);
+const compressionAutoEnabled = computed(() => (activeCompressionTrigger.value?.mode ?? 'token_threshold') === 'token_threshold');
+const compressionReserveTokens = computed(() => normalizeTokenCount(activeCompressionTrigger.value?.reserveLatestUserMessageTokens) ?? DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS);
+const configuredThresholdPercent = computed(() => clampPercent(activeCompressionTrigger.value?.thresholdPercent ?? 80));
+const compressionThresholdTokens = computed(() => {
+  const contextWindow = contextWindowTokens.value;
+  const tokenValue = normalizeTokenCount(activeCompressionTrigger.value?.thresholdTokens);
+  if (tokenValue !== undefined) return contextWindow > 0 ? Math.min(tokenValue, contextWindow) : tokenValue;
+  if (contextWindow <= 0) return 0;
+  return clampTokenToContext((contextWindow * configuredThresholdPercent.value) / 100, contextWindow);
+});
+const compressionThresholdPercent = computed(() => {
+  const contextWindow = contextWindowTokens.value;
+  const thresholdTokens = compressionThresholdTokens.value;
+  if (contextWindow > 0 && thresholdTokens > 0) return clampPercent((thresholdTokens / contextWindow) * 100);
+  return configuredThresholdPercent.value;
+});
+const recommendedThresholdTokens = computed(() => {
+  const contextWindow = contextWindowTokens.value;
+  if (contextWindow <= 0) return 0;
+  return clampTokenToContext(contextWindow - compressionReserveTokens.value, contextWindow);
+});
+const compressionThresholdInputValue = computed(() => String(compressionThresholdTokens.value || ''));
+
+
 const hasModels = computed(() => (activeConfig.value?.models.length ?? 0) > 0);
 const canClearModels = computed(() => !!activeConfig.value && hasModels.value);
 
@@ -113,6 +142,70 @@ function formatModelTime(value: string | undefined): string {
 function updateActiveConfigField<K extends keyof LlmProviderConfigRecord>(key: K, value: LlmProviderConfigRecord[K]): void {
   settings.updateActiveLlmProviderConfig({ [key]: value } as Partial<LlmProviderConfigRecord>);
 }
+function normalizeTokenCount(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
+}
+
+function alignTokenCountToK(value: number): number {
+  return Math.max(TOKEN_STEP, Math.round(value / TOKEN_STEP) * TOKEN_STEP);
+}
+
+function clampTokenToContext(value: number, contextWindow = contextWindowTokens.value): number {
+  const aligned = alignTokenCountToK(value);
+  return contextWindow > 0 ? Math.min(contextWindow, aligned) : aligned;
+}
+
+function clampPercent(value: unknown): number {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 1;
+  return Math.min(100, Math.max(1, number));
+}
+
+function percentForTokens(tokens: number, contextWindow = contextWindowTokens.value): number {
+  return contextWindow > 0 ? clampPercent((tokens / contextWindow) * 100) : compressionThresholdPercent.value;
+}
+
+function formatTokenLabel(value: number | undefined): string {
+  const tokens = normalizeTokenCount(value);
+  if (tokens === undefined) return '未设置';
+  const kilo = tokens / 1_000;
+  if (kilo >= 1) return `${Number.isInteger(kilo) ? kilo.toFixed(0) : kilo.toFixed(1)}k`;
+  return `${tokens}`;
+}
+
+function numericInputValue(event: Event): number | undefined {
+  const value = (event.target as HTMLInputElement).value.trim();
+  if (!value) return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function updateContextWindowTokens(event: Event): void {
+  const value = numericInputValue(event);
+  settings.updateActiveLlmContextWindowTokens(value === undefined ? undefined : alignTokenCountToK(value));
+}
+
+function updateCompressionAutoEnabled(enabled: boolean): void {
+  settings.updateActiveCompressionTrigger({ mode: enabled ? 'token_threshold' : 'manual' });
+}
+
+function updateCompressionThresholdTokens(event: Event): void {
+  const value = numericInputValue(event);
+  if (value === undefined) return;
+  updateCompressionThresholdFromTokens(value);
+}
+
+function updateCompressionThresholdFromTokens(value: number): void {
+  const tokens = clampTokenToContext(value);
+  settings.updateActiveCompressionTrigger({
+    thresholdUnit: 'tokens',
+    thresholdTokens: tokens,
+    thresholdPercent: percentForTokens(tokens)
+  });
+}
+
+
 
 function inputValue(event: Event): string {
   return (event.target as HTMLInputElement).value;
@@ -314,16 +407,33 @@ function cancelDelete(): void {
         <input :value="activeConfig.apiKey" type="text" placeholder="sk-..." autocomplete="off" spellcheck="false" @input="updateActiveConfigField('apiKey', inputValue($event))" />
       </label>
 
-      <label class="global-settings-field global-settings-field-wide stream-field">
-        <span>流式生成</span>
-        <LcCheckbox
-          :model-value="activeConfig.stream !== false"
-          aria-label="启用流式生成"
-          @update:model-value="updateActiveConfigField('stream', $event)"
-        >
-          <span class="stream-checkbox-text">启用流式生成。普通回复和上下文压缩会复用此配置。</span>
-        </LcCheckbox>
+      <label class="global-settings-field context-window-field">
+        <span>上下文窗口 token 数</span>
+        <input
+          class="token-number-input"
+          :value="activeConfig.contextWindowTokens ?? ''"
+          type="number"
+          min="1000"
+          :step="TOKEN_STEP"
+          placeholder="例如 200000"
+          @change="updateContextWindowTokens"
+        />
       </label>
+
+      <div class="global-settings-field stream-field">
+        <span>流式生成</span>
+        <div class="stream-checkbox-row">
+          <LcCheckbox
+            :model-value="activeConfig.stream !== false"
+            size="sm"
+            aria-label="启用流式生成"
+            @update:model-value="updateActiveConfigField('stream', $event)"
+          >
+            <span class="stream-checkbox-enable">启用</span>
+          </LcCheckbox>
+        </div>
+        <span class="stream-checkbox-text">启用流式生成。普通回复和上下文压缩会复用此配置。</span>
+      </div>
 
       <section class="model-manager global-settings-field-wide" aria-label="模型列表">
         <header class="model-manager-header">
@@ -415,6 +525,55 @@ function cancelDelete(): void {
               @update:model-value="updateActiveCompressionMethod"
             />
           </label>
+
+          <label class="global-settings-field global-settings-field-wide compression-auto-field">
+            <span>自动触发</span>
+            <LcCheckbox
+              :model-value="compressionAutoEnabled"
+              aria-label="启用自动触发上下文压缩"
+              @update:model-value="updateCompressionAutoEnabled"
+            >
+              <span class="compression-auto-text">启用后，当上下文达到阈值时自动准备压缩。默认建议开启。</span>
+            </LcCheckbox>
+          </label>
+
+          <div v-if="compressionAutoEnabled" class="compression-trigger-panel global-settings-field-wide">
+            <div class="compression-trigger-head">
+              <div>
+                <span class="compression-trigger-title">触发上下文 token 数阈值</span>
+                <p>直接填写触发压缩的上下文 token 数；建议至少预留 {{ formatTokenLabel(compressionReserveTokens) }} 窗口给最后一轮用户消息。</p>
+              </div>
+            </div>
+
+            <div class="compression-threshold-control">
+              <label class="global-settings-field compression-threshold-input-field">
+                <span>上下文 token 数</span>
+                <span class="threshold-input-shell">
+                  <input
+                    class="token-number-input"
+                    :value="compressionThresholdInputValue"
+                    type="number"
+                    :min="TOKEN_STEP"
+                    :max="contextWindowTokens || undefined"
+                    :step="TOKEN_STEP"
+                    :disabled="contextWindowTokens <= 0"
+                    @change="updateCompressionThresholdTokens"
+                  />
+                  <span>token</span>
+                </span>
+              </label>
+
+              <TokenThresholdSlider
+                :model-value="compressionThresholdTokens"
+                :max-tokens="contextWindowTokens"
+                :step-tokens="TOKEN_STEP"
+                :recommended-tokens="recommendedThresholdTokens"
+                :disabled="contextWindowTokens <= 0"
+                aria-label="拖拽调整自动压缩触发阈值"
+                @update:model-value="updateCompressionThresholdFromTokens"
+              />
+            </div>
+          </div>
         </div>
       </section>
 
@@ -550,6 +709,135 @@ function cancelDelete(): void {
 
 .compression-settings-grid {
   margin: 0;
+}
+
+.stream-field {
+  justify-content: start;
+}
+
+.stream-checkbox-row {
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+}
+
+.stream-checkbox-row :deep(.lc-checkbox-control) {
+  align-items: center;
+}
+
+.stream-checkbox-row :deep(.lc-checkbox-box) {
+  flex: 0 0 auto;
+}
+
+.stream-checkbox-enable {
+  color: var(--vscode-foreground);
+  font-size: var(--font-size-xs);
+  line-height: 1.2;
+}
+
+.stream-checkbox-text,
+.compression-auto-text {
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+}
+
+.token-number-input[type='number'] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.token-number-input[type='number']::-webkit-outer-spin-button,
+.token-number-input[type='number']::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
+.compression-auto-field {
+  padding-top: var(--space-1);
+  border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 72%, transparent);
+}
+
+.compression-trigger-panel {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--vscode-editor-background) 97%, var(--vscode-foreground) 3%);
+}
+
+.compression-trigger-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.compression-trigger-title {
+  display: block;
+  color: var(--vscode-foreground);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.compression-trigger-head p {
+  margin: 3px 0 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+}
+
+
+.compression-threshold-control {
+  display: grid;
+  grid-template-columns: minmax(130px, 190px) minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.compression-threshold-input-field {
+  min-width: 0;
+}
+
+.threshold-input-shell {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  border-radius: var(--radius-sm);
+  background: var(--vscode-input-background);
+  color: var(--vscode-descriptionForeground);
+  overflow: hidden;
+}
+
+.threshold-input-shell input {
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.threshold-input-shell input:focus {
+  outline: none;
+}
+
+.threshold-input-shell > span {
+  padding: 0 var(--space-2);
+  font-size: var(--font-size-xs);
+}
+
+
+@media (max-width: 720px) {
+  .compression-trigger-head,
+  .compression-threshold-control {
+    grid-template-columns: 1fr;
+  }
+
+  .compression-trigger-head {
+    display: grid;
+  }
 }
 </style>
 

@@ -149,6 +149,7 @@ export async function startLlmProvider(
       model: settings.model,
       apiKey: settings.apiKey,
       baseUrl: settings.baseUrl,
+      ...(settings.contextWindowTokens ? { contextWindow: settings.contextWindowTokens } : {}),
       ...(headers ? { headers } : {}),
       ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
       ...(proxy ? { proxy, fetch: proxyFetch } : {})
@@ -234,6 +235,7 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
     model: runtimeSettings.model,
     apiKey: runtimeSettings.apiKey,
     baseUrl: runtimeSettings.baseUrl,
+    ...(runtimeSettings.contextWindowTokens ? { contextWindow: runtimeSettings.contextWindowTokens } : {}),
     ...(headers ? { headers } : {}),
     ...(runtimeSettings.requestBody ? { requestBody: runtimeSettings.requestBody } : {}),
     ...(proxy ? { proxy } : {})
@@ -384,6 +386,7 @@ async function compactWithOpenAIResponses(
     model: settings.model,
     apiKey: settings.apiKey,
     baseUrl: settings.baseUrl,
+    ...(settings.contextWindowTokens ? { contextWindow: settings.contextWindowTokens } : {}),
     ...(headers ? { headers } : {}),
     ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
     ...(proxy ? { proxy, fetch: proxyFetch } : {})
@@ -459,6 +462,7 @@ async function generateSummaryText(
     model: settings.model,
     apiKey: settings.apiKey,
     baseUrl: settings.baseUrl,
+    ...(settings.contextWindowTokens ? { contextWindow: settings.contextWindowTokens } : {}),
     ...(headers ? { headers } : {}),
     ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
     ...(proxy ? { proxy, fetch: proxyFetch } : {})
@@ -575,6 +579,7 @@ function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmPr
   const headers = normalizeHeaders(settings?.headers);
   const generationConfig = settings?.generationConfig;
   const requestBody = settings?.requestBody;
+  const contextWindowTokens = normalizeContextWindowTokens(settings?.contextWindowTokens);
   return {
     id: settings?.id?.trim() || 'llm-provider-config-default',
     name: settings?.name?.trim() || '默认渠道',
@@ -585,6 +590,7 @@ function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmPr
     apiKey: settings?.apiKey?.trim() ?? '',
     toolCallFormat: normalizeToolCallFormat(settings?.toolCallFormat),
     stream: settings?.stream !== false,
+    ...(contextWindowTokens ? { contextWindowTokens } : {}),
     ...(proxy ? { proxy } : {}),
     ...(headers ? { headers } : {}),
     ...(nonEmptyRecord(generationConfig) ? { generationConfig } : {}),
@@ -616,6 +622,7 @@ function snapshotFromSettings(settings: LlmProviderConfigRecord, compressionConf
     ...(modelName ? { modelName, displayModelName: modelName } : {}),
     toolCallFormat: settings.toolCallFormat,
     stream: settings.stream !== false,
+    ...(settings.contextWindowTokens ? { contextWindowTokens: settings.contextWindowTokens } : {}),
     ...(settings.generationConfig ? { generationConfig: settings.generationConfig } : {}),
     ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
     ...(compressionConfig?.id ? { compressionConfigId: compressionConfig.id } : {}),
@@ -685,6 +692,11 @@ function mergeHeaders(...records: Array<Record<string, string> | undefined>): Ll
     }
   }
   return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function normalizeContextWindowTokens(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
 }
 
 function nonEmptyRecord(value: unknown): value is Record<string, unknown> {

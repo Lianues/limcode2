@@ -2,10 +2,17 @@ import { bridge, BridgeMessageType } from '@webview/transport';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import type { CompressionBlockRecord } from '@shared/protocol';
 
+export interface CreateCompressionOptions {
+  startMessageId?: string;
+  endMessageId?: string;
+  methodConfigId?: string;
+}
+
 export function useCompression() {
   const clientState = useClientStateStore();
 
-  function createCompression(methodConfigId?: string): boolean {
+  function createCompression(options: CreateCompressionOptions | string = {}): boolean {
+    const input = typeof options === 'string' ? { methodConfigId: options } : options;
     const conversationId = clientState.currentConversationId;
     if (!conversationId) return false;
     const runningBlocks = clientState.currentCompressionBlocks.filter((block) => block.status === 'pending' || block.status === 'running');
@@ -18,7 +25,12 @@ export function useCompression() {
       return false;
     }
     if (clientState.currentMessages.length < 2) return false;
-    bridge.request(BridgeMessageType.CompressionCreate, { conversationId, ...(methodConfigId ? { methodConfigId } : {}) });
+    bridge.request(BridgeMessageType.CompressionCreate, {
+      conversationId,
+      ...(input.startMessageId ? { startMessageId: input.startMessageId } : {}),
+      ...(input.endMessageId ? { endMessageId: input.endMessageId } : {}),
+      ...(input.methodConfigId ? { methodConfigId: input.methodConfigId } : {})
+    });
     return true;
   }
 

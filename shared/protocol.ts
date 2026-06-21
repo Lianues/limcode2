@@ -386,8 +386,10 @@ export type LlmCompressionFallbackMode = 'use_summary' | 'use_raw_history' | 'bl
 export type LlmCompressionThresholdUnit = 'percent' | 'tokens';
 
 export const DEFAULT_LLM_CONTEXT_WINDOW_TOKENS = 200_000;
-export const DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT = 80;
+export const DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT = 90;
 export const DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS = 20_000;
+export const DEFAULT_LLM_COMPRESSION_SUMMARY_SYSTEM_PROMPT = 'You have written a partial transcript for the initial task above. Please write a summary of the transcript. The purpose of this summary is to provide continuity so you can continue to make progress towards solving the task in a future context, where the raw history above may not be accessible and will be replaced with this summary. Write down anything that would be helpful, including the state, next steps, learnings etc. You must wrap your summary in a <summary></summary> block.';
+export const DEFAULT_LLM_COMPRESSION_SUMMARY_USER_PROMPT = 'Transcript:';
 
 export interface LlmCompressionSettingsRecord {
   defaultConfigId?: string;
@@ -458,8 +460,8 @@ export function createDefaultLlmCompressionConfig(name = '默认压缩方法'): 
       reserveLatestUserMessageTokens: DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS
     },
     llmSummary: {
-      systemPrompt: '你是上下文压缩助手。请保留用户目标、关键约束、已完成工作、工具结果、未解决问题和后续待办，用简洁但完整的中文总结历史对话。',
-      userPrompt: '请压缩以下对话历史，输出后续模型可以继续工作的上下文摘要。',
+      systemPrompt: DEFAULT_LLM_COMPRESSION_SUMMARY_SYSTEM_PROMPT,
+      userPrompt: DEFAULT_LLM_COMPRESSION_SUMMARY_USER_PROMPT,
       targetTokens: 2000
     },
     fallbackPolicy: { whenNativeUnavailable: 'use_summary' },
@@ -512,6 +514,7 @@ export interface LlmInvocationSettingsSnapshotRecord {
   requestBody?: LlmRequestBodyRecord;
   compressionConfigId?: string;
   compressionMethodKind?: LlmCompressionMethodKind;
+  compressionTrigger?: LlmCompressionConfigRecord['trigger'];
   /** header 名保留；敏感值会被 mask，不持久化真实 secret。 */
   headers?: LlmProviderHeadersRecord;
 }

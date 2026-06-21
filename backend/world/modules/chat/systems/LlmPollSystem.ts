@@ -14,8 +14,10 @@ import { ToolCall } from '../../tools/components';
 import { spawnToolCall, ToolCallBundle } from '../../tools/bundles';
 import { AgentRun } from '../../agentRun/components';
 import { spawnToolCallRunLink } from '../../agentRun/bundles';
-import { LlmRequest, Message, Streaming, Conversation, type MessageData } from '../components';
-import { isFunctionCallPart, isTextPart, isVisibleTextPart, type ContentPart } from '../../../../../shared/protocol';
+import { CompressionBlock } from '../../compression/components';
+import { CompressionEventType } from '../../compression/events';
+import { LlmRequest, Message, Streaming, Conversation, PartOf, type MessageData } from '../components';
+import { isFunctionCallPart, isProviderContextPart, isTextPart, isVisibleTextPart, type ContentPart, type LlmUsageMetadataRecord } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
 
 type PendingOperation =
@@ -69,8 +71,9 @@ export const LlmPollSystem = defineSystem({
   name: 'LlmPollSystem',
   access: {
     queries: [LlmInvocationsByIdQuery, LlmRequestsByIdQuery, ModelMessagesQuery, ToolCallLookupQuery],
+    reads: { components: [PartOf, CompressionBlock] },
     writes: { components: [Streaming, AgentRun] },
-    events: { read: [LlmEventType.Started, LlmEventType.ThoughtDelta, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error], emit: [CheckpointEventType.Requested] },
+    events: { read: [LlmEventType.Started, LlmEventType.ThoughtDelta, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error], emit: [CheckpointEventType.Requested, CompressionEventType.Create] },
     bundles: [ToolCallBundle]
   },
   run(ctx) {
@@ -125,6 +128,91 @@ function updateFor(updates: Map<string, PendingRequestUpdate>, requestId: string
 function requestOf(world: WorldReader, requestId: string): Entity | undefined {
   return world.query(LlmRequest).find((request) => world.get(request, LlmRequest)?.id === requestId);
 }
+
+function maybeEnqueueAutoCompression(
+  world: WorldReader,
+  cmd: CommandSink,
+  input: { conversation: Entity; modelMessage: Entity; invocation?: Entity; usageMetadata?: LlmUsageMetadataRecord }
+): void {
+  if (!input.usageMetadata || input.invocation === undefined) return;
+  const invocation = world.get(input.invocation, LlmInvocation);
+  const settings = invocation?.settings;
+  const trigger = settings?.compressionTrigger;
+  if (!settings || !trigger || trigger.mode !== 'token_threshold' || settings.compressionMethodKind === 'disabled') return;
+
+  const observedTokens = usageTokenCount(input.usageMetadata);
+  const thresholdTokens = autoCompressionThresholdTokens(settings);
+  if (observedTokens === undefined || thresholdTokens === undefined || observedTokens < thresholdTokens) return;
+
+  const endMessage = previousCompressibleMessageBefore(world, input.conversation, input.modelMessage);
+  if (!endMessage || hasCompressionBlockForAnchor(world, input.conversation, endMessage.id)) return;
+
+  const conversation = world.get(input.conversation, Conversation);
+  if (!conversation) return;
+  cmd.enqueue({
+    type: CompressionEventType.Create,
+    payload: {
+      conversationId: conversation.id,
+      endMessageId: endMessage.id,
+      ...(settings.compressionConfigId ? { methodConfigId: settings.compressionConfigId } : {}),
+      ...(settings.compressionMethodKind ? { methodKind: settings.compressionMethodKind } : {}),
+      trigger: 'auto' as const
+    }
+  });
+}
+
+function autoCompressionThresholdTokens(settings: NonNullable<LlmInvocationData['settings']>): number | undefined {
+  const trigger = settings.compressionTrigger;
+  if (!trigger) return undefined;
+  const contextWindowTokens = finitePositiveNumber(settings.contextWindowTokens);
+  const thresholdPercent = finitePositiveNumber(trigger.thresholdPercent);
+  const configuredTokens = finitePositiveNumber(trigger.thresholdTokens)
+    ?? (contextWindowTokens !== undefined && thresholdPercent !== undefined
+      ? Math.floor(contextWindowTokens * Math.min(100, thresholdPercent) / 100)
+      : undefined);
+  return configuredTokens;
+}
+
+function usageTokenCount(usage: LlmUsageMetadataRecord): number | undefined {
+  const total = finitePositiveNumber(usage.totalTokenCount);
+  if (total !== undefined) return total;
+  const prompt = finitePositiveNumber(usage.promptTokenCount) ?? 0;
+  const candidates = finitePositiveNumber(usage.candidatesTokenCount) ?? 0;
+  const thoughts = finitePositiveNumber(usage.thoughtsTokenCount) ?? 0;
+  const sum = prompt + candidates + thoughts;
+  return sum > 0 ? sum : undefined;
+}
+
+function finitePositiveNumber(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
+}
+
+function previousCompressibleMessageBefore(world: WorldReader, conversation: Entity, modelMessage: Entity): MessageData | undefined {
+  const current = world.get(modelMessage, Message);
+  if (!current) return undefined;
+  return world
+    .query(Message, PartOf)
+    .filter((entity) => entity !== modelMessage && world.get(entity, PartOf)?.parent === conversation)
+    .map((entity) => world.get(entity, Message))
+    .filter((message): message is MessageData => !!message && message.seq < current.seq && !containsOnlyProviderContext(message))
+    .sort((left, right) => right.seq - left.seq)
+    [0];
+}
+
+function containsOnlyProviderContext(message: MessageData): boolean {
+  return message.content.parts.length > 0 && message.content.parts.every(isProviderContextPart);
+}
+
+function hasCompressionBlockForAnchor(world: WorldReader, conversation: Entity, anchorMessageId: string): boolean {
+  return world.query(CompressionBlock).some((entity) => {
+    const block = world.get(entity, CompressionBlock);
+    return block?.conversation === conversation
+      && block.anchorMessageId === anchorMessageId
+      && (block.status === 'running' || block.status === 'pending' || block.status === 'complete');
+  });
+}
+
 
 function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: string, update: PendingRequestUpdate): void {
   const request = requestOf(world, requestId);
@@ -226,6 +314,7 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
           type: CheckpointEventType.Requested,
           payload: { conversationId: conversation.id, runId: run.id, floorMessageId: current.id, anchorPosition: 'after', trigger: 'llm_response_after' }
         });
+        maybeEnqueueAutoCompression(world, cmd, { conversation: requestData.conversation, modelMessage, invocation: requestData.invocation, usageMetadata });
       }
       cmd.add(requestData.run, AgentRun, {
         ...run,

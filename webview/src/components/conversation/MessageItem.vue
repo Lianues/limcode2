@@ -29,17 +29,19 @@ const props = withDefaults(
     deleteCount?: number;
     floorNumber?: number;
     rollbackCheckpoint?: CheckpointRecord;
+    compactCount?: number;
     deleting?: boolean;
     entering?: boolean;
     editingHighlighted?: boolean;
   }>(),
-  { runId: undefined, runDetailLoading: false, deleteCount: 1, floorNumber: 0, rollbackCheckpoint: undefined, deleting: false, entering: false, editingHighlighted: false }
+  { runId: undefined, runDetailLoading: false, deleteCount: 1, floorNumber: 0, rollbackCheckpoint: undefined, compactCount: 1, deleting: false, entering: false, editingHighlighted: false }
 );
 
 const emit = defineEmits<{
   (event: 'edit-message', message: MessageRecord): void;
   (event: 'retry-from', message: MessageRecord): void;
   (event: 'delete-from', message: MessageRecord): void;
+  (event: 'compact-to', message: MessageRecord): void;
   (event: 'view-run-detail', message: MessageRecord): void;
 }>();
 
@@ -94,9 +96,13 @@ const checkpointStore = useCheckpointPolicyStore();
 const copied = ref(false);
 const confirmRetryOpen = ref(false);
 const confirmDeleteOpen = ref(false);
+const confirmCompactOpen = ref(false);
 const rollbackPending = ref(false);
 const deleteDescriptionHtml = computed(
   () => `将删除这条消息以及它之后的所有共 ${props.deleteCount} 条消息，此操作<strong>无法撤销</strong>。`
+);
+const compactDescriptionHtml = computed(
+  () => `确定从此处开始往前进行总结吗？共 <strong>${props.compactCount}</strong> 条消息（前面的总结块本身额外算一条）。总结块会追加到这条消息后面。`
 );
 const retryDescriptionHtml = computed(
   () => `确定要重试此消息吗？这将删除此消息及后续共 ${props.deleteCount} 条消息，然后重新请求 AI 响应。此操作<strong>不可撤销</strong>。`
@@ -599,6 +605,10 @@ function openDeleteConfirm(): void {
   confirmDeleteOpen.value = true;
 }
 
+function openCompactConfirm(): void {
+  confirmCompactOpen.value = true;
+}
+
 function editMessage(): void {
   emit('edit-message', props.message);
 }
@@ -650,6 +660,16 @@ function confirmDelete(): void {
 async function rollbackAndConfirmDelete(): Promise<void> {
   if (await restoreBeforeConfirm()) confirmDelete();
 }
+
+function cancelCompact(): void {
+  confirmCompactOpen.value = false;
+}
+
+function confirmCompact(): void {
+  emit('compact-to', props.message);
+  confirmCompactOpen.value = false;
+}
+
 
 function onDeleteConfirmAction(action: ConfirmPanelAction): void {
   if (action.key === 'cancel') cancelDelete();
@@ -770,6 +790,19 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
       <button
         type="button"
         class="message-action-button"
+        :disabled="streaming || compactCount < 2"
+        aria-label="总结到此处"
+        title="总结到此处"
+        @click="openCompactConfirm"
+      >
+        <svg class="message-action-icon message-compact-icon" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+          <path class="message-compact-icon-top" d="M5 5h14l-7 6z" />
+          <path class="message-compact-icon-bottom" d="M5 19h14l-7 -6z" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="message-action-button"
         :class="{ 'is-copied': copied }"
         :disabled="!messageText"
         :aria-label="copied ? '已复制消息' : '复制消息'"
@@ -804,6 +837,14 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
       :actions="deleteConfirmActions"
       @action="onDeleteConfirmAction"
       @cancel="cancelDelete"
+    />
+    <ConfirmPanel
+      :open="confirmCompactOpen"
+      title="总结到此处？"
+      :description-html="compactDescriptionHtml"
+      confirm-label="开始总结"
+      @confirm="confirmCompact"
+      @cancel="cancelCompact"
     />
   </article>
 </template>
@@ -861,7 +902,7 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
   align-items: center;
   gap: var(--space-2);
   margin-bottom: var(--space-2);
-  padding-right: 118px;
+  padding-right: 150px;
   flex-wrap: wrap;
 }
 
@@ -923,6 +964,11 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
   width: 15px;
   height: 15px;
   pointer-events: none;
+}
+
+.message-compact-icon path {
+  fill: currentColor;
+  stroke: none;
 }
 
 .role-chip {

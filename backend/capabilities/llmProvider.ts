@@ -13,6 +13,8 @@ import {
   isFileDataPart,
   isFunctionCallPart,
   isFunctionResponsePart,
+  DEFAULT_LLM_COMPRESSION_SUMMARY_SYSTEM_PROMPT,
+  DEFAULT_LLM_COMPRESSION_SUMMARY_USER_PROMPT,
   isInlineDataPart,
   isTextPart,
   isProviderContextPart
@@ -468,8 +470,8 @@ async function generateSummaryText(
     ...(proxy ? { proxy, fetch: proxyFetch } : {})
   }, registry.llmProviders);
 
-  const systemPrompt = summarySettings?.systemPrompt?.trim() || '你是上下文压缩助手。请保留任务目标、关键约束、已完成工作、工具结果、错误、决策和下一步计划。';
-  const userPrompt = summarySettings?.userPrompt?.trim() || '请将以下对话历史压缩为后续模型可继续工作的摘要：';
+  const systemPrompt = summarySettings?.systemPrompt?.trim() || DEFAULT_LLM_COMPRESSION_SUMMARY_SYSTEM_PROMPT;
+  const userPrompt = summarySettings?.userPrompt?.trim() || DEFAULT_LLM_COMPRESSION_SUMMARY_USER_PROMPT;
   const transcript = renderContentsForSummary(request.contents);
   const summaryRequest = {
     contents: [{ role: 'user', parts: [{ text: `${userPrompt}\n\n${transcript}` }] }],
@@ -627,6 +629,7 @@ function snapshotFromSettings(settings: LlmProviderConfigRecord, compressionConf
     ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
     ...(compressionConfig?.id ? { compressionConfigId: compressionConfig.id } : {}),
     ...(compressionConfig?.kind ? { compressionMethodKind: compressionConfig.kind } : {}),
+    ...(compressionConfig?.trigger ? { compressionTrigger: compressionConfig.trigger } : {}),
     ...(settings.headers ? { headers: maskSensitiveHeaders(settings.headers) } : {})
   };
 }

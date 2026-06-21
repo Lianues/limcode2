@@ -20,7 +20,7 @@ withDefaults(
 const ui = useConversationUiStore();
 const clientState = useClientStateStore();
 const { retryMessageFrom, deleteMessagesFrom } = useChat();
-const { deleteCompression, regenerateCompression, setCompressionEnabled } = useCompression();
+const { createCompression, deleteCompression, regenerateCompression, setCompressionEnabled } = useCompression();
 const runHistory = useRunHistoryStore();
 
 function onDeleteFrom(message: MessageRecord): void {
@@ -33,6 +33,19 @@ function onEditMessage(row: MessageViewRow): void {
 
 function onRetryFrom(message: MessageRecord): void {
   ui.playExitFrom(message.id, () => retryMessageFrom(message.conversationId, message.id));
+}
+
+function onCompactTo(message: MessageRecord): void {
+  createCompression({ endMessageId: message.id });
+}
+
+function compactCountForMessage(message: MessageRecord): number {
+  const messageCount = clientState.currentMessages.filter((candidate) => candidate.seq <= message.seq).length;
+  const previousCompressionCount = clientState.currentCompressionBlocks.filter((block) => {
+    const anchorSeq = block.anchorSeq ?? block.endSeq;
+    return anchorSeq !== undefined && anchorSeq < message.seq;
+  }).length;
+  return messageCount + previousCompressionCount;
 }
 
 function runIdForMessage(message: MessageRecord): string | undefined {
@@ -75,9 +88,11 @@ function rollbackCheckpointForMessage(message: MessageRecord): CheckpointRecord 
         :entering="row.phase === 'entering'"
         :editing-highlighted="isEditingTarget(row)"
         :rollback-checkpoint="rollbackCheckpointForMessage(row.message)"
+        :compact-count="compactCountForMessage(row.message)"
         @edit-message="onEditMessage(row)"
         @retry-from="onRetryFrom"
         @delete-from="onDeleteFrom"
+        @compact-to="onCompactTo"
         @view-run-detail="onViewRunDetail"
       />
       <CheckpointTimelineCard

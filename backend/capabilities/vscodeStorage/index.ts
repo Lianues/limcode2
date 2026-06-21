@@ -4,12 +4,15 @@ import type {
   ConversationSettingsRecord,
   GlobalSettingsRecord,
   GlobalSettingsSectionValue,
+  LlmCompressionConfigsRecord,
+  LlmCompressionSettingsRecord,
   LlmProviderConfigsRecord,
   LlmSettingsRecord
 } from '../../../shared/protocol';
 import type { StorageCapability } from '../types';
 import { loadGlobalSettingsFile, writeGlobalSettingsFile } from './globalSettings';
 import { loadLlmProviderConfigsSettings, saveLlmProviderConfigsSettings } from './llmProviderConfigs';
+import { loadLlmCompressionConfigsSettings, normalizeLlmCompressionSettings, saveLlmCompressionConfigsSettings } from './llmCompressionConfigs';
 import {
   createGlobalSettingsRecord,
   LIMCODE_GLOBAL_STATUS_LABEL,
@@ -197,6 +200,17 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
         await loadNormalizedLlmGlobalSettings(paths);
         return { section, settings: stored.settings, filePath: stored.filePath };
       }
+      if (section === 'llmCompression') {
+        const configs = (await loadLlmCompressionConfigsSettings(paths)).settings.configs;
+        const stored = await loadGlobalSettingsFile(paths.settingsRootUri, 'llmCompression');
+        const settings = normalizeLlmCompressionSettings(stored.settings as Partial<LlmCompressionSettingsRecord> | undefined, configs);
+        if (JSON.stringify(settings) !== JSON.stringify(stored.settings)) await writeGlobalSettingsFile(paths.settingsRootUri, 'llmCompression', settings);
+        return { section, settings, filePath: stored.filePath };
+      }
+      if (section === 'llmCompressionConfigs') {
+        const stored = await loadLlmCompressionConfigsSettings(paths);
+        return { section, settings: stored.settings, filePath: stored.filePath };
+      }
       await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
       return loadGlobalSettingsFile(paths.settingsRootUri, section);
     },
@@ -207,6 +221,17 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       if (section === 'llmProviderConfigs') {
         const stored = await saveLlmProviderConfigsSettings(paths, settings as Partial<LlmProviderConfigsRecord> | undefined);
         await loadNormalizedLlmGlobalSettings(paths);
+        return { section, settings: stored.settings, filePath: stored.filePath };
+      }
+      if (section === 'llmCompression') {
+        const configs = (await loadLlmCompressionConfigsSettings(paths)).settings.configs;
+        const normalized = normalizeLlmCompressionSettings(settings as Partial<LlmCompressionSettingsRecord> | undefined, configs);
+        await writeGlobalSettingsFile(paths.settingsRootUri, 'llmCompression', normalized);
+        const stored = await loadGlobalSettingsFile(paths.settingsRootUri, 'llmCompression');
+        return { section, settings: stored.settings, filePath: stored.filePath };
+      }
+      if (section === 'llmCompressionConfigs') {
+        const stored = await saveLlmCompressionConfigsSettings(paths, settings as Partial<LlmCompressionConfigsRecord> | undefined);
         return { section, settings: stored.settings, filePath: stored.filePath };
       }
       await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
@@ -233,6 +258,24 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       const paths = getPaths();
       await ensureLlmSettingsRoots(paths);
       return (await loadLlmProviderConfigsSettings(paths)).settings.configs.find((config) => config.id === id);
+    },
+    async loadActiveLlmCompressionConfig(providerConfigId) {
+      const paths = getPaths();
+      await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
+      const configs = (await loadLlmCompressionConfigsSettings(paths)).settings.configs;
+      const stored = await loadGlobalSettingsFile(paths.settingsRootUri, 'llmCompression');
+      const settings = normalizeLlmCompressionSettings(stored.settings as Partial<LlmCompressionSettingsRecord> | undefined, configs);
+      const binding = providerConfigId
+        ? settings.providerBindings.find((candidate) => candidate.providerConfigId === providerConfigId)
+        : undefined;
+      const id = binding?.compressionConfigId ?? settings.defaultConfigId ?? configs[0]?.id;
+      return configs.find((config) => config.id === id) ?? configs[0];
+    },
+    async loadLlmCompressionConfigById(configId) {
+      const id = configId.trim();
+      if (!id) return undefined;
+      const paths = getPaths();
+      return (await loadLlmCompressionConfigsSettings(paths)).settings.configs.find((config) => config.id === id);
     },
     async loadConversationSettings(conversationId, section) {
       const paths = getPaths();

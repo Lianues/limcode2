@@ -19,6 +19,7 @@ import { cleanupRunLlmRequests } from '../../agentRun/llmRequestCleanup';
 import { activeDeliveryPolicyForRun, defaultAgentForConversation, effectiveEditPolicyForRun, runSource, runTarget } from '../../agentRun/queries';
 import type { MessageContent } from '../../../../../shared/protocol';
 import { Checkpoint, CheckpointTimelineAnchor } from '../../checkpoint/components';
+import { CompressionBlock, CompressionBlockSourceLink } from '../../compression/components';
 import { CheckpointEventType } from '../../checkpoint/events';
 import {
   cloneMessageToConversation,
@@ -59,9 +60,11 @@ const MessageEditQuery = defineQuery({
     RunDeliveryPolicyLink,
     LlmRequest,
     Checkpoint,
-    CheckpointTimelineAnchor
+    CheckpointTimelineAnchor,
+    CompressionBlock,
+    CompressionBlockSourceLink
   ],
-  write: [Message, AgentRun],
+  write: [Message, AgentRun, CompressionBlock],
   remove: [MessageCurrentRevisionLink, AgentRunNeedsModel, Streaming, LlmRequest, CheckpointTimelineAnchor, Checkpoint],
   mutationMode: 'update',
   role: 'work'
@@ -103,6 +106,7 @@ export const MessageEditSystem = defineSystem({
       cmd.add(message, Message, { ...current, content, status: 'complete', usageMetadata });
       const newRevision = spawnMessageRevision(cmd, message, content, 'edited');
       applySourceEditedPolicies(world, cmd, { message, conversation, oldRevision, newRevision, content });
+      markCompressionBlocksForEditedMessage(world, cmd, message);
       if (current.role === 'user') replaceMessageAfterCheckpoints(world, cmd, conversation, message);
 
       if (payload.deleteFollowing) {
@@ -115,6 +119,17 @@ export const MessageEditSystem = defineSystem({
         spawnEditedMessageRun(world, cmd, conversation, message);
       }
     }
+function markCompressionBlocksForEditedMessage(world: WorldReader, cmd: CommandSink, message: Entity): void {
+  for (const entity of world.query(CompressionBlockSourceLink)) {
+    const link = world.get(entity, CompressionBlockSourceLink);
+    if (link?.source !== message) continue;
+    const block = world.get(link.block, CompressionBlock);
+    if (!block || block.status === 'stale') continue;
+    cmd.add(link.block, CompressionBlock, { ...block, status: 'stale', staleReason: '源消息已编辑。', updatedAt: Date.now() });
+  }
+}
+
+
   }
 });
 

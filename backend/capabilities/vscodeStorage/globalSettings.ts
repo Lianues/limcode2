@@ -3,11 +3,14 @@ import type {
   CheckpointMaintenanceSettingsRecord,
   GlobalSettingsSection,
   GlobalSettingsSectionValue,
+  LlmCompressionSettingsRecord,
   LlmSettingsRecord
 } from '../../../shared/protocol';
-import { CHECKPOINT_MAINTENANCE_SETTINGS_FILE, LLM_SETTINGS_FILE, STORAGE_VERSION } from './constants';
+import { createDefaultLlmCompressionSettings } from '../../../shared/protocol';
+import { CHECKPOINT_MAINTENANCE_SETTINGS_FILE, LLM_COMPRESSION_SETTINGS_FILE, LLM_SETTINGS_FILE, STORAGE_VERSION } from './constants';
 import { readJson, writeJson } from './json';
 import { createDefaultLlmSettings, normalizeLlmSettings } from './llmSettings';
+import { normalizeLlmCompressionSettings } from './llmCompressionConfigs';
 
 interface GlobalSettingsFile<T> {
   schemaVersion: typeof STORAGE_VERSION;
@@ -15,7 +18,7 @@ interface GlobalSettingsFile<T> {
   settings: T;
 }
 
-type FileBackedGlobalSettingsSection = Exclude<GlobalSettingsSection, 'common' | 'llmProviderConfigs'>;
+type FileBackedGlobalSettingsSection = Exclude<GlobalSettingsSection, 'common' | 'llmProviderConfigs' | 'llmCompressionConfigs'>;
 
 const GLOBAL_SETTINGS_SECTION_SPECS: Record<FileBackedGlobalSettingsSection, {
   fileName: string;
@@ -26,6 +29,11 @@ const GLOBAL_SETTINGS_SECTION_SPECS: Record<FileBackedGlobalSettingsSection, {
     fileName: LLM_SETTINGS_FILE,
     createDefault: createDefaultLlmSettings,
     normalize: (input) => normalizeLlmSettings(input as Partial<LlmSettingsRecord> | undefined)
+  },
+  llmCompression: {
+    fileName: LLM_COMPRESSION_SETTINGS_FILE,
+    createDefault: createDefaultLlmCompressionSettings,
+    normalize: (input) => normalizeLlmCompressionSettings(input as Partial<LlmCompressionSettingsRecord> | undefined)
   },
   checkpointMaintenance: {
     fileName: CHECKPOINT_MAINTENANCE_SETTINGS_FILE,
@@ -114,7 +122,7 @@ function sameSettings(section: GlobalSettingsSection, a: GlobalSettingsSectionVa
 }
 
 function getFileBackedSpec(section: GlobalSettingsSection): (typeof GLOBAL_SETTINGS_SECTION_SPECS)[FileBackedGlobalSettingsSection] {
-  if (section === 'common' || section === 'llmProviderConfigs') {
+  if (section === 'common' || section === 'llmProviderConfigs' || section === 'llmCompressionConfigs') {
     throw new Error(`Global settings section "${section}" is not stored by the generic file-backed settings handler.`);
   }
   return GLOBAL_SETTINGS_SECTION_SPECS[section];

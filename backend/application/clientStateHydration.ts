@@ -63,6 +63,12 @@ import {
   MessageLlmInvocationLink,
   RunLlmInvocationLink
 } from '../world/modules/llm/components';
+import {
+  CompressionBlock,
+  CompressionBlockSourceLink,
+  CompressionContextVariant,
+  RunCompressionBlockLink
+} from '../world/modules/compression/components';
 import type { ClientState, MessageRecord, ToolCallEventRecord, ToolCallRecord } from '../../shared/protocol';
 import { createDefaultAgentRecord, DEFAULT_AGENT_NAME, DEFAULT_CONVERSATION_ID } from './defaults';
 
@@ -356,6 +362,7 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
   });
   hydrateSystemPromptScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, modes: modeEntities, runs: runEntities, prompts: systemPromptEntities });
   hydrateModelProfileScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, modes: modeEntities, runs: runEntities, profiles: modelProfileEntities });
+  hydrateCompressionRecords(world, state, { conversations: conversationEntities, messages: messageEntities, runs: runEntities });
 
   const inputRevisionIds = existingIds(world, AgentRunInputRevision);
   for (const record of state.agentRunInputRevisions ?? []) {
@@ -370,6 +377,59 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
   }
 
   return true;
+}
+
+function hydrateCompressionRecords(
+  world: World,
+  state: ClientState,
+  maps: { conversations: Map<string, Entity>; messages: Map<string, Entity>; runs: Map<string, Entity> }
+): void {
+  const blockEntities = existingRecords(world, CompressionBlock);
+  for (const record of state.compressionBlocks ?? []) {
+    if (blockEntities.has(record.id)) continue;
+    const conversation = maps.conversations.get(record.conversationId);
+    if (conversation === undefined) continue;
+    const entity = world.spawn();
+    blockEntities.set(record.id, entity);
+    const { conversationId: _conversationId, ...rest } = record;
+    world.add(entity, CompressionBlock, { ...rest, conversation });
+  }
+
+  const sourceLinkIds = existingIds(world, CompressionBlockSourceLink);
+  for (const record of state.compressionBlockSourceLinks ?? []) {
+    if (sourceLinkIds.has(record.id)) continue;
+    const block = blockEntities.get(record.blockId);
+    if (block === undefined) continue;
+    const entity = world.spawn();
+    sourceLinkIds.add(record.id);
+    const { blockId: _blockId, ...rest } = record;
+    const source = record.sourceKind === 'message' ? maps.messages.get(record.sourceId) : blockEntities.get(record.sourceId);
+    world.add(entity, CompressionBlockSourceLink, { ...rest, block, ...(source !== undefined ? { source } : {}) });
+  }
+
+  const variantEntities = existingRecords(world, CompressionContextVariant);
+  for (const record of state.compressionContextVariants ?? []) {
+    if (variantEntities.has(record.id)) continue;
+    const block = blockEntities.get(record.blockId);
+    if (block === undefined) continue;
+    const entity = world.spawn();
+    variantEntities.set(record.id, entity);
+    const { blockId: _blockId, ...rest } = record;
+    world.add(entity, CompressionContextVariant, { ...rest, block });
+  }
+
+  const runLinkIds = existingIds(world, RunCompressionBlockLink);
+  for (const record of state.runCompressionBlockLinks ?? []) {
+    if (runLinkIds.has(record.id)) continue;
+    const run = maps.runs.get(record.runId);
+    const block = blockEntities.get(record.blockId);
+    if (run === undefined || block === undefined) continue;
+    const variant = record.variantId ? variantEntities.get(record.variantId) : undefined;
+    const entity = world.spawn();
+    runLinkIds.add(record.id);
+    const { runId: _runId, blockId: _blockId, variantId: _variantId, ...rest } = record;
+    world.add(entity, RunCompressionBlockLink, { ...rest, run, block, ...(variant !== undefined ? { variant } : {}) });
+  }
 }
 
 function spawnHydratedMessage(world: World, conversation: Entity, record: MessageRecord): Entity {

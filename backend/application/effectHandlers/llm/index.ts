@@ -9,6 +9,10 @@ export function registerLlmEffectHandlers(registry: EffectHandlerRegistry): void
     env.llm.start(effect.request, emit);
   });
 
+  registry.register('llm.compact', (effect, env, emit) => {
+    env.llm.compact(effect.request, emit);
+  });
+
   registry.register('llm.abort', (effect, env) => {
     env.llm.abort(effect.requestId);
   });

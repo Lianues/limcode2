@@ -6,6 +6,7 @@ import type {
   LlmProviderConfigRecord,
   LlmProviderHeadersRecord,
   LlmProviderKind,
+  LlmCompressionMethodKind,
   LlmProviderModelRecord,
   LlmRequestBodyRecord,
   LlmToolCallFormat
@@ -20,6 +21,7 @@ import LlmHeadersSettings from './parameters/LlmHeadersSettings.vue';
 import LlmParameterSettings from './parameters/LlmParameterSettings.vue';
 
 const settings = useGlobalSettingsStore();
+type SelectableCompressionMethodKind = 'openai_responses_compact' | 'llm_summary' | 'deterministic_summary';
 const createOpen = ref(false);
 const createProvider = ref<LlmProviderKind>('openai-compatible');
 const renameOpen = ref(false);
@@ -48,10 +50,26 @@ const activeConfigId = computed({
   get: () => settings.llm.activeProviderConfigId || activeConfig.value?.id || '',
   set: (configId: string) => settings.selectLlmProviderConfig(configId)
 });
+const activeCompressionMethodKind = computed<SelectableCompressionMethodKind>(() => {
+  const kind = settings.activeCompressionConfig?.kind ?? 'llm_summary';
+  if (kind === 'openai_responses_compact' && activeConfig.value?.provider !== 'openai-responses') return 'llm_summary';
+  if (kind === 'disabled' || kind === 'manual_summary') return 'llm_summary';
+  return kind;
+});
 const configPageOptions = computed<SettingsDropdownOption[]>(() =>
   settings.llmProviderConfigs.configs.map((config) => ({ value: config.id, label: config.name, description: providerLabel(config.provider) }))
 );
 const activeProviderLabel = computed(() => providerLabel(activeConfig.value?.provider));
+const compressionMethodOptions = computed<SettingsDropdownOption[]>(() => {
+  const base: SettingsDropdownOption[] = [
+    { value: 'llm_summary', label: 'LLM 总结' },
+    { value: 'deterministic_summary', label: '确定性摘要' }
+  ];
+  if (activeConfig.value?.provider === 'openai-responses') {
+    base.splice(1, 0, { value: 'openai_responses_compact', label: 'OpenAI 原生压缩' });
+  }
+  return base;
+});
 const filteredModels = computed<LlmProviderModelRecord[]>(() => {
   const keyword = modelFilter.value.trim().toLowerCase();
   const models = activeConfig.value?.models ?? [];
@@ -98,6 +116,22 @@ function updateHeaders(value: LlmProviderHeadersRecord | undefined): void {
 function providerLabel(provider: LlmProviderKind | undefined): string {
   return providerOptions.find((option) => option.value === provider)?.label ?? '未知渠道';
 }
+
+function compressionKindLabel(kind: LlmCompressionMethodKind | undefined): string {
+  switch (kind) {
+    case 'openai_responses_compact': return 'OpenAI 原生压缩';
+    case 'llm_summary': return 'LLM 总结';
+    case 'deterministic_summary': return '确定性摘要';
+    case 'manual_summary': return '手动摘要';
+    case 'disabled': return '关闭';
+    default: return '未知方法';
+  }
+}
+
+function updateActiveCompressionMethod(value: string): void {
+  settings.setActiveCompressionMethodKind(value as SelectableCompressionMethodKind);
+}
+
 
 function openCreate(): void {
   createProvider.value = 'openai-compatible';
@@ -326,6 +360,26 @@ function cancelDelete(): void {
         </div>
       </section>
 
+      <section class="compression-settings global-settings-field-wide" aria-label="上下文压缩">
+        <header class="compression-settings-header">
+          <div>
+            <label>上下文压缩</label>
+            <p>选择当前渠道使用的压缩方式。非 OpenAI Responses 渠道不会显示 OpenAI 原生压缩。</p>
+          </div>
+        </header>
+        <div class="global-settings-grid compression-settings-grid">
+          <label class="global-settings-field">
+            <span>压缩方法</span>
+            <SettingsDropdown
+              :model-value="activeCompressionMethodKind"
+              :options="compressionMethodOptions"
+              title="选择压缩方法"
+              @update:model-value="updateActiveCompressionMethod"
+            />
+          </label>
+        </div>
+      </section>
+
       <LlmParameterSettings
         class="global-settings-field-wide"
         :config="activeConfig"
@@ -433,3 +487,32 @@ function cancelDelete(): void {
     />
   </section>
 </template>
+
+<style scoped>
+.compression-settings {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-editor-foreground) 6%);
+}
+
+.compression-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.compression-settings-header p {
+  margin: 2px 0 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+}
+
+.compression-settings-grid {
+  margin: 0;
+}
+</style>
+

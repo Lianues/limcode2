@@ -10,6 +10,7 @@ import {
 } from '../../agentRun/components';
 import { cleanupRunLlmRequests } from '../../agentRun/llmRequestCleanup';
 import { Checkpoint, CheckpointTimelineAnchor } from '../../checkpoint/components';
+import { CompressionBlock, CompressionBlockSourceLink } from '../../compression/components';
 import { ToolCall, ToolCallEvent, ToolResultConsumed, ToolState } from '../../tools/components';
 import { ChatEventType } from '../events';
 import { conversationMessages } from '../queries';
@@ -44,7 +45,9 @@ const DELETE_READ_COMPONENTS = [
   ToolCallEvent,
   ToolResultConsumed,
   Checkpoint,
-  CheckpointTimelineAnchor
+  CheckpointTimelineAnchor,
+  CompressionBlock,
+  CompressionBlockSourceLink
 ] as const;
 
 /** 删除指定消息及其后的所有消息，并清理消息关联的修订、工具调用和运行链接。 */
@@ -81,8 +84,10 @@ export function deleteMessagesFromIndex(world: WorldReader, cmd: CommandSink, me
   const deletedCheckpointAnchors = checkpointAnchorsForMessages(world, deletedMessages);
   const deletedCheckpoints = checkpointsOrphanedByDeletedAnchors(world, deletedCheckpointAnchors);
   const affectedRuns = runsAffectedByDeletion(world, deletedMessages, deletedRevisions, deletedToolCalls);
+  const affectedCompressionBlocks = compressionBlocksAffectedByDeletion(world, deletedMessages);
 
   for (const run of affectedRuns) markRunStale(world, cmd, run);
+  for (const block of affectedCompressionBlocks) markCompressionBlockStale(world, cmd, block);
 
   const entitiesToDespawn = new Set<Entity>();
   for (const entity of deletedMessages) entitiesToDespawn.add(entity);
@@ -119,6 +124,22 @@ export function deleteMessagesFromIndex(world: WorldReader, cmd: CommandSink, me
   }
 
   for (const entity of entitiesToDespawn) cmd.despawn(entity);
+function compressionBlocksAffectedByDeletion(world: WorldReader, deletedMessages: ReadonlySet<Entity>): Set<Entity> {
+  const blocks = new Set<Entity>();
+  for (const entity of world.query(CompressionBlockSourceLink)) {
+    const link = world.get(entity, CompressionBlockSourceLink);
+    if (link?.source !== undefined && deletedMessages.has(link.source)) blocks.add(link.block);
+  }
+  return blocks;
+}
+
+function markCompressionBlockStale(world: WorldReader, cmd: CommandSink, block: Entity): void {
+  const data = world.get(block, CompressionBlock);
+  if (!data || data.status === 'stale') return;
+  cmd.add(block, CompressionBlock, { ...data, status: 'stale', staleReason: '源消息已删除。', updatedAt: Date.now() });
+}
+
+
 }
 
 function checkpointAnchorsForMessages(world: WorldReader, deletedMessages: ReadonlySet<Entity>): Set<Entity> {

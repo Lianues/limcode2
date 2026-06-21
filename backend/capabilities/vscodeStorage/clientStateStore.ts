@@ -47,6 +47,7 @@ import {
   loadConversationTimelineDetail,
   saveConversationTimelineDetail
 } from './conversationTimelineStore';
+import { loadConversationCompressionDetail, saveConversationCompressionDetail } from './compressionStore';
 
 export type StoragePaths = ReturnType<typeof createVscodeStoragePaths>;
 
@@ -130,7 +131,8 @@ const RUN_HISTORY_TABLE_KEYS = [
   'runLlmInvocationLinks',
   'messageLlmInvocationLinks',
   'runWorkEnvironmentLinks',
-  'agentRunInputRevisions'
+  'agentRunInputRevisions',
+  'runCompressionBlockLinks'
 ] as const;
 
 const RUN_DETAIL_TABLE_KEYS = [
@@ -140,7 +142,10 @@ const RUN_DETAIL_TABLE_KEYS = [
   'messageRevisions',
   'messageCurrentRevisionLinks',
   'toolCalls',
-  'toolCallEvents'
+  'toolCallEvents',
+  'compressionBlocks',
+  'compressionBlockSourceLinks',
+  'compressionContextVariants'
 ] as const;
 
 export async function loadClientStateSkeletonFromStores(paths: StoragePaths, options: LoadClientStateSkeletonOptions = {}): Promise<ClientState | undefined> {
@@ -263,6 +268,8 @@ export async function loadConversationDetailFromStores(
 ): Promise<ClientState | undefined> {
   const includeRunHistory = options.includeRunHistory ?? false;
   const state = (await loadConversationTimelineDetail(paths, conversationId)) ?? createEmptyClientState();
+  const compression = await loadConversationCompressionDetail(paths, conversationId);
+  if (compression) copyCompressionTables(state, compression);
 
   if (includeRunHistory) {
     const runHistory = await loadConversationRunHistoryFromStores(paths, conversationId);
@@ -373,7 +380,10 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
 
 export async function saveConversationRenderDetailToStores(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
   const detail = conversationRenderDetailSlice(state, conversationId);
-  await saveConversationTimelineDetail(paths, conversationId, detail);
+  await Promise.all([
+    saveConversationTimelineDetail(paths, conversationId, detail),
+    saveConversationCompressionDetail(paths, conversationId, detail)
+  ]);
 }
 
 export async function saveConversationRunHistoryToStores(
@@ -452,6 +462,10 @@ export function conversationRenderDetailSlice(state: ClientState, conversationId
   });
   detail.shadowRepositories = state.shadowRepositories.filter((repository) => shadowRepositoryIds.has(repository.id));
   detail.projectContexts = state.projectContexts.filter((projectContext) => projectContextIds.has(projectContext.id));
+  detail.compressionBlocks = state.compressionBlocks.filter((block) => block.conversationId === conversationId);
+  const compressionBlockIds = new Set(detail.compressionBlocks.map((block) => block.id));
+  detail.compressionBlockSourceLinks = state.compressionBlockSourceLinks.filter((link) => compressionBlockIds.has(link.blockId));
+  detail.compressionContextVariants = state.compressionContextVariants.filter((variant) => compressionBlockIds.has(variant.blockId));
   return detail;
 }
 
@@ -496,6 +510,7 @@ export function conversationRunHistorySlice(state: ClientState, conversationId: 
   detail.llmInvocations = state.llmInvocations.filter((invocation) => invocationIds.has(invocation.id));
   detail.runWorkEnvironmentLinks = state.runWorkEnvironmentLinks.filter((link) => runIds.has(link.runId));
   detail.agentRunInputRevisions = state.agentRunInputRevisions.filter((input) => runIds.has(input.runId) || input.conversationId === conversationId || revisionIds.has(input.revisionId));
+  detail.runCompressionBlockLinks = state.runCompressionBlockLinks.filter((link) => runIds.has(link.runId));
   return detail;
 }
 
@@ -528,6 +543,13 @@ function copyRunHistoryTables(target: ClientState, source: ClientState): void {
   target.messageLlmInvocationLinks = source.messageLlmInvocationLinks;
   target.runWorkEnvironmentLinks = source.runWorkEnvironmentLinks;
   target.agentRunInputRevisions = source.agentRunInputRevisions;
+  target.runCompressionBlockLinks = source.runCompressionBlockLinks;
+}
+
+function copyCompressionTables(target: ClientState, source: ClientState): void {
+  target.compressionBlocks = source.compressionBlocks;
+  target.compressionBlockSourceLinks = source.compressionBlockSourceLinks;
+  target.compressionContextVariants = source.compressionContextVariants;
 }
 
 function conversationRunDetailRecord(state: ClientState, conversationId: string, runId: string): ConversationRunDetailRecord | undefined {
@@ -558,6 +580,7 @@ function runDetailSlice(state: ClientState, runId: string): ClientState {
   detail.runLlmInvocationLinks = state.runLlmInvocationLinks.filter((link) => link.runId === runId);
   detail.runWorkEnvironmentLinks = state.runWorkEnvironmentLinks.filter((link) => link.runId === runId);
   detail.agentRunInputRevisions = state.agentRunInputRevisions.filter((input) => input.runId === runId);
+  detail.runCompressionBlockLinks = state.runCompressionBlockLinks.filter((link) => link.runId === runId);
 
   const conversationPolicyIds = new Set(detail.runConversationPolicyLinks.map((link) => link.policyId));
   const contextPolicyIds = new Set(detail.runContextPolicyLinks.map((link) => link.policyId));
@@ -596,6 +619,12 @@ function runDetailSlice(state: ClientState, runId: string): ClientState {
     return matches;
   });
   detail.llmInvocations = state.llmInvocations.filter((invocation) => invocationIds.has(invocation.id));
+
+  const compressionBlockIds = new Set(detail.runCompressionBlockLinks.map((link) => link.blockId));
+  const compressionVariantIds = new Set(detail.runCompressionBlockLinks.map((link) => link.variantId).filter((id): id is string => !!id));
+  detail.compressionBlocks = state.compressionBlocks.filter((block) => compressionBlockIds.has(block.id));
+  detail.compressionBlockSourceLinks = state.compressionBlockSourceLinks.filter((link) => compressionBlockIds.has(link.blockId));
+  detail.compressionContextVariants = state.compressionContextVariants.filter((variant) => compressionBlockIds.has(variant.blockId) || compressionVariantIds.has(variant.id));
 
   const conversationIds = new Set<string>();
   for (const link of detail.agentRunTargetLinks) conversationIds.add(link.conversationId);

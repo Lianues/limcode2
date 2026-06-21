@@ -17,7 +17,7 @@ import { checkpointBeforeMessageFloor, rollbackConfirmActionTitle } from './chec
 const clientState = useClientStateStore();
 const conversationUi = useConversationUiStore();
 const checkpointStore = useCheckpointPolicyStore();
-const { currentMessages, currentCheckpoints, currentCheckpointTimelineAnchors, currentConversationId, currentConversationDetailLoaded } = storeToRefs(clientState);
+const { currentMessages, currentCheckpoints, currentCheckpointTimelineAnchors, currentCompressionBlocks, currentConversationId, currentConversationDetailLoaded } = storeToRefs(clientState);
 const { sendMessage, editMessage } = useChat();
 
 const scroller = ref<HTMLElement | null>(null);
@@ -82,8 +82,8 @@ const scrollMarkers = computed(() =>
 );
 
 watch(
-  [currentMessages, currentCheckpoints, currentCheckpointTimelineAnchors],
-  ([messages, checkpoints, checkpointAnchors]) => conversationUi.syncTimeline(messages, checkpoints, checkpointAnchors),
+  [currentMessages, currentCheckpoints, currentCheckpointTimelineAnchors, currentCompressionBlocks],
+  ([messages, checkpoints, checkpointAnchors, compressionBlocks]) => conversationUi.syncTimeline(messages, checkpoints, checkpointAnchors, compressionBlocks),
   { immediate: true }
 );
 

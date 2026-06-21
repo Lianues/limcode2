@@ -10,6 +10,7 @@ import {
   type ClientPatchOp,
   type ClientState,
   type ConversationRecord,
+  type CompressionBlockRecord,
   type MessageRecord,
   type ProjectContextRecord,
   type WorkEnvironmentRecord
@@ -113,6 +114,11 @@ export const useClientStateStore = defineStore('clientState', {
       return state.checkpointTimelineAnchors
         .filter((anchor) => anchor.conversationId === state.currentConversationId)
         .sort((left, right) => left.order - right.order || left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+    },
+    currentCompressionBlocks(state): CompressionBlockRecord[] {
+      return state.compressionBlocks
+        .filter((block) => block.conversationId === state.currentConversationId)
+        .sort((left, right) => (left.anchorSeq ?? left.endSeq ?? 0) - (right.anchorSeq ?? right.endSeq ?? 0) || left.createdAt - right.createdAt || left.id.localeCompare(right.id));
     },
     currentActiveRuns(state): AgentRunRecord[] {
       return activeRunsForConversation(state, state.currentConversationId);

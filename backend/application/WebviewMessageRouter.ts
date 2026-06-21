@@ -12,6 +12,7 @@ import { ModeEventType } from '../world/modules/mode/events';
 import { WorkEnvironmentEventType } from '../world/modules/workEnvironment/events';
 import { CheckpointEventType } from '../world/modules/checkpoint/events';
 import { AgentEventType } from '../world/modules/agent/events';
+import { CompressionEventType } from '../world/modules/compression/events';
 import {
   BridgeMessageType,
   GLOBAL_CLIENT_STATE_STREAM_ID,
@@ -223,6 +224,30 @@ export class WebviewMessageRouter {
         break;
       case BridgeMessageType.CheckpointShadowDelete:
         if (message.payload) void this.handleCheckpointShadowDelete(clientId, message.payload.storageKeys, message.id);
+        break;
+      case BridgeMessageType.CompressionCreate:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: CompressionEventType.Create, payload: message.payload });
+        break;
+      case BridgeMessageType.CompressionDelete:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: CompressionEventType.Delete, payload: message.payload });
+        break;
+      case BridgeMessageType.CompressionUpdate:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: CompressionEventType.Update, payload: message.payload });
+        break;
+      case BridgeMessageType.CompressionRegenerate:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: CompressionEventType.Regenerate, payload: message.payload });
+        break;
+      case BridgeMessageType.CompressionDisable:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: CompressionEventType.Disable, payload: message.payload });
+        break;
+      case BridgeMessageType.CompressionEnable:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: CompressionEventType.Enable, payload: message.payload });
         break;
       case BridgeMessageType.GlobalSettingsGet:
         if (!message.payload) return;

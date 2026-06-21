@@ -1,4 +1,4 @@
-import type { LlmInvocationSettingsSnapshotRecord, LlmProviderKind, MessageContent } from '../../../../shared/protocol';
+import type { LlmCompressionConfigRecord, LlmInvocationSettingsSnapshotRecord, LlmProviderKind, LlmUsageMetadataRecord, MessageContent } from '../../../../shared/protocol';
 
 export type { LlmProviderKind };
 
@@ -57,4 +57,24 @@ export interface LlmDryRunResult {
   maskedSecrets: boolean;
   /** 当前是否能从配置中取到真实 API Key；false 时 dry-run 使用占位 key 生成请求结构。 */
   apiKeyAvailable?: boolean;
+}
+
+export interface LlmCompactRequest {
+  id: string;
+  blockId: string;
+  conversationId: string;
+  methodConfigId?: string;
+  methodKind?: LlmCompressionConfigRecord['kind'];
+  contents: MessageContent[];
+  sourceHash?: string;
+}
+
+export interface LlmCompactResult {
+  id?: string;
+  object?: string;
+  createdAt?: number;
+  contents: MessageContent[];
+  usageMetadata?: LlmUsageMetadataRecord;
+  rawResponse?: unknown;
+  methodConfig?: LlmCompressionConfigRecord;
 }

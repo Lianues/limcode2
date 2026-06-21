@@ -1,4 +1,4 @@
-import type { CheckpointRecord, CheckpointTimelineAnchorRecord, MessageRecord } from './protocol';
+import type { CheckpointRecord, CheckpointTimelineAnchorRecord, CompressionBlockRecord, MessageRecord } from './protocol';
 
 export interface ConversationMessageTimelineRow {
   kind: 'message';
@@ -17,12 +17,21 @@ export interface ConversationCheckpointTimelineRow {
   messageFloorNumber?: number;
 }
 
-export type ConversationTimelineRow = ConversationMessageTimelineRow | ConversationCheckpointTimelineRow;
+export interface ConversationCompressionTimelineRow {
+  kind: 'compression';
+  id: string;
+  block: CompressionBlockRecord;
+  floorMessageId?: string;
+  messageFloorNumber?: number;
+}
+
+export type ConversationTimelineRow = ConversationMessageTimelineRow | ConversationCheckpointTimelineRow | ConversationCompressionTimelineRow;
 
 export interface BuildConversationTimelineRowsInput {
   messages: readonly MessageRecord[];
   checkpoints: readonly CheckpointRecord[];
   checkpointAnchors: readonly CheckpointTimelineAnchorRecord[];
+  compressionBlocks?: readonly CompressionBlockRecord[];
 }
 
 export function buildConversationTimelineRows(input: BuildConversationTimelineRowsInput): ConversationTimelineRow[] {
@@ -30,6 +39,7 @@ export function buildConversationTimelineRows(input: BuildConversationTimelineRo
   const anchoredCheckpointIds = new Set(input.checkpointAnchors.map((anchor) => anchor.checkpointId));
   const messages = [...input.messages].sort(compareMessages);
   const anchorsByMessage = groupAnchorsByFloorMessage(input.checkpointAnchors, checkpointsById);
+  const compressionByMessage = groupCompressionByAnchor(input.compressionBlocks ?? []);
   const rows: ConversationTimelineRow[] = [];
   appendInitialCheckpointRows(rows, input.checkpoints, anchoredCheckpointIds);
 
@@ -38,11 +48,31 @@ export function buildConversationTimelineRows(input: BuildConversationTimelineRo
     const anchors = anchorsByMessage.get(message.id);
     appendCheckpointRows(rows, anchors?.before ?? [], checkpointsById, messageFloorNumber);
     rows.push({ kind: 'message', id: message.id, message, messageFloorNumber });
+    appendCompressionRows(rows, compressionByMessage.get(message.id) ?? [], messageFloorNumber);
     appendCheckpointRows(rows, anchors?.after ?? [], checkpointsById, messageFloorNumber);
   });
 
   return rows;
 }
+
+function groupCompressionByAnchor(blocks: readonly CompressionBlockRecord[]): Map<string, CompressionBlockRecord[]> {
+  const grouped = new Map<string, CompressionBlockRecord[]>();
+  for (const block of blocks) {
+    if (!block.anchorMessageId) continue;
+    const list = grouped.get(block.anchorMessageId) ?? [];
+    list.push(block);
+    grouped.set(block.anchorMessageId, list);
+  }
+  for (const list of grouped.values()) list.sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+  return grouped;
+}
+
+function appendCompressionRows(rows: ConversationTimelineRow[], blocks: readonly CompressionBlockRecord[], messageFloorNumber: number): void {
+  for (const block of blocks) {
+    rows.push({ kind: 'compression', id: `compression:${block.id}`, block, floorMessageId: block.anchorMessageId, messageFloorNumber });
+  }
+}
+
 
 function groupAnchorsByFloorMessage(
   anchors: readonly CheckpointTimelineAnchorRecord[],

@@ -10,6 +10,7 @@ import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
 import { GLOBAL_MODE_OPTION_ID, useModeStore } from '@webview/stores/useModeStore';
 import { useWorkEnvironmentStore } from '@webview/stores/useWorkEnvironmentStore';
 import { useAgentStore } from '@webview/stores/useAgentStore';
+import { useCompression } from '@webview/composables/useCompression';
 import RichContentEditor from '@webview/components/content/RichContentEditor.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
 import ContextTokenUsageBar from '@webview/components/conversation/ContextTokenUsageBar.vue';
@@ -33,6 +34,7 @@ const conversationSettings = useConversationSettingsStore();
 const modeStore = useModeStore();
 const agentStore = useAgentStore();
 const workEnvironmentStore = useWorkEnvironmentStore();
+const compression = useCompression();
 const ui = useConversationUiStore();
 const highlighted = ref(false);
 const editorExpanded = ref(false);
@@ -51,6 +53,8 @@ const draft = computed({
 });
 const expandTitle = computed(() => (editorExpanded.value ? '恢复输入框高度' : '扩大输入框'));
 const sendTitle = computed(() => (ui.isEditing ? '提交编辑' : '发送'));
+const compacting = computed(() => clientState.currentCompressionBlocks.some((block) => block.status === 'pending' || block.status === 'running'));
+const compactTitle = computed(() => compacting.value ? '上下文正在压缩...' : '压缩当前上下文');
 const channelOptions = computed<SettingsDropdownOption[]>(() =>
   globalSettings.llmProviderConfigs.configs.map((config) => ({
     value: config.id,
@@ -152,6 +156,12 @@ function submit(): void {
   emit('submit', text);
   if (!ui.isEditing) ui.clearChatDraft();
 }
+
+function compactConversation(): void {
+  if (props.disabled) return;
+  compression.createCompression();
+}
+
 
 function toggleEditorExpanded(): void {
   if (!editorExpanded.value) {
@@ -405,6 +415,20 @@ function middleEllipsis(value: string, maxLength: number): string {
       <ContextTokenUsageBar class="composer-token-usage" />
       <button
         type="button"
+        class="composer-compact"
+        :class="{ 'is-compacting': compacting }"
+        :disabled="disabled || compacting || clientState.currentMessages.length < 2"
+        aria-label="压缩上下文"
+        :title="compactTitle"
+        @click="compactConversation"
+      >
+        <svg class="composer-compact-icon" :class="{ 'is-compacting': compacting }" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+          <path class="composer-compact-icon-top" d="M5 5h14l-7 6z" />
+          <path class="composer-compact-icon-bottom" d="M5 19h14l-7 -6z" />
+        </svg>
+      </button>
+      <button
+        type="button"
         class="composer-send"
         :disabled="disabled || !draft.trim()"
         :aria-label="sendTitle"
@@ -646,7 +670,8 @@ function middleEllipsis(value: string, maxLength: number): string {
   margin-left: var(--space-1);
 }
 
-.composer-send {
+.composer-send,
+.composer-compact {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -659,13 +684,15 @@ function middleEllipsis(value: string, maxLength: number): string {
   border-color: transparent;
 }
 
-.composer-send:hover:not(:disabled) {
+.composer-send:hover:not(:disabled),
+.composer-compact:hover:not(:disabled) {
   color: var(--vscode-foreground);
   background: var(--vscode-list-hoverBackground, transparent);
   border-color: var(--vscode-panel-border, transparent);
 }
 
-.composer-send:disabled {
+.composer-send:disabled,
+.composer-compact:disabled {
   color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
   background: transparent;
   border-color: transparent;
@@ -673,10 +700,40 @@ function middleEllipsis(value: string, maxLength: number): string {
   cursor: not-allowed;
 }
 
-.composer-send-icon {
+.composer-send-icon,
+.composer-compact-icon {
   width: 16px;
   height: 16px;
   color: currentColor;
   pointer-events: none;
+}
+
+.composer-compact-icon path {
+  fill: currentColor;
+}
+
+.composer-compact.is-compacting,
+.composer-compact-icon.is-compacting {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.composer-compact-icon.is-compacting .composer-compact-icon-top {
+  animation: composer-compact-squeeze-top 1.1s ease-in-out infinite;
+  transform-origin: 12px 8px;
+}
+
+.composer-compact-icon.is-compacting .composer-compact-icon-bottom {
+  animation: composer-compact-squeeze-bottom 1.1s ease-in-out infinite;
+  transform-origin: 12px 16px;
+}
+
+@keyframes composer-compact-squeeze-top {
+  0%, 100% { transform: translateY(-1px); }
+  50% { transform: translateY(2px); }
+}
+
+@keyframes composer-compact-squeeze-bottom {
+  0%, 100% { transform: translateY(1px); }
+  50% { transform: translateY(-2px); }
 }
 </style>

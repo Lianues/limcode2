@@ -164,6 +164,9 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
     }
     return matches;
   });
+  const compressionBlocks = state.compressionBlocks.filter((block) => block.conversationId === conversationId);
+  const compressionBlockIds = new Set(compressionBlocks.map((block) => block.id));
+  const compressionVariantIds = new Set(state.runCompressionBlockLinks.filter((link) => compressionBlockIds.has(link.blockId)).map((link) => link.variantId).filter((id): id is string => !!id));
 
   return {
     ...createEmptyClientState(),
@@ -181,6 +184,10 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
     messages,
     messageRevisions: state.messageRevisions.filter((revision) => revision.conversationId === conversationId),
     messageCurrentRevisionLinks: state.messageCurrentRevisionLinks.filter((link) => messageIds.has(link.messageId)),
+    compressionBlocks,
+    compressionBlockSourceLinks: state.compressionBlockSourceLinks.filter((link) => compressionBlockIds.has(link.blockId)),
+    compressionContextVariants: state.compressionContextVariants.filter((variant) => compressionBlockIds.has(variant.blockId) || compressionVariantIds.has(variant.id)),
+    runCompressionBlockLinks: state.runCompressionBlockLinks.filter((link) => runIds.has(link.runId) || compressionBlockIds.has(link.blockId)),
     toolCalls,
     toolCallEvents: state.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId)),
     agentRuns: state.agentRuns.filter((run) => runIds.has(run.id)),
@@ -260,6 +267,8 @@ function collectConversationIds(
   for (const conversation of next.conversations) ids.add(conversation.id);
   for (const message of prev?.messages ?? []) ids.add(message.conversationId);
   for (const message of next.messages) ids.add(message.conversationId);
+  for (const block of prev?.compressionBlocks ?? []) ids.add(block.conversationId);
+  for (const block of next.compressionBlocks) ids.add(block.conversationId);
   for (const streamId of Object.keys(streams)) {
     const conversationId = conversationIdFromClientStateStreamId(streamId);
     if (conversationId) ids.add(conversationId);

@@ -20,7 +20,7 @@ export interface WebviewClientMeta {
 
 export const GLOBAL_CLIENT_STATE_STREAM_ID = 'global:state';
 export const GLOBAL_SETTINGS_STREAM_PREFIX = 'settings:global:';
-export const GLOBAL_SETTINGS_SECTIONS = ['common', 'llm', 'llmProviderConfigs', 'checkpointMaintenance'] as const;
+export const GLOBAL_SETTINGS_SECTIONS = ['common', 'llm', 'llmProviderConfigs', 'llmCompression', 'llmCompressionConfigs', 'checkpointMaintenance'] as const;
 export type GlobalSettingsSection = typeof GLOBAL_SETTINGS_SECTIONS[number];
 
 export function globalSettingsStreamId(section: GlobalSettingsSection): string {
@@ -131,7 +131,13 @@ export enum BridgeMessageType {
   CheckpointShadowDelete = 'checkpoint.shadow.delete',
   CheckpointDismiss = 'checkpoint.dismiss',
   CheckpointRestore = 'checkpoint.restore',
-  CheckpointRestoreResult = 'checkpoint.restore.result'
+  CheckpointRestoreResult = 'checkpoint.restore.result',
+  CompressionCreate = 'compression.create',
+  CompressionDelete = 'compression.delete',
+  CompressionUpdate = 'compression.update',
+  CompressionRegenerate = 'compression.regenerate',
+  CompressionDisable = 'compression.disable',
+  CompressionEnable = 'compression.enable'
 }
 
 export interface BridgeEnvelope<TType extends string = string, TPayload = unknown> {
@@ -374,6 +380,80 @@ export interface LlmProviderConfigsRecord {
   configs: LlmProviderConfigRecord[];
 }
 
+export type LlmCompressionMethodKind = 'disabled' | 'openai_responses_compact' | 'llm_summary' | 'deterministic_summary' | 'manual_summary';
+export type LlmCompressionTriggerMode = 'manual' | 'token_threshold';
+export type LlmCompressionFallbackMode = 'use_summary' | 'use_raw_history' | 'block_and_ask' | 'auto_generate_summary';
+
+export interface LlmCompressionSettingsRecord {
+  defaultConfigId?: string;
+  providerBindings: LlmCompressionProviderBindingRecord[];
+}
+
+export interface LlmCompressionProviderBindingRecord {
+  id: string;
+  providerConfigId: string;
+  compressionConfigId: string;
+  role: 'default';
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface LlmCompressionConfigsRecord {
+  configs: LlmCompressionConfigRecord[];
+}
+
+export interface LlmCompressionConfigRecord {
+  id: string;
+  name: string;
+  kind: LlmCompressionMethodKind;
+  trigger: {
+    mode: LlmCompressionTriggerMode;
+    thresholdTokens?: number;
+    preserveLatestMessages?: number;
+  };
+  openaiResponsesCompact?: {
+    providerConfigId?: string;
+    model?: string;
+    createSummaryFallback?: boolean;
+    fallbackConfigId?: string;
+  };
+  llmSummary?: {
+    providerConfigId?: string;
+    model?: string;
+    systemPrompt?: string;
+    userPrompt?: string;
+    targetTokens?: number;
+    generationConfig?: LlmGenerationConfigRecord;
+  };
+  fallbackPolicy: {
+    whenNativeUnavailable: LlmCompressionFallbackMode;
+  };
+  createdAt: number;
+  updatedAt: number;
+}
+
+export function createDefaultLlmCompressionSettings(): LlmCompressionSettingsRecord {
+  return { providerBindings: [] };
+}
+
+export function createDefaultLlmCompressionConfig(name = '默认压缩方法'): LlmCompressionConfigRecord {
+  const now = Date.now();
+  return {
+    id: `llm-compression-config-${createMessageId()}`,
+    name,
+    kind: 'llm_summary',
+    trigger: { mode: 'manual', preserveLatestMessages: 8 },
+    llmSummary: {
+      systemPrompt: '你是上下文压缩助手。请保留用户目标、关键约束、已完成工作、工具结果、未解决问题和后续待办，用简洁但完整的中文总结历史对话。',
+      userPrompt: '请压缩以下对话历史，输出后续模型可以继续工作的上下文摘要。',
+      targetTokens: 2000
+    },
+    fallbackPolicy: { whenNativeUnavailable: 'use_summary' },
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
 export interface LlmProviderModelRecord {
   id: string;
   name: string;
@@ -412,6 +492,8 @@ export interface LlmInvocationSettingsSnapshotRecord {
   toolCallFormat?: LlmToolCallFormat;
   generationConfig?: LlmGenerationConfigRecord;
   requestBody?: LlmRequestBodyRecord;
+  compressionConfigId?: string;
+  compressionMethodKind?: LlmCompressionMethodKind;
   /** header 名保留；敏感值会被 mask，不持久化真实 secret。 */
   headers?: LlmProviderHeadersRecord;
 }
@@ -938,7 +1020,18 @@ export interface FileDataPart {
   fileData: { mimeType?: string; uri: string };
 }
 
-export type ContentPart = TextPart | FunctionCallPart | FunctionResponsePart | InlineDataPart | FileDataPart;
+export interface ProviderContextPart {
+  providerContext: {
+    provider: string;
+    format: string;
+    endpoint?: string;
+    itemType?: string;
+    encryptedContent?: string;
+    rawItem?: unknown;
+  };
+}
+
+export type ContentPart = TextPart | FunctionCallPart | FunctionResponsePart | InlineDataPart | FileDataPart | ProviderContextPart;
 
 export function isTextPart(part: ContentPart): part is TextPart { return 'text' in part; }
 export function isVisibleTextPart(part: ContentPart): part is TextPart { return isTextPart(part) && part.thought !== true; }
@@ -946,6 +1039,7 @@ export function isFunctionCallPart(part: ContentPart): part is FunctionCallPart 
 export function isFunctionResponsePart(part: ContentPart): part is FunctionResponsePart { return 'functionResponse' in part; }
 export function isInlineDataPart(part: ContentPart): part is InlineDataPart { return 'inlineData' in part; }
 export function isFileDataPart(part: ContentPart): part is FileDataPart { return 'fileData' in part; }
+export function isProviderContextPart(part: ContentPart): part is ProviderContextPart { return 'providerContext' in part; }
 
 export interface MessageContent {
   role: ContentRole;
@@ -1184,6 +1278,92 @@ export interface AgentRunInputRevisionRecord {
   revisionId: string;
 }
 
+export type CompressionBlockStatus = 'pending' | 'running' | 'complete' | 'error' | 'stale' | 'disabled';
+export type CompressionBlockSourceKind = 'message' | 'compressionBlock';
+export type CompressionBlockSourceRole = 'source' | 'retained' | 'anchor';
+export type CompressionContextVariantKind = 'provider_native' | 'provider_neutral_summary';
+export type CompressionContextUseMode = 'provider_native' | 'summary_fallback' | 'raw_history_fallback';
+
+export interface CompressionBlockRecord {
+  id: string;
+  conversationId: string;
+  title: string;
+  status: CompressionBlockStatus;
+  methodKind: LlmCompressionMethodKind;
+  methodConfigId?: string;
+  anchorMessageId?: string;
+  anchorSeq?: number;
+  startSeq?: number;
+  endSeq?: number;
+  sourceMessageCount?: number;
+  summaryPreview?: string;
+  tokenCountBefore?: number;
+  tokenCountAfter?: number;
+  tokenSaved?: number;
+  sourceHash?: string;
+  staleReason?: string;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+  completedAt?: number;
+}
+
+export interface CompressionBlockSourceLinkRecord {
+  id: string;
+  blockId: string;
+  sourceKind: CompressionBlockSourceKind;
+  sourceId: string;
+  revisionId?: string;
+  role: CompressionBlockSourceRole;
+  order: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CompressionContextVariantRecord {
+  id: string;
+  blockId: string;
+  kind: CompressionContextVariantKind;
+  contents: MessageContent[];
+  compatibility?: {
+    provider?: LlmProviderKind;
+    providerConfigId?: string;
+    baseUrl?: string;
+    model?: string;
+    format?: string;
+    endpoint?: string;
+  };
+  usageMetadata?: LlmUsageMetadataRecord;
+  rawResponse?: unknown;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RunCompressionBlockLinkRecord {
+  id: string;
+  runId: string;
+  blockId: string;
+  variantId?: string;
+  role: 'context';
+  mode: CompressionContextUseMode;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CompressionCreatePayload {
+  conversationId: string;
+  startMessageId?: string;
+  endMessageId?: string;
+  methodConfigId?: string;
+  methodKind?: LlmCompressionMethodKind;
+  trigger?: 'manual' | 'auto';
+}
+
+export interface CompressionDeletePayload { conversationId: string; blockId: string }
+export interface CompressionUpdatePayload { conversationId: string; blockId: string; title?: string; summaryPreview?: string; summaryContents?: MessageContent[] }
+export interface CompressionRegeneratePayload { conversationId: string; blockId: string; methodConfigId?: string }
+export interface CompressionTogglePayload { conversationId: string; blockId: string }
+
 export interface ClientStateRecordByTable {
   agents: AgentRecord;
   toolDefinitions: ToolDefinitionRecord;
@@ -1220,6 +1400,10 @@ export interface ClientStateRecordByTable {
   llmInvocations: LlmInvocationRecord;
   runLlmInvocationLinks: RunLlmInvocationLinkRecord;
   messageLlmInvocationLinks: MessageLlmInvocationLinkRecord;
+  compressionBlocks: CompressionBlockRecord;
+  compressionBlockSourceLinks: CompressionBlockSourceLinkRecord;
+  compressionContextVariants: CompressionContextVariantRecord;
+  runCompressionBlockLinks: RunCompressionBlockLinkRecord;
   toolCalls: ToolCallRecord;
   toolCallEvents: ToolCallEventRecord;
   agentRuns: AgentRunRecord;
@@ -1516,7 +1700,7 @@ export interface CheckpointMaintenanceSettingsRecord {
   autoDismissEnabled: boolean;
   autoDismissSeconds: number;
 }
-export type GlobalSettingsSectionValue = GlobalSettingsRecord | LlmSettingsRecord | LlmProviderConfigsRecord | CheckpointMaintenanceSettingsRecord;
+export type GlobalSettingsSectionValue = GlobalSettingsRecord | LlmSettingsRecord | LlmProviderConfigsRecord | LlmCompressionSettingsRecord | LlmCompressionConfigsRecord | CheckpointMaintenanceSettingsRecord;
 export interface GlobalSettingsGetPayload {
   section: GlobalSettingsSection;
 }
@@ -1646,6 +1830,12 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.CheckpointShadowDelete, CheckpointShadowDeletePayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointDismiss, CheckpointDismissPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointRestore, CheckpointRestorePayload>
+  | BridgeEnvelope<BridgeMessageType.CompressionCreate, CompressionCreatePayload>
+  | BridgeEnvelope<BridgeMessageType.CompressionDelete, CompressionDeletePayload>
+  | BridgeEnvelope<BridgeMessageType.CompressionUpdate, CompressionUpdatePayload>
+  | BridgeEnvelope<BridgeMessageType.CompressionRegenerate, CompressionRegeneratePayload>
+  | BridgeEnvelope<BridgeMessageType.CompressionDisable, CompressionTogglePayload>
+  | BridgeEnvelope<BridgeMessageType.CompressionEnable, CompressionTogglePayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsGet, GlobalSettingsGetPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsUpdate, GlobalSettingsUpdatePayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsGet, ConversationSettingsGetPayload>

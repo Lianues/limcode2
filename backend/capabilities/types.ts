@@ -1,5 +1,5 @@
 import type * as vscode from 'vscode';
-import type { LlmDryRunOptions, LlmDryRunResult, LlmResolveInvocationRequest, LlmStartRequest } from '../world/modules/llm/contracts';
+import type { LlmCompactRequest, LlmDryRunOptions, LlmDryRunResult, LlmResolveInvocationRequest, LlmStartRequest } from '../world/modules/llm/contracts';
 import type { WorldEvent } from '../ecs/types';
 import type {
   BridgeClientId,
@@ -15,6 +15,7 @@ import type {
   ExtensionToWebviewMessage,
   GlobalSettingsSection,
   GlobalSettingsSectionValue,
+  LlmCompressionConfigRecord,
   LlmProviderConfigRecord,
   LlmProviderModelRecord,
   CheckpointRecord,
@@ -37,6 +38,7 @@ export type Emit = (event: WorldEvent) => void;
 export interface LlmCapability {
   resolveInvocation(request: LlmResolveInvocationRequest, emit: Emit): void;
   start(request: LlmStartRequest, emit: Emit): void;
+  compact(request: LlmCompactRequest, emit: Emit): void;
   dryRun(request: LlmStartRequest, options?: LlmDryRunOptions): Promise<LlmDryRunResult>;
   listModels(config: LlmProviderConfigRecord): Promise<LlmProviderModelRecord[]>;
   abort(requestId: string): void;
@@ -284,6 +286,18 @@ export interface RuntimePaths {
   checkpointTimelineAnchorsIndexPath: string;
   checkpointShadowWorktreesRootUri: vscode.Uri;
   checkpointShadowWorktreesRootPath: string;
+  compressionBlocksRootUri: vscode.Uri;
+  compressionBlocksRootPath: string;
+  compressionBlocksIndexUri: vscode.Uri;
+  compressionBlocksIndexPath: string;
+  compressionBlockSourceLinksRootUri: vscode.Uri;
+  compressionBlockSourceLinksRootPath: string;
+  compressionBlockSourceLinksIndexUri: vscode.Uri;
+  compressionBlockSourceLinksIndexPath: string;
+  compressionContextVariantsRootUri: vscode.Uri;
+  compressionContextVariantsRootPath: string;
+  compressionContextVariantsIndexUri: vscode.Uri;
+  compressionContextVariantsIndexPath: string;
   /** Agent 与 Conversation 的关系数据根目录：<dataRoot>/agent-conversation-links */
   linksRootUri: vscode.Uri;
   linksRootPath: string;
@@ -352,6 +366,8 @@ export interface StorageCapability {
   saveGlobalSettings(section: GlobalSettingsSection, settings: GlobalSettingsSectionValue): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
   loadActiveLlmProviderConfig(conversationId?: string): Promise<LlmProviderConfigRecord>;
   loadLlmProviderConfigById(configId: string): Promise<LlmProviderConfigRecord | undefined>;
+  loadActiveLlmCompressionConfig(providerConfigId?: string): Promise<LlmCompressionConfigRecord | undefined>;
+  loadLlmCompressionConfigById(configId: string): Promise<LlmCompressionConfigRecord | undefined>;
   loadConversationSettings(conversationId: string, section: ConversationSettingsSection): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string } | undefined>;
   saveConversationSettings(section: ConversationSettingsSection, settings: ConversationSettingsSectionValue): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }>;
 }

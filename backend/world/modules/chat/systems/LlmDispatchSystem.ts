@@ -21,6 +21,7 @@ import {
   RunSystemPromptLink,
   RunToolPolicyLink
 } from '../../agentRun/components';
+import { CompressionBlock, CompressionContextVariant, RunCompressionBlockLink } from '../../compression/components';
 import { ToolCall, ToolPolicyScopeLink, ToolState } from '../../tools/components';
 import { ToolSchemasKey } from '../../tools/resources';
 import { buildRuntimeToolSchemas, TOOL_SCHEMA_CONTRIBUTOR_READS } from '../../tools/schemaContributors';
@@ -34,7 +35,7 @@ import {
   systemPromptsForRun,
   activeToolPolicyForRun
 } from '../../agentRun/queries';
-import { buildRunContextContents, selectRunContextMessageEntities } from '../../agentRun/contextPolicy';
+import { buildRunContextContents, selectRunContextCompressionVariant, selectRunContextMessageEntities } from '../../agentRun/contextPolicy';
 import { AgentRunBundle } from '../../agentRun/bundles';
 
 const PendingLlmRequestsQuery = defineQuery({
@@ -73,6 +74,9 @@ const LlmContextLookupComponents = [
   ToolCall,
   ToolState,
   LlmInvocation,
+  CompressionBlock,
+  CompressionContextVariant,
+  RunCompressionBlockLink,
   ...(TOOL_SCHEMA_CONTRIBUTOR_READS.components ?? [])
 ] as const;
 
@@ -94,6 +98,7 @@ export const LlmDispatchSystem = defineSystem({
   access: {
     queries: [PendingLlmRequestsQuery],
     reads: { components: LlmContextLookupComponents },
+    writes: { components: [RunCompressionBlockLink], mutationMode: 'create' },
     bundles: [AgentRunBundle],
     resources: { read: [ToolSchemasKey] },
     effects: { emit: ['llm.start'] }
@@ -113,11 +118,13 @@ export const LlmDispatchSystem = defineSystem({
         run: data.run,
         conversation: data.conversation,
         modelMessage: data.modelMessage,
-        policy: contextPolicy
+        policy: contextPolicy,
+        settingsSnapshot: data.invocation !== undefined ? world.get(data.invocation, LlmInvocation)?.settings : undefined
       };
       recordInputRevisions(world, cmd, contextInput.run, selectRunContextMessageEntities(world, contextInput));
       const llmRequest = buildLlmStartRequestForRun(world, { run: data.run, conversation: data.conversation, modelMessage: data.modelMessage, invocation: data.invocation, requestId: data.id, tools: allTools });
       if (!llmRequest) continue;
+      recordCompressionContextLink(world, cmd, data.run, data.conversation, llmRequest.settingsSnapshot);
 
       cmd.effect({
         kind: 'llm.start',
@@ -149,7 +156,7 @@ export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmSt
     : [];
   const tools = buildRuntimeToolSchemas(filteredTools, { world, run: input.run, conversation: context.conversation });
   const contextPolicy = activeContextPolicyForRun(world, input.run);
-  const contents = buildRunContextContents(world, { ...context, policy: contextPolicy });
+  const contents = buildRunContextContents(world, { ...context, policy: contextPolicy, settingsSnapshot });
   const systemText = systemPrompt.trim();
 
   return {
@@ -175,6 +182,38 @@ function composeSystemInstruction(prompts: Array<{ name: string; text: string }>
     .filter(Boolean)
     .join('\n\n');
 }
+function recordCompressionContextLink(
+  world: WorldReader,
+  cmd: CommandSink,
+  run: Entity,
+  conversation: Entity,
+  settingsSnapshot: import('../../../../../shared/protocol').LlmInvocationSettingsSnapshotRecord | undefined
+): void {
+  const selected = selectRunContextCompressionVariant(world, conversation, settingsSnapshot);
+  if (!selected) return;
+  const block = world.get(selected.block, CompressionBlock);
+  const variant = world.get(selected.variant, CompressionContextVariant);
+  if (!block || !variant) return;
+  const exists = world.query(RunCompressionBlockLink).some((entity) => {
+    const link = world.get(entity, RunCompressionBlockLink);
+    return link?.run === run && link.block === selected.block && link.variant === selected.variant;
+  });
+  if (exists) return;
+  const entity = cmd.spawn();
+  const now = Date.now();
+  cmd.add(entity, RunCompressionBlockLink, {
+    id: `run-compression-${entity}`,
+    run,
+    block: selected.block,
+    variant: selected.variant,
+    role: 'context',
+    mode: selected.mode,
+    createdAt: now,
+    updatedAt: now
+  });
+}
+
+
 
 
 

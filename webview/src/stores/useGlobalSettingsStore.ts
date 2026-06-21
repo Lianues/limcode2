@@ -7,6 +7,9 @@ import {
   type GlobalSettingsSection,
   type GlobalSettingsSnapshotPayload,
   type LlmGenerationConfigRecord,
+  type LlmCompressionConfigRecord,
+  type LlmCompressionConfigsRecord,
+  type LlmCompressionSettingsRecord,
   type LlmProviderKind,
   type LlmProviderHeadersRecord,
   type LlmProviderConfigRecord,
@@ -17,7 +20,10 @@ import {
   type LlmProviderConfigsRecord,
   type LlmSettingsRecord
 } from '@shared/protocol';
+import { createDefaultLlmCompressionConfig } from '@shared/protocol';
 import { bridge, BridgeMessageType } from '@webview/transport';
+
+type SelectableCompressionMethodKind = 'openai_responses_compact' | 'llm_summary' | 'deterministic_summary';
 
 interface FetchedModelsDialogState {
   open: boolean;
@@ -32,6 +38,8 @@ interface GlobalSettingsState {
   llm: LlmSettingsRecord;
   /** 全局范围内可复用的渠道配置集合。 */
   llmProviderConfigs: LlmProviderConfigsRecord;
+  llmCompression: LlmCompressionSettingsRecord;
+  llmCompressionConfigs: LlmCompressionConfigsRecord;
   /** 存档点维护：自动清理未使用 shadow 仓库的设置。 */
   checkpointMaintenance: CheckpointMaintenanceSettingsRecord;
   /** 各 section 的来源文件路径，用于在 UI 展示。 */
@@ -56,6 +64,14 @@ function emptyLlm(): LlmSettingsRecord {
 }
 
 function emptyLlmProviderConfigs(): LlmProviderConfigsRecord {
+  return { configs: [] };
+}
+
+function emptyLlmCompression(): LlmCompressionSettingsRecord {
+  return { providerBindings: [] };
+}
+
+function emptyLlmCompressionConfigs(): LlmCompressionConfigsRecord {
   return { configs: [] };
 }
 
@@ -268,6 +284,8 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
     common: emptyCommon(),
     llm: emptyLlm(),
     llmProviderConfigs: emptyLlmProviderConfigs(),
+    llmCompression: emptyLlmCompression(),
+    llmCompressionConfigs: emptyLlmCompressionConfigs(),
     checkpointMaintenance: emptyCheckpointMaintenance(),
     filePaths: {},
     pendingActiveProviderConfigIdAfterConfigsSave: '',
@@ -281,14 +299,24 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       return state.llmProviderConfigs.configs.find((config) => config.id === state.llm.activeProviderConfigId)
         ?? state.llmProviderConfigs.configs[0];
     },
+    activeCompressionConfig(state): LlmCompressionConfigRecord | undefined {
+      const activeProviderId = state.llm.activeProviderConfigId;
+      const binding = activeProviderId ? state.llmCompression.providerBindings.find((item) => item.providerConfigId === activeProviderId) : undefined;
+      const id = binding?.compressionConfigId ?? state.llmCompression.defaultConfigId;
+      return state.llmCompressionConfigs.configs.find((config) => config.id === id) ?? state.llmCompressionConfigs.configs[0];
+    },
     isChannelSettingsLoading(state): boolean {
       return !state.loadedSections.llm
         || !state.loadedSections.llmProviderConfigs
+        || !state.loadedSections.llmCompression
+        || !state.loadedSections.llmCompressionConfigs
         || !!state.pendingSettingsSections.llm
-        || !!state.pendingSettingsSections.llmProviderConfigs;
+        || !!state.pendingSettingsSections.llmProviderConfigs
+        || !!state.pendingSettingsSections.llmCompression
+        || !!state.pendingSettingsSections.llmCompressionConfigs;
     },
     channelSettingsLoadingText(state): string {
-      if (!state.loadedSections.llm || !state.loadedSections.llmProviderConfigs) return '正在加载渠道配置...';
+      if (!state.loadedSections.llm || !state.loadedSections.llmProviderConfigs || !state.loadedSections.llmCompression || !state.loadedSections.llmCompressionConfigs) return '正在加载渠道配置...';
       if (state.pendingSettingsSections.llmProviderConfigs) return '正在同步渠道配置...';
       if (state.pendingSettingsSections.llm) return '正在切换渠道...';
       return '正在加载渠道配置...';
@@ -311,7 +339,7 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       }
     },
     requestChannelSettings(): void {
-      for (const section of ['llm', 'llmProviderConfigs'] as const) {
+      for (const section of ['llm', 'llmProviderConfigs', 'llmCompression', 'llmCompressionConfigs'] as const) {
         if (this.loadedSections[section] || this.pendingSettingsSections[section]) continue;
         this.markPendingSettingSection(section);
         bridge.request(BridgeMessageType.GlobalSettingsGet, { section });
@@ -383,6 +411,68 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
         }
       });
     },
+    saveLlmCompression(): void {
+      this.markPendingSettingSection('llmCompression');
+      bridge.request(BridgeMessageType.GlobalSettingsUpdate, { section: 'llmCompression', settings: this.llmCompression });
+    },
+    saveLlmCompressionConfigs(): void {
+      this.markPendingSettingSection('llmCompressionConfigs');
+      bridge.request(BridgeMessageType.GlobalSettingsUpdate, { section: 'llmCompressionConfigs', settings: { configs: this.llmCompressionConfigs.configs.map((config) => ({ ...config, updatedAt: Date.now() })) } });
+    },
+    selectCompressionConfigForActiveProvider(configId: string): void {
+      if (!this.llmCompressionConfigs.configs.some((config) => config.id === configId)) return;
+      const providerConfigId = this.llm.activeProviderConfigId || this.activeLlmProviderConfig?.id || '';
+      if (!providerConfigId) {
+        this.llmCompression.defaultConfigId = configId;
+      } else {
+        const now = Date.now();
+        const existing = this.llmCompression.providerBindings.find((item) => item.providerConfigId === providerConfigId);
+        if (existing) {
+          existing.compressionConfigId = configId;
+          existing.updatedAt = now;
+        } else {
+          this.llmCompression.providerBindings.push({ id: `llm-compression-binding-${providerConfigId}`, providerConfigId, compressionConfigId: configId, role: 'default', createdAt: now, updatedAt: now });
+        }
+      }
+      this.saveLlmCompression();
+    },
+    createCompressionConfig(name = '新压缩方法'): void {
+      const config = createDefaultLlmCompressionConfig(name.trim() || '新压缩方法');
+      this.llmCompressionConfigs.configs.push(config);
+      this.llmCompression.defaultConfigId = config.id;
+      this.saveLlmCompressionConfigs();
+      this.saveLlmCompression();
+    },
+    updateCompressionConfig(configId: string, patch: Partial<LlmCompressionConfigRecord>): void {
+      const config = this.llmCompressionConfigs.configs.find((item) => item.id === configId);
+      if (!config) return;
+      Object.assign(config, patch, { updatedAt: Date.now() });
+      this.saveLlmCompressionConfigs();
+    },
+    setActiveCompressionMethodKind(kind: SelectableCompressionMethodKind): void {
+      const activeProvider = this.activeLlmProviderConfig;
+      const safeKind: SelectableCompressionMethodKind = activeProvider?.provider !== 'openai-responses' && kind === 'openai_responses_compact'
+        ? 'llm_summary'
+        : kind;
+      let config = this.activeCompressionConfig;
+      if (!config) {
+        config = createDefaultLlmCompressionConfig('默认压缩方法');
+        this.llmCompressionConfigs.configs.push(config);
+        this.llmCompression.defaultConfigId = config.id;
+      }
+      config.kind = safeKind;
+      if (safeKind === 'openai_responses_compact') {
+        config.openaiResponsesCompact = { ...(config.openaiResponsesCompact ?? {}), createSummaryFallback: true };
+      }
+      if (safeKind === 'llm_summary' && !config.llmSummary) {
+        config.llmSummary = createDefaultLlmCompressionConfig('临时').llmSummary;
+      }
+      config.updatedAt = Date.now();
+      this.saveLlmCompressionConfigs();
+      this.selectCompressionConfigForActiveProvider(config.id);
+    },
+
+
     selectLlmProviderConfig(configId: string): void {
       if (!this.llmProviderConfigs.configs.some((config) => config.id === configId)) return;
       this.llm.activeProviderConfigId = configId;
@@ -531,6 +621,11 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
           this.llm.activeProviderConfigId = nextActiveId;
           this.saveLlm();
         }
+      } else if (payload.section === 'llmCompression') {
+        this.llmCompression = { ...emptyLlmCompression(), ...(payload.settings as LlmCompressionSettingsRecord) };
+      } else if (payload.section === 'llmCompressionConfigs') {
+        const settings = payload.settings as LlmCompressionConfigsRecord;
+        this.llmCompressionConfigs = { configs: settings.configs };
       } else if (payload.section === 'checkpointMaintenance') {
         this.checkpointMaintenance = { ...emptyCheckpointMaintenance(), ...(payload.settings as CheckpointMaintenanceSettingsRecord) };
       } else {

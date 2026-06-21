@@ -4,12 +4,15 @@ import {
   isFunctionCallPart,
   isFunctionResponsePart,
   isInlineDataPart,
+  isProviderContextPart,
   isTextPart,
   type ContentPart,
+  type LlmInvocationSettingsSnapshotRecord,
   type MessageContent
 } from '../../../../shared/protocol';
 import { Message, type MessageData } from '../chat/components';
 import { conversationMessages } from '../chat/queries';
+import { CompressionBlock, CompressionContextVariant } from '../compression/components';
 import { ToolCall, ToolState } from '../tools/components';
 import {
   AgentRunSourceLink,
@@ -26,6 +29,13 @@ export interface BuildRunContextInput {
   conversation: Entity;
   modelMessage: Entity;
   policy?: RunContextPolicyData;
+  settingsSnapshot?: LlmInvocationSettingsSnapshotRecord;
+}
+
+export interface SelectedRunCompressionContext {
+  block: Entity;
+  variant: Entity;
+  mode: 'provider_native' | 'summary_fallback';
 }
 
 /**
@@ -83,6 +93,19 @@ function buildTargetConversationContents(
   const runScopedMessages = targetMessages.filter((entity) => runScopedMessageSet.has(entity));
   const extraHistoryMessages = targetMessages.filter((entity) => !runScopedMessageSet.has(entity));
 
+  const compression = selectRunContextCompressionVariant(world, input.conversation, input.settingsSnapshot);
+  if (compression) {
+    const block = world.get(compression.block, CompressionBlock);
+    const boundarySeq = block?.endSeq ?? block?.anchorSeq ?? 0;
+    const afterCompressedHistory = extraHistoryMessages.filter((entity) => (world.get(entity, Message)?.seq ?? 0) > boundarySeq);
+    const variant = world.get(compression.variant, CompressionContextVariant);
+    return [
+      ...(variant?.contents ?? []),
+      ...messageContents(world, afterCompressedHistory),
+      ...messageContents(world, runScopedMessages)
+    ];
+  }
+
   if (policy.historyMode === 'summary') {
     const selectedForSummary = selectHistoryMessages(world, extraHistoryMessages, policy);
     const summary = syntheticMessagesBlock(world, '[Context summary]', selectedForSummary);
@@ -96,6 +119,41 @@ function buildTargetConversationContents(
   const selected = new Set([...selectedHistory, ...runScopedMessages]);
   return messageContents(world, targetMessages.filter((entity) => selected.has(entity)));
 }
+
+export function selectRunContextCompressionVariant(
+  world: WorldReader,
+  conversation: Entity,
+  settingsSnapshot?: LlmInvocationSettingsSnapshotRecord
+): SelectedRunCompressionContext | undefined {
+  const candidates = world.query(CompressionBlock)
+    .filter((entity) => {
+      const block = world.get(entity, CompressionBlock);
+      return block?.conversation === conversation && block.status === 'complete';
+    })
+    .sort((left, right) => {
+      const leftBlock = world.get(left, CompressionBlock)!;
+      const rightBlock = world.get(right, CompressionBlock)!;
+      return (rightBlock.anchorSeq ?? rightBlock.endSeq ?? 0) - (leftBlock.anchorSeq ?? leftBlock.endSeq ?? 0)
+        || rightBlock.createdAt - leftBlock.createdAt
+        || rightBlock.id.localeCompare(leftBlock.id);
+    });
+
+  for (const blockEntity of candidates) {
+    const block = world.get(blockEntity, CompressionBlock)!;
+    const variants = world.query(CompressionContextVariant)
+      .filter((entity) => world.get(entity, CompressionContextVariant)?.block === blockEntity)
+      .sort((left, right) => world.get(left, CompressionContextVariant)!.createdAt - world.get(right, CompressionContextVariant)!.createdAt);
+    const canUseOpenAIResponsesNative = settingsSnapshot?.provider === 'openai-responses' && settingsSnapshot.compressionMethodKind === 'openai_responses_compact' && block.methodKind === 'openai_responses_compact';
+    if (canUseOpenAIResponsesNative) {
+      const native = variants.find((entity) => world.get(entity, CompressionContextVariant)?.kind === 'provider_native');
+      if (native !== undefined) return { block: blockEntity, variant: native, mode: 'provider_native' };
+    }
+    const summary = variants.find((entity) => world.get(entity, CompressionContextVariant)?.kind === 'provider_neutral_summary');
+    if (summary !== undefined) return { block: blockEntity, variant: summary, mode: 'summary_fallback' };
+  }
+  return undefined;
+}
+
 
 function buildSourceContextContents(
   world: WorldReader,
@@ -233,6 +291,9 @@ function renderPart(part: ContentPart): string {
   }
   if (isFileDataPart(part)) {
     return `[file_data uri=${part.fileData.uri} mimeType=${part.fileData.mimeType ?? 'unknown'}]`;
+  }
+  if (isProviderContextPart(part)) {
+    return `[provider_context format=${part.providerContext.format} itemType=${part.providerContext.itemType ?? 'context'}]`;
   }
   return '';
 }

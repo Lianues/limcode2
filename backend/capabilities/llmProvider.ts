@@ -1,5 +1,7 @@
 import { LlmEventType } from '../world/modules/llm/events';
 import type {
+  LlmCompactRequest,
+  LlmCompactResult,
   LlmDryRunOptions,
   LlmDryRunResult,
   LlmResolveInvocationRequest,
@@ -12,10 +14,12 @@ import {
   isFunctionCallPart,
   isFunctionResponsePart,
   isInlineDataPart,
-  isTextPart
+  isTextPart,
+  isProviderContextPart
 } from '../../shared/protocol';
 import type {
   ContentPart,
+  LlmCompressionConfigRecord,
   LlmGenerationConfigRecord,
   LlmInvocationSettingsSnapshotRecord,
   LlmProviderConfigRecord,
@@ -31,11 +35,14 @@ export const DEFAULT_LLM_BASE_URL = 'https://api.openai.com/v1';
 
 type MaybeProvider<T, TArg = void> = T | undefined | ((arg: TArg) => T | undefined | Promise<T | undefined>);
 type LlmSettingsRequest = LlmStartRequest | LlmResolveInvocationRequest | undefined;
+type LlmCompressionSettingsProvider = (request: LlmCompactRequest) => LlmCompressionConfigRecord | undefined | Promise<LlmCompressionConfigRecord | undefined>;
 
 type UnifiedModule = typeof import('unified-llm-provider');
 type UnifiedContent = import('unified-llm-provider').Content;
 type UnifiedPart = import('unified-llm-provider').Part;
 type UnifiedLLMRequest = import('unified-llm-provider').LLMRequest;
+type UnifiedLLMResponse = import('unified-llm-provider').LLMResponse;
+type UnifiedLLMCompactResponse = import('unified-llm-provider').LLMCompactResponse;
 type UnifiedLLMStreamChunk = import('unified-llm-provider').LLMStreamChunk;
 type UnifiedFunctionDeclaration = import('unified-llm-provider').FunctionDeclaration;
 type UnifiedModelCatalogEntry = import('unified-llm-provider').ModelCatalogEntry;
@@ -61,6 +68,8 @@ interface UnifiedDryRunCapable {
 
 export interface LlmProviderOptions {
   settings: MaybeProvider<LlmProviderConfigRecord, LlmSettingsRequest>;
+  compressionSettings?: LlmCompressionSettingsProvider;
+  activeCompressionSettings?: (conversationId?: string) => LlmCompressionConfigRecord | undefined | Promise<LlmCompressionConfigRecord | undefined>;
   headers?: MaybeProvider<Record<string, string>>;
 }
 
@@ -89,6 +98,9 @@ export function createLlmProviderCapability(options: LlmProviderOptions): LlmCap
           }
           if (request.invocationId) resolvedRuntimeSettingsByInvocationId.delete(request.invocationId);
         });
+    },
+    compact(request, emit) {
+      void compactLlmProvider(request, emit, options);
     },
     dryRun(request, dryRunOptions) {
       return dryRunLlmProvider(request, options, dryRunOptions, resolvedRuntimeSettingsByInvocationId);
@@ -181,8 +193,9 @@ export async function resolveLlmInvocationProvider(
 ): Promise<void> {
   try {
     const settings = normalizeSettings(await resolveMaybe(options.settings, request));
+    const compressionConfig = await options.activeCompressionSettings?.(request.conversationId);
     resolvedRuntimeSettingsByInvocationId?.set(request.invocationId, settings);
-    emit({ type: LlmEventType.InvocationResolved, payload: { invocationId: request.invocationId, requestId: request.requestId, settings: snapshotFromSettings(settings), resolvedAt: Date.now() } });
+    emit({ type: LlmEventType.InvocationResolved, payload: { invocationId: request.invocationId, requestId: request.requestId, settings: snapshotFromSettings(settings, compressionConfig), resolvedAt: Date.now() } });
   } catch (error) {
     emit({ type: LlmEventType.InvocationResolveError, payload: { invocationId: request.invocationId, requestId: request.requestId, message: error instanceof Error ? error.message : String(error), resolvedAt: Date.now() } });
   }
@@ -258,6 +271,263 @@ export async function listLlmProviderModels(config: LlmProviderConfigRecord, opt
   return result.models.map(modelCatalogEntryToRecord);
 }
 
+export type LlmCompressionMethodHandler = (
+  request: LlmCompactRequest,
+  methodConfig: LlmCompressionConfigRecord,
+  options: LlmProviderOptions
+) => Promise<LlmCompactResult>;
+
+const compressionMethodHandlers = new Map<LlmCompressionConfigRecord['kind'], LlmCompressionMethodHandler>();
+
+export function registerLlmCompressionMethod(kind: LlmCompressionConfigRecord['kind'], handler: LlmCompressionMethodHandler): void {
+  compressionMethodHandlers.set(kind, handler);
+}
+
+function ensureDefaultCompressionMethodsRegistered(): void {
+  if (compressionMethodHandlers.size > 0) return;
+  registerLlmCompressionMethod('openai_responses_compact', compactWithOpenAIResponses);
+  registerLlmCompressionMethod('llm_summary', compactWithSummary);
+  registerLlmCompressionMethod('deterministic_summary', compactWithSummary);
+  registerLlmCompressionMethod('manual_summary', compactWithSummary);
+}
+
+export async function compactLlmProvider(request: LlmCompactRequest, emit: Emit, options: LlmProviderOptions): Promise<void> {
+  try {
+    ensureDefaultCompressionMethodsRegistered();
+    const methodConfig = normalizeCompressionConfig(await options.compressionSettings?.(request), request.methodKind);
+    if (methodConfig.kind === 'disabled') {
+      throw new Error('当前压缩方法已关闭。');
+    }
+
+    const handler = compressionMethodHandlers.get(methodConfig.kind);
+    if (!handler) throw new Error(`未注册的压缩方法：${methodConfig.kind}`);
+    const result = await handler(request, methodConfig, options);
+
+    emit({
+      type: LlmEventType.CompactDone,
+      payload: {
+        requestId: request.id,
+        blockId: request.blockId,
+        conversationId: request.conversationId,
+        result,
+        completedAt: Date.now()
+      }
+    });
+  } catch (error) {
+    emit({
+      type: LlmEventType.CompactError,
+      payload: {
+        requestId: request.id,
+        blockId: request.blockId,
+        conversationId: request.conversationId,
+        message: error instanceof Error ? error.message : String(error),
+        completedAt: Date.now()
+      }
+    });
+  }
+}
+
+async function compactWithOpenAIResponses(
+  request: LlmCompactRequest,
+  methodConfig: LlmCompressionConfigRecord,
+  options: LlmProviderOptions
+): Promise<LlmCompactResult> {
+  const modelOverride = methodConfig.openaiResponsesCompact?.model?.trim();
+  const providerConfigId = methodConfig.openaiResponsesCompact?.providerConfigId?.trim();
+  const settings = await resolveRuntimeSettings({
+    id: request.id,
+    contents: request.contents,
+    tools: [],
+    conversationId: request.conversationId,
+    model: {
+      ...(providerConfigId ? { providerConfigId } : {}),
+      model: modelOverride || ''
+    }
+  }, options);
+
+  if (settings.provider !== 'openai-responses') {
+    throw new Error('OpenAI 原生压缩仅支持 openai-responses 渠道格式。');
+  }
+  if (!settings.apiKey) {
+    throw new Error('缺少 LLM API Key。请在全局设置的“渠道”页签里填写并保存。');
+  }
+
+  const unified = await importUnifiedLlmProvider();
+  const registry = unified.createBootstrapExtensionRegistry();
+  const proxy = normalizeOptionalString(settings.proxy);
+  const proxyFetch = proxy ? await createUndiciFetch() : undefined;
+  const headers = mergeHeaders(await resolveMaybe(options.headers), settings.headers);
+  const provider = unified.createLLMFromConfig({
+    provider: settings.provider,
+    model: settings.model,
+    apiKey: settings.apiKey,
+    baseUrl: settings.baseUrl,
+    ...(headers ? { headers } : {}),
+    ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
+    ...(proxy ? { proxy, fetch: proxyFetch } : {})
+  }, registry.llmProviders) as unknown as { compact?: (request: unknown, options?: unknown) => Promise<UnifiedLLMCompactResponse> };
+
+  if (typeof provider.compact !== 'function') {
+    throw new Error('当前 unified-llm-provider 不支持 provider.compact。');
+  }
+
+  const compacted = await provider.compact(
+    { contents: request.contents.map(toUnifiedContent) },
+    { inputFormat: 'unified', outputFormat: 'unified' }
+  );
+
+  return {
+    id: compacted.id,
+    object: compacted.object,
+    createdAt: compacted.createdAt,
+    contents: (compacted.contents ?? []).map(fromUnifiedContent),
+    usageMetadata: usageMetadataFromCompact(compacted.usageMetadata),
+    rawResponse: compacted.rawResponse,
+    methodConfig
+  };
+}
+
+async function compactWithSummary(
+  request: LlmCompactRequest,
+  methodConfig: LlmCompressionConfigRecord,
+  options: LlmProviderOptions
+): Promise<LlmCompactResult> {
+  const summary = await generateSummaryText(request, methodConfig, options);
+  const contents: MessageContent[] = [{ role: 'user', parts: [{ text: `[Context Summary]\n\n${summary}` }] }];
+  return {
+    id: `summary-${request.blockId}`,
+    object: 'limcode.context_summary',
+    createdAt: Date.now(),
+    contents,
+    methodConfig
+  };
+}
+
+async function generateSummaryText(
+  request: LlmCompactRequest,
+  methodConfig: LlmCompressionConfigRecord,
+  options: LlmProviderOptions
+): Promise<string> {
+  if (methodConfig.kind === 'deterministic_summary' || methodConfig.kind === 'manual_summary') {
+    return deterministicSummary(request.contents);
+  }
+
+  const summarySettings = methodConfig.llmSummary;
+  const providerConfigId = summarySettings?.providerConfigId?.trim();
+  const model = summarySettings?.model?.trim();
+  const settings = await resolveRuntimeSettings({
+    id: request.id,
+    contents: request.contents,
+    tools: [],
+    conversationId: request.conversationId,
+    ...(providerConfigId || model ? { model: { ...(providerConfigId ? { providerConfigId } : {}), model: model || '' } } : {})
+  }, options);
+
+  if (!settings.apiKey) return deterministicSummary(request.contents);
+
+  const unified = await importUnifiedLlmProvider();
+  const registry = unified.createBootstrapExtensionRegistry();
+  const proxy = normalizeOptionalString(settings.proxy);
+  const proxyFetch = proxy ? await createUndiciFetch() : undefined;
+  const headers = mergeHeaders(await resolveMaybe(options.headers), settings.headers);
+  const provider = unified.createLLMFromConfig({
+    provider: settings.provider,
+    model: settings.model,
+    apiKey: settings.apiKey,
+    baseUrl: settings.baseUrl,
+    ...(headers ? { headers } : {}),
+    ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
+    ...(proxy ? { proxy, fetch: proxyFetch } : {})
+  }, registry.llmProviders);
+
+  const systemPrompt = summarySettings?.systemPrompt?.trim() || '你是上下文压缩助手。请保留任务目标、关键约束、已完成工作、工具结果、错误、决策和下一步计划。';
+  const userPrompt = summarySettings?.userPrompt?.trim() || '请将以下对话历史压缩为后续模型可继续工作的摘要：';
+  const transcript = renderContentsForSummary(request.contents);
+  const response = await provider.chat<UnifiedLLMResponse>({
+    contents: [{ role: 'user', parts: [{ text: `${userPrompt}\n\n${transcript}` }] }],
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    generationConfig: summarySettings?.generationConfig ?? settings.generationConfig
+  }, { inputFormat: 'unified', outputFormat: 'unified' });
+
+  const text = visibleTextFromParts(response.content?.parts ?? []).trim();
+  return text || deterministicSummary(request.contents);
+}
+
+function normalizeCompressionConfig(input: LlmCompressionConfigRecord | undefined, fallbackKind?: LlmCompressionConfigRecord['kind']): LlmCompressionConfigRecord {
+  const now = Date.now();
+  const kind = input?.kind ?? fallbackKind ?? 'llm_summary';
+  return {
+    id: input?.id ?? 'inline-compression-config',
+    name: input?.name ?? '临时压缩方法',
+    kind,
+    trigger: input?.trigger ?? { mode: 'manual', preserveLatestMessages: 8 },
+    ...(input?.openaiResponsesCompact ? { openaiResponsesCompact: input.openaiResponsesCompact } : {}),
+    ...(input?.llmSummary ? { llmSummary: input.llmSummary } : {}),
+    fallbackPolicy: input?.fallbackPolicy ?? { whenNativeUnavailable: 'use_summary' },
+    createdAt: input?.createdAt ?? now,
+    updatedAt: input?.updatedAt ?? now
+  };
+}
+
+function fromUnifiedContent(content: UnifiedContent): MessageContent {
+  return {
+    role: content.role === 'model' ? 'model' : 'user',
+    parts: (content.parts ?? []).map(fromUnifiedPart).filter((part): part is ContentPart => part !== undefined)
+  };
+}
+
+function fromUnifiedPart(part: UnifiedPart): ContentPart | undefined {
+  const record = part as Record<string, unknown>;
+  if (isRecord(record.providerContext)) return { providerContext: record.providerContext as never };
+  if (typeof record.text === 'string' || typeof record.thought === 'boolean' || typeof record.thoughtSignature === 'string') {
+    return {
+      text: typeof record.text === 'string' ? record.text : '',
+      ...(typeof record.thought === 'boolean' ? { thought: record.thought } : {}),
+      ...(typeof record.thoughtSignature === 'string' ? { thoughtSignature: record.thoughtSignature } : {}),
+      ...(typeof record.thoughtDurationMs === 'number' ? { thoughtDurationMs: record.thoughtDurationMs } : {})
+    };
+  }
+  const call = record.functionCall;
+  if (isRecord(call) && typeof call.name === 'string') {
+    return { id: typeof call.callId === 'string' ? call.callId : undefined, functionCall: { name: call.name, args: call.args ?? {} } };
+  }
+  const response = record.functionResponse;
+  if (isRecord(response) && typeof response.name === 'string') {
+    return { id: typeof response.callId === 'string' ? response.callId : undefined, functionResponse: { name: response.name, response: response.response ?? {} } };
+  }
+  const inlineData = record.inlineData;
+  if (isRecord(inlineData) && typeof inlineData.mimeType === 'string' && typeof inlineData.data === 'string') {
+    return { inlineData: { mimeType: inlineData.mimeType, data: inlineData.data } };
+  }
+  return undefined;
+}
+
+function usageMetadataFromCompact(value: unknown): LlmUsageMetadataRecord | undefined {
+  const cleaned = stripUndefined(value);
+  return isRecord(cleaned) && Object.keys(cleaned).length > 0 ? cleaned as LlmUsageMetadataRecord : undefined;
+}
+
+function renderContentsForSummary(contents: MessageContent[]): string {
+  return contents.map((content, index) => `${index + 1}. ${content.role}: ${content.parts.map(renderSummaryPart).filter(Boolean).join('\n') || '[empty]'}`).join('\n\n');
+}
+
+function renderSummaryPart(part: ContentPart): string {
+  if (isTextPart(part)) return part.thought === true ? '' : part.text;
+  if (isFunctionCallPart(part)) return `[tool call] ${part.functionCall.name}: ${stringifyJson(part.functionCall.args)}`;
+  if (isFunctionResponsePart(part)) return `[tool result] ${part.functionResponse.name}: ${stringifyJson(part.functionResponse.response)}`;
+  if (isInlineDataPart(part)) return `[inline data] ${part.inlineData.mimeType}`;
+  if (isFileDataPart(part)) return `[file] ${part.fileData.uri}`;
+  if (isProviderContextPart(part)) return `[provider context] ${part.providerContext.format}:${part.providerContext.itemType ?? 'context'}`;
+  return '';
+}
+
+function deterministicSummary(contents: MessageContent[]): string {
+  const rendered = renderContentsForSummary(contents).trim();
+  if (!rendered) return '暂无可压缩的上下文。';
+  const limit = 12_000;
+  return rendered.length > limit ? `${rendered.slice(0, limit)}\n\n[已截断]` : rendered;
+}
+
 function modelCatalogEntryToRecord(model: UnifiedModelCatalogEntry): LlmProviderModelRecord {
   return {
     id: model.id,
@@ -299,7 +569,7 @@ async function resolveRuntimeSettings(
   return normalizeSettings(await resolveMaybe(options.settings, request));
 }
 
-function snapshotFromSettings(settings: LlmProviderConfigRecord): LlmInvocationSettingsSnapshotRecord {
+function snapshotFromSettings(settings: LlmProviderConfigRecord, compressionConfig?: LlmCompressionConfigRecord): LlmInvocationSettingsSnapshotRecord {
   const modelId = settings.model.trim();
   const modelName = modelId ? settings.models.find((model) => model.id === modelId)?.name.trim() || modelId : undefined;
   return {
@@ -312,6 +582,8 @@ function snapshotFromSettings(settings: LlmProviderConfigRecord): LlmInvocationS
     toolCallFormat: settings.toolCallFormat,
     ...(settings.generationConfig ? { generationConfig: settings.generationConfig } : {}),
     ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
+    ...(compressionConfig?.id ? { compressionConfigId: compressionConfig.id } : {}),
+    ...(compressionConfig?.kind ? { compressionMethodKind: compressionConfig.kind } : {}),
     ...(settings.headers ? { headers: maskSensitiveHeaders(settings.headers) } : {})
   };
 }
@@ -424,6 +696,7 @@ function toUnifiedPart(part: ContentPart): UnifiedPart {
     // unified-llm-provider 当前统一 Part 没有 fileData；先作为文本占位保留语义。
     return { text: `[fileData:${part.fileData.mimeType ?? 'unknown'}:${part.fileData.uri}]` };
   }
+  if (isProviderContextPart(part)) return { providerContext: part.providerContext } as unknown as UnifiedPart;
   return assertNever(part);
 }
 

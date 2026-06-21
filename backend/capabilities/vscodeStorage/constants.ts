@@ -31,6 +31,9 @@ export const CONVERSATION_CHECKPOINT_REPOSITORY_LINKS_ROOT_DIR = 'conversation-c
 export const CHECKPOINTS_ROOT_DIR = 'checkpoints';
 export const CHECKPOINT_TIMELINE_ANCHORS_ROOT_DIR = 'checkpoint-timeline-anchors';
 export const CHECKPOINT_SHADOW_WORKTREES_ROOT_DIR = 'checkpoint-shadow-worktrees';
+export const COMPRESSION_BLOCKS_ROOT_DIR = 'compression-blocks';
+export const COMPRESSION_BLOCK_SOURCE_LINKS_ROOT_DIR = 'compression-block-source-links';
+export const COMPRESSION_CONTEXT_VARIANTS_ROOT_DIR = 'compression-context-variants';
 
 /**
  * 当前插件明确注册的数据根目录名。
@@ -65,8 +68,12 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
   CHECKPOINTS_ROOT_DIR,
   CHECKPOINT_TIMELINE_ANCHORS_ROOT_DIR,
   CHECKPOINT_SHADOW_WORKTREES_ROOT_DIR,
+  COMPRESSION_BLOCKS_ROOT_DIR,
+  COMPRESSION_BLOCK_SOURCE_LINKS_ROOT_DIR,
+  COMPRESSION_CONTEXT_VARIANTS_ROOT_DIR,
   SETTINGS_ROOT_DIR
 ] as const;
 
 export const LLM_SETTINGS_FILE = 'llm.json';
+export const LLM_COMPRESSION_SETTINGS_FILE = 'llm-compression.json';
 export const CHECKPOINT_MAINTENANCE_SETTINGS_FILE = 'checkpoint-maintenance.json';

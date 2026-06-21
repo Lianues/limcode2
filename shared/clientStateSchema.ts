@@ -265,7 +265,8 @@ const agentRunsTable: ClientSyncOverrides = {
     { table: 'runDeliveryPolicyLinks', foreignKey: 'runId' },
     { table: 'runEditPolicyLinks', foreignKey: 'runId' },
     { table: 'runWorkEnvironmentLinks', foreignKey: 'runId' },
-    { table: 'agentRunInputRevisions', foreignKey: 'runId' }
+    { table: 'agentRunInputRevisions', foreignKey: 'runId' },
+    { table: 'runCompressionBlockLinks', foreignKey: 'runId' }
   ],
   scope: {
     kind: 'conversationAnyOf',
@@ -327,7 +328,8 @@ export const CLIENT_STATE_TABLES = {
       { table: 'workEnvironmentPolicyScopeLinks', foreignKey: 'scopeId' },
       { table: 'systemPromptScopeLinks', foreignKey: 'scopeId' },
       { table: 'modelProfileScopeLinks', foreignKey: 'scopeId' },
-      { table: 'messages', foreignKey: 'conversationId', cascade: true }
+      { table: 'messages', foreignKey: 'conversationId', cascade: true },
+      { table: 'compressionBlocks', foreignKey: 'conversationId', cascade: true }
     ]
   }),
   conversationReuseLinks: upsertRemoveTable('conversationReuseLink', 'link', { scope: { kind: 'conversation', field: 'conversationId' }, globalSnapshot: true }),
@@ -400,6 +402,27 @@ export const CLIENT_STATE_TABLES = {
   },
   messageRevisions: upsertRemoveTable('messageRevision', 'revision', { ...conversationScopedTable, orderBy: [{ field: 'createdAt' }, { field: 'id' }] }),
   messageCurrentRevisionLinks: upsertRemoveTable('messageCurrentRevisionLink', 'link', { ...conversationScopedTable, scope: { kind: 'conversationVia', table: 'messages', localField: 'messageId', foreignField: 'id' } }),
+  compressionBlocks: upsertRemoveTable('compressionBlock', 'block', {
+    scope: { kind: 'conversation', field: 'conversationId' },
+    globalSnapshot: false,
+    orderBy: [{ field: 'anchorSeq' }, { field: 'createdAt' }, { field: 'id' }],
+    cascadeRemove: [
+      { table: 'compressionBlockSourceLinks', foreignKey: 'blockId' },
+      { table: 'compressionContextVariants', foreignKey: 'blockId' },
+      { table: 'runCompressionBlockLinks', foreignKey: 'blockId' }
+    ]
+  }),
+  compressionBlockSourceLinks: upsertRemoveTable('compressionBlockSourceLink', 'link', {
+    scope: { kind: 'conversationVia', table: 'compressionBlocks', localField: 'blockId', foreignField: 'id' },
+    globalSnapshot: false,
+    orderBy: [{ field: 'order' }, { field: 'id' }]
+  }),
+  compressionContextVariants: upsertRemoveTable('compressionContextVariant', 'variant', {
+    scope: { kind: 'conversationVia', table: 'compressionBlocks', localField: 'blockId', foreignField: 'id' },
+    globalSnapshot: false,
+    orderBy: [{ field: 'createdAt' }, { field: 'id' }]
+  }),
+  runCompressionBlockLinks: upsertRemoveTable('runCompressionBlockLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
   llmInvocations: upsertRemoveTable('llmInvocation', 'invocation', {
     cascadeRemove: [
       { table: 'runLlmInvocationLinks', foreignKey: 'invocationId' },

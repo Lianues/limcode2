@@ -4,8 +4,10 @@ import { useConversationUiStore, type MessageViewRow } from '@webview/stores/use
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useChat } from '@webview/composables/useChat';
 import { useRunHistoryStore } from '@webview/stores/useRunHistoryStore';
+import { useCompression } from '@webview/composables/useCompression';
 import CheckpointTimelineCard from './CheckpointTimelineCard.vue';
 import { checkpointBeforeMessageFloor } from './checkpointRollback';
+import CompressionTimelineCard from './CompressionTimelineCard.vue';
 import MessageItem from './MessageItem.vue';
 
 withDefaults(
@@ -18,6 +20,7 @@ withDefaults(
 const ui = useConversationUiStore();
 const clientState = useClientStateStore();
 const { retryMessageFrom, deleteMessagesFrom } = useChat();
+const { deleteCompression, regenerateCompression, setCompressionEnabled } = useCompression();
 const runHistory = useRunHistoryStore();
 
 function onDeleteFrom(message: MessageRecord): void {
@@ -78,10 +81,18 @@ function rollbackCheckpointForMessage(message: MessageRecord): CheckpointRecord 
         @view-run-detail="onViewRunDetail"
       />
       <CheckpointTimelineCard
-        v-else
+        v-else-if="row.kind === 'checkpoint'"
         :checkpoint="row.checkpoint"
         :anchor="row.anchor"
         :phase="row.phase"
+      />
+      <CompressionTimelineCard
+        v-else
+        :block="row.block"
+        :phase="row.phase"
+        @delete="deleteCompression"
+        @regenerate="regenerateCompression"
+        @toggle-enabled="setCompressionEnabled"
       />
     </template>
     <div v-if="!ui.timelineRows.length" class="message-empty-container">

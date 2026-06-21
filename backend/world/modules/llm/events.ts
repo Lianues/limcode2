@@ -1,4 +1,5 @@
 import type { LlmInvocationSettingsSnapshotRecord, LlmUsageMetadataRecord } from '../../../../shared/protocol';
+import type { LlmCompactResult } from './contracts';
 
 export const LlmEventType = {
   InvocationResolved: 'llm:invocationResolved',
@@ -9,7 +10,9 @@ export const LlmEventType = {
   ThoughtDone: 'llm:thoughtDone',
   ToolCall: 'llm:toolcall',
   Done: 'llm:done',
-  Error: 'llm:error'
+  Error: 'llm:error',
+  CompactDone: 'llm:compactDone',
+  CompactError: 'llm:compactError'
 } as const;
 
 export interface LlmStartedPayload {
@@ -60,6 +63,20 @@ export interface LlmErrorPayload {
   createdAt?: number;
   streamOutputDurationMs?: number;
 }
+export interface LlmCompactDonePayload {
+  requestId: string;
+  blockId: string;
+  conversationId: string;
+  result: LlmCompactResult;
+  completedAt: number;
+}
+export interface LlmCompactErrorPayload {
+  requestId: string;
+  blockId: string;
+  conversationId: string;
+  message: string;
+  completedAt: number;
+}
 
 declare module '@backend/world/events' {
   interface WorldEventPayloadMap {
@@ -72,5 +89,7 @@ declare module '@backend/world/events' {
     'llm:toolcall': LlmToolCallPayload;
     'llm:done': LlmDonePayload;
     'llm:error': LlmErrorPayload;
+    'llm:compactDone': LlmCompactDonePayload;
+    'llm:compactError': LlmCompactErrorPayload;
   }
 }

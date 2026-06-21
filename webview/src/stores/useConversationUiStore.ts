@@ -1,7 +1,7 @@
 import { computed, ref, shallowRef } from 'vue';
 import { defineStore } from 'pinia';
-import { buildConversationTimelineRows, type ConversationCheckpointTimelineRow } from '@shared/conversationTimeline';
-import { isVisibleTextPart, type CheckpointRecord, type CheckpointTimelineAnchorRecord, type MessageRecord } from '@shared/protocol';
+import { buildConversationTimelineRows, type ConversationCheckpointTimelineRow, type ConversationCompressionTimelineRow } from '@shared/conversationTimeline';
+import { isVisibleTextPart, type CheckpointRecord, type CheckpointTimelineAnchorRecord, type CompressionBlockRecord, type MessageRecord } from '@shared/protocol';
 
 export type MessageViewPhase = 'stable' | 'entering' | 'exiting';
 export type ComposerMode = 'chat' | 'edit';
@@ -20,8 +20,11 @@ export interface MessageViewRow {
 export interface CheckpointViewRow extends ConversationCheckpointTimelineRow {
   phase: MessageViewPhase;
 }
+export interface CompressionViewRow extends ConversationCompressionTimelineRow {
+  phase: MessageViewPhase;
+}
 
-export type ConversationTimelineViewRow = MessageViewRow | CheckpointViewRow;
+export type ConversationTimelineViewRow = MessageViewRow | CheckpointViewRow | CompressionViewRow;
 
 export interface ComposerSnapshot {
   draft: string;
@@ -75,13 +78,14 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
   const composerDraft = computed(() => activeComposerSnapshot.value.draft);
 
   function syncMessages(messages: readonly MessageRecord[]): void {
-    syncTimeline(messages, [], []);
+    syncTimeline(messages, [], [], []);
   }
 
   function syncTimeline(
     messages: readonly MessageRecord[],
     checkpoints: readonly CheckpointRecord[],
-    checkpointAnchors: readonly CheckpointTimelineAnchorRecord[]
+    checkpointAnchors: readonly CheckpointTimelineAnchorRecord[],
+    compressionBlocks: readonly CompressionBlockRecord[] = []
   ): void {
     const currentIds = new Set(messages.map((message) => message.id));
     for (const id of [...enterTimers.keys()]) {
@@ -104,13 +108,20 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     if (exitingFromId && !currentIds.has(exitingFromId)) clearExitState();
 
     const messageIndexById = new Map(messages.map((message, index) => [message.id, index]));
-    const rows = buildConversationTimelineRows({ messages, checkpoints, checkpointAnchors }).map((row): ConversationTimelineViewRow => {
+    const rows = buildConversationTimelineRows({ messages, checkpoints, checkpointAnchors, compressionBlocks }).map((row): ConversationTimelineViewRow => {
       if (row.kind === 'message') {
         const messageIndex = messageIndexById.get(row.message.id) ?? 0;
         return {
           ...row,
           deleteCount: messages.length - messageIndex,
           phase: phaseForMessage(row.message.id, messageIndex, messages)
+        };
+      }
+      if (row.kind === 'compression') {
+        const floorIndex = row.floorMessageId ? messageIndexById.get(row.floorMessageId) ?? -1 : -1;
+        return {
+          ...row,
+          phase: floorIndex >= 0 && row.floorMessageId ? phaseForMessage(row.floorMessageId, floorIndex, messages) : 'stable'
         };
       }
       const floorIndex = row.floorMessageId ? messageIndexById.get(row.floorMessageId) ?? -1 : -1;

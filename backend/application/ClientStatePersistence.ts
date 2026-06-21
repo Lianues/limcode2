@@ -31,7 +31,8 @@ const RUN_HISTORY_TABLE_KEYS = [
   'runLlmInvocationLinks',
   'messageLlmInvocationLinks',
   'runWorkEnvironmentLinks',
-  'agentRunInputRevisions'
+  'agentRunInputRevisions',
+  'runCompressionBlockLinks'
 ] as const;
 
 export interface ClientStatePersistenceOptions {
@@ -298,7 +299,11 @@ function skeletonPersistenceSlice(state: ClientState): ClientState {
     llmInvocations: [],
     runLlmInvocationLinks: [],
     messageLlmInvocationLinks: [],
-    agentRunInputRevisions: []
+    agentRunInputRevisions: [],
+    compressionBlocks: [],
+    compressionBlockSourceLinks: [],
+    compressionContextVariants: [],
+    runCompressionBlockLinks: []
   };
 }
 
@@ -306,12 +311,14 @@ function knownRunHistoryConversationIds(state: ClientState): string[] {
   const ids = new Set<string>();
   const messageConversationIds = new Map(state.messages.map((message) => [message.id, message.conversationId]));
   const toolCallMessageIds = new Map(state.toolCalls.map((toolCall) => [toolCall.id, toolCall.messageId]));
+  const compressionConversationIds = new Map(state.compressionBlocks.map((block) => [block.id, block.conversationId]));
 
   for (const link of state.agentRunTargetLinks) addId(ids, link.conversationId);
   for (const link of state.agentRunSourceLinks) addId(ids, link.sourceConversationId);
   for (const link of state.messageRunLinks) addId(ids, messageConversationIds.get(link.messageId));
   for (const link of state.toolCallRunLinks) addId(ids, conversationIdForToolCall(link.toolCallId, toolCallMessageIds, messageConversationIds));
   for (const input of state.agentRunInputRevisions) addId(ids, input.conversationId);
+  for (const link of state.runCompressionBlockLinks) addId(ids, compressionConversationIds.get(link.blockId));
   for (const policy of state.runConversationPolicies) {
     addId(ids, policy.conversationId);
     addId(ids, policy.branchFromConversationId);

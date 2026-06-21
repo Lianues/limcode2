@@ -31,7 +31,10 @@ import {
   CONVERSATION_CHECKPOINT_REPOSITORY_LINKS_ROOT_DIR,
   CHECKPOINTS_ROOT_DIR,
   CHECKPOINT_TIMELINE_ANCHORS_ROOT_DIR,
-  CHECKPOINT_SHADOW_WORKTREES_ROOT_DIR
+  CHECKPOINT_SHADOW_WORKTREES_ROOT_DIR,
+  COMPRESSION_BLOCKS_ROOT_DIR,
+  COMPRESSION_BLOCK_SOURCE_LINKS_ROOT_DIR,
+  COMPRESSION_CONTEXT_VARIANTS_ROOT_DIR
 } from './constants';
 
 export interface VscodeStorageUris {
@@ -78,6 +81,12 @@ export interface VscodeStorageUris {
   checkpointTimelineAnchorsRootUri: vscode.Uri;
   checkpointTimelineAnchorsIndexUri: vscode.Uri;
   checkpointShadowWorktreesRootUri: vscode.Uri;
+  compressionBlocksRootUri: vscode.Uri;
+  compressionBlocksIndexUri: vscode.Uri;
+  compressionBlockSourceLinksRootUri: vscode.Uri;
+  compressionBlockSourceLinksIndexUri: vscode.Uri;
+  compressionContextVariantsRootUri: vscode.Uri;
+  compressionContextVariantsIndexUri: vscode.Uri;
   linksRootUri: vscode.Uri;
   linksIndexUri: vscode.Uri;
   systemPromptScopeLinksRootUri: vscode.Uri;
@@ -122,6 +131,9 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const checkpoints = root(globalStorageUri, CHECKPOINTS_ROOT_DIR);
   const checkpointTimelineAnchors = root(globalStorageUri, CHECKPOINT_TIMELINE_ANCHORS_ROOT_DIR);
   const checkpointShadowWorktreesRootUri = vscode.Uri.joinPath(globalStorageUri, CHECKPOINT_SHADOW_WORKTREES_ROOT_DIR);
+  const compressionBlocks = root(globalStorageUri, COMPRESSION_BLOCKS_ROOT_DIR);
+  const compressionBlockSourceLinks = root(globalStorageUri, COMPRESSION_BLOCK_SOURCE_LINKS_ROOT_DIR);
+  const compressionContextVariants = root(globalStorageUri, COMPRESSION_CONTEXT_VARIANTS_ROOT_DIR);
   const links = root(globalStorageUri, AGENT_CONVERSATION_LINKS_ROOT_DIR);
   const systemPromptScopeLinks = root(globalStorageUri, SYSTEM_PROMPT_SCOPE_LINKS_ROOT_DIR);
   const modelProfileScopeLinks = root(globalStorageUri, MODEL_PROFILE_SCOPE_LINKS_ROOT_DIR);
@@ -220,6 +232,18 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     checkpointTimelineAnchorsIndexPath: checkpointTimelineAnchors.indexUri.fsPath,
     checkpointShadowWorktreesRootUri,
     checkpointShadowWorktreesRootPath: checkpointShadowWorktreesRootUri.fsPath,
+    compressionBlocksRootUri: compressionBlocks.rootUri,
+    compressionBlocksRootPath: compressionBlocks.rootUri.fsPath,
+    compressionBlocksIndexUri: compressionBlocks.indexUri,
+    compressionBlocksIndexPath: compressionBlocks.indexUri.fsPath,
+    compressionBlockSourceLinksRootUri: compressionBlockSourceLinks.rootUri,
+    compressionBlockSourceLinksRootPath: compressionBlockSourceLinks.rootUri.fsPath,
+    compressionBlockSourceLinksIndexUri: compressionBlockSourceLinks.indexUri,
+    compressionBlockSourceLinksIndexPath: compressionBlockSourceLinks.indexUri.fsPath,
+    compressionContextVariantsRootUri: compressionContextVariants.rootUri,
+    compressionContextVariantsRootPath: compressionContextVariants.rootUri.fsPath,
+    compressionContextVariantsIndexUri: compressionContextVariants.indexUri,
+    compressionContextVariantsIndexPath: compressionContextVariants.indexUri.fsPath,
     linksRootUri: links.rootUri,
     linksRootPath: links.rootUri.fsPath,
     linksIndexUri: links.indexUri,

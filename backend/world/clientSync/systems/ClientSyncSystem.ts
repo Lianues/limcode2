@@ -171,6 +171,11 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
   const invocationIds = new Set(compressionBlockLlmInvocationLinks.map((link) => link.invocationId));
   for (const link of state.runLlmInvocationLinks.filter((link) => runIds.has(link.runId))) invocationIds.add(link.invocationId);
   for (const link of state.messageLlmInvocationLinks.filter((link) => messageIds.has(link.messageId))) invocationIds.add(link.invocationId);
+  const conversationRuntimeContextSnapshotLinks = state.conversationRuntimeContextSnapshotLinks.filter((link) => link.conversationId === conversationId);
+  const runRuntimeContextSnapshotLinks = state.runRuntimeContextSnapshotLinks.filter((link) => runIds.has(link.runId));
+  const runtimeContextSnapshotIds = new Set<string>();
+  for (const link of conversationRuntimeContextSnapshotLinks) runtimeContextSnapshotIds.add(link.runtimeContextSnapshotId);
+  for (const link of runRuntimeContextSnapshotLinks) runtimeContextSnapshotIds.add(link.runtimeContextSnapshotId);
 
   return {
     ...createEmptyClientState(),
@@ -218,7 +223,10 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
     runContextPolicyLinks: state.runContextPolicyLinks.filter((link) => runIds.has(link.runId)),
     runDeliveryPolicyLinks: state.runDeliveryPolicyLinks.filter((link) => runIds.has(link.runId)),
     runEditPolicyLinks: state.runEditPolicyLinks.filter((link) => runIds.has(link.runId)),
-    agentRunInputRevisions: state.agentRunInputRevisions.filter((inputRevision) => runIds.has(inputRevision.runId))
+    agentRunInputRevisions: state.agentRunInputRevisions.filter((inputRevision) => runIds.has(inputRevision.runId)),
+    runtimeContextSnapshots: state.runtimeContextSnapshots.filter((snapshot) => snapshot.conversationId === conversationId || runtimeContextSnapshotIds.has(snapshot.id)),
+    conversationRuntimeContextSnapshotLinks,
+    runRuntimeContextSnapshotLinks
   };
 }
 

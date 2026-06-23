@@ -314,7 +314,8 @@ export const CLIENT_STATE_TABLES = {
   runtimeContextScopeLinks: upsertRemoveTable('runtimeContextScopeLink', 'link', { globalSnapshot: true }),
   runtimeContextSnapshots: upsertRemoveTable('runtimeContextSnapshot', 'snapshot', {
     cascadeRemove: [{ table: 'conversationRuntimeContextSnapshotLinks', foreignKey: 'runtimeContextSnapshotId' }, { table: 'runRuntimeContextSnapshotLinks', foreignKey: 'runtimeContextSnapshotId' }],
-    globalSnapshot: true
+    globalSnapshot: true,
+    scope: { kind: 'conversation', field: 'conversationId', replace: 'upsertOnly' }
   }),
   conversationRuntimeContextSnapshotLinks: upsertRemoveTable('conversationRuntimeContextSnapshotLink', 'link', { scope: { kind: 'conversation', field: 'conversationId' }, globalSnapshot: true }),
   runRuntimeContextSnapshotLinks: upsertRemoveTable('runRuntimeContextSnapshotLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),

@@ -173,6 +173,8 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
   for (const link of state.messageLlmInvocationLinks.filter((link) => messageIds.has(link.messageId))) invocationIds.add(link.invocationId);
   const conversationRuntimeContextSnapshotLinks = state.conversationRuntimeContextSnapshotLinks.filter((link) => link.conversationId === conversationId);
   const runRuntimeContextSnapshotLinks = state.runRuntimeContextSnapshotLinks.filter((link) => runIds.has(link.runId));
+  const conversationWorkEnvironmentLinks = state.conversationWorkEnvironmentLinks.filter((link) => link.conversationId === conversationId);
+  const runWorkEnvironmentLinks = state.runWorkEnvironmentLinks.filter((link) => runIds.has(link.runId));
   const runtimeContextSnapshotIds = new Set<string>();
   for (const link of conversationRuntimeContextSnapshotLinks) runtimeContextSnapshotIds.add(link.runtimeContextSnapshotId);
   for (const link of runRuntimeContextSnapshotLinks) runtimeContextSnapshotIds.add(link.runtimeContextSnapshotId);
@@ -226,7 +228,9 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
     agentRunInputRevisions: state.agentRunInputRevisions.filter((inputRevision) => runIds.has(inputRevision.runId)),
     runtimeContextSnapshots: state.runtimeContextSnapshots.filter((snapshot) => snapshot.conversationId === conversationId || runtimeContextSnapshotIds.has(snapshot.id)),
     conversationRuntimeContextSnapshotLinks,
-    runRuntimeContextSnapshotLinks
+    runRuntimeContextSnapshotLinks,
+    conversationWorkEnvironmentLinks,
+    runWorkEnvironmentLinks
   };
 }
 

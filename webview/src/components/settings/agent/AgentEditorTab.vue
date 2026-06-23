@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import { IconRobot, IconPencil, IconPlus, IconTrash } from '@tabler/icons-vue';
 import type { AgentRecord } from '@shared/protocol';
+import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingInline.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
 import ToolPolicyEditor from '@webview/components/settings/tools/ToolPolicyEditor.vue';
 import WorkEnvironmentPolicyEditor from '@webview/components/settings/workEnvironment/WorkEnvironmentPolicyEditor.vue';
@@ -12,8 +13,10 @@ import ModelProfileScopeEditor from '@webview/components/settings/config/ModelPr
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
 import { useAgentStore } from '@webview/stores/useAgentStore';
+import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
 
 const agentStore = useAgentStore();
+const { loading: agentLoading, text: agentLoadingText } = useSettingsLoadingText('Agent 配置');
 const activeAgentId = ref('');
 const createOpen = ref(false);
 const renameOpen = ref(false);
@@ -38,7 +41,10 @@ function confirmDelete(): void { const agent = activeAgent.value; deleteOpen.val
   <section class="global-settings-tab-section agent-editor" aria-label="Agent 编辑">
     <header class="global-settings-section-header">
       <div>
-        <h2>Agent</h2>
+        <h2>
+          Agent
+          <SettingsLoadingInline :show="agentLoading" :text="agentLoadingText" />
+        </h2>
         <p>Agent 是角色层（who）：人格 Prompt、能力上限和默认模型。Mode 是独立的交互模式层（how）。</p>
       </div>
     </header>

@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { CheckpointPolicyRecord, CheckpointPolicyScopeKind, CheckpointToolTriggerConfigRecord, CheckpointTriggerConfigRecord, ToolDefinitionRecord } from '@shared/protocol';
+import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingInline.vue';
 import LcCheckbox from '@webview/components/ui/LcCheckbox.vue';
 import { useCheckpointPolicyStore } from '@webview/stores/useCheckpointPolicyStore';
 import { useToolPolicyStore } from '@webview/stores/useToolPolicyStore';
+import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
 
 const props = withDefaults(defineProps<{
   scopeKind: CheckpointPolicyScopeKind;
@@ -19,6 +21,7 @@ const props = withDefaults(defineProps<{
 
 const store = useCheckpointPolicyStore();
 const toolStore = useToolPolicyStore();
+const { loading: checkpointLoading, text: checkpointLoadingText } = useSettingsLoadingText('存档点配置', () => props.scopeKind, () => props.scopeId);
 const localResolution = computed(() => store.localPolicyFor(props.scopeKind, props.scopeId));
 const effectiveResolution = computed(() => store.effectivePolicyFor(props.scopeKind, props.scopeId));
 const policy = computed(() => effectiveResolution.value.policy);
@@ -100,7 +103,10 @@ function restoreInheritance(): void {
   <section class="checkpoint-policy-editor" :aria-label="title">
     <header class="checkpoint-policy-header">
       <div>
-        <h3>{{ title }}</h3>
+        <h3>
+          {{ title }}
+          <SettingsLoadingInline :show="checkpointLoading" :text="checkpointLoadingText" />
+        </h3>
         <p v-if="description">{{ description }}</p>
       </div>
       <span class="checkpoint-source">{{ sourceLabel }}</span>

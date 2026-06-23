@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { createEmptyClientState } from '@shared/clientStateSchema';
 import {
+  GLOBAL_CLIENT_STATE_STREAM_ID,
   conversationClientStateStreamId,
   isFunctionResponsePart,
   type AgentRunRecord,
@@ -47,6 +48,10 @@ export function isActiveAgentRunStatus(status: AgentRunStatus): boolean {
 }
 
 const dbByStore = new WeakMap<object, ClientStateDb>();
+// 设置页依赖 startup + deferred 两阶段 ClientState：Ready 后第一次 global snapshot 可能还没有
+// workEnvironment / checkpoint 等 deferred 表；后端 deferred 加载完成后会再次 resync。
+// 因此配置页标题加载态至少等到 global stream seq >= 2 再收起。
+const SETTINGS_READY_MIN_GLOBAL_STREAM_SEQ = 2;
 
 function dbFor(store: ClientStateStoreState): ClientStateDb {
   const key = store as object;
@@ -74,6 +79,19 @@ export const useClientStateStore = defineStore('clientState', {
     currentConversationDetailLoaded(state): boolean {
       if (!state.currentConversationId) return false;
       return (state.streamSeqs[conversationClientStateStreamId(state.currentConversationId)] ?? 0) > 0;
+    },
+    settingsClientStateReady(state): boolean {
+      return isSettingsClientStateReady(state);
+    },
+    settingsClientStateLoading(state): boolean {
+      return !isSettingsClientStateReady(state);
+    },
+    isConfigScopeClientStateLoading(state): (scopeKind?: string, scopeId?: string) => boolean {
+      return (scopeKind?: string, scopeId?: string): boolean => {
+        if (!isSettingsClientStateReady(state)) return true;
+        if (scopeKind === 'conversation' && scopeId) return (state.streamSeqs[conversationClientStateStreamId(scopeId)] ?? 0) <= 0;
+        return false;
+      };
     },
     currentConversation(state): ConversationRecord | undefined {
       return state.conversations.find((conversation) => conversation.id === state.currentConversationId);
@@ -245,5 +263,16 @@ function workEnvironmentSortKey(environment: WorkEnvironmentRecord): string {
 
 function latestScopeLink<T extends { createdAt: number; updatedAt: number; id: string }>(links: T[]): T | undefined {
   return [...links].sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt || right.id.localeCompare(left.id))[0];
+}
+
+function isSettingsClientStateReady(state: ClientStateStoreState): boolean {
+  const streamSeq = state.streamSeqs[GLOBAL_CLIENT_STATE_STREAM_ID] ?? 0;
+  if (streamSeq >= SETTINGS_READY_MIN_GLOBAL_STREAM_SEQ) return true;
+  if (streamSeq <= 0) return false;
+  // 如果设置面板是在后端 deferred skeleton 已加载后才打开，第一次 global snapshot 就可能已经包含完整配置数据。
+  return state.workEnvironments.length > 0
+    || state.workEnvironmentPolicies.length > 0
+    || state.checkpointPolicies.length > 0
+    || state.shadowRepositories.length > 0;
 }
 

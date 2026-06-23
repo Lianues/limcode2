@@ -74,16 +74,6 @@ function hasOutstandingSettingsWork(state: GlobalSettingsState): boolean {
   return Object.keys(state.loadingSettingsSections).length > 0 || Object.keys(state.pendingSettingsSections).length > 0;
 }
 
-function hasLoadingChannelSettingsSection(state: GlobalSettingsState): boolean {
-  return CHANNEL_SETTINGS_SECTIONS.some((section) =>
-    !!state.loadingSettingsSections[section] || (!state.loadedSections[section] && !state.failedSettingsSections[section])
-  );
-}
-
-function hasPendingChannelSettingsSection(state: GlobalSettingsState): boolean {
-  return CHANNEL_SETTINGS_SECTIONS.some((section) => !!state.pendingSettingsSections[section]);
-}
-
 function settingsErrorStatus(requestType: string | undefined, message: string): string {
   if (requestType === BridgeMessageType.GlobalSettingsGet) return `设置读取失败：${message}`;
   if (requestType === BridgeMessageType.LlmProviderModelsGet) return `获取模型列表失败：${message}`;
@@ -558,17 +548,6 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       const binding = activeProviderId ? state.llmCompression.providerBindings.find((item) => item.providerConfigId === activeProviderId) : undefined;
       const id = binding?.compressionConfigId ?? state.llmCompression.defaultConfigId;
       return state.llmCompressionConfigs.configs.find((config) => config.id === id) ?? state.llmCompressionConfigs.configs[0];
-    },
-    isChannelSettingsLoading(state): boolean {
-      return hasLoadingChannelSettingsSection(state) || hasPendingChannelSettingsSection(state);
-    },
-    channelSettingsLoadingText(state): string {
-      if (hasLoadingChannelSettingsSection(state)) return '正在加载渠道配置...';
-      if (state.pendingSettingsSections.llmProviderConfigs) return '正在同步渠道配置...';
-      if (state.pendingSettingsSections.llm) return '正在切换渠道...';
-      if (state.pendingSettingsSections.llmCompressionConfigs) return '正在同步压缩配置...';
-      if (state.pendingSettingsSections.llmCompression) return '正在同步压缩绑定...';
-      return '正在加载渠道配置...';
     }
   },
   actions: {

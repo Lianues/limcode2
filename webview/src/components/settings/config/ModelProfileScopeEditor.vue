@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import type { ConfigScopeKind } from '@shared/protocol';
+import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingInline.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import { useModelProfileStore } from '@webview/stores/useModelProfileStore';
+import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
 
 const INHERIT_GLOBAL_MODEL_ID = '__inherit_global_model__';
 
@@ -14,6 +16,9 @@ const props = withDefaults(defineProps<{ scopeKind: ConfigScopeKind; scopeId?: s
 
 const globalSettings = useGlobalSettingsStore();
 const store = useModelProfileStore();
+const { loading: modelLoading, text: modelLoadingText } = useSettingsLoadingText('模型配置', () => props.scopeKind, () => props.scopeId, {
+  globalSettingsSections: ['llm', 'llmProviderConfigs'] as const
+});
 const providerConfigId = ref(INHERIT_GLOBAL_MODEL_ID);
 const model = ref('');
 const local = computed(() => store.localProfileFor(props.scopeKind, props.scopeId));
@@ -74,7 +79,10 @@ function save(): void {
   <section class="model-profile-editor">
     <header class="model-profile-header">
       <div>
-        <h3>{{ title }}</h3>
+        <h3>
+          {{ title }}
+          <SettingsLoadingInline :show="modelLoading" :text="modelLoadingText" />
+        </h3>
         <p v-if="description">{{ description }}</p>
       </div>
       <span>{{ local.profile ? '当前作用域已配置' : '继承全局' }}</span>

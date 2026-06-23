@@ -1,13 +1,20 @@
 <script setup lang="ts">
+import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingInline.vue';
 import RuntimeContextScopeEditor from '@webview/components/settings/config/RuntimeContextScopeEditor.vue';
 import SystemPromptScopeEditor from '@webview/components/settings/config/SystemPromptScopeEditor.vue';
+import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
+
+const { loading: promptLoading, text: promptLoadingText } = useSettingsLoadingText('提示词配置', 'global');
 </script>
 
 <template>
   <section class="global-settings-tab-section" aria-label="提示词配置">
     <header class="global-settings-section-header">
       <div>
-        <h2>提示词</h2>
+        <h2>
+          提示词
+          <SettingsLoadingInline :show="promptLoading" :text="promptLoadingText" />
+        </h2>
         <p>系统提示词用于稳定行为规则；运行时上下文用于初始变量快照，默认不会在每次请求时自动刷新。</p>
       </div>
     </header>

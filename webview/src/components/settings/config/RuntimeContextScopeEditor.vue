@@ -2,7 +2,9 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import type { ConfigScopeKind } from '@shared/protocol';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
+import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingInline.vue';
 import { useRuntimeContextStore } from '@webview/stores/useRuntimeContextStore';
+import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
 
 const props = withDefaults(defineProps<{ scopeKind: ConfigScopeKind; scopeId?: string; title?: string; description?: string }>(), {
   title: '运行时上下文',
@@ -10,6 +12,7 @@ const props = withDefaults(defineProps<{ scopeKind: ConfigScopeKind; scopeId?: s
 });
 
 const store = useRuntimeContextStore();
+const { loading: runtimeLoading, text: runtimeLoadingText } = useSettingsLoadingText('运行时上下文配置', () => props.scopeKind, () => props.scopeId);
 const scroller = ref<HTMLTextAreaElement | null>(null);
 const snapshotScroller = ref<HTMLElement | null>(null);
 const draft = ref('');
@@ -45,7 +48,10 @@ function insertPlaceholder(token: string): void {
   <section class="runtime-editor">
     <header class="runtime-editor-header">
       <div>
-        <h3>{{ title }}</h3>
+        <h3>
+          {{ title }}
+          <SettingsLoadingInline :show="runtimeLoading" :text="runtimeLoadingText" />
+        </h3>
         <p v-if="description">{{ description }}</p>
       </div>
       <span>{{ local.runtimeContext ? '当前作用域已配置' : scopeKind === 'global' ? '等待默认模板' : '继承上级模板' }}</span>

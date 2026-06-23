@@ -17,13 +17,18 @@ import ConfirmPanel from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
 import LcCheckbox from '@webview/components/ui/LcCheckbox.vue';
 import TokenThresholdSlider from '@webview/components/ui/TokenThresholdSlider.vue';
+import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingInline.vue';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
+import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
 import ModelFetchDialog from './ModelFetchDialog.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from './SettingsDropdown.vue';
 import LlmHeadersSettings from './parameters/LlmHeadersSettings.vue';
 import LlmParameterSettings from './parameters/LlmParameterSettings.vue';
 
 const settings = useGlobalSettingsStore();
+const { loading: channelLoading, text: channelLoadingText } = useSettingsLoadingText('渠道配置', 'global', undefined, {
+  globalSettingsSections: ['llm', 'llmProviderConfigs', 'llmCompression', 'llmCompressionConfigs'] as const
+});
 type SelectableCompressionMethodKind = 'openai_responses_compact' | 'llm_summary' | 'deterministic_summary';
 const TOKEN_STEP = 1_000;
 const createOpen = ref(false);
@@ -342,19 +347,17 @@ function cancelDelete(): void {
       <div>
         <div class="channel-title-row">
           <h2>渠道</h2>
-          <Transition name="channel-loading-fade">
-            <span v-if="settings.isChannelSettingsLoading" class="channel-loading-inline" role="status" aria-live="polite">
-              <span class="channel-loading-spinner" aria-hidden="true"></span>
-              <span>{{ settings.channelSettingsLoadingText }}</span>
-            </span>
-          </Transition>
+          <SettingsLoadingInline
+            :show="channelLoading"
+            :text="channelLoadingText"
+          />
         </div>
         <p>配置全局范围内可复用的 LLM 渠道。后续 Agent、Mode 或其他对象可通过关系数据复用这些配置。</p>
       </div>
     </header>
 
     <div class="channel-content-shell">
-      <div class="channel-content" :aria-busy="settings.isChannelSettingsLoading">
+      <div class="channel-content" :aria-busy="channelLoading">
         <div class="channel-config-picker">
       <label class="global-settings-field channel-config-select">
         <span>配置页</span>

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingInline.vue';
 import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
+import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
 import ToolPolicyEditor from '@webview/components/settings/tools/ToolPolicyEditor.vue';
 import WorkEnvironmentPolicyEditor from '@webview/components/settings/workEnvironment/WorkEnvironmentPolicyEditor.vue';
 import CheckpointPolicyEditor from '@webview/components/settings/checkpoints/CheckpointPolicyEditor.vue';
@@ -11,6 +13,8 @@ import RuntimeContextScopeEditor from '@webview/components/settings/config/Runti
 const settings = useConversationSettingsStore();
 
 const hasConversation = computed(() => !!settings.common.conversationId);
+const { loading: conversationLoading, text: conversationLoadingText } = useSettingsLoadingText('对话配置', 'conversation', () => settings.common.conversationId);
+const showConversationLoading = computed(() => hasConversation.value && conversationLoading.value);
 
 function reload(): void {
   settings.request(settings.common.conversationId);
@@ -19,7 +23,10 @@ function reload(): void {
 
 <template>
   <section class="conversation-settings">
-    <h2>对话设置</h2>
+    <h2>
+      对话设置
+      <SettingsLoadingInline :show="showConversationLoading" :text="conversationLoadingText" />
+    </h2>
     <label class="field">
       <span>对话名称</span>
       <input v-model="settings.common.name" type="text" placeholder="输入对话名称" />

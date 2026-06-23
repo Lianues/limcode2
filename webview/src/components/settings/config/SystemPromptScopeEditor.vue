@@ -2,7 +2,9 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import type { ConfigScopeKind } from '@shared/protocol';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
+import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingInline.vue';
 import { useSystemPromptStore } from '@webview/stores/useSystemPromptStore';
+import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
 
 const props = withDefaults(defineProps<{ scopeKind: ConfigScopeKind; scopeId?: string; title?: string; description?: string }>(), {
   title: 'System Prompt',
@@ -10,6 +12,7 @@ const props = withDefaults(defineProps<{ scopeKind: ConfigScopeKind; scopeId?: s
 });
 
 const store = useSystemPromptStore();
+const { loading: promptLoading, text: promptLoadingText } = useSettingsLoadingText('提示词配置', () => props.scopeKind, () => props.scopeId);
 const scroller = ref<HTMLTextAreaElement | null>(null);
 const draft = ref('');
 const local = computed(() => store.localPromptFor(props.scopeKind, props.scopeId));
@@ -42,7 +45,10 @@ function insertPlaceholder(token: string): void {
   <section class="scope-editor">
     <header class="scope-editor-header">
       <div>
-        <h3>{{ title }}</h3>
+        <h3>
+          {{ title }}
+          <SettingsLoadingInline :show="promptLoading" :text="promptLoadingText" />
+        </h3>
         <p v-if="description">{{ description }}</p>
       </div>
       <span>{{ local.prompt ? '当前作用域已配置' : '未配置' }}</span>

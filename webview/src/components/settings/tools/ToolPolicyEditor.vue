@@ -9,9 +9,11 @@ import type {
   ToolPolicyToolConfigRecord
 } from '@shared/protocol';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
+import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingInline.vue';
 import LcCheckbox from '@webview/components/ui/LcCheckbox.vue';
 import { useToolPolicyStore } from '@webview/stores/useToolPolicyStore';
 import { resolveToolHeaderIcon } from '@webview/components/content/toolDisplay/registry';
+import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
 
 const props = withDefaults(defineProps<{
   scopeKind: ToolPolicyScopeKind;
@@ -26,6 +28,7 @@ const props = withDefaults(defineProps<{
 });
 
 const store = useToolPolicyStore();
+const { loading: toolLoading, text: toolLoadingText } = useSettingsLoadingText('工具配置', () => props.scopeKind, () => props.scopeId);
 const scroller = ref<HTMLElement | null>(null);
 const expandedToolNames = ref<string[]>([]);
 
@@ -215,7 +218,10 @@ function inputNumber(event: Event): number {
   <section class="tool-policy-editor" :aria-label="title">
     <header class="tool-policy-header">
       <div class="tool-policy-title-block">
-        <h3>{{ title }}</h3>
+        <h3>
+          {{ title }}
+          <SettingsLoadingInline :show="toolLoading" :text="toolLoadingText" />
+        </h3>
         <p v-if="description">{{ description }}</p>
       </div>
       <div class="tool-policy-summary" aria-live="polite">

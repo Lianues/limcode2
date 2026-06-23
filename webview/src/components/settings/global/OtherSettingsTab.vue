@@ -1,14 +1,20 @@
 <script setup lang="ts">
+import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingInline.vue';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
+import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
 
 const settings = useGlobalSettingsStore();
+const { loading: otherLoading, text: otherLoadingText } = useSettingsLoadingText('其他设置', 'global', undefined, { globalSettingsSections: ['common'] as const });
 </script>
 
 <template>
   <section class="global-settings-tab-section" aria-label="其他全局设置">
     <header class="global-settings-section-header">
       <div>
-        <h2>其他</h2>
+        <h2>
+          其他
+          <SettingsLoadingInline :show="otherLoading" :text="otherLoadingText" />
+        </h2>
         <p>除渠道外，其余全局配置暂时统一放在这里。</p>
       </div>
     </header>

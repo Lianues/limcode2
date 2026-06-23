@@ -40,42 +40,6 @@
   gap: var(--space-4);
 }
 
-.channel-loading-inline {
-  min-height: 20px;
-  border-radius: var(--radius-sm);
-  padding: 1px var(--space-2);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  color: var(--vscode-descriptionForeground);
-  background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-foreground) 10%);
-  font-size: var(--font-size-xs);
-}
-
-.channel-loading-fade-enter-active,
-.channel-loading-fade-leave-active {
-  transition: opacity 0.16s ease;
-}
-
-.channel-loading-fade-enter-from,
-.channel-loading-fade-leave-to {
-  opacity: 0;
-}
-
-.channel-loading-spinner {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 1.5px solid color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
-  border-top-color: currentColor;
-  animation: channel-loading-spin 0.8s linear infinite;
-}
-
-@keyframes channel-loading-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 
 
 .global-settings-grid {

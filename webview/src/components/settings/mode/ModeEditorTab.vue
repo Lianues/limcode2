@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import { IconListDetails, IconPencil, IconPlus, IconTrash } from '@tabler/icons-vue';
 import type { ModeRecord } from '@shared/protocol';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
+import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingInline.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
 import ToolPolicyEditor from '@webview/components/settings/tools/ToolPolicyEditor.vue';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
@@ -13,8 +14,10 @@ import { useModeStore } from '@webview/stores/useModeStore';
 import SystemPromptScopeEditor from '@webview/components/settings/config/SystemPromptScopeEditor.vue';
 import RuntimeContextScopeEditor from '@webview/components/settings/config/RuntimeContextScopeEditor.vue';
 import ModelProfileScopeEditor from '@webview/components/settings/config/ModelProfileScopeEditor.vue';
+import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
 
 const modeStore = useModeStore();
+const { loading: modeLoading, text: modeLoadingText } = useSettingsLoadingText('模式配置');
 const activeModeId = ref('');
 const createOpen = ref(false);
 const renameOpen = ref(false);
@@ -103,7 +106,10 @@ function escapeHtml(value: string): string {
   <section class="global-settings-tab-section" aria-label="模式编辑">
     <header class="global-settings-section-header">
       <div>
-        <h2>模式</h2>
+        <h2>
+          模式
+          <SettingsLoadingInline :show="modeLoading" :text="modeLoadingText" />
+        </h2>
         <p>管理内置模式和用户自定义模式。Global 是聊天里的合成选项，表示使用全局工具策略，不在这里作为模式编辑。</p>
       </div>
     </header>

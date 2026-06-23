@@ -13,9 +13,11 @@ import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.
 import LcCheckbox from '@webview/components/ui/LcCheckbox.vue';
 import ConfirmPanel from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
+import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingInline.vue';
 import { useWorkEnvironmentStore } from '@webview/stores/useWorkEnvironmentStore';
 import { WORK_ENVIRONMENT_CREATE_ACTIONS, type WorkEnvironmentCreateAction } from './creationActions';
 import { workEnvironmentDetailEditorForKind } from './detailEditors';
+import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
 
 const props = withDefaults(defineProps<{
   scopeKind: WorkEnvironmentPolicyScopeKind;
@@ -30,6 +32,7 @@ const props = withDefaults(defineProps<{
 });
 
 const store = useWorkEnvironmentStore();
+const { loading: workEnvironmentLoading, text: workEnvironmentLoadingText } = useSettingsLoadingText('工作环境配置', () => props.scopeKind, () => props.scopeId);
 const scroller = ref<HTMLElement | null>(null);
 const activeEnvironmentId = ref('');
 const activeCreateAction = ref<WorkEnvironmentCreateAction | undefined>(WORK_ENVIRONMENT_CREATE_ACTIONS[0]);
@@ -166,7 +169,10 @@ function detailNote(environment: WorkEnvironmentRecord): string {
   <section class="work-environment-policy-editor" :aria-label="title">
     <header class="work-env-header">
       <div class="work-env-title-block">
-        <h3>{{ title }}</h3>
+        <h3>
+          {{ title }}
+          <SettingsLoadingInline :show="workEnvironmentLoading" :text="workEnvironmentLoadingText" />
+        </h3>
         <p v-if="description">{{ description }}</p>
       </div>
       <div class="work-env-summary" aria-live="polite">

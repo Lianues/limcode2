@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue';
+import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingInline.vue';
 import CheckpointPolicyEditor from '@webview/components/settings/checkpoints/CheckpointPolicyEditor.vue';
 import ShadowRepositoryManager from '@webview/components/settings/checkpoints/ShadowRepositoryManager.vue';
 import { useCheckpointPolicyStore } from '@webview/stores/useCheckpointPolicyStore';
+import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
 
 const checkpointStore = useCheckpointPolicyStore();
 const gitStatus = computed(() => checkpointStore.gitStatus);
+const { loading: checkpointLoading, text: checkpointLoadingText } = useSettingsLoadingText('存档点配置', 'global', undefined, {
+  globalSettingsSections: ['checkpointMaintenance'] as const
+});
 
 onMounted(() => {
   checkpointStore.requestGitStatus();
@@ -16,7 +21,10 @@ onMounted(() => {
   <section class="global-settings-tab-section" aria-label="存档点设置">
     <header class="global-settings-section-header">
       <div>
-        <h2>存档点</h2>
+        <h2>
+          存档点
+          <SettingsLoadingInline :show="checkpointLoading" :text="checkpointLoadingText" />
+        </h2>
         <p>配置插件内部 shadow git 存档点。存档点绑定对话归属文件夹，不直接绑定当前工作环境。</p>
       </div>
     </header>

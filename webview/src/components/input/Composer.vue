@@ -13,6 +13,7 @@ import { useAgentStore } from '@webview/stores/useAgentStore';
 import { useCompression } from '@webview/composables/useCompression';
 import { useChat } from '@webview/composables/useChat';
 import RichContentEditor from '@webview/components/content/RichContentEditor.vue';
+import QueuePanel, { type QueueItem } from '@webview/components/input/QueuePanel.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
 import ContextTokenUsageBar from '@webview/components/conversation/ContextTokenUsageBar.vue';
 
@@ -37,7 +38,7 @@ const agentStore = useAgentStore();
 const workEnvironmentStore = useWorkEnvironmentStore();
 const compression = useCompression();
 const ui = useConversationUiStore();
-const { abortCurrentConversation } = useChat();
+const { abortCurrentConversation, removeQueueRun, promoteQueueRun, reorderQueue, pauseQueueRun, resumeQueueRun, resumeAllQueueRuns } = useChat();
 const highlighted = ref(false);
 const editorExpanded = ref(false);
 const editor = ref<{ focus: () => void } | null>(null);
@@ -162,6 +163,34 @@ function submit(): void {
 
 function abortConversation(): void {
   abortCurrentConversation();
+}
+
+function onQueueEdit(item: QueueItem): void {
+  ui.startEditQueueItem(item.runId, item.text);
+}
+
+function onQueueDelete(runId: string): void {
+  removeQueueRun(runId);
+}
+
+function onQueueForceSend(runId: string): void {
+  promoteQueueRun(runId);
+}
+
+function onQueueReorder(runIds: string[]): void {
+  reorderQueue(runIds);
+}
+
+function onQueuePause(runId: string): void {
+  pauseQueueRun(runId);
+}
+
+function onQueueResume(runId: string): void {
+  resumeQueueRun(runId);
+}
+
+function onQueueResumeAll(): void {
+  resumeAllQueueRuns();
 }
 
 function compactConversation(): void {
@@ -291,11 +320,20 @@ function middleEllipsis(value: string, maxLength: number): string {
 <template>
   <div class="composer" :class="{ 'is-editing': ui.isEditing, 'is-highlighted': highlighted, 'is-editor-expanded': editorExpanded }">
     <div class="composer-zone composer-zone-top" aria-label="输入框上方功能区">
+      <QueuePanel
+        @edit="onQueueEdit"
+        @delete="onQueueDelete"
+        @force-send="onQueueForceSend"
+        @reorder="onQueueReorder"
+        @pause="onQueuePause"
+        @resume="onQueueResume"
+        @resume-all="onQueueResumeAll"
+      />
       <div v-if="ui.isEditing" class="composer-edit-indicator">
         <span class="composer-edit-indicator-icon" aria-hidden="true">
           <IconPencilExclamation stroke="2" />
         </span>
-        <span class="composer-edit-text">正在编辑消息，发送前需要确认。</span>
+        <span class="composer-edit-text">{{ ui.editingQueueRunId ? '正在编辑排队消息，发送后替换原排队消息。' : '正在编辑消息，发送前需要确认。' }}</span>
         <button type="button" class="composer-edit-cancel" @click="ui.cancelEditMode">取消编辑</button>
       </div>
     </div>
@@ -307,7 +345,7 @@ function middleEllipsis(value: string, maxLength: number): string {
           ref="editor"
           v-model="draft"
           class="composer-editor"
-          :placeholder="ui.isEditing ? '编辑消息内容...' : placeholder"
+          :placeholder="ui.isEditing ? (ui.editingQueueRunId ? '编辑排队消息内容...' : '编辑消息内容...') : placeholder"
           :disabled="disabled"
           :rows="5"
           @submit="submit"

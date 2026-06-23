@@ -44,5 +44,55 @@ export function useChat() {
     return true;
   }
 
-  return { sendMessage, editMessage, retryMessageFrom, deleteMessagesFrom, abortCurrentConversation };
+  function removeQueueRun(runId: string): boolean {
+    const conversationId = clientState.currentConversationId;
+    if (!conversationId || !runId) return false;
+    bridge.request(BridgeMessageType.QueueRemove, { runId, conversationId });
+    return true;
+  }
+
+  function promoteQueueRun(runId: string): boolean {
+    const conversationId = clientState.currentConversationId;
+    if (!conversationId || !runId) return false;
+    bridge.request(BridgeMessageType.QueuePromote, { conversationId, runId });
+    return true;
+  }
+
+  function reorderQueue(runIds: string[]): boolean {
+    const conversationId = clientState.currentConversationId;
+    if (!conversationId || runIds.length === 0) return false;
+    bridge.request(BridgeMessageType.QueueReorder, { conversationId, runIds });
+    return true;
+  }
+
+  function pauseQueueRun(runId: string): boolean {
+    const conversationId = clientState.currentConversationId;
+    if (!conversationId || !runId) return false;
+    bridge.request(BridgeMessageType.QueuePause, { conversationId, runId });
+    return true;
+  }
+
+  function resumeQueueRun(runId: string): boolean {
+    const conversationId = clientState.currentConversationId;
+    if (!conversationId || !runId) return false;
+    bridge.request(BridgeMessageType.QueueResume, { conversationId, runId });
+    return true;
+  }
+
+  function resumeAllQueueRuns(): boolean {
+    const conversationId = clientState.currentConversationId;
+    if (!conversationId) return false;
+    bridge.request(BridgeMessageType.QueueResumeAll, { conversationId });
+    return true;
+  }
+
+  function updateQueueInput(runId: string, text: string, content?: MessageContent): boolean {
+    const conversationId = clientState.currentConversationId;
+    const trimmed = text.trim();
+    if (!conversationId || !runId || !trimmed) return false;
+    bridge.request(BridgeMessageType.QueueInputUpdate, { conversationId, runId, text: trimmed, ...(content ? { content } : {}) });
+    return true;
+  }
+
+  return { sendMessage, editMessage, retryMessageFrom, deleteMessagesFrom, abortCurrentConversation, removeQueueRun, promoteQueueRun, reorderQueue, pauseQueueRun, resumeQueueRun, resumeAllQueueRuns, updateQueueInput };
 }

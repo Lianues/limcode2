@@ -149,6 +149,34 @@ export class WebviewMessageRouter {
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: AgentRunEventType.MarkStale, payload: message.payload });
         break;
+      case BridgeMessageType.QueuePromote:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentRunEventType.Promote, payload: message.payload });
+        break;
+      case BridgeMessageType.QueueRemove:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentRunEventType.RemoveQueued, payload: message.payload });
+        break;
+      case BridgeMessageType.QueueReorder:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentRunEventType.ReorderQueue, payload: message.payload });
+        break;
+      case BridgeMessageType.QueuePause:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentRunEventType.PauseQueue, payload: message.payload });
+        break;
+      case BridgeMessageType.QueueResume:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentRunEventType.ResumeQueue, payload: message.payload });
+        break;
+      case BridgeMessageType.QueueResumeAll:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentRunEventType.ResumeQueueConversation, payload: message.payload });
+        break;
+      case BridgeMessageType.QueueInputUpdate:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: AgentRunEventType.UpdateQueuedInput, payload: message.payload });
+        break;
       case BridgeMessageType.AgentCreate:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: AgentEventType.Create, payload: message.payload });

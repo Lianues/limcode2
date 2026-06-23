@@ -83,6 +83,13 @@ export enum BridgeMessageType {
   AgentRunRetry = 'agentRun.retry',
   AgentRunRegenerate = 'agentRun.regenerate',
   AgentRunMarkStale = 'agentRun.markStale',
+  QueuePromote = 'queue.promote',
+  QueueRemove = 'queue.remove',
+  QueueReorder = 'queue.reorder',
+  QueuePause = 'queue.pause',
+  QueueResume = 'queue.resume',
+  QueueResumeAll = 'queue.resumeAll',
+  QueueInputUpdate = 'queue.input.update',
   ToolPolicyScopeSet = 'toolPolicy.scope.set',
   ToolPolicyScopeClear = 'toolPolicy.scope.clear',
   ToolExecutionApprove = 'tool.execution.approve',
@@ -575,6 +582,8 @@ export interface AgentRecord {
 
 export type AgentRunKind = 'chat' | 'tool_invoked' | 'delegated' | 'review' | 'notification' | 'scheduled';
 export type AgentRunStatus = 'queued' | 'preparing' | 'running' | 'waiting_tool' | 'waiting_child_run' | 'delivering' | 'paused' | 'completed' | 'failed' | 'cancelled' | 'stale';
+export type AgentRunQueueHoldReason = 'restored' | 'manual';
+
 export type AgentRunEndReason = 'completed' | 'failed' | 'cancelled_by_user' | 'cancelled_by_policy' | 'stale_source_edited' | 'retry_requested' | 'regenerate_requested';
 export type AgentRunErrorType = 'llm' | 'tool' | 'policy' | 'cancelled' | 'stale' | 'unknown';
 export type AgentRunSourceKind = 'user' | 'toolCall' | 'agentRun' | 'schedule' | 'system';
@@ -1233,6 +1242,33 @@ export interface AgentRunTargetLinkRecord {
   role: AgentRunTargetRole;
 }
 
+export interface AgentRunQueueOrderRecord {
+  id: string;
+  runId: string;
+  conversationId: string;
+  order: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AgentRunQueueHoldRecord {
+  id: string;
+  runId: string;
+  conversationId: string;
+  reason: AgentRunQueueHoldReason;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AgentRunQueuedInputRecord {
+  id: string;
+  runId: string;
+  conversationId: string;
+  content: MessageContent;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface MessageRunLinkRecord {
   id: string;
   messageId: string;
@@ -1442,6 +1478,9 @@ export interface ClientStateRecordByTable {
   agentRuns: AgentRunRecord;
   agentRunSourceLinks: AgentRunSourceLinkRecord;
   agentRunTargetLinks: AgentRunTargetLinkRecord;
+  agentRunQueueOrders: AgentRunQueueOrderRecord;
+  agentRunQueueHolds: AgentRunQueueHoldRecord;
+  agentRunQueuedInputs: AgentRunQueuedInputRecord;
   messageRunLinks: MessageRunLinkRecord;
   toolCallRunLinks: ToolCallRunLinkRecord;
   runConversationPolicies: RunConversationPolicyRecord;
@@ -1528,6 +1567,35 @@ export interface AgentRunControlPayload {
   runId: string;
   conversationId?: string;
   reason?: string;
+}
+export interface QueuePromotePayload {
+  conversationId: string;
+  runId: string;
+}
+export interface QueueRemovePayload {
+  conversationId: string;
+  runId: string;
+}
+export interface QueueReorderPayload {
+  conversationId: string;
+  runIds: string[];
+}
+export interface QueuePausePayload {
+  conversationId: string;
+  runId: string;
+}
+export interface QueueResumePayload {
+  conversationId: string;
+  runId: string;
+}
+export interface QueueResumeAllPayload {
+  conversationId: string;
+}
+export interface QueueInputUpdatePayload {
+  conversationId: string;
+  runId: string;
+  text?: string;
+  content?: MessageContent;
 }
 export interface ToolDecisionPayload {
   toolCallId: string;
@@ -1845,6 +1913,13 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.AgentRunRetry, AgentRunControlPayload>
   | BridgeEnvelope<BridgeMessageType.AgentRunRegenerate, AgentRunControlPayload>
   | BridgeEnvelope<BridgeMessageType.AgentRunMarkStale, AgentRunControlPayload>
+  | BridgeEnvelope<BridgeMessageType.QueuePromote, QueuePromotePayload>
+  | BridgeEnvelope<BridgeMessageType.QueueRemove, QueueRemovePayload>
+  | BridgeEnvelope<BridgeMessageType.QueueReorder, QueueReorderPayload>
+  | BridgeEnvelope<BridgeMessageType.QueuePause, QueuePausePayload>
+  | BridgeEnvelope<BridgeMessageType.QueueResume, QueueResumePayload>
+  | BridgeEnvelope<BridgeMessageType.QueueResumeAll, QueueResumeAllPayload>
+  | BridgeEnvelope<BridgeMessageType.QueueInputUpdate, QueueInputUpdatePayload>
   | BridgeEnvelope<BridgeMessageType.ToolPolicyScopeSet, ToolPolicyScopeSetPayload>
   | BridgeEnvelope<BridgeMessageType.ToolPolicyScopeClear, ToolPolicyScopeClearPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointPolicyScopeSet, CheckpointPolicyScopeSetPayload>

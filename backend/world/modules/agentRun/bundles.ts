@@ -1,9 +1,12 @@
 import { defineBundle, type CommandSink, type Entity } from '../../../ecs/types';
-import type { AgentRunKind, AgentRunSourceKind, DeliveryMode, TranscriptInclusion } from '../../../../shared/protocol';
+import type { AgentRunKind, AgentRunSourceKind, DeliveryMode, MessageContent, TranscriptInclusion } from '../../../../shared/protocol';
 import {
   AgentRun,
   AgentRunInputRevision,
   AgentRunNeedsModel,
+  AgentRunQueueHold,
+  AgentRunQueueOrder,
+  AgentRunQueuedInput,
   AgentRunSourceLink,
   AgentRunTargetLink,
   MessageRunLink,
@@ -23,6 +26,9 @@ export const AgentRunBundle = defineBundle({
   writes: [
     AgentRun,
     AgentRunNeedsModel,
+    AgentRunQueueHold,
+    AgentRunQueueOrder,
+    AgentRunQueuedInput,
     AgentRunSourceLink,
     AgentRunTargetLink,
     MessageRunLink,
@@ -57,6 +63,7 @@ export interface SpawnAgentRunInput {
   retryOfRunId?: string;
   attempt?: number;
   needsModel?: boolean;
+  queuedInputContent?: MessageContent;
 }
 
 export function spawnAgentRun(cmd: CommandSink, input: SpawnAgentRunInput): Entity {
@@ -72,6 +79,28 @@ export function spawnAgentRun(cmd: CommandSink, input: SpawnAgentRunInput): Enti
     ...(input.attempt !== undefined ? { attempt: input.attempt } : {})
   });
   if (input.needsModel !== false) cmd.add(run, AgentRunNeedsModel, { since: now });
+
+  const queueOrder = cmd.spawn();
+  cmd.add(queueOrder, AgentRunQueueOrder, {
+    id: `arqo${queueOrder}`,
+    run,
+    conversation: input.conversation,
+    order: now,
+    createdAt: now,
+    updatedAt: now
+  });
+
+  if (input.queuedInputContent !== undefined) {
+    const queuedInput = cmd.spawn();
+    cmd.add(queuedInput, AgentRunQueuedInput, {
+      id: `arqi${queuedInput}`,
+      run,
+      conversation: input.conversation,
+      content: input.queuedInputContent,
+      createdAt: now,
+      updatedAt: now
+    });
+  }
 
   const source = cmd.spawn();
   cmd.add(source, AgentRunSourceLink, {

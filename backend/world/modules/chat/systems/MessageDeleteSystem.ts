@@ -4,6 +4,7 @@ import {
   AgentRun,
   AgentRunInputRevision,
   AgentRunNeedsModel,
+  AgentRunQueueHold,
   AgentRunSourceLink,
   MessageRunLink,
   ToolCallRunLink
@@ -36,6 +37,7 @@ const DELETE_READ_COMPONENTS = [
   InFlight,
   AgentRun,
   AgentRunNeedsModel,
+  AgentRunQueueHold,
   AgentRunSourceLink,
   AgentRunInputRevision,
   MessageRunLink,
@@ -75,9 +77,11 @@ export const MessageDeleteSystem = defineSystem({
 });
 
 export function deleteMessagesFromIndex(world: WorldReader, cmd: CommandSink, messages: Entity[], startIndex: number): void {
-  const deletedMessages = new Set(messages.slice(startIndex));
-  if (deletedMessages.size === 0) return;
+  deleteMessages(world, cmd, new Set(messages.slice(startIndex)));
+}
 
+function deleteMessages(world: WorldReader, cmd: CommandSink, deletedMessages: Set<Entity>): void {
+  if (deletedMessages.size === 0) return;
   const deletedRevisions = entitiesWithParent(world, MessageRevision, deletedMessages);
   const deletedToolCalls = entitiesWithParent(world, ToolCall, deletedMessages);
   const deletedToolEvents = entitiesWithParent(world, ToolCallEvent, deletedToolCalls);
@@ -123,7 +127,14 @@ export function deleteMessagesFromIndex(world: WorldReader, cmd: CommandSink, me
     if (request && deletedMessages.has(request.modelMessage)) entitiesToDespawn.add(entity);
   }
 
+  for (const entity of world.query(AgentRunQueueHold)) {
+    const hold = world.get(entity, AgentRunQueueHold);
+    if (hold && affectedRuns.includes(hold.run)) entitiesToDespawn.add(entity);
+  }
+
   for (const entity of entitiesToDespawn) cmd.despawn(entity);
+}
+
 function compressionBlocksAffectedByDeletion(world: WorldReader, deletedMessages: ReadonlySet<Entity>): Set<Entity> {
   const blocks = new Set<Entity>();
   for (const entity of world.query(CompressionBlockSourceLink)) {
@@ -137,9 +148,6 @@ function markCompressionBlockStale(world: WorldReader, cmd: CommandSink, block: 
   const data = world.get(block, CompressionBlock);
   if (!data || data.status === 'stale') return;
   cmd.add(block, CompressionBlock, { ...data, status: 'stale', staleReason: '源消息已删除。', updatedAt: Date.now() });
-}
-
-
 }
 
 function checkpointAnchorsForMessages(world: WorldReader, deletedMessages: ReadonlySet<Entity>): Set<Entity> {

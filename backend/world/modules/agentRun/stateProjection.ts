@@ -1,6 +1,9 @@
 import type {
   AgentRunInputRevisionRecord,
   AgentRunRecord,
+  AgentRunQueueHoldRecord,
+  AgentRunQueueOrderRecord,
+  AgentRunQueuedInputRecord,
   AgentRunSourceLinkRecord,
   AgentRunTargetLinkRecord,
   ClientState,
@@ -27,6 +30,9 @@ import { ToolCall } from '../tools/components';
 import {
   AgentRun,
   AgentRunInputRevision,
+  AgentRunQueueHold,
+  AgentRunQueueOrder,
+  AgentRunQueuedInput,
   AgentRunSourceLink,
   AgentRunTargetLink,
   MessageRunLink,
@@ -57,6 +63,9 @@ export const agentRunStateProjectionReads: AccessDeclaration = {
     SystemPrompt,
     ModelProfile,
     AgentRun,
+    AgentRunQueueHold,
+    AgentRunQueueOrder,
+    AgentRunQueuedInput,
     AgentRunSourceLink,
     AgentRunTargetLink,
     MessageRunLink,
@@ -78,10 +87,17 @@ export const agentRunStateProjectionReads: AccessDeclaration = {
 };
 
 export function projectAgentRunState(world: WorldReader): Partial<ClientState> {
+  const agentRuns = world.query(AgentRun).map((entity): AgentRunRecord => ({ ...world.get(entity, AgentRun)! }));
+  const agentRunQueueOrders = world.query(AgentRunQueueOrder).map((entity) => buildQueueOrderRecord(world, entity)).filter(isDefined);
+  const agentRunQueueHolds = world.query(AgentRunQueueHold).map((entity) => buildQueueHoldRecord(world, entity)).filter(isDefined);
+  const agentRunQueuedInputs = world.query(AgentRunQueuedInput).map((entity) => buildQueuedInputRecord(world, entity)).filter(isDefined);
   return {
-    agentRuns: world.query(AgentRun).map((entity): AgentRunRecord => ({ ...world.get(entity, AgentRun)! })),
+    agentRuns,
     agentRunSourceLinks: world.query(AgentRunSourceLink).map((entity) => buildSourceLinkRecord(world, entity)).filter(isDefined),
     agentRunTargetLinks: world.query(AgentRunTargetLink).map((entity) => buildTargetLinkRecord(world, entity)).filter(isDefined),
+    agentRunQueueOrders,
+    agentRunQueueHolds,
+    agentRunQueuedInputs,
     messageRunLinks: world.query(MessageRunLink).map((entity) => buildMessageRunLinkRecord(world, entity)).filter(isDefined),
     toolCallRunLinks: world.query(ToolCallRunLink).map((entity) => buildToolCallRunLinkRecord(world, entity)).filter(isDefined),
     runConversationPolicies: world.query(RunConversationPolicy).map((entity): RunConversationPolicyRecord => ({ ...world.get(entity, RunConversationPolicy)! })),
@@ -125,6 +141,33 @@ function buildTargetLinkRecord(world: WorldReader, entity: number): AgentRunTarg
   const conversation = world.get(link.conversation, Conversation);
   if (!run || !agent || !conversation) return undefined;
   return { id: link.id, runId: run.id, agentId: agent.id, conversationId: conversation.id, role: link.role };
+}
+
+function buildQueueOrderRecord(world: WorldReader, entity: number): AgentRunQueueOrderRecord | undefined {
+  const order = world.get(entity, AgentRunQueueOrder);
+  if (!order) return undefined;
+  const run = world.get(order.run, AgentRun);
+  const conversation = world.get(order.conversation, Conversation);
+  if (!run || !conversation) return undefined;
+  return { id: order.id, runId: run.id, conversationId: conversation.id, order: order.order, createdAt: order.createdAt, updatedAt: order.updatedAt };
+}
+
+function buildQueueHoldRecord(world: WorldReader, entity: number): AgentRunQueueHoldRecord | undefined {
+  const hold = world.get(entity, AgentRunQueueHold);
+  if (!hold) return undefined;
+  const run = world.get(hold.run, AgentRun);
+  const conversation = world.get(hold.conversation, Conversation);
+  if (!run || !conversation) return undefined;
+  return { id: hold.id, runId: run.id, conversationId: conversation.id, reason: hold.reason, createdAt: hold.createdAt, updatedAt: hold.updatedAt };
+}
+
+function buildQueuedInputRecord(world: WorldReader, entity: number): AgentRunQueuedInputRecord | undefined {
+  const input = world.get(entity, AgentRunQueuedInput);
+  if (!input) return undefined;
+  const run = world.get(input.run, AgentRun);
+  const conversation = world.get(input.conversation, Conversation);
+  if (!run || !conversation) return undefined;
+  return { id: input.id, runId: run.id, conversationId: conversation.id, content: input.content, createdAt: input.createdAt, updatedAt: input.updatedAt };
 }
 
 function buildMessageRunLinkRecord(world: WorldReader, entity: number): MessageRunLinkRecord | undefined {

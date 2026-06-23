@@ -63,6 +63,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
   const composerMode = ref<ComposerMode>('chat');
   const composerHighlightKey = ref(0);
   const editingMessage = shallowRef<EditingMessageState>();
+  const editingQueueRunId = ref<string | undefined>(undefined);
   const editConfirmOpen = ref(false);
   const pendingEditText = ref('');
 
@@ -161,10 +162,21 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
 
   function cancelEditMode(): void {
     editingMessage.value = undefined;
+    editingQueueRunId.value = undefined;
     pendingEditText.value = '';
     editConfirmOpen.value = false;
     composerMode.value = 'chat';
     composerSnapshots.value.edit = createComposerSnapshot();
+  }
+
+  function startEditQueueItem(runId: string, messageText: string): void {
+    editingMessage.value = undefined;
+    editingQueueRunId.value = runId;
+    pendingEditText.value = '';
+    editConfirmOpen.value = false;
+    composerMode.value = 'edit';
+    composerSnapshots.value.edit = createComposerSnapshot(messageText);
+    composerHighlightKey.value += 1;
   }
 
   function setComposerDraft(value: string): void {
@@ -239,6 +251,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     composerHighlightKey,
     composerDraft,
     editingMessage,
+    editingQueueRunId,
     editConfirmOpen,
     pendingEditText,
     isEditing,
@@ -246,6 +259,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     syncTimeline,
     playExitFrom,
     startEditMessage,
+    startEditQueueItem,
     cancelEditMode,
     setComposerDraft,
     clearChatDraft

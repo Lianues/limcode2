@@ -41,6 +41,9 @@ import {
 import {
   AgentRun,
   AgentRunInputRevision,
+  AgentRunQueueHold,
+  AgentRunQueueOrder,
+  AgentRunQueuedInput,
   AgentRunSourceLink,
   AgentRunTargetLink,
   MessageRunLink,
@@ -278,6 +281,7 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
     toolCallEventIds.add(record.id);
   }
 
+  const existingRunIdsBeforeHydration = existingIds(world, AgentRun);
   const runEntities = hydrateRecordsUnique(world, state.agentRuns ?? [], AgentRun);
   const llmInvocationEntities = hydrateRecordsUnique(world, state.llmInvocations ?? [], LlmInvocation);
   const conversationPolicyEntities = hydrateRecordsUnique(world, state.runConversationPolicies, RunConversationPolicy);
@@ -332,6 +336,11 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
     world.add(entity, AgentRunTargetLink, { id: link.id, run, agent, conversation: targetConversation, role: link.role, createdAt: now, updatedAt: now });
   }
 
+  hydrateQueueOrderRecords(world, state, runEntities, conversationEntities);
+  hydrateQueueHoldRecords(world, state, runEntities, conversationEntities);
+  hydrateQueuedInputRecords(world, state, runEntities, conversationEntities);
+  holdRestoredQueuedRuns(world, state, runEntities, conversationEntities, existingRunIdsBeforeHydration);
+
   hydrateConversationOriginLinks(world, state, { conversations: conversationEntities, agents: agentEntities, messages: messageEntities, toolCalls: toolCallEntities, runs: runEntities });
 
   for (const link of state.messageRunLinks ?? []) spawnRunLink(world, messageEntities, runEntities, link, MessageRunLink, 'message', 'run');
@@ -379,6 +388,103 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
 
   return true;
 }
+function hydrateQueueOrderRecords(world: World, state: ClientState, runs: Map<string, Entity>, conversations: Map<string, Entity>): void {
+  const existing = existingIds(world, AgentRunQueueOrder);
+  for (const record of state.agentRunQueueOrders ?? []) {
+    if (existing.has(record.id)) continue;
+    const run = runs.get(record.runId);
+    const conversation = conversations.get(record.conversationId);
+    if (run === undefined || conversation === undefined) continue;
+    const entity = world.spawn();
+    existing.add(record.id);
+    world.add(entity, AgentRunQueueOrder, {
+      id: record.id,
+      run,
+      conversation,
+      order: record.order,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt
+    });
+  }
+}
+
+function hydrateQueueHoldRecords(world: World, state: ClientState, runs: Map<string, Entity>, conversations: Map<string, Entity>): void {
+  const existing = existingIds(world, AgentRunQueueHold);
+  for (const record of state.agentRunQueueHolds ?? []) {
+    if (existing.has(record.id)) continue;
+    const run = runs.get(record.runId);
+    const conversation = conversations.get(record.conversationId);
+    if (run === undefined || conversation === undefined) continue;
+    const entity = world.spawn();
+    existing.add(record.id);
+    world.add(entity, AgentRunQueueHold, {
+      id: record.id,
+      run,
+      conversation,
+      reason: record.reason,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt
+    });
+  }
+}
+
+function hydrateQueuedInputRecords(world: World, state: ClientState, runs: Map<string, Entity>, conversations: Map<string, Entity>): void {
+  const existing = existingIds(world, AgentRunQueuedInput);
+  for (const record of state.agentRunQueuedInputs ?? []) {
+    if (existing.has(record.id)) continue;
+    const run = runs.get(record.runId);
+    const conversation = conversations.get(record.conversationId);
+    if (run === undefined || conversation === undefined) continue;
+    const entity = world.spawn();
+    existing.add(record.id);
+    world.add(entity, AgentRunQueuedInput, {
+      id: record.id,
+      run,
+      conversation,
+      content: record.content,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt
+    });
+  }
+}
+
+
+
+function holdRestoredQueuedRuns(
+  world: World,
+  state: ClientState,
+  runs: Map<string, Entity>,
+  conversations: Map<string, Entity>,
+  existingRunIdsBeforeHydration: ReadonlySet<string>
+): void {
+  const existingHoldRunIds = new Set(
+    world.query(AgentRunQueueHold)
+      .map((entity) => world.get(entity, AgentRunQueueHold)?.run)
+      .filter((run): run is Entity => run !== undefined)
+      .map((run) => world.get(run, AgentRun)?.id)
+      .filter((id): id is string => !!id)
+  );
+  const targetConversationByRunId = new Map((state.agentRunTargetLinks ?? []).map((link) => [link.runId, link.conversationId]));
+  const existingHoldIds = existingIds(world, AgentRunQueueHold);
+  const now = Date.now();
+
+  for (const record of state.agentRuns ?? []) {
+    if (record.status !== 'queued' || existingRunIdsBeforeHydration.has(record.id) || existingHoldRunIds.has(record.id)) continue;
+    const run = runs.get(record.id);
+    const conversationId = targetConversationByRunId.get(record.id);
+    const conversation = conversationId ? conversations.get(conversationId) : undefined;
+    if (run === undefined || conversation === undefined) continue;
+
+    const id = `arqh-restored:${record.id}`;
+    if (existingHoldIds.has(id)) continue;
+    const entity = world.spawn();
+    existingHoldIds.add(id);
+    existingHoldRunIds.add(record.id);
+    world.add(entity, AgentRunQueueHold, { id, run, conversation, reason: 'restored', createdAt: now, updatedAt: now });
+  }
+}
+
+
 
 function hydrateCompressionRecords(
   world: World,

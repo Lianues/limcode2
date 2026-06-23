@@ -2,7 +2,7 @@ import { defineQuery, defineSystem, type Entity, type WorldReader, type CommandS
 import { ChatEventType } from '../events';
 import { readEvents } from '../../../events';
 import { Aborted, Conversation, LlmRequest, Message, Streaming } from '../components';
-import { spawnUserContentMessage, spawnUserMessage, UserMessageBundle } from '../bundles';
+import { UserMessageBundle } from '../bundles';
 import { Agent, AgentConversationLink, ConversationAgentSelection } from '../../agent/components';
 import { AgentRun, AgentRunNeedsModel, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink } from '../../agentRun/components';
 import { AgentRunBundle, spawnAgentRun, spawnMessageRunLink } from '../../agentRun/bundles';
@@ -12,6 +12,7 @@ import type { ChatSendPayload, MessageContent } from '../../../../../shared/prot
 import { CheckpointEventType } from '../../checkpoint/events';
 import { Checkpoint } from '../../checkpoint/components';
 import { conversationMessages } from '../queries';
+import { materializeUserInputMessage } from '../userInputMaterialization';
 
 const ConversationsByIdQuery = defineQuery({
   name: 'ConversationsById',
@@ -54,11 +55,7 @@ function handleSend(world: WorldReader, cmd: CommandSink, conversation: Entity, 
 
   const activeRuns = activeRunsForConversation(world, conversation);
   if (activeRuns.length === 0) {
-    const isFirstMessage = conversationMessages(world, conversation).length === 0;
-    const needsInitialCheckpoint = isFirstMessage && !hasInitialCheckpoint(world, conversation);
-    const message = spawnInputMessage(cmd, conversation, content);
-    if (needsInitialCheckpoint) requestInitialCheckpoint(cmd, payload.conversationId);
-    requestUserMessageCheckpoints(cmd, payload.conversationId, message);
+    const message = materializeUserInputMessage(world, cmd, conversation, payload.conversationId, content);
     spawnChatRun(cmd, { agent, conversation, message });
     return;
   }
@@ -71,62 +68,22 @@ function handleSend(world: WorldReader, cmd: CommandSink, conversation: Entity, 
       const target = runTarget(world, activeRuns[0]);
       const targetConversation = target?.conversation ?? conversation;
       const targetConversationId = world.get(targetConversation, Conversation)?.id ?? payload.conversationId;
-      const isFirstMessage = conversationMessages(world, targetConversation).length === 0;
-      const needsInitialCheckpoint = isFirstMessage && !hasInitialCheckpoint(world, targetConversation);
-      const message = spawnInputMessage(cmd, targetConversation, content);
-      if (needsInitialCheckpoint) requestInitialCheckpoint(cmd, targetConversationId);
-      requestUserMessageCheckpoints(cmd, targetConversationId, message);
+      const message = materializeUserInputMessage(world, cmd, targetConversation, targetConversationId, content);
       spawnMessageRunLink(cmd, { message, run: activeRuns[0], role: 'input' });
       return;
     }
     case 'interrupt_current': {
       cancelRuns(world, cmd, activeRuns);
-      const isFirstMessage = conversationMessages(world, conversation).length === 0;
-      const needsInitialCheckpoint = isFirstMessage && !hasInitialCheckpoint(world, conversation);
-      const message = spawnInputMessage(cmd, conversation, content);
-      if (needsInitialCheckpoint) requestInitialCheckpoint(cmd, payload.conversationId);
-      requestUserMessageCheckpoints(cmd, payload.conversationId, message);
+      const message = materializeUserInputMessage(world, cmd, conversation, payload.conversationId, content);
       spawnChatRun(cmd, { agent, conversation, message });
       return;
     }
     case 'queue_next_run':
     default: {
-      const isFirstMessage = conversationMessages(world, conversation).length === 0;
-      const needsInitialCheckpoint = isFirstMessage && !hasInitialCheckpoint(world, conversation);
-      const message = spawnInputMessage(cmd, conversation, content);
-      if (needsInitialCheckpoint) requestInitialCheckpoint(cmd, payload.conversationId);
-      requestUserMessageCheckpoints(cmd, payload.conversationId, message);
-      spawnChatRun(cmd, { agent, conversation, message, needsModel: false });
+      spawnQueuedChatRun(cmd, { agent, conversation, content });
       return;
     }
   }
-}
-
-function hasInitialCheckpoint(world: WorldReader, conversation: Entity): boolean {
-  return world.query(Checkpoint).some((entity) => {
-    const checkpoint = world.get(entity, Checkpoint);
-    return checkpoint?.conversation === conversation && checkpoint.trigger === 'conversation_initial';
-  });
-}
-
-function requestInitialCheckpoint(cmd: CommandSink, conversationId: string): void {
-  cmd.enqueue({
-    type: CheckpointEventType.Requested,
-    payload: { conversationId, trigger: 'conversation_initial' }
-  });
-}
-
-function requestUserMessageCheckpoints(cmd: CommandSink, conversationId: string, floorMessage: Entity): void {
-  const floorMessageId = spawnedMessageId(floorMessage);
-  cmd.enqueue({
-    type: CheckpointEventType.Requested,
-    payload: { conversationId, trigger: 'user_message_before', floorMessageId, anchorPosition: 'before' }
-  });
-
-  cmd.enqueue({
-    type: CheckpointEventType.Requested,
-    payload: { conversationId, trigger: 'user_message_after', floorMessageId, anchorPosition: 'after' }
-  });
 }
 
 function normalizeInputContent(payload: ChatSendPayload): MessageContent {
@@ -135,15 +92,6 @@ function normalizeInputContent(payload: ChatSendPayload): MessageContent {
   }
   const text = payload.text?.trim() ?? '';
   return { role: 'user', parts: text ? [{ text }] : [] };
-}
-
-function spawnInputMessage(cmd: CommandSink, conversation: Entity, content: MessageContent): Entity {
-  if (content.parts.length === 1 && 'text' in content.parts[0]) return spawnUserMessage(cmd, conversation, content.parts[0].text);
-  return spawnUserContentMessage(cmd, conversation, content);
-}
-
-function spawnedMessageId(entity: Entity): string {
-  return `m${entity}`;
 }
 
 function spawnChatRun(
@@ -161,6 +109,23 @@ function spawnChatRun(
     deliveryMode: 'direct_reply',
     includeTranscript: 'full',
     needsModel: input.needsModel
+  });
+}
+
+function spawnQueuedChatRun(
+  cmd: CommandSink,
+  input: { agent: Entity; conversation: Entity; content: MessageContent }
+): Entity {
+  return spawnAgentRun(cmd, {
+    kind: 'chat',
+    agent: input.agent,
+    conversation: input.conversation,
+    sourceKind: 'user',
+    sourceConversation: input.conversation,
+    deliveryMode: 'direct_reply',
+    includeTranscript: 'full',
+    needsModel: false,
+    queuedInputContent: input.content
   });
 }
 

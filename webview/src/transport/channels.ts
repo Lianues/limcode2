@@ -14,6 +14,13 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
     case BridgeMessageType.AgentRunRetry:
     case BridgeMessageType.AgentRunRegenerate:
     case BridgeMessageType.AgentRunMarkStale:
+    case BridgeMessageType.QueuePromote:
+    case BridgeMessageType.QueueRemove:
+    case BridgeMessageType.QueueReorder:
+    case BridgeMessageType.QueuePause:
+    case BridgeMessageType.QueueResume:
+    case BridgeMessageType.QueueResumeAll:
+    case BridgeMessageType.QueueInputUpdate:
     case BridgeMessageType.ModeCreate:
     case BridgeMessageType.ModeUpdate:
     case BridgeMessageType.ModeDelete:

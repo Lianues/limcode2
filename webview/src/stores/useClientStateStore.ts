@@ -205,8 +205,9 @@ function activeRunsForConversation(state: ClientStateStoreState, conversationId:
       .map((link) => link.runId)
   );
   if (runIds.size === 0) return [];
+  const heldRunIds = new Set(state.agentRunQueueHolds.filter((hold) => hold.conversationId === conversationId).map((hold) => hold.runId));
   return state.agentRuns
-    .filter((run) => runIds.has(run.id) && isActiveAgentRunStatus(run.status))
+    .filter((run) => runIds.has(run.id) && isActiveAgentRunStatus(run.status) && !(run.status === 'queued' && heldRunIds.has(run.id)))
     .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt || right.id.localeCompare(left.id));
 }
 

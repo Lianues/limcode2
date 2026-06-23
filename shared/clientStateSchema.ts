@@ -448,6 +448,36 @@ export const CLIENT_STATE_TABLES = {
   agentRuns: upsertRemoveTable('agentRun', 'run', agentRunsTable),
   agentRunSourceLinks: upsertRemoveTable('agentRunSourceLink', 'link', { scope: { kind: 'conversationAnyOf', scopes: [{ kind: 'conversation', field: 'sourceConversationId' }, { kind: 'conversationVia', table: 'messages', localField: 'sourceMessageId', foreignField: 'id' }, { kind: 'conversationVia', table: 'toolCalls', localField: 'sourceToolCallId', foreignField: 'id' }, { kind: 'conversationVia', table: 'agentRuns', localField: 'sourceRunId', foreignField: 'id' }, { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' }] } }),
   agentRunTargetLinks: upsertRemoveTable('agentRunTargetLink', 'link', { scope: { kind: 'conversationAnyOf', scopes: [{ kind: 'conversation', field: 'conversationId' }, { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' }] } }),
+  agentRunQueueOrders: upsertRemoveTable('agentRunQueueOrder', 'queueOrder', {
+    orderBy: [{ field: 'order' }, { field: 'createdAt' }, { field: 'id' }],
+    scope: {
+      kind: 'conversationAnyOf',
+      scopes: [
+        { kind: 'conversation', field: 'conversationId' },
+        { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' }
+      ]
+    }
+  }),
+  agentRunQueueHolds: upsertRemoveTable('agentRunQueueHold', 'queueHold', {
+    orderBy: [{ field: 'createdAt' }, { field: 'id' }],
+    scope: {
+      kind: 'conversationAnyOf',
+      scopes: [
+        { kind: 'conversation', field: 'conversationId' },
+        { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' }
+      ]
+    }
+  }),
+  agentRunQueuedInputs: upsertRemoveTable('agentRunQueuedInput', 'queuedInput', {
+    orderBy: [{ field: 'createdAt' }, { field: 'id' }],
+    scope: {
+      kind: 'conversationAnyOf',
+      scopes: [
+        { kind: 'conversation', field: 'conversationId' },
+        { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' }
+      ]
+    }
+  }),
   messageRunLinks: upsertRemoveTable('messageRunLink', 'link', { scope: { kind: 'conversationAnyOf', scopes: [{ kind: 'conversationVia', table: 'messages', localField: 'messageId', foreignField: 'id' }, { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' }] } }),
   toolCallRunLinks: upsertRemoveTable('toolCallRunLink', 'link', { scope: { kind: 'conversationAnyOf', scopes: [{ kind: 'conversationVia', table: 'toolCalls', localField: 'toolCallId', foreignField: 'id' }, { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' }] } }),
   runConversationPolicies: upsertRemoveTable('runConversationPolicy', 'policy', { scope: { kind: 'conversationReverseVia', table: 'runConversationPolicyLinks', localField: 'id', foreignField: 'policyId', replace: 'upsertOnly' } }),

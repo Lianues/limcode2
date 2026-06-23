@@ -16,7 +16,9 @@ import type {
   SourceEditBehavior,
   ToolCallRunRole,
   TranscriptInclusion,
-  LlmUsageMetadataRecord
+  LlmUsageMetadataRecord,
+  MessageContent,
+  AgentRunQueueHoldReason
 } from '../../../../shared/protocol';
 
 export interface AgentRunData {
@@ -62,6 +64,36 @@ export interface AgentRunTargetLinkData {
   updatedAt: number;
 }
 export const AgentRunTargetLink = defineComponent<AgentRunTargetLinkData>('AgentRunTargetLink');
+
+export interface AgentRunQueueOrderData {
+  id: string;
+  run: Entity;
+  conversation: Entity;
+  order: number;
+  createdAt: number;
+  updatedAt: number;
+}
+export const AgentRunQueueOrder = defineComponent<AgentRunQueueOrderData>('AgentRunQueueOrder');
+
+export interface AgentRunQueueHoldData {
+  id: string;
+  run: Entity;
+  conversation: Entity;
+  reason: AgentRunQueueHoldReason;
+  createdAt: number;
+  updatedAt: number;
+}
+export const AgentRunQueueHold = defineComponent<AgentRunQueueHoldData>('AgentRunQueueHold');
+
+export interface AgentRunQueuedInputData {
+  id: string;
+  run: Entity;
+  conversation: Entity;
+  content: MessageContent;
+  createdAt: number;
+  updatedAt: number;
+}
+export const AgentRunQueuedInput = defineComponent<AgentRunQueuedInputData>('AgentRunQueuedInput');
 
 export interface MessageRunLinkData {
   id: string;

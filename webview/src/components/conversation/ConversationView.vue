@@ -18,7 +18,7 @@ const clientState = useClientStateStore();
 const conversationUi = useConversationUiStore();
 const checkpointStore = useCheckpointPolicyStore();
 const { currentMessages, currentCheckpoints, currentCheckpointTimelineAnchors, currentCompressionBlocks, currentConversationId, currentConversationDetailLoaded } = storeToRefs(clientState);
-const { sendMessage, editMessage } = useChat();
+const { sendMessage, editMessage, updateQueueInput } = useChat();
 
 const scroller = ref<HTMLElement | null>(null);
 const conversationBody = ref<HTMLElement | null>(null);
@@ -88,6 +88,11 @@ watch(
 );
 
 function onSubmit(text: string, content?: MessageContent): void {
+  if (conversationUi.editingQueueRunId) {
+    updateQueueInput(conversationUi.editingQueueRunId, text, content);
+    conversationUi.cancelEditMode();
+    return;
+  }
   if (conversationUi.isEditing) {
     conversationUi.pendingEditText = text;
     conversationUi.editConfirmOpen = true;

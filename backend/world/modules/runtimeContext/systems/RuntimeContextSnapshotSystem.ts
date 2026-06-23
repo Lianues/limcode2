@@ -58,7 +58,9 @@ export const RuntimeContextSnapshotSystem = defineSystem({
       ]
     },
     writes: { components: [RuntimeContextSnapshot, ConversationRuntimeContextSnapshotLink, RunRuntimeContextSnapshotLink], mutationMode: 'update' },
-    events: { read: [RuntimeContextEventType.Refresh, RuntimeContextEventType.SnapshotClear] }
+    events: { read: [RuntimeContextEventType.Refresh, RuntimeContextEventType.SnapshotClear] },
+    after: ['ContextAssemblySystem'],
+    before: ['LlmDispatchSystem']
   },
   run(ctx) {
     const { world, cmd } = ctx;

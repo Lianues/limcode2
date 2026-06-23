@@ -485,12 +485,13 @@ export class BackendApplication {
     } finally {
       this.hydrated = true;
       this.persistence.enable();
-      this.syncWorkEnvironmentsFromWorkspaceFolders();
       this.flushPendingSnapshots();
       this.flushPendingHydrationMessages();
       for (const section of GLOBAL_SETTINGS_SECTIONS) {
         void this.globalSettingsBridge.postSnapshot(undefined, section);
       }
+      // 工作环境与策略属于 deferred skeleton。必须先加载已保存策略，再同步 VS Code workspace folders，
+      // 否则启动时会临时生成只包含当前本地目录的全局策略，覆盖用户勾选的 SSH / 允许列表。
       this.startDeferredClientStateSkeletonLoad();
       this.startCheckpointShadowAutoCleanup();
       this.resolveHydrated();
@@ -500,13 +501,18 @@ export class BackendApplication {
   private startDeferredClientStateSkeletonLoad(): void {
     void this.env.storage.loadClientStateSkeleton({ profile: 'deferred' })
       .then(async (deferred) => {
-        if (!deferred) return;
-        const hydrated = await hydrateClientStateSkeleton(this.world, deferred, { allowDefaults: false, resetMessageSeq: false });
-        if (!hydrated) return;
-        this.requestSnapshot();
-        this.conversationHistoryChangedEmitter.fire();
+        if (deferred) {
+          const hydrated = await hydrateClientStateSkeleton(this.world, deferred, { allowDefaults: false, resetMessageSeq: false });
+          if (hydrated) {
+            this.requestSnapshot();
+            this.conversationHistoryChangedEmitter.fire();
+          }
+        }
       })
-      .catch((error) => console.warn('[LimCode] Failed to lazy-load deferred client state skeleton.', error));
+      .catch((error) => console.warn('[LimCode] Failed to lazy-load deferred client state skeleton.', error))
+      .finally(() => {
+        this.syncWorkEnvironmentsFromWorkspaceFolders();
+      });
   }
 
   private startCheckpointShadowAutoCleanup(): void {

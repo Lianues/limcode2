@@ -16,6 +16,7 @@ import {
   llmPlugin,
   requestSpawnAgent,
   projectPlugin,
+  runtimeContextPlugin,
   toolsPlugin,
   workEnvironmentPlugin
 } from '../world/modules';
@@ -187,7 +188,7 @@ export class BackendApplication {
 
     installWorldPlugins(
       { world: this.world, scheduler: this.scheduler },
-      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), modePlugin(), projectPlugin(), workEnvironmentPlugin(), checkpointPlugin(), compressionPlugin(), llmPlugin(), toolsPlugin({ toolSchemas, toolDefinitions, toolRuntimeDefinitions: this.env.tools.registry }), chatPlugin(), agentRunPlugin()]
+      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), modePlugin(), projectPlugin(), workEnvironmentPlugin(), runtimeContextPlugin(), checkpointPlugin(), compressionPlugin(), llmPlugin(), toolsPlugin({ toolSchemas, toolDefinitions, toolRuntimeDefinitions: this.env.tools.registry }), chatPlugin(), agentRunPlugin()]
     );
     registerClientSyncSystems(this.scheduler);
 

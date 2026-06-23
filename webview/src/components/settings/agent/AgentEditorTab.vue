@@ -7,6 +7,7 @@ import ToolPolicyEditor from '@webview/components/settings/tools/ToolPolicyEdito
 import WorkEnvironmentPolicyEditor from '@webview/components/settings/workEnvironment/WorkEnvironmentPolicyEditor.vue';
 import CheckpointPolicyEditor from '@webview/components/settings/checkpoints/CheckpointPolicyEditor.vue';
 import SystemPromptScopeEditor from '@webview/components/settings/config/SystemPromptScopeEditor.vue';
+import RuntimeContextScopeEditor from '@webview/components/settings/config/RuntimeContextScopeEditor.vue';
 import ModelProfileScopeEditor from '@webview/components/settings/config/ModelProfileScopeEditor.vue';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
@@ -69,6 +70,7 @@ function confirmDelete(): void { const agent = activeAgent.value; deleteOpen.val
     </label>
 
     <SystemPromptScopeEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 人格 Prompt" description="按 global → agent → mode → conversation → run 顺序拼接。这里定义这个 Agent 的角色人格。" />
+    <RuntimeContextScopeEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 运行时上下文模板" description="用于生成运行时快照的 Agent 级模板；变量只在快照生成或刷新时替换一次。" />
     <ModelProfileScopeEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 默认模型" description="当 conversation/mode/run 没有更近覆盖时使用。" />
     <ToolPolicyEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 工具能力上限" description="Agent 的工具策略作为能力上限，Mode/Conversation/Run 只能继续收窄，不能放大。" />
     <WorkEnvironmentPolicyEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 工作环境策略" description="限制这个 Agent 可使用的工作环境。" />

@@ -10,6 +10,11 @@ export const SYSTEM_PROMPTS_ROOT_DIR = 'system-prompts';
 export const MODEL_PROFILES_ROOT_DIR = 'model-profiles';
 export const AGENT_CONVERSATION_LINKS_ROOT_DIR = 'agent-conversation-links';
 export const SYSTEM_PROMPT_SCOPE_LINKS_ROOT_DIR = 'system-prompt-scope-links';
+export const RUNTIME_CONTEXTS_ROOT_DIR = 'runtime-contexts';
+export const RUNTIME_CONTEXT_SCOPE_LINKS_ROOT_DIR = 'runtime-context-scope-links';
+export const RUNTIME_CONTEXT_SNAPSHOTS_ROOT_DIR = 'runtime-context-snapshots';
+export const CONVERSATION_RUNTIME_CONTEXT_SNAPSHOT_LINKS_ROOT_DIR = 'conversation-runtime-context-snapshot-links';
+export const RUN_RUNTIME_CONTEXT_SNAPSHOT_LINKS_ROOT_DIR = 'run-runtime-context-snapshot-links';
 export const MODEL_PROFILE_SCOPE_LINKS_ROOT_DIR = 'model-profile-scope-links';
 export const CONVERSATION_MODE_SELECTIONS_ROOT_DIR = 'conversation-mode-selections';
 export const CONVERSATION_AGENT_SELECTIONS_ROOT_DIR = 'conversation-agent-selections';
@@ -50,6 +55,11 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
   MODEL_PROFILES_ROOT_DIR,
   AGENT_CONVERSATION_LINKS_ROOT_DIR,
   SYSTEM_PROMPT_SCOPE_LINKS_ROOT_DIR,
+  RUNTIME_CONTEXTS_ROOT_DIR,
+  RUNTIME_CONTEXT_SCOPE_LINKS_ROOT_DIR,
+  RUNTIME_CONTEXT_SNAPSHOTS_ROOT_DIR,
+  CONVERSATION_RUNTIME_CONTEXT_SNAPSHOT_LINKS_ROOT_DIR,
+  RUN_RUNTIME_CONTEXT_SNAPSHOT_LINKS_ROOT_DIR,
   MODEL_PROFILE_SCOPE_LINKS_ROOT_DIR,
   CONVERSATION_MODE_SELECTIONS_ROOT_DIR,
   CONVERSATION_AGENT_SELECTIONS_ROOT_DIR,

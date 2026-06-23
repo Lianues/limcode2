@@ -11,6 +11,7 @@ import WorkEnvironmentPolicyEditor from '@webview/components/settings/workEnviro
 import CheckpointPolicyEditor from '@webview/components/settings/checkpoints/CheckpointPolicyEditor.vue';
 import { useModeStore } from '@webview/stores/useModeStore';
 import SystemPromptScopeEditor from '@webview/components/settings/config/SystemPromptScopeEditor.vue';
+import RuntimeContextScopeEditor from '@webview/components/settings/config/RuntimeContextScopeEditor.vue';
 import ModelProfileScopeEditor from '@webview/components/settings/config/ModelProfileScopeEditor.vue';
 
 const modeStore = useModeStore();
@@ -174,6 +175,14 @@ function escapeHtml(value: string): string {
         :scope-id="activeMode.id"
         title="模式模型覆盖"
         description="当这个模式被选中时，优先覆盖 Agent 默认模型；Run/Conversation 仍可覆盖它。"
+      />
+
+      <RuntimeContextScopeEditor
+        v-if="activeMode"
+        scope-kind="mode"
+        :scope-id="activeMode.id"
+        title="模式运行时上下文模板"
+        description="用于生成运行时快照的模式级模板；变量只在快照生成或刷新时替换一次。"
       />
 
       <WorkEnvironmentPolicyEditor

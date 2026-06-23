@@ -13,6 +13,11 @@ import {
   MODES_ROOT_DIR,
   MODEL_PROFILE_SCOPE_LINKS_ROOT_DIR,
   MODEL_PROFILES_ROOT_DIR,
+  RUNTIME_CONTEXTS_ROOT_DIR,
+  RUNTIME_CONTEXT_SCOPE_LINKS_ROOT_DIR,
+  RUNTIME_CONTEXT_SNAPSHOTS_ROOT_DIR,
+  CONVERSATION_RUNTIME_CONTEXT_SNAPSHOT_LINKS_ROOT_DIR,
+  RUN_RUNTIME_CONTEXT_SNAPSHOT_LINKS_ROOT_DIR,
   PROJECT_CONTEXTS_ROOT_DIR,
   RUN_HISTORY_ROOT_DIR,
   SETTINGS_ROOT_DIR,
@@ -50,6 +55,16 @@ export interface VscodeStorageUris {
   toolPolicyScopeLinksIndexUri: vscode.Uri;
   systemPromptsRootUri: vscode.Uri;
   systemPromptsIndexUri: vscode.Uri;
+  runtimeContextsRootUri: vscode.Uri;
+  runtimeContextsIndexUri: vscode.Uri;
+  runtimeContextScopeLinksRootUri: vscode.Uri;
+  runtimeContextScopeLinksIndexUri: vscode.Uri;
+  runtimeContextSnapshotsRootUri: vscode.Uri;
+  runtimeContextSnapshotsIndexUri: vscode.Uri;
+  conversationRuntimeContextSnapshotLinksRootUri: vscode.Uri;
+  conversationRuntimeContextSnapshotLinksIndexUri: vscode.Uri;
+  runRuntimeContextSnapshotLinksRootUri: vscode.Uri;
+  runRuntimeContextSnapshotLinksIndexUri: vscode.Uri;
   modelProfilesRootUri: vscode.Uri;
   modelProfilesIndexUri: vscode.Uri;
   conversationsRootUri: vscode.Uri;
@@ -120,6 +135,11 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const toolPolicies = root(globalStorageUri, TOOL_POLICIES_ROOT_DIR);
   const toolPolicyScopeLinks = root(globalStorageUri, TOOL_POLICY_SCOPE_LINKS_ROOT_DIR);
   const systemPrompts = root(globalStorageUri, SYSTEM_PROMPTS_ROOT_DIR);
+  const runtimeContexts = root(globalStorageUri, RUNTIME_CONTEXTS_ROOT_DIR);
+  const runtimeContextScopeLinks = root(globalStorageUri, RUNTIME_CONTEXT_SCOPE_LINKS_ROOT_DIR);
+  const runtimeContextSnapshots = root(globalStorageUri, RUNTIME_CONTEXT_SNAPSHOTS_ROOT_DIR);
+  const conversationRuntimeContextSnapshotLinks = root(globalStorageUri, CONVERSATION_RUNTIME_CONTEXT_SNAPSHOT_LINKS_ROOT_DIR);
+  const runRuntimeContextSnapshotLinks = root(globalStorageUri, RUN_RUNTIME_CONTEXT_SNAPSHOT_LINKS_ROOT_DIR);
   const modelProfiles = root(globalStorageUri, MODEL_PROFILES_ROOT_DIR);
   const conversations = root(globalStorageUri, CONVERSATIONS_ROOT_DIR);
   const conversationHistory = root(globalStorageUri, CONVERSATION_HISTORY_ROOT_DIR);
@@ -174,6 +194,26 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     systemPromptsRootPath: systemPrompts.rootUri.fsPath,
     systemPromptsIndexUri: systemPrompts.indexUri,
     systemPromptsIndexPath: systemPrompts.indexUri.fsPath,
+    runtimeContextsRootUri: runtimeContexts.rootUri,
+    runtimeContextsRootPath: runtimeContexts.rootUri.fsPath,
+    runtimeContextsIndexUri: runtimeContexts.indexUri,
+    runtimeContextsIndexPath: runtimeContexts.indexUri.fsPath,
+    runtimeContextScopeLinksRootUri: runtimeContextScopeLinks.rootUri,
+    runtimeContextScopeLinksRootPath: runtimeContextScopeLinks.rootUri.fsPath,
+    runtimeContextScopeLinksIndexUri: runtimeContextScopeLinks.indexUri,
+    runtimeContextScopeLinksIndexPath: runtimeContextScopeLinks.indexUri.fsPath,
+    runtimeContextSnapshotsRootUri: runtimeContextSnapshots.rootUri,
+    runtimeContextSnapshotsRootPath: runtimeContextSnapshots.rootUri.fsPath,
+    runtimeContextSnapshotsIndexUri: runtimeContextSnapshots.indexUri,
+    runtimeContextSnapshotsIndexPath: runtimeContextSnapshots.indexUri.fsPath,
+    conversationRuntimeContextSnapshotLinksRootUri: conversationRuntimeContextSnapshotLinks.rootUri,
+    conversationRuntimeContextSnapshotLinksRootPath: conversationRuntimeContextSnapshotLinks.rootUri.fsPath,
+    conversationRuntimeContextSnapshotLinksIndexUri: conversationRuntimeContextSnapshotLinks.indexUri,
+    conversationRuntimeContextSnapshotLinksIndexPath: conversationRuntimeContextSnapshotLinks.indexUri.fsPath,
+    runRuntimeContextSnapshotLinksRootUri: runRuntimeContextSnapshotLinks.rootUri,
+    runRuntimeContextSnapshotLinksRootPath: runRuntimeContextSnapshotLinks.rootUri.fsPath,
+    runRuntimeContextSnapshotLinksIndexUri: runRuntimeContextSnapshotLinks.indexUri,
+    runRuntimeContextSnapshotLinksIndexPath: runRuntimeContextSnapshotLinks.indexUri.fsPath,
     modelProfilesRootUri: modelProfiles.rootUri,
     modelProfilesRootPath: modelProfiles.rootUri.fsPath,
     modelProfilesIndexUri: modelProfiles.indexUri,

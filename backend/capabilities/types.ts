@@ -201,6 +201,31 @@ export interface RuntimePaths {
   systemPromptsRootPath: string;
   systemPromptsIndexUri: vscode.Uri;
   systemPromptsIndexPath: string;
+  /** RuntimeContext 模板数据根目录：<dataRoot>/runtime-contexts */
+  runtimeContextsRootUri: vscode.Uri;
+  runtimeContextsRootPath: string;
+  runtimeContextsIndexUri: vscode.Uri;
+  runtimeContextsIndexPath: string;
+  /** RuntimeContext 与各 scope 的关系数据根目录：<dataRoot>/runtime-context-scope-links */
+  runtimeContextScopeLinksRootUri: vscode.Uri;
+  runtimeContextScopeLinksRootPath: string;
+  runtimeContextScopeLinksIndexUri: vscode.Uri;
+  runtimeContextScopeLinksIndexPath: string;
+  /** RuntimeContext 快照数据根目录：<dataRoot>/runtime-context-snapshots */
+  runtimeContextSnapshotsRootUri: vscode.Uri;
+  runtimeContextSnapshotsRootPath: string;
+  runtimeContextSnapshotsIndexUri: vscode.Uri;
+  runtimeContextSnapshotsIndexPath: string;
+  /** Conversation 与 RuntimeContextSnapshot 的关系数据根目录：<dataRoot>/conversation-runtime-context-snapshot-links */
+  conversationRuntimeContextSnapshotLinksRootUri: vscode.Uri;
+  conversationRuntimeContextSnapshotLinksRootPath: string;
+  conversationRuntimeContextSnapshotLinksIndexUri: vscode.Uri;
+  conversationRuntimeContextSnapshotLinksIndexPath: string;
+  /** Run 与 RuntimeContextSnapshot 的关系数据根目录：<dataRoot>/run-runtime-context-snapshot-links */
+  runRuntimeContextSnapshotLinksRootUri: vscode.Uri;
+  runRuntimeContextSnapshotLinksRootPath: string;
+  runRuntimeContextSnapshotLinksIndexUri: vscode.Uri;
+  runRuntimeContextSnapshotLinksIndexPath: string;
   /** ModelProfile 数据根目录：<dataRoot>/model-profiles */
   modelProfilesRootUri: vscode.Uri;
   modelProfilesRootPath: string;

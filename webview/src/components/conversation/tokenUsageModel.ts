@@ -32,6 +32,7 @@ export interface TokenUsageMessageEntry {
   index: number;
   messageId?: string;
   messageSeq?: number;
+  label?: string;
   role?: MsgRole;
   status?: MsgStatus;
   createdAt?: number;

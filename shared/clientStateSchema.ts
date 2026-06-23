@@ -258,8 +258,10 @@ const agentRunsTable: ClientSyncOverrides = {
     { table: 'runSystemPromptLinks', foreignKey: 'runId' },
     { table: 'runModelProfileLinks', foreignKey: 'runId' },
     { table: 'runToolPolicyLinks', foreignKey: 'runId' },
+    { table: 'runRuntimeContextSnapshotLinks', foreignKey: 'runId' },
     { table: 'systemPromptScopeLinks', foreignKey: 'scopeId' },
     { table: 'modelProfileScopeLinks', foreignKey: 'scopeId' },
+    { table: 'runtimeContextScopeLinks', foreignKey: 'scopeId' },
     { table: 'runConversationPolicyLinks', foreignKey: 'runId' },
     { table: 'runContextPolicyLinks', foreignKey: 'runId' },
     { table: 'runDeliveryPolicyLinks', foreignKey: 'runId' },
@@ -288,6 +290,7 @@ export const CLIENT_STATE_TABLES = {
       { table: 'toolPolicyScopeLinks', foreignKey: 'scopeId' },
       { table: 'systemPromptScopeLinks', foreignKey: 'scopeId' },
       { table: 'modelProfileScopeLinks', foreignKey: 'scopeId' },
+      { table: 'runtimeContextScopeLinks', foreignKey: 'scopeId' },
       { table: 'workEnvironmentPolicyScopeLinks', foreignKey: 'scopeId' }
     ]
   }),
@@ -298,6 +301,7 @@ export const CLIENT_STATE_TABLES = {
       { table: 'runModeLinks', foreignKey: 'modeId' },
       { table: 'systemPromptScopeLinks', foreignKey: 'scopeId' },
       { table: 'modelProfileScopeLinks', foreignKey: 'scopeId' },
+      { table: 'runtimeContextScopeLinks', foreignKey: 'scopeId' },
       { table: 'workEnvironmentPolicyScopeLinks', foreignKey: 'scopeId' }
     ]
   }),
@@ -305,6 +309,15 @@ export const CLIENT_STATE_TABLES = {
   toolPolicyScopeLinks: upsertRemoveTable('toolPolicyScopeLink', 'link'),
   systemPrompts: upsertRemoveTable('systemPrompt', 'systemPrompt', { cascadeRemove: [{ table: 'systemPromptScopeLinks', foreignKey: 'systemPromptId' }, { table: 'runSystemPromptLinks', foreignKey: 'systemPromptId' }] }),
   systemPromptScopeLinks: upsertRemoveTable('systemPromptScopeLink', 'link', { globalSnapshot: true }),
+  promptPlaceholders: upsertRemoveTable('promptPlaceholder', 'placeholder'),
+  runtimeContexts: upsertRemoveTable('runtimeContext', 'runtimeContext', { cascadeRemove: [{ table: 'runtimeContextScopeLinks', foreignKey: 'runtimeContextId' }] }),
+  runtimeContextScopeLinks: upsertRemoveTable('runtimeContextScopeLink', 'link', { globalSnapshot: true }),
+  runtimeContextSnapshots: upsertRemoveTable('runtimeContextSnapshot', 'snapshot', {
+    cascadeRemove: [{ table: 'conversationRuntimeContextSnapshotLinks', foreignKey: 'runtimeContextSnapshotId' }, { table: 'runRuntimeContextSnapshotLinks', foreignKey: 'runtimeContextSnapshotId' }],
+    globalSnapshot: true
+  }),
+  conversationRuntimeContextSnapshotLinks: upsertRemoveTable('conversationRuntimeContextSnapshotLink', 'link', { scope: { kind: 'conversation', field: 'conversationId' }, globalSnapshot: true }),
+  runRuntimeContextSnapshotLinks: upsertRemoveTable('runRuntimeContextSnapshotLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
   modelProfiles: upsertRemoveTable('modelProfile', 'modelProfile', { cascadeRemove: [{ table: 'modelProfileScopeLinks', foreignKey: 'modelProfileId' }, { table: 'runModelProfileLinks', foreignKey: 'modelProfileId' }] }),
   modelProfileScopeLinks: upsertRemoveTable('modelProfileScopeLink', 'link', { globalSnapshot: true }),
   conversationModeSelections: upsertRemoveTable('conversationModeSelection', 'selection', { scope: { kind: 'conversation', field: 'conversationId' }, globalSnapshot: true }),
@@ -328,6 +341,8 @@ export const CLIENT_STATE_TABLES = {
       { table: 'workEnvironmentPolicyScopeLinks', foreignKey: 'scopeId' },
       { table: 'systemPromptScopeLinks', foreignKey: 'scopeId' },
       { table: 'modelProfileScopeLinks', foreignKey: 'scopeId' },
+      { table: 'runtimeContextScopeLinks', foreignKey: 'scopeId' },
+      { table: 'conversationRuntimeContextSnapshotLinks', foreignKey: 'conversationId' },
       { table: 'messages', foreignKey: 'conversationId', cascade: true },
       { table: 'compressionBlocks', foreignKey: 'conversationId', cascade: true }
     ]

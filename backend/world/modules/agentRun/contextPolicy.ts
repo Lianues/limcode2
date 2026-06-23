@@ -19,6 +19,7 @@ import {
   MessageRunLink,
   type RunContextPolicyData
 } from './components';
+import { runRuntimeContextSnapshots } from '../runtimeContext/queries';
 
 const DEFAULT_LAST_N = 20;
 const MAX_SYNTHETIC_CONTEXT_CHARS = 12_000;
@@ -48,9 +49,18 @@ export interface SelectedRunCompressionContext {
 export function buildRunContextContents(world: WorldReader, input: BuildRunContextInput): MessageContent[] {
   const policy = input.policy ?? defaultContextPolicy();
   return [
+    ...buildRuntimeContextSnapshotContents(world, input),
     ...buildSourceContextContents(world, input, policy),
     ...buildTargetConversationContents(world, input, policy)
   ];
+}
+
+function buildRuntimeContextSnapshotContents(world: WorldReader, input: BuildRunContextInput): MessageContent[] {
+  const text = runRuntimeContextSnapshots(world, input.run)
+    .map((snapshot) => snapshot.data.text.trim())
+    .filter(Boolean)
+    .join('\n\n');
+  return text ? [syntheticTextContent(text)] : [];
 }
 
 export function selectRunContextMessageEntities(world: WorldReader, input: BuildRunContextInput): Entity[] {

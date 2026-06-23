@@ -5,6 +5,8 @@ import ToolPolicyEditor from '@webview/components/settings/tools/ToolPolicyEdito
 import WorkEnvironmentPolicyEditor from '@webview/components/settings/workEnvironment/WorkEnvironmentPolicyEditor.vue';
 import CheckpointPolicyEditor from '@webview/components/settings/checkpoints/CheckpointPolicyEditor.vue';
 import CheckpointListPanel from '@webview/components/settings/checkpoints/CheckpointListPanel.vue';
+import SystemPromptScopeEditor from '@webview/components/settings/config/SystemPromptScopeEditor.vue';
+import RuntimeContextScopeEditor from '@webview/components/settings/config/RuntimeContextScopeEditor.vue';
 
 const settings = useConversationSettingsStore();
 
@@ -30,6 +32,22 @@ function reload(): void {
     <p class="settings-note">
       对话级 common 设置会保存到当前 conversation 目录下的 <code>settings/common.json</code>。
     </p>
+
+    <SystemPromptScopeEditor
+      v-if="hasConversation"
+      scope-kind="conversation"
+      :scope-id="settings.common.conversationId"
+      title="对话系统提示词"
+      description="仅影响当前对话，会在 global / agent / mode 之后拼接。"
+    />
+
+    <RuntimeContextScopeEditor
+      v-if="hasConversation"
+      scope-kind="conversation"
+      :scope-id="settings.common.conversationId"
+      title="对话运行时上下文模板"
+      description="用于生成当前对话的运行时快照；可手动刷新快照，刷新不会写入聊天记录。"
+    />
 
     <WorkEnvironmentPolicyEditor
       v-if="hasConversation"

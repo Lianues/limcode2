@@ -1,12 +1,13 @@
 import type { Component } from 'vue';
-import { IconArchive, IconServer, IconSettings2, IconSettingsAi, IconTool } from '@tabler/icons-vue';
+import { IconArchive, IconMessage, IconServer, IconSettings2, IconSettingsAi, IconTool } from '@tabler/icons-vue';
 import ChannelSettingsTab from './ChannelSettingsTab.vue';
 import CheckpointSettingsTab from './CheckpointSettingsTab.vue';
 import OtherSettingsTab from './OtherSettingsTab.vue';
+import SystemPromptSettingsTab from './SystemPromptSettingsTab.vue';
 import ToolSettingsTab from './ToolSettingsTab.vue';
 import WorkEnvironmentSettingsTab from './WorkEnvironmentSettingsTab.vue';
 
-export type GlobalSettingsTabKey = 'channels' | 'tools' | 'checkpoints' | 'work-environments' | 'other';
+export type GlobalSettingsTabKey = 'channels' | 'prompts' | 'tools' | 'checkpoints' | 'work-environments' | 'other';
 
 export interface GlobalSettingsTabDefinition {
   key: GlobalSettingsTabKey;
@@ -23,6 +24,13 @@ export const GLOBAL_SETTINGS_TABS: readonly GlobalSettingsTabDefinition[] = [
     description: '模型渠道与 API 连接',
     icon: IconSettingsAi,
     component: ChannelSettingsTab
+  },
+  {
+    key: 'prompts',
+    label: '提示词',
+    description: '系统提示词与运行时快照',
+    icon: IconMessage,
+    component: SystemPromptSettingsTab
   },
   {
     key: 'tools',

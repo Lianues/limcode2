@@ -25,6 +25,12 @@ import { CompressionBlock, CompressionContextVariant, RunCompressionBlockLink } 
 import { ToolCall, ToolPolicyScopeLink, ToolState } from '../../tools/components';
 import { ToolSchemasKey } from '../../tools/resources';
 import { buildRuntimeToolSchemas, TOOL_SCHEMA_CONTRIBUTOR_READS } from '../../tools/schemaContributors';
+import {
+  ConversationRuntimeContextSnapshotLink,
+  RuntimeContextSnapshot,
+  RunRuntimeContextSnapshotLink
+} from '../../runtimeContext/components';
+import { PROMPT_CONTEXT_PLACEHOLDER_READS, renderSystemPromptTemplate } from '../../runtimeContext/placeholders';
 import { Conversation, InFlight, LlmRequest, Message, MessageCurrentRevisionLink, PartOf } from '../components';
 import { textContent } from '../../../../../shared/protocol';
 import type { LlmModelSettings, LlmStartRequest, ToolSchema } from '../../llm/contracts';
@@ -77,7 +83,11 @@ const LlmContextLookupComponents = [
   CompressionBlock,
   CompressionContextVariant,
   RunCompressionBlockLink,
-  ...(TOOL_SCHEMA_CONTRIBUTOR_READS.components ?? [])
+  RuntimeContextSnapshot,
+  ConversationRuntimeContextSnapshotLink,
+  RunRuntimeContextSnapshotLink,
+  ...(TOOL_SCHEMA_CONTRIBUTOR_READS.components ?? []),
+  ...(PROMPT_CONTEXT_PLACEHOLDER_READS.components ?? [])
 ] as const;
 
 export interface BuildLlmStartRequestForRunInput {
@@ -139,7 +149,10 @@ export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmSt
   const context = resolveLlmContext(world, input);
   if (!context) return undefined;
 
-  const systemPrompt = composeSystemInstruction(systemPromptsForRun(world, input.run));
+  const systemPrompt = composeSystemInstruction(systemPromptsForRun(world, input.run).map((prompt) => ({
+    ...prompt,
+    text: renderSystemPromptTemplate(prompt.text, { world, run: input.run, conversation: context.conversation })
+  })));
   const invocation = input.invocation !== undefined ? world.get(input.invocation, LlmInvocation) : undefined;
   const settingsSnapshot = invocation?.settings;
   const modelProfile = activeModelProfileForRun(world, input.run);

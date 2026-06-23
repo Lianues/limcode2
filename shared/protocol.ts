@@ -72,6 +72,10 @@ export enum BridgeMessageType {
   AgentDelete = 'agent.delete',
   SystemPromptScopeSet = 'systemPrompt.scope.set',
   SystemPromptScopeClear = 'systemPrompt.scope.clear',
+  RuntimeContextScopeSet = 'runtimeContext.scope.set',
+  RuntimeContextScopeClear = 'runtimeContext.scope.clear',
+  RuntimeContextRefresh = 'runtimeContext.refresh',
+  RuntimeContextSnapshotClear = 'runtimeContext.snapshot.clear',
   ModelProfileScopeSet = 'modelProfile.scope.set',
   ModelProfileScopeClear = 'modelProfile.scope.clear',
   MessageEdit = 'message.edit',
@@ -668,6 +672,65 @@ export interface SystemPromptScopeLinkRecord {
   systemPromptId: string;
   role: ConfigScopeBindingRole;
   order?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type PromptPlaceholderTarget = 'systemPrompt' | 'runtimeContext';
+
+export interface PromptPlaceholderRecord {
+  id: string;
+  token: string;
+  label: string;
+  description?: string;
+  target: PromptPlaceholderTarget;
+  order?: number;
+}
+
+export interface RuntimeContextRecord {
+  id: string;
+  name: string;
+  template: string;
+}
+
+export interface RuntimeContextScopeLinkRecord {
+  id: string;
+  scopeKind: ConfigScopeKind;
+  scopeId?: string;
+  runtimeContextId: string;
+  role: ConfigScopeBindingRole;
+  order?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RuntimeContextSnapshotRecord {
+  id: string;
+  name: string;
+  text: string;
+  template: string;
+  conversationId?: string;
+  sourceRuntimeContextIds?: string[];
+  sourceHash?: string;
+  createdAt: number;
+  updatedAt: number;
+  refreshedAt: number;
+}
+
+export interface ConversationRuntimeContextSnapshotLinkRecord {
+  id: string;
+  conversationId: string;
+  runtimeContextSnapshotId: string;
+  role: ConfigScopeBindingRole;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RunRuntimeContextSnapshotLinkRecord {
+  id: string;
+  runId: string;
+  runtimeContextSnapshotId: string;
+  role: 'context';
   createdAt: number;
   updatedAt: number;
 }
@@ -1440,6 +1503,12 @@ export interface ClientStateRecordByTable {
   toolPolicyScopeLinks: ToolPolicyScopeLinkRecord;
   systemPrompts: SystemPromptRecord;
   systemPromptScopeLinks: SystemPromptScopeLinkRecord;
+  promptPlaceholders: PromptPlaceholderRecord;
+  runtimeContexts: RuntimeContextRecord;
+  runtimeContextScopeLinks: RuntimeContextScopeLinkRecord;
+  runtimeContextSnapshots: RuntimeContextSnapshotRecord;
+  conversationRuntimeContextSnapshotLinks: ConversationRuntimeContextSnapshotLinkRecord;
+  runRuntimeContextSnapshotLinks: RunRuntimeContextSnapshotLinkRecord;
   modelProfiles: ModelProfileRecord;
   modelProfileScopeLinks: ModelProfileScopeLinkRecord;
   conversationModeSelections: ConversationModeSelectionRecord;
@@ -1637,6 +1706,24 @@ export interface SystemPromptScopeSetPayload {
   order?: number;
 }
 export interface SystemPromptScopeClearPayload { scopeKind: ConfigScopeKind; scopeId?: string }
+export interface RuntimeContextScopeSetPayload {
+  scopeKind: ConfigScopeKind;
+  scopeId?: string;
+  name?: string;
+  template: string;
+  order?: number;
+}
+export interface RuntimeContextScopeClearPayload { scopeKind: ConfigScopeKind; scopeId?: string }
+export interface RuntimeContextRefreshPayload {
+  conversationId?: string;
+  runId?: string;
+  scopeKind?: ConfigScopeKind;
+  scopeId?: string;
+}
+export interface RuntimeContextSnapshotClearPayload {
+  conversationId?: string;
+  runId?: string;
+}
 export interface ModelProfileScopeSetPayload {
   scopeKind: ConfigScopeKind;
   scopeId?: string;
@@ -1902,6 +1989,10 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ConversationAgentSelect, ConversationAgentSelectPayload>
   | BridgeEnvelope<BridgeMessageType.SystemPromptScopeSet, SystemPromptScopeSetPayload>
   | BridgeEnvelope<BridgeMessageType.SystemPromptScopeClear, SystemPromptScopeClearPayload>
+  | BridgeEnvelope<BridgeMessageType.RuntimeContextScopeSet, RuntimeContextScopeSetPayload>
+  | BridgeEnvelope<BridgeMessageType.RuntimeContextScopeClear, RuntimeContextScopeClearPayload>
+  | BridgeEnvelope<BridgeMessageType.RuntimeContextRefresh, RuntimeContextRefreshPayload>
+  | BridgeEnvelope<BridgeMessageType.RuntimeContextSnapshotClear, RuntimeContextSnapshotClearPayload>
   | BridgeEnvelope<BridgeMessageType.ModelProfileScopeSet, ModelProfileScopeSetPayload>
   | BridgeEnvelope<BridgeMessageType.ModelProfileScopeClear, ModelProfileScopeClearPayload>
   | BridgeEnvelope<BridgeMessageType.MessageEdit, MessageEditPayload>

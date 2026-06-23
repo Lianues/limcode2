@@ -5,6 +5,7 @@ export * from './mode';
 export * from './chat';
 export * from './project';
 export * from './workEnvironment';
+export * from './runtimeContext';
 export * from './llm';
 export * from './tools';
 export * from './checkpoint';

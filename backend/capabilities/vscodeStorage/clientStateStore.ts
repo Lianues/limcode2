@@ -27,6 +27,11 @@ import type {
   ProjectContextRecord,
   SystemPromptRecord,
   SystemPromptScopeLinkRecord,
+  RuntimeContextRecord,
+  RuntimeContextScopeLinkRecord,
+  RuntimeContextSnapshotRecord,
+  ConversationRuntimeContextSnapshotLinkRecord,
+  RunRuntimeContextSnapshotLinkRecord,
   ToolCallEventRecord,
   ToolCallRecord,
   ToolPolicyRecord,
@@ -123,6 +128,7 @@ const RUN_HISTORY_TABLE_KEYS = [
   'runSystemPromptLinks',
   'runModelProfileLinks',
   'runToolPolicyLinks',
+  'runRuntimeContextSnapshotLinks',
   'runConversationPolicyLinks',
   'runContextPolicyLinks',
   'runDeliveryPolicyLinks',
@@ -173,6 +179,11 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
     toolPolicyScopeLinks,
     systemPrompts,
     systemPromptScopeLinks,
+    runtimeContexts,
+    runtimeContextScopeLinks,
+    runtimeContextSnapshots,
+    conversationRuntimeContextSnapshotLinks,
+    runRuntimeContextSnapshotLinks,
     modelProfiles,
     modelProfileScopeLinks,
     conversationModeSelections,
@@ -189,6 +200,11 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
     loadSkeletonRecords<ToolPolicyScopeLinkRecord>('toolPolicyScopeLinks', [paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri], 'link'),
     loadSkeletonRecords<SystemPromptRecord>('systemPrompts', [paths.systemPromptsRootUri, paths.systemPromptsIndexUri], 'systemPrompt'),
     loadSkeletonRecords<SystemPromptScopeLinkRecord>('systemPromptScopeLinks', [paths.systemPromptScopeLinksRootUri, paths.systemPromptScopeLinksIndexUri], 'link'),
+    loadSkeletonRecords<RuntimeContextRecord>('runtimeContexts', [paths.runtimeContextsRootUri, paths.runtimeContextsIndexUri], 'runtimeContext'),
+    loadSkeletonRecords<RuntimeContextScopeLinkRecord>('runtimeContextScopeLinks', [paths.runtimeContextScopeLinksRootUri, paths.runtimeContextScopeLinksIndexUri], 'link'),
+    loadSkeletonRecords<RuntimeContextSnapshotRecord>('runtimeContextSnapshots', [paths.runtimeContextSnapshotsRootUri, paths.runtimeContextSnapshotsIndexUri], 'snapshot'),
+    loadSkeletonRecords<ConversationRuntimeContextSnapshotLinkRecord>('conversationRuntimeContextSnapshotLinks', [paths.conversationRuntimeContextSnapshotLinksRootUri, paths.conversationRuntimeContextSnapshotLinksIndexUri], 'link'),
+    loadSkeletonRecords<RunRuntimeContextSnapshotLinkRecord>('runRuntimeContextSnapshotLinks', [paths.runRuntimeContextSnapshotLinksRootUri, paths.runRuntimeContextSnapshotLinksIndexUri], 'link'),
     loadSkeletonRecords<ModelProfileRecord>('modelProfiles', [paths.modelProfilesRootUri, paths.modelProfilesIndexUri], 'modelProfile'),
     loadSkeletonRecords<ModelProfileScopeLinkRecord>('modelProfileScopeLinks', [paths.modelProfileScopeLinksRootUri, paths.modelProfileScopeLinksIndexUri], 'link'),
     loadSkeletonRecords<ConversationModeSelectionRecord>('conversationModeSelections', [paths.conversationModeSelectionsRootUri, paths.conversationModeSelectionsIndexUri], 'selection'),
@@ -206,6 +222,11 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
   state.toolPolicyScopeLinks = toolPolicyScopeLinks;
   state.systemPrompts = systemPrompts;
   state.systemPromptScopeLinks = systemPromptScopeLinks;
+  state.runtimeContexts = runtimeContexts;
+  state.runtimeContextScopeLinks = runtimeContextScopeLinks;
+  state.runtimeContextSnapshots = runtimeContextSnapshots;
+  state.conversationRuntimeContextSnapshotLinks = conversationRuntimeContextSnapshotLinks;
+  state.runRuntimeContextSnapshotLinks = runRuntimeContextSnapshotLinks;
   state.modelProfiles = modelProfiles;
   state.modelProfileScopeLinks = modelProfileScopeLinks;
   state.conversationModeSelections = conversationModeSelections;
@@ -355,6 +376,11 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
     saveRecords(paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri, state.toolPolicyScopeLinks, 'link'),
     saveRecords(paths.systemPromptsRootUri, paths.systemPromptsIndexUri, state.systemPrompts, 'systemPrompt', (record) => record.name || record.id),
     saveRecords(paths.systemPromptScopeLinksRootUri, paths.systemPromptScopeLinksIndexUri, state.systemPromptScopeLinks, 'link'),
+    saveRecords(paths.runtimeContextsRootUri, paths.runtimeContextsIndexUri, state.runtimeContexts, 'runtimeContext', (record) => record.name || record.id),
+    saveRecords(paths.runtimeContextScopeLinksRootUri, paths.runtimeContextScopeLinksIndexUri, state.runtimeContextScopeLinks, 'link'),
+    saveRecords(paths.runtimeContextSnapshotsRootUri, paths.runtimeContextSnapshotsIndexUri, state.runtimeContextSnapshots, 'snapshot', (record) => record.name || record.id),
+    saveRecords(paths.conversationRuntimeContextSnapshotLinksRootUri, paths.conversationRuntimeContextSnapshotLinksIndexUri, state.conversationRuntimeContextSnapshotLinks, 'link'),
+    saveRecords(paths.runRuntimeContextSnapshotLinksRootUri, paths.runRuntimeContextSnapshotLinksIndexUri, state.runRuntimeContextSnapshotLinks, 'link'),
     saveRecords(paths.modelProfilesRootUri, paths.modelProfilesIndexUri, state.modelProfiles, 'modelProfile', (record) => record.name || record.id),
     saveRecords(paths.modelProfileScopeLinksRootUri, paths.modelProfileScopeLinksIndexUri, state.modelProfileScopeLinks, 'link'),
     saveRecords(paths.conversationModeSelectionsRootUri, paths.conversationModeSelectionsIndexUri, state.conversationModeSelections, 'selection'),

@@ -1,14 +1,20 @@
 import { defineStore } from 'pinia';
-import { type ConfigScopeKind, type SystemPromptRecord, type SystemPromptScopeLinkRecord } from '@shared/protocol';
+import { type ConfigScopeKind, type PromptPlaceholderRecord, type SystemPromptRecord, type SystemPromptScopeLinkRecord } from '@shared/protocol';
 import { bridge, BridgeMessageType } from '@webview/transport';
 import { useClientStateStore } from './useClientStateStore';
 
 function scopeIdFor(scopeKind: ConfigScopeKind, scopeId?: string): string | undefined { return scopeKind === 'global' ? undefined : scopeId?.trim(); }
 function matches(link: SystemPromptScopeLinkRecord, scopeKind: ConfigScopeKind, scopeId?: string): boolean { return link.role === 'active' && link.scopeKind === scopeKind && scopeIdFor(scopeKind, link.scopeId) === scopeIdFor(scopeKind, scopeId); }
 function latest<T extends { createdAt: number; updatedAt: number; id: string }>(items: T[]): T | undefined { return [...items].sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt || b.id.localeCompare(a.id))[0]; }
+function sortPlaceholders(items: PromptPlaceholderRecord[]): PromptPlaceholderRecord[] { return [...items].sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.label.localeCompare(b.label) || a.id.localeCompare(b.id)); }
 
 export const useSystemPromptStore = defineStore('systemPrompt', {
   state: () => ({ status: '' }),
+  getters: {
+    systemPlaceholders(): PromptPlaceholderRecord[] {
+      return sortPlaceholders(useClientStateStore().promptPlaceholders.filter((item) => item.target === 'systemPrompt'));
+    }
+  },
   actions: {
     localPromptFor(scopeKind: ConfigScopeKind, scopeId?: string): { prompt?: SystemPromptRecord; link?: SystemPromptScopeLinkRecord } {
       const clientState = useClientStateStore();

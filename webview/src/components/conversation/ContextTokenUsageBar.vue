@@ -58,7 +58,8 @@ let animationFrame = 0;
 let dragStartX = 0;
 let dragStartScrollLeft = 0;
 
-const usageItems = computed(() => buildTokenUsageMessages(clientState.currentMessages));
+const messageUsageItems = computed(() => buildTokenUsageMessages(clientState.currentMessages).filter((item) => item.id !== 'system-prompt-floor-0'));
+const usageItems = computed(() => [...fixedContextUsageItems.value, ...messageUsageItems.value]);
 const latestUsage = computed(() => usageItems.value[usageItems.value.length - 1]);
 const hasUsage = computed(() => usageItems.value.length > 0);
 const refreshKey = computed(() => usageItems.value.map((item) => `${item.id}:${item.total}:${item.ratio}`).join('|'));
@@ -97,6 +98,7 @@ const horizontalThumbStyle = computed(() => ({
   width: `${horizontalThumbWidth.value}px`,
   transform: `translateX(${horizontalThumbLeft.value}px)`
 }));
+const fixedContextUsageItems = computed<TokenUsageMessageEntry[]>(() => buildFixedContextUsageItems());
 
 watch(() => clientState.currentConversationId, () => {
   expanded.value = false;
@@ -233,7 +235,7 @@ function compactTokenText(item: TokenUsageMessageEntry): string {
 
 function messageTitle(item: TokenUsageMessageEntry): string {
   if (item.kind === 'system') {
-    return [`楼层 0`, `类型：系统提示词`, `token：${tokenText(item)}`].join('\n');
+    return [`楼层 0`, `类型：${item.label ?? '系统提示词'}`, `token：${tokenText(item)}`].join('\n');
   }
 
   return [
@@ -247,7 +249,7 @@ function messageTitle(item: TokenUsageMessageEntry): string {
 }
 
 function messageTooltipTitle(item: TokenUsageMessageEntry): string {
-  if (item.kind === 'system') return '楼层 0 系统提示词 token';
+  if (item.kind === 'system') return `楼层 0 ${item.label ?? '系统提示词'} token`;
   return `第 ${item.index} 楼消息 token`;
 }
 
@@ -255,7 +257,7 @@ function messageTooltipRows(item: TokenUsageMessageEntry): TooltipPanelItem[] {
   if (item.kind === 'system') {
     return [
       { label: '楼层', value: '#00' },
-      { label: '类型', value: '系统提示词' },
+      { label: '类型', value: item.label ?? '系统提示词' },
       { label: 'token', value: tokenText(item) },
       { label: '高度', value: '固定 100%' }
     ];
@@ -338,6 +340,94 @@ function tokenBarSegment(kind: TokenBarSegmentKind, value: number, basis: number
     value,
     style: { height: `${(value / basis) * 100}%` }
   };
+}
+
+function buildFixedContextUsageItems(): TokenUsageMessageEntry[] {
+  const items: TokenUsageMessageEntry[] = [];
+  const systemTokens = estimateTokenCount(currentSystemPromptText());
+  if (systemTokens > 0) {
+    items.push({
+      id: 'fixed-system-prompt-estimate',
+      kind: 'system',
+      index: 0,
+      label: '系统提示词（预估）',
+      total: systemTokens,
+      input: systemTokens,
+      totalEstimated: true,
+      sourceEstimated: true,
+      fixedRatio: true,
+      ratio: 1
+    });
+  }
+
+  const runtimeTokens = estimateTokenCount(currentRuntimeContextText());
+  if (runtimeTokens > 0) {
+    items.push({
+      id: 'fixed-runtime-context-estimate',
+      kind: 'system',
+      index: 0,
+      label: '运行时变量（预估）',
+      total: runtimeTokens,
+      input: runtimeTokens,
+      totalEstimated: true,
+      sourceEstimated: true,
+      fixedRatio: true,
+      ratio: 1
+    });
+  }
+  return items;
+}
+
+function currentSystemPromptText(): string {
+  const conversationId = clientState.currentConversationId;
+  const agentId = currentAgentId();
+  const modeId = currentModeId();
+  const scopeOrder = [
+    { kind: 'global' as const },
+    ...(agentId ? [{ kind: 'agent' as const, scopeId: agentId }] : []),
+    ...(modeId ? [{ kind: 'mode' as const, scopeId: modeId }] : []),
+    ...(conversationId ? [{ kind: 'conversation' as const, scopeId: conversationId }] : [])
+  ];
+  return scopeOrder
+    .map((scope) => latestSystemPromptForScope(scope.kind, scope.scopeId)?.text.trim() ?? '')
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function currentRuntimeContextText(): string {
+  const conversationId = clientState.currentConversationId;
+  const link = latestByUpdatedAt(clientState.conversationRuntimeContextSnapshotLinks.filter((item) => item.conversationId === conversationId && item.role === 'active'));
+  return clientState.runtimeContextSnapshots.find((snapshot) => snapshot.id === link?.runtimeContextSnapshotId)?.text.trim() ?? '';
+}
+
+function latestSystemPromptForScope(scopeKind: 'global' | 'agent' | 'mode' | 'conversation', scopeId?: string) {
+  const link = latestByUpdatedAt(clientState.systemPromptScopeLinks.filter((item) => item.role === 'active' && item.scopeKind === scopeKind && (scopeKind === 'global' ? item.scopeId === undefined : item.scopeId === scopeId)));
+  return clientState.systemPrompts.find((prompt) => prompt.id === link?.systemPromptId);
+}
+
+function currentAgentId(): string | undefined {
+  const conversationId = clientState.currentConversationId;
+  const selection = latestByUpdatedAt(clientState.conversationAgentSelections.filter((item) => item.conversationId === conversationId && item.role === 'active'));
+  if (selection) return selection.agentId;
+  return clientState.agentConversationLinks.find((link) => link.conversationId === conversationId && link.role === 'default')?.agentId
+    ?? clientState.agentConversationLinks.find((link) => link.conversationId === conversationId)?.agentId;
+}
+
+function currentModeId(): string | undefined {
+  const selection = latestByUpdatedAt(clientState.conversationModeSelections.filter((item) => item.conversationId === clientState.currentConversationId && item.role === 'active'));
+  return selection?.scopeKind === 'mode' ? selection.modeId : undefined;
+}
+
+function latestByUpdatedAt<T extends { id: string; createdAt: number; updatedAt: number }>(items: T[]): T | undefined {
+  return [...items].sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt || right.id.localeCompare(left.id))[0];
+}
+
+function estimateTokenCount(text: string): number {
+  const trimmed = text.trim();
+  if (!trimmed) return 0;
+  let score = 0;
+  for (const char of trimmed) score += /[\u3400-\u9fff\u3040-\u30ff\uff00-\uffef]/.test(char) ? 1 : /\s/.test(char) ? 0 : 0.28;
+  return Math.max(1, Math.ceil(score));
 }
 
 function roleLabel(role: TokenUsageMessageEntry['role']): string {

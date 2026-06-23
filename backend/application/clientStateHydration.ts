@@ -9,6 +9,13 @@ import {
   SystemPromptScopeLink,
   ToolPolicy
 } from '../world/modules/mode/components';
+import {
+  ConversationRuntimeContextSnapshotLink,
+  RuntimeContext,
+  RuntimeContextScopeLink,
+  RuntimeContextSnapshot,
+  RunRuntimeContextSnapshotLink
+} from '../world/modules/runtimeContext/components';
 import { rememberHydratedMessageSeq, resetMessageSeqState } from '../world/modules/chat/bundles';
 import {
   Conversation,
@@ -111,9 +118,12 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState, opt
   const modeEntities = hydrateRecordsUnique(world, state.modes, Mode);
   const toolPolicyEntities = hydrateRecordsUnique(world, state.toolPolicies, ToolPolicy);
   const systemPromptEntities = hydrateRecordsUnique(world, state.systemPrompts, SystemPrompt);
+  const runtimeContextEntities = hydrateRecordsUnique(world, state.runtimeContexts, RuntimeContext);
+  const runtimeContextSnapshotEntities = existingRecords(world, RuntimeContextSnapshot);
   const modelProfileEntities = hydrateRecordsUnique(world, state.modelProfiles, ModelProfile);
 
   hydrateSystemPromptScopeLinks(world, state, { agents: agentEntities, conversations: new Map(), modes: modeEntities, runs: new Map(), prompts: systemPromptEntities });
+  hydrateRuntimeContextScopeLinks(world, state, { agents: agentEntities, conversations: new Map(), modes: modeEntities, runs: new Map(), runtimeContexts: runtimeContextEntities });
   hydrateModelProfileScopeLinks(world, state, { agents: agentEntities, conversations: new Map(), modes: modeEntities, runs: new Map(), profiles: modelProfileEntities });
 
   for (const conversation of conversations) {
@@ -214,6 +224,9 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState, opt
     runs: new Map()
   });
   hydrateSystemPromptScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, modes: modeEntities, runs: new Map(), prompts: systemPromptEntities });
+  hydrateRuntimeContextScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, modes: modeEntities, runs: new Map(), runtimeContexts: runtimeContextEntities });
+  hydrateRuntimeContextSnapshots(world, state, conversationEntities, runtimeContextEntities, runtimeContextSnapshotEntities);
+  hydrateConversationRuntimeContextSnapshotLinks(world, state, conversationEntities, runtimeContextSnapshotEntities);
   hydrateModelProfileScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, modes: modeEntities, runs: new Map(), profiles: modelProfileEntities });
 
   return true;
@@ -238,6 +251,8 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
   const workEnvironmentPolicyEntities = existingRecords(world, WorkEnvironmentPolicy);
   const checkpointPolicyEntities = hydrateRecordsUnique(world, state.checkpointPolicies ?? [], CheckpointPolicy);
   const shadowRepositoryEntities = hydrateRecordsUnique(world, state.shadowRepositories ?? [], ShadowRepository);
+  const runtimeContextEntities = existingRecords(world, RuntimeContext);
+  const runtimeContextSnapshotEntities = existingRecords(world, RuntimeContextSnapshot);
 
   const messageEntities = existingRecords(world, Message);
   for (const record of state.messages.filter((message) => message.conversationId === conversationId)) {
@@ -343,6 +358,7 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
 
   hydrateConversationOriginLinks(world, state, { conversations: conversationEntities, agents: agentEntities, messages: messageEntities, toolCalls: toolCallEntities, runs: runEntities });
 
+  hydrateRuntimeContextSnapshots(world, state, conversationEntities, runtimeContextEntities, runtimeContextSnapshotEntities);
   for (const link of state.messageRunLinks ?? []) spawnRunLink(world, messageEntities, runEntities, link, MessageRunLink, 'message', 'run');
   for (const link of state.toolCallRunLinks ?? []) spawnRunLink(world, toolCallEntities, runEntities, link, ToolCallRunLink, 'toolCall', 'run');
   for (const link of state.runModeLinks ?? []) spawnRunLink(world, runEntities, modeEntities, link, RunModeLink, 'run', 'mode');
@@ -354,6 +370,7 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
   for (const link of state.runDeliveryPolicyLinks ?? []) spawnRunLink(world, runEntities, deliveryPolicyEntities, link, RunDeliveryPolicyLink, 'run', 'policy');
   for (const link of state.runEditPolicyLinks ?? []) spawnRunLink(world, runEntities, editPolicyEntities, link, RunEditPolicyLink, 'run', 'policy');
   for (const link of state.runWorkEnvironmentLinks ?? []) spawnRunLink(world, runEntities, workEnvironmentEntities, link, RunWorkEnvironmentLink, 'run', 'workEnvironment');
+  for (const link of state.runRuntimeContextSnapshotLinks ?? []) spawnRunLink(world, runEntities, runtimeContextSnapshotEntities, link, RunRuntimeContextSnapshotLink, 'run', 'snapshot');
   for (const link of state.runLlmInvocationLinks ?? []) spawnRunLink(world, runEntities, llmInvocationEntities, link, RunLlmInvocationLink, 'run', 'invocation');
   for (const link of state.messageLlmInvocationLinks ?? []) spawnRunLink(world, messageEntities, llmInvocationEntities, link, MessageLlmInvocationLink, 'message', 'invocation');
   hydrateWorkEnvironmentPolicyScopeLinks(world, state, { conversations: conversationEntities, modes: modeEntities, agents: agentEntities, runs: runEntities, policies: workEnvironmentPolicyEntities });
@@ -371,6 +388,8 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
     runs: runEntities
   });
   hydrateSystemPromptScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, modes: modeEntities, runs: runEntities, prompts: systemPromptEntities });
+  hydrateRuntimeContextScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, modes: modeEntities, runs: runEntities, runtimeContexts: runtimeContextEntities });
+  hydrateConversationRuntimeContextSnapshotLinks(world, state, conversationEntities, runtimeContextSnapshotEntities);
   hydrateModelProfileScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, modes: modeEntities, runs: runEntities, profiles: modelProfileEntities });
   hydrateCompressionRecords(world, state, { conversations: conversationEntities, messages: messageEntities, runs: runEntities, invocations: llmInvocationEntities });
 
@@ -737,13 +756,14 @@ function hydrateConversationAgentSelections(
   }
 }
 
-interface ConfigScopeHydrationMaps<TTargetKey extends 'prompts' | 'profiles'> {
+interface ConfigScopeHydrationMaps<TTargetKey extends 'prompts' | 'profiles' | 'runtimeContexts'> {
   agents: Map<string, Entity>;
   conversations: Map<string, Entity>;
   modes: Map<string, Entity>;
   runs: Map<string, Entity>;
   prompts?: Map<string, Entity>;
   profiles?: Map<string, Entity>;
+  runtimeContexts?: Map<string, Entity>;
 }
 
 function hydrateSystemPromptScopeLinks(world: World, state: ClientState, maps: ConfigScopeHydrationMaps<'prompts'>): void {
@@ -766,6 +786,61 @@ function hydrateSystemPromptScopeLinks(world: World, state: ClientState, maps: C
       ...(record.order !== undefined ? { order: record.order } : {}),
       createdAt: record.createdAt || Date.now(),
       updatedAt: record.updatedAt || record.createdAt || Date.now()
+    });
+  }
+}
+
+function hydrateRuntimeContextScopeLinks(world: World, state: ClientState, maps: ConfigScopeHydrationMaps<'runtimeContexts'>): void {
+  const existing = existingIds(world, RuntimeContextScopeLink);
+  for (const record of state.runtimeContextScopeLinks ?? []) {
+    if (existing.has(record.id)) continue;
+    const runtimeContext = maps.runtimeContexts?.get(record.runtimeContextId);
+    if (runtimeContext === undefined) continue;
+    const scope = resolveHydratedConfigScope(record.scopeKind, record.scopeId, maps);
+    if (!scope.ok) continue;
+    const entity = world.spawn();
+    existing.add(record.id);
+    world.add(entity, RuntimeContextScopeLink, {
+      id: record.id,
+      scopeKind: record.scopeKind,
+      ...(record.scopeId ? { scopeId: record.scopeId } : {}),
+      runtimeContext,
+      ...scope.data,
+      role: record.role,
+      ...(record.order !== undefined ? { order: record.order } : {}),
+      createdAt: record.createdAt || Date.now(),
+      updatedAt: record.updatedAt || record.createdAt || Date.now()
+    });
+  }
+}
+
+function hydrateRuntimeContextSnapshots(
+  world: World,
+  state: ClientState,
+  conversations: Map<string, Entity>,
+  runtimeContexts: Map<string, Entity>,
+  snapshots: Map<string, Entity>
+): void {
+  for (const record of state.runtimeContextSnapshots ?? []) {
+    if (snapshots.has(record.id)) continue;
+    const conversation = record.conversationId ? conversations.get(record.conversationId) : undefined;
+    if (record.conversationId && conversation === undefined) continue;
+    const sourceRuntimeContexts = (record.sourceRuntimeContextIds ?? [])
+      .map((id) => runtimeContexts.get(id))
+      .filter((entity): entity is Entity => entity !== undefined);
+    const entity = world.spawn();
+    snapshots.set(record.id, entity);
+    world.add(entity, RuntimeContextSnapshot, {
+      id: record.id,
+      name: record.name,
+      text: record.text,
+      template: record.template,
+      ...(conversation !== undefined ? { conversation } : {}),
+      ...(sourceRuntimeContexts.length > 0 ? { sourceRuntimeContexts } : {}),
+      ...(record.sourceHash ? { sourceHash: record.sourceHash } : {}),
+      createdAt: record.createdAt || Date.now(),
+      updatedAt: record.updatedAt || record.createdAt || Date.now(),
+      refreshedAt: record.refreshedAt || record.updatedAt || record.createdAt || Date.now()
     });
   }
 }
@@ -793,10 +868,35 @@ function hydrateModelProfileScopeLinks(world: World, state: ClientState, maps: C
   }
 }
 
+function hydrateConversationRuntimeContextSnapshotLinks(
+  world: World,
+  state: ClientState,
+  conversations: Map<string, Entity>,
+  snapshots: Map<string, Entity>
+): void {
+  const existing = existingIds(world, ConversationRuntimeContextSnapshotLink);
+  for (const record of state.conversationRuntimeContextSnapshotLinks ?? []) {
+    if (existing.has(record.id)) continue;
+    const conversation = conversations.get(record.conversationId);
+    const snapshot = snapshots.get(record.runtimeContextSnapshotId);
+    if (conversation === undefined || snapshot === undefined) continue;
+    const entity = world.spawn();
+    existing.add(record.id);
+    world.add(entity, ConversationRuntimeContextSnapshotLink, {
+      id: record.id,
+      conversation,
+      snapshot,
+      role: record.role,
+      createdAt: record.createdAt || Date.now(),
+      updatedAt: record.updatedAt || record.createdAt || Date.now()
+    });
+  }
+}
+
 function resolveHydratedConfigScope(
   scopeKind: NonNullable<ClientState['systemPromptScopeLinks'][number]>['scopeKind'],
   scopeId: string | undefined,
-  maps: ConfigScopeHydrationMaps<'prompts' | 'profiles'>
+  maps: ConfigScopeHydrationMaps<'prompts' | 'profiles' | 'runtimeContexts'>
 ): { ok: true; data: Partial<{ conversation: Entity; agent: Entity; mode: Entity; run: Entity }> } | { ok: false } {
   switch (scopeKind) {
     case 'global': return { ok: true, data: {} };

@@ -14,6 +14,7 @@ import { WorkEnvironmentEventType } from '../world/modules/workEnvironment/event
 import { CheckpointEventType } from '../world/modules/checkpoint/events';
 import { AgentEventType } from '../world/modules/agent/events';
 import { CompressionEventType } from '../world/modules/compression/events';
+import { RuntimeContextEventType } from '../world/modules/runtimeContext/events';
 import {
   BridgeMessageType,
   GLOBAL_CLIENT_STATE_STREAM_ID,
@@ -206,6 +207,30 @@ export class WebviewMessageRouter {
       case BridgeMessageType.SystemPromptScopeClear:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: AgentEventType.SystemPromptScopeClear, payload: message.payload });
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.RuntimeContextScopeSet:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: RuntimeContextEventType.ScopeSet, payload: message.payload });
+        this.deps.requestSnapshot(message.payload.scopeKind === 'conversation' ? message.payload.scopeId : undefined);
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.RuntimeContextScopeClear:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: RuntimeContextEventType.ScopeClear, payload: message.payload });
+        this.deps.requestSnapshot(message.payload.scopeKind === 'conversation' ? message.payload.scopeId : undefined);
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.RuntimeContextRefresh:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: RuntimeContextEventType.Refresh, payload: message.payload });
+        this.deps.requestSnapshot(message.payload.conversationId ?? (message.payload.scopeKind === 'conversation' ? message.payload.scopeId : undefined));
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.RuntimeContextSnapshotClear:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: RuntimeContextEventType.SnapshotClear, payload: message.payload });
+        this.deps.requestSnapshot(message.payload.conversationId);
         this.deps.requestSnapshot();
         break;
       case BridgeMessageType.ModelProfileScopeSet:

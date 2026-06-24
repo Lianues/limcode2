@@ -116,7 +116,6 @@ export interface FsEditFileResult {
   summary: string;
   changedFiles: string[];
   files: FsFileChangeRecord[];
-  statistics?: EditToolStatisticsRecord;
 }
 
 export interface FsCapability {
@@ -457,6 +456,7 @@ export interface StorageCapability {
   createShadowCheckpoint(request: ShadowCheckpointCreateRequest): Promise<CheckpointRecord>;
   restoreShadowCheckpoint(request: CheckpointRestorePayload): Promise<ShadowCheckpointRestoreResult>;
   openShadowCheckpointDiff(request: ShadowCheckpointDiffOpenRequest): Promise<ShadowCheckpointDiffOpenResult>;
+  loadEditToolStatistics(): Promise<EditToolStatisticsRecord>;
   recordEditToolModeResult(mode: EditToolMode, success: boolean): Promise<EditToolStatisticsRecord>;
   collectShadowWorktreeStats(): Promise<ShadowRepositoryDiskStatRecord[]>;
   deleteShadowWorktrees(storageKeys: string[]): Promise<{ deletedStorageKeys: string[] }>;

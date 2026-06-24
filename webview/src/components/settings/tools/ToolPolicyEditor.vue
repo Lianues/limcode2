@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import type {
   ToolConfigFieldRecord,
   ToolConfigRecord,
@@ -47,6 +47,10 @@ const sourceLabel = computed(() => {
   if (hasLocalOverride.value) return '当前作用域覆盖';
   const inheritedFrom = effectiveResolution.value.inheritedFrom;
   return '继承全局默认策略';
+});
+
+onMounted(() => {
+  store.ensureEditToolStatistics();
 });
 
 function nextAllowed(toolName: string, enabled: boolean): string[] {
@@ -128,6 +132,19 @@ function editModeShortLabel(tool: ToolDefinitionRecord): string | undefined {
   return editModeForTool(tool) === 'patch'
     ? '当前模式：Patch · AI 参数为 path + patch'
     : '当前模式：Hunk · AI 参数为 path + hunks';
+}
+
+function editModeStatisticsText(tool: ToolDefinitionRecord): string | undefined {
+  if (tool.name !== EDIT_TOOL_NAME) return undefined;
+  if (store.editToolStatisticsLoading && !store.editToolStatisticsLoaded) return '统计加载中...';
+  const hunk = store.editToolStatistics.modes.hunk;
+  const patch = store.editToolStatistics.modes.patch;
+  return `Hunk：${formatModeStatistics(hunk.successes, hunk.attempts, hunk.successRate)}；Patch：${formatModeStatistics(patch.successes, patch.attempts, patch.successRate)}`;
+}
+
+function formatModeStatistics(successes: number, attempts: number, successRate: number): string {
+  if (attempts <= 0) return '暂无调用';
+  return `${successes}/${attempts} 成功（${Math.round(successRate * 100)}%）`;
 }
 
 function toolIcon(tool: ToolDefinitionRecord) {
@@ -314,6 +331,7 @@ function inputNumber(event: Event): number {
                     </div>
                     <p class="tool-definition-description">{{ toolDescription(tool) }}</p>
                     <p v-if="editModeShortLabel(tool)" class="tool-definition-mode-note">{{ editModeShortLabel(tool) }}</p>
+                    <p v-if="editModeStatisticsText(tool)" class="tool-definition-mode-note is-statistics">{{ editModeStatisticsText(tool) }}</p>
                   </div>
 
                   <template v-if="allowedSet.has(tool.name)">
@@ -757,6 +775,11 @@ function inputNumber(event: Event): number {
   color: var(--vscode-foreground);
   background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-foreground) 8%);
   font-size: var(--font-size-xs);
+}
+
+.tool-definition-mode-note.is-statistics {
+  color: var(--vscode-descriptionForeground);
+  background: color-mix(in srgb, var(--vscode-editor-background) 96%, var(--vscode-foreground) 4%);
 }
 
 .tool-config-disabled-note {

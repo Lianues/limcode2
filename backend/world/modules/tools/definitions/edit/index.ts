@@ -1,4 +1,4 @@
-import { EDIT_TOOL_NAME, type EditToolMode, type EditToolStatisticsRecord } from '../../../../../../shared/protocol';
+import { EDIT_TOOL_NAME, type EditToolMode } from '../../../../../../shared/protocol';
 import type { FsStructuredEditHunk } from '../../../../../capabilities/types';
 import type { ToolConfigRecord } from '../../../../../../shared/protocol';
 import type { ToolDefinition, ToolDeps } from '../../registry';
@@ -64,8 +64,8 @@ export const editTool: ToolDefinition = {
         ? buildPatchModeRequest(path, args)
         : buildHunkModeRequest(path, args);
       const result = await deps.fs.editFile(request, { workEnvironment: ctx?.workEnvironment });
-      const statistics = await recordStatistics(deps, mode, result.success);
-      return { ok: result.success, output: { ...result, ...(statistics ? { statistics } : {}) } };
+      await recordStatistics(deps, mode, result.success);
+      return { ok: result.success, output: result };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, output: await failedOutput(deps, mode, path, message) };
@@ -159,24 +159,22 @@ function normalizeStructuredHunks(value: unknown): FsStructuredEditHunk[] {
 }
 
 async function failedOutput(deps: ToolDeps, mode: EditToolMode, path: string, error: string): Promise<Record<string, unknown>> {
-  const statistics = await recordStatistics(deps, mode, false);
+  await recordStatistics(deps, mode, false);
   return {
     kind: 'file_edit.result',
     mode,
     path,
     success: false,
     error,
-    summary: `edit(${mode}) failed: ${error}`,
-    ...(statistics ? { statistics } : {})
+    summary: `edit(${mode}) failed: ${error}`
   };
 }
 
-async function recordStatistics(deps: ToolDeps, mode: EditToolMode, success: boolean): Promise<EditToolStatisticsRecord | undefined> {
+async function recordStatistics(deps: ToolDeps, mode: EditToolMode, success: boolean): Promise<void> {
   try {
-    return await deps.storage.recordEditToolModeResult(mode, success);
+    await deps.storage.recordEditToolModeResult(mode, success);
   } catch (error) {
     console.warn('[LimCode] Failed to record edit tool mode statistics.', error);
-    return undefined;
   }
 }
 

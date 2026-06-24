@@ -290,6 +290,9 @@ export class WebviewMessageRouter {
       case BridgeMessageType.CheckpointShadowDelete:
         if (message.payload) void this.handleCheckpointShadowDelete(clientId, message.payload.storageKeys, message.id);
         break;
+      case BridgeMessageType.EditToolStatisticsGet:
+        void this.postEditToolStatistics(clientId, message.id);
+        break;
       case BridgeMessageType.CompressionCreate:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: CompressionEventType.Create, payload: message.payload });
@@ -679,6 +682,21 @@ export class WebviewMessageRouter {
       await this.postCheckpointShadowStats(clientId, correlationId);
     } catch (error) {
       this.postRequestError(clientId, BridgeMessageType.CheckpointShadowDelete, error instanceof Error ? error.message : '无法删除 shadow 仓库。', correlationId);
+    }
+  }
+
+  private async postEditToolStatistics(clientId: BridgeClientId, correlationId?: string): Promise<void> {
+    try {
+      const statistics = await this.deps.storage.loadEditToolStatistics();
+      this.deps.webview.post(clientId, {
+        id: createMessageId(),
+        type: BridgeMessageType.EditToolStatisticsSnapshot,
+        channel: 'state',
+        correlationId,
+        payload: { statistics }
+      });
+    } catch (error) {
+      this.postRequestError(clientId, BridgeMessageType.EditToolStatisticsGet, error instanceof Error ? error.message : '无法读取 edit 工具统计。', correlationId);
     }
   }
 

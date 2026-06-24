@@ -51,6 +51,7 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
     case BridgeMessageType.ToolResultReject:
     case BridgeMessageType.CheckpointDiffOpen:
       return 'command';
+    case BridgeMessageType.EditToolStatisticsGet:
     case BridgeMessageType.ClientResync:
     case BridgeMessageType.ProjectFoldersGet:
     case BridgeMessageType.RunHistoryPageGet:

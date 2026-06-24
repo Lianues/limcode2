@@ -27,7 +27,6 @@ interface FileChangeOutput {
   applied?: number;
   failed?: number;
   fallbackMode?: string;
-  statistics?: unknown;
   changedFiles?: unknown;
   files?: unknown;
 }
@@ -112,7 +111,6 @@ function fileChangeOutputSections(title: string, output: FileChangeOutput | stri
     { label: 'action', value: actionLabel(stringValue(output.action)) },
     { label: 'hunks', value: hunkCountText(output) },
     { label: 'fallback', value: stringValue(output.fallbackMode) },
-    { label: 'stats', value: editStatisticsText(output.statistics, stringValue(output.mode)) },
     { label: 'changedFiles', value: changedFilesText(output.changedFiles) }
   ]);
   const sections: ToolDisplaySection[] = rows.length > 0
@@ -244,17 +242,6 @@ function editArgs(value: unknown): EditArgs {
 function hunkCountText(output: FileChangeOutput): string | undefined {
   if (output.totalHunks === undefined && output.applied === undefined && output.failed === undefined) return undefined;
   return `${numberValue(output.applied) ?? 0}/${numberValue(output.totalHunks) ?? 0} 成功，${numberValue(output.failed) ?? 0} 失败`;
-}
-
-function editStatisticsText(value: unknown, mode: string | undefined): string | undefined {
-  const record = asRecord(value);
-  const modes = asRecord(record?.modes);
-  const stats = asRecord(mode ? modes?.[mode] : undefined);
-  const attempts = numberValue(stats?.attempts);
-  const successes = numberValue(stats?.successes);
-  const successRate = numberValue(stats?.successRate);
-  if (attempts === undefined || successes === undefined || successRate === undefined) return undefined;
-  return `${successes}/${attempts} 成功（${Math.round(successRate * 100)}%）`;
 }
 
 function parameterRows(items: Array<{ label: string; value: string | undefined }>): Array<{ label: string; value: string }> {

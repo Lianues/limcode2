@@ -187,6 +187,10 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       const paths = getPaths();
       return openShadowCheckpointDiff(paths, request);
     },
+    async loadEditToolStatistics() {
+      const paths = getPaths();
+      return loadEditToolStatistics(paths);
+    },
     async recordEditToolModeResult(mode, success) {
       const paths = getPaths();
       return recordEditToolModeResult(paths, mode, success);
@@ -336,6 +340,10 @@ function normalizeConversationLlmSettings(
 
 function editToolStatisticsUri(paths: StoragePaths): vscode.Uri {
   return vscode.Uri.joinPath(paths.settingsRootUri, 'edit-tool-statistics.json');
+}
+
+async function loadEditToolStatistics(paths: StoragePaths): Promise<EditToolStatisticsRecord> {
+  return normalizeEditToolStatistics(await readJson<Partial<EditToolStatisticsRecord>>(editToolStatisticsUri(paths)));
 }
 
 async function recordEditToolModeResult(paths: StoragePaths, mode: EditToolMode, success: boolean): Promise<EditToolStatisticsRecord> {

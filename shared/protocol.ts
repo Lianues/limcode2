@@ -104,6 +104,8 @@ export enum BridgeMessageType {
   ToolResultReject = 'tool.result.reject',
   CheckpointDiffOpen = 'checkpoint.diff.open',
   CheckpointDiffOpenResult = 'checkpoint.diff.open.result',
+  EditToolStatisticsGet = 'editTool.statistics.get',
+  EditToolStatisticsSnapshot = 'editTool.statistics.snapshot',
   ClientResync = 'client.resync',
   ClientSnapshot = 'state.snapshot',
   ClientPatch = 'state.patch',
@@ -1042,6 +1044,8 @@ export interface CheckpointDiffOpenResultPayload {
   status: 'opened' | 'failed';
   message: string;
 }
+
+export interface EditToolStatisticsSnapshotPayload { statistics: EditToolStatisticsRecord }
 
 export interface CheckpointPolicyScopeLinkRecord {
   id: string;
@@ -2057,6 +2061,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ToolResultSubmit, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ToolResultReject, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointDiffOpen, CheckpointDiffOpenPayload>
+  | BridgeEnvelope<BridgeMessageType.EditToolStatisticsGet, undefined>
   | BridgeEnvelope<BridgeMessageType.ClientResync, ClientResyncPayload>
   | BridgeEnvelope<BridgeMessageType.RunHistoryPageGet, ConversationRunHistoryPageRequest>
   | BridgeEnvelope<BridgeMessageType.RunHistoryDetailGet, ConversationRunDetailRequest>
@@ -2105,6 +2110,7 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.CheckpointShadowStatsSnapshot, CheckpointShadowStatsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointRestoreResult, CheckpointRestoreResultPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointDiffOpenResult, CheckpointDiffOpenResultPayload>
+  | BridgeEnvelope<BridgeMessageType.EditToolStatisticsSnapshot, EditToolStatisticsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsSnapshot, GlobalSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsSnapshot, ConversationSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ProjectFoldersSnapshot, ProjectFoldersSnapshotPayload>;

@@ -34,6 +34,7 @@ export const writeTool: ToolDefinition = {
     },
     metadata: {
       category: 'filesystem',
+      scope: 'file',
       riskLevel: 'write',
       readonly: false,
       defaultEnabled: true,

@@ -23,6 +23,9 @@ export const CONVERSATION_HISTORY_ROOT_DIR = 'conversation-history';
 export const PROJECT_CONTEXTS_ROOT_DIR = 'project-contexts';
 export const CONVERSATION_PROJECT_LINKS_ROOT_DIR = 'conversation-project-links';
 export const RUN_HISTORY_ROOT_DIR = 'run-history';
+export const AGENT_ANSWERS_ROOT_DIR = 'agent-answers';
+export const AGENT_ANSWER_SUBMISSION_LINKS_ROOT_DIR = 'agent-answer-submission-links';
+export const AGENT_ANSWER_TARGET_LINKS_ROOT_DIR = 'agent-answer-target-links';
 export const SETTINGS_ROOT_DIR = 'settings';
 export const WORK_ENVIRONMENTS_ROOT_DIR = 'work-environments';
 export const CONVERSATION_WORK_ENVIRONMENT_LINKS_ROOT_DIR = 'conversation-work-environment-links';
@@ -68,6 +71,9 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
   PROJECT_CONTEXTS_ROOT_DIR,
   CONVERSATION_PROJECT_LINKS_ROOT_DIR,
   RUN_HISTORY_ROOT_DIR,
+  AGENT_ANSWERS_ROOT_DIR,
+  AGENT_ANSWER_SUBMISSION_LINKS_ROOT_DIR,
+  AGENT_ANSWER_TARGET_LINKS_ROOT_DIR,
   WORK_ENVIRONMENTS_ROOT_DIR,
   CONVERSATION_WORK_ENVIRONMENT_LINKS_ROOT_DIR,
   RUN_WORK_ENVIRONMENT_LINKS_ROOT_DIR,

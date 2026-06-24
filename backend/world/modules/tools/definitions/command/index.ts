@@ -51,6 +51,7 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
       },
       metadata: {
         category: 'command',
+        scope: 'command',
         riskLevel: 'command',
         readonly: false,
         defaultEnabled: true,

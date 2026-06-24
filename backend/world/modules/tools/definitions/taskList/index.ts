@@ -85,6 +85,7 @@ export const taskListTool: ToolDefinition = {
     },
     metadata: {
       category: 'general',
+      scope: 'task',
       riskLevel: 'read',
       readonly: true,
       defaultEnabled: true,

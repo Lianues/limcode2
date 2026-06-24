@@ -262,6 +262,7 @@ export type ToolExecutionKind = 'runtime' | 'agentRun';
 export type ToolSchedulingMode = 'parallel' | 'serial';
 export type ToolRiskLevel = 'read' | 'write' | 'command' | 'agent';
 export type ToolDefinitionCategory = 'filesystem' | 'command' | 'agent' | 'general';
+export type ToolDomainScope = 'agent' | 'file' | 'command' | 'conversation' | 'workEnvironment' | 'task' | 'general';
 export type ToolConfigFieldType = 'string' | 'number' | 'boolean' | 'stringList' | 'globList' | 'enum' | 'json';
 export type ToolConfigValue = string | number | boolean | null | string[] | number[] | boolean[] | unknown[] | Record<string, unknown>;
 export type ToolConfigRecord = Record<string, ToolConfigValue>;
@@ -290,6 +291,8 @@ export interface ToolConfigSchemaRecord {
 
 export interface ToolDefinitionMetadataRecord {
   category?: ToolDefinitionCategory;
+  /** 工具领域分类，不是 ToolPolicyScopeKind。用于设置页分组、筛选与隐藏显示。 */
+  scope?: ToolDomainScope;
   riskLevel?: ToolRiskLevel;
   readonly?: boolean;
   defaultEnabled?: boolean;
@@ -314,6 +317,8 @@ export const TRANSFER_FILES_TOOL_NAME = 'transfer_files';
 export const READ_TOOL_NAME = 'read';
 export const EDIT_TOOL_NAME = 'edit';
 export const WRITE_TOOL_NAME = 'write';
+export const SUBMIT_AGENT_ANSWER_TOOL_NAME = 'submit_agent_answer';
+export const READ_AGENT_ANSWER_TOOL_NAME = 'read_agent_answer';
 
 export type EditToolMode = 'patch' | 'hunk';
 
@@ -1334,6 +1339,7 @@ export interface AgentRunSourceLinkRecord {
   sourceMessageId?: string;
   sourceToolCallId?: string;
   sourceRunId?: string;
+  answerBridgeId?: string;
 }
 
 export interface AgentRunTargetLinkRecord {
@@ -1446,6 +1452,36 @@ export interface AgentRunInputRevisionRecord {
   runId: string;
   conversationId: string;
   revisionId: string;
+}
+
+export interface AgentAnswerRecord {
+  id: string;
+  title: string;
+  content: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AgentAnswerSubmissionLinkRecord {
+  id: string;
+  answerId: string;
+  submitterRunId?: string;
+  submitterAgentId?: string;
+  submitterConversationId?: string;
+  submitterToolCallId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AgentAnswerTargetLinkRecord {
+  id: string;
+  answerId: string;
+  targetRunId?: string;
+  targetAgentId?: string;
+  targetConversationId?: string;
+  sourceToolCallId?: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export type CompressionBlockStatus = 'pending' | 'running' | 'complete' | 'error' | 'stale' | 'disabled';
@@ -1604,6 +1640,9 @@ export interface ClientStateRecordByTable {
   runDeliveryPolicyLinks: RunDeliveryPolicyLinkRecord;
   runEditPolicyLinks: RunEditPolicyLinkRecord;
   agentRunInputRevisions: AgentRunInputRevisionRecord;
+  agentAnswers: AgentAnswerRecord;
+  agentAnswerSubmissionLinks: AgentAnswerSubmissionLinkRecord;
+  agentAnswerTargetLinks: AgentAnswerTargetLinkRecord;
 }
 
 export type ClientStateTableKey = keyof ClientStateRecordByTable;

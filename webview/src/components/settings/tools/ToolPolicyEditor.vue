@@ -5,6 +5,7 @@ import type {
   ToolConfigRecord,
   ToolConfigValue,
   ToolDefinitionRecord,
+  ToolDomainScope,
   ToolPolicyScopeKind,
   ToolPolicyToolConfigRecord
 } from '@shared/protocol';
@@ -35,12 +36,18 @@ const scroller = ref<HTMLElement | null>(null);
 const expandedToolNames = ref<string[]>([]);
 
 const tools = computed(() => store.toolDefinitions);
+type ToolScopeFilter = 'all' | ToolDomainScope;
+const selectedToolScope = ref<ToolScopeFilter>('all');
 const localResolution = computed(() => store.localPolicyFor(props.scopeKind, props.scopeId));
 const effectiveResolution = computed(() => store.effectivePolicyFor(props.scopeKind, props.scopeId));
 const effectivePolicy = computed(() => effectiveResolution.value.policy);
 const hasLocalOverride = computed(() => props.scopeKind === 'global' || !!localResolution.value.policy);
 const allowedSet = computed(() => new Set(effectivePolicy.value?.allowedTools ?? []));
 const enabledCount = computed(() => tools.value.filter((tool) => allowedSet.value.has(tool.name)).length);
+const visibleTools = computed(() => selectedToolScope.value === 'all'
+  ? tools.value
+  : tools.value.filter((tool) => toolScope(tool) === selectedToolScope.value));
+const visibleEnabledCount = computed(() => visibleTools.value.filter((tool) => allowedSet.value.has(tool.name)).length);
 const canRestoreInheritance = computed(() => props.scopeKind !== 'global' && hasLocalOverride.value && !props.readonly);
 const sourceLabel = computed(() => {
   if (props.scopeKind === 'global') return '全局默认策略';
@@ -48,6 +55,21 @@ const sourceLabel = computed(() => {
   const inheritedFrom = effectiveResolution.value.inheritedFrom;
   return '继承全局默认策略';
 });
+const toolScopeOptions = computed<SettingsDropdownOption[]>(() => [
+  { value: 'all', label: '全部领域', description: `${tools.value.length} 个工具` },
+  ...TOOL_SCOPE_ORDER.map((scope) => {
+    const count = tools.value.filter((tool) => toolScope(tool) === scope).length;
+    return { value: scope, label: scopeLabel(scope), description: `${count} 个工具`, disabled: count === 0 };
+  })
+]);
+
+const TOOL_SCOPE_ORDER: ToolDomainScope[] = ['agent', 'file', 'command', 'conversation', 'workEnvironment', 'task', 'general'];
+
+function updateSelectedToolScope(value: string): void {
+  selectedToolScope.value = value === 'all' || TOOL_SCOPE_ORDER.includes(value as ToolDomainScope)
+    ? value as ToolScopeFilter
+    : 'all';
+}
 
 onMounted(() => {
   store.ensureEditToolStatistics();
@@ -102,6 +124,29 @@ function riskLabel(tool: ToolDefinitionRecord): string {
     case 'command': return '命令';
     case 'agent': return 'Agent';
     default: return '未分类';
+  }
+}
+
+function toolScope(tool: ToolDefinitionRecord): ToolDomainScope {
+  if (tool.metadata?.scope) return tool.metadata.scope;
+  switch (tool.metadata?.category) {
+    case 'filesystem': return 'file';
+    case 'command': return 'command';
+    case 'agent': return 'agent';
+    case 'general':
+    default: return 'general';
+  }
+}
+
+function scopeLabel(scope: ToolDomainScope): string {
+  switch (scope) {
+    case 'agent': return 'Agent';
+    case 'file': return '文件';
+    case 'command': return '命令';
+    case 'conversation': return '对话';
+    case 'workEnvironment': return '工作环境';
+    case 'task': return '任务';
+    case 'general': return '通用';
   }
 }
 
@@ -276,10 +321,20 @@ function inputNumber(event: Event): number {
       <div class="tool-policy-summary" aria-live="polite">
         <span>{{ sourceLabel }}</span>
         <span>{{ enabledCount }} / {{ tools.length }} 已启用</span>
+        <span v-if="selectedToolScope !== 'all'">当前显示 {{ visibleEnabledCount }} / {{ visibleTools.length }} 已启用</span>
       </div>
     </header>
 
     <div class="tool-policy-actions">
+      <div class="tool-policy-filter">
+        <span>工具领域</span>
+        <SettingsDropdown
+          :model-value="selectedToolScope"
+          :options="toolScopeOptions"
+          title="筛选工具领域"
+          @update:model-value="updateSelectedToolScope"
+        />
+      </div>
       <button type="button" :disabled="readonly || tools.length === 0" @click="enableAll">启用全部</button>
       <button type="button" class="secondary" :disabled="readonly || tools.length === 0" @click="disableAll">禁用全部</button>
       <button type="button" class="secondary" :disabled="!canRestoreInheritance" @click="restoreInheritance">恢复继承</button>
@@ -288,8 +343,9 @@ function inputNumber(event: Event): number {
     <div class="tool-list-shell">
       <div ref="scroller" class="tool-list-scroll">
         <div v-if="tools.length === 0" class="tool-list-empty">等待后端返回工具定义...</div>
+        <div v-else-if="visibleTools.length === 0" class="tool-list-empty">当前工具领域没有可配置工具。</div>
         <template v-else>
-          <article v-for="tool in tools" :key="tool.name" class="tool-item" :class="{ 'is-enabled': allowedSet.has(tool.name) }">
+          <article v-for="tool in visibleTools" :key="tool.name" class="tool-item" :class="{ 'is-enabled': allowedSet.has(tool.name) }">
             <div class="tool-item-header">
               <button type="button" class="tool-item-main" :disabled="readonly" @click="toggleTool(tool)">
                 <span class="tool-toggle" aria-hidden="true"></span>
@@ -299,6 +355,7 @@ function inputNumber(event: Event): number {
                 <span class="tool-main">
                   <span class="tool-name-row">
                     <span class="tool-name">{{ tool.name }}</span>
+                    <span class="tool-pill">{{ scopeLabel(toolScope(tool)) }}</span>
                     <span class="tool-pill">{{ executionLabel(tool) }}</span>
                     <span class="tool-pill">{{ riskLabel(tool) }}</span>
                   </span>
@@ -504,6 +561,21 @@ function inputNumber(event: Event): number {
   display: flex;
   gap: var(--space-2);
   flex-wrap: wrap;
+  align-items: center;
+}
+
+.tool-policy-filter {
+  min-width: 220px;
+  display: grid;
+  grid-template-columns: auto minmax(150px, 1fr);
+  gap: var(--space-2);
+  align-items: center;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+}
+
+.tool-policy-filter :deep(.settings-dropdown) {
+  min-width: 150px;
 }
 
 .tool-policy-actions button {

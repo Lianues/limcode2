@@ -1,6 +1,9 @@
 import * as vscode from 'vscode';
 import type {
   AgentConversationLinkRecord,
+  AgentAnswerRecord,
+  AgentAnswerSubmissionLinkRecord,
+  AgentAnswerTargetLinkRecord,
   AgentRecord,
   CheckpointPolicyRecord,
   CheckpointPolicyScopeLinkRecord,
@@ -192,7 +195,10 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
     conversationBranchLinks,
     conversationOriginLinks,
     agentConversationLinks,
-    conversationAgentSelections
+    conversationAgentSelections,
+    agentAnswers,
+    agentAnswerSubmissionLinks,
+    agentAnswerTargetLinks
   ] = await Promise.all([
     loadSkeletonRecords<AgentRecord>('agents', [paths.agentsRootUri, paths.agentsIndexUri], 'agent'),
     loadSkeletonRecords<ModeRecord>('modes', [paths.modesRootUri, paths.modesIndexUri], 'mode'),
@@ -213,7 +219,10 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
     loadSkeletonRecords<ConversationBranchLinkRecord>('conversationBranchLinks', subStore(paths.conversationsRootUri, CONVERSATION_BRANCH_LINKS_DIR), 'link'),
     loadSkeletonRecords<ConversationOriginLinkRecord>('conversationOriginLinks', subStore(paths.conversationsRootUri, CONVERSATION_ORIGIN_LINKS_DIR), 'link'),
     loadSkeletonRecords<AgentConversationLinkRecord>('agentConversationLinks', [paths.linksRootUri, paths.linksIndexUri], 'link'),
-    loadSkeletonRecords<ConversationAgentSelectionRecord>('conversationAgentSelections', [paths.conversationAgentSelectionsRootUri, paths.conversationAgentSelectionsIndexUri], 'selection')
+    loadSkeletonRecords<ConversationAgentSelectionRecord>('conversationAgentSelections', [paths.conversationAgentSelectionsRootUri, paths.conversationAgentSelectionsIndexUri], 'selection'),
+    loadSkeletonRecords<AgentAnswerRecord>('agentAnswers', [paths.agentAnswersRootUri, paths.agentAnswersIndexUri], 'answer'),
+    loadSkeletonRecords<AgentAnswerSubmissionLinkRecord>('agentAnswerSubmissionLinks', [paths.agentAnswerSubmissionLinksRootUri, paths.agentAnswerSubmissionLinksIndexUri], 'link'),
+    loadSkeletonRecords<AgentAnswerTargetLinkRecord>('agentAnswerTargetLinks', [paths.agentAnswerTargetLinksRootUri, paths.agentAnswerTargetLinksIndexUri], 'link')
   ]);
 
   state.agents = agents;
@@ -236,6 +245,9 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
   state.conversationOriginLinks = conversationOriginLinks;
   state.agentConversationLinks = agentConversationLinks;
   state.conversationAgentSelections = conversationAgentSelections;
+  state.agentAnswers = agentAnswers;
+  state.agentAnswerSubmissionLinks = agentAnswerSubmissionLinks;
+  state.agentAnswerTargetLinks = agentAnswerTargetLinks;
 }
 
 async function loadDeferredSkeletonRecords(paths: StoragePaths, state: ClientState): Promise<void> {
@@ -390,6 +402,9 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
     saveRecords(...subStore(paths.conversationsRootUri, CONVERSATION_ORIGIN_LINKS_DIR), state.conversationOriginLinks, 'link'),
     saveRecords(paths.linksRootUri, paths.linksIndexUri, state.agentConversationLinks, 'link'),
     saveRecords(paths.conversationAgentSelectionsRootUri, paths.conversationAgentSelectionsIndexUri, state.conversationAgentSelections, 'selection'),
+    saveRecords(paths.agentAnswersRootUri, paths.agentAnswersIndexUri, state.agentAnswers, 'answer', (record) => record.title || record.id),
+    saveRecords(paths.agentAnswerSubmissionLinksRootUri, paths.agentAnswerSubmissionLinksIndexUri, state.agentAnswerSubmissionLinks, 'link'),
+    saveRecords(paths.agentAnswerTargetLinksRootUri, paths.agentAnswerTargetLinksIndexUri, state.agentAnswerTargetLinks, 'link'),
     saveRecords(paths.projectContextsRootUri, paths.projectContextsIndexUri, state.projectContexts, 'projectContext', (record) => record.name || record.id),
     saveRecords(paths.conversationProjectLinksRootUri, paths.conversationProjectLinksIndexUri, state.conversationProjectLinks, 'link'),
     saveRecords(paths.workEnvironmentsRootUri, paths.workEnvironmentsIndexUri, state.workEnvironments, 'workEnvironment', (record) => record.name || record.id),

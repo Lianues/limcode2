@@ -129,7 +129,8 @@ function buildSourceLinkRecord(world: WorldReader, entity: number): AgentRunSour
     ...(link.sourceConversation !== undefined ? { sourceConversationId: world.get(link.sourceConversation, Conversation)?.id } : {}),
     ...(link.sourceMessage !== undefined ? { sourceMessageId: world.get(link.sourceMessage, Message)?.id } : {}),
     ...(link.sourceToolCall !== undefined ? { sourceToolCallId: world.get(link.sourceToolCall, ToolCall)?.id } : {}),
-    ...(link.sourceRun !== undefined ? { sourceRunId: world.get(link.sourceRun, AgentRun)?.id } : {})
+    ...(link.sourceRun !== undefined ? { sourceRunId: world.get(link.sourceRun, AgentRun)?.id } : {}),
+    ...(link.answerBridgeId ? { answerBridgeId: link.answerBridgeId } : {})
   };
 }
 

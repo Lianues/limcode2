@@ -15,7 +15,9 @@ export const runAgentTool: ToolDefinition = {
     name: 'run_agent',
     description: `启动一个 AgentRun，让指定 Agent 或指定类型 Agent 执行任务。所有 Agent 都是平等的一等对象；本工具只是创建一次新的 AgentRun，不引入子 Agent / 委派 Agent 的特殊执行核心。
 
-可通过 agent.id/agentId 指定已有 Agent；通过 agent.type/type 按蓝图选择或创建 Agent；通过 conversation 决定 same/fresh/reuse/fork/branch；通过 mode 覆盖 systemPrompt/modelProfile/toolPolicy/context/delivery/edit；通过 delivery 决定结果如何回流。默认同步 tool_response，run_in_background=true 时默认 notification。`,
+可通过 agent.id/agentId 指定已有 Agent；通过 agent.type/type 按蓝图选择或创建 Agent；通过 conversation 决定 same/fresh/reuse/fork/branch；通过 mode 覆盖 systemPrompt/modelProfile/toolPolicy/context/delivery/edit；通过 delivery 决定结果如何回流。
+
+每次调用都会分配 answerBridgeId。目标 Agent 可通过 submit_agent_answer 提交正文；同步模式下 run_agent 会直接返回已提交正文，异步模式下调用方可稍后用 read_agent_answer({ answerBridgeId }) 读取。默认由 AI 自己选择同步/异步。`,
     parameters: {
       type: 'object',
       properties: {
@@ -112,13 +114,32 @@ export const runAgentTool: ToolDefinition = {
     },
     metadata: {
       category: 'agent',
+      scope: 'agent',
       riskLevel: 'agent',
       readonly: false,
       defaultEnabled: true,
       checkpoint: { before: true, after: true }
-    }
+    },
+    configSchema: {
+      fields: [
+        {
+          key: 'launchMode',
+          label: '运行模式',
+          type: 'enum',
+          description: 'auto=让 AI 根据任务选择同步/异步；sync=强制同步等待并直接返回子 Agent 正文；async=强制异步启动，稍后用 answerBridgeId 读取。',
+          options: [
+            { label: '让 AI 自己选择', value: 'auto', description: '默认。AI 可用 run_in_background/delivery 自行决定。' },
+            { label: '同步模式', value: 'sync', description: '强制 tool_response，同步等待完成并返回正文。' },
+            { label: '异步模式', value: 'async', description: '强制后台启动，返回 answerBridgeId 后稍后读取。' }
+          ],
+          defaultValue: 'auto'
+        }
+      ]
+    },
+    defaultConfig: { launchMode: 'auto' }
   },
-  scheduling: resolveRunAgentScheduling
+  scheduling: resolveRunAgentScheduling,
+  summary: summarizeRunAgentToolCall
 };
 
 interface RunAgentSchedulingArgs {
@@ -126,6 +147,21 @@ interface RunAgentSchedulingArgs {
   scheduling?: string;
   delivery?: { mode?: string };
   mode?: { deliveryPolicy?: { mode?: string } };
+}
+
+function summarizeRunAgentToolCall(rawArgs: unknown): string | undefined {
+  const args = (rawArgs ?? {}) as RunAgentSchedulingArgs & { prompt?: unknown; agent?: { type?: unknown; id?: unknown }; type?: unknown; agentId?: unknown };
+  const prompt = typeof args.prompt === 'string' ? normalizeSummaryText(args.prompt) : '';
+  const target = typeof args.agent?.type === 'string' && args.agent.type.trim()
+    ? args.agent.type.trim()
+    : typeof args.type === 'string' && args.type.trim()
+      ? args.type.trim()
+      : typeof args.agent?.id === 'string' && args.agent.id.trim()
+        ? args.agent.id.trim()
+        : typeof args.agentId === 'string' && args.agentId.trim()
+          ? args.agentId.trim()
+          : 'Agent';
+  return prompt ? `运行 ${target} · ${truncateSummary(prompt, 96)}` : `运行 ${target}`;
 }
 
 function resolveRunAgentScheduling(rawArgs: unknown): { mode: 'parallel' | 'serial'; reason: string } {
@@ -150,4 +186,12 @@ function isBackgroundRunAgent(args: RunAgentSchedulingArgs): boolean {
   return deliveryMode === 'notification'
     || deliveryMode === 'silent'
     || deliveryMode === 'append_to_source_conversation';
+}
+
+function normalizeSummaryText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function truncateSummary(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, Math.max(0, maxLength - 1))}…` : value;
 }

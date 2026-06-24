@@ -49,6 +49,7 @@ export interface AgentRunSourceLinkData {
   sourceMessage?: Entity;
   sourceToolCall?: Entity;
   sourceRun?: Entity;
+  answerBridgeId?: string;
   createdAt: number;
   updatedAt: number;
 }

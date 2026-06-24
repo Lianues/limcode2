@@ -31,6 +31,7 @@ import {
 import { ModeBundle, selectGlobalModeForConversation } from '../../mode/bundles';
 import {
   AgentRun,
+  AgentRunSourceLink,
   AgentRunTargetLink,
   RunContextPolicy,
   RunContextPolicyLink,
@@ -48,7 +49,10 @@ import {
   ToolCallRunLink
 } from '../../agentRun/components';
 import { AgentRunBundle, spawnAgentRun } from '../../agentRun/bundles';
-import { activeToolPolicyForRun, runForToolCall, runTarget, toolCallEntityById } from '../../agentRun/queries';
+import { activeToolPolicyForRun, runForToolCall, runSource, runTarget, toolCallEntityById } from '../../agentRun/queries';
+import { AgentAnswerBundle, spawnAgentAnswer } from '../../agentAnswer/bundles';
+import { AgentAnswer, AgentAnswerSubmissionLink, AgentAnswerTargetLink } from '../../agentAnswer/components';
+import { agentAnswerById } from '../../agentAnswer/queries';
 import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
 import { ToolCall, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolStateData } from '../components';
 import { ToolEventType } from '../events';
@@ -83,8 +87,11 @@ import {
   progressRecord
 } from '../scheduling';
 import {
+  createMessageId,
   SWITCH_WORK_ENVIRONMENT_TOOL_NAME,
   TRANSFER_FILES_TOOL_NAME,
+  READ_AGENT_ANSWER_TOOL_NAME,
+  SUBMIT_AGENT_ANSWER_TOOL_NAME,
   type AgentRunStatus,
   type ContextHistoryMode,
   type ConversationPolicyMode,
@@ -118,8 +125,12 @@ const QueuedToolCallsQuery = defineQuery({
     ToolPolicy,
     ToolPolicyScopeLink,
     AgentRun,
+    AgentRunSourceLink,
     ToolCallRunLink,
     AgentRunTargetLink,
+    AgentAnswer,
+    AgentAnswerSubmissionLink,
+    AgentAnswerTargetLink,
     ToolResultConsumed,
     ProjectContext,
     ConversationProjectLink,
@@ -129,7 +140,7 @@ const QueuedToolCallsQuery = defineQuery({
     ConversationWorkEnvironmentLink,
     RunWorkEnvironmentLink
   ],
-  write: [ToolState, AgentRun],
+  write: [ToolState, AgentRun, AgentAnswer],
   add: [InFlight],
   mutationMode: 'update',
   role: 'work'
@@ -140,7 +151,7 @@ export const ToolDispatchSystem = defineSystem({
   access: {
     queries: [QueuedToolCallsQuery],
     resources: { read: [AgentBlueprintsKey, ToolSchemasKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey] },
-    bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentFromBlueprintBundle, ModeBundle, ConversationProjectLinkBundle, WorkEnvironmentBundle],
+    bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentAnswerBundle, AgentFromBlueprintBundle, ModeBundle, ConversationProjectLinkBundle, WorkEnvironmentBundle],
     events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested], emit: [CheckpointEventType.Requested] },
     effects: { emit: ['tool.run'] }
   },
@@ -254,6 +265,14 @@ function isRunReadyForToolExecution(authorization: Extract<AuthorizationResult, 
 }
 
 function dispatchToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
+  if (call.name === SUBMIT_AGENT_ANSWER_TOOL_NAME) {
+    executeSubmitAgentAnswerTool(world, cmd, entity, call, state, authorization);
+    return;
+  }
+  if (call.name === READ_AGENT_ANSWER_TOOL_NAME) {
+    executeReadAgentAnswerTool(world, cmd, entity, call, state, authorization);
+    return;
+  }
   if (call.name === SWITCH_WORK_ENVIRONMENT_TOOL_NAME) {
     executeSwitchWorkEnvironmentTool(world, cmd, entity, call, state, authorization);
     return;
@@ -307,6 +326,143 @@ function executeRuntimeToolCall(world: WorldReader, cmd: CommandSink, entity: En
   });
   cmd.add(entity, InFlight, { kind: 'tool', startedAt: now });
 }
+
+interface SubmitAgentAnswerArgs {
+  answerBridgeId?: string;
+  title?: string;
+  content?: string;
+}
+
+interface ReadAgentAnswerArgs {
+  answerBridgeId?: string;
+}
+
+function executeSubmitAgentAnswerTool(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
+  let args: SubmitAgentAnswerArgs = {};
+  try {
+    args = call.argsJson ? JSON.parse(call.argsJson) as SubmitAgentAnswerArgs : {};
+  } catch (error) {
+    rejectToolCall(cmd, entity, call, state, `submit_agent_answer 参数不是合法 JSON: ${String(error)}`);
+    return;
+  }
+
+  const title = args.title?.trim();
+  const content = typeof args.content === 'string' ? args.content : '';
+  if (!title) {
+    rejectToolCall(cmd, entity, call, state, 'submit_agent_answer 缺少必填 title。');
+    return;
+  }
+  if (!content.trim()) {
+    rejectToolCall(cmd, entity, call, state, 'submit_agent_answer 缺少必填 content。');
+    return;
+  }
+
+  const explicitAnswerBridgeId = args.answerBridgeId?.trim();
+  const source = runSource(world, authorization.run);
+  const answerBridgeId = explicitAnswerBridgeId || source?.answerBridgeId?.trim();
+  if (!answerBridgeId) {
+    rejectToolCall(cmd, entity, call, state, 'submit_agent_answer 缺少 answerBridgeId，且当前 AgentRun 没有默认 answerBridgeId。');
+    return;
+  }
+
+  const submitterTarget = runTarget(world, authorization.run);
+  const parentTarget = source?.sourceRun !== undefined ? runTarget(world, source.sourceRun) : undefined;
+  const targetAgent = source?.sourceAgent ?? parentTarget?.agent;
+  const targetConversation = source?.sourceConversation ?? parentTarget?.conversation;
+
+  if (answerBridgeId) {
+    const existingAnswer = agentAnswerById(world, answerBridgeId);
+    const existingAnswerData = existingAnswer !== undefined ? world.get(existingAnswer, AgentAnswer) : undefined;
+    if (existingAnswer !== undefined && existingAnswerData) {
+      const now = Date.now();
+      cmd.add(existingAnswer, AgentAnswer, { ...existingAnswerData, title, content, updatedAt: now });
+      completeInlineToolCallSuccess(cmd, entity, call, state, { ok: true, answerBridgeId, updated: true });
+      return;
+    }
+  }
+
+  const spawned = spawnAgentAnswer(cmd, {
+    id: answerBridgeId,
+    title,
+    content,
+    submission: {
+      submitterRun: authorization.run,
+      submitterRunId: authorization.runId,
+      ...(submitterTarget?.agent !== undefined ? { submitterAgent: submitterTarget.agent } : {}),
+      ...optionalRecordId('submitterAgentId', submitterTarget?.agent !== undefined ? world.get(submitterTarget.agent, Agent)?.id : undefined),
+      ...(submitterTarget?.conversation !== undefined ? { submitterConversation: submitterTarget.conversation } : {}),
+      ...optionalRecordId('submitterConversationId', submitterTarget?.conversation !== undefined ? world.get(submitterTarget.conversation, Conversation)?.id : undefined),
+      submitterToolCall: entity,
+      submitterToolCallId: call.id
+    },
+    target: {
+      ...(source?.sourceRun !== undefined ? { targetRun: source.sourceRun } : {}),
+      ...optionalRecordId('targetRunId', source?.sourceRun !== undefined ? world.get(source.sourceRun, AgentRun)?.id : undefined),
+      ...(targetAgent !== undefined ? { targetAgent } : {}),
+      ...optionalRecordId('targetAgentId', targetAgent !== undefined ? world.get(targetAgent, Agent)?.id : undefined),
+      ...(targetConversation !== undefined ? { targetConversation } : {}),
+      ...optionalRecordId('targetConversationId', targetConversation !== undefined ? world.get(targetConversation, Conversation)?.id : undefined),
+      ...(source?.sourceToolCall !== undefined ? { sourceToolCall: source.sourceToolCall } : {}),
+      ...optionalRecordId('sourceToolCallId', source?.sourceToolCall !== undefined ? world.get(source.sourceToolCall, ToolCall)?.id : undefined)
+    }
+  });
+
+  completeInlineToolCallSuccess(cmd, entity, call, state, { ok: true, answerBridgeId: spawned.id });
+}
+
+function executeReadAgentAnswerTool(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, _authorization: Extract<AuthorizationResult, { ok: true }>): void {
+  let args: ReadAgentAnswerArgs = {};
+  try {
+    args = call.argsJson ? JSON.parse(call.argsJson) as ReadAgentAnswerArgs : {};
+  } catch (error) {
+    rejectToolCall(cmd, entity, call, state, `read_agent_answer 参数不是合法 JSON: ${String(error)}`);
+    return;
+  }
+
+  const answerBridgeId = args.answerBridgeId?.trim();
+  if (!answerBridgeId) {
+    rejectToolCall(cmd, entity, call, state, 'read_agent_answer 缺少必填 answerBridgeId。');
+    return;
+  }
+
+  const answerEntity = agentAnswerById(world, answerBridgeId);
+  const answer = answerEntity !== undefined ? world.get(answerEntity, AgentAnswer) : undefined;
+  if (answerEntity === undefined || !answer) {
+    completeInlineToolCallSuccess(cmd, entity, call, state, { ok: false, answerBridgeId, error: `AgentAnswer not found: ${answerBridgeId}` });
+    return;
+  }
+
+  completeInlineToolCallSuccess(cmd, entity, call, state, {
+    ok: true,
+    answerBridgeId: answer.id,
+    title: answer.title,
+    content: answer.content
+  });
+}
+
+function optionalRecordId<TKey extends string>(key: TKey, value: string | undefined): { [K in TKey]?: string } {
+  const id = value?.trim();
+  return id ? { [key]: id } as { [K in TKey]?: string } : {};
+}
+
+function completeInlineToolCallSuccess(cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, result: unknown): void {
+  const started = startInlineToolExecution(cmd, entity, call, state);
+  const now = Date.now();
+  const durationMs = Math.max(0, now - started.startedAt);
+  cmd.add(entity, ToolState, transitionToolState(started.state, 'success', { result, durationMs }, now));
+  spawnToolCallEvent(cmd, {
+    toolCall: entity,
+    toolCallId: call.id,
+    kind: 'completed',
+    status: 'success',
+    at: now,
+    elapsedMs: Math.max(0, now - call.createdAt),
+    durationMs,
+    payload: result
+  });
+}
+
+
 
 interface SwitchWorkEnvironmentArgs {
   workEnvironmentId?: string;
@@ -420,6 +576,8 @@ interface RunAgentArgs {
     editPolicy?: { onSourceEdited?: string; onNewUserMessageWhileRunning?: string };
   };
 }
+
+type RunAgentLaunchMode = 'auto' | 'sync' | 'async';
 
 interface ResolvedConversation {
   conversation: Entity;
@@ -583,11 +741,23 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
   const fullPrompt = args.context?.trim()
     ? `Context:\n${args.context.trim()}\n\nTask:\n${prompt}`
     : prompt;
-  const inputMessage = spawnUserMessage(cmd, resolved.value.conversation, fullPrompt);
+  const answerBridgeId = `agent-answer:${createMessageId()}`;
+  const promptWithAnswerBridge = `${fullPrompt}\n\n[Agent answer bridge]\n本次任务已分配默认 answerBridgeId：${answerBridgeId}。当你需要把阶段性结论或最终正文提交给来源 Agent 时，请调用 submit_agent_answer({ title, content })，未传 answerBridgeId 时会自动使用这个 answerBridgeId；如果用户要求提交到其它 answerBridgeId，可显式传 submit_agent_answer({ answerBridgeId, title, content })。最终自然语言回复可以保持简短。`;
+  const inputMessage = spawnUserMessage(cmd, resolved.value.conversation, promptWithAnswerBridge);
   const linkedDeliveryPolicy = args.mode?.deliveryPolicyId ? findByRecordId<RunDeliveryPolicyData>(world, RunDeliveryPolicy, args.mode.deliveryPolicyId) : undefined;
   const launchDeliveryMode = args.delivery?.mode ?? args.mode?.deliveryPolicy?.mode ?? (linkedDeliveryPolicy !== undefined ? world.get(linkedDeliveryPolicy, RunDeliveryPolicy)?.mode : undefined);
-  const background = args.run_in_background === true || isAsyncDeliveryMode(launchDeliveryMode);
-  const baseDeliveryPolicy = resolveDeliveryPolicy(args, policyDefaults.deliveryPolicy, background, linkedDeliveryPolicy !== undefined ? world.get(linkedDeliveryPolicy, RunDeliveryPolicy) : undefined);
+  const launchMode = normalizeRunAgentLaunchMode(effectiveToolConfig(world, authorization.policy, call.name)?.launchMode);
+  const background = launchMode === 'async'
+    ? true
+    : launchMode === 'sync'
+      ? false
+      : args.run_in_background === true || isAsyncDeliveryMode(launchDeliveryMode);
+  let baseDeliveryPolicy = resolveDeliveryPolicy(args, policyDefaults.deliveryPolicy, background, linkedDeliveryPolicy !== undefined ? world.get(linkedDeliveryPolicy, RunDeliveryPolicy) : undefined);
+  if (launchMode === 'sync') {
+    baseDeliveryPolicy = { ...baseDeliveryPolicy, mode: 'tool_response' };
+  } else if (launchMode === 'async' && !isAsyncDeliveryMode(baseDeliveryPolicy.mode)) {
+    baseDeliveryPolicy = { ...baseDeliveryPolicy, mode: 'notification' };
+  }
   const deliveryMode = baseDeliveryPolicy.mode;
   const includeTranscript = baseDeliveryPolicy.includeTranscript;
   const childRun = spawnAgentRun(cmd, {
@@ -599,6 +769,7 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     sourceConversation: parentTarget.conversation,
     sourceToolCall: entity,
     sourceRun: authorization.run,
+    answerBridgeId,
     inputMessage,
     deliveryMode,
     includeTranscript
@@ -619,14 +790,14 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     const started = startInlineToolExecution(cmd, entity, call, state, { childRunId, runId: childRunId, conversationId: resolved.value.conversationId, deliveryMode });
     const now = Date.now();
     const durationMs = Math.max(0, now - started.startedAt);
-    const result = { status: 'async_launched', runId: childRunId, conversationId: resolved.value.conversationId, message: 'AgentRun 已在后台启动，完成后会按 delivery policy 回流。' };
+    const result = { ok: true, status: 'async_launched', answerBridgeId, message: 'AgentRun 已在后台启动；稍后可用 read_agent_answer({ answerBridgeId }) 读取提交内容。' };
     cmd.add(entity, ToolState, transitionToolState(started.state, 'success', { result, durationMs }, now));
     spawnToolCallEvent(cmd, { toolCall: entity, toolCallId: call.id, kind: 'completed', status: 'success', at: now, elapsedMs: Math.max(0, now - call.createdAt), durationMs, payload: result });
     return;
   }
 
   const now = Date.now();
-  const progress = { childRunId, runId: childRunId, conversationId: resolved.value.conversationId };
+  const progress = { childRunId, runId: childRunId, conversationId: resolved.value.conversationId, answerBridgeId };
   cmd.add(entity, ToolState, transitionToolState(state, 'executing', { progress }, now));
   spawnToolCallEvent(cmd, {
     toolCall: entity,
@@ -881,6 +1052,11 @@ function normalizeTranscript(value: string | undefined): TranscriptInclusion {
 function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'default';
 }
+function normalizeRunAgentLaunchMode(value: unknown): RunAgentLaunchMode {
+  return value === 'sync' || value === 'async' ? value : 'auto';
+}
+
+
 
 function applyRunConversationPolicy(cmd: CommandSink, run: Entity, resolved: ResolvedConversation): void {
   const policy = cmd.spawn();

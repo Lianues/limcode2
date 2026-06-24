@@ -28,6 +28,7 @@ export const switchWorkEnvironmentTool: ToolDefinition = {
     },
     metadata: {
       category: 'general',
+      scope: 'workEnvironment',
       riskLevel: 'read',
       readonly: true,
       defaultEnabled: true,

@@ -31,6 +31,7 @@ export const readFileTool: ToolDefinition = {
     },
     metadata: {
       category: 'filesystem',
+      scope: 'file',
       riskLevel: 'read',
       readonly: true,
       defaultEnabled: true,

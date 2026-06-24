@@ -12,7 +12,7 @@ export const readConversationTool: ToolDefinition = {
     name: 'read_conversation',
     description: 'Read messages from a saved LimCode conversation by conversationId. Returns a compact read-only transcript excerpt.',
     parameters: { type: 'object', properties: { conversationId: { type: 'string' }, lastN: { type: 'number' }, messageIds: { type: 'array', items: { type: 'string' } } }, required: ['conversationId'] },
-    metadata: { category: 'general', riskLevel: 'read', readonly: true, defaultEnabled: true, checkpoint: { before: false, after: false } }
+    metadata: { category: 'general', scope: 'conversation', riskLevel: 'read', readonly: true, defaultEnabled: true, checkpoint: { before: false, after: false } }
   },
   execution: 'runtime',
   scheduling: staticToolScheduling('parallel', 'readonly_conversation_read'),

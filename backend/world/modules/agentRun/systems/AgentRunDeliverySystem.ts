@@ -4,8 +4,6 @@ import type {
   LlmUsageMetadataRecord,
   MessageContent,
   MessageRunRole,
-  MsgRole,
-  MsgStatus,
   TranscriptInclusion
 } from '../../../../../shared/protocol';
 import {
@@ -33,41 +31,20 @@ import {
 } from '../components';
 import { activeDeliveryPolicyForRun, defaultAgentForConversation, runSource, runTarget } from '../queries';
 import { CheckpointEventType } from '../../checkpoint/events';
+import { AgentAnswer } from '../../agentAnswer/components';
+import { agentAnswerById } from '../../agentAnswer/queries';
 
 const MAX_SUMMARY_CHARS = 4_000;
 const MAX_RESULT_CHARS = 16_000;
-const MAX_MESSAGE_TEXT_CHARS = 8_000;
-
-interface DeliveryExecutorInfo {
-  agentId: string;
-  name?: string;
-}
-
-interface DeliveryTranscriptMessage {
-  id: string;
-  role: MsgRole;
-  status: MsgStatus;
-  runRole?: MessageRunRole;
-  text: string;
-  content: MessageContent;
-}
-
-type DeliveryTranscript =
-  | { mode: 'summary'; runId: string; conversationId?: string; summary: string; messageCount: number }
-  | { mode: 'link'; runId: string; conversationId?: string; messageIds: string[]; runMessageIds: string[] }
-  | { mode: 'selected' | 'full'; runId: string; conversationId?: string; messages: DeliveryTranscriptMessage[] };
 
 interface DeliveryEnvelope {
   ok: true;
-  type: 'agent_run';
   status: 'completed';
-  runId: string;
-  conversationId?: string;
-  executor?: DeliveryExecutorInfo;
-  summary: string;
-  result: string;
-  usage?: LlmUsageMetadataRecord;
-  transcript?: DeliveryTranscript;
+  answerBridgeId?: string;
+  answerSubmitted?: boolean;
+  title?: string;
+  content: string;
+  message?: string;
 }
 
 const DeliveringRunsQuery = defineQuery({
@@ -84,7 +61,8 @@ const DeliveringRunsQuery = defineQuery({
     MessageRunLink,
     PartOf,
     ToolCall,
-    ToolState
+    ToolState,
+    AgentAnswer
   ],
   write: [AgentRun, ToolState],
   remove: [InFlight],
@@ -235,79 +213,35 @@ function activeNotificationRunForConversation(world: WorldReader, conversation: 
 }
 
 function buildDeliveryEnvelope(world: WorldReader, runEntity: Entity, includeTranscript: TranscriptInclusion): DeliveryEnvelope {
-  const runId = runRecordId(world, runEntity);
-  const target = runTarget(world, runEntity);
-  const conversation = target ? world.get(target.conversation, Conversation) : undefined;
-  const agent = target ? world.get(target.agent, Agent) : undefined;
-  const result = truncate(finalModelText(world, runEntity) || `[AgentRun ${runId} completed]`, MAX_RESULT_CHARS);
-  const summary = summarizeResult(result);
-  const modelMessages = runModelMessages(world, runEntity).map((entity) => world.get(entity, Message)).filter(isDefined);
-  const usage = mergeUsageMetadata(modelMessages.map((message) => message.usageMetadata).filter(isDefined));
-  const transcript = buildTranscript(world, runEntity, includeTranscript, summary);
+  const source = runSource(world, runEntity);
+  const answerBridgeId = source?.answerBridgeId?.trim();
+  const submittedAnswerEntity = answerBridgeId ? agentAnswerById(world, answerBridgeId) : undefined;
+  const submittedAnswer = submittedAnswerEntity !== undefined ? world.get(submittedAnswerEntity, AgentAnswer) : undefined;
+  const fallback = truncate(finalModelText(world, runEntity) || '[AgentRun completed]', MAX_RESULT_CHARS);
 
-  return {
-    ok: true,
-    type: 'agent_run',
-    status: 'completed',
-    runId,
-    ...(conversation ? { conversationId: conversation.id } : {}),
-    ...(agent ? { executor: { agentId: agent.id, ...(agent.name ? { name: agent.name } : {}) } } : {}),
-    summary,
-    result,
-    ...(usage ? { usage } : {}),
-    ...(transcript ? { transcript } : {})
-  };
-}
-
-function buildTranscript(world: WorldReader, runEntity: Entity, mode: TranscriptInclusion, summary: string): DeliveryTranscript | undefined {
-  if (mode === 'none') return undefined;
-
-  const runId = runRecordId(world, runEntity);
-  const target = runTarget(world, runEntity);
-  const conversation = target ? world.get(target.conversation, Conversation) : undefined;
-  const allMessages = target ? nonStreamingConversationMessages(world, target.conversation) : [];
-  const runRoles = runMessageRoles(world, runEntity);
-  const runMessages = allMessages.filter((entity) => runRoles.has(entity));
-
-  if (mode === 'summary') {
-    return { mode, runId, ...(conversation ? { conversationId: conversation.id } : {}), summary, messageCount: allMessages.length };
-  }
-
-  if (mode === 'link') {
+  if (submittedAnswer) {
     return {
-      mode,
-      runId,
-      ...(conversation ? { conversationId: conversation.id } : {}),
-      messageIds: messageIds(world, allMessages),
-      runMessageIds: messageIds(world, runMessages)
+      ok: true,
+      status: 'completed',
+      ...(answerBridgeId ? { answerBridgeId, answerSubmitted: true } : {}),
+      title: submittedAnswer.title,
+      content: submittedAnswer.content
     };
   }
 
-  const messages = (mode === 'full' ? allMessages : runMessages).map((entity) => buildTranscriptMessage(world, entity, runRoles)).filter(isDefined);
-  return { mode, runId, ...(conversation ? { conversationId: conversation.id } : {}), messages };
-}
-
-function buildTranscriptMessage(world: WorldReader, entity: Entity, runRoles: ReadonlyMap<Entity, MessageRunRole>): DeliveryTranscriptMessage | undefined {
-  const message = world.get(entity, Message);
-  if (!message) return undefined;
-  const runRole = runRoles.get(entity);
   return {
-    id: message.id,
-    role: message.role,
-    status: message.status,
-    ...(runRole ? { runRole } : {}),
-    text: truncate(renderMessageText(message), MAX_MESSAGE_TEXT_CHARS),
-    content: message.content
+    ok: true,
+    status: 'completed',
+    ...(answerBridgeId ? { answerBridgeId, answerSubmitted: false } : {}),
+    content: fallback,
+    ...(answerBridgeId ? { message: '子 Agent 未通过 submit_agent_answer 提交内容，已返回最终自然语言回复。' } : {})
   };
-}
-
-function nonStreamingConversationMessages(world: WorldReader, conversation: Entity): Entity[] {
-  return conversationMessages(world, conversation).filter((entity) => world.get(entity, Message)?.status !== 'streaming');
 }
 
 function runMessageRoles(world: WorldReader, runEntity: Entity): Map<Entity, MessageRunRole> {
   const result = new Map<Entity, MessageRunRole>();
   for (const entity of world.query(MessageRunLink)) {
+
     const link = world.get(entity, MessageRunLink);
     if (link?.run === runEntity && !result.has(link.message)) result.set(link.message, link.role);
   }
@@ -385,74 +319,16 @@ function mergeUsageMetadata(items: LlmUsageMetadataRecord[]): LlmUsageMetadataRe
 function deliveryXml(root: 'task-notification' | 'agent-run-delivery', envelope: DeliveryEnvelope): string {
   return [
     `<${root}>`,
-    '<type>agent_run</type>',
     `<status>${escapeXml(envelope.status)}</status>`,
-    `<run-id>${escapeXml(envelope.runId)}</run-id>`,
-    ...(envelope.conversationId ? [`<conversation-id>${escapeXml(envelope.conversationId)}</conversation-id>`] : []),
-    ...(envelope.executor ? executorXml(envelope.executor) : []),
-    `<summary>${escapeXml(envelope.summary)}</summary>`,
-    `<result>${escapeXml(envelope.result)}</result>`,
-    ...(envelope.usage ? [`<usage>${escapeXml(jsonString(envelope.usage))}</usage>`] : []),
-    ...(envelope.transcript ? [transcriptXml(envelope.transcript)] : []),
+    ...(envelope.answerBridgeId ? [`<answer-bridge-id>${escapeXml(envelope.answerBridgeId)}</answer-bridge-id>`] : []),
+    ...(envelope.answerSubmitted !== undefined ? [`<answer-submitted>${String(envelope.answerSubmitted)}</answer-submitted>`] : []),
+    ...(envelope.title ? [`<title>${escapeXml(envelope.title)}</title>`] : []),
+    `<content>${escapeXml(envelope.content)}</content>`,
+    ...(envelope.message ? [`<message>${escapeXml(envelope.message)}</message>`] : []),
     `</${root}>`
   ].join('\n');
 }
 
-function executorXml(executor: DeliveryExecutorInfo): string[] {
-  return [
-    '<executor>',
-    `<agent-id>${escapeXml(executor.agentId)}</agent-id>`,
-    ...(executor.name ? [`<name>${escapeXml(executor.name)}</name>`] : []),
-    '</executor>'
-  ];
-}
-
-function transcriptXml(transcript: DeliveryTranscript): string {
-  if (transcript.mode === 'summary') {
-    return [
-      '<transcript mode="summary">',
-      `<run-id>${escapeXml(transcript.runId)}</run-id>`,
-      ...(transcript.conversationId ? [`<conversation-id>${escapeXml(transcript.conversationId)}</conversation-id>`] : []),
-      `<message-count>${transcript.messageCount}</message-count>`,
-      `<summary>${escapeXml(transcript.summary)}</summary>`,
-      '</transcript>'
-    ].join('\n');
-  }
-
-  if (transcript.mode === 'link') {
-    return [
-      '<transcript mode="link">',
-      `<run-id>${escapeXml(transcript.runId)}</run-id>`,
-      ...(transcript.conversationId ? [`<conversation-id>${escapeXml(transcript.conversationId)}</conversation-id>`] : []),
-      '<message-ids>',
-      ...transcript.messageIds.map((id) => `<message-id>${escapeXml(id)}</message-id>`),
-      '</message-ids>',
-      '<run-message-ids>',
-      ...transcript.runMessageIds.map((id) => `<message-id>${escapeXml(id)}</message-id>`),
-      '</run-message-ids>',
-      '</transcript>'
-    ].join('\n');
-  }
-
-  return [
-    `<transcript mode="${transcript.mode}">`,
-    `<run-id>${escapeXml(transcript.runId)}</run-id>`,
-    ...(transcript.conversationId ? [`<conversation-id>${escapeXml(transcript.conversationId)}</conversation-id>`] : []),
-    '<messages>',
-    ...transcript.messages.map(transcriptMessageXml),
-    '</messages>',
-    '</transcript>'
-  ].join('\n');
-}
-
-function transcriptMessageXml(message: DeliveryTranscriptMessage): string {
-  return [
-    `<message id="${escapeXmlAttribute(message.id)}" role="${escapeXmlAttribute(message.role)}" status="${escapeXmlAttribute(message.status)}"${message.runRole ? ` run-role="${escapeXmlAttribute(message.runRole)}"` : ''}>`,
-    `<text>${escapeXml(message.text)}</text>`,
-    `<content>${escapeXml(jsonString(message.content))}</content>`,
-    '</message>'
-  ].join('\n');
-}
 
 function runRecordId(world: WorldReader, runEntity: Entity): string {
   return world.get(runEntity, AgentRun)?.id ?? String(runEntity);

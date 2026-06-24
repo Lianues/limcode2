@@ -413,6 +413,21 @@ export interface RuntimePaths {
   runHistoryRootPath: string;
   runHistoryIndexUri: vscode.Uri;
   runHistoryIndexPath: string;
+  /** Agent 回答数据根目录：<dataRoot>/agent-answers */
+  agentAnswersRootUri: vscode.Uri;
+  agentAnswersRootPath: string;
+  agentAnswersIndexUri: vscode.Uri;
+  agentAnswersIndexPath: string;
+  /** Agent 回答提交来源关系数据根目录：<dataRoot>/agent-answer-submission-links */
+  agentAnswerSubmissionLinksRootUri: vscode.Uri;
+  agentAnswerSubmissionLinksRootPath: string;
+  agentAnswerSubmissionLinksIndexUri: vscode.Uri;
+  agentAnswerSubmissionLinksIndexPath: string;
+  /** Agent 回答目标关系数据根目录：<dataRoot>/agent-answer-target-links */
+  agentAnswerTargetLinksRootUri: vscode.Uri;
+  agentAnswerTargetLinksRootPath: string;
+  agentAnswerTargetLinksIndexUri: vscode.Uri;
+  agentAnswerTargetLinksIndexPath: string;
 
   /** 通用设置根目录：<dataRoot>/settings */
   settingsRootUri: vscode.Uri;

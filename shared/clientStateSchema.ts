@@ -508,7 +508,13 @@ export const CLIENT_STATE_TABLES = {
   runContextPolicyLinks: upsertRemoveTable('runContextPolicyLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
   runDeliveryPolicyLinks: upsertRemoveTable('runDeliveryPolicyLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
   runEditPolicyLinks: upsertRemoveTable('runEditPolicyLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
-  agentRunInputRevisions: upsertRemoveTable('agentRunInputRevision', 'inputRevision', { scope: { kind: 'conversationAnyOf', scopes: [{ kind: 'conversation', field: 'conversationId' }, { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' }] } })
+  agentRunInputRevisions: upsertRemoveTable('agentRunInputRevision', 'inputRevision', { scope: { kind: 'conversationAnyOf', scopes: [{ kind: 'conversation', field: 'conversationId' }, { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' }] } }),
+  agentAnswers: upsertRemoveTable('agentAnswer', 'answer', {
+    cascadeRemove: [{ table: 'agentAnswerSubmissionLinks', foreignKey: 'answerId' }, { table: 'agentAnswerTargetLinks', foreignKey: 'answerId' }],
+    globalSnapshot: true
+  }),
+  agentAnswerSubmissionLinks: upsertRemoveTable('agentAnswerSubmissionLink', 'link', { globalSnapshot: true }),
+  agentAnswerTargetLinks: upsertRemoveTable('agentAnswerTargetLink', 'link', { globalSnapshot: true })
 } as const satisfies ClientStateTableRegistry;
 
 export const CLIENT_STATE_TABLE_KEYS = Object.keys(CLIENT_STATE_TABLES) as ClientStateTableKey[];

@@ -69,6 +69,11 @@ import {
   ToolCallRunLink
 } from '../world/modules/agentRun/components';
 import {
+  AgentAnswer,
+  AgentAnswerSubmissionLink,
+  AgentAnswerTargetLink
+} from '../world/modules/agentAnswer/components';
+import {
   LlmInvocation,
   MessageLlmInvocationLink,
   RunLlmInvocationLink
@@ -150,6 +155,7 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState, opt
   const workEnvironmentEntities = hydrateRecordsUnique(world, state.workEnvironments ?? [], WorkEnvironment);
   const workEnvironmentPolicyEntities = hydrateRecordsUnique(world, state.workEnvironmentPolicies ?? [], WorkEnvironmentPolicy);
   const checkpointPolicyEntities = hydrateRecordsUnique(world, state.checkpointPolicies ?? [], CheckpointPolicy);
+  const agentAnswerEntities = hydrateRecordsUnique(world, state.agentAnswers ?? [], AgentAnswer);
   const shadowRepositoryEntities = hydrateRecordsUnique(world, state.shadowRepositories ?? [], ShadowRepository);
 
   const conversationProjectLinkIds = existingIds(world, ConversationProjectLink);
@@ -223,6 +229,7 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState, opt
     toolPolicies: toolPolicyEntities,
     runs: new Map()
   });
+  hydrateAgentAnswerLinks(world, state, { answers: agentAnswerEntities, agents: agentEntities, conversations: conversationEntities, runs: new Map(), toolCalls: new Map() });
   hydrateSystemPromptScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, modes: modeEntities, runs: new Map(), prompts: systemPromptEntities });
   hydrateRuntimeContextScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, modes: modeEntities, runs: new Map(), runtimeContexts: runtimeContextEntities });
   hydrateRuntimeContextSnapshots(world, state, conversationEntities, runtimeContextEntities, runtimeContextSnapshotEntities);
@@ -298,6 +305,7 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
 
   const existingRunIdsBeforeHydration = existingIds(world, AgentRun);
   const runEntities = hydrateRecordsUnique(world, state.agentRuns ?? [], AgentRun);
+  const agentAnswerEntities = hydrateRecordsUnique(world, state.agentAnswers ?? [], AgentAnswer);
   const llmInvocationEntities = hydrateRecordsUnique(world, state.llmInvocations ?? [], LlmInvocation);
   const conversationPolicyEntities = hydrateRecordsUnique(world, state.runConversationPolicies, RunConversationPolicy);
   const contextPolicyEntities = hydrateRecordsUnique(world, state.runContextPolicies, RunContextPolicy);
@@ -333,6 +341,7 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
       ...(link.sourceMessageId ? { sourceMessage: messageEntities.get(link.sourceMessageId) } : {}),
       ...(link.sourceToolCallId ? { sourceToolCall: toolCallEntities.get(link.sourceToolCallId) } : {}),
       ...(link.sourceRunId ? { sourceRun: runEntities.get(link.sourceRunId) } : {}),
+      ...(link.answerBridgeId ? { answerBridgeId: link.answerBridgeId } : {}),
       createdAt: now,
       updatedAt: now
     });
@@ -392,6 +401,7 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
   hydrateConversationRuntimeContextSnapshotLinks(world, state, conversationEntities, runtimeContextSnapshotEntities);
   hydrateModelProfileScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, modes: modeEntities, runs: runEntities, profiles: modelProfileEntities });
   hydrateCompressionRecords(world, state, { conversations: conversationEntities, messages: messageEntities, runs: runEntities, invocations: llmInvocationEntities });
+  hydrateAgentAnswerLinks(world, state, { answers: agentAnswerEntities, agents: agentEntities, conversations: conversationEntities, runs: runEntities, toolCalls: toolCallEntities });
 
   const inputRevisionIds = existingIds(world, AgentRunInputRevision);
   for (const record of state.agentRunInputRevisions ?? []) {
@@ -700,6 +710,65 @@ function sourceEntityAndId<TEntityKey extends string, TIdKey extends string>(
     [idKey]: id
   } as Partial<Record<TEntityKey, Entity> & Record<TIdKey, string>>;
 }
+
+interface AgentAnswerHydrationMaps {
+  answers: Map<string, Entity>;
+  agents: Map<string, Entity>;
+  conversations: Map<string, Entity>;
+  runs: Map<string, Entity>;
+  toolCalls: Map<string, Entity>;
+}
+
+function hydrateAgentAnswerLinks(world: World, state: ClientState, maps: AgentAnswerHydrationMaps): void {
+  const submissionLinks = existingRecords(world, AgentAnswerSubmissionLink);
+  for (const record of state.agentAnswerSubmissionLinks ?? []) {
+    const answer = maps.answers.get(record.answerId);
+    if (answer === undefined) continue;
+    const now = Date.now();
+    const data = {
+      id: record.id,
+      answer,
+      ...sourceEntityAndId('submitterRun', 'submitterRunId', record.submitterRunId, maps.runs),
+      ...sourceEntityAndId('submitterAgent', 'submitterAgentId', record.submitterAgentId, maps.agents),
+      ...sourceEntityAndId('submitterConversation', 'submitterConversationId', record.submitterConversationId, maps.conversations),
+      ...sourceEntityAndId('submitterToolCall', 'submitterToolCallId', record.submitterToolCallId, maps.toolCalls),
+      createdAt: record.createdAt || now,
+      updatedAt: record.updatedAt || record.createdAt || now
+    };
+    const existing = submissionLinks.get(record.id);
+    if (existing !== undefined) world.add(existing, AgentAnswerSubmissionLink, data);
+    else {
+      const entity = world.spawn();
+      submissionLinks.set(record.id, entity);
+      world.add(entity, AgentAnswerSubmissionLink, data);
+    }
+  }
+
+  const targetLinks = existingRecords(world, AgentAnswerTargetLink);
+  for (const record of state.agentAnswerTargetLinks ?? []) {
+    const answer = maps.answers.get(record.answerId);
+    if (answer === undefined) continue;
+    const now = Date.now();
+    const data = {
+      id: record.id,
+      answer,
+      ...sourceEntityAndId('targetRun', 'targetRunId', record.targetRunId, maps.runs),
+      ...sourceEntityAndId('targetAgent', 'targetAgentId', record.targetAgentId, maps.agents),
+      ...sourceEntityAndId('targetConversation', 'targetConversationId', record.targetConversationId, maps.conversations),
+      ...sourceEntityAndId('sourceToolCall', 'sourceToolCallId', record.sourceToolCallId, maps.toolCalls),
+      createdAt: record.createdAt || now,
+      updatedAt: record.updatedAt || record.createdAt || now
+    };
+    const existing = targetLinks.get(record.id);
+    if (existing !== undefined) world.add(existing, AgentAnswerTargetLink, data);
+    else {
+      const entity = world.spawn();
+      targetLinks.set(record.id, entity);
+      world.add(entity, AgentAnswerTargetLink, data);
+    }
+  }
+}
+
 
 
 function hydrateConversationModeSelections(

@@ -34,6 +34,7 @@ export interface ToolDisplaySection {
   kind: 'input' | 'output';
   title: string;
   text?: string;
+  markdown?: boolean;
   rows?: ToolDisplayRow[];
   rowStyle?: 'keyValue' | 'lineNumber';
   diff?: ToolDisplayDiff;

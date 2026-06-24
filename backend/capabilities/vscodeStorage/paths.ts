@@ -20,6 +20,9 @@ import {
   RUN_RUNTIME_CONTEXT_SNAPSHOT_LINKS_ROOT_DIR,
   PROJECT_CONTEXTS_ROOT_DIR,
   RUN_HISTORY_ROOT_DIR,
+  AGENT_ANSWERS_ROOT_DIR,
+  AGENT_ANSWER_SUBMISSION_LINKS_ROOT_DIR,
+  AGENT_ANSWER_TARGET_LINKS_ROOT_DIR,
   SETTINGS_ROOT_DIR,
   SYSTEM_PROMPT_SCOPE_LINKS_ROOT_DIR,
   SYSTEM_PROMPTS_ROOT_DIR,
@@ -120,6 +123,12 @@ export interface VscodeStorageUris {
   conversationAgentSelectionsIndexUri: vscode.Uri;
   runHistoryRootUri: vscode.Uri;
   runHistoryIndexUri: vscode.Uri;
+  agentAnswersRootUri: vscode.Uri;
+  agentAnswersIndexUri: vscode.Uri;
+  agentAnswerSubmissionLinksRootUri: vscode.Uri;
+  agentAnswerSubmissionLinksIndexUri: vscode.Uri;
+  agentAnswerTargetLinksRootUri: vscode.Uri;
+  agentAnswerTargetLinksIndexUri: vscode.Uri;
   settingsRootUri: vscode.Uri;
   llmSettingsUri: vscode.Uri;
 }
@@ -168,6 +177,9 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const conversationModeSelections = root(globalStorageUri, CONVERSATION_MODE_SELECTIONS_ROOT_DIR);
   const conversationAgentSelections = root(globalStorageUri, CONVERSATION_AGENT_SELECTIONS_ROOT_DIR);
   const runHistory = root(globalStorageUri, RUN_HISTORY_ROOT_DIR);
+  const agentAnswers = root(globalStorageUri, AGENT_ANSWERS_ROOT_DIR);
+  const agentAnswerSubmissionLinks = root(globalStorageUri, AGENT_ANSWER_SUBMISSION_LINKS_ROOT_DIR);
+  const agentAnswerTargetLinks = root(globalStorageUri, AGENT_ANSWER_TARGET_LINKS_ROOT_DIR);
   const settingsRootUri = vscode.Uri.joinPath(globalStorageUri, SETTINGS_ROOT_DIR);
   const llmSettingsUri = vscode.Uri.joinPath(settingsRootUri, LLM_SETTINGS_FILE);
 
@@ -324,6 +336,18 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     runHistoryRootPath: runHistory.rootUri.fsPath,
     runHistoryIndexUri: runHistory.indexUri,
     runHistoryIndexPath: runHistory.indexUri.fsPath,
+    agentAnswersRootUri: agentAnswers.rootUri,
+    agentAnswersRootPath: agentAnswers.rootUri.fsPath,
+    agentAnswersIndexUri: agentAnswers.indexUri,
+    agentAnswersIndexPath: agentAnswers.indexUri.fsPath,
+    agentAnswerSubmissionLinksRootUri: agentAnswerSubmissionLinks.rootUri,
+    agentAnswerSubmissionLinksRootPath: agentAnswerSubmissionLinks.rootUri.fsPath,
+    agentAnswerSubmissionLinksIndexUri: agentAnswerSubmissionLinks.indexUri,
+    agentAnswerSubmissionLinksIndexPath: agentAnswerSubmissionLinks.indexUri.fsPath,
+    agentAnswerTargetLinksRootUri: agentAnswerTargetLinks.rootUri,
+    agentAnswerTargetLinksRootPath: agentAnswerTargetLinks.rootUri.fsPath,
+    agentAnswerTargetLinksIndexUri: agentAnswerTargetLinks.indexUri,
+    agentAnswerTargetLinksIndexPath: agentAnswerTargetLinks.indexUri.fsPath,
     settingsRootUri,
     settingsRootPath: settingsRootUri.fsPath,
     llmSettingsUri,

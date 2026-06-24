@@ -27,6 +27,7 @@ export const editTool: ToolDefinition = {
     parameters: hunkModeParameters(),
     metadata: {
       category: 'filesystem',
+      scope: 'file',
       riskLevel: 'write',
       readonly: false,
       defaultEnabled: true,

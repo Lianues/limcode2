@@ -11,7 +11,17 @@ import {
   IconUsers,
   IconWriting
 } from '@tabler/icons-vue';
-import { EDIT_TOOL_NAME, READ_TOOL_NAME, SWITCH_WORK_ENVIRONMENT_TOOL_NAME, TASK_LIST_TOOL_NAME, TRANSFER_FILES_TOOL_NAME, WRITE_TOOL_NAME } from '@shared/protocol';
+import {
+  EDIT_TOOL_NAME,
+  READ_AGENT_ANSWER_TOOL_NAME,
+  READ_TOOL_NAME,
+  SUBMIT_AGENT_ANSWER_TOOL_NAME,
+  SWITCH_WORK_ENVIRONMENT_TOOL_NAME,
+  TASK_LIST_TOOL_NAME,
+  TRANSFER_FILES_TOOL_NAME,
+  WRITE_TOOL_NAME
+} from '@shared/protocol';
+import { readAgentAnswerToolDisplay, submitAgentAnswerToolDisplay } from './agentAnswerToolDisplay';
 import { editToolDisplay, writeToolDisplay } from './fileChangeToolDisplay';
 import { readConversationToolDisplay } from './readConversationToolDisplay';
 import { readFileToolDisplay } from './readFileToolDisplay';
@@ -29,6 +39,8 @@ const TOOL_DISPLAY_RESOLVERS: Record<string, ToolDisplayResolver> = {
   [WRITE_TOOL_NAME]: writeToolDisplay,
   read_conversation: readConversationToolDisplay,
   run_agent: runAgentToolDisplay,
+  [SUBMIT_AGENT_ANSWER_TOOL_NAME]: submitAgentAnswerToolDisplay,
+  [READ_AGENT_ANSWER_TOOL_NAME]: readAgentAnswerToolDisplay,
   shell: shellToolDisplay,
   bash: shellToolDisplay,
   [SWITCH_WORK_ENVIRONMENT_TOOL_NAME]: switchWorkEnvironmentToolDisplay,
@@ -42,6 +54,8 @@ const TOOL_HEADER_ICONS: Record<string, Component> = {
   [WRITE_TOOL_NAME]: IconWriting,
   read_conversation: IconMessageDots,
   run_agent: IconUsers,
+  [SUBMIT_AGENT_ANSWER_TOOL_NAME]: IconUsers,
+  [READ_AGENT_ANSWER_TOOL_NAME]: IconUsers,
   shell: IconTerminal2,
   bash: IconTerminal2,
   [SWITCH_WORK_ENVIRONMENT_TOOL_NAME]: IconSwitch,

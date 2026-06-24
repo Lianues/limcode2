@@ -57,6 +57,7 @@ export interface SpawnAgentRunInput {
   sourceMessage?: Entity;
   sourceToolCall?: Entity;
   sourceRun?: Entity;
+  answerBridgeId?: string;
   inputMessage?: Entity;
   deliveryMode?: DeliveryMode;
   includeTranscript?: TranscriptInclusion;
@@ -112,6 +113,7 @@ export function spawnAgentRun(cmd: CommandSink, input: SpawnAgentRunInput): Enti
     ...(input.sourceMessage !== undefined ? { sourceMessage: input.sourceMessage } : {}),
     ...(input.sourceToolCall !== undefined ? { sourceToolCall: input.sourceToolCall } : {}),
     ...(input.sourceRun !== undefined ? { sourceRun: input.sourceRun } : {}),
+    ...(input.answerBridgeId ? { answerBridgeId: input.answerBridgeId } : {}),
     createdAt: now,
     updatedAt: now
   });

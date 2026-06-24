@@ -15,6 +15,7 @@ import { resolveToolDisplay } from '../toolDisplay/registry';
 import ContentBlockSection from '../ContentBlockSection.vue';
 import CollapsibleContentBlock from '../CollapsibleContentBlock.vue';
 import ToolDiffView from '../toolDisplay/ToolDiffView.vue';
+import TextPartView from './TextPartView.vue';
 import type { ToolHeaderAction } from '../toolDisplay/types';
 
 const props = defineProps<{
@@ -282,8 +283,9 @@ function isInternalApprovalProgress(progress: unknown): boolean {
         :key="`input-${index}-${section.title}`"
         :kind="section.kind"
         :title="section.title"
-        :text="section.text"
+        :text="section.markdown ? undefined : section.text"
       >
+        <TextPartView v-if="section.markdown && section.text !== undefined" class="tool-display-markdown" :text="section.text" markdown />
         <ToolDiffView v-if="section.diff" :diff="section.diff" />
         <div v-if="section.rows?.length" class="tool-display-rows" :class="`is-${section.rowStyle ?? 'keyValue'}`">
           <template v-for="(row, rowIndex) in section.rows" :key="`${section.title}-${rowIndex}-${row.label}`">
@@ -304,8 +306,9 @@ function isInternalApprovalProgress(progress: unknown): boolean {
         :key="`output-${index}-${section.title}`"
         :kind="section.kind"
         :title="section.title"
-        :text="section.text"
+        :text="section.markdown ? undefined : section.text"
       >
+        <TextPartView v-if="section.markdown && section.text !== undefined" class="tool-display-markdown" :text="section.text" markdown />
         <ToolDiffView v-if="section.diff" :diff="section.diff" />
         <div v-if="section.rows?.length" class="tool-display-rows" :class="`is-${section.rowStyle ?? 'keyValue'}`">
           <template v-for="(row, rowIndex) in section.rows" :key="`${section.title}-${rowIndex}-${row.label}`">

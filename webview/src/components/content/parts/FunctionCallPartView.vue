@@ -166,6 +166,7 @@ function labelForToolCall(call: ToolCallRecord): string {
     return deniedStatusLabel(call.result, call.error);
   }
   if (call.status === 'success' && isAsyncAgentRunResult(call.result)) return '子任务已启动';
+  if (call.status === 'warning' && isPartialEditResult(call.result)) return '部分成功';
   return labelForStatus(call.status);
 }
 
@@ -201,6 +202,17 @@ function deniedStatusLabel(result: unknown, error: string | undefined): string {
 
 function isAsyncAgentRunResult(result: unknown): boolean {
   return isRecord(result) && result.status === 'async_launched';
+}
+
+function isPartialEditResult(result: unknown): boolean {
+  const output = toolOutput(result);
+  if (!isRecord(output) || output.kind !== 'file_edit.result') return false;
+  return typeof output.failed === 'number' && output.failed > 0 && typeof output.applied === 'number' && output.applied > 0;
+}
+
+function toolOutput(result: unknown): unknown {
+  const record = isRecord(result) ? result : undefined;
+  return record && 'output' in record ? record.output : result;
 }
 
 function isExecutionApprovedProgress(progress: unknown): boolean {

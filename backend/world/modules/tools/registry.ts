@@ -20,6 +20,7 @@ export interface ToolDeps {
 export interface ToolResultOut {
   ok: boolean;
   output: unknown;
+  status?: 'success' | 'warning';
 }
 
 export interface ToolRuntimeEvent {

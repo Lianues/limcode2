@@ -65,7 +65,7 @@ export const editTool: ToolDefinition = {
         : buildHunkModeRequest(path, args);
       const result = await deps.fs.editFile(request, { workEnvironment: ctx?.workEnvironment });
       await recordStatistics(deps, mode, result.success);
-      return { ok: result.success, output: result };
+      return { ok: result.success, output: result, ...(result.failed > 0 ? { status: 'warning' as const } : {}) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, output: await failedOutput(deps, mode, path, message) };

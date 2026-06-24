@@ -1,3 +1,4 @@
+import { READ_TOOL_NAME } from '../../../../../../shared/protocol';
 import type { ToolDefinition } from '../../registry';
 import { staticToolScheduling } from '../../scheduling';
 import { defineToolDefinitionModule } from '../types';
@@ -9,7 +10,7 @@ interface ReadFileArgs {
 }
 
 export const readFileToolModule = defineToolDefinitionModule({
-  id: 'read_file',
+  id: READ_TOOL_NAME,
   create() {
     return readFileTool;
   }
@@ -17,8 +18,8 @@ export const readFileToolModule = defineToolDefinitionModule({
 
 export const readFileTool: ToolDefinition = {
   declaration: {
-    name: 'read_file',
-    description: 'Read a UTF-8 text file from the workspace. Optional startLine/endLine are 1-based and inclusive.',
+    name: READ_TOOL_NAME,
+    description: 'Read a UTF-8 text file from the current work environment. Optional startLine/endLine are 1-based and inclusive.',
     parameters: {
       type: 'object',
       properties: {

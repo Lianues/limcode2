@@ -102,6 +102,8 @@ export enum BridgeMessageType {
   ToolChangeReject = 'tool.change.reject',
   ToolResultSubmit = 'tool.result.submit',
   ToolResultReject = 'tool.result.reject',
+  CheckpointDiffOpen = 'checkpoint.diff.open',
+  CheckpointDiffOpenResult = 'checkpoint.diff.open.result',
   ClientResync = 'client.resync',
   ClientSnapshot = 'state.snapshot',
   ClientPatch = 'state.patch',
@@ -307,6 +309,25 @@ export interface ToolDefinitionRecord {
 export const TASK_LIST_TOOL_NAME = 'update_task_list';
 export const SWITCH_WORK_ENVIRONMENT_TOOL_NAME = 'switch_work_environment';
 export const TRANSFER_FILES_TOOL_NAME = 'transfer_files';
+export const READ_TOOL_NAME = 'read';
+export const EDIT_TOOL_NAME = 'edit';
+export const WRITE_TOOL_NAME = 'write';
+
+export type EditToolMode = 'patch' | 'hunk';
+
+export interface EditToolModeStatisticsRecord {
+  mode: EditToolMode;
+  attempts: number;
+  successes: number;
+  failures: number;
+  successRate: number;
+  updatedAt?: number;
+}
+
+export interface EditToolStatisticsRecord {
+  modes: Record<EditToolMode, EditToolModeStatisticsRecord>;
+  updatedAt: number;
+}
 
 export const TASK_LIST_ITEM_STATUSES = [
   'pending',
@@ -627,7 +648,7 @@ export interface ToolPolicyToolConfigRecord {
   /**
    * 是否自动应用工具生成的可预览更改。
    * 仅对“执行阶段只生成更改提案、应用阶段才产生副作用”的工具有意义；
-   * 对 read_file、shell、switch_work_environment 等无更改提案或立即副作用工具无影响。
+   * 对 read、shell、switch_work_environment 等无更改提案或立即副作用工具无影响。
    */
   autoApplyChange?: boolean;
   /**
@@ -1006,6 +1027,20 @@ export interface CheckpointRestoreResultPayload {
   checkpointId: string;
   conversationId: string;
   result: ShadowCheckpointRestoreResult;
+}
+
+export interface CheckpointDiffOpenPayload {
+  conversationId: string;
+  checkpointId: string;
+  filePath: string;
+}
+
+export interface CheckpointDiffOpenResultPayload {
+  conversationId: string;
+  checkpointId: string;
+  filePath: string;
+  status: 'opened' | 'failed';
+  message: string;
 }
 
 export interface CheckpointPolicyScopeLinkRecord {
@@ -2021,6 +2056,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ToolChangeReject, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ToolResultSubmit, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ToolResultReject, ToolDecisionPayload>
+  | BridgeEnvelope<BridgeMessageType.CheckpointDiffOpen, CheckpointDiffOpenPayload>
   | BridgeEnvelope<BridgeMessageType.ClientResync, ClientResyncPayload>
   | BridgeEnvelope<BridgeMessageType.RunHistoryPageGet, ConversationRunHistoryPageRequest>
   | BridgeEnvelope<BridgeMessageType.RunHistoryDetailGet, ConversationRunDetailRequest>
@@ -2068,6 +2104,7 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.CheckpointGitStatusSnapshot, CheckpointGitStatusSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointShadowStatsSnapshot, CheckpointShadowStatsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointRestoreResult, CheckpointRestoreResultPayload>
+  | BridgeEnvelope<BridgeMessageType.CheckpointDiffOpenResult, CheckpointDiffOpenResultPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsSnapshot, GlobalSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsSnapshot, ConversationSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ProjectFoldersSnapshot, ProjectFoldersSnapshotPayload>;

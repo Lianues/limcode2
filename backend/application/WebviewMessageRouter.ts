@@ -4,7 +4,7 @@ import type { LlmCapability, StorageCapability, WebviewCapability } from '../cap
 import { ChatEventType } from '../world/modules/chat/events';
 import { AgentRunEventType } from '../world/modules/agentRun/events';
 import { AgentRun } from '../world/modules/agentRun/components';
-import { Message } from '../world/modules/chat/components';
+import { Conversation, Message } from '../world/modules/chat/components';
 import { LlmInvocation, MessageLlmInvocationLink, RunLlmInvocationLink } from '../world/modules/llm/components';
 import { buildLlmStartRequestForRun } from '../world/modules/chat/systems/LlmDispatchSystem';
 import { CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSourceLink } from '../world/modules/compression/components';
@@ -15,6 +15,7 @@ import { CheckpointEventType } from '../world/modules/checkpoint/events';
 import { AgentEventType } from '../world/modules/agent/events';
 import { CompressionEventType } from '../world/modules/compression/events';
 import { RuntimeContextEventType } from '../world/modules/runtimeContext/events';
+import { Checkpoint, ShadowRepository } from '../world/modules/checkpoint/components';
 import {
   BridgeMessageType,
   GLOBAL_CLIENT_STATE_STREAM_ID,
@@ -31,6 +32,7 @@ import {
   isProviderContextPart,
   isTextPart,
   type BridgeClientId,
+  type CheckpointDiffOpenPayload,
   type CheckpointRestorePayload,
   type ContentPart,
   type LlmInvocationSettingsSnapshotRecord,
@@ -401,6 +403,9 @@ export class WebviewMessageRouter {
       case BridgeMessageType.CheckpointRestore:
         if (message.payload) void this.handleCheckpointRestore(clientId, message.payload, message.id);
         break;
+      case BridgeMessageType.CheckpointDiffOpen:
+        if (message.payload) void this.handleCheckpointDiffOpen(clientId, message.payload, message.id);
+        break;
       case BridgeMessageType.Ready:
         this.sendBridgeHello(clientId, message.id);
         if (!this.deps.isHydrated()) break;
@@ -693,6 +698,45 @@ export class WebviewMessageRouter {
     }
   }
 
+  private async handleCheckpointDiffOpen(clientId: BridgeClientId, payload: CheckpointDiffOpenPayload, correlationId?: string): Promise<void> {
+    try {
+      await this.deps.ensureConversationDetailLoaded(payload.conversationId);
+      const checkpointEntity = this.findCheckpointEntity(payload.checkpointId);
+      const checkpoint = checkpointEntity !== undefined ? this.deps.world.get(checkpointEntity, Checkpoint) : undefined;
+      if (checkpointEntity === undefined || !checkpoint) {
+        this.postCheckpointDiffOpenResult(clientId, payload, { status: 'failed', message: '无法找到该存档点。' }, correlationId);
+        return;
+      }
+      const conversation = this.deps.world.get(checkpoint.conversation, Conversation);
+      if (conversation?.id !== payload.conversationId) {
+        this.postCheckpointDiffOpenResult(clientId, payload, { status: 'failed', message: '存档点不属于当前对话。' }, correlationId);
+        return;
+      }
+      if (checkpoint.status !== 'created' || !checkpoint.commitSha) {
+        this.postCheckpointDiffOpenResult(clientId, payload, { status: 'failed', message: checkpoint.message ?? '该存档点没有可查看的 shadow commit。' }, correlationId);
+        return;
+      }
+      const shadowRepository = this.deps.world.get(checkpoint.shadowRepository, ShadowRepository);
+      if (!shadowRepository?.storageKey) {
+        this.postCheckpointDiffOpenResult(clientId, payload, { status: 'failed', message: '未找到此存档点关联的 shadow 仓库。' }, correlationId);
+        return;
+      }
+
+      const result = await this.deps.storage.openShadowCheckpointDiff({
+        checkpointId: checkpoint.id,
+        conversationId: conversation.id,
+        shadowRepositoryStorageKey: shadowRepository.storageKey,
+        commitSha: checkpoint.commitSha,
+        projectUri: checkpoint.projectUri,
+        filePath: payload.filePath
+      });
+      this.postCheckpointDiffOpenResult(clientId, payload, result, correlationId);
+    } catch (error) {
+      const result = { status: 'failed' as const, message: error instanceof Error ? error.message : '无法打开差异视图。' };
+      this.postCheckpointDiffOpenResult(clientId, payload, result, correlationId);
+    }
+  }
+
   private postCheckpointRestoreResult(clientId: BridgeClientId, payload: CheckpointRestorePayload, result: { status: 'restored' | 'failed'; message: string; restoredFileCount?: number; removedFileCount?: number }, correlationId?: string): void {
     this.deps.webview.post(clientId, {
       id: createMessageId(),
@@ -701,6 +745,21 @@ export class WebviewMessageRouter {
       correlationId,
       payload: { checkpointId: payload.checkpointId, conversationId: payload.conversationId, result }
     });
+  }
+
+  private postCheckpointDiffOpenResult(clientId: BridgeClientId, payload: CheckpointDiffOpenPayload, result: { status: 'opened' | 'failed'; message: string }, correlationId?: string): void {
+    if (result.status === 'failed') void vscode.window.showWarningMessage(`LimCode ${result.message}`);
+    this.deps.webview.post(clientId, {
+      id: createMessageId(),
+      type: BridgeMessageType.CheckpointDiffOpenResult,
+      channel: 'command',
+      correlationId,
+      payload: { checkpointId: payload.checkpointId, conversationId: payload.conversationId, filePath: payload.filePath, status: result.status, message: result.message }
+    });
+  }
+
+  private findCheckpointEntity(checkpointId: string): number | undefined {
+    return this.deps.world.query(Checkpoint).find((entity) => this.deps.world.get(entity, Checkpoint)?.id === checkpointId);
   }
 
   private async ensureRunDetailHydrated(conversationId: string, runId: string): Promise<void> {

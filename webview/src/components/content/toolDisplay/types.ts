@@ -2,7 +2,10 @@ import type { Component } from 'vue';
 import type {
   AgentRunSourceLinkRecord,
   AgentRunTargetLinkRecord,
+  CheckpointRecord,
+  CheckpointTimelineAnchorRecord,
   MessageRecord,
+  ShadowRepositoryRecord,
   ToolCallEventRecord,
   ToolCallRecord
 } from '@shared/protocol';
@@ -13,12 +16,27 @@ export interface ToolDisplayRow {
   value: string;
 }
 
+export interface ToolDisplayDiffFile {
+  path: string;
+  action?: string;
+  added?: number;
+  removed?: number;
+  truncated?: boolean;
+  text: string;
+}
+
+export interface ToolDisplayDiff {
+  files: ToolDisplayDiffFile[];
+  summary?: string;
+}
+
 export interface ToolDisplaySection {
   kind: 'input' | 'output';
   title: string;
   text?: string;
   rows?: ToolDisplayRow[];
   rowStyle?: 'keyValue' | 'lineNumber';
+  diff?: ToolDisplayDiff;
   taskList?: ToolDisplayTaskList;
 }
 
@@ -39,6 +57,9 @@ export interface ToolDisplayContext {
   toolCalls?: ToolCallRecord[];
   agentRunSourceLinks?: AgentRunSourceLinkRecord[];
   agentRunTargetLinks?: AgentRunTargetLinkRecord[];
+  checkpoints?: CheckpointRecord[];
+  checkpointTimelineAnchors?: CheckpointTimelineAnchorRecord[];
+  shadowRepositories?: ShadowRepositoryRecord[];
   currentConversationId?: string;
   stringifyValue(value: unknown): string;
 }

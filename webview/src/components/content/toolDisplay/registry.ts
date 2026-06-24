@@ -2,14 +2,17 @@ import type { Component } from 'vue';
 import {
   IconFileDescription,
   IconMessageDots,
+  IconPencil,
   IconPlaylistAdd,
   IconSwitch,
   IconTerminal2,
   IconTool,
   IconTransfer,
-  IconUsers
+  IconUsers,
+  IconWriting
 } from '@tabler/icons-vue';
-import { SWITCH_WORK_ENVIRONMENT_TOOL_NAME, TASK_LIST_TOOL_NAME, TRANSFER_FILES_TOOL_NAME } from '@shared/protocol';
+import { EDIT_TOOL_NAME, READ_TOOL_NAME, SWITCH_WORK_ENVIRONMENT_TOOL_NAME, TASK_LIST_TOOL_NAME, TRANSFER_FILES_TOOL_NAME, WRITE_TOOL_NAME } from '@shared/protocol';
+import { editToolDisplay, writeToolDisplay } from './fileChangeToolDisplay';
 import { readConversationToolDisplay } from './readConversationToolDisplay';
 import { readFileToolDisplay } from './readFileToolDisplay';
 import { runAgentToolDisplay } from './runAgentToolDisplay';
@@ -21,7 +24,9 @@ import type { ToolDisplayContext, ToolDisplayResolver, ToolDisplayResult, ToolDi
 
 const TOOL_DISPLAY_RESOLVERS: Record<string, ToolDisplayResolver> = {
   [TASK_LIST_TOOL_NAME]: taskListToolDisplay,
-  read_file: readFileToolDisplay,
+  [READ_TOOL_NAME]: readFileToolDisplay,
+  [EDIT_TOOL_NAME]: editToolDisplay,
+  [WRITE_TOOL_NAME]: writeToolDisplay,
   read_conversation: readConversationToolDisplay,
   run_agent: runAgentToolDisplay,
   shell: shellToolDisplay,
@@ -32,7 +37,9 @@ const TOOL_DISPLAY_RESOLVERS: Record<string, ToolDisplayResolver> = {
 
 const TOOL_HEADER_ICONS: Record<string, Component> = {
   [TASK_LIST_TOOL_NAME]: IconPlaylistAdd,
-  read_file: IconFileDescription,
+  [READ_TOOL_NAME]: IconFileDescription,
+  [EDIT_TOOL_NAME]: IconPencil,
+  [WRITE_TOOL_NAME]: IconWriting,
   read_conversation: IconMessageDots,
   run_agent: IconUsers,
   shell: IconTerminal2,

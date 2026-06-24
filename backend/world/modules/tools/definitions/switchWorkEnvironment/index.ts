@@ -13,7 +13,7 @@ export const switchWorkEnvironmentToolModule = defineToolDefinitionModule({
 export const switchWorkEnvironmentTool: ToolDefinition = {
   declaration: {
     name: SWITCH_WORK_ENVIRONMENT_TOOL_NAME,
-    description: `切换当前工作环境。工作环境决定 read_file、shell/bash 等工具解析相对路径和默认 cwd 时使用的根目录。
+    description: `切换当前工作环境。工作环境决定 read、edit、write、shell/bash 等工具解析相对路径和默认 cwd 时使用的根目录。
 
 传入目标工作环境 id 即可。切换后后续工具参数保持不变，仍使用相对路径 / 相对 cwd。`,
     parameters: {

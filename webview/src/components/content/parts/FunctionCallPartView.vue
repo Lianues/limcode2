@@ -14,6 +14,7 @@ import TaskListDisplay from '@webview/components/taskList/TaskListDisplay.vue';
 import { resolveToolDisplay } from '../toolDisplay/registry';
 import ContentBlockSection from '../ContentBlockSection.vue';
 import CollapsibleContentBlock from '../CollapsibleContentBlock.vue';
+import ToolDiffView from '../toolDisplay/ToolDiffView.vue';
 import type { ToolHeaderAction } from '../toolDisplay/types';
 
 const props = defineProps<{
@@ -59,6 +60,9 @@ const toolDisplay = computed(() => resolveToolDisplay({
   toolCalls: clientState.toolCalls,
   agentRunSourceLinks: clientState.agentRunSourceLinks,
   agentRunTargetLinks: clientState.agentRunTargetLinks,
+  checkpoints: clientState.checkpoints,
+  checkpointTimelineAnchors: clientState.checkpointTimelineAnchors,
+  shadowRepositories: clientState.shadowRepositories,
   currentConversationId: clientState.currentConversationId,
   stringifyValue
 }));
@@ -268,6 +272,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
         :title="section.title"
         :text="section.text"
       >
+        <ToolDiffView v-if="section.diff" :diff="section.diff" />
         <div v-if="section.rows?.length" class="tool-display-rows" :class="`is-${section.rowStyle ?? 'keyValue'}`">
           <template v-for="(row, rowIndex) in section.rows" :key="`${section.title}-${rowIndex}-${row.label}`">
             <span class="tool-display-row-label">{{ row.label }}</span>
@@ -289,6 +294,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
         :title="section.title"
         :text="section.text"
       >
+        <ToolDiffView v-if="section.diff" :diff="section.diff" />
         <div v-if="section.rows?.length" class="tool-display-rows" :class="`is-${section.rowStyle ?? 'keyValue'}`">
           <template v-for="(row, rowIndex) in section.rows" :key="`${section.title}-${rowIndex}-${row.label}`">
             <span class="tool-display-row-label">{{ row.label }}</span>

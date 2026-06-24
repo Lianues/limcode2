@@ -1,6 +1,7 @@
 import type { AccessDeclaration, ComponentType, Entity, ResourceKey, WorldReader } from '../../../ecs/types';
 import type { ToolSchema } from '../llm/contracts';
 import { workEnvironmentToolSchemaContributor } from '../workEnvironment/toolSchemaContributor';
+import { editToolSchemaContributor } from './editToolSchemaContributor';
 
 export interface ToolSchemaBuildContext {
   world: WorldReader;
@@ -16,6 +17,7 @@ export interface ToolSchemaContributor {
 }
 
 export const TOOL_SCHEMA_CONTRIBUTORS = [
+  editToolSchemaContributor,
   workEnvironmentToolSchemaContributor
 ] as const satisfies readonly ToolSchemaContributor[];
 

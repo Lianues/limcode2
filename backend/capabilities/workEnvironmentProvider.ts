@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import * as path from 'node:path';
 import type { Readable, Writable } from 'node:stream';
 import type { WorkEnvironmentRecord } from '../../shared/protocol';
@@ -35,6 +36,13 @@ export function assertRemoteServerCommandSupported(environment: WorkEnvironmentR
   }
 }
 
+export class RemoteFileNotFoundError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = 'RemoteFileNotFoundError';
+  }
+}
+
 export async function runRemoteServerCommand(
   environment: WorkEnvironmentRecord,
   args: CommandRunArgs,
@@ -58,20 +66,7 @@ export async function readRemoteServerTextFile(
   startLine?: number,
   endLine?: number
 ): Promise<FsReadFileResult> {
-  assertRemoteServerCommandSupported(environment);
-  const remotePath = resolveRemotePath(filePath, environment);
-  const script = `set -euo pipefail
-FILE=${shQuote(remotePath)}
-if [ ! -f "$FILE" ]; then echo "not a file: $FILE" >&2; exit 44; fi
-bytes="$(wc -c < "$FILE" 2>/dev/null || printf '0')"
-case "$bytes" in ''|*[!0-9]*) bytes=0 ;; esac
-if [ "$bytes" -gt ${MAX_REMOTE_READ_BYTES} ]; then echo "File too large: ${remotePath} (${MAX_REMOTE_READ_BYTES} bytes limit)" >&2; exit 45; fi
-base64 < "$FILE" | tr -d '\n\r'`;
-  const result = await executeRemoteServerScript(environment, script, { timeout: DEFAULT_REMOTE_TIMEOUT_MS, displayCommand: `read_file ${remotePath}` });
-  if (result.exitCode !== 0 || result.killed) {
-    throw new Error(result.stderr || `远程读取失败：${remotePath}`);
-  }
-  const text = Buffer.from(result.stdout.replace(/\s+/g, ''), 'base64').toString('utf8');
+  const text = await readRemoteServerRawTextFile(environment, filePath, MAX_REMOTE_READ_BYTES);
   const fileLines = text.split(/\r?\n/);
   const from = normalizeStartLine(startLine);
   const to = normalizeEndLine(endLine, fileLines.length);
@@ -85,6 +80,57 @@ base64 < "$FILE" | tr -d '\n\r'`;
     lines: selectedLines,
     content: selectedLines.map((line) => `${line.line} ${line.text}`).join('\n')
   };
+}
+
+export async function readRemoteServerRawTextFile(
+  environment: WorkEnvironmentRecord,
+  filePath: string,
+  maxBytes = MAX_REMOTE_READ_BYTES
+): Promise<string> {
+  assertRemoteServerCommandSupported(environment);
+  const remotePath = resolveRemotePath(filePath, environment);
+  const script = `set -euo pipefail
+FILE=${shQuote(remotePath)}
+if [ ! -e "$FILE" ]; then echo "file not found: $FILE" >&2; exit 44; fi
+if [ ! -f "$FILE" ]; then echo "not a file: $FILE" >&2; exit 46; fi
+bytes="$(wc -c < "$FILE" 2>/dev/null || printf '0')"
+case "$bytes" in ''|*[!0-9]*) bytes=0 ;; esac
+if [ "$bytes" -gt ${maxBytes} ]; then echo "File too large: ${remotePath} (${maxBytes} bytes limit)" >&2; exit 45; fi
+base64 < "$FILE" | tr -d '\n\r'`;
+  const result = await executeRemoteServerScript(environment, script, { timeout: DEFAULT_REMOTE_TIMEOUT_MS, displayCommand: `read ${remotePath}` });
+  if (result.exitCode === 44) throw new RemoteFileNotFoundError(result.stderr || `远程文件不存在：${remotePath}`);
+  if (result.exitCode !== 0 || result.killed) {
+    throw new Error(result.stderr || `远程读取失败：${remotePath}`);
+  }
+  return Buffer.from(result.stdout.replace(/\s+/g, ''), 'base64').toString('utf8');
+}
+
+export async function writeRemoteServerTextFile(
+  environment: WorkEnvironmentRecord,
+  filePath: string,
+  content: string
+): Promise<void> {
+  assertRemoteServerCommandSupported(environment);
+  const remotePath = resolveRemotePath(filePath, environment);
+  const remoteDir = path.posix.dirname(remotePath);
+  const tempPath = path.posix.join(remoteDir, `.${path.posix.basename(remotePath) || 'file'}.limcode-write-${Date.now()}-${randomBytes(4).toString('hex')}`);
+  const mkdirResult = await executeRemoteServerScript(environment, `mkdir -p -- ${shQuote(remoteDir)}`, { timeout: DEFAULT_REMOTE_TIMEOUT_MS, displayCommand: `mkdir -p ${remoteDir}` });
+  if (mkdirResult.exitCode !== 0 || mkdirResult.killed) throw new Error(mkdirResult.stderr || `远程目录创建失败：${remoteDir}`);
+
+  const handle = openRemoteServerWriteStream(environment, tempPath);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      handle.stdin.once('error', reject);
+      handle.stdin.end(Buffer.from(content, 'utf8'), () => resolve());
+    });
+    const writeResult = await handle.done;
+    if (writeResult.exitCode !== 0 || writeResult.killed) throw new Error(writeResult.stderr || `远程文件写入失败：${remotePath}`);
+    const renameResult = await executeRemoteServerScript(environment, `mv -f -- ${shQuote(tempPath)} ${shQuote(remotePath)}`, { timeout: DEFAULT_REMOTE_TIMEOUT_MS, displayCommand: `rename ${tempPath} -> ${remotePath}` });
+    if (renameResult.exitCode !== 0 || renameResult.killed) throw new Error(renameResult.stderr || `远程文件替换失败：${remotePath}`);
+  } catch (error) {
+    await executeRemoteServerScript(environment, `rm -f -- ${shQuote(tempPath)}`, { timeout: DEFAULT_REMOTE_TIMEOUT_MS, displayCommand: `cleanup ${tempPath}` }).catch(() => undefined);
+    throw error;
+  }
 }
 
 export function openRemoteServerReadStream(environment: WorkEnvironmentRecord, remotePath: string): RemoteServerStreamHandle {

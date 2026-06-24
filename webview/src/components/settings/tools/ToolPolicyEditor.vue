@@ -8,8 +8,10 @@ import type {
   ToolPolicyScopeKind,
   ToolPolicyToolConfigRecord
 } from '@shared/protocol';
+import { EDIT_TOOL_NAME } from '@shared/protocol';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingInline.vue';
+import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
 import LcCheckbox from '@webview/components/ui/LcCheckbox.vue';
 import { useToolPolicyStore } from '@webview/stores/useToolPolicyStore';
 import { resolveToolHeaderIcon } from '@webview/components/content/toolDisplay/registry';
@@ -103,8 +105,29 @@ function executionLabel(tool: ToolDefinitionRecord): string {
   return tool.execution === 'agentRun' ? 'AgentRun' : 'Runtime';
 }
 
+type EditToolMode = 'hunk' | 'patch';
+
 function toolDescription(tool: ToolDefinitionRecord): string {
+  if (tool.name === EDIT_TOOL_NAME) return editModeDescription(editModeForTool(tool));
   return tool.description || '后端未提供描述。';
+}
+
+function editModeForTool(tool: ToolDefinitionRecord): EditToolMode {
+  return configForTool(tool).mode === 'patch' ? 'patch' : 'hunk';
+}
+
+function editModeDescription(mode: EditToolMode): string {
+  if (mode === 'patch') {
+    return '当前 AI 将看到 Patch 模式定义：edit({ path, patch })。patch 使用单文件 unified diff，支持标准 @@ hunk；行号失败后会尝试上下文搜索、search/replace 和 loose @@ 兜底。历史工具调用记录不会回写，只影响后续模型请求看到的工具定义。';
+  }
+  return '当前 AI 将看到 Hunk 结构化模式定义：edit({ path, hunks })。每个 hunk 使用 oldContent/newContent/startLine；优先唯一精确匹配，重复内容用 startLine 定位，精确失败时尝试行首缩进兜底。历史工具调用记录不会回写，只影响后续模型请求看到的工具定义。';
+}
+
+function editModeShortLabel(tool: ToolDefinitionRecord): string | undefined {
+  if (tool.name !== EDIT_TOOL_NAME) return undefined;
+  return editModeForTool(tool) === 'patch'
+    ? '当前模式：Patch · AI 参数为 path + patch'
+    : '当前模式：Hunk · AI 参数为 path + hunks';
 }
 
 function toolIcon(tool: ToolDefinitionRecord) {
@@ -200,7 +223,16 @@ function sanitizeConfigForTool(tool: ToolDefinitionRecord, config: ToolConfigRec
 }
 
 function supportsInlineField(field: ToolConfigFieldRecord): boolean {
-  return field.type === 'stringList' || field.type === 'globList' || field.type === 'string' || field.type === 'number' || field.type === 'boolean';
+  return field.type === 'stringList' || field.type === 'globList' || field.type === 'string' || field.type === 'number' || field.type === 'boolean' || field.type === 'enum';
+}
+
+function enumOptions(field: ToolConfigFieldRecord): SettingsDropdownOption[] {
+  return (field.options ?? []).map((option) => ({ value: String(option.value), label: option.label, description: option.description }));
+}
+
+function enumValue(tool: ToolDefinitionRecord, field: ToolConfigFieldRecord): string {
+  const value = configForTool(tool)[field.key] ?? field.defaultValue ?? field.options?.[0]?.value ?? '';
+  return String(value);
 }
 
 function inputValue(event: Event): string {
@@ -281,6 +313,7 @@ function inputNumber(event: Event): number {
                       <small>来自后端工具定义，展开后查看完整说明。</small>
                     </div>
                     <p class="tool-definition-description">{{ toolDescription(tool) }}</p>
+                    <p v-if="editModeShortLabel(tool)" class="tool-definition-mode-note">{{ editModeShortLabel(tool) }}</p>
                   </div>
 
                   <template v-if="allowedSet.has(tool.name)">
@@ -370,6 +403,14 @@ function inputNumber(event: Event): number {
                           :model-value="Boolean(configForTool(tool)[field.key] ?? field.defaultValue)"
                           :disabled="readonly"
                           :aria-label="field.label"
+                          @update:model-value="updateScalarField(tool, field, $event)"
+                        />
+                        <SettingsDropdown
+                          v-else-if="field.type === 'enum'"
+                          :model-value="enumValue(tool, field)"
+                          :options="enumOptions(field)"
+                          :title="field.label"
+                          :disabled="readonly"
                           @update:model-value="updateScalarField(tool, field, $event)"
                         />
                         <input
@@ -596,6 +637,20 @@ function inputNumber(event: Event): number {
   overflow: hidden;
 }
 
+.tool-config-collapse.is-expanded,
+.tool-config-collapse.is-expanded .tool-config-collapse-frame,
+.tool-config-collapse.is-expanded .tool-config-panel,
+.tool-config-collapse.is-expanded .tool-specific-config,
+.tool-config-collapse.is-expanded .tool-config-fields,
+.tool-config-collapse.is-expanded .tool-config-field {
+  overflow: visible;
+}
+
+.tool-config-collapse.is-expanded .tool-config-field {
+  position: relative;
+  z-index: 3;
+}
+
 .tool-toggle {
   width: 10px;
   height: 10px;
@@ -687,11 +742,21 @@ function inputNumber(event: Event): number {
 }
 
 .tool-definition-description,
+.tool-definition-mode-note,
 .tool-config-disabled-note {
   margin: 0;
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-sm);
   line-height: 1.55;
+}
+
+.tool-definition-mode-note {
+  border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 82%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-foreground) 8%);
+  font-size: var(--font-size-xs);
 }
 
 .tool-config-disabled-note {

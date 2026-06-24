@@ -15,6 +15,8 @@ import type {
   ExtensionToWebviewMessage,
   GlobalSettingsSection,
   GlobalSettingsSectionValue,
+  EditToolMode,
+  EditToolStatisticsRecord,
   LlmCompressionConfigRecord,
   LlmProviderConfigRecord,
   LlmProviderModelRecord,
@@ -59,8 +61,68 @@ export interface FsReadFileResult {
   content: string;
 }
 
+export interface FsFileDiffRecord {
+  format: 'unified';
+  text: string;
+  added: number;
+  removed: number;
+  truncated: boolean;
+}
+
+export interface FsStructuredEditHunk {
+  oldContent: string;
+  newContent: string;
+  startLine?: number;
+}
+
+export interface FsEditFileRequest {
+  path: string;
+  mode: EditToolMode;
+  patch?: string;
+  hunks?: FsStructuredEditHunk[];
+}
+
+export type FsFileWriteAction = 'created' | 'modified' | 'unchanged';
+
+export interface FsFileChangeRecord {
+  path: string;
+  action: FsFileWriteAction;
+  added: number;
+  removed: number;
+  diff?: FsFileDiffRecord;
+}
+
+export interface FsWriteFileResult {
+  kind: 'file_write.result';
+  path: string;
+  success: boolean;
+  action: FsFileWriteAction;
+  summary: string;
+  changedFiles: string[];
+  files: FsFileChangeRecord[];
+}
+
+export interface FsEditFileResult {
+  kind: 'file_edit.result';
+  mode: EditToolMode;
+  path: string;
+  success: boolean;
+  action: Extract<FsFileWriteAction, 'modified' | 'unchanged'>;
+  totalHunks: number;
+  applied: number;
+  failed: number;
+  fallbackMode?: string;
+  results: unknown[];
+  summary: string;
+  changedFiles: string[];
+  files: FsFileChangeRecord[];
+  statistics?: EditToolStatisticsRecord;
+}
+
 export interface FsCapability {
   readFile(path: string, startLine?: number, endLine?: number, options?: WorkEnvironmentCapabilityOptions): Promise<FsReadFileResult>;
+  writeFile(path: string, content: string, options?: WorkEnvironmentCapabilityOptions): Promise<FsWriteFileResult>;
+  editFile(request: FsEditFileRequest, options?: WorkEnvironmentCapabilityOptions): Promise<FsEditFileResult>;
 }
 
 export interface WorkEnvironmentCapabilityOptions {
@@ -394,6 +456,8 @@ export interface StorageCapability {
   detectSystemGit(): Promise<CheckpointGitStatusRecord>;
   createShadowCheckpoint(request: ShadowCheckpointCreateRequest): Promise<CheckpointRecord>;
   restoreShadowCheckpoint(request: CheckpointRestorePayload): Promise<ShadowCheckpointRestoreResult>;
+  openShadowCheckpointDiff(request: ShadowCheckpointDiffOpenRequest): Promise<ShadowCheckpointDiffOpenResult>;
+  recordEditToolModeResult(mode: EditToolMode, success: boolean): Promise<EditToolStatisticsRecord>;
   collectShadowWorktreeStats(): Promise<ShadowRepositoryDiskStatRecord[]>;
   deleteShadowWorktrees(storageKeys: string[]): Promise<{ deletedStorageKeys: string[] }>;
   cleanupUnusedShadowWorktrees(maxAgeDays: number): Promise<{ deletedStorageKeys: string[] }>;
@@ -417,4 +481,18 @@ export interface ShadowCheckpointCreateRequest {
   shadowRepositoryStorageKey: string;
   trigger: CheckpointTriggerKind;
   policy: CheckpointPolicyRecord;
+}
+
+export interface ShadowCheckpointDiffOpenRequest {
+  checkpointId: string;
+  conversationId: string;
+  shadowRepositoryStorageKey: string;
+  commitSha: string;
+  projectUri: string;
+  filePath: string;
+}
+
+export interface ShadowCheckpointDiffOpenResult {
+  status: 'opened' | 'failed';
+  message: string;
 }

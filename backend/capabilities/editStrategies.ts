@@ -192,6 +192,104 @@ export function applyHunkEdit(originalContent: string, hunks: FsStructuredEditHu
   };
 }
 
+export function applyInsertEdit(originalContent: string, line: number, content: string): EditApplyResult {
+  const normalized = normalizeLineEndings(originalContent);
+  const split = splitLinesPreserveTrailing(normalized);
+  const lines = split.lines;
+  const totalLines = lines.length;
+
+  if (!Number.isFinite(line) || line < 1) {
+    return {
+      mode: 'insert',
+      newContent: normalized,
+      totalHunks: 1,
+      applied: 0,
+      failed: 1,
+      results: [{ index: 0, success: false, error: `Invalid line number: ${line}. Must be a positive integer (1-based).` }]
+    };
+  }
+  if (line > totalLines + 1) {
+    return {
+      mode: 'insert',
+      newContent: normalized,
+      totalHunks: 1,
+      applied: 0,
+      failed: 1,
+      results: [{ index: 0, success: false, error: `Line ${line} is out of range. The file has ${totalLines} lines. Use line ${totalLines + 1} to append at the end.` }]
+    };
+  }
+
+  const insertText = normalizeLineEndings(content);
+  const insertLines = insertText === '' ? [] : insertText.split('\n');
+  const insertIndex = line - 1;
+  lines.splice(insertIndex, 0, ...insertLines);
+
+  const newContent = joinLinesPreserveTrailing(lines, split.endsWithNewline);
+  const endLine = line + Math.max(countTextLines(insertText), 1) - 1;
+  return {
+    mode: 'insert',
+    newContent,
+    totalHunks: 1,
+    applied: 1,
+    failed: 0,
+    results: [{ index: 0, success: true, startLine: line, endLine, appliedBy: 'line_number' }]
+  };
+}
+
+export function applyDeleteEdit(originalContent: string, startLine: number, endLine: number): EditApplyResult {
+  const normalized = normalizeLineEndings(originalContent);
+  const split = splitLinesPreserveTrailing(normalized);
+  const lines = split.lines;
+  const totalLines = lines.length;
+
+  if (!Number.isFinite(startLine) || startLine < 1 || !Number.isFinite(endLine) || endLine < 1) {
+    return {
+      mode: 'delete',
+      newContent: normalized,
+      totalHunks: 1,
+      applied: 0,
+      failed: 1,
+      results: [{ index: 0, success: false, error: `Invalid line range: startLine=${startLine}, endLine=${endLine}. Both must be positive integers (1-based).` }]
+    };
+  }
+  if (startLine > endLine) {
+    return {
+      mode: 'delete',
+      newContent: normalized,
+      totalHunks: 1,
+      applied: 0,
+      failed: 1,
+      results: [{ index: 0, success: false, error: `Invalid line range: startLine (${startLine}) must be ≤ endLine (${endLine}).` }]
+    };
+  }
+  if (startLine > totalLines) {
+    return {
+      mode: 'delete',
+      newContent: normalized,
+      totalHunks: 1,
+      applied: 0,
+      failed: 1,
+      results: [{ index: 0, success: false, error: `Line ${startLine} is out of range. The file has ${totalLines} lines.` }]
+    };
+  }
+
+  const clampedEnd = Math.min(endLine, totalLines);
+  const deleteStart = startLine - 1;
+  const deleteCount = clampedEnd - deleteStart;
+  lines.splice(deleteStart, deleteCount);
+
+  const newContent = joinLinesPreserveTrailing(lines, split.endsWithNewline);
+  return {
+    mode: 'delete',
+    newContent,
+    totalHunks: 1,
+    applied: 1,
+    failed: 0,
+    results: [{ index: 0, success: true, startLine, endLine: clampedEnd, appliedBy: 'line_number' }]
+  };
+}
+
+
 function parseUnifiedDiff(patch: string): ParsedUnifiedDiff {
   const lines = sanitizePatch(patch).split('\n');
   let oldFile: string | undefined;

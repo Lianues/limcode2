@@ -26,7 +26,7 @@ import {
   writeRemoteServerTextFile
 } from './workEnvironmentProvider';
 import { buildFileDiffRecord } from './fileDiff';
-import { applyHunkEdit, applyPatchEdit } from './editStrategies';
+import { applyHunkEdit, applyInsertEdit, applyPatchEdit, applyDeleteEdit } from './editStrategies';
 
 const MAX_BYTES = 256 * 1024;
 const MAX_EDIT_READ_BYTES = 2 * 1024 * 1024;
@@ -111,8 +111,10 @@ export async function editWorkspaceTextFile(
   const before = await readWorkspaceRawTextFile(path, MAX_EDIT_READ_BYTES, options);
   if (!before.existed) throw new Error(`File not found: ${path}`);
 
-  const applied = request.mode === 'patch'
-    ? applyPatchEdit(before.content, request.patch ?? '')
+  const applied =
+    request.mode === 'patch' ? applyPatchEdit(before.content, request.patch ?? '')
+    : request.mode === 'insert' ? applyInsertEdit(before.content, request.insert?.line ?? 0, request.insert?.content ?? '')
+    : request.mode === 'delete' ? applyDeleteEdit(before.content, request.delete?.startLine ?? 0, request.delete?.endLine ?? 0)
     : applyHunkEdit(before.content, request.hunks ?? []);
   if (applied.applied <= 0) {
     const firstError = applied.results.find((item) => !item.success)?.error ?? 'No hunks were applied.';

@@ -102,7 +102,9 @@ function emptyEditToolStatistics(): EditToolStatisticsRecord {
   return {
     modes: {
       patch: { mode: 'patch', attempts: 0, successes: 0, failures: 0, successRate: 0 },
-      hunk: { mode: 'hunk', attempts: 0, successes: 0, failures: 0, successRate: 0 }
+      hunk: { mode: 'hunk', attempts: 0, successes: 0, failures: 0, successRate: 0 },
+      insert: { mode: 'insert', attempts: 0, successes: 0, failures: 0, successRate: 0 },
+      delete: { mode: 'delete', attempts: 0, successes: 0, failures: 0, successRate: 0 }
     },
     updatedAt: 0
   };

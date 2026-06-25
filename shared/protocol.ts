@@ -340,7 +340,7 @@ export const ALLOW_OUTSIDE_PROJECT_PATHS_CONFIG_KEY = 'allowOutsideProjectPaths'
 export const SUBMIT_AGENT_ANSWER_TOOL_NAME = 'submit_agent_answer';
 export const READ_AGENT_ANSWER_TOOL_NAME = 'read_agent_answer';
 
-export type EditToolMode = 'patch' | 'hunk';
+export type EditToolMode = 'patch' | 'hunk' | 'insert' | 'delete';
 
 export interface EditToolModeStatisticsRecord {
   mode: EditToolMode;

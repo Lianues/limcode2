@@ -391,7 +391,9 @@ function normalizeEditToolStatistics(input: Partial<EditToolStatisticsRecord> | 
   return {
     modes: {
       patch: normalizeEditModeStatistics({ mode: 'patch', ...(input?.modes?.patch ?? {}) }),
-      hunk: normalizeEditModeStatistics({ mode: 'hunk', ...(input?.modes?.hunk ?? {}) })
+      hunk: normalizeEditModeStatistics({ mode: 'hunk', ...(input?.modes?.hunk ?? {}) }),
+      insert: normalizeEditModeStatistics({ mode: 'insert', ...(input?.modes?.insert ?? {}) }),
+      delete: normalizeEditModeStatistics({ mode: 'delete', ...(input?.modes?.delete ?? {}) })
     },
     updatedAt: finiteNonNegativeInteger(input?.updatedAt, now)
   };

@@ -78,11 +78,23 @@ export interface FsStructuredEditHunk {
   startLine?: number;
 }
 
+export interface FsInsertEditRequest {
+  line: number;
+  content: string;
+}
+
+export interface FsDeleteEditRequest {
+  startLine: number;
+  endLine: number;
+}
+
 export interface FsEditFileRequest {
   path: string;
   mode: EditToolMode;
   patch?: string;
   hunks?: FsStructuredEditHunk[];
+  insert?: FsInsertEditRequest;
+  delete?: FsDeleteEditRequest;
 }
 
 export type FsFileWriteAction = 'created' | 'modified' | 'unchanged' | 'deleted';

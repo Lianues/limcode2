@@ -14,7 +14,6 @@ import { ConversationModeSelection, Mode, ToolPolicy } from '../mode/components'
 import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey } from './resources';
 import { toolSchedulingDecision } from './scheduling';
 import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolPolicyScopeLinkData } from './components';
-import { simplifyToolResponseForModel } from './responseSimplifier';
 
 export const toolsRuntimeStateProjectionReads: AccessDeclaration = {
   components: [
@@ -96,7 +95,7 @@ function buildToolCallRecord(world: WorldReader, entity: number): ToolCallRecord
     args: call.argsJson,
     ...(summary ? { summary } : {}),
     status: state.status,
-    ...(state.result !== undefined ? { result: simplifyToolResponseForModel(call.name, state.status, state.result) } : {}),
+    ...(state.result !== undefined ? { result: state.result } : {}),
     ...(state.error !== undefined ? { error: state.error } : {}),
     ...(state.progress !== undefined ? { progress: state.progress } : {}),
     schedulingMode: scheduling.mode,

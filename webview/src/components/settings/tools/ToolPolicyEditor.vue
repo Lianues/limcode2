@@ -175,8 +175,8 @@ function editModeDescription(mode: EditToolMode): string {
 function editModeShortLabel(tool: ToolDefinitionRecord): string | undefined {
   if (tool.name !== EDIT_TOOL_NAME) return undefined;
   return editModeForTool(tool) === 'patch'
-    ? '当前模式：Patch · AI 参数为 path + patch'
-    : '当前模式：Hunk · AI 参数为 path + hunks';
+    ? '当前模式：Patch · AI 参数为 path + patch（insert/delete 始终可用）'
+    : '当前模式：Hunk · AI 参数为 path + hunks（insert/delete 始终可用）';
 }
 
 function editModeStatisticsText(tool: ToolDefinitionRecord): string | undefined {
@@ -184,7 +184,9 @@ function editModeStatisticsText(tool: ToolDefinitionRecord): string | undefined 
   if (store.editToolStatisticsLoading && !store.editToolStatisticsLoaded) return '统计加载中...';
   const hunk = store.editToolStatistics.modes.hunk;
   const patch = store.editToolStatistics.modes.patch;
-  return `Hunk：${formatModeStatistics(hunk.successes, hunk.attempts, hunk.successRate)}；Patch：${formatModeStatistics(patch.successes, patch.attempts, patch.successRate)}`;
+  const insert = store.editToolStatistics.modes.insert;
+  const del = store.editToolStatistics.modes.delete;
+  return `Hunk：${formatModeStatistics(hunk.successes, hunk.attempts, hunk.successRate)}；Patch：${formatModeStatistics(patch.successes, patch.attempts, patch.successRate)}；Insert：${formatModeStatistics(insert.successes, insert.attempts, insert.successRate)}；Delete：${formatModeStatistics(del.successes, del.attempts, del.successRate)}`;
 }
 
 function formatModeStatistics(successes: number, attempts: number, successRate: number): string {

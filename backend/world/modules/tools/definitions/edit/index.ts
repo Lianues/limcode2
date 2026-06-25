@@ -1,5 +1,5 @@
 import { EDIT_TOOL_NAME, type EditToolMode } from '../../../../../../shared/protocol';
-import type { FsStructuredEditHunk } from '../../../../../capabilities/types';
+import type { FsStructuredEditHunk, FsInsertEditRequest, FsDeleteEditRequest, FsEditFileRequest } from '../../../../../capabilities/types';
 import type { ToolConfigRecord } from '../../../../../../shared/protocol';
 import type { ToolDefinition, ToolDeps } from '../../registry';
 import { staticToolScheduling } from '../../scheduling';
@@ -10,6 +10,8 @@ interface EditArgs {
   path?: string;
   patch?: string;
   hunks?: unknown;
+  insert?: { line?: number; content?: string };
+  delete?: { startLine?: number; endLine?: number };
 }
 
 export const EDIT_TOOL_MODE_DEFAULT: EditToolMode = 'hunk';
@@ -58,23 +60,21 @@ export const editTool: ToolDefinition = {
   summary: summarizeEditToolCall,
   async execute(rawArgs, deps, ctx) {
     const args = (rawArgs ?? {}) as EditArgs;
-    const mode = editModeFromConfig(ctx?.config);
+    const runtimeMode = detectEditMode(args, ctx?.config);
     const path = normalizeDisplayPath(args.path);
-    if (!path) return { ok: false, output: await failedOutput(deps, mode, path, 'Missing required argument: path') };
+    if (!path) return { ok: false, output: await failedOutput(deps, runtimeMode, path, 'Missing required argument: path') };
 
     try {
-      const request = mode === 'patch'
-        ? buildPatchModeRequest(path, args)
-        : buildHunkModeRequest(path, args);
+      const request = buildEditRequest(path, args, runtimeMode);
       const result = await deps.fs.editFile(request, {
         workEnvironment: ctx?.workEnvironment,
         allowOutsideProjectPaths: allowOutsideProjectPathsFromConfig(ctx?.config, false)
       });
-      await recordStatistics(deps, mode, result.success);
+      await recordStatistics(deps, runtimeMode, result.success);
       return { ok: result.success, output: result, ...(result.failed > 0 ? { status: 'warning' as const } : {}) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return { ok: false, output: await failedOutput(deps, mode, path, message) };
+      return { ok: false, output: await failedOutput(deps, runtimeMode, path, message) };
     }
   }
 };
@@ -140,6 +140,37 @@ export function patchModeParameters(): unknown {
   };
 }
 
+export function insertDeleteDescription(): string {
+  return [
+    '\nLine-based methods (always available, choose per call):',
+    '- insert: provide insert={ line, content } to insert text before the given 1-based line number. Use line N+1 to append after the last line.',
+    '- delete: provide delete={ startLine, endLine } to remove lines in the inclusive range [startLine, endLine].'
+  ].join('\n');
+}
+
+export function insertModeParameters(): unknown {
+  return {
+    type: 'object',
+    properties: {
+      line: { type: 'number', description: '1-based line number before which to insert content. Use line N+1 to append after the last line of the file.' },
+      content: { type: 'string', description: 'Text to insert at the specified line position. May contain multiple lines separated by newlines.' }
+    },
+    required: ['line', 'content']
+  };
+}
+
+export function deleteModeParameters(): unknown {
+  return {
+    type: 'object',
+    properties: {
+      startLine: { type: 'number', description: '1-based first line to delete (inclusive).' },
+      endLine: { type: 'number', description: '1-based last line to delete (inclusive).' }
+    },
+    required: ['startLine', 'endLine']
+  };
+}
+
+
 function buildPatchModeRequest(path: string, args: EditArgs): { path: string; mode: 'patch'; patch: string } {
   if (typeof args.patch !== 'string' || args.patch.trim().length === 0) throw new Error('Missing required argument for patch mode: patch');
   return { path, mode: 'patch', patch: args.patch };
@@ -150,6 +181,34 @@ function buildHunkModeRequest(path: string, args: EditArgs): { path: string; mod
   if (hunks.length === 0) throw new Error('Missing required argument for hunk mode: hunks');
   return { path, mode: 'hunk', hunks };
 }
+
+function detectEditMode(args: EditArgs, config: ToolConfigRecord | undefined): EditToolMode {
+  if (args.insert && typeof args.insert.line === 'number' && typeof args.insert.content === 'string') return 'insert';
+  if (args.delete && typeof args.delete.startLine === 'number' && typeof args.delete.endLine === 'number') return 'delete';
+  return editModeFromConfig(config);
+}
+
+function buildEditRequest(path: string, args: EditArgs, mode: EditToolMode): FsEditFileRequest {
+  if (mode === 'insert') return buildInsertModeRequest(path, args);
+  if (mode === 'delete') return buildDeleteModeRequest(path, args);
+  if (mode === 'patch') return buildPatchModeRequest(path, args);
+  return buildHunkModeRequest(path, args);
+}
+
+function buildInsertModeRequest(path: string, args: EditArgs): { path: string; mode: 'insert'; insert: FsInsertEditRequest } {
+  if (!args.insert || typeof args.insert.line !== 'number' || typeof args.insert.content !== 'string') {
+    throw new Error('Missing required arguments for insert mode: insert.line and insert.content');
+  }
+  return { path, mode: 'insert', insert: { line: Math.max(1, Math.floor(args.insert.line)), content: args.insert.content } };
+}
+
+function buildDeleteModeRequest(path: string, args: EditArgs): { path: string; mode: 'delete'; delete: FsDeleteEditRequest } {
+  if (!args.delete || typeof args.delete.startLine !== 'number' || typeof args.delete.endLine !== 'number') {
+    throw new Error('Missing required arguments for delete mode: delete.startLine and delete.endLine');
+  }
+  return { path, mode: 'delete', delete: { startLine: Math.max(1, Math.floor(args.delete.startLine)), endLine: Math.max(1, Math.floor(args.delete.endLine)) } };
+}
+
 
 function normalizeStructuredHunks(value: unknown): FsStructuredEditHunk[] {
   if (!Array.isArray(value)) return [];

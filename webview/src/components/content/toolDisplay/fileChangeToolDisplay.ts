@@ -14,6 +14,8 @@ interface EditArgs {
   path?: string;
   patch?: string;
   hunks?: unknown;
+  insert?: { line?: number; content?: string };
+  delete?: { startLine?: number; endLine?: number };
 }
 
 interface DeleteArgs {
@@ -119,7 +121,9 @@ function editInputSections(args: EditArgs, context: ToolDisplayContext): ToolDis
     rows: parameterRows([
       { label: 'path', value: path },
       { label: 'patch', value: typeof args.patch === 'string' ? `${args.patch.length} 字符` : undefined },
-      { label: 'hunks', value: Array.isArray(args.hunks) ? `${args.hunks.length} 个` : undefined }
+      { label: 'hunks', value: Array.isArray(args.hunks) ? `${args.hunks.length} 个` : undefined },
+      { label: 'insert', value: args.insert ? `第 ${args.insert.line} 行，${args.insert.content?.length ?? 0} 字符` : undefined },
+      { label: 'delete', value: args.delete ? `第 ${args.delete.startLine}-${args.delete.endLine} 行` : undefined }
     ]),
     rowStyle: 'keyValue'
   }];
@@ -300,7 +304,9 @@ function editArgs(value: unknown): EditArgs {
   return {
     path: stringValue(record.path),
     patch: stringValue(record.patch),
-    hunks: record.hunks
+    hunks: record.hunks,
+    insert: asRecord(record.insert) ? { line: numberValue(asRecord(record.insert)?.line), content: stringValue(asRecord(record.insert)?.content) } : undefined,
+    delete: asRecord(record.delete) ? { startLine: numberValue(asRecord(record.delete)?.startLine), endLine: numberValue(asRecord(record.delete)?.endLine) } : undefined
   };
 }
 

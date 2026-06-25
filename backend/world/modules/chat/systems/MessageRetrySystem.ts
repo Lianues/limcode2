@@ -77,7 +77,6 @@ export const MessageRetrySystem = defineSystem({
 
       const retryInput = buildRetryInput(world, conversation, messages, startIndex, modelMessage);
       if (!retryInput) continue;
-
       deleteMessagesFromIndex(world, cmd, messages, startIndex);
       spawnAgentRun(cmd, retryInput);
     }

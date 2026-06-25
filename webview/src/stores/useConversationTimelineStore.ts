@@ -214,6 +214,11 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       const conversationId = conversationIdFromClientStateStreamId(streamId);
       if (!conversationId) return;
       const timeline = this.ensureTimeline(conversationId);
+      if (state.messages.some((message) => message.conversationId === conversationId)) {
+        timeline.state = createEmptyClientState();
+        timeline.loadedChunkIds = [];
+        timeline.chunkById = {};
+      }
       mergeClientState(timeline.state, state);
     },
     applyClientStatePatch(streamId: string, streamSeq: number, patches: ClientPatchOp[]): void {

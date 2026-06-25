@@ -88,17 +88,13 @@ export class WebviewMessageRouter {
         break;
       case BridgeMessageType.MessageEdit:
         if (!this.deps.isHydrated() || !message.payload) return;
-        void (message.payload.runAfterEdit
-          ? this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
-            this.deps.world.enqueue({ type: ChatEventType.Edit, payload: message.payload });
-          })
-          : this.enqueueAfterTimelineRangeLoaded({ conversationId: message.payload.conversationId, mode: 'suffix', anchorMessageId: message.payload.messageId, contextBeforeChunks: 1 }, () => {
-            this.deps.world.enqueue({ type: ChatEventType.Edit, payload: message.payload });
-          }));
+        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
+          this.deps.world.enqueue({ type: ChatEventType.Edit, payload: message.payload });
+        });
         break;
       case BridgeMessageType.MessageDeleteFrom:
         if (!this.deps.isHydrated() || !message.payload) return;
-        void this.enqueueAfterTimelineRangeLoaded({ conversationId: message.payload.conversationId, mode: 'suffix', anchorMessageId: message.payload.messageId, contextBeforeChunks: 1 }, () => {
+        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
           this.deps.world.enqueue({ type: ChatEventType.DeleteFrom, payload: message.payload });
         });
         break;

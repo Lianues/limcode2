@@ -463,12 +463,10 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
 
 export async function saveConversationRenderDetailToStores(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
   const detail = conversationRenderDetailSlice(state, conversationId);
-  const timeline = (await loadConversationTimelineDetail(paths, conversationId)) ?? createEmptyClientState();
-  mergeRenderDetailTables(timeline, detail);
-  const compression = (await loadConversationCompressionDetail(paths, conversationId)) ?? createEmptyClientState();
-  mergeCompressionTables(compression, detail);
+  const compression = createEmptyClientState();
+  copyCompressionTables(compression, detail);
   await Promise.all([
-    saveConversationTimelineDetail(paths, conversationId, timeline),
+    saveConversationTimelineDetail(paths, conversationId, detail),
     saveConversationCompressionDetail(paths, conversationId, compression)
   ]);
 }

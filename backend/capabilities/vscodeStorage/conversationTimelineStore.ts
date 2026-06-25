@@ -166,7 +166,7 @@ export async function loadConversationTimelinePage(paths: StoragePaths, request:
     return emptyTimelinePage(request.conversationId, applyModeForDirection(request.direction));
   }
 
-  const chunks = [...index.chunks].sort((left, right) => left.index - right.index || left.id.localeCompare(right.id));
+  const chunks = await normalizeTimelineChunkIndexRecords(root, index.chunks);
   const selected = selectTimelinePageChunks(chunks, request);
   const state = createEmptyClientState();
   const chunkFiles = await Promise.all(selected.map((chunk) => readConversationTimelineChunk(root, chunk)));
@@ -218,7 +218,8 @@ export async function loadConversationMessagesByIds(paths: StoragePaths, convers
   const root = conversationTimelineRoot(paths, conversationId);
   const index = await readJson<ConversationTimelineIndexFile>(vscode.Uri.joinPath(root, INDEX_FILE));
   if (!isConversationTimelineIndex(index, conversationId)) return [];
-  const records = index.chunks.filter((chunk) => chunk.messageIds.some((id) => wanted.has(id)));
+  const allRecords = await normalizeTimelineChunkIndexRecords(root, index.chunks);
+  const records = allRecords.filter((chunk) => chunk.messageIds.some((id) => wanted.has(id)));
   const chunks = await Promise.all(records.map((chunk) => readConversationTimelineChunk(root, chunk)));
   return chunks
     .flatMap((chunk) => chunk?.messages ?? [])
@@ -236,7 +237,7 @@ export async function loadConversationTimelineRange(paths: StoragePaths, request
   const root = conversationTimelineRoot(paths, request.conversationId);
   const index = await readJson<ConversationTimelineIndexFile>(vscode.Uri.joinPath(root, INDEX_FILE));
   if (!isConversationTimelineIndex(index, request.conversationId) || index.chunks.length === 0) return undefined;
-  const chunks = [...index.chunks].sort((left, right) => left.index - right.index || left.id.localeCompare(right.id));
+  const chunks = await normalizeTimelineChunkIndexRecords(root, index.chunks);
   const selected = selectTimelineRangeChunks(chunks, request);
   if (selected.length === 0) return undefined;
   const state = createEmptyClientState();
@@ -314,7 +315,54 @@ function normalizeTimelinePageChunkCount(value: number | undefined): number {
   return Math.max(1, Math.min(MAX_TIMELINE_PAGE_CHUNKS, Math.floor(value!)));
 }
 
+async function normalizeTimelineChunkIndexRecords(root: vscode.Uri, records: ConversationTimelineChunkIndexRecord[]): Promise<ConversationTimelineChunkIndexRecord[]> {
+  const normalized: ConversationTimelineChunkIndexRecord[] = [];
+  let messageOffset = 0;
+  for (let position = 0; position < records.length; position += 1) {
+    const record = records[position] as ConversationTimelineChunkIndexRecord & Partial<{
+      index: number;
+      startSeq: number;
+      endSeq: number;
+      messageCount: number;
+      messageOffsetStart: number;
+      messageOffsetEnd: number;
+      messageIds: string[];
+      toolCallIds: string[];
+      toolCallCount: number;
+      toolCallEventCount: number;
+    }>;
+    const needsChunkFile = typeof record.startSeq !== 'number'
+      || typeof record.endSeq !== 'number'
+      || typeof record.messageCount !== 'number'
+      || !Array.isArray(record.messageIds);
+    const file = needsChunkFile
+      ? await readJson<ConversationTimelineChunkFile>(vscode.Uri.joinPath(root, ...record.file.split('/')))
+      : undefined;
+    const messages = file?.schemaVersion === STORAGE_VERSION && file.chunkId === record.id ? file.messages : [];
+    const messageCount = typeof record.messageCount === 'number' ? record.messageCount : messages.length;
+    const messageOffsetStart = typeof record.messageOffsetStart === 'number' ? record.messageOffsetStart : messageOffset + 1;
+    const messageOffsetEnd = typeof record.messageOffsetEnd === 'number' ? record.messageOffsetEnd : messageOffset + messageCount;
+    normalized.push({
+      ...record,
+      index: typeof record.index === 'number' ? record.index : position,
+      startSeq: typeof record.startSeq === 'number' ? record.startSeq : messages[0]?.seq ?? 0,
+      endSeq: typeof record.endSeq === 'number' ? record.endSeq : messages[messages.length - 1]?.seq ?? 0,
+      messageCount,
+      messageOffsetStart,
+      messageOffsetEnd,
+      messageIds: Array.isArray(record.messageIds) ? record.messageIds : messages.map((message) => message.id),
+      toolCallIds: Array.isArray(record.toolCallIds) ? record.toolCallIds : [],
+      toolCallCount: typeof record.toolCallCount === 'number' ? record.toolCallCount : Array.isArray(record.toolCallIds) ? record.toolCallIds.length : 0,
+      toolCallEventCount: typeof record.toolCallEventCount === 'number' ? record.toolCallEventCount : 0
+    });
+    messageOffset += messageCount;
+  }
+  return normalized.sort((left, right) => left.index - right.index || left.id.localeCompare(right.id));
+}
+
+
 function applyModeForDirection(direction: ConversationTimelinePageRequest['direction']): ConversationTimelinePageRecord['applyMode'] {
+
   switch (direction) {
     case 'older': return 'prepend';
     case 'newer': return 'append';
@@ -794,14 +842,6 @@ function isConversationTimelineIndex(value: ConversationTimelineIndexFile | unde
     && value.chunks.every((chunk) => {
       return typeof chunk.id === 'string'
         && typeof chunk.file === 'string'
-        && typeof chunk.index === 'number'
-        && typeof chunk.startSeq === 'number'
-        && typeof chunk.endSeq === 'number'
-        && typeof chunk.messageCount === 'number'
-        && typeof chunk.messageOffsetStart === 'number'
-        && typeof chunk.messageOffsetEnd === 'number'
-        && Array.isArray(chunk.messageIds)
-        && Array.isArray(chunk.toolCallIds)
         && typeof chunk.messageHash === 'string'
         && typeof chunk.sourceHash === 'string'
         && hasAllSidecars(chunk.sidecars)

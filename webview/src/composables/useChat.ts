@@ -13,26 +13,30 @@ export function useChat() {
     const trimmed = text.trim();
     if (!trimmed || !conversationId) return false;
     const agentId = agentStore.activeAgentForConversation(conversationId)?.id;
-    bridge.request(BridgeMessageType.ChatSend, { conversationId, text: trimmed, ...(content ? { content } : {}), ...(agentId ? { agentId } : {}) });
+    const payload = { conversationId, text: trimmed, ...(content ? { content } : {}), ...(agentId ? { agentId } : {}) };
+    bridge.request(BridgeMessageType.ChatSend, payload);
     return true;
   }
 
   function editMessage(conversationId: string, messageId: string, text: string, options: { runAfterEdit?: boolean; deleteFollowing?: boolean } = {}): boolean {
     const trimmed = text.trim();
     if (!conversationId || !messageId || !trimmed) return false;
-    bridge.request(BridgeMessageType.MessageEdit, { conversationId, messageId, text: trimmed, ...options });
+    const payload = { conversationId, messageId, text: trimmed, ...options };
+    bridge.request(BridgeMessageType.MessageEdit, payload);
     return true;
   }
 
   function retryMessageFrom(conversationId: string, messageId: string): boolean {
     if (!conversationId || !messageId) return false;
-    bridge.request(BridgeMessageType.MessageRetryFrom, { conversationId, messageId });
+    const payload = { conversationId, messageId };
+    bridge.request(BridgeMessageType.MessageRetryFrom, payload);
     return true;
   }
 
   function deleteMessagesFrom(conversationId: string, messageId: string): boolean {
     if (!conversationId || !messageId) return false;
-    bridge.request(BridgeMessageType.MessageDeleteFrom, { conversationId, messageId });
+    const payload = { conversationId, messageId };
+    bridge.request(BridgeMessageType.MessageDeleteFrom, payload);
     return true;
   }
 

@@ -410,7 +410,9 @@ export class BackendApplication {
   public async ensureConversationDetailLoaded(conversationId: string): Promise<void> {
     if (!conversationId) return;
     if (!this.hydrated) await this.waitUntilHydrated();
-    if (this.renderLoadedConversationDetails.has(conversationId)) return;
+    if (this.renderLoadedConversationDetails.has(conversationId)) {
+      return;
+    }
     const detail = await this.env.storage.loadConversationDetail(conversationId, { includeRunHistory: false });
     const hydrated = detail ? await hydrateConversationDetail(this.world, detail, conversationId) : false;
     if (hydrated || this.findConversationEntity(conversationId) !== undefined) this.renderLoadedConversationDetails.add(conversationId);

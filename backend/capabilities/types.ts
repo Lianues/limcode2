@@ -460,6 +460,14 @@ export interface StorageCapability {
   loadConversationTimelinePage(request: ConversationTimelinePageRequest): Promise<ConversationTimelinePageRecord>;
   loadConversationLatestMessages(conversationId: string, limit?: number): Promise<MessageRecord[]>;
   loadConversationMessagesByIds(conversationId: string, messageIds: readonly string[]): Promise<MessageRecord[]>;
+  loadConversationTimelineRange(request: {
+    conversationId: string;
+    mode: 'suffix' | 'prefix' | 'between';
+    anchorMessageId?: string;
+    startMessageId?: string;
+    endMessageId?: string;
+    contextBeforeChunks?: number;
+  }): Promise<ClientState | undefined>;
   saveClientStateSkeleton(state: ClientState): Promise<void>;
   saveConversationRenderDetail(conversationId: string, state: ClientState): Promise<void>;
   saveConversationRunHistory(conversationId: string, state: ClientState, options: { mode: ConversationRunHistorySaveMode }): Promise<void>;

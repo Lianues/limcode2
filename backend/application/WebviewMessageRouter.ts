@@ -88,13 +88,17 @@ export class WebviewMessageRouter {
         break;
       case BridgeMessageType.MessageEdit:
         if (!this.deps.isHydrated() || !message.payload) return;
-        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
-          this.deps.world.enqueue({ type: ChatEventType.Edit, payload: message.payload });
-        });
+        void (message.payload.runAfterEdit
+          ? this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
+            this.deps.world.enqueue({ type: ChatEventType.Edit, payload: message.payload });
+          })
+          : this.enqueueAfterTimelineRangeLoaded({ conversationId: message.payload.conversationId, mode: 'suffix', anchorMessageId: message.payload.messageId, contextBeforeChunks: 1 }, () => {
+            this.deps.world.enqueue({ type: ChatEventType.Edit, payload: message.payload });
+          }));
         break;
       case BridgeMessageType.MessageDeleteFrom:
         if (!this.deps.isHydrated() || !message.payload) return;
-        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
+        void this.enqueueAfterTimelineRangeLoaded({ conversationId: message.payload.conversationId, mode: 'suffix', anchorMessageId: message.payload.messageId, contextBeforeChunks: 1 }, () => {
           this.deps.world.enqueue({ type: ChatEventType.DeleteFrom, payload: message.payload });
         });
         break;
@@ -308,9 +312,13 @@ export class WebviewMessageRouter {
         break;
       case BridgeMessageType.CompressionCreate:
         if (!this.deps.isHydrated() || !message.payload) return;
-        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
+        void (message.payload.startMessageId || message.payload.endMessageId
+          ? this.enqueueAfterTimelineRangeLoaded({ conversationId: message.payload.conversationId, mode: 'between', startMessageId: message.payload.startMessageId, endMessageId: message.payload.endMessageId }, () => {
+            this.deps.world.enqueue({ type: CompressionEventType.Create, payload: message.payload });
+          })
+          : this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
           this.deps.world.enqueue({ type: CompressionEventType.Create, payload: message.payload });
-        });
+        }));
         break;
       case BridgeMessageType.CompressionDelete:
         if (!this.deps.isHydrated() || !message.payload) return;
@@ -476,6 +484,27 @@ export class WebviewMessageRouter {
       this.deps.requestSnapshot(conversationId);
     } catch (error) {
       console.warn('[LimCode] Failed to hydrate conversation before command.', error);
+    }
+  }
+
+  private async enqueueAfterTimelineRangeLoaded(
+    request: {
+      conversationId: string;
+      mode: 'suffix' | 'prefix' | 'between';
+      anchorMessageId?: string;
+      startMessageId?: string;
+      endMessageId?: string;
+      contextBeforeChunks?: number;
+    },
+    action: () => void
+  ): Promise<void> {
+    try {
+      const detail = await this.deps.storage.loadConversationTimelineRange(request);
+      if (detail) await hydrateConversationDetail(this.deps.world, detail, request.conversationId);
+      action();
+      this.deps.requestSnapshot(request.conversationId);
+    } catch (error) {
+      console.warn('[LimCode] Failed to hydrate conversation timeline range before command.', error);
     }
   }
 

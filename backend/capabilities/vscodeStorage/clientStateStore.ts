@@ -57,6 +57,7 @@ import {
   loadConversationLatestMessages,
   loadConversationMessagesByIds,
   loadConversationTimelinePage,
+  loadConversationTimelineRange,
   loadConversationTimelineDetail,
   saveConversationTimelineDetail
 } from './conversationTimelineStore';
@@ -335,6 +336,22 @@ export async function loadConversationLatestMessagesFromStores(paths: StoragePat
 export async function loadConversationMessagesByIdsFromStores(paths: StoragePaths, conversationId: string, messageIds: readonly string[]): Promise<MessageRecord[]> {
   return loadConversationMessagesByIds(paths, conversationId, messageIds);
 }
+
+export async function loadConversationTimelineRangeFromStores(paths: StoragePaths, request: {
+  conversationId: string;
+  mode: 'suffix' | 'prefix' | 'between';
+  anchorMessageId?: string;
+  startMessageId?: string;
+  endMessageId?: string;
+  contextBeforeChunks?: number;
+}): Promise<ClientState | undefined> {
+  const state = await loadConversationTimelineRange(paths, request);
+  if (!state) return undefined;
+  const compression = await loadConversationCompressionDetail(paths, request.conversationId);
+  if (compression) copyCompressionTables(state, compression);
+  return state;
+}
+
 
 
 export async function loadConversationRunHistoryPageFromStores(paths: StoragePaths, request: { conversationId: string; cursor?: string; limit?: number }): Promise<ConversationRunHistoryPageRecord> {

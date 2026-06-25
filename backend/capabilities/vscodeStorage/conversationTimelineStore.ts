@@ -225,6 +225,61 @@ export async function loadConversationMessagesByIds(paths: StoragePaths, convers
     .filter((message) => wanted.has(message.id))
     .sort(compareMessagesBySeq);
 }
+export async function loadConversationTimelineRange(paths: StoragePaths, request: {
+  conversationId: string;
+  mode: 'suffix' | 'prefix' | 'between';
+  anchorMessageId?: string;
+  startMessageId?: string;
+  endMessageId?: string;
+  contextBeforeChunks?: number;
+}): Promise<ClientState | undefined> {
+  const root = conversationTimelineRoot(paths, request.conversationId);
+  const index = await readJson<ConversationTimelineIndexFile>(vscode.Uri.joinPath(root, INDEX_FILE));
+  if (!isConversationTimelineIndex(index, request.conversationId) || index.chunks.length === 0) return undefined;
+  const chunks = [...index.chunks].sort((left, right) => left.index - right.index || left.id.localeCompare(right.id));
+  const selected = selectTimelineRangeChunks(chunks, request);
+  if (selected.length === 0) return undefined;
+  const state = createEmptyClientState();
+  const chunkFiles = await Promise.all(selected.map((chunk) => readConversationTimelineChunk(root, chunk)));
+  for (const chunk of chunkFiles) {
+    if (!chunk) continue;
+    state.messages.push(...chunk.messages);
+    state.messageRevisions.push(...chunk.messageRevisions);
+    state.messageCurrentRevisionLinks.push(...chunk.messageCurrentRevisionLinks);
+    state.toolCalls.push(...chunk.toolCalls);
+    state.toolCallEvents.push(...chunk.toolCallEvents);
+    state.projectContexts.push(...chunk.projectContexts);
+    state.shadowRepositories.push(...chunk.shadowRepositories);
+    state.conversationCheckpointRepositoryLinks.push(...chunk.conversationCheckpointRepositoryLinks);
+    state.checkpoints.push(...chunk.checkpoints);
+    state.checkpointTimelineAnchors.push(...chunk.checkpointTimelineAnchors);
+  }
+  sortConversationTimelineDetail(state);
+  return state;
+}
+
+function selectTimelineRangeChunks(
+  chunks: ConversationTimelineChunkIndexRecord[],
+  request: { mode: 'suffix' | 'prefix' | 'between'; anchorMessageId?: string; startMessageId?: string; endMessageId?: string; contextBeforeChunks?: number }
+): ConversationTimelineChunkIndexRecord[] {
+  const anchorId = request.anchorMessageId ?? request.startMessageId ?? request.endMessageId;
+  const anchorIndex = anchorId ? chunks.findIndex((chunk) => chunk.messageIds.includes(anchorId)) : -1;
+  const before = Math.max(0, Math.floor(request.contextBeforeChunks ?? 0));
+  if (request.mode === 'suffix') {
+    if (anchorIndex < 0) return [];
+    return chunks.slice(Math.max(0, anchorIndex - before));
+  }
+  if (request.mode === 'prefix') {
+    if (anchorIndex < 0) return chunks;
+    return chunks.slice(0, anchorIndex + 1);
+  }
+  const startIndex = request.startMessageId ? chunks.findIndex((chunk) => chunk.messageIds.includes(request.startMessageId!)) : 0;
+  const endIndex = request.endMessageId ? chunks.findIndex((chunk) => chunk.messageIds.includes(request.endMessageId!)) : chunks.length - 1;
+  if (startIndex < 0 || endIndex < 0) return [];
+  return chunks.slice(Math.max(0, startIndex - before), Math.max(startIndex, endIndex) + 1);
+}
+
+
 
 function selectTimelinePageChunks(
   chunks: ConversationTimelineChunkIndexRecord[],

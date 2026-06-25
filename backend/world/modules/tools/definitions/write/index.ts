@@ -40,6 +40,8 @@ export const writeTool: ToolDefinition = {
       riskLevel: 'write',
       readonly: false,
       defaultEnabled: true,
+      defaultAutoExpand: true,
+      defaultAutoApproveExecution: false,
       requiresApproval: true,
       checkpoint: { before: true, after: true }
     },

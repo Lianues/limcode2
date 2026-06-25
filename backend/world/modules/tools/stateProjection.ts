@@ -113,8 +113,11 @@ function resolveToolCallDisplay(world: WorldReader, entity: number, call: ToolCa
   const display = activeToolPolicyForRun(world, run)?.toolConfigs?.[call.name]?.display;
   if (display?.autoExpand === true) return { autoExpand: true };
   if (display?.autoExpand === false) return { autoExpand: false };
-  return undefined;
+  const definitions = world.tryGetResource(ToolRuntimeDefinitionsKey) ?? [];
+  const definition = definitions.find((tool) => tool.declaration.name === call.name);
+  return definition?.declaration.metadata?.defaultAutoExpand ? { autoExpand: true } : undefined;
 }
+
 
 function resolveToolCallSummary(world: WorldReader, call: ToolCallData): string | undefined {
   const definitions = world.tryGetResource(ToolRuntimeDefinitionsKey) ?? [];

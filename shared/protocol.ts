@@ -315,6 +315,10 @@ export interface ToolDefinitionMetadataRecord {
   readonly?: boolean;
   defaultEnabled?: boolean;
   requiresApproval?: boolean;
+  defaultAutoExpand?: boolean;
+  defaultAutoApproveExecution?: boolean;
+  defaultAutoApplyChange?: boolean;
+  defaultAutoSubmitResult?: boolean;
   checkpoint?: Partial<CheckpointToolTriggerConfigRecord>;
 }
 

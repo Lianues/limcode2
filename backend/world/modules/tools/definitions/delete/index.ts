@@ -51,6 +51,7 @@ export const deleteTool: ToolDefinition = {
       riskLevel: 'write',
       readonly: false,
       defaultEnabled: true,
+      defaultAutoApproveExecution: false,
       requiresApproval: true,
       checkpoint: { before: true, after: true }
     },

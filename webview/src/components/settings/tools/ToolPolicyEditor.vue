@@ -49,6 +49,7 @@ const visibleTools = computed(() => selectedToolScope.value === 'all'
   : tools.value.filter((tool) => toolScope(tool) === selectedToolScope.value));
 const visibleEnabledCount = computed(() => visibleTools.value.filter((tool) => allowedSet.value.has(tool.name)).length);
 const canRestoreInheritance = computed(() => props.scopeKind !== 'global' && hasLocalOverride.value && !props.readonly);
+const canRestoreDefault = computed(() => props.scopeKind === 'global' && !props.readonly);
 const sourceLabel = computed(() => {
   if (props.scopeKind === 'global') return '全局默认策略';
   if (hasLocalOverride.value) return '当前作用域覆盖';
@@ -115,6 +116,18 @@ function disableAll(): void {
 function restoreInheritance(): void {
   if (!canRestoreInheritance.value) return;
   store.clearPolicyScope(props.scopeKind, props.scopeId);
+}
+
+function restoreDefault(): void {
+  if (!canRestoreDefault.value) return;
+  const defaultAllowed = tools.value
+    .filter((tool) => tool.metadata?.defaultEnabled !== false)
+    .map((tool) => tool.name);
+  const defaultConfigs: Record<string, ToolPolicyToolConfigRecord> = {};
+  for (const tool of tools.value) {
+    defaultConfigs[tool.name] = { config: { ...(tool.defaultConfig ?? {}) } };
+  }
+  store.setPolicyForScope(props.scopeKind, props.scopeId, defaultAllowed, undefined, defaultConfigs);
 }
 
 function riskLabel(tool: ToolDefinitionRecord): string {
@@ -259,7 +272,11 @@ function updateGateSetting(tool: ToolDefinitionRecord, key: ToolGateSettingKey, 
 }
 
 function toolGateValue(tool: ToolDefinitionRecord, key: ToolGateSettingKey): boolean {
-  return effectivePolicy.value?.toolConfigs?.[tool.name]?.[key] !== false;
+  const configValue = effectivePolicy.value?.toolConfigs?.[tool.name]?.[key];
+  if (configValue !== undefined) return configValue;
+  if (key === 'autoApproveExecution') return tool.metadata?.defaultAutoApproveExecution ?? true;
+  if (key === 'autoApplyChange') return tool.metadata?.defaultAutoApplyChange ?? true;
+  return tool.metadata?.defaultAutoSubmitResult ?? true;
 }
 
 function updateDisplayAutoExpand(tool: ToolDefinitionRecord, value: boolean): void {
@@ -273,7 +290,9 @@ function updateDisplayAutoExpand(tool: ToolDefinitionRecord, value: boolean): vo
 }
 
 function displayAutoExpandValue(tool: ToolDefinitionRecord): boolean {
-  return effectivePolicy.value?.toolConfigs?.[tool.name]?.display?.autoExpand === true;
+  const display = effectivePolicy.value?.toolConfigs?.[tool.name]?.display;
+  if (display?.autoExpand !== undefined) return display.autoExpand;
+  return tool.metadata?.defaultAutoExpand === true;
 }
 
 function sanitizeConfigForTool(tool: ToolDefinitionRecord, config: ToolConfigRecord): ToolConfigRecord {
@@ -339,7 +358,8 @@ function inputNumber(event: Event): number {
       </div>
       <button type="button" :disabled="readonly || tools.length === 0" @click="enableAll">启用全部</button>
       <button type="button" class="secondary" :disabled="readonly || tools.length === 0" @click="disableAll">禁用全部</button>
-      <button type="button" class="secondary" :disabled="!canRestoreInheritance" @click="restoreInheritance">恢复继承</button>
+      <button v-if="canRestoreDefault" type="button" class="secondary" :disabled="!canRestoreDefault" @click="restoreDefault">恢复默认</button>
+      <button v-else type="button" class="secondary" :disabled="!canRestoreInheritance" @click="restoreInheritance">恢复继承</button>
     </div>
 
     <div class="tool-list-shell">

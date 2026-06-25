@@ -214,7 +214,7 @@ export const ToolDispatchSystem = defineSystem({
         continue;
       }
 
-      if (requiresExecutionApproval(authorization.policy, call.name)) {
+      if (requiresExecutionApproval(world, authorization.policy, call.name)) {
         awaitApproval(cmd, entity, call, state, authorization.agentId, authorization.runId);
         continue;
       }
@@ -1325,17 +1325,19 @@ function effectiveToolConfig(world: WorldReader, policy: ToolPolicyData, toolNam
   return Object.keys(config).length > 0 ? config : undefined;
 }
 
-function toolGateSettings(policy: ToolPolicyData, toolName: string): { autoApproveExecution: boolean; autoApplyChange: boolean; autoSubmitResult: boolean } {
+function toolGateSettings(world: WorldReader, policy: ToolPolicyData, toolName: string): { autoApproveExecution: boolean; autoApplyChange: boolean; autoSubmitResult: boolean } {
   const config = policy.toolConfigs?.[toolName];
+  const definitions = world.tryGetResource(ToolRuntimeDefinitionsKey) ?? [];
+  const meta = definitions.find((tool) => tool.declaration.name === toolName)?.declaration.metadata;
   return {
-    autoApproveExecution: config?.autoApproveExecution ?? true,
-    autoApplyChange: config?.autoApplyChange ?? true,
-    autoSubmitResult: config?.autoSubmitResult ?? true
+    autoApproveExecution: config?.autoApproveExecution ?? meta?.defaultAutoApproveExecution ?? true,
+    autoApplyChange: config?.autoApplyChange ?? meta?.defaultAutoApplyChange ?? true,
+    autoSubmitResult: config?.autoSubmitResult ?? meta?.defaultAutoSubmitResult ?? true
   };
 }
 
-function requiresExecutionApproval(toolPolicy: ToolPolicyData, toolName: string): boolean {
-  return toolGateSettings(toolPolicy, toolName).autoApproveExecution === false;
+function requiresExecutionApproval(world: WorldReader, toolPolicy: ToolPolicyData, toolName: string): boolean {
+  return toolGateSettings(world, toolPolicy, toolName).autoApproveExecution === false;
 }
 
 function startInlineToolExecution(

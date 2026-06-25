@@ -89,6 +89,7 @@ export const taskListTool: ToolDefinition = {
       riskLevel: 'read',
       readonly: true,
       defaultEnabled: true,
+      defaultAutoExpand: true,
       checkpoint: { before: false, after: false }
     }
   },

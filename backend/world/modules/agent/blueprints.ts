@@ -55,12 +55,7 @@ export const AgentBlueprintsKey = defineResource<BuiltinAgentRegistry>('AgentBlu
 export const DEFAULT_SYSTEM_PROMPT = 'You are LimCode, a concise and helpful AI coding assistant running inside VS Code. Reply in the user\'s language unless asked otherwise.';
 const DEFAULT_TOOLS = [TASK_LIST_TOOL_NAME, SWITCH_WORK_ENVIRONMENT_TOOL_NAME, TRANSFER_TOOL_NAME, READ_TOOL_NAME, EDIT_TOOL_NAME, WRITE_TOOL_NAME, DELETE_TOOL_NAME, 'shell', 'bash', 'run_agent', 'read_conversation', SUBMIT_AGENT_ANSWER_TOOL_NAME, READ_AGENT_ANSWER_TOOL_NAME];
 const READONLY_TOOLS = [TASK_LIST_TOOL_NAME, SWITCH_WORK_ENVIRONMENT_TOOL_NAME, READ_TOOL_NAME, 'shell', 'bash', 'read_conversation', SUBMIT_AGENT_ANSWER_TOOL_NAME, READ_AGENT_ANSWER_TOOL_NAME];
-const DEFAULT_TOOL_CONFIGS = {
-  [TASK_LIST_TOOL_NAME]: { config: {}, display: { autoExpand: true } },
-  [EDIT_TOOL_NAME]: { config: {}, autoApproveExecution: false },
-  [WRITE_TOOL_NAME]: { config: {}, autoApproveExecution: false },
-  [DELETE_TOOL_NAME]: { config: {}, autoApproveExecution: false }
-} satisfies Record<string, ToolPolicyToolConfigRecord>;
+const DEFAULT_TOOL_CONFIGS: Record<string, ToolPolicyToolConfigRecord> = {};
 
 export function createDefaultAgentBlueprints(): BuiltinAgentRegistry {
   return {

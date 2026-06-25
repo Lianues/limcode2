@@ -89,7 +89,7 @@ import {
 import {
   createMessageId,
   SWITCH_WORK_ENVIRONMENT_TOOL_NAME,
-  TRANSFER_FILES_TOOL_NAME,
+  TRANSFER_TOOL_NAME,
   READ_AGENT_ANSWER_TOOL_NAME,
   SUBMIT_AGENT_ANSWER_TOOL_NAME,
   type AgentRunStatus,
@@ -246,7 +246,7 @@ function authorizeRunToolExecution(world: WorldReader, toolCall: Entity, call: T
   if (!policy.allowedTools.includes(call.name)) {
     return { ok: false, reason: `AgentRun ${runData.id} 不允许执行工具 ${call.name}。` };
   }
-  if ((call.name === SWITCH_WORK_ENVIRONMENT_TOOL_NAME || call.name === TRANSFER_FILES_TOOL_NAME) && effectiveWorkEnvironmentPolicyForRun(world, run).policy?.enabled === false) {
+  if ((call.name === SWITCH_WORK_ENVIRONMENT_TOOL_NAME || call.name === TRANSFER_TOOL_NAME) && effectiveWorkEnvironmentPolicyForRun(world, run).policy?.enabled === false) {
     return { ok: false, reason: `当前工作环境策略已停用工具 ${call.name}。` };
   }
   return {

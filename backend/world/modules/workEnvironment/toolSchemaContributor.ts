@@ -1,4 +1,4 @@
-import { SWITCH_WORK_ENVIRONMENT_TOOL_NAME, TRANSFER_FILES_TOOL_NAME } from '../../../../shared/protocol';
+import { SWITCH_WORK_ENVIRONMENT_TOOL_NAME, TRANSFER_TOOL_NAME } from '../../../../shared/protocol';
 import type { ToolSchema } from '../llm/contracts';
 import type { ToolSchemaContributor } from '../tools/schemaContributors';
 import { Agent } from '../agent/components';
@@ -39,12 +39,12 @@ export const workEnvironmentToolSchemaContributor: ToolSchemaContributor = {
   },
   augment(tools, context) {
     if (effectiveWorkEnvironmentPolicyForRun(context.world, context.run).policy?.enabled === false) {
-      return tools.filter((tool) => tool.name !== SWITCH_WORK_ENVIRONMENT_TOOL_NAME && tool.name !== TRANSFER_FILES_TOOL_NAME);
+      return tools.filter((tool) => tool.name !== SWITCH_WORK_ENVIRONMENT_TOOL_NAME && tool.name !== TRANSFER_TOOL_NAME);
     }
 
     return tools.map((tool) => {
       if (tool.name === SWITCH_WORK_ENVIRONMENT_TOOL_NAME) return augmentSwitchWorkEnvironmentTool(tool, context);
-      if (tool.name === TRANSFER_FILES_TOOL_NAME) return augmentTransferFilesTool(tool, context);
+      if (tool.name === TRANSFER_TOOL_NAME) return augmentTransferFilesTool(tool, context);
       return tool;
     });
   }

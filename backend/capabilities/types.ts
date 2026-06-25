@@ -85,7 +85,7 @@ export interface FsEditFileRequest {
   hunks?: FsStructuredEditHunk[];
 }
 
-export type FsFileWriteAction = 'created' | 'modified' | 'unchanged';
+export type FsFileWriteAction = 'created' | 'modified' | 'unchanged' | 'deleted';
 
 export interface FsFileChangeRecord {
   path: string;
@@ -103,6 +103,14 @@ export interface FsWriteFileResult {
   summary: string;
   changedFiles: string[];
   files: FsFileChangeRecord[];
+}
+
+export type FsDeletePathTargetType = 'file' | 'directory';
+
+export interface FsDeletePathResult {
+  inputPath: string;
+  path: string;
+  targetType: FsDeletePathTargetType;
 }
 
 export interface FsEditFileResult {
@@ -125,10 +133,12 @@ export interface FsCapability {
   readFile(path: string, startLine?: number, endLine?: number, options?: WorkEnvironmentCapabilityOptions): Promise<FsReadFileResult>;
   writeFile(path: string, content: string, options?: WorkEnvironmentCapabilityOptions): Promise<FsWriteFileResult>;
   editFile(request: FsEditFileRequest, options?: WorkEnvironmentCapabilityOptions): Promise<FsEditFileResult>;
+  deletePath(path: string, options?: WorkEnvironmentCapabilityOptions): Promise<FsDeletePathResult>;
 }
 
 export interface WorkEnvironmentCapabilityOptions {
   workEnvironment?: WorkEnvironmentRecord;
+  allowOutsideProjectPaths?: boolean;
 }
 
 export interface CommandRunEvent {
@@ -177,6 +187,7 @@ export interface WorkEnvironmentTransferArgs {
 export interface WorkEnvironmentTransferContext {
   activeWorkEnvironment?: WorkEnvironmentRecord;
   availableWorkEnvironments?: WorkEnvironmentRecord[];
+  allowOutsideProjectPaths?: boolean;
 }
 
 export interface WorkEnvironmentTransferEntryResult {

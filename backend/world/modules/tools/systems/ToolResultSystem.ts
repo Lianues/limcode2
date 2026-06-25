@@ -18,6 +18,7 @@ import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
 import { ToolCall, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolStateData } from '../components';
 import { ToolEventType } from '../events';
 import { isTerminalToolStatus, toolStateToResponse, transitionToolState } from '../state';
+import { simplifyToolResponseForModel } from '../responseSimplifier';
 import { readEvents } from '../../../events';
 import type { ToolCallStatus } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
@@ -136,7 +137,7 @@ export const ToolResultSystem = defineSystem({
         toolCallId: call.functionCallId ?? call.id,
         toolName: call.name,
         status: state.status,
-        response: toolStateToResponse(state),
+        response: simplifyToolResponseForModel(call.name, state.status, toolStateToResponse(state)),
         durationMs: state.durationMs
       });
       spawnMessageRunLink(cmd, { message: responseMessage, run, role: 'tool_response' });

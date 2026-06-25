@@ -5,6 +5,7 @@ import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
 import { ToolCall, ToolState } from '../components';
 import { ToolEventType } from '../events';
 import { isTerminalToolStatus, transitionToolState } from '../state';
+import { simplifyToolResponseForModel } from '../responseSimplifier';
 import type { ToolCallEventKind } from '../../../../../shared/protocol';
 
 const ToolCallsByIdQuery = defineQuery({
@@ -47,6 +48,7 @@ export const ToolPollSystem = defineSystem({
           delta: isOutputEvent ? undefined : payload.delta,
           durationMs: payload.durationMs
         }, now);
+        const terminalPayload = isTerminalToolStatus(next.status) && payload.result !== undefined ? simplifyToolResponseForModel(call.name, next.status, payload.result) : undefined;
         cmd.add(entity, ToolState, next);
         spawnToolCallEvent(cmd, {
           toolCall: entity,
@@ -57,7 +59,7 @@ export const ToolPollSystem = defineSystem({
           elapsedMs: Math.max(0, now - call.createdAt),
           durationMs: payload.durationMs,
           delta: payload.delta,
-          payload: payload.progress ?? payload.result,
+          payload: payload.progress ?? terminalPayload ?? payload.result,
           error: payload.error
         });
         if (isTerminalToolStatus(next.status)) {

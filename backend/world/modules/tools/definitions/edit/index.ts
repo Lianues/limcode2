@@ -4,6 +4,7 @@ import type { ToolConfigRecord } from '../../../../../../shared/protocol';
 import type { ToolDefinition, ToolDeps } from '../../registry';
 import { staticToolScheduling } from '../../scheduling';
 import { defineToolDefinitionModule } from '../types';
+import { allowOutsideProjectPathsDefaultConfig, allowOutsideProjectPathsField, allowOutsideProjectPathsFromConfig, filePathPolicyDescription } from '../filePathPolicy';
 
 interface EditArgs {
   path?: string;
@@ -46,10 +47,11 @@ export const editTool: ToolDefinition = {
             { label: 'Hunk 结构化模式', value: 'hunk', description: '使用 hunks[{ oldContent, newContent, startLine? }]，含唯一匹配、行号定位与缩进兜底。' },
             { label: 'Patch 模式', value: 'patch', description: '使用 unified diff patch 字符串，含 hunk 行号、上下文搜索、search/replace 与 loose @@ 兜底。' }
           ]
-        }
+        },
+        allowOutsideProjectPathsField(false)
       ]
     },
-    defaultConfig: { mode: EDIT_TOOL_MODE_DEFAULT }
+    defaultConfig: { mode: EDIT_TOOL_MODE_DEFAULT, ...allowOutsideProjectPathsDefaultConfig(false) }
   },
   execution: 'runtime',
   scheduling: staticToolScheduling('serial', 'filesystem_edit_side_effect'),
@@ -64,7 +66,10 @@ export const editTool: ToolDefinition = {
       const request = mode === 'patch'
         ? buildPatchModeRequest(path, args)
         : buildHunkModeRequest(path, args);
-      const result = await deps.fs.editFile(request, { workEnvironment: ctx?.workEnvironment });
+      const result = await deps.fs.editFile(request, {
+        workEnvironment: ctx?.workEnvironment,
+        allowOutsideProjectPaths: allowOutsideProjectPathsFromConfig(ctx?.config, false)
+      });
       await recordStatistics(deps, mode, result.success);
       return { ok: result.success, output: result, ...(result.failed > 0 ? { status: 'warning' as const } : {}) };
     } catch (error) {
@@ -83,7 +88,8 @@ export function hunkModeDescription(): string {
     'Modify one UTF-8 text file using structured hunks.',
     'This mode accepts hunks[{ oldContent, newContent, startLine? }]. Each hunk replaces one exact oldContent block with newContent.',
     'Fallback strategy: if oldContent is unique it is replaced directly; if repeated, startLine is used after accounting for prior hunk line offsets; if exact matching fails, a conservative leading-indentation-only fallback is attempted and replacement indentation is remapped.',
-    'Use multiple hunks in one call for multiple independent edits in the same file. For new files or full rewrites, use write.'
+    'Use multiple hunks in one call for multiple independent edits in the same file. For new files or full rewrites, use write.',
+    filePathPolicyDescription(false)
   ].join('\n');
 }
 
@@ -91,7 +97,7 @@ export function hunkModeParameters(): unknown {
   return {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'File path. Relative paths are resolved from the current work environment root.' },
+      path: { type: 'string', description: 'File path. Relative paths are resolved from the current work environment root; absolute paths are supported when allowed by tool policy.' },
       hunks: {
         type: 'array',
         description: 'Ordered edit hunks. Each hunk replaces oldContent with newContent. Use startLine only to disambiguate repeated oldContent.',
@@ -115,7 +121,8 @@ export function patchModeDescription(): string {
     'Modify one UTF-8 text file using a unified diff patch string.',
     'This mode accepts { path, patch }. The patch may include ---/+++ headers and one or more @@ -oldStart,oldCount +newStart,newCount @@ hunks for this single file.',
     'Fallback strategy: each hunk first applies by line number; if that fails, the context+deleted block is searched globally and applied only when unique. If some hunks still fail, hunks are converted to search/replace blocks and retried. Bare @@ hunks without line numbers are parsed with a loose search/replace fallback.',
-    'Do not include multi-file patches or /dev/null create/delete patches. Use write for new files.'
+    'Do not include multi-file patches or /dev/null create/delete patches. Use write for new files and delete for deleting files/directories.',
+    filePathPolicyDescription(false)
   ].join('\n');
 }
 
@@ -123,7 +130,7 @@ export function patchModeParameters(): unknown {
   return {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'File path. Relative paths are resolved from the current work environment root.' },
+      path: { type: 'string', description: 'File path. Relative paths are resolved from the current work environment root; absolute paths are supported when allowed by tool policy.' },
       patch: {
         type: 'string',
         description: 'Unified diff patch for this single file. Hunk lines use prefix space=context, -=delete, +=add. Bare @@ hunks are allowed as a loose fallback when enough context is present.'

@@ -2,6 +2,7 @@ import { READ_TOOL_NAME } from '../../../../../../shared/protocol';
 import type { ToolDefinition } from '../../registry';
 import { staticToolScheduling } from '../../scheduling';
 import { defineToolDefinitionModule } from '../types';
+import { allowOutsideProjectPathsDefaultConfig, allowOutsideProjectPathsField, allowOutsideProjectPathsFromConfig, filePathPolicyDescription } from '../filePathPolicy';
 
 interface ReadFileArgs {
   path?: string;
@@ -19,11 +20,14 @@ export const readFileToolModule = defineToolDefinitionModule({
 export const readFileTool: ToolDefinition = {
   declaration: {
     name: READ_TOOL_NAME,
-    description: 'Read a UTF-8 text file from the current work environment. Optional startLine/endLine are 1-based and inclusive.',
+    description: [
+      'Read a UTF-8 text file from the current work environment. Optional startLine/endLine are 1-based and inclusive.',
+      filePathPolicyDescription(true)
+    ].join(' '),
     parameters: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Workspace-relative file path.' },
+        path: { type: 'string', description: 'File path. Relative paths are resolved from the current work environment root; absolute paths are supported when allowed by tool policy.' },
         startLine: { type: 'number', description: '1-based start line (inclusive).' },
         endLine: { type: 'number', description: '1-based end line (inclusive).' }
       },
@@ -36,7 +40,9 @@ export const readFileTool: ToolDefinition = {
       readonly: true,
       defaultEnabled: true,
       checkpoint: { before: false, after: false }
-    }
+    },
+    configSchema: { fields: [allowOutsideProjectPathsField(true)] },
+    defaultConfig: allowOutsideProjectPathsDefaultConfig(true)
   },
   execution: 'runtime',
   scheduling: staticToolScheduling('parallel', 'readonly_file_read'),
@@ -46,7 +52,10 @@ export const readFileTool: ToolDefinition = {
     if (!args.path) {
       return { ok: false, output: 'Missing required argument: path' };
     }
-    const text = await deps.fs.readFile(args.path, args.startLine, args.endLine, { workEnvironment: ctx?.workEnvironment });
+    const text = await deps.fs.readFile(args.path, args.startLine, args.endLine, {
+      workEnvironment: ctx?.workEnvironment,
+      allowOutsideProjectPaths: allowOutsideProjectPathsFromConfig(ctx?.config, true)
+    });
     return { ok: true, output: text };
   }
 };

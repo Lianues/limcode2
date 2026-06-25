@@ -331,10 +331,12 @@ export interface ToolDefinitionRecord {
 
 export const TASK_LIST_TOOL_NAME = 'update_task_list';
 export const SWITCH_WORK_ENVIRONMENT_TOOL_NAME = 'switch_work_environment';
-export const TRANSFER_FILES_TOOL_NAME = 'transfer_files';
+export const TRANSFER_TOOL_NAME = 'transfer';
 export const READ_TOOL_NAME = 'read';
 export const EDIT_TOOL_NAME = 'edit';
 export const WRITE_TOOL_NAME = 'write';
+export const DELETE_TOOL_NAME = 'delete';
+export const ALLOW_OUTSIDE_PROJECT_PATHS_CONFIG_KEY = 'allowOutsideProjectPaths';
 export const SUBMIT_AGENT_ANSWER_TOOL_NAME = 'submit_agent_answer';
 export const READ_AGENT_ANSWER_TOOL_NAME = 'read_agent_answer';
 

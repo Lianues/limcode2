@@ -1,5 +1,5 @@
-import { IconFileDiff, IconPencil, IconWriting } from '@tabler/icons-vue';
-import { EDIT_TOOL_NAME, WRITE_TOOL_NAME } from '@shared/protocol';
+import { IconFileDiff, IconPencil, IconTrash, IconWriting } from '@tabler/icons-vue';
+import { DELETE_TOOL_NAME, EDIT_TOOL_NAME, WRITE_TOOL_NAME } from '@shared/protocol';
 import { bridge, BridgeMessageType } from '@webview/transport';
 import { useCheckpointPolicyStore } from '@webview/stores/useCheckpointPolicyStore';
 import type { CheckpointRecord, CheckpointTimelineAnchorRecord } from '@shared/protocol';
@@ -16,6 +16,10 @@ interface EditArgs {
   hunks?: unknown;
 }
 
+interface DeleteArgs {
+  paths: string[];
+}
+
 interface FileChangeOutput {
   kind?: string;
   path?: string;
@@ -25,10 +29,17 @@ interface FileChangeOutput {
   mode?: string;
   totalHunks?: number;
   applied?: number;
-  failed?: number;
+  failed?: number | unknown[];
   fallbackMode?: string;
   changedFiles?: unknown;
+  paths?: unknown;
+  requestedPaths?: unknown;
+  deleted?: unknown;
   files?: unknown;
+  results?: unknown;
+  totalCount?: number;
+  successCount?: number;
+  failCount?: number;
 }
 
 interface FileChangeItem {
@@ -70,6 +81,21 @@ export const editToolDisplay: ToolDisplayResolver = (context) => {
   };
 };
 
+export const deleteToolDisplay: ToolDisplayResolver = (context) => {
+  const args = deleteArgs(context.args);
+  const inputSections = deleteInputSections(args, context);
+  const output = fileChangeOutput(context.result) ?? fileChangeOutput(context.progress);
+  const outputSections = deleteOutputSections(output, context);
+
+  return {
+    headerIcon: IconTrash,
+    inputSections,
+    ...(outputSections ? { outputSections } : {}),
+    headerActions: []
+  };
+};
+
+
 function writeInputSections(args: WriteArgs, context: ToolDisplayContext): ToolDisplaySection[] {
   const path = normalizePath(args.path);
   if (!path) return [{ kind: 'input', title: '输入', text: context.stringifyValue(context.args) }];
@@ -97,6 +123,45 @@ function editInputSections(args: EditArgs, context: ToolDisplayContext): ToolDis
     ]),
     rowStyle: 'keyValue'
   }];
+}
+
+function deleteInputSections(args: DeleteArgs, context: ToolDisplayContext): ToolDisplaySection[] {
+  if (args.paths.length === 0) return [{ kind: 'input', title: '输入', text: context.stringifyValue(context.args) }];
+  return [{
+    kind: 'input',
+    title: '请求删除路径',
+    rows: args.paths.map((path, index) => ({ label: String(index + 1), value: normalizePath(path) })),
+    rowStyle: 'lineNumber'
+  }];
+}
+
+function deleteOutputSections(output: FileChangeOutput | string | undefined, context: ToolDisplayContext): ToolDisplaySection[] | undefined {
+  if (output === undefined) return undefined;
+  if (typeof output === 'string') return output ? [{ kind: 'output', title: '删除结果', text: output }] : undefined;
+
+  const rows = parameterRows([
+    { label: 'summary', value: stringValue(output.summary) },
+    { label: 'error', value: stringValue(output.error) },
+    { label: 'total', value: numberValue(output.totalCount)?.toString() },
+    { label: 'success', value: numberValue(output.successCount)?.toString() },
+    { label: 'failed', value: numberValue(output.failCount)?.toString() }
+  ]);
+  const sections: ToolDisplaySection[] = rows.length > 0
+    ? [{ kind: 'output', title: '删除结果', rows, rowStyle: 'keyValue' }]
+    : [];
+
+  const pathRows = deletePathRows(output);
+  if (pathRows.length > 0) {
+    sections.push({
+      kind: 'output',
+      title: '删除路径',
+      rows: pathRows,
+      rowStyle: 'lineNumber'
+    });
+  }
+
+  if (sections.length === 0) sections.push({ kind: 'output', title: '删除结果', text: context.stringifyValue(output) });
+  return sections;
 }
 
 function fileChangeOutputSections(title: string, output: FileChangeOutput | string | undefined, context: ToolDisplayContext): ToolDisplaySection[] | undefined {
@@ -239,6 +304,11 @@ function editArgs(value: unknown): EditArgs {
   };
 }
 
+function deleteArgs(value: unknown): DeleteArgs {
+  const record = asRecord(value);
+  return { paths: stringArray(record?.paths) };
+}
+
 function hunkCountText(output: FileChangeOutput): string | undefined {
   if (output.totalHunks === undefined && output.applied === undefined && output.failed === undefined) return undefined;
   return `${numberValue(output.applied) ?? 0}/${numberValue(output.totalHunks) ?? 0} 成功，${numberValue(output.failed) ?? 0} 失败`;
@@ -258,8 +328,61 @@ function changedFilesText(value: unknown): string | undefined {
 function actionLabel(action: string | undefined): string | undefined {
   if (action === 'created') return '创建';
   if (action === 'modified') return '修改';
+  if (action === 'deleted') return '删除';
   if (action === 'unchanged') return '未变化';
   return action;
+}
+
+function deletePathRows(output: FileChangeOutput): Array<{ label: string; value: string }> {
+  const compact = compactDeletePathRows(output.paths);
+  if (compact.length > 0) return compact;
+
+  const legacyDeleted = legacyDeleteRows(output.deleted, true);
+  const legacyFailed = legacyDeleteRows(output.failed, false);
+  if (legacyDeleted.length > 0 || legacyFailed.length > 0) return [...legacyDeleted, ...legacyFailed];
+
+  const explicitPaths = stringArray(output.paths);
+  if (explicitPaths.length > 0) return explicitPaths.map((path, index) => ({ label: String(index + 1), value: `${normalizePath(path)} · 成功` }));
+
+  const resultPaths = deleteResultPaths(output.results);
+  if (resultPaths.length > 0) return resultPaths.map((path, index) => ({ label: String(index + 1), value: `${normalizePath(path)} · 成功` }));
+
+  const changedFiles = stringArray(output.changedFiles);
+  if (changedFiles.length > 0) return changedFiles.map((path, index) => ({ label: String(index + 1), value: `${normalizePath(path)} · 成功` }));
+
+  return fileChangeItems(output.files).map((item, index) => ({ label: String(index + 1), value: `${normalizePath(item.path)} · 成功` }));
+}
+
+function compactDeletePathRows(value: unknown): Array<{ label: string; value: string }> {
+  if (!Array.isArray(value)) return [];
+  const rows: Array<{ label: string; value: string }> = [];
+  for (const item of value) {
+    const record = asRecord(item);
+    const path = stringValue(record?.path);
+    const success = booleanValue(record?.success);
+    if (!path || success === undefined) continue;
+    rows.push({ label: String(rows.length + 1), value: `${normalizePath(path)} · ${success ? '成功' : '失败'}` });
+  }
+  return rows;
+}
+
+function legacyDeleteRows(value: unknown, success: boolean): Array<{ label: string; value: string }> {
+  if (!Array.isArray(value)) return [];
+  const rows: Array<{ label: string; value: string }> = [];
+  for (const item of value) {
+    const record = asRecord(item);
+    const path = stringValue(record?.path) ?? stringValue(record?.inputPath);
+    if (!path) continue;
+    rows.push({ label: String(rows.length + 1), value: `${normalizePath(path)} · ${success ? '成功' : '失败'}` });
+  }
+  return rows;
+}
+
+function deleteResultPaths(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => stringValue(asRecord(item)?.path))
+    .filter((path): path is string => !!path?.trim());
 }
 
 function normalizePath(path: unknown): string {
@@ -276,6 +399,11 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+}
+
 function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
@@ -284,4 +412,4 @@ function booleanValue(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined;
 }
 
-export const FILE_CHANGE_TOOL_NAMES = [EDIT_TOOL_NAME, WRITE_TOOL_NAME] as const;
+export const FILE_CHANGE_TOOL_NAMES = [EDIT_TOOL_NAME, WRITE_TOOL_NAME, DELETE_TOOL_NAME] as const;

@@ -14,6 +14,8 @@ import { Message, type MessageData } from '../chat/components';
 import { conversationMessages } from '../chat/queries';
 import { CompressionBlock, CompressionContextVariant } from '../compression/components';
 import { ToolCall, ToolState } from '../tools/components';
+import { simplifyToolResponseForModel } from '../tools/responseSimplifier';
+import { toolStateToResponse } from '../tools/state';
 import {
   AgentRunSourceLink,
   MessageRunLink,
@@ -270,7 +272,7 @@ function syntheticSourceToolBlock(world: WorldReader, toolCall: Entity): Message
     `name: ${call.name}`,
     `args: ${jsonPreview(parseArgsJson(call.argsJson))}`,
     ...(state ? [`status: ${state.status}`] : []),
-    ...(state?.result !== undefined ? [`result: ${jsonPreview(state.result)}`] : []),
+    ...(state?.result !== undefined ? [`result: ${jsonPreview(simplifyToolResponseForModel(call.name, state.status, toolStateToResponse(state)))}`] : []),
     ...(state?.error !== undefined ? [`error: ${state.error}`] : []),
     ...(state?.progress !== undefined ? [`progress: ${jsonPreview(state.progress)}`] : []),
     ...(state?.durationMs !== undefined ? [`durationMs: ${state.durationMs}`] : [])

@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { Transform, type Readable, type Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { WorkEnvironmentRecord } from '../../shared/protocol';
@@ -22,6 +23,8 @@ import {
   executeRemoteServerScript,
   openRemoteServerReadStream,
   openRemoteServerWriteStream,
+  remoteProjectRootPath,
+  resolveRemotePath,
   shQuote
 } from './workEnvironmentProvider';
 
@@ -49,7 +52,7 @@ interface StreamHandle {
 
 interface Endpoint {
   environment: WorkEnvironmentRecord;
-  assertAbsolute(p: string): void;
+  resolvePath(input: string, policy: TransferPathPolicy): string;
   normalize(p: string): string;
   dirname(p: string): string;
   basename(p: string): string;
@@ -63,6 +66,11 @@ interface Endpoint {
   openRead(p: string): Promise<StreamHandle & { stream: Readable }>;
   openWrite(p: string, overwrite: boolean): Promise<StreamHandle & { stream: Writable }>;
 }
+
+interface TransferPathPolicy {
+  allowOutsideProjectPaths: boolean;
+}
+
 
 interface TransferProgressTracker {
   observer?: CommandRunObserver;
@@ -100,7 +108,7 @@ async function transferFiles(
   context: WorkEnvironmentTransferContext
 ): Promise<WorkEnvironmentTransferResult> {
   const items = normalizeTransfers(args);
-  if (items.length === 0) throw new Error('transfer_files: 请提供 transfers 数组，且每项包含 fromEnvironment/fromPath/toEnvironment/toPath。');
+  if (items.length === 0) throw new Error('transfer: 请提供 transfers 数组，且每项包含 fromEnvironment/fromPath/toEnvironment/toPath。');
   const verify: WorkEnvironmentTransferVerifyMode = args.verify === 'none' ? 'none' : 'size';
   const results: WorkEnvironmentTransferResult['results'] = [];
   let successCount = 0;
@@ -163,12 +171,10 @@ async function runTransfer(
 ): Promise<WorkEnvironmentTransferResult['results'][number]> {
   const from = createEndpoint(resolveEnvironment(item.fromEnvironment, context));
   const to = createEndpoint(resolveEnvironment(item.toEnvironment, context));
+  const pathPolicy: TransferPathPolicy = { allowOutsideProjectPaths: context.allowOutsideProjectPaths !== false };
 
-  from.assertAbsolute(item.fromPath);
-  to.assertAbsolute(item.toPath);
-
-  const sourcePath = from.normalize(item.fromPath);
-  let targetPath = to.normalize(item.toPath);
+  const sourcePath = from.resolvePath(item.fromPath, pathPolicy);
+  let targetPath = to.resolvePath(item.toPath, pathPolicy);
   const sourceStat = await from.stat(sourcePath);
   const kind: ResolvedKind = item.type === 'auto'
     ? (hasTrailingSlash(item.fromPath) ? 'directory' : sourceStat.type)
@@ -370,7 +376,7 @@ function reportTransferProgress(tracker: TransferProgressTracker, final: boolean
   tracker.observer?.onEvent?.({
     kind: 'progress',
     payload: {
-      kind: 'transfer_files',
+      kind: 'transfer',
       sourcePath: tracker.currentSourcePath,
       targetPath: tracker.currentTargetPath,
       bytesTransferred: tracker.transferredBytes,
@@ -419,10 +425,58 @@ function trimTrailingSeparators(p: string, isRemote: boolean): string {
   return out;
 }
 
+function localProjectRootPath(environment: WorkEnvironmentRecord): string | undefined {
+  const rootPath = normalizeString(environment.rootPath);
+  if (rootPath) return path.resolve(rootPath);
+  const uri = normalizeString(environment.uri);
+  if (!uri) return undefined;
+  if (uri.startsWith('file:')) {
+    try { return path.resolve(fileURLToPath(uri)); }
+    catch { return undefined; }
+  }
+  return path.resolve(uri);
+}
+
+function isAbsoluteLocalPath(input: string): boolean {
+  return path.isAbsolute(input) || path.win32.isAbsolute(input) || path.posix.isAbsolute(input);
+}
+
+function relativeLocalPath(input: string): string {
+  return input.replace(/[\\/]+/g, path.sep);
+}
+
+function canonicalLocalPath(input: string): string {
+  const normalized = path.resolve(input);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function assertLocalPathInsideRoot(candidate: string, root: string): void {
+  const normalizedCandidate = canonicalLocalPath(candidate);
+  const normalizedRoot = canonicalLocalPath(root);
+  const relative = path.relative(normalizedRoot, normalizedCandidate);
+  if (relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative))) return;
+  throw new Error(`路径超出当前本地工作环境根目录：${candidate}（root=${root}）`);
+}
+
+
 class LocalEndpoint implements Endpoint {
   public constructor(public environment: WorkEnvironmentRecord) {}
-  assertAbsolute(p: string): void {
-    if (!path.isAbsolute(p) && !path.win32.isAbsolute(p) && !path.posix.isAbsolute(p)) throw new Error(`本地路径必须是绝对路径: ${p}`);
+  resolvePath(input: string, policy: TransferPathPolicy): string {
+    const text = normalizeString(input);
+    if (!text) throw new Error('本地路径不能为空。');
+    const root = localProjectRootPath(this.environment);
+    const resolved = isAbsoluteLocalPath(text)
+      ? this.normalize(text)
+      : root
+        ? path.resolve(root, relativeLocalPath(text))
+        : undefined;
+    if (!resolved) throw new Error(`本地工作环境缺少 rootPath，无法解析相对路径: ${text}`);
+    const normalized = this.normalize(resolved);
+    if (!policy.allowOutsideProjectPaths) {
+      if (!root) throw new Error(`本地工作环境缺少 rootPath，无法限制项目外路径：${workEnvironmentDisplayName(this.environment)}`);
+      assertLocalPathInsideRoot(normalized, root);
+    }
+    return normalized;
   }
   normalize(p: string): string { return path.normalize(trimTrailingSeparators(p, false)); }
   dirname(p: string): string { return path.dirname(p); }
@@ -461,7 +515,16 @@ class LocalEndpoint implements Endpoint {
 
 class RemoteCommandEndpoint implements Endpoint {
   public constructor(public environment: WorkEnvironmentRecord) {}
-  assertAbsolute(p: string): void { if (!p.trim().replace(/\\/g, '/').startsWith('/')) throw new Error(`远端路径必须是 / 开头的绝对路径: ${p}`); }
+  resolvePath(input: string, policy: TransferPathPolicy): string {
+    const text = normalizeString(input);
+    if (!text) throw new Error('远端路径不能为空。');
+    const isAbsolute = text.replace(/\\/g, '/').startsWith('/');
+    const root = remoteProjectRootPath(this.environment);
+    if (!isAbsolute && !root) throw new Error(`远程工作环境缺少 workdir/rootPath，无法解析相对路径: ${text}`);
+    return this.normalize(resolveRemotePath(text, this.environment, undefined, {
+      allowOutsideProjectPaths: policy.allowOutsideProjectPaths
+    }));
+  }
   normalize(p: string): string { return path.posix.normalize(trimTrailingSeparators(p.replace(/\\/g, '/'), true)); }
   dirname(p: string): string { return path.posix.dirname(p); }
   basename(p: string): string { return path.posix.basename(p); }

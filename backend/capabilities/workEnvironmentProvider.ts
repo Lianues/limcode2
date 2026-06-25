@@ -4,11 +4,16 @@ import * as path from 'node:path';
 import type { Readable, Writable } from 'node:stream';
 import type { WorkEnvironmentRecord } from '../../shared/protocol';
 import { isRemoteServerWorkEnvironment, workEnvironmentDisplayName } from '../../shared/workEnvironmentCatalog';
-import type { CommandRunArgs, CommandRunObserver, CommandRunResult, FsReadFileResult } from './types';
+import type { CommandRunArgs, CommandRunObserver, CommandRunResult, FsDeletePathTargetType, FsReadFileResult } from './types';
 
 const DEFAULT_REMOTE_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT_CHARS = 120_000;
 const MAX_REMOTE_READ_BYTES = 256 * 1024;
+
+export interface RemotePathPolicyOptions {
+  allowOutsideProjectPaths?: boolean;
+  rejectProjectRoot?: boolean;
+}
 
 export interface RemoteServerStreamHandle {
   stdin: Writable;
@@ -64,9 +69,10 @@ export async function readRemoteServerTextFile(
   environment: WorkEnvironmentRecord,
   filePath: string,
   startLine?: number,
-  endLine?: number
+  endLine?: number,
+  options: RemotePathPolicyOptions = {}
 ): Promise<FsReadFileResult> {
-  const text = await readRemoteServerRawTextFile(environment, filePath, MAX_REMOTE_READ_BYTES);
+  const text = await readRemoteServerRawTextFile(environment, filePath, MAX_REMOTE_READ_BYTES, options);
   const fileLines = text.split(/\r?\n/);
   const from = normalizeStartLine(startLine);
   const to = normalizeEndLine(endLine, fileLines.length);
@@ -85,10 +91,11 @@ export async function readRemoteServerTextFile(
 export async function readRemoteServerRawTextFile(
   environment: WorkEnvironmentRecord,
   filePath: string,
-  maxBytes = MAX_REMOTE_READ_BYTES
+  maxBytes = MAX_REMOTE_READ_BYTES,
+  options: RemotePathPolicyOptions = {}
 ): Promise<string> {
   assertRemoteServerCommandSupported(environment);
-  const remotePath = resolveRemotePath(filePath, environment);
+  const remotePath = resolveRemotePath(filePath, environment, undefined, options);
   const script = `set -euo pipefail
 FILE=${shQuote(remotePath)}
 if [ ! -e "$FILE" ]; then echo "file not found: $FILE" >&2; exit 44; fi
@@ -108,10 +115,11 @@ base64 < "$FILE" | tr -d '\n\r'`;
 export async function writeRemoteServerTextFile(
   environment: WorkEnvironmentRecord,
   filePath: string,
-  content: string
+  content: string,
+  options: RemotePathPolicyOptions = {}
 ): Promise<void> {
   assertRemoteServerCommandSupported(environment);
-  const remotePath = resolveRemotePath(filePath, environment);
+  const remotePath = resolveRemotePath(filePath, environment, undefined, options);
   const remoteDir = path.posix.dirname(remotePath);
   const tempPath = path.posix.join(remoteDir, `.${path.posix.basename(remotePath) || 'file'}.limcode-write-${Date.now()}-${randomBytes(4).toString('hex')}`);
   const mkdirResult = await executeRemoteServerScript(environment, `mkdir -p -- ${shQuote(remoteDir)}`, { timeout: DEFAULT_REMOTE_TIMEOUT_MS, displayCommand: `mkdir -p ${remoteDir}` });
@@ -132,6 +140,31 @@ export async function writeRemoteServerTextFile(
     throw error;
   }
 }
+
+export async function deleteRemoteServerPath(
+  environment: WorkEnvironmentRecord,
+  filePath: string,
+  options: RemotePathPolicyOptions = {}
+): Promise<{ path: string; targetType: FsDeletePathTargetType }> {
+  assertRemoteServerCommandSupported(environment);
+  const remotePath = resolveRemotePath(filePath, environment, undefined, { ...options, rejectProjectRoot: true });
+  assertSafeRemoteDeleteTarget(remotePath, environment);
+  const script = `set -euo pipefail
+TARGET=${shQuote(remotePath)}
+if [ ! -e "$TARGET" ]; then echo "path not found: $TARGET" >&2; exit 44; fi
+if [ -d "$TARGET" ] && [ ! -L "$TARGET" ]; then
+  rm -rf -- "$TARGET"
+  printf 'directory'
+else
+  rm -f -- "$TARGET"
+  printf 'file'
+fi`;
+  const result = await executeRemoteServerScript(environment, script, { timeout: DEFAULT_REMOTE_TIMEOUT_MS, displayCommand: `delete ${remotePath}` });
+  if (result.exitCode === 44) throw new RemoteFileNotFoundError(result.stderr || `远程路径不存在：${remotePath}`);
+  if (result.exitCode !== 0 || result.killed) throw new Error(result.stderr || `远程删除失败：${remotePath}`);
+  return { path: remotePath, targetType: result.stdout.trim() === 'directory' ? 'directory' : 'file' };
+}
+
 
 export function openRemoteServerReadStream(environment: WorkEnvironmentRecord, remotePath: string): RemoteServerStreamHandle {
   assertRemoteServerCommandSupported(environment);
@@ -218,11 +251,15 @@ export function spawnRemoteServerScript(
   };
 }
 
-export function resolveRemotePath(input: string, environment: WorkEnvironmentRecord, cwd?: string): string {
+export function resolveRemotePath(input: string, environment: WorkEnvironmentRecord, cwd?: string, options: RemotePathPolicyOptions = {}): string {
   const text = normalizeRemoteInput(input);
-  if (path.posix.isAbsolute(text)) return path.posix.normalize(text);
   const base = resolveRemoteCwd(cwd, environment);
-  return base ? path.posix.join(base, text) : text;
+  const resolved = path.posix.isAbsolute(text)
+    ? path.posix.normalize(text)
+    : base
+      ? path.posix.join(base, text)
+      : text;
+  return applyRemotePathPolicy(path.posix.normalize(resolved), environment, options);
 }
 
 export function resolveRemoteCwd(inputCwd: string | undefined, environment: WorkEnvironmentRecord): string | undefined {
@@ -232,6 +269,46 @@ export function resolveRemoteCwd(inputCwd: string | undefined, environment: Work
   if (path.posix.isAbsolute(cwd)) return path.posix.normalize(cwd);
   return base ? path.posix.join(base, cwd) : path.posix.normalize(cwd);
 }
+
+export function remoteProjectRootPath(environment: WorkEnvironmentRecord): string | undefined {
+  return resolveRemoteCwd(undefined, environment);
+}
+
+function applyRemotePathPolicy(remotePath: string, environment: WorkEnvironmentRecord, options: RemotePathPolicyOptions): string {
+  if (options.allowOutsideProjectPaths === false) {
+    const root = remoteProjectRootPath(environment);
+    if (!root || !path.posix.isAbsolute(root)) {
+      throw new Error(`当前远程工作环境缺少绝对 workdir/rootPath，无法限制项目外路径：${workEnvironmentDisplayName(environment)}`);
+    }
+    if (!path.posix.isAbsolute(remotePath) || !isRemotePathInside(remotePath, root)) {
+      throw new Error(`路径超出当前远程工作环境根目录：${remotePath}（root=${root}）`);
+    }
+  }
+  if (options.rejectProjectRoot === true) assertSafeRemoteDeleteTarget(remotePath, environment);
+  return remotePath;
+}
+
+function assertSafeRemoteDeleteTarget(remotePath: string, environment: WorkEnvironmentRecord): void {
+  const normalized = path.posix.normalize(remotePath);
+  if (!normalized || normalized === '/') throw new Error('拒绝删除远程文件系统根目录。');
+  if (!path.posix.isAbsolute(normalized)) throw new Error(`远程相对删除路径需要配置 workdir/rootPath：${normalized}`);
+  const root = remoteProjectRootPath(environment);
+  if (root && path.posix.isAbsolute(root) && sameRemotePath(normalized, root)) {
+    throw new Error(`拒绝删除远程工作环境根目录：${normalized}`);
+  }
+}
+
+function sameRemotePath(left: string, right: string): boolean {
+  return path.posix.normalize(left) === path.posix.normalize(right);
+}
+
+function isRemotePathInside(candidate: string, root: string): boolean {
+  const normalizedCandidate = path.posix.normalize(candidate);
+  const normalizedRoot = path.posix.normalize(root);
+  const relative = path.posix.relative(normalizedRoot, normalizedCandidate);
+  return relative === '' || (!!relative && !relative.startsWith('..') && !path.posix.isAbsolute(relative));
+}
+
 
 export function shQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;

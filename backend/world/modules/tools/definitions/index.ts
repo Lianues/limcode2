@@ -1,6 +1,7 @@
 import type { ToolDefinition } from '../registry';
 import { readAgentAnswerToolModule, submitAgentAnswerToolModule } from './agentAnswer';
 import { commandToolModule } from './command';
+import { deleteToolModule } from './delete';
 import { editToolModule } from './edit';
 import { readFileToolModule } from './readFile';
 import { runAgentToolModule } from './runAgent';
@@ -14,6 +15,7 @@ import type { ToolDefinitionContext, ToolDefinitionModule } from './types';
 export * from './types';
 export { readAgentAnswerTool, readAgentAnswerToolModule, submitAgentAnswerTool, submitAgentAnswerToolModule } from './agentAnswer';
 export { commandToolModule, createCommandTool } from './command';
+export { deleteToolModule, deleteTool } from './delete';
 export { editToolModule, editTool } from './edit';
 export { readFileToolModule, readFileTool } from './readFile';
 export { writeToolModule, writeTool } from './write';
@@ -30,6 +32,7 @@ const BUILTIN_TOOL_MODULES: readonly ToolDefinitionModule[] = [
   readFileToolModule,
   editToolModule,
   writeToolModule,
+  deleteToolModule,
   readConversationToolModule,
   submitAgentAnswerToolModule,
   readAgentAnswerToolModule,

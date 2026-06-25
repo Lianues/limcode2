@@ -2,6 +2,7 @@ import { WRITE_TOOL_NAME } from '../../../../../../shared/protocol';
 import type { ToolDefinition } from '../../registry';
 import { staticToolScheduling } from '../../scheduling';
 import { defineToolDefinitionModule } from '../types';
+import { allowOutsideProjectPathsDefaultConfig, allowOutsideProjectPathsField, allowOutsideProjectPathsFromConfig, filePathPolicyDescription } from '../filePathPolicy';
 
 interface WriteArgs {
   path?: string;
@@ -22,12 +23,13 @@ export const writeTool: ToolDefinition = {
       'Write a UTF-8 text file in the current work environment.',
       'Creates parent directories automatically when the file does not exist.',
       'Returns unchanged when the target content is identical to the existing file.',
-      'Use edit for small targeted replacements; use write when you intentionally provide the complete file content.'
+      'Use edit for small targeted replacements; use write when you intentionally provide the complete file content.',
+      filePathPolicyDescription(false)
     ].join(' '),
     parameters: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'File path. Relative paths are resolved from the current work environment root.' },
+        path: { type: 'string', description: 'File path. Relative paths are resolved from the current work environment root; absolute paths are supported when allowed by tool policy.' },
         content: { type: 'string', description: 'Complete UTF-8 content to write to the file.' }
       },
       required: ['path', 'content']
@@ -40,7 +42,9 @@ export const writeTool: ToolDefinition = {
       defaultEnabled: true,
       requiresApproval: true,
       checkpoint: { before: true, after: true }
-    }
+    },
+    configSchema: { fields: [allowOutsideProjectPathsField(false)] },
+    defaultConfig: allowOutsideProjectPathsDefaultConfig(false)
   },
   execution: 'runtime',
   scheduling: staticToolScheduling('serial', 'filesystem_write_side_effect'),
@@ -49,7 +53,10 @@ export const writeTool: ToolDefinition = {
     const args = (rawArgs ?? {}) as WriteArgs;
     if (!args.path) return { ok: false, output: 'Missing required argument: path' };
     if (typeof args.content !== 'string') return { ok: false, output: 'Missing required argument: content' };
-    const result = await deps.fs.writeFile(args.path, args.content, { workEnvironment: ctx?.workEnvironment });
+    const result = await deps.fs.writeFile(args.path, args.content, {
+      workEnvironment: ctx?.workEnvironment,
+      allowOutsideProjectPaths: allowOutsideProjectPathsFromConfig(ctx?.config, false)
+    });
     return { ok: result.success, output: result };
   }
 };

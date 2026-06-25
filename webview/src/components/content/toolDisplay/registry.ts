@@ -6,23 +6,25 @@ import {
   IconPlaylistAdd,
   IconSwitch,
   IconTerminal2,
+  IconTrash,
   IconTool,
   IconTransfer,
   IconUsers,
   IconWriting
 } from '@tabler/icons-vue';
 import {
+  DELETE_TOOL_NAME,
   EDIT_TOOL_NAME,
   READ_AGENT_ANSWER_TOOL_NAME,
   READ_TOOL_NAME,
   SUBMIT_AGENT_ANSWER_TOOL_NAME,
   SWITCH_WORK_ENVIRONMENT_TOOL_NAME,
   TASK_LIST_TOOL_NAME,
-  TRANSFER_FILES_TOOL_NAME,
+  TRANSFER_TOOL_NAME,
   WRITE_TOOL_NAME
 } from '@shared/protocol';
 import { readAgentAnswerToolDisplay, submitAgentAnswerToolDisplay } from './agentAnswerToolDisplay';
-import { editToolDisplay, writeToolDisplay } from './fileChangeToolDisplay';
+import { deleteToolDisplay, editToolDisplay, writeToolDisplay } from './fileChangeToolDisplay';
 import { readConversationToolDisplay } from './readConversationToolDisplay';
 import { readFileToolDisplay } from './readFileToolDisplay';
 import { runAgentToolDisplay } from './runAgentToolDisplay';
@@ -37,6 +39,7 @@ const TOOL_DISPLAY_RESOLVERS: Record<string, ToolDisplayResolver> = {
   [READ_TOOL_NAME]: readFileToolDisplay,
   [EDIT_TOOL_NAME]: editToolDisplay,
   [WRITE_TOOL_NAME]: writeToolDisplay,
+  [DELETE_TOOL_NAME]: deleteToolDisplay,
   read_conversation: readConversationToolDisplay,
   run_agent: runAgentToolDisplay,
   [SUBMIT_AGENT_ANSWER_TOOL_NAME]: submitAgentAnswerToolDisplay,
@@ -44,7 +47,7 @@ const TOOL_DISPLAY_RESOLVERS: Record<string, ToolDisplayResolver> = {
   shell: shellToolDisplay,
   bash: shellToolDisplay,
   [SWITCH_WORK_ENVIRONMENT_TOOL_NAME]: switchWorkEnvironmentToolDisplay,
-  [TRANSFER_FILES_TOOL_NAME]: transferFilesToolDisplay
+  [TRANSFER_TOOL_NAME]: transferFilesToolDisplay
 };
 
 const TOOL_HEADER_ICONS: Record<string, Component> = {
@@ -52,6 +55,7 @@ const TOOL_HEADER_ICONS: Record<string, Component> = {
   [READ_TOOL_NAME]: IconFileDescription,
   [EDIT_TOOL_NAME]: IconPencil,
   [WRITE_TOOL_NAME]: IconWriting,
+  [DELETE_TOOL_NAME]: IconTrash,
   read_conversation: IconMessageDots,
   run_agent: IconUsers,
   [SUBMIT_AGENT_ANSWER_TOOL_NAME]: IconUsers,
@@ -59,7 +63,7 @@ const TOOL_HEADER_ICONS: Record<string, Component> = {
   shell: IconTerminal2,
   bash: IconTerminal2,
   [SWITCH_WORK_ENVIRONMENT_TOOL_NAME]: IconSwitch,
-  [TRANSFER_FILES_TOOL_NAME]: IconTransfer
+  [TRANSFER_TOOL_NAME]: IconTransfer
 };
 
 export function resolveToolHeaderIcon(toolName: string): Component {

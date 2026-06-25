@@ -22,6 +22,7 @@ import {
   GLOBAL_SETTINGS_SECTIONS,
   conversationClientStateStreamId,
   conversationIdFromClientStateStreamId,
+  conversationTimelineStreamId,
   conversationSettingsStreamId,
   globalSettingsStreamId,
   createMessageId,
@@ -35,6 +36,7 @@ import {
   type CheckpointDiffOpenPayload,
   type CheckpointRestorePayload,
   type ContentPart,
+  type ConversationTimelinePageRequest,
   type LlmInvocationSettingsSnapshotRecord,
   type MessageContent,
   type LlmProviderModelsGetPayload,
@@ -75,7 +77,9 @@ export class WebviewMessageRouter {
     switch (message.type) {
       case BridgeMessageType.ChatSend:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: ChatEventType.Send, payload: message.payload });
+        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
+          this.deps.world.enqueue({ type: ChatEventType.Send, payload: message.payload });
+        });
         break;
       case BridgeMessageType.ChatAbort:
         if (!this.deps.isHydrated() || !message.payload) return;
@@ -84,15 +88,21 @@ export class WebviewMessageRouter {
         break;
       case BridgeMessageType.MessageEdit:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: ChatEventType.Edit, payload: message.payload });
+        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
+          this.deps.world.enqueue({ type: ChatEventType.Edit, payload: message.payload });
+        });
         break;
       case BridgeMessageType.MessageDeleteFrom:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: ChatEventType.DeleteFrom, payload: message.payload });
+        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
+          this.deps.world.enqueue({ type: ChatEventType.DeleteFrom, payload: message.payload });
+        });
         break;
       case BridgeMessageType.MessageRetryFrom:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: ChatEventType.RetryFrom, payload: message.payload });
+        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
+          this.deps.world.enqueue({ type: ChatEventType.RetryFrom, payload: message.payload });
+        });
         break;
       case BridgeMessageType.ToolPolicyScopeSet:
         if (!this.deps.isHydrated() || !message.payload) return;
@@ -269,6 +279,9 @@ export class WebviewMessageRouter {
       case BridgeMessageType.ClientResync:
         this.handleClientResync(clientId, message.payload?.streamId, message.payload?.conversationId);
         break;
+      case BridgeMessageType.ConversationTimelinePageGet:
+        if (message.payload) void this.postConversationTimelinePage(clientId, message.payload, message.id);
+        break;
       case BridgeMessageType.RunHistoryPageGet:
         if (message.payload) void this.postRunHistoryPage(clientId, message.payload, message.id);
         break;
@@ -295,7 +308,9 @@ export class WebviewMessageRouter {
         break;
       case BridgeMessageType.CompressionCreate:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: CompressionEventType.Create, payload: message.payload });
+        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
+          this.deps.world.enqueue({ type: CompressionEventType.Create, payload: message.payload });
+        });
         break;
       case BridgeMessageType.CompressionDelete:
         if (!this.deps.isHydrated() || !message.payload) return;
@@ -438,6 +453,7 @@ export class WebviewMessageRouter {
           id: createMessageId(),
           type: BridgeMessageType.WorkspaceInfo,
           channel: 'control',
+
           correlationId: message.id,
           payload: {
             name: vscode.workspace.name ?? '',
@@ -453,6 +469,17 @@ export class WebviewMessageRouter {
     }
   }
 
+  private async enqueueAfterConversationLoaded(conversationId: string, action: () => void): Promise<void> {
+    try {
+      await this.deps.ensureConversationDetailLoaded(conversationId);
+      action();
+      this.deps.requestSnapshot(conversationId);
+    } catch (error) {
+      console.warn('[LimCode] Failed to hydrate conversation before command.', error);
+    }
+  }
+
+
   private handleClientResync(clientId: BridgeClientId, streamId: string | undefined, conversationId: string | undefined): void {
     this.subscribeRequestedStream(clientId, streamId, conversationId);
     const requestedConversationId = conversationId ?? conversationIdFromClientStateStreamId(streamId ?? '');
@@ -460,9 +487,29 @@ export class WebviewMessageRouter {
       this.deps.requestSnapshot();
       return;
     }
-    void this.deps.ensureConversationDetailLoaded(requestedConversationId)
-      .then(() => this.deps.requestSnapshot(requestedConversationId))
-      .catch((error) => console.warn('[LimCode] Failed to lazy-load conversation detail.', error));
+    this.deps.requestSnapshot(requestedConversationId);
+  }
+
+  private async postConversationTimelinePage(
+    clientId: BridgeClientId,
+    payload: ConversationTimelinePageRequest,
+    correlationId?: string
+  ): Promise<void> {
+    try {
+      this.deps.webview.subscribe(clientId, conversationTimelineStreamId(payload.conversationId));
+      const page = await this.deps.storage.loadConversationTimelinePage(payload);
+      this.deps.webview.post(clientId, {
+        id: createMessageId(),
+        type: BridgeMessageType.ConversationTimelinePageSnapshot,
+        channel: 'state',
+        scope: { kind: 'conversation', id: payload.conversationId },
+        correlationId,
+        payload: page
+      });
+    } catch (error) {
+      console.warn('[LimCode] Failed to load conversation timeline page.', error);
+      this.postRequestError(clientId, BridgeMessageType.ConversationTimelinePageGet, '无法加载对话消息分页。', correlationId);
+    }
   }
 
   private async postRunHistoryPage(

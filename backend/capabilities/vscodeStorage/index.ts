@@ -29,8 +29,11 @@ import {
   appendToolCallEventRecord,
   loadClientStateSkeletonFromStores,
   loadConversationDetailFromStores,
+  loadConversationLatestMessagesFromStores,
+  loadConversationMessagesByIdsFromStores,
   loadConversationRunDetailFromStores,
   loadConversationRunHistoryPageFromStores,
+  loadConversationTimelinePageFromStores,
   resolveConversationRunIdForMessageFromStores,
   removeMessageRecord,
   saveClientStateSkeletonToStores,
@@ -119,6 +122,18 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     async loadConversationTimelineProjectionContext(conversationId, projectionKey, chunkId) {
       const paths = getPaths();
       return loadTimelineProjectionContext(paths, conversationId, projectionKey, chunkId);
+    },
+    async loadConversationTimelinePage(request) {
+      const paths = getPaths();
+      return loadConversationTimelinePageFromStores(paths, request);
+    },
+    async loadConversationLatestMessages(conversationId, limit) {
+      const paths = getPaths();
+      return loadConversationLatestMessagesFromStores(paths, conversationId, limit);
+    },
+    async loadConversationMessagesByIds(conversationId, messageIds) {
+      const paths = getPaths();
+      return loadConversationMessagesByIdsFromStores(paths, conversationId, messageIds);
     },
     async saveClientStateSkeleton(state) {
       const paths = getPaths();

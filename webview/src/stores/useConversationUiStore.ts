@@ -86,7 +86,9 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     messages: readonly MessageRecord[],
     checkpoints: readonly CheckpointRecord[],
     checkpointAnchors: readonly CheckpointTimelineAnchorRecord[],
-    compressionBlocks: readonly CompressionBlockRecord[] = []
+    compressionBlocks: readonly CompressionBlockRecord[] = [],
+    floorByMessageId: Readonly<Record<string, number>> = {},
+    totalMessageCount = messages.length
   ): void {
     const currentIds = new Set(messages.map((message) => message.id));
     for (const id of [...enterTimers.keys()]) {
@@ -112,9 +114,11 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     const rows = buildConversationTimelineRows({ messages, checkpoints, checkpointAnchors, compressionBlocks }).map((row): ConversationTimelineViewRow => {
       if (row.kind === 'message') {
         const messageIndex = messageIndexById.get(row.message.id) ?? 0;
+        const floorNumber = floorByMessageId[row.message.id] ?? row.messageFloorNumber;
         return {
           ...row,
-          deleteCount: messages.length - messageIndex,
+          messageFloorNumber: floorNumber,
+          deleteCount: Math.max(1, totalMessageCount - floorNumber + 1),
           phase: phaseForMessage(row.message.id, messageIndex, messages)
         };
       }

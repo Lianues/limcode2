@@ -9,6 +9,7 @@ import type {
   ToolSchedulingMode
 } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { bridge, BridgeMessageType } from '@webview/transport';
 import TaskListDisplay from '@webview/components/taskList/TaskListDisplay.vue';
 import { resolveToolDisplay } from '../toolDisplay/registry';
@@ -31,12 +32,13 @@ const props = defineProps<{
 }>();
 
 const clientState = useClientStateStore();
+const conversationTimeline = useConversationTimelineStore();
 const expanded = ref(false);
 const userChangedExpanded = ref(false);
 const toolCall = computed<ToolCallRecord | undefined>(() => {
   const partId = props.part.id;
   if (!props.messageId || !partId) return undefined;
-  return clientState.toolCalls.find(
+  return conversationTimeline.currentTimeline.state.toolCalls.find(
     (call) => call.messageId === props.messageId && (call.id === partId || call.functionCallId === partId)
   );
 });
@@ -57,13 +59,13 @@ const toolDisplay = computed(() => resolveToolDisplay({
   progress: displayProgress.value,
   events: toolEvents.value,
   toolCall: toolCall.value,
-  messages: clientState.messages,
-  toolCalls: clientState.toolCalls,
-  agentRunSourceLinks: clientState.agentRunSourceLinks,
-  agentRunTargetLinks: clientState.agentRunTargetLinks,
-  checkpoints: clientState.checkpoints,
-  checkpointTimelineAnchors: clientState.checkpointTimelineAnchors,
-  shadowRepositories: clientState.shadowRepositories,
+  messages: conversationTimeline.currentTimeline.state.messages,
+  toolCalls: conversationTimeline.currentTimeline.state.toolCalls,
+  agentRunSourceLinks: conversationTimeline.currentTimeline.state.agentRunSourceLinks,
+  agentRunTargetLinks: conversationTimeline.currentTimeline.state.agentRunTargetLinks,
+  checkpoints: conversationTimeline.currentTimeline.state.checkpoints,
+  checkpointTimelineAnchors: conversationTimeline.currentTimeline.state.checkpointTimelineAnchors,
+  shadowRepositories: conversationTimeline.currentTimeline.state.shadowRepositories,
   currentConversationId: clientState.currentConversationId,
   stringifyValue
 }));

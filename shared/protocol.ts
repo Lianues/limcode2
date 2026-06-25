@@ -1,4 +1,5 @@
 import type { CLIENT_STATE_TABLES } from './clientStateSchema';
+import type { TimelineProjectionContextRecord } from './timelineProjection';
 
 export type MessageId = string;
 export type BridgeClientId = string;
@@ -32,6 +33,8 @@ export const CONVERSATION_SETTINGS_SECTIONS = ['common', 'llm'] as const;
 export type ConversationSettingsSection = typeof CONVERSATION_SETTINGS_SECTIONS[number];
 export const CONVERSATION_CLIENT_STATE_STREAM_PREFIX = 'conversation:';
 export const CONVERSATION_CLIENT_STATE_STREAM_SUFFIX = ':state';
+export const CONVERSATION_TIMELINE_STREAM_PREFIX = 'conversation:';
+export const CONVERSATION_TIMELINE_STREAM_SUFFIX = ':timeline';
 
 export function conversationSettingsStreamId(conversationId: string, section: ConversationSettingsSection = 'common'): string {
   return `${CONVERSATION_SETTINGS_STREAM_PREFIX}${conversationId}:${section}`;
@@ -48,11 +51,22 @@ export function conversationClientStateStreamId(conversationId: string): string 
   return `${CONVERSATION_CLIENT_STATE_STREAM_PREFIX}${conversationId}${CONVERSATION_CLIENT_STATE_STREAM_SUFFIX}`;
 }
 
+export function conversationTimelineStreamId(conversationId: string): string {
+  return `${CONVERSATION_TIMELINE_STREAM_PREFIX}${conversationId}${CONVERSATION_TIMELINE_STREAM_SUFFIX}`;
+}
+
 export function conversationIdFromClientStateStreamId(streamId: string): string | undefined {
   return streamId.startsWith(CONVERSATION_CLIENT_STATE_STREAM_PREFIX) && streamId.endsWith(CONVERSATION_CLIENT_STATE_STREAM_SUFFIX)
     ? streamId.slice(CONVERSATION_CLIENT_STATE_STREAM_PREFIX.length, -CONVERSATION_CLIENT_STATE_STREAM_SUFFIX.length)
     : undefined;
 }
+
+export function conversationIdFromTimelineStreamId(streamId: string): string | undefined {
+  return streamId.startsWith(CONVERSATION_TIMELINE_STREAM_PREFIX) && streamId.endsWith(CONVERSATION_TIMELINE_STREAM_SUFFIX)
+    ? streamId.slice(CONVERSATION_TIMELINE_STREAM_PREFIX.length, -CONVERSATION_TIMELINE_STREAM_SUFFIX.length)
+    : undefined;
+}
+
 
 export enum BridgeMessageType {
   Hello = 'bridge.hello',
@@ -109,6 +123,10 @@ export enum BridgeMessageType {
   ClientResync = 'client.resync',
   ClientSnapshot = 'state.snapshot',
   ClientPatch = 'state.patch',
+  ConversationTimelinePageGet = 'conversationTimeline.page.get',
+  ConversationTimelinePageSnapshot = 'conversationTimeline.page.snapshot',
+  ConversationTimelinePatch = 'conversationTimeline.patch',
+  ConversationTimelineMetaSnapshot = 'conversationTimeline.meta.snapshot',
   RunHistoryPageGet = 'runHistory.page.get',
   RunHistoryPageSnapshot = 'runHistory.page.snapshot',
   RunHistoryDetailGet = 'runHistory.detail.get',
@@ -1833,6 +1851,63 @@ export type ConversationModeSelectPayload =
 export interface ConversationAgentSelectPayload {
   conversationId: string; agentId: string;
 }
+
+export type ConversationTimelinePageDirection = 'initial' | 'older' | 'newer' | 'around';
+export type ConversationTimelinePageApplyMode = 'replace' | 'prepend' | 'append' | 'merge';
+
+export interface ConversationTimelinePageRequest {
+  conversationId: string;
+  direction?: ConversationTimelinePageDirection;
+  cursor?: string;
+  anchorMessageId?: string;
+  chunkCount?: number;
+  includeProjections?: string[];
+}
+
+export interface ConversationTimelineChunkSummaryRecord {
+  id: string;
+  index: number;
+  startSeq: number;
+  endSeq: number;
+  messageCount: number;
+  messageOffsetStart: number;
+  messageOffsetEnd: number;
+  toolCallCount: number;
+  toolCallEventCount: number;
+}
+
+export interface ConversationTimelinePageInfo {
+  conversationId: string;
+  chunkIds: string[];
+  totalChunks: number;
+  totalMessages: number;
+  startSeq?: number;
+  endSeq?: number;
+  oldestChunkId?: string;
+  newestChunkId?: string;
+  previousCursor?: string;
+  nextCursor?: string;
+  hasOlder: boolean;
+  hasNewer: boolean;
+  loadedAt: number;
+}
+
+export interface ConversationTimelinePageRecord {
+  conversationId: string;
+  applyMode: ConversationTimelinePageApplyMode;
+  chunks: ConversationTimelineChunkSummaryRecord[];
+  pageInfo: ConversationTimelinePageInfo;
+  state: ClientState;
+  projections?: Record<string, TimelineProjectionContextRecord>;
+}
+
+export interface ConversationTimelinePatchPayload {
+  conversationId: string;
+  streamSeq: number;
+  patches: ClientPatchOp[];
+  pageInfo?: Partial<ConversationTimelinePageInfo>;
+}
+
 export interface ClientSnapshotPayload {
   streamId: string;
   streamSeq: number;
@@ -2102,6 +2177,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.CheckpointDiffOpen, CheckpointDiffOpenPayload>
   | BridgeEnvelope<BridgeMessageType.EditToolStatisticsGet, undefined>
   | BridgeEnvelope<BridgeMessageType.ClientResync, ClientResyncPayload>
+  | BridgeEnvelope<BridgeMessageType.ConversationTimelinePageGet, ConversationTimelinePageRequest>
   | BridgeEnvelope<BridgeMessageType.RunHistoryPageGet, ConversationRunHistoryPageRequest>
   | BridgeEnvelope<BridgeMessageType.RunHistoryDetailGet, ConversationRunDetailRequest>
   | BridgeEnvelope<BridgeMessageType.LlmDryRunGet, LlmDryRunGetPayload>
@@ -2141,6 +2217,9 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.Error, { requestType?: string; message: string }>
   | BridgeEnvelope<BridgeMessageType.ClientSnapshot, ClientSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ClientPatch, ClientPatchPayload>
+  | BridgeEnvelope<BridgeMessageType.ConversationTimelinePageSnapshot, ConversationTimelinePageRecord>
+  | BridgeEnvelope<BridgeMessageType.ConversationTimelinePatch, ConversationTimelinePatchPayload>
+  | BridgeEnvelope<BridgeMessageType.ConversationTimelineMetaSnapshot, ConversationTimelinePageRecord>
   | BridgeEnvelope<BridgeMessageType.RunHistoryPageSnapshot, ConversationRunHistoryPageRecord>
   | BridgeEnvelope<BridgeMessageType.RunHistoryDetailSnapshot, ConversationRunDetailRecord>
   | BridgeEnvelope<BridgeMessageType.LlmDryRunSnapshot, LlmDryRunSnapshotPayload>

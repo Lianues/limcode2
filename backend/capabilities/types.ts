@@ -10,6 +10,8 @@ import type {
   ConversationRunDetailRequest,
   ConversationRunHistoryPageRecord,
   ConversationRunHistoryPageRequest,
+  ConversationTimelinePageRecord,
+  ConversationTimelinePageRequest,
   ConversationSettingsSection,
   ConversationSettingsSectionValue,
   ExtensionToWebviewMessage,
@@ -18,6 +20,7 @@ import type {
   EditToolMode,
   EditToolStatisticsRecord,
   LlmCompressionConfigRecord,
+  MessageRecord,
   LlmProviderConfigRecord,
   LlmProviderModelRecord,
   CheckpointRecord,
@@ -454,6 +457,9 @@ export interface StorageCapability {
     projectionKey: string,
     chunkId?: string
   ): Promise<TimelineProjectionContextRecord | undefined>;
+  loadConversationTimelinePage(request: ConversationTimelinePageRequest): Promise<ConversationTimelinePageRecord>;
+  loadConversationLatestMessages(conversationId: string, limit?: number): Promise<MessageRecord[]>;
+  loadConversationMessagesByIds(conversationId: string, messageIds: readonly string[]): Promise<MessageRecord[]>;
   saveClientStateSkeleton(state: ClientState): Promise<void>;
   saveConversationRenderDetail(conversationId: string, state: ClientState): Promise<void>;
   saveConversationRunHistory(conversationId: string, state: ClientState, options: { mode: ConversationRunHistorySaveMode }): Promise<void>;

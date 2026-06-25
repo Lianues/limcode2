@@ -4,6 +4,7 @@ import { IconFolder, IconListDetails, IconPencilExclamation, IconPlayerStop, Ico
 import { workEnvironmentDisplayPath, workEnvironmentSortKey as buildWorkEnvironmentSortKey } from '@shared/workEnvironmentCatalog';
 import type { MessageContent, WorkEnvironmentRecord } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
 import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
@@ -31,6 +32,7 @@ const emit = defineEmits<{
 }>();
 
 const clientState = useClientStateStore();
+const conversationTimeline = useConversationTimelineStore();
 const globalSettings = useGlobalSettingsStore();
 const conversationSettings = useConversationSettingsStore();
 const modeStore = useModeStore();
@@ -56,7 +58,7 @@ const draft = computed({
 });
 const expandTitle = computed(() => (editorExpanded.value ? '恢复输入框高度' : '扩大输入框'));
 const sendTitle = computed(() => (ui.isEditing ? '提交编辑' : '发送'));
-const compacting = computed(() => clientState.currentCompressionBlocks.some((block) => block.status === 'pending' || block.status === 'running'));
+const compacting = computed(() => conversationTimeline.currentCompressionBlocks.some((block) => block.status === 'pending' || block.status === 'running'));
 const compactTitle = computed(() => compacting.value ? '取消上下文压缩' : '压缩当前上下文');
 const runSummary = computed(() => clientState.currentRunSummary);
 const channelOptions = computed<SettingsDropdownOption[]>(() =>
@@ -472,7 +474,7 @@ function middleEllipsis(value: string, maxLength: number): string {
         type="button"
         class="composer-compact"
         :class="{ 'is-compacting': compacting }"
-        :disabled="disabled || (!compacting && clientState.currentMessages.length < 2)"
+        :disabled="disabled || (!compacting && conversationTimeline.currentMessages.length < 2)"
         aria-label="压缩上下文"
         :title="compactTitle"
         @click="compactConversation"

@@ -6,6 +6,7 @@ import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
 import { useRunHistoryStore } from '@webview/stores/useRunHistoryStore';
+import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 
 /**
  * 在 App 根组件挂载时调用一次：集中注册所有入站桥接监听并接入对应 store，
@@ -26,6 +27,7 @@ export function useBridgeBootstrap(): void {
   const globalSettings = useGlobalSettingsStore();
   const conversationSettings = useConversationSettingsStore();
   const runHistory = useRunHistoryStore();
+  const conversationTimeline = useConversationTimelineStore();
 
   const disposers: Array<() => void> = [];
   const requestedConversationStreams = new Set<string>();
@@ -76,6 +78,7 @@ export function useBridgeBootstrap(): void {
     bridge.on(BridgeMessageType.ClientSnapshot, (message) => {
       if (!message.payload) return;
       clientState.applyClientSnapshot(message.payload.streamId, message.payload.streamSeq, message.payload.state);
+      conversationTimeline.applyClientStateSnapshot(message.payload.streamId, message.payload.state);
     })
   );
 
@@ -87,7 +90,20 @@ export function useBridgeBootstrap(): void {
         message.payload.streamSeq,
         message.payload.patches
       );
+      conversationTimeline.applyClientStatePatch(message.payload.streamId, message.payload.streamSeq, message.payload.patches);
       if (!applied) resync();
+    })
+  );
+
+  disposers.push(
+    bridge.on(BridgeMessageType.ConversationTimelinePageSnapshot, (message) => {
+      if (message.payload) conversationTimeline.applyPageSnapshot(message.payload);
+    })
+  );
+
+  disposers.push(
+    bridge.on(BridgeMessageType.ConversationTimelinePatch, (message) => {
+      if (message.payload) conversationTimeline.applyTimelinePatch(message.payload);
     })
   );
 
@@ -138,6 +154,8 @@ export function useBridgeBootstrap(): void {
           requestType: message.payload.requestType,
           section: globalSettingsSectionFromScope(message.scope)
         });
+      } else if (message.payload?.requestType === BridgeMessageType.ConversationTimelinePageGet) {
+        conversationTimeline.setError(clientState.currentConversationId, message.payload.message);
       } else if (message.payload?.requestType === BridgeMessageType.RunHistoryPageGet || message.payload?.requestType === BridgeMessageType.RunHistoryDetailGet || message.payload?.requestType === BridgeMessageType.LlmDryRunGet) {
         runHistory.setError(message.payload.message);
       }
@@ -150,7 +168,11 @@ export function useBridgeBootstrap(): void {
       () => clientState.currentConversationId,
       (conversationId) => {
         if (session.viewKind !== 'chat' || !conversationId) return;
+        conversationTimeline.setCurrentConversation(conversationId);
         ensureConversationStream(conversationId);
+        if (conversationTimeline.ensureTimeline(conversationId).loadedChunkIds.length === 0) {
+          conversationTimeline.requestInitial(conversationId);
+        }
         conversationSettings.request(conversationId);
       },
       { immediate: true }

@@ -20,12 +20,11 @@ export const readConversationTool: ToolDefinition = {
     const args = (rawArgs ?? {}) as ReadConversationArgs;
     const conversationId = args.conversationId?.trim();
     if (!conversationId) return { ok: false, output: 'Missing required argument: conversationId' };
-    const detail = await deps.storage.loadConversationDetail(conversationId, { includeRunHistory: false });
-    if (!detail) return { ok: false, output: `Conversation not found: ${conversationId}` };
     const ids = new Set(args.messageIds ?? []);
-    let messages = detail.messages.sort((a, b) => a.seq - b.seq);
-    if (ids.size > 0) messages = messages.filter((message) => ids.has(message.id));
-    else if (args.lastN !== undefined) messages = messages.slice(-Math.max(1, Math.min(200, Math.floor(args.lastN))));
+    const messages = ids.size > 0
+      ? await deps.storage.loadConversationMessagesByIds(conversationId, [...ids])
+      : await deps.storage.loadConversationLatestMessages(conversationId, Math.max(1, Math.min(200, Math.floor(args.lastN ?? 50))));
+    if (messages.length === 0) return { ok: false, output: `Conversation not found or no messages available: ${conversationId}` };
     return { ok: true, output: { conversationId, messages: messages.map(renderMessage) } };
   }
 };

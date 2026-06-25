@@ -2,20 +2,25 @@
 import { computed, ref, watch } from 'vue';
 import { IconChevronRight, IconListNumbers } from '@tabler/icons-vue';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import TaskListDisplay from './TaskListDisplay.vue';
-import { buildTaskListTimeline, formatTaskListProgress } from './taskListModel';
+import { buildTaskListTimeline, emptyTaskListSnapshot, formatTaskListProgress, type TaskListSnapshotView } from './taskListModel';
 
 const clientState = useClientStateStore();
+const conversationTimeline = useConversationTimelineStore();
 const expanded = ref(false);
 const listScroller = ref<HTMLElement | null>(null);
 
 const timeline = computed(() => buildTaskListTimeline({
-  messages: clientState.messages,
-  toolCalls: clientState.toolCalls,
+  messages: conversationTimeline.currentTimeline.state.messages,
+  toolCalls: conversationTimeline.currentTimeline.state.toolCalls,
   conversationId: clientState.currentConversationId
 }));
-const snapshot = computed(() => timeline.value.snapshot);
+const snapshot = computed<TaskListSnapshotView>(() => {
+  const latest = conversationTimeline.currentTaskListProjection?.latestSnapshot as TaskListSnapshotView | undefined;
+  return latest ?? timeline.value.snapshot ?? emptyTaskListSnapshot();
+});
 const visible = computed(() => snapshot.value.items.length > 0);
 const progressLabel = computed(() => formatTaskListProgress(snapshot.value));
 const activeLabel = computed(() => {

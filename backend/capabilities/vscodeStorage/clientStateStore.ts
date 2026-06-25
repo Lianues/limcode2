@@ -19,6 +19,8 @@ import type {
   ConversationRunDetailRecord,
   ConversationRunHistoryPageRecord,
   ConversationRunSummaryRecord,
+  ConversationTimelinePageRecord,
+  ConversationTimelinePageRequest,
   ConversationOriginLinkRecord,
   ConversationReuseLinkRecord,
   MessageCurrentRevisionLinkRecord,
@@ -52,6 +54,9 @@ import { createVscodeStoragePaths } from './paths';
 import { loadRecordStore, saveRecordStore } from './recordStore';
 import { readJson, writeJson } from './json';
 import {
+  loadConversationLatestMessages,
+  loadConversationMessagesByIds,
+  loadConversationTimelinePage,
   loadConversationTimelineDetail,
   saveConversationTimelineDetail
 } from './conversationTimelineStore';
@@ -309,10 +314,28 @@ export async function loadConversationDetailFromStores(
   if (includeRunHistory) {
     const runHistory = await loadConversationRunHistoryFromStores(paths, conversationId);
     if (runHistory) copyRunHistoryTables(state, runHistory);
+
+
   }
 
   return hasAnyState(state) ? state : undefined;
 }
+
+export async function loadConversationTimelinePageFromStores(paths: StoragePaths, request: ConversationTimelinePageRequest): Promise<ConversationTimelinePageRecord> {
+  const page = await loadConversationTimelinePage(paths, request);
+  const compression = await loadConversationCompressionDetail(paths, request.conversationId);
+  if (compression) copyCompressionTables(page.state, compression);
+  return page;
+}
+
+export async function loadConversationLatestMessagesFromStores(paths: StoragePaths, conversationId: string, limit?: number): Promise<MessageRecord[]> {
+  return loadConversationLatestMessages(paths, conversationId, limit);
+}
+
+export async function loadConversationMessagesByIdsFromStores(paths: StoragePaths, conversationId: string, messageIds: readonly string[]): Promise<MessageRecord[]> {
+  return loadConversationMessagesByIds(paths, conversationId, messageIds);
+}
+
 
 export async function loadConversationRunHistoryPageFromStores(paths: StoragePaths, request: { conversationId: string; cursor?: string; limit?: number }): Promise<ConversationRunHistoryPageRecord> {
   const index = await loadRunHistoryIndex(paths, request.conversationId);
@@ -423,9 +446,13 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
 
 export async function saveConversationRenderDetailToStores(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
   const detail = conversationRenderDetailSlice(state, conversationId);
+  const timeline = (await loadConversationTimelineDetail(paths, conversationId)) ?? createEmptyClientState();
+  mergeRenderDetailTables(timeline, detail);
+  const compression = (await loadConversationCompressionDetail(paths, conversationId)) ?? createEmptyClientState();
+  mergeCompressionTables(compression, detail);
   await Promise.all([
-    saveConversationTimelineDetail(paths, conversationId, detail),
-    saveConversationCompressionDetail(paths, conversationId, detail)
+    saveConversationTimelineDetail(paths, conversationId, timeline),
+    saveConversationCompressionDetail(paths, conversationId, compression)
   ]);
 }
 
@@ -566,6 +593,34 @@ export function conversationDetailSlice(state: ClientState, conversationId: stri
   copyRunHistoryTables(detail, conversationRunHistorySlice(state, conversationId));
   return detail;
 }
+
+function mergeRenderDetailTables(target: ClientState, source: ClientState): void {
+  const keys = [
+    'messages',
+    'messageRevisions',
+    'messageCurrentRevisionLinks',
+    'toolCalls',
+    'toolCallEvents',
+    'projectContexts',
+    'shadowRepositories',
+    'conversationCheckpointRepositoryLinks',
+    'checkpoints',
+    'checkpointTimelineAnchors'
+  ] as const;
+  mergeClientStateTables(target, source, keys);
+}
+
+function mergeCompressionTables(target: ClientState, source: ClientState): void {
+  const keys = [
+    'compressionBlocks',
+    'compressionBlockSourceLinks',
+    'compressionContextVariants',
+    'compressionBlockLlmInvocationLinks',
+    'llmInvocations'
+  ] as const;
+  mergeClientStateTables(target, source, keys);
+}
+
 
 function copyRunHistoryTables(target: ClientState, source: ClientState): void {
   target.agentRuns = source.agentRuns;

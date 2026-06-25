@@ -7,7 +7,7 @@ import {
   type ToolCallRecord,
   type ToolSchedulingMode
 } from '@shared/protocol';
-import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { partViewComponent, toRenderNodes, type RichRenderNode } from './partRegistry';
 
 const props = defineProps<{
@@ -34,7 +34,7 @@ interface ToolCallNodeInfo {
   blocking: boolean;
 }
 
-const clientState = useClientStateStore();
+const conversationTimeline = useConversationTimelineStore();
 const nodes = computed(() => withToolBatchMeta(toRenderNodes(props.parts)));
 
 function nodeStreaming(node: RichRenderNode, index: number): boolean {
@@ -128,7 +128,7 @@ function toolCallForNode(node: RichRenderNode): ToolCallRecord | undefined {
   const functionCallPart = part as FunctionCallPart;
   const partId = functionCallPart.id;
   if (!partId) return undefined;
-  return clientState.toolCalls.find(
+  return conversationTimeline.currentTimeline.state.toolCalls.find(
     (call) => call.messageId === props.messageId && (call.id === partId || call.functionCallId === partId)
   );
 }

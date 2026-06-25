@@ -1,5 +1,6 @@
 import { bridge, BridgeMessageType } from '@webview/transport';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import type { CompressionBlockRecord } from '@shared/protocol';
 
 export interface CreateCompressionOptions {
@@ -10,22 +11,23 @@ export interface CreateCompressionOptions {
 
 export function useCompression() {
   const clientState = useClientStateStore();
+  const conversationTimeline = useConversationTimelineStore();
 
   function createCompression(options: CreateCompressionOptions | string = {}): boolean {
     const input = typeof options === 'string' ? { methodConfigId: options } : options;
     const conversationId = clientState.currentConversationId;
     if (!conversationId) return false;
-    const runningBlocks = clientState.currentCompressionBlocks.filter((block) => block.status === 'pending' || block.status === 'running');
+    const runningBlocks = conversationTimeline.currentCompressionBlocks.filter((block) => block.status === 'pending' || block.status === 'running');
     if (runningBlocks.length > 0) {
       for (const block of runningBlocks) deleteCompression(block);
       return true;
     }
-    if (clientState.currentMessages.some((message) => message.status === 'streaming')) {
+    if (conversationTimeline.currentMessages.some((message) => message.status === 'streaming')) {
       bridge.request(BridgeMessageType.ShowInfo, { message: '请等待 AI 响应结束后再压缩上下文。' });
       return false;
     }
     const minimumMessageCount = input.startMessageId || input.endMessageId ? 1 : 2;
-    if (clientState.currentMessages.length < minimumMessageCount) return false;
+    if (conversationTimeline.currentMessages.length < minimumMessageCount) return false;
     bridge.request(BridgeMessageType.CompressionCreate, {
       conversationId,
       ...(input.startMessageId ? { startMessageId: input.startMessageId } : {}),

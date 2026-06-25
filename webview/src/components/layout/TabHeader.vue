@@ -5,10 +5,12 @@ import type { ProjectFolderCandidateRecord } from '@shared/protocol';
 import { displayConversationTitle } from '@shared/conversationTitle';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useRuntimeContextStore } from '@webview/stores/useRuntimeContextStore';
 import { bridge, BridgeMessageType } from '@webview/transport';
 
 const clientState = useClientStateStore();
+const conversationTimeline = useConversationTimelineStore();
 const runtimeContext = useRuntimeContextStore();
 
 const headerRoot = ref<HTMLElement | null>(null);
@@ -21,7 +23,7 @@ const projectFoldersLoaded = ref(false);
 const title = computed(() => {
   const conversationId = clientState.currentConversation?.id ?? clientState.currentConversationId;
   if (!conversationId) return '正在初始化默认对话...';
-  return displayConversationTitle({ id: conversationId, title: clientState.currentConversation?.title, messages: clientState.currentMessages });
+  return displayConversationTitle({ id: conversationId, title: clientState.currentConversation?.title, messages: conversationTimeline.currentMessages });
 });
 const runSummary = computed(() => clientState.currentRunSummary);
 const runStatusClass = computed(() => `run-status-${runSummary.value.status ?? 'idle'}`);

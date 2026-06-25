@@ -6,6 +6,7 @@ import {
   type MessageRecord
 } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import HoverTooltipPanel from '@webview/components/ui/HoverTooltipPanel.vue';
 import {
@@ -40,6 +41,7 @@ interface TokenBarSegment {
 }
 
 const clientState = useClientStateStore();
+const conversationTimeline = useConversationTimelineStore();
 const globalSettings = useGlobalSettingsStore();
 const root = ref<HTMLElement | null>(null);
 const expanded = ref(false);
@@ -58,7 +60,7 @@ let animationFrame = 0;
 let dragStartX = 0;
 let dragStartScrollLeft = 0;
 
-const messageUsageItems = computed(() => buildTokenUsageMessages(clientState.currentMessages).filter((item) => item.id !== 'system-prompt-floor-0'));
+const messageUsageItems = computed(() => buildTokenUsageMessages(conversationTimeline.currentMessages).filter((item) => item.id !== 'system-prompt-floor-0'));
 const usageItems = computed(() => [...fixedContextUsageItems.value, ...messageUsageItems.value]);
 const latestUsage = computed(() => usageItems.value[usageItems.value.length - 1]);
 const hasUsage = computed(() => usageItems.value.length > 0);
@@ -66,7 +68,7 @@ const refreshKey = computed(() => usageItems.value.map((item) => `${item.id}:${i
 const activeProviderConfig = computed(() => globalSettings.activeLlmProviderConfig);
 const activeCompressionTrigger = computed(() => globalSettings.activeCompressionConfig?.trigger);
 const contextWindowTokens = computed(() => normalizeTokenCount(activeProviderConfig.value?.contextWindowTokens) ?? 0);
-const actualContextTokens = computed(() => latestActualModelTotalTokens(clientState.currentMessages) ?? 0);
+const actualContextTokens = computed(() => latestActualModelTotalTokens(conversationTimeline.currentMessages) ?? 0);
 const hasContextUsage = computed(() => contextWindowTokens.value > 0 && actualContextTokens.value > 0);
 const contextUsageRatio = computed(() => hasContextUsage.value ? actualContextTokens.value / contextWindowTokens.value : 0);
 const contextUsageFillRatio = computed(() => clamp(contextUsageRatio.value, 0, 1));

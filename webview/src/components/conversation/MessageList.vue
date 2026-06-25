@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import type { CheckpointRecord, CompressionBlockRecord, MessageRecord } from '@shared/protocol';
-import { useConversationUiStore, type MessageViewRow } from '@webview/stores/useConversationUiStore';
-import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import { useConversationUiStore, type ConversationTimelineViewRow, type MessageViewRow } from '@webview/stores/useConversationUiStore';
+import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useChat } from '@webview/composables/useChat';
 import { useRunHistoryStore } from '@webview/stores/useRunHistoryStore';
 import { useCompression } from '@webview/composables/useCompression';
@@ -9,19 +10,29 @@ import CheckpointTimelineCard from './CheckpointTimelineCard.vue';
 import { checkpointBeforeMessageFloor } from './checkpointRollback';
 import CompressionTimelineCard from './CompressionTimelineCard.vue';
 import MessageItem from './MessageItem.vue';
+import VirtualTimelineList from './VirtualTimelineList.vue';
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     emptyHint?: string;
+    scroller?: HTMLElement | null;
   }>(),
-  { emptyHint: '还没有消息，发一条试试。' }
+  { emptyHint: '还没有消息，发一条试试。', scroller: null }
 );
 
 const ui = useConversationUiStore();
-const clientState = useClientStateStore();
+const timeline = useConversationTimelineStore();
 const { retryMessageFrom, deleteMessagesFrom } = useChat();
 const { createCompression, deleteCompression, regenerateCompression, setCompressionEnabled } = useCompression();
 const runHistory = useRunHistoryStore();
+
+const timelineStatusLabel = computed(() => {
+  const info = timeline.currentTimeline.pageInfo;
+  const loaded = timeline.currentLoadedMessageCount;
+  const total = timeline.currentTotalMessages || info?.totalMessages || loaded;
+  return total > 0 ? `已加载 ${loaded}/${total} 条消息` : '';
+});
+const loadingOlder = computed(() => timeline.currentTimeline.status === 'loadingOlder');
 
 function onDeleteFrom(message: MessageRecord): void {
   ui.playExitFrom(message.id, () => deleteMessagesFrom(message.conversationId, message.id));
@@ -40,8 +51,9 @@ function onCompactTo(message: MessageRecord): void {
 }
 
 function compactCountForMessage(message: MessageRecord): number {
-  const messageCount = clientState.currentMessages.filter((candidate) => candidate.seq <= message.seq).length;
-  const previousCompressionCount = clientState.currentCompressionBlocks.filter((block) => {
+  const floor = timeline.currentMessageFloorById[message.id];
+  const messageCount = floor ?? timeline.currentMessages.filter((candidate) => candidate.seq <= message.seq).length;
+  const previousCompressionCount = timeline.currentCompressionBlocks.filter((block) => {
     const anchorSeq = block.anchorSeq ?? block.endSeq;
     return anchorSeq !== undefined && anchorSeq < message.seq;
   }).length;
@@ -50,8 +62,9 @@ function compactCountForMessage(message: MessageRecord): number {
 
 function runIdForMessage(message: MessageRecord): string | undefined {
   if (message.role === 'user') return undefined;
-  const link = clientState.messageRunLinks.find((candidate) => candidate.messageId === message.id && candidate.role === 'model')
-    ?? clientState.messageRunLinks.find((candidate) => candidate.messageId === message.id);
+  const links = timeline.currentTimeline.state.messageRunLinks;
+  const link = links.find((candidate) => candidate.messageId === message.id && candidate.role === 'model')
+    ?? links.find((candidate) => candidate.messageId === message.id);
   return link?.runId;
 }
 
@@ -74,13 +87,35 @@ function isEditingTarget(row: MessageViewRow): boolean {
 }
 
 function rollbackCheckpointForMessage(message: MessageRecord): CheckpointRecord | undefined {
-  return checkpointBeforeMessageFloor(clientState.currentCheckpoints, clientState.currentCheckpointTimelineAnchors, message.id);
+  return checkpointBeforeMessageFloor(timeline.currentCheckpoints, timeline.currentCheckpointTimelineAnchors, message.id);
+}
+
+function loadOlder(): void {
+  timeline.requestOlder();
+}
+
+function rowKey(row: ConversationTimelineViewRow): string {
+  return row.id;
 }
 </script>
 
 <template>
   <div class="message-list">
-    <template v-for="row in ui.timelineRows" :key="row.id">
+    <div v-if="timeline.currentHasOlder || timelineStatusLabel" class="timeline-load-more">
+      <button
+        v-if="timeline.currentHasOlder"
+        type="button"
+        class="timeline-load-more-button"
+        :disabled="loadingOlder"
+        @click="loadOlder"
+      >
+        {{ loadingOlder ? '正在加载更早消息…' : '加载更早消息' }}
+      </button>
+      <span v-else class="timeline-load-more-done">已到达对话开始</span>
+      <span v-if="timelineStatusLabel" class="timeline-load-more-count">{{ timelineStatusLabel }}</span>
+    </div>
+    <VirtualTimelineList :rows="ui.timelineRows" :scroller="props.scroller" :item-key="rowKey" :estimated-height="220">
+      <template #default="{ row }">
       <MessageItem
         v-if="row.kind === 'message'"
         :message="row.message"
@@ -114,7 +149,8 @@ function rollbackCheckpointForMessage(message: MessageRecord): CheckpointRecord 
         @toggle-enabled="setCompressionEnabled"
         @view-detail="onViewCompressionDetail"
       />
-    </template>
+      </template>
+    </VirtualTimelineList>
     <div v-if="!ui.timelineRows.length" class="message-empty-container">
       <p class="message-empty">{{ emptyHint }}</p>
     </div>
@@ -128,6 +164,44 @@ function rollbackCheckpointForMessage(message: MessageRecord): CheckpointRecord 
   flex-direction: column;
   gap: 0; /* 楼层之间无缝级联拼接 */
 }
+
+.timeline-load-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 34px;
+  padding: var(--space-2) var(--conversation-content-padding-right, calc(var(--space-4) + 24px)) var(--space-2) var(--conversation-content-padding-left, var(--space-4));
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+}
+
+.timeline-load-more-button {
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  padding: 3px 10px;
+  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-foreground) 8%);
+  font: inherit;
+  cursor: pointer;
+}
+
+.timeline-load-more-button:hover:not(:disabled),
+.timeline-load-more-button:focus-visible {
+  background: color-mix(in srgb, var(--vscode-editor-background) 86%, var(--vscode-foreground) 14%);
+  outline: none;
+}
+
+.timeline-load-more-button:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.timeline-load-more-done,
+.timeline-load-more-count {
+  color: var(--vscode-descriptionForeground);
+}
+
 
 .message-empty-container {
   padding: var(--space-6) var(--space-4);

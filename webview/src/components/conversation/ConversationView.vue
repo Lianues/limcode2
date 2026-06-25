@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { isVisibleTextPart, type MessageContent } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
 import { useChat } from '@webview/composables/useChat';
 import { useBottomStickyScroller } from '@webview/composables/useBottomStickyScroller';
@@ -15,9 +16,11 @@ import RunHistoryDetailPanel from './RunHistoryDetailPanel.vue';
 import { checkpointBeforeMessageFloor, rollbackConfirmActionTitle } from './checkpointRollback';
 
 const clientState = useClientStateStore();
+const conversationTimeline = useConversationTimelineStore();
 const conversationUi = useConversationUiStore();
 const checkpointStore = useCheckpointPolicyStore();
-const { currentMessages, currentCheckpoints, currentCheckpointTimelineAnchors, currentCompressionBlocks, currentConversationId, currentConversationDetailLoaded } = storeToRefs(clientState);
+const { currentConversationId } = storeToRefs(clientState);
+const { currentTimeline, currentMessages, currentCheckpoints, currentCheckpointTimelineAnchors, currentCompressionBlocks, currentMessageFloorById, currentTotalMessages } = storeToRefs(conversationTimeline);
 const { sendMessage, editMessage, updateQueueInput } = useChat();
 
 const scroller = ref<HTMLElement | null>(null);
@@ -25,8 +28,8 @@ const conversationBody = ref<HTMLElement | null>(null);
 
 useBottomStickyScroller(scroller);
 
-const loadingDetail = computed(() => !!currentConversationId.value && !currentConversationDetailLoaded.value);
-const ready = computed(() => !!currentConversationId.value && currentConversationDetailLoaded.value);
+const loadingDetail = computed(() => !!currentConversationId.value && currentTimeline.value.status === 'loadingInitial' && currentMessages.value.length === 0);
+const ready = computed(() => !!currentConversationId.value && !loadingDetail.value);
 const placeholder = computed(() =>
   ready.value
     ? '输入消息，Enter 发送，Shift+Enter 换行'
@@ -82,8 +85,8 @@ const scrollMarkers = computed(() =>
 );
 
 watch(
-  [currentMessages, currentCheckpoints, currentCheckpointTimelineAnchors, currentCompressionBlocks],
-  ([messages, checkpoints, checkpointAnchors, compressionBlocks]) => conversationUi.syncTimeline(messages, checkpoints, checkpointAnchors, compressionBlocks),
+  [currentMessages, currentCheckpoints, currentCheckpointTimelineAnchors, currentCompressionBlocks, currentMessageFloorById, currentTotalMessages],
+  ([messages, checkpoints, checkpointAnchors, compressionBlocks, floorByMessageId, totalMessages]) => conversationUi.syncTimeline(messages, checkpoints, checkpointAnchors, compressionBlocks, floorByMessageId, totalMessages),
   { immediate: true }
 );
 
@@ -162,7 +165,7 @@ function truncatePreview(text: string): string {
   <div class="conversation">
     <div ref="conversationBody" class="conversation-body">
       <div ref="scroller" class="conversation-scroll">
-        <MessageList :empty-hint="emptyHint" />
+        <MessageList :empty-hint="emptyHint" :scroller="scroller" />
       </div>
       <AdvancedScrollbar
         :scroller="scroller"

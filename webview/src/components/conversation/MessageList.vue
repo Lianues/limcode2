@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { nextTick, onBeforeUnmount, watch } from 'vue';
 import type { CheckpointRecord, CompressionBlockRecord, MessageRecord } from '@shared/protocol';
 import { useConversationUiStore, type ConversationTimelineViewRow, type MessageViewRow } from '@webview/stores/useConversationUiStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
@@ -26,13 +26,19 @@ const { retryMessageFrom, deleteMessagesFrom } = useChat();
 const { createCompression, deleteCompression, regenerateCompression, setCompressionEnabled } = useCompression();
 const runHistory = useRunHistoryStore();
 
-const timelineStatusLabel = computed(() => {
-  const info = timeline.currentTimeline.pageInfo;
-  const loaded = timeline.currentLoadedMessageCount;
-  const total = timeline.currentTotalMessages || info?.totalMessages || loaded;
-  return total > 0 ? `已加载 ${loaded}/${total} 条消息` : '';
-});
-const loadingOlder = computed(() => timeline.currentTimeline.status === 'loadingOlder');
+const AUTO_LOAD_TOP_THRESHOLD_PX = 480;
+const AUTO_LOAD_UNDERFILLED_THRESHOLD_PX = 240;
+let attachedScroller: HTMLElement | null = null;
+let autoLoadFrame: number | undefined;
+
+watch(() => props.scroller, attachScroller, { immediate: true, flush: 'post' });
+watch(
+  () => `${timeline.currentTimeline.status}:${timeline.currentHasOlder}:${ui.timelineRows.length}`,
+  () => void nextTick(scheduleAutoLoadOlder),
+  { flush: 'post' }
+);
+
+onBeforeUnmount(detachScroller);
 
 function onDeleteFrom(message: MessageRecord): void {
   ui.playExitFrom(message.id, () => deleteMessagesFrom(message.conversationId, message.id));
@@ -90,30 +96,46 @@ function rollbackCheckpointForMessage(message: MessageRecord): CheckpointRecord 
   return checkpointBeforeMessageFloor(timeline.currentCheckpoints, timeline.currentCheckpointTimelineAnchors, message.id);
 }
 
-function loadOlder(): void {
-  timeline.requestOlder();
-}
-
 function rowKey(row: ConversationTimelineViewRow): string {
   return row.id;
+}
+
+function attachScroller(element: HTMLElement | null | undefined): void {
+  detachScroller();
+  if (!element) return;
+  attachedScroller = element;
+  element.addEventListener('scroll', scheduleAutoLoadOlder, { passive: true });
+  scheduleAutoLoadOlder();
+}
+
+function detachScroller(): void {
+  if (attachedScroller) attachedScroller.removeEventListener('scroll', scheduleAutoLoadOlder);
+  attachedScroller = null;
+  if (autoLoadFrame !== undefined) window.cancelAnimationFrame(autoLoadFrame);
+  autoLoadFrame = undefined;
+}
+
+function scheduleAutoLoadOlder(): void {
+  if (autoLoadFrame !== undefined) return;
+  autoLoadFrame = window.requestAnimationFrame(() => {
+    autoLoadFrame = undefined;
+    maybeLoadOlder();
+  });
+}
+
+function maybeLoadOlder(): void {
+  const scroller = attachedScroller;
+  if (!scroller || !timeline.currentHasOlder) return;
+  const status = timeline.currentTimeline.status;
+  if (status === 'loadingInitial' || status === 'loadingOlder') return;
+  const nearTop = scroller.scrollTop <= AUTO_LOAD_TOP_THRESHOLD_PX;
+  const underfilled = scroller.scrollHeight <= scroller.clientHeight + AUTO_LOAD_UNDERFILLED_THRESHOLD_PX;
+  if (nearTop || underfilled) timeline.requestOlder();
 }
 </script>
 
 <template>
   <div class="message-list">
-    <div v-if="timeline.currentHasOlder || timelineStatusLabel" class="timeline-load-more">
-      <button
-        v-if="timeline.currentHasOlder"
-        type="button"
-        class="timeline-load-more-button"
-        :disabled="loadingOlder"
-        @click="loadOlder"
-      >
-        {{ loadingOlder ? '正在加载更早消息…' : '加载更早消息' }}
-      </button>
-      <span v-else class="timeline-load-more-done">已到达对话开始</span>
-      <span v-if="timelineStatusLabel" class="timeline-load-more-count">{{ timelineStatusLabel }}</span>
-    </div>
     <VirtualTimelineList :rows="ui.timelineRows" :scroller="props.scroller" :item-key="rowKey" :estimated-height="220">
       <template #default="{ row }">
       <MessageItem
@@ -164,44 +186,6 @@ function rowKey(row: ConversationTimelineViewRow): string {
   flex-direction: column;
   gap: 0; /* 楼层之间无缝级联拼接 */
 }
-
-.timeline-load-more {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  min-height: 34px;
-  padding: var(--space-2) var(--conversation-content-padding-right, calc(var(--space-4) + 24px)) var(--space-2) var(--conversation-content-padding-left, var(--space-4));
-  color: var(--vscode-descriptionForeground);
-  font-size: var(--font-size-xs);
-}
-
-.timeline-load-more-button {
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 4px;
-  padding: 3px 10px;
-  color: var(--vscode-foreground);
-  background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-foreground) 8%);
-  font: inherit;
-  cursor: pointer;
-}
-
-.timeline-load-more-button:hover:not(:disabled),
-.timeline-load-more-button:focus-visible {
-  background: color-mix(in srgb, var(--vscode-editor-background) 86%, var(--vscode-foreground) 14%);
-  outline: none;
-}
-
-.timeline-load-more-button:disabled {
-  cursor: progress;
-  opacity: 0.7;
-}
-
-.timeline-load-more-done,
-.timeline-load-more-count {
-  color: var(--vscode-descriptionForeground);
-}
-
 
 .message-empty-container {
   padding: var(--space-6) var(--space-4);

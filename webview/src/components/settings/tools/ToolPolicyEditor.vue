@@ -49,7 +49,20 @@ const visibleTools = computed(() => selectedToolScope.value === 'all'
   : tools.value.filter((tool) => toolScope(tool) === selectedToolScope.value));
 const visibleEnabledCount = computed(() => visibleTools.value.filter((tool) => allowedSet.value.has(tool.name)).length);
 const canRestoreInheritance = computed(() => props.scopeKind !== 'global' && hasLocalOverride.value && !props.readonly);
-const canRestoreDefault = computed(() => props.scopeKind === 'global' && !props.readonly);
+const canRestoreDefault = computed(() => {
+  if (props.scopeKind !== 'global' || props.readonly) return false;
+  return !isUsingToolDefaults.value;
+});
+const isUsingToolDefaults = computed(() => {
+  if (props.scopeKind !== 'global') return false;
+  const policy = effectivePolicy.value;
+  if (!policy) return false;
+  const expectedAllowed = tools.value.filter((tool) => tool.metadata?.defaultEnabled !== false).map((tool) => tool.name).sort();
+  const actualAllowed = [...policy.allowedTools].sort();
+  if (expectedAllowed.length !== actualAllowed.length || !expectedAllowed.every((name, i) => name === actualAllowed[i])) return false;
+  const configs = policy.toolConfigs ?? {};
+  return Object.keys(configs).length === 0;
+});
 const sourceLabel = computed(() => {
   if (props.scopeKind === 'global') return '全局默认策略';
   if (hasLocalOverride.value) return '当前作用域覆盖';
@@ -118,16 +131,12 @@ function restoreInheritance(): void {
   store.clearPolicyScope(props.scopeKind, props.scopeId);
 }
 
-function restoreDefault(): void {
+function inheritDefaults(): void {
   if (!canRestoreDefault.value) return;
   const defaultAllowed = tools.value
     .filter((tool) => tool.metadata?.defaultEnabled !== false)
     .map((tool) => tool.name);
-  const defaultConfigs: Record<string, ToolPolicyToolConfigRecord> = {};
-  for (const tool of tools.value) {
-    defaultConfigs[tool.name] = { config: { ...(tool.defaultConfig ?? {}) } };
-  }
-  store.setPolicyForScope(props.scopeKind, props.scopeId, defaultAllowed, undefined, defaultConfigs);
+  store.setPolicyForScope(props.scopeKind, props.scopeId, defaultAllowed, effectivePolicy.value?.name, {});
 }
 
 function riskLabel(tool: ToolDefinitionRecord): string {
@@ -358,7 +367,7 @@ function inputNumber(event: Event): number {
       </div>
       <button type="button" :disabled="readonly || tools.length === 0" @click="enableAll">启用全部</button>
       <button type="button" class="secondary" :disabled="readonly || tools.length === 0" @click="disableAll">禁用全部</button>
-      <button v-if="canRestoreDefault" type="button" class="secondary" :disabled="!canRestoreDefault" @click="restoreDefault">恢复默认</button>
+      <button v-if="canRestoreDefault || isUsingToolDefaults" type="button" class="secondary" :disabled="!canRestoreDefault" @click="inheritDefaults">继承默认</button>
       <button v-else type="button" class="secondary" :disabled="!canRestoreInheritance" @click="restoreInheritance">恢复继承</button>
     </div>
 

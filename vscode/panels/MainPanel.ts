@@ -177,6 +177,14 @@ export class MainPanel {
     }
   }
 
+  public static closePanelsByConversationId(conversationId: string): void {
+    for (const panel of [...MainPanel.panels.values()]) {
+      if (panel.kind === 'chat' && panel.conversationId === conversationId) {
+        panel.panel.dispose();
+      }
+    }
+  }
+
   public static getOpenConversationPanelStates(): OpenConversationPanelRecord[] {
     const byConversation = new Map<string, OpenConversationPanelRecord>();
     for (const item of MainPanel.panels.values()) {

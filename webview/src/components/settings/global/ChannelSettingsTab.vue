@@ -134,6 +134,13 @@ const compressionThresholdInputValue = computed(() => String(compressionThreshol
 const hasModels = computed(() => (activeConfig.value?.models.length ?? 0) > 0);
 const canClearModels = computed(() => !!activeConfig.value && hasModels.value);
 
+/** 获取模型弹窗对应配置中已存在的模型 ID，用于在弹窗中标记「已添加」状态。 */
+const fetchedDialogExistingModelIds = computed<string[]>(() => {
+  const configId = settings.fetchedModelsDialog.configId;
+  const config = settings.llmProviderConfigs.configs.find((c) => c.id === configId);
+  return config?.models.map((m) => m.id) ?? [];
+});
+
 function formatModelTime(value: string | undefined): string {
   if (!value) return '';
   const date = new Date(value);
@@ -722,6 +729,7 @@ function cancelDelete(): void {
       :open="settings.fetchedModelsDialog.open"
       :loading="settings.fetchedModelsDialog.loading"
       :models="settings.fetchedModelsDialog.models"
+      :existing-model-ids="fetchedDialogExistingModelIds"
       @add="addFetchedModels"
       @close="settings.closeFetchedModelsDialog()"
     />

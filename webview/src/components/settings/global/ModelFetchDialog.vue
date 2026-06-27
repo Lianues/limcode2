@@ -5,11 +5,15 @@ import type { LlmProviderModelRecord } from '@shared/protocol';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import LcCheckbox from '@webview/components/ui/LcCheckbox.vue';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   open: boolean;
   loading?: boolean;
   models: LlmProviderModelRecord[];
-}>();
+  /** 已经存在于当前配置中的模型 ID 集合，这些模型在面板中标记为「已添加」且不可勾选。 */
+  existingModelIds?: string[];
+}>(), {
+  existingModelIds: () => []
+});
 
 const emit = defineEmits<{
   (event: 'add', models: LlmProviderModelRecord[]): void;
@@ -19,6 +23,8 @@ const emit = defineEmits<{
 const filterText = ref('');
 const selectedIds = ref<string[]>([]);
 const scroller = ref<HTMLElement | null>(null);
+
+const existingSet = computed(() => new Set(props.existingModelIds.map((id) => id.trim()).filter(Boolean)));
 
 const filteredModels = computed(() => {
   const keyword = filterText.value.trim().toLowerCase();
@@ -31,7 +37,16 @@ const filteredModels = computed(() => {
 });
 const selectedSet = computed(() => new Set(selectedIds.value));
 const selectedModels = computed(() => props.models.filter((model) => selectedSet.value.has(model.id)));
-const allFilteredSelected = computed(() => filteredModels.value.length > 0 && filteredModels.value.every((model) => selectedSet.value.has(model.id)));
+
+/** 当前筛选结果中可勾选的模型（排除已添加的）。 */
+const selectableFilteredModels = computed(() =>
+  filteredModels.value.filter((model) => !existingSet.value.has(model.id))
+);
+
+const allFilteredSelected = computed(() =>
+  selectableFilteredModels.value.length > 0 &&
+  selectableFilteredModels.value.every((model) => selectedSet.value.has(model.id))
+);
 
 watch(
   () => [props.open, props.models] as const,
@@ -44,6 +59,7 @@ watch(
 );
 
 function toggleModel(modelId: string): void {
+  if (existingSet.value.has(modelId)) return;
   const next = new Set(selectedIds.value);
   if (next.has(modelId)) next.delete(modelId);
   else next.add(modelId);
@@ -53,9 +69,9 @@ function toggleModel(modelId: string): void {
 function toggleAllFiltered(): void {
   const next = new Set(selectedIds.value);
   if (allFilteredSelected.value) {
-    for (const model of filteredModels.value) next.delete(model.id);
+    for (const model of selectableFilteredModels.value) next.delete(model.id);
   } else {
-    for (const model of filteredModels.value) next.add(model.id);
+    for (const model of selectableFilteredModels.value) next.add(model.id);
   }
   selectedIds.value = [...next];
 }
@@ -91,7 +107,7 @@ function formatModelTime(value: string | undefined): string {
             <span>选择要添加的模型</span>
           </h4>
           <div class="model-fetch-header-actions">
-            <button type="button" class="model-fetch-header-button" :disabled="loading || !filteredModels.length" @click="toggleAllFiltered">
+            <button type="button" class="model-fetch-header-button" :disabled="loading || !selectableFilteredModels.length" @click="toggleAllFiltered">
               <span>{{ allFilteredSelected ? '取消全选' : '全选' }}</span>
             </button>
             <button type="button" class="model-fetch-close" aria-label="关闭" @click="close">×</button>
@@ -109,21 +125,36 @@ function formatModelTime(value: string | undefined): string {
               <div class="model-fetch-list">
                 <div v-if="!models.length" class="model-fetch-empty">没有获取到模型。</div>
                 <div v-else-if="!filteredModels.length" class="model-fetch-empty">没有匹配的模型。</div>
-                <button
+                <div
                   v-for="model in filteredModels"
                   :key="model.id"
-                  type="button"
                   class="model-fetch-item"
-                  :class="{ selected: selectedSet.has(model.id) }"
-                  @click="toggleModel(model.id)"
+                  :class="{
+                    selected: selectedSet.has(model.id),
+                    'is-existing': existingSet.has(model.id)
+                  }"
+                  :role="existingSet.has(model.id) ? undefined : 'button'"
+                  :tabindex="existingSet.has(model.id) ? -1 : 0"
+                  @click="existingSet.has(model.id) ? undefined : toggleModel(model.id)"
+                  @keydown.enter.prevent="existingSet.has(model.id) ? undefined : toggleModel(model.id)"
+                  @keydown.space.prevent="existingSet.has(model.id) ? undefined : toggleModel(model.id)"
                 >
-                  <LcCheckbox class="model-fetch-checkbox" :model-value="selectedSet.has(model.id)" size="sm" presentation />
+                  <LcCheckbox
+                    class="model-fetch-checkbox"
+                    :model-value="existingSet.has(model.id) ? true : selectedSet.has(model.id)"
+                    :disabled="existingSet.has(model.id)"
+                    size="sm"
+                    presentation
+                  />
                   <span class="model-fetch-info">
-                    <span class="model-fetch-name">{{ model.name }}</span>
+                    <span class="model-fetch-name">
+                      {{ model.name }}
+                      <span v-if="existingSet.has(model.id)" class="model-fetch-badge">已添加</span>
+                    </span>
                     <span class="model-fetch-id">ID: {{ model.id }}</span>
                     <span v-if="model.createdAt" class="model-fetch-time">时间: {{ formatModelTime(model.createdAt) }}</span>
                   </span>
-                </button>
+                </div>
               </div>
             </div>
             <AdvancedScrollbar :scroller="scroller" variant="minimal" />
@@ -410,12 +441,21 @@ function formatModelTime(value: string | undefined): string {
   text-align: left;
 }
 
-.model-fetch-item:hover:not(:disabled),
+.model-fetch-item[role='button'] {
+  cursor: pointer;
+}
+
+.model-fetch-item:hover:not(.is-existing),
 .model-fetch-item:focus-visible,
 .model-fetch-item.selected {
   border-color: var(--vscode-panel-border, transparent);
   background: color-mix(in srgb, var(--vscode-editor-background) 86%, var(--vscode-foreground) 14%);
   outline: none;
+}
+
+.model-fetch-item.is-existing {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .model-fetch-info {
@@ -435,8 +475,22 @@ function formatModelTime(value: string | undefined): string {
 }
 
 .model-fetch-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
   font-size: var(--font-size-sm);
   font-weight: 600;
+}
+
+.model-fetch-badge {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.28));
+  border-radius: var(--radius-xs);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--vscode-descriptionForeground);
 }
 
 .model-fetch-id,

@@ -7,17 +7,28 @@ import {
   type LlmStartedPayload,
   type LlmThoughtDeltaPayload,
   type LlmThoughtDonePayload,
-  type LlmToolCallPayload
+  type LlmToolCallPayload,
+  type LlmRetryPayload
 } from '../../llm/events';
 import { LlmInvocation, type LlmInvocationData } from '../../llm/components';
-import { ToolCall } from '../../tools/components';
+import { ToolCall, ToolCallEvent } from '../../tools/components';
 import { spawnToolCall, ToolCallBundle } from '../../tools/bundles';
-import { AgentRun } from '../../agentRun/components';
+import { AgentRun, ToolCallRunLink } from '../../agentRun/components';
 import { spawnToolCallRunLink } from '../../agentRun/bundles';
 import { CompressionBlock } from '../../compression/components';
 import { CompressionEventType } from '../../compression/events';
-import { LlmRequest, Message, Streaming, Conversation, PartOf, type MessageData } from '../components';
-import { isFunctionCallPart, isProviderContextPart, isTextPart, isVisibleTextPart, type ContentPart, type LlmUsageMetadataRecord } from '../../../../../shared/protocol';
+import { LlmRequest, Message, Streaming, Conversation, PartOf, type LlmRequestData, type MessageData } from '../components';
+import {
+  conversationClientStateStreamId,
+  createMessageId,
+  isFunctionCallPart,
+  isProviderContextPart,
+  isTextPart,
+  isVisibleTextPart,
+  type ContentPart,
+  type LlmTransientNoticeKind,
+  type LlmUsageMetadataRecord
+} from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
 
 type PendingOperation =
@@ -27,6 +38,10 @@ type PendingOperation =
   | { kind: 'delta'; payload: LlmDeltaPayload }
   | { kind: 'toolCall'; payload: LlmToolCallPayload }
   | { kind: 'done'; payload: LlmDonePayload }
+  | { kind: 'retryScheduled'; payload: LlmRetryPayload }
+  | { kind: 'retryStarted'; payload: LlmRetryPayload }
+  | { kind: 'retryCancelled'; payload: LlmRetryPayload }
+  | { kind: 'retryRecovered'; payload: LlmRetryPayload }
   | { kind: 'error'; payload: LlmErrorPayload };
 
 interface PendingRequestUpdate {
@@ -71,9 +86,10 @@ export const LlmPollSystem = defineSystem({
   name: 'LlmPollSystem',
   access: {
     queries: [LlmInvocationsByIdQuery, LlmRequestsByIdQuery, ModelMessagesQuery, ToolCallLookupQuery],
-    reads: { components: [PartOf, CompressionBlock] },
-    writes: { components: [Streaming, AgentRun] },
-    events: { read: [LlmEventType.Started, LlmEventType.ThoughtDelta, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error], emit: [CheckpointEventType.Requested, CompressionEventType.Create] },
+    reads: { components: [PartOf, CompressionBlock, ToolCallEvent, ToolCallRunLink] },
+    writes: { components: [Streaming, AgentRun, ToolCall, ToolCallEvent, ToolCallRunLink] },
+    events: { read: [LlmEventType.Started, LlmEventType.ThoughtDelta, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error, LlmEventType.RetryScheduled, LlmEventType.RetryStarted, LlmEventType.RetryCancelled, LlmEventType.RetryRecovered], emit: [CheckpointEventType.Requested, CompressionEventType.Create] },
+    effects: { emit: ['client.transientNotice'] },
     bundles: [ToolCallBundle]
   },
   run(ctx) {
@@ -102,6 +118,18 @@ export const LlmPollSystem = defineSystem({
           break;
         case LlmEventType.Error:
           pushOperation(updates, { kind: 'error', payload: event.payload as LlmErrorPayload });
+          break;
+        case LlmEventType.RetryScheduled:
+          pushOperation(updates, { kind: 'retryScheduled', payload: event.payload as LlmRetryPayload });
+          break;
+        case LlmEventType.RetryStarted:
+          pushOperation(updates, { kind: 'retryStarted', payload: event.payload as LlmRetryPayload });
+          break;
+        case LlmEventType.RetryCancelled:
+          pushOperation(updates, { kind: 'retryCancelled', payload: event.payload as LlmRetryPayload });
+          break;
+        case LlmEventType.RetryRecovered:
+          pushOperation(updates, { kind: 'retryRecovered', payload: event.payload as LlmRetryPayload });
           break;
       }
     }
@@ -249,6 +277,21 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
       case 'started':
         nextInvocation = markInvocationStreaming(nextInvocation, operation.payload.startedAt);
         break;
+      case 'retryScheduled':
+        emitTransientNotice(world, cmd, requestId, requestData, current, 'retryScheduled', operation.payload);
+        break;
+      case 'retryStarted':
+        emitTransientNotice(world, cmd, requestId, requestData, current, 'retryStarted', operation.payload);
+        next = resetMessageForRetry(next);
+        existingFunctionCallIds.clear();
+        cleanupToolCallsForMessage(world, cmd, modelMessage);
+        break;
+      case 'retryCancelled':
+        emitTransientNotice(world, cmd, requestId, requestData, current, 'retryCancelled', operation.payload);
+        break;
+      case 'retryRecovered':
+        emitTransientNotice(world, cmd, requestId, requestData, current, 'retryRecovered', operation.payload);
+        break;
       case 'thoughtDelta':
         next = appendThoughtDelta(next, operation.payload);
         break;
@@ -278,7 +321,7 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
         break;
       case 'error':
         errorMessage = operation.payload.message;
-        next = appendTextToMessage(next, `\n[error] ${operation.payload.message}`);
+        emitTransientNotice(world, cmd, requestId, requestData, next, 'error', operation.payload);
         next = withLlmTiming({ ...next, status: 'error' }, operation.payload);
         nextInvocation = markInvocationError(nextInvocation, operation.payload.message, operation.payload);
         shouldFinish = true;
@@ -326,6 +369,72 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
     }
   }
 }
+
+function emitTransientNotice(
+  world: WorldReader,
+  cmd: CommandSink,
+  requestId: string,
+  requestData: LlmRequestData,
+  message: MessageData,
+  kind: LlmTransientNoticeKind,
+  payload: LlmRetryPayload | LlmErrorPayload
+): void {
+  const conversation = world.get(requestData.conversation, Conversation);
+  if (!conversation) return;
+  const run = world.get(requestData.run, AgentRun);
+  const invocation = requestData.invocation !== undefined ? world.get(requestData.invocation, LlmInvocation) : undefined;
+  cmd.effect({
+    kind: 'client.transientNotice',
+    streamId: conversationClientStateStreamId(conversation.id),
+    payload: {
+      id: createMessageId(),
+      kind,
+      conversationId: conversation.id,
+      messageId: message.id,
+      requestId,
+      ...(run?.id ? { runId: run.id } : {}),
+      ...(invocation?.id ? { invocationId: invocation.id } : {}),
+      message: payload.message,
+      ...(payload.rawError ? { rawError: payload.rawError } : {}),
+      ...(payload.retryAttempt !== undefined ? { retryAttempt: payload.retryAttempt } : {}),
+      ...(payload.retryMaxAttempts !== undefined ? { retryMaxAttempts: payload.retryMaxAttempts } : {}),
+      ...('retryDelayMs' in payload && payload.retryDelayMs !== undefined ? { retryDelayMs: payload.retryDelayMs } : {}),
+      createdAt: payload.createdAt ?? Date.now()
+    }
+  });
+}
+
+function resetMessageForRetry(message: MessageData): MessageData {
+  const { usageMetadata: _usageMetadata, streamOutputDurationMs: _streamOutputDurationMs, stopReason: _stopReason, ...rest } = message;
+  void _usageMetadata;
+  void _streamOutputDurationMs;
+  void _stopReason;
+  return {
+    ...rest,
+    status: 'streaming',
+    content: { ...message.content, parts: [] }
+  };
+}
+
+function cleanupToolCallsForMessage(world: WorldReader, cmd: CommandSink, modelMessage: Entity): void {
+  const toolCalls = new Set<Entity>();
+  for (const entity of world.query(ToolCall, PartOf)) {
+    const partOf = world.get(entity, PartOf);
+    if (partOf?.parent === modelMessage) toolCalls.add(entity);
+  }
+  if (toolCalls.size === 0) return;
+
+  for (const entity of world.query(ToolCallEvent, PartOf)) {
+    const partOf = world.get(entity, PartOf);
+    if (partOf && toolCalls.has(partOf.parent)) cmd.despawn(entity);
+  }
+  for (const entity of world.query(ToolCallRunLink)) {
+    const link = world.get(entity, ToolCallRunLink);
+    if (link && toolCalls.has(link.toolCall)) cmd.despawn(entity);
+  }
+  for (const entity of toolCalls) cmd.despawn(entity);
+}
+
 
 function markInvocationStreaming(invocation: LlmInvocationData | undefined, startedAt = Date.now()): LlmInvocationData | undefined {
   if (!invocation) return undefined;

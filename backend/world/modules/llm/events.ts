@@ -1,4 +1,4 @@
-import type { LlmInvocationSettingsSnapshotRecord, LlmUsageMetadataRecord } from '../../../../shared/protocol';
+import type { LlmInvocationSettingsSnapshotRecord, LlmRawErrorInfoRecord, LlmUsageMetadataRecord } from '../../../../shared/protocol';
 import type { LlmCompactResult } from './contracts';
 
 export const LlmEventType = {
@@ -11,6 +11,10 @@ export const LlmEventType = {
   ToolCall: 'llm:toolcall',
   Done: 'llm:done',
   Error: 'llm:error',
+  RetryScheduled: 'llm:retryScheduled',
+  RetryStarted: 'llm:retryStarted',
+  RetryCancelled: 'llm:retryCancelled',
+  RetryRecovered: 'llm:retryRecovered',
   CompactDone: 'llm:compactDone',
   CompactError: 'llm:compactError'
 } as const;
@@ -60,8 +64,20 @@ export interface LlmDonePayload {
 export interface LlmErrorPayload {
   requestId: string;
   message: string;
+  rawError?: LlmRawErrorInfoRecord;
+  retryAttempt?: number;
+  retryMaxAttempts?: number;
   createdAt?: number;
   streamOutputDurationMs?: number;
+}
+export interface LlmRetryPayload {
+  requestId: string;
+  message: string;
+  rawError?: LlmRawErrorInfoRecord;
+  retryAttempt: number;
+  retryMaxAttempts: number;
+  retryDelayMs?: number;
+  createdAt: number;
 }
 export interface LlmCompactDonePayload {
   requestId: string;
@@ -89,6 +105,10 @@ declare module '@backend/world/events' {
     'llm:toolcall': LlmToolCallPayload;
     'llm:done': LlmDonePayload;
     'llm:error': LlmErrorPayload;
+    'llm:retryScheduled': LlmRetryPayload;
+    'llm:retryStarted': LlmRetryPayload;
+    'llm:retryCancelled': LlmRetryPayload;
+    'llm:retryRecovered': LlmRetryPayload;
     'llm:compactDone': LlmCompactDonePayload;
     'llm:compactError': LlmCompactErrorPayload;
   }

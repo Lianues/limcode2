@@ -5,6 +5,8 @@ import {
   DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS,
   DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT,
   DEFAULT_LLM_CONTEXT_WINDOW_TOKENS,
+  DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
+  DEFAULT_LLM_RETRY_ON_ERROR,
   type CheckpointMaintenanceSettingsRecord,
   type GlobalSettingsRecord,
   type GlobalSettingsSection,
@@ -139,6 +141,8 @@ function createDefaultProviderConfig(name = '新渠道配置', provider: LlmProv
     apiKey: '',
     toolCallFormat: 'function-call',
     stream: true,
+    retryOnError: DEFAULT_LLM_RETRY_ON_ERROR,
+    retryMaxAttempts: DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     contextWindowTokens: providerDefaultContextWindow(provider),
     proxy: '',
     headers: {},
@@ -159,6 +163,8 @@ function normalizeProviderConfigForUi(config: LlmProviderConfigRecord): LlmProvi
     models: normalizeModelsForUi(config.models, model),
     proxy: config.proxy ?? '',
     stream: config.stream !== false,
+    retryOnError: config.retryOnError !== false,
+    retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     contextWindowTokens: normalizeTokenCount(config.contextWindowTokens) ?? providerDefaultContextWindow(provider),
     headers: sanitizeHeaders(config.headers) ?? {},
     generationConfig: normalizeGenerationConfigForUi(config.generationConfig) ?? {},
@@ -178,6 +184,15 @@ function normalizeModelsForUi(models: LlmProviderModelRecord[] | undefined, acti
   if (activeModel && !byId.has(activeModel)) byId.set(activeModel, { id: activeModel, name: activeModel });
   return [...byId.values()].sort((left, right) => left.id.localeCompare(right.id));
 }
+
+function normalizeRetryMaxAttempts(value: unknown): number | undefined {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return undefined;
+  const attempts = Math.floor(number);
+  if (attempts < -1) return -1;
+  return attempts;
+}
+
 
 function sanitizeModels(models: LlmProviderModelRecord[]): LlmProviderModelRecord[] {
   const byId = new Map<string, LlmProviderModelRecord>();
@@ -385,6 +400,8 @@ function toPlainProviderConfig(config: LlmProviderConfigRecord): LlmProviderConf
     apiKey: config.apiKey,
     toolCallFormat: config.toolCallFormat,
     stream: config.stream !== false,
+    retryOnError: config.retryOnError !== false,
+    retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     ...(normalizeTokenCount(config.contextWindowTokens) ? { contextWindowTokens: normalizeTokenCount(config.contextWindowTokens) } : {}),
     ...(config.proxy?.trim() ? { proxy: config.proxy.trim() } : {}),
     ...(sanitizeHeaders(config.headers) ? { headers: sanitizeHeaders(config.headers) } : {}),

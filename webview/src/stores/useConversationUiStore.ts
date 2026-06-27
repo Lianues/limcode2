@@ -1,7 +1,7 @@
 import { computed, ref, shallowRef } from 'vue';
 import { defineStore } from 'pinia';
 import { buildConversationTimelineRows, type ConversationCheckpointTimelineRow, type ConversationCompressionTimelineRow } from '@shared/conversationTimeline';
-import { isVisibleTextPart, type CheckpointRecord, type CheckpointTimelineAnchorRecord, type CompressionBlockRecord, type MessageRecord } from '@shared/protocol';
+import { isVisibleTextPart, type CheckpointRecord, type CheckpointTimelineAnchorRecord, type CompressionBlockRecord, type LlmTransientNoticePayload, type MessageRecord } from '@shared/protocol';
 
 export type MessageViewPhase = 'stable' | 'entering' | 'exiting';
 export type ComposerMode = 'chat' | 'edit';
@@ -37,6 +37,26 @@ export interface EditingMessageState {
   originalText: string;
 }
 
+export type LlmErrorBlockStatus = 'retrying' | 'cancelled' | 'resolved' | 'failed';
+
+export interface LlmErrorBlockRecord {
+  id: string;
+  conversationId: string;
+  messageId: string;
+  requestId: string;
+  runId?: string;
+  invocationId?: string;
+  message: string;
+  rawError?: unknown;
+  status: LlmErrorBlockStatus;
+  retryAttempt?: number;
+  retryMaxAttempts?: number;
+  retryDelayMs?: number;
+  cancelPending?: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
 // CSS 动画是 100ms；JS 计时保持一致，让新增/删除节奏更利落。
 const MESSAGE_ANIMATION_SETTLE_MS = 100;
 const MESSAGE_ENTER_MS = MESSAGE_ANIMATION_SETTLE_MS;
@@ -55,6 +75,7 @@ const MESSAGE_EXIT_ACTION_DELAY_MS = MESSAGE_EXIT_MS;
 export const useConversationUiStore = defineStore('conversationUi', () => {
   const messageRows = shallowRef<MessageViewRow[]>([]);
   const timelineRows = shallowRef<ConversationTimelineViewRow[]>([]);
+  const llmErrorBlocks = shallowRef<LlmErrorBlockRecord[]>([]);
   const enteringMessageIds = ref<Set<string>>(new Set());
   const composerSnapshots = ref<Record<ComposerMode, ComposerSnapshot>>({
     chat: createComposerSnapshot(),
@@ -91,6 +112,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     totalMessageCount = messages.length
   ): void {
     const currentIds = new Set(messages.map((message) => message.id));
+    pruneErrorBlocks(currentIds);
     for (const id of [...enterTimers.keys()]) {
       if (!currentIds.has(id)) clearEntering(id);
     }
@@ -198,6 +220,52 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     return 'stable';
   }
 
+  function llmErrorBlocksForMessage(messageId: string): LlmErrorBlockRecord[] {
+    return llmErrorBlocks.value.filter((block) => block.messageId === messageId);
+  }
+
+  function applyLlmTransientNotice(payload: LlmTransientNoticePayload): void {
+    const index = llmErrorBlocks.value.findIndex((block) => block.requestId === payload.requestId);
+    const previous = index >= 0 ? llmErrorBlocks.value[index] : undefined;
+    const now = payload.createdAt || Date.now();
+    const status = statusFromNoticeKind(payload.kind);
+    const next: LlmErrorBlockRecord = {
+      id: previous?.id ?? payload.id,
+      conversationId: payload.conversationId,
+      messageId: payload.messageId,
+      requestId: payload.requestId,
+      ...(payload.runId ? { runId: payload.runId } : previous?.runId ? { runId: previous.runId } : {}),
+      ...(payload.invocationId ? { invocationId: payload.invocationId } : previous?.invocationId ? { invocationId: previous.invocationId } : {}),
+      message: payload.message || previous?.message || 'LLM 请求失败。',
+      ...(payload.rawError !== undefined ? { rawError: payload.rawError } : previous?.rawError !== undefined ? { rawError: previous.rawError } : {}),
+      status,
+      ...(payload.retryAttempt !== undefined ? { retryAttempt: payload.retryAttempt } : previous?.retryAttempt !== undefined ? { retryAttempt: previous.retryAttempt } : {}),
+      ...(payload.retryMaxAttempts !== undefined ? { retryMaxAttempts: payload.retryMaxAttempts } : previous?.retryMaxAttempts !== undefined ? { retryMaxAttempts: previous.retryMaxAttempts } : {}),
+      ...(payload.retryDelayMs !== undefined ? { retryDelayMs: payload.retryDelayMs } : previous?.retryDelayMs !== undefined && status === 'retrying' ? { retryDelayMs: previous.retryDelayMs } : {}),
+      cancelPending: status === 'retrying' ? previous?.cancelPending === true : false,
+      createdAt: previous?.createdAt ?? now,
+      updatedAt: now
+    };
+    const blocks = [...llmErrorBlocks.value];
+    if (index >= 0) blocks[index] = next;
+    else blocks.push(next);
+    llmErrorBlocks.value = blocks;
+  }
+
+  function removeLlmErrorBlock(id: string): void {
+    llmErrorBlocks.value = llmErrorBlocks.value.filter((block) => block.id !== id);
+  }
+
+  function markLlmRetryCancelPending(requestId: string): void {
+    llmErrorBlocks.value = llmErrorBlocks.value.map((block) => block.requestId === requestId && block.status === 'retrying'
+      ? { ...block, cancelPending: true, updatedAt: Date.now() }
+      : block);
+  }
+
+  function pruneErrorBlocks(currentMessageIds: ReadonlySet<string>): void {
+    llmErrorBlocks.value = llmErrorBlocks.value.filter((block) => currentMessageIds.has(block.messageId));
+  }
+
   function refreshRowPhases(): void {
     const messages = messageRows.value.map((item) => item.message);
     const messageIndexById = new Map(messages.map((message, index) => [message.id, index]));
@@ -251,6 +319,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
   return {
     messageRows,
     timelineRows,
+    llmErrorBlocks,
     composerMode,
     composerHighlightKey,
     composerDraft,
@@ -266,7 +335,11 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     startEditQueueItem,
     cancelEditMode,
     setComposerDraft,
-    clearChatDraft
+    clearChatDraft,
+    llmErrorBlocksForMessage,
+    applyLlmTransientNotice,
+    removeLlmErrorBlock,
+    markLlmRetryCancelPending
   };
 });
 
@@ -288,4 +361,18 @@ function createComposerSnapshot(draft = ''): ComposerSnapshot {
       bottom: {}
     }
   };
+}
+
+function statusFromNoticeKind(kind: LlmTransientNoticePayload['kind']): LlmErrorBlockStatus {
+  switch (kind) {
+    case 'retryScheduled':
+    case 'retryStarted':
+      return 'retrying';
+    case 'retryCancelled':
+      return 'cancelled';
+    case 'retryRecovered':
+      return 'resolved';
+    case 'error':
+      return 'failed';
+  }
 }

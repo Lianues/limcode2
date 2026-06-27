@@ -3,6 +3,8 @@ import { computed, ref } from 'vue';
 import { IconCloudDown, IconPencil, IconPlus, IconSearch, IconTrash } from '@tabler/icons-vue';
 import {
   DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS,
+  DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
+  DEFAULT_LLM_RETRY_ON_ERROR,
   type LlmGenerationConfigRecord,
   type LlmProviderConfigRecord,
   type LlmProviderHeadersRecord,
@@ -189,6 +191,17 @@ function numericInputValue(event: Event): number | undefined {
 function updateContextWindowTokens(event: Event): void {
   const value = numericInputValue(event);
   settings.updateActiveLlmContextWindowTokens(value === undefined ? undefined : alignTokenCountToK(value));
+}
+
+function normalizeRetryMaxAttempts(value: unknown): number {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return DEFAULT_LLM_RETRY_MAX_ATTEMPTS;
+  const attempts = Math.floor(number);
+  return attempts < -1 ? -1 : attempts;
+}
+
+function updateRetryMaxAttempts(event: Event): void {
+  updateActiveConfigField('retryMaxAttempts', normalizeRetryMaxAttempts(numericInputValue(event)));
 }
 
 function updateCompressionAutoEnabled(enabled: boolean): void {
@@ -437,6 +450,34 @@ function cancelDelete(): void {
         </div>
         <span class="stream-checkbox-text">启用流式生成。普通回复和上下文压缩会复用此配置。</span>
       </div>
+
+      <div class="global-settings-field stream-field retry-field">
+        <span>报错自动重试</span>
+        <div class="stream-checkbox-row">
+          <LcCheckbox
+            :model-value="activeConfig.retryOnError ?? DEFAULT_LLM_RETRY_ON_ERROR"
+            size="sm"
+            aria-label="启用报错自动重试"
+            @update:model-value="updateActiveConfigField('retryOnError', $event)"
+          >
+            <span class="stream-checkbox-enable">启用</span>
+          </LcCheckbox>
+        </div>
+        <span class="stream-checkbox-text">请求报错时自动重试。重试次数不包含原始请求；设置为 -1 表示无限重试。</span>
+      </div>
+
+      <label class="global-settings-field retry-attempts-field">
+        <span>最大重试次数</span>
+        <input
+          class="token-number-input"
+          :value="activeConfig.retryMaxAttempts ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS"
+          type="number"
+          min="-1"
+          step="1"
+          placeholder="3"
+          @change="updateRetryMaxAttempts"
+        />
+      </label>
 
       <section class="model-manager global-settings-field-wide" aria-label="模型列表">
         <header class="model-manager-header">

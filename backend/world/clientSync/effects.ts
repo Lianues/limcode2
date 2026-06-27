@@ -1,4 +1,4 @@
-import type { ClientPatchOp, ClientState } from '../../../shared/protocol';
+import type { ClientPatchOp, ClientState, LlmTransientNoticePayload } from '../../../shared/protocol';
 
 export interface ClientSnapshotEffect {
   kind: 'client.snapshot';
@@ -16,9 +16,16 @@ export interface ClientPatchEffect {
   patches: ClientPatchOp[];
 }
 
+export interface ClientTransientNoticeEffect {
+  kind: 'client.transientNotice';
+  streamId: string;
+  payload: LlmTransientNoticePayload;
+}
+
 declare module '@backend/world/effects' {
   interface WorldEffectMap {
     'client.snapshot': ClientSnapshotEffect;
     'client.patch': ClientPatchEffect;
+    'client.transientNotice': ClientTransientNoticeEffect;
   }
 }

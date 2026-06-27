@@ -86,6 +86,10 @@ export class WebviewMessageRouter {
         this.deps.world.enqueue({ type: ChatEventType.Abort, payload: message.payload });
         this.deps.world.enqueue({ type: AgentRunEventType.CancelConversation, payload: { conversationId: message.payload.conversationId, reason: 'chat_abort' } });
         break;
+      case BridgeMessageType.LlmRetryCancel:
+        if (!this.deps.isHydrated() || !message.payload?.requestId) return;
+        this.deps.llm.cancelRetry(message.payload.requestId);
+        break;
       case BridgeMessageType.MessageEdit:
         if (!this.deps.isHydrated() || !message.payload) return;
         void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {

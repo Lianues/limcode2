@@ -12,7 +12,12 @@ import type {
   LlmThinkingLevel,
   LlmToolCallFormat
 } from '../../../shared/protocol';
-import { DEFAULT_LLM_CONTEXT_WINDOW_TOKENS, createMessageId } from '../../../shared/protocol';
+import {
+  DEFAULT_LLM_CONTEXT_WINDOW_TOKENS,
+  DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
+  DEFAULT_LLM_RETRY_ON_ERROR,
+  createMessageId
+} from '../../../shared/protocol';
 import { DEFAULT_LLM_BASE_URL } from '../llmProvider';
 import type { StoragePaths } from './clientStateStore';
 import { INDEX_FILE } from './constants';
@@ -66,6 +71,8 @@ export function createDefaultLlmProviderConfig(input: { name?: string } = {}): L
     apiKey: '',
     toolCallFormat: 'function-call',
     stream: true,
+    retryOnError: DEFAULT_LLM_RETRY_ON_ERROR,
+    retryMaxAttempts: DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     contextWindowTokens: DEFAULT_LLM_CONTEXT_WINDOW_TOKENS,
     createdAt: now,
     updatedAt: now
@@ -93,6 +100,8 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
     apiKey: typeof input?.apiKey === 'string' ? input.apiKey.trim() : fallback.apiKey,
     toolCallFormat: isKnownToolCallFormat(input?.toolCallFormat) ? input.toolCallFormat : fallback.toolCallFormat,
     stream: typeof input?.stream === 'boolean' ? input.stream : true,
+    retryOnError: typeof input?.retryOnError === 'boolean' ? input.retryOnError : DEFAULT_LLM_RETRY_ON_ERROR,
+    retryMaxAttempts: finiteRetryMaxAttempts(input?.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     contextWindowTokens,
     ...(optionalString(input?.proxy) ? { proxy: optionalString(input?.proxy) } : {}),
     ...(headers ? { headers } : {}),
@@ -193,6 +202,13 @@ function finiteTimestamp(value: unknown, fallback: number): number {
 function finitePositiveInteger(value: unknown): number | undefined {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
+}
+
+function finiteRetryMaxAttempts(value: unknown): number | undefined {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return undefined;
+  const attempts = Math.floor(number);
+  return attempts < -1 ? -1 : attempts;
 }
 
 function normalizeHeaders(input: unknown): LlmProviderHeadersRecord | undefined {

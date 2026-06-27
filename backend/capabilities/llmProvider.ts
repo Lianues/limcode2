@@ -16,6 +16,8 @@ import {
   DEFAULT_LLM_COMPRESSION_SUMMARY_SYSTEM_PROMPT,
   DEFAULT_LLM_COMPRESSION_SUMMARY_USER_PROMPT,
   isInlineDataPart,
+  DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
+  DEFAULT_LLM_RETRY_ON_ERROR,
   isTextPart,
   isProviderContextPart
 } from '../../shared/protocol';
@@ -29,6 +31,7 @@ import type {
   LlmProviderKind,
   LlmProviderModelRecord,
   LlmToolCallFormat,
+  LlmRawErrorInfoRecord,
   LlmUsageMetadataRecord,
   MessageContent
 } from '../../shared/protocol';
@@ -72,8 +75,35 @@ export interface LlmProviderOptions {
   settings: MaybeProvider<LlmProviderConfigRecord, LlmSettingsRequest>;
   compressionSettings?: LlmCompressionSettingsProvider;
   activeCompressionSettings?: (conversationId?: string) => LlmCompressionConfigRecord | undefined | Promise<LlmCompressionConfigRecord | undefined>;
+
   headers?: MaybeProvider<Record<string, string>>;
 }
+interface RetryControl {
+  cancelRequested: boolean;
+  wakeRetryWait?: () => void;
+}
+
+interface LlmAttemptFailure {
+  message: string;
+  rawError?: LlmRawErrorInfoRecord;
+  createdAt?: number;
+  streamOutputDurationMs?: number;
+}
+
+interface LlmAttemptTimingState {
+  firstStreamChunkAt?: number;
+  firstStreamChunkMark?: number;
+  streamTimingChunkCount: number;
+}
+
+class LlmAttemptFailureError extends Error {
+  public constructor(public readonly failure: LlmAttemptFailure) {
+    super(failure.message);
+    this.name = 'LlmAttemptFailureError';
+  }
+}
+
+
 
 /**
  * LLM capability 只维护 unified/Gemini-like 请求。
@@ -81,6 +111,7 @@ export interface LlmProviderOptions {
  */
 export function createLlmProviderCapability(options: LlmProviderOptions): LlmCapability {
   const controllers = new Map<string, AbortController>();
+  const retryControls = new Map<string, RetryControl>();
   const resolvedRuntimeSettingsByInvocationId = new Map<string, LlmProviderConfigRecord>();
 
   return {
@@ -89,15 +120,19 @@ export function createLlmProviderCapability(options: LlmProviderOptions): LlmCap
     },
     start(request, emit) {
       controllers.get(request.id)?.abort(createAbortError(`Superseded LLM request: ${request.id}`));
+      retryControls.get(request.id)?.wakeRetryWait?.();
 
       const controller = new AbortController();
+      const retryControl: RetryControl = { cancelRequested: false };
       controllers.set(request.id, controller);
+      retryControls.set(request.id, retryControl);
 
-      void startLlmProvider(request, emit, options, controller.signal, resolvedRuntimeSettingsByInvocationId)
+      void startLlmProvider(request, emit, options, controller.signal, resolvedRuntimeSettingsByInvocationId, retryControl)
         .finally(() => {
           if (controllers.get(request.id) === controller) {
             controllers.delete(request.id);
           }
+          if (retryControls.get(request.id) === retryControl) retryControls.delete(request.id);
           if (request.invocationId) resolvedRuntimeSettingsByInvocationId.delete(request.invocationId);
         });
     },
@@ -116,7 +151,16 @@ export function createLlmProviderCapability(options: LlmProviderOptions): LlmCap
     listModels(config) {
       return listLlmProviderModels(config, options);
     },
+    cancelRetry(requestId) {
+      const control = retryControls.get(requestId);
+      if (!control) return;
+      control.cancelRequested = true;
+      control.wakeRetryWait?.();
+    },
     abort(requestId) {
+      const control = retryControls.get(requestId);
+      if (control) control.cancelRequested = true;
+      control?.wakeRetryWait?.();
       const controller = controllers.get(requestId);
       if (!controller) return;
       controllers.delete(requestId);
@@ -130,15 +174,12 @@ export async function startLlmProvider(
   emit: Emit,
   options: LlmProviderOptions,
   signal?: AbortSignal,
-  resolvedRuntimeSettingsByInvocationId?: Map<string, LlmProviderConfigRecord>
+  resolvedRuntimeSettingsByInvocationId?: Map<string, LlmProviderConfigRecord>,
+  retryControl: RetryControl = { cancelRequested: false }
 ): Promise<void> {
   try {
     const settings = await resolveRuntimeSettings(request, options, resolvedRuntimeSettingsByInvocationId);
     emitLlmStarted(emit, request.id, request.invocationId, resolveModelDisplayName(settings));
-    if (!settings.apiKey) {
-      emitLlmError(emit, request.id, '缺少 LLM API Key。请在全局设置的“渠道”页签里填写并保存。');
-      return;
-    }
 
     const unified = await importUnifiedLlmProvider();
     const registry = unified.createBootstrapExtensionRegistry();
@@ -157,29 +198,110 @@ export async function startLlmProvider(
       ...(proxy ? { proxy, fetch: proxyFetch } : {})
     }, registry.llmProviders);
 
-    let latestUsageMetadata: LlmUsageMetadataRecord | undefined;
-    let firstStreamChunkAt: number | undefined;
-    let firstStreamChunkMark: number | undefined;
-    let streamTimingChunkCount = 0;
-    let activeThoughtBlock: ActiveThoughtBlock | undefined;
-    if (settings.stream === false) {
-      const response = await provider.chat<UnifiedLLMResponse>(toUnifiedRequest(request, settings.generationConfig), {
-        inputFormat: 'unified',
-        outputFormat: 'unified',
-        signal
-      });
-      emitUnifiedResponse(request.id, response, emit);
-      emit({
-        type: LlmEventType.Done,
-        payload: { requestId: request.id, createdAt: Date.now(), ...(usageMetadataFromCompact(response.usageMetadata) ? { usageMetadata: usageMetadataFromCompact(response.usageMetadata) } : {}) }
-      });
-      return;
+    const retryEnabled = settings.retryOnError !== false;
+    const maxRetries = normalizeRetryMaxAttempts(settings.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS;
+    let retryCount = 0;
+    let sawRetry = false;
+
+    while (true) {
+      try {
+        await runLlmAttempt(request, emit, settings, provider, signal);
+        if (sawRetry) {
+          emitLlmRetryRecovered(emit, request.id, '自动重试成功。', retryCount, maxRetries);
+        }
+        return;
+      } catch (error) {
+        if (isAbortError(error)) return;
+        const failure = failureFromCaughtError(error);
+        const nextRetryCount = retryCount + 1;
+        const canRetry = retryEnabled
+          && !retryControl.cancelRequested
+          && (maxRetries === -1 || nextRetryCount <= maxRetries);
+
+        if (!canRetry) {
+          if (retryControl.cancelRequested && retryCount > 0) {
+            emitLlmRetryCancelled(emit, request.id, failure.message, retryCount, maxRetries, failure.rawError);
+          }
+          emitLlmError(emit, request.id, failure.message, failure.rawError, {
+            retryAttempt: retryCount || undefined,
+            retryMaxAttempts: retryEnabled ? maxRetries : 0,
+            createdAt: failure.createdAt,
+            streamOutputDurationMs: failure.streamOutputDurationMs
+          });
+          return;
+        }
+
+        sawRetry = true;
+        retryCount = nextRetryCount;
+        const retryDelayMs = retryDelayForAttempt(retryCount);
+        emitLlmRetryScheduled(emit, request.id, failure.message, failure.rawError, retryCount, maxRetries, retryDelayMs);
+        const shouldRetry = await waitForRetryDelay(retryDelayMs, retryControl, signal);
+        if (!shouldRetry) {
+          emitLlmRetryCancelled(emit, request.id, failure.message, retryCount, maxRetries, failure.rawError);
+          emitLlmError(emit, request.id, failure.message, failure.rawError, {
+            retryAttempt: retryCount,
+            retryMaxAttempts: maxRetries,
+            createdAt: failure.createdAt,
+            streamOutputDurationMs: failure.streamOutputDurationMs
+          });
+          return;
+        }
+        emitLlmRetryStarted(emit, request.id, failure.message, failure.rawError, retryCount, maxRetries);
+      }
     }
+  } catch (error) {
+    if (isAbortError(error)) return;
+    const failure = failureFromCaughtError(error);
+    emitLlmError(emit, request.id, failure.message, failure.rawError, {
+      createdAt: failure.createdAt,
+      streamOutputDurationMs: failure.streamOutputDurationMs
+    });
+  }
+}
+
+async function runLlmAttempt(
+  request: LlmStartRequest,
+  emit: Emit,
+  settings: LlmProviderConfigRecord,
+  provider: {
+    chat<T>(request: unknown, options: { inputFormat: 'unified'; outputFormat: 'unified'; signal?: AbortSignal }): Promise<T>;
+    chatStream<T>(request: unknown, options: { inputFormat: 'unified'; outputFormat: 'unified'; signal?: AbortSignal }): AsyncIterable<T>;
+  },
+  signal?: AbortSignal
+): Promise<void> {
+  if (settings.stream === false) {
+    const response = await provider.chat<UnifiedLLMResponse>(toUnifiedRequest(request, settings.generationConfig), {
+      inputFormat: 'unified',
+      outputFormat: 'unified',
+      signal
+    });
+    if (hasUnifiedError(response)) {
+      throw new LlmAttemptFailureError(failureFromProviderError(response.error, { rawResponse: response.rawResponse }));
+    }
+    emitUnifiedResponse(request.id, response, emit);
+    emit({
+      type: LlmEventType.Done,
+      payload: { requestId: request.id, createdAt: Date.now(), ...(usageMetadataFromCompact(response.usageMetadata) ? { usageMetadata: usageMetadataFromCompact(response.usageMetadata) } : {}) }
+    });
+    return;
+  }
+
+  let latestUsageMetadata: LlmUsageMetadataRecord | undefined;
+  const timing: LlmAttemptTimingState = { streamTimingChunkCount: 0 };
+  let activeThoughtBlock: ActiveThoughtBlock | undefined;
+  try {
     for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(toUnifiedRequest(request, settings.generationConfig), {
       inputFormat: 'unified',
       outputFormat: 'unified',
       signal
     })) {
+      if (hasUnifiedError(chunk)) {
+        const failure = failureFromProviderError(chunk.error, {
+          rawChunk: (chunk as { rawChunk?: unknown }).rawChunk ?? chunk,
+          ...createDoneTiming(timing.firstStreamChunkAt, Date.now(), timing.firstStreamChunkMark, nowMonotonicMs(), timing.streamTimingChunkCount)
+        });
+        throw new LlmAttemptFailureError(failure);
+      }
       const chunkAt = Date.now();
       const chunkMark = nowMonotonicMs();
       activeThoughtBlock = emitThoughtDeltas(request.id, activeThoughtBlock, chunk, chunkAt, emit);
@@ -187,25 +309,165 @@ export async function startLlmProvider(
       const chunkUsageMetadata = usageMetadataFromChunk(chunk);
       if (chunkUsageMetadata) latestUsageMetadata = mergeUsageMetadata(latestUsageMetadata, chunkUsageMetadata);
       if (hasStreamTimingChunk(chunk)) {
-        firstStreamChunkAt ??= chunkAt;
-        firstStreamChunkMark ??= chunkMark;
-        streamTimingChunkCount += 1;
+        timing.firstStreamChunkAt ??= chunkAt;
+        timing.firstStreamChunkMark ??= chunkMark;
+        timing.streamTimingChunkCount += 1;
       }
       emitUnifiedChunk(request.id, chunk, emit);
     }
-
-    const finishedAt = Date.now();
-    const finishedMark = nowMonotonicMs();
-    if (activeThoughtBlock) finishThoughtBlock(request.id, activeThoughtBlock, finishedAt, emit);
-    emit({
-      type: LlmEventType.Done,
-      payload: { requestId: request.id, ...createDoneTiming(firstStreamChunkAt, finishedAt, firstStreamChunkMark, finishedMark, streamTimingChunkCount), ...(latestUsageMetadata ? { usageMetadata: latestUsageMetadata } : {}) }
-    });
   } catch (error) {
-    if (isAbortError(error)) return;
-    emitLlmError(emit, request.id, error instanceof Error ? error.message : String(error));
+    if (activeThoughtBlock) finishThoughtBlock(request.id, activeThoughtBlock, Date.now(), emit);
+    throw error;
   }
+
+  const finishedAt = Date.now();
+  const finishedMark = nowMonotonicMs();
+  if (activeThoughtBlock) finishThoughtBlock(request.id, activeThoughtBlock, finishedAt, emit);
+  emit({
+    type: LlmEventType.Done,
+    payload: { requestId: request.id, ...createDoneTiming(timing.firstStreamChunkAt, finishedAt, timing.firstStreamChunkMark, finishedMark, timing.streamTimingChunkCount), ...(latestUsageMetadata ? { usageMetadata: latestUsageMetadata } : {}) }
+  });
 }
+
+function hasUnifiedError(value: unknown): value is { error: unknown; rawResponse?: unknown; rawChunk?: unknown } {
+  return isRecord(value) && value.error !== undefined && value.error !== null;
+}
+
+function failureFromCaughtError(error: unknown): LlmAttemptFailure {
+  if (error instanceof LlmAttemptFailureError) return error.failure;
+  const rawError = rawErrorFromUnknown(error);
+  return { message: messageFromRawError(rawError), rawError, createdAt: Date.now() };
+}
+
+function failureFromProviderError(error: unknown, extras: Record<string, unknown> = {}): LlmAttemptFailure {
+  const rawError = rawErrorFromUnknown(error, extras);
+  return {
+    message: messageFromRawError(rawError),
+    rawError,
+    createdAt: typeof extras.createdAt === 'number' ? extras.createdAt : Date.now(),
+    ...(typeof extras.streamOutputDurationMs === 'number' ? { streamOutputDurationMs: extras.streamOutputDurationMs } : {})
+  };
+}
+
+function rawErrorFromUnknown(error: unknown, extras: Record<string, unknown> = {}): LlmRawErrorInfoRecord {
+  const base = toPlainJsonLike(error);
+  const baseRecord = isRecord(base) ? base : { data: base };
+  const merged: LlmRawErrorInfoRecord = { ...baseRecord };
+  for (const [key, value] of Object.entries(extras)) {
+    if (value !== undefined) merged[key] = toPlainJsonLike(value);
+  }
+  if (typeof merged.message !== 'string') {
+    const message = error instanceof Error ? error.message : typeof error === 'string' ? error : undefined;
+    if (message) merged.message = message;
+  }
+  return merged;
+}
+
+function messageFromRawError(rawError: LlmRawErrorInfoRecord): string {
+  if (typeof rawError.message === 'string' && rawError.message.trim()) return rawError.message.trim();
+  const bodyMessage = nestedMessage(rawError.rawBody) ?? nestedMessage(rawError.rawResponse) ?? nestedMessage(rawError.data);
+  if (bodyMessage) return bodyMessage;
+  if (typeof rawError.bodyText === 'string' && rawError.bodyText.trim()) return truncateForSummary(rawError.bodyText.trim());
+  if (typeof rawError.data === 'string' && rawError.data.trim()) return truncateForSummary(rawError.data.trim());
+  const kind = typeof rawError.kind === 'string' && rawError.kind.trim() ? rawError.kind.trim() : 'llm_error';
+  const status = typeof rawError.status === 'number' ? ` HTTP ${rawError.status}` : '';
+  return `LLM 请求失败：${kind}${status}`;
+}
+
+function nestedMessage(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const direct = value.message;
+  if (typeof direct === 'string' && direct.trim()) return truncateForSummary(direct.trim());
+  const error = value.error;
+  if (isRecord(error)) {
+    const message = error.message;
+    if (typeof message === 'string' && message.trim()) return truncateForSummary(message.trim());
+  }
+  return undefined;
+}
+
+function truncateForSummary(value: string): string {
+  const limit = 600;
+  return value.length > limit ? `${value.slice(0, limit)}…` : value;
+}
+
+function retryDelayForAttempt(retryAttempt: number): number {
+  const base = 1000 * (2 ** Math.max(0, retryAttempt - 1));
+  return Math.min(10_000, base);
+}
+
+function waitForRetryDelay(delayMs: number, control: RetryControl, signal?: AbortSignal): Promise<boolean> {
+  if (control.cancelRequested) return Promise.resolve(false);
+  if (signal?.aborted) return Promise.reject(createAbortError('Aborted LLM retry wait.'));
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const previousWake = control.wakeRetryWait;
+    const cleanup = () => {
+      if (timeout !== undefined) clearTimeout(timeout);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      control.wakeRetryWait = previousWake;
+    };
+    const settle = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(createAbortError('Aborted LLM retry wait.'));
+    };
+    control.wakeRetryWait = () => {
+      previousWake?.();
+      settle(false);
+    };
+    timeout = setTimeout(() => settle(!control.cancelRequested), delayMs);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function toPlainJsonLike(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value === 'symbol' || typeof value === 'function') return String(value);
+  if (value instanceof Error) {
+    if (seen.has(value)) return '[Circular]';
+    seen.add(value);
+    const cause = (value as { cause?: unknown }).cause;
+    return {
+      name: value.name,
+      message: value.message,
+      stack: value.stack,
+      ...(cause !== undefined ? { cause: toPlainJsonLike(cause, seen) } : {})
+    };
+  }
+  if (typeof Headers !== 'undefined' && value instanceof Headers) {
+    return Object.fromEntries(value.entries());
+  }
+  if (typeof value !== 'object') return value;
+  if (seen.has(value)) return '[Circular]';
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((item) => toPlainJsonLike(item, seen));
+  if (typeof (value as { entries?: unknown }).entries === 'function' && typeof (value as { forEach?: unknown }).forEach === 'function') {
+    try {
+      return Object.fromEntries((value as { entries(): Iterable<[string, unknown]> }).entries());
+    } catch {
+      // fall through
+    }
+  }
+  const result: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    result[key] = toPlainJsonLike(child, seen);
+  }
+  return result;
+}
+
+
+
 
 export async function resolveLlmInvocationProvider(
   request: LlmResolveInvocationRequest,
@@ -277,9 +539,6 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
 
 export async function listLlmProviderModels(config: LlmProviderConfigRecord, options: LlmProviderOptions): Promise<LlmProviderModelRecord[]> {
   const settings = normalizeSettings(config);
-  if (!settings.apiKey) {
-    throw new Error('缺少 LLM API Key，无法获取模型列表。');
-  }
 
   const unified = await importUnifiedLlmProvider();
   const headers = mergeHeaders(await resolveMaybe(options.headers), settings.headers);
@@ -586,6 +845,7 @@ function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmPr
   const generationConfig = settings?.generationConfig;
   const requestBody = settings?.requestBody;
   const contextWindowTokens = normalizeContextWindowTokens(settings?.contextWindowTokens);
+  const retryMaxAttempts = normalizeRetryMaxAttempts(settings?.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS;
   return {
     id: settings?.id?.trim() || 'llm-provider-config-default',
     name: settings?.name?.trim() || '默认渠道',
@@ -596,6 +856,8 @@ function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmPr
     apiKey: settings?.apiKey?.trim() ?? '',
     toolCallFormat: normalizeToolCallFormat(settings?.toolCallFormat),
     stream: settings?.stream !== false,
+    retryOnError: settings?.retryOnError !== false ? DEFAULT_LLM_RETRY_ON_ERROR : false,
+    retryMaxAttempts,
     ...(contextWindowTokens ? { contextWindowTokens } : {}),
     ...(proxy ? { proxy } : {}),
     ...(headers ? { headers } : {}),
@@ -628,6 +890,8 @@ function snapshotFromSettings(settings: LlmProviderConfigRecord, compressionConf
     ...(modelName ? { modelName, displayModelName: modelName } : {}),
     toolCallFormat: settings.toolCallFormat,
     stream: settings.stream !== false,
+    retryOnError: settings.retryOnError !== false,
+    retryMaxAttempts: normalizeRetryMaxAttempts(settings.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     ...(settings.contextWindowTokens ? { contextWindowTokens: settings.contextWindowTokens } : {}),
     ...(settings.generationConfig ? { generationConfig: settings.generationConfig } : {}),
     ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
@@ -704,6 +968,13 @@ function mergeHeaders(...records: Array<Record<string, string> | undefined>): Ll
 function normalizeContextWindowTokens(value: unknown): number | undefined {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
+}
+
+function normalizeRetryMaxAttempts(value: unknown): number | undefined {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return undefined;
+  const attempts = Math.floor(number);
+  return attempts < -1 ? -1 : attempts;
 }
 
 function nonEmptyRecord(value: unknown): value is Record<string, unknown> {
@@ -1011,8 +1282,41 @@ function emitLlmStarted(emit: Emit, requestId: string, invocationId: string | un
   emit({ type: LlmEventType.Started, payload: { requestId, ...(invocationId ? { invocationId } : {}), ...(model ? { model } : {}), startedAt: Date.now() } });
 }
 
-function emitLlmError(emit: Emit, requestId: string, message: string): void {
-  emit({ type: LlmEventType.Error, payload: { requestId, message } });
+function emitLlmError(
+  emit: Emit,
+  requestId: string,
+  message: string,
+  rawError?: LlmRawErrorInfoRecord,
+  extra: { retryAttempt?: number; retryMaxAttempts?: number; createdAt?: number; streamOutputDurationMs?: number } = {}
+): void {
+  emit({
+    type: LlmEventType.Error,
+    payload: {
+      requestId,
+      message,
+      ...(rawError ? { rawError } : {}),
+      ...(extra.retryAttempt !== undefined ? { retryAttempt: extra.retryAttempt } : {}),
+      ...(extra.retryMaxAttempts !== undefined ? { retryMaxAttempts: extra.retryMaxAttempts } : {}),
+      ...(extra.createdAt !== undefined ? { createdAt: extra.createdAt } : {}),
+      ...(extra.streamOutputDurationMs !== undefined ? { streamOutputDurationMs: extra.streamOutputDurationMs } : {})
+    }
+  });
+}
+
+function emitLlmRetryScheduled(emit: Emit, requestId: string, message: string, rawError: LlmRawErrorInfoRecord | undefined, retryAttempt: number, retryMaxAttempts: number, retryDelayMs: number): void {
+  emit({ type: LlmEventType.RetryScheduled, payload: { requestId, message, retryAttempt, retryMaxAttempts, retryDelayMs, createdAt: Date.now(), ...(rawError ? { rawError } : {}) } });
+}
+
+function emitLlmRetryStarted(emit: Emit, requestId: string, message: string, rawError: LlmRawErrorInfoRecord | undefined, retryAttempt: number, retryMaxAttempts: number): void {
+  emit({ type: LlmEventType.RetryStarted, payload: { requestId, message, retryAttempt, retryMaxAttempts, createdAt: Date.now(), ...(rawError ? { rawError } : {}) } });
+}
+
+function emitLlmRetryCancelled(emit: Emit, requestId: string, message: string, retryAttempt: number, retryMaxAttempts: number, rawError?: LlmRawErrorInfoRecord): void {
+  emit({ type: LlmEventType.RetryCancelled, payload: { requestId, message, retryAttempt, retryMaxAttempts, createdAt: Date.now(), ...(rawError ? { rawError } : {}) } });
+}
+
+function emitLlmRetryRecovered(emit: Emit, requestId: string, message: string, retryAttempt: number, retryMaxAttempts: number): void {
+  emit({ type: LlmEventType.RetryRecovered, payload: { requestId, message, retryAttempt, retryMaxAttempts, createdAt: Date.now() } });
 }
 
 function assertNever(value: never): never {

@@ -40,6 +40,12 @@ export function useChat() {
     return true;
   }
 
+  function cancelLlmAutoRetry(input: { requestId: string; conversationId?: string; messageId?: string; runId?: string }): boolean {
+    if (!input.requestId) return false;
+    bridge.request(BridgeMessageType.LlmRetryCancel, { ...input, reason: 'user_cancelled_auto_retry' });
+    return true;
+  }
+
   function abortCurrentConversation(reason = 'user_requested_abort'): boolean {
     const conversationId = clientState.currentConversationId;
     if (!conversationId) return false;
@@ -98,5 +104,5 @@ export function useChat() {
     return true;
   }
 
-  return { sendMessage, editMessage, retryMessageFrom, deleteMessagesFrom, abortCurrentConversation, removeQueueRun, promoteQueueRun, reorderQueue, pauseQueueRun, resumeQueueRun, resumeAllQueueRuns, updateQueueInput };
+  return { sendMessage, editMessage, retryMessageFrom, deleteMessagesFrom, cancelLlmAutoRetry, abortCurrentConversation, removeQueueRun, promoteQueueRun, reorderQueue, pauseQueueRun, resumeQueueRun, resumeAllQueueRuns, updateQueueInput };
 }

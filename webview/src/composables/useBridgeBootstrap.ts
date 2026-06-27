@@ -7,6 +7,7 @@ import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
 import { useRunHistoryStore } from '@webview/stores/useRunHistoryStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
+import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
 
 /**
  * 在 App 根组件挂载时调用一次：集中注册所有入站桥接监听并接入对应 store，
@@ -28,6 +29,7 @@ export function useBridgeBootstrap(): void {
   const conversationSettings = useConversationSettingsStore();
   const runHistory = useRunHistoryStore();
   const conversationTimeline = useConversationTimelineStore();
+  const conversationUi = useConversationUiStore();
 
   const disposers: Array<() => void> = [];
   const requestedConversationStreams = new Set<string>();
@@ -134,6 +136,12 @@ export function useBridgeBootstrap(): void {
   disposers.push(
     bridge.on(BridgeMessageType.LlmDryRunSnapshot, (message) => {
       if (message.payload) runHistory.applyDryRunSnapshot(message.payload);
+    })
+  );
+
+  disposers.push(
+    bridge.on(BridgeMessageType.LlmTransientNotice, (message) => {
+      if (message.payload) conversationUi.applyLlmTransientNotice(message.payload);
     })
   );
 

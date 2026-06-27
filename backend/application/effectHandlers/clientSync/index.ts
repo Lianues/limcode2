@@ -37,6 +37,16 @@ export function registerClientSyncEffectHandlers(registry: EffectHandlerRegistry
       });
     }
   });
+
+  registry.register('client.transientNotice', (effect, env) => {
+    env.webview.broadcastToStream(effect.streamId, {
+      id: createMessageId(),
+      type: BridgeMessageType.LlmTransientNotice,
+      channel: 'state',
+      scope: scopeForStream(effect.streamId),
+      payload: effect.payload
+    });
+  });
 }
 
 function scopeForStream(streamId: string): BridgeScope {

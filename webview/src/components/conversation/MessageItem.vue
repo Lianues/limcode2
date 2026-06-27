@@ -18,6 +18,8 @@ import RichContentView from '@webview/components/content/RichContentView.vue';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 import HoverTooltipPanel from '@webview/components/ui/HoverTooltipPanel.vue';
 import { useCheckpointPolicyStore } from '@webview/stores/useCheckpointPolicyStore';
+import type { LlmErrorBlockRecord } from '@webview/stores/useConversationUiStore';
+import LlmErrorBlock from './LlmErrorBlock.vue';
 import { rollbackConfirmActionTitle } from './checkpointRollback';
 import { normalizeTokenUsage } from './tokenUsageModel';
 
@@ -33,8 +35,9 @@ const props = withDefaults(
     deleting?: boolean;
     entering?: boolean;
     editingHighlighted?: boolean;
+    errorBlocks?: LlmErrorBlockRecord[];
   }>(),
-  { runId: undefined, runDetailLoading: false, deleteCount: 1, floorNumber: 0, rollbackCheckpoint: undefined, compactCount: 1, deleting: false, entering: false, editingHighlighted: false }
+  { runId: undefined, runDetailLoading: false, deleteCount: 1, floorNumber: 0, rollbackCheckpoint: undefined, compactCount: 1, deleting: false, entering: false, editingHighlighted: false, errorBlocks: () => [] }
 );
 
 const emit = defineEmits<{
@@ -43,6 +46,8 @@ const emit = defineEmits<{
   (event: 'delete-from', message: MessageRecord): void;
   (event: 'compact-to', message: MessageRecord): void;
   (event: 'view-run-detail', message: MessageRecord): void;
+  (event: 'close-error-block', id: string): void;
+  (event: 'cancel-error-retry', block: LlmErrorBlockRecord): void;
 }>();
 
 const roleLabel = computed(() => {
@@ -567,6 +572,15 @@ async function copyMessage(): Promise<void> {
   }, 1400);
 }
 
+function closeErrorBlock(id: string): void {
+  emit('close-error-block', id);
+}
+
+function cancelErrorRetry(block: LlmErrorBlockRecord): void {
+  emit('cancel-error-retry', block);
+}
+
+
 async function writeClipboard(text: string): Promise<boolean> {
   if (navigator.clipboard?.writeText) {
     try {
@@ -709,6 +723,13 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
             :markdown="message.role !== 'user'"
             :streaming="streaming"
             :message-id="message.id"
+          />
+          <LlmErrorBlock
+            v-for="block in errorBlocks"
+            :key="block.id"
+            :block="block"
+            @close="closeErrorBlock"
+            @cancel-retry="cancelErrorRetry"
           />
         </div>
         <footer v-if="messageFooterVisible" class="message-footer">

@@ -133,6 +133,8 @@ export enum BridgeMessageType {
   RunHistoryDetailSnapshot = 'runHistory.detail.snapshot',
   LlmDryRunGet = 'llm.dryRun.get',
   LlmDryRunSnapshot = 'llm.dryRun.snapshot',
+  LlmRetryCancel = 'llm.retry.cancel',
+  LlmTransientNotice = 'llm.transient.notice',
   LlmProviderModelsGet = 'llm.providerModels.get',
   LlmProviderModelsSnapshot = 'llm.providerModels.snapshot',
   GlobalSettingsGet = 'settings.global.get',
@@ -449,6 +451,8 @@ export type LlmCompressionFallbackMode = 'use_summary' | 'use_raw_history' | 'bl
 export type LlmCompressionThresholdUnit = 'percent' | 'tokens';
 
 export const DEFAULT_LLM_CONTEXT_WINDOW_TOKENS = 200_000;
+export const DEFAULT_LLM_RETRY_ON_ERROR = true;
+export const DEFAULT_LLM_RETRY_MAX_ATTEMPTS = 3;
 export const DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT = 90;
 export const DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS = 20_000;
 export const DEFAULT_LLM_COMPRESSION_SUMMARY_SYSTEM_PROMPT = 'You have written a partial transcript for the initial task above. Please write a summary of the transcript. The purpose of this summary is to provide continuity so you can continue to make progress towards solving the task in a future context, where the raw history above may not be accessible and will be replaced with this summary. Write down anything that would be helpful, including the state, next steps, learnings etc. You must wrap your summary in a <summary></summary> block.';
@@ -549,6 +553,10 @@ export interface LlmProviderConfigRecord {
   apiKey: string;
   toolCallFormat: LlmToolCallFormat;
   stream: boolean;
+  /** 请求报错时是否自动重试。 */
+  retryOnError: boolean;
+  /** 最大重试次数，不包含原始请求；3 表示最多 1 + 3 次请求，-1 表示无限重试。 */
+  retryMaxAttempts: number;
   proxy?: string;
   contextWindowTokens?: number;
   headers?: LlmProviderHeadersRecord;
@@ -573,6 +581,8 @@ export interface LlmInvocationSettingsSnapshotRecord {
   displayModelName?: string;
   toolCallFormat?: LlmToolCallFormat;
   stream?: boolean;
+  retryOnError?: boolean;
+  retryMaxAttempts?: number;
   contextWindowTokens?: number;
   generationConfig?: LlmGenerationConfigRecord;
   requestBody?: LlmRequestBodyRecord;
@@ -1714,6 +1724,13 @@ export interface ChatSendPayload {
 export interface ChatAbortPayload {
   conversationId: string;
 }
+export interface LlmRetryCancelPayload {
+  requestId: string;
+  conversationId?: string;
+  messageId?: string;
+  runId?: string;
+  reason?: string;
+}
 export interface MessageEditPayload {
   conversationId: string;
   messageId: string;
@@ -1923,6 +1940,42 @@ export interface ClientPatchPayload {
   streamId: string;
   streamSeq: number;
   patches: ClientPatchOp[];
+}
+
+export interface LlmRawErrorInfoRecord {
+  kind?: string;
+  status?: number;
+  headers?: Record<string, unknown>;
+  bodyText?: string;
+  rawBody?: unknown;
+  rawChunk?: unknown;
+  rawResponse?: unknown;
+  data?: unknown;
+  message?: string;
+  [key: string]: unknown;
+}
+
+export type LlmTransientNoticeKind =
+  | 'retryScheduled'
+  | 'retryStarted'
+  | 'retryCancelled'
+  | 'retryRecovered'
+  | 'error';
+
+export interface LlmTransientNoticePayload {
+  id: string;
+  kind: LlmTransientNoticeKind;
+  conversationId: string;
+  messageId: string;
+  requestId: string;
+  runId?: string;
+  invocationId?: string;
+  message: string;
+  rawError?: LlmRawErrorInfoRecord;
+  retryAttempt?: number;
+  retryMaxAttempts?: number;
+  retryDelayMs?: number;
+  createdAt: number;
 }
 
 export interface ConversationRunHistoryPageRequest {
@@ -2141,6 +2194,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ShowInfo, { message: string }>
   | BridgeEnvelope<BridgeMessageType.ChatSend, ChatSendPayload>
   | BridgeEnvelope<BridgeMessageType.ChatAbort, ChatAbortPayload>
+  | BridgeEnvelope<BridgeMessageType.LlmRetryCancel, LlmRetryCancelPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationOpen, ConversationOpenPayload>
   | BridgeEnvelope<BridgeMessageType.AgentCreate, AgentCreatePayload>
   | BridgeEnvelope<BridgeMessageType.AgentUpdate, AgentUpdatePayload>
@@ -2229,6 +2283,7 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.RunHistoryPageSnapshot, ConversationRunHistoryPageRecord>
   | BridgeEnvelope<BridgeMessageType.RunHistoryDetailSnapshot, ConversationRunDetailRecord>
   | BridgeEnvelope<BridgeMessageType.LlmDryRunSnapshot, LlmDryRunSnapshotPayload>
+  | BridgeEnvelope<BridgeMessageType.LlmTransientNotice, LlmTransientNoticePayload>
   | BridgeEnvelope<BridgeMessageType.LlmProviderModelsSnapshot, LlmProviderModelsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointGitStatusSnapshot, CheckpointGitStatusSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointShadowStatsSnapshot, CheckpointShadowStatsSnapshotPayload>

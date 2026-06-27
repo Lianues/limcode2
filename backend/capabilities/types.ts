@@ -46,6 +46,7 @@ export interface LlmCapability {
   compact(request: LlmCompactRequest, emit: Emit): void;
   dryRun(request: LlmStartRequest, options?: LlmDryRunOptions): Promise<LlmDryRunResult>;
   listModels(config: LlmProviderConfigRecord): Promise<LlmProviderModelRecord[]>;
+  cancelRetry(requestId: string): void;
   abort(requestId: string): void;
 }
 

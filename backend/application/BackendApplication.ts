@@ -1038,13 +1038,14 @@ function labelForAgentRunStatus(status: AgentRunStatus): string {
 
 function isRealtimeClientEffect(effect: WorldEffect): boolean {
   const kind = (effect as { kind?: string }).kind;
-  return kind === 'client.patch' || kind === 'client.snapshot';
+  return kind === 'client.patch' || kind === 'client.snapshot' || kind === 'client.transientNotice';
 }
 
 function shouldDeferUntilHydrated(message: WebviewToExtensionMessage): boolean {
   switch (message.type) {
     case 'chat.send':
     case 'chat.abort':
+    case 'llm.retry.cancel':
     case 'message.edit':
     case 'message.deleteFrom':
     case 'message.retryFrom':

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, watch } from 'vue';
 import type { CheckpointRecord, CompressionBlockRecord, MessageRecord } from '@shared/protocol';
-import { useConversationUiStore, type ConversationTimelineViewRow, type MessageViewRow } from '@webview/stores/useConversationUiStore';
+import { useConversationUiStore, type ConversationTimelineViewRow, type LlmErrorBlockRecord, type MessageViewRow } from '@webview/stores/useConversationUiStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useChat } from '@webview/composables/useChat';
 import { useRunHistoryStore } from '@webview/stores/useRunHistoryStore';
@@ -22,7 +22,7 @@ const props = withDefaults(
 
 const ui = useConversationUiStore();
 const timeline = useConversationTimelineStore();
-const { retryMessageFrom, deleteMessagesFrom } = useChat();
+const { retryMessageFrom, deleteMessagesFrom, cancelLlmAutoRetry } = useChat();
 const { createCompression, deleteCompression, regenerateCompression, setCompressionEnabled } = useCompression();
 const runHistory = useRunHistoryStore();
 
@@ -54,6 +54,15 @@ function onRetryFrom(message: MessageRecord): void {
 
 function onCompactTo(message: MessageRecord): void {
   createCompression({ endMessageId: message.id });
+}
+
+function onCloseErrorBlock(id: string): void {
+  ui.removeLlmErrorBlock(id);
+}
+
+function onCancelErrorRetry(block: LlmErrorBlockRecord): void {
+  ui.markLlmRetryCancelPending(block.requestId);
+  cancelLlmAutoRetry({ requestId: block.requestId, conversationId: block.conversationId, messageId: block.messageId, runId: block.runId });
 }
 
 function compactCountForMessage(message: MessageRecord): number {
@@ -150,11 +159,14 @@ function maybeLoadOlder(): void {
         :editing-highlighted="isEditingTarget(row)"
         :rollback-checkpoint="rollbackCheckpointForMessage(row.message)"
         :compact-count="compactCountForMessage(row.message)"
+        :error-blocks="ui.llmErrorBlocksForMessage(row.message.id)"
         @edit-message="onEditMessage(row)"
         @retry-from="onRetryFrom"
         @delete-from="onDeleteFrom"
         @compact-to="onCompactTo"
         @view-run-detail="onViewRunDetail"
+        @close-error-block="onCloseErrorBlock"
+        @cancel-error-retry="onCancelErrorRetry"
       />
       <CheckpointTimelineCard
         v-else-if="row.kind === 'checkpoint'"

@@ -433,17 +433,23 @@ export class WebviewMessageRouter {
         break;
       case BridgeMessageType.Ready:
         this.sendBridgeHello(clientId, message.id);
-        if (!this.deps.isHydrated()) break;
         if (this.deps.clients.getOrUnknown(clientId).meta.kind === 'globalSettings') {
+          // 流订阅不依赖 hydration 状态，提前注册可确保 hydration 完成后的快照不会丢失。
+          // requestSnapshot 在未 hydrated 时自动排队，hydration 完成后由 flushPendingSnapshots 投递。
           for (const section of GLOBAL_SETTINGS_SECTIONS) {
             this.deps.webview.subscribe(clientId, globalSettingsStreamId(section));
-            void this.deps.globalSettingsBridge.postSnapshot(clientId, section, message.id);
           }
           this.deps.webview.subscribe(clientId, GLOBAL_CLIENT_STATE_STREAM_ID);
           this.deps.requestSnapshot();
+          if (!this.deps.isHydrated()) break;
+          // 仅在数据就绪时立即推送 settings section 快照。
+          for (const section of GLOBAL_SETTINGS_SECTIONS) {
+            void this.deps.globalSettingsBridge.postSnapshot(clientId, section, message.id);
+          }
         } else {
           this.deps.webview.subscribe(clientId, GLOBAL_CLIENT_STATE_STREAM_ID);
           this.deps.requestSnapshot();
+          if (!this.deps.isHydrated()) break;
         }
         break;
       case BridgeMessageType.Ping:

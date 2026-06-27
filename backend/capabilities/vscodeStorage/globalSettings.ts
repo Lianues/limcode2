@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type {
+  AppearanceSettingsRecord,
   CheckpointMaintenanceSettingsRecord,
   GlobalSettingsSection,
   GlobalSettingsSectionValue,
@@ -8,6 +9,7 @@ import type {
 } from '../../../shared/protocol';
 import { createDefaultLlmCompressionSettings } from '../../../shared/protocol';
 import { CHECKPOINT_MAINTENANCE_SETTINGS_FILE, LLM_COMPRESSION_SETTINGS_FILE, LLM_SETTINGS_FILE, STORAGE_VERSION } from './constants';
+import { APPEARANCE_SETTINGS_FILE } from './constants';
 import { readJson, writeJson } from './json';
 import { createDefaultLlmSettings, normalizeLlmSettings } from './llmSettings';
 import { normalizeLlmCompressionSettings } from './llmCompressionConfigs';
@@ -39,6 +41,11 @@ const GLOBAL_SETTINGS_SECTION_SPECS: Record<FileBackedGlobalSettingsSection, {
     fileName: CHECKPOINT_MAINTENANCE_SETTINGS_FILE,
     createDefault: createDefaultCheckpointMaintenanceSettings,
     normalize: (input) => normalizeCheckpointMaintenanceSettings(input as Partial<CheckpointMaintenanceSettingsRecord> | undefined)
+  },
+  appearance: {
+    fileName: APPEARANCE_SETTINGS_FILE,
+    createDefault: createDefaultAppearanceSettings,
+    normalize: (input) => normalizeAppearanceSettings(input as Partial<AppearanceSettingsRecord> | undefined)
   }
 };
 
@@ -68,6 +75,28 @@ export function normalizeCheckpointMaintenanceSettings(input: Partial<Checkpoint
     autoCleanupDays: Math.min(3650, Math.max(1, rawDays)),
     autoDismissEnabled,
     autoDismissSeconds: Math.min(600, Math.max(1, rawSeconds))
+  };
+}
+
+export const DEFAULT_APPEARANCE_STREAMING_TEXT_WAITING = '...少女响应中';
+export const DEFAULT_APPEARANCE_STREAMING_TEXT_THINKING = '...少女思考中';
+export const DEFAULT_APPEARANCE_STREAMING_TEXT_WRITING = '...少女编写中';
+
+export function createDefaultAppearanceSettings(): AppearanceSettingsRecord {
+  return {
+    streamingTextWaiting: DEFAULT_APPEARANCE_STREAMING_TEXT_WAITING,
+    streamingTextThinking: DEFAULT_APPEARANCE_STREAMING_TEXT_THINKING,
+    streamingTextWriting: DEFAULT_APPEARANCE_STREAMING_TEXT_WRITING
+  };
+}
+
+export function normalizeAppearanceSettings(input: Partial<AppearanceSettingsRecord> | undefined): AppearanceSettingsRecord {
+  const sanitize = (value: unknown, fallback: string): string =>
+    typeof value === 'string' && value.trim() ? value.trim() : fallback;
+  return {
+    streamingTextWaiting: sanitize(input?.streamingTextWaiting, DEFAULT_APPEARANCE_STREAMING_TEXT_WAITING),
+    streamingTextThinking: sanitize(input?.streamingTextThinking, DEFAULT_APPEARANCE_STREAMING_TEXT_THINKING),
+    streamingTextWriting: sanitize(input?.streamingTextWriting, DEFAULT_APPEARANCE_STREAMING_TEXT_WRITING)
   };
 }
 

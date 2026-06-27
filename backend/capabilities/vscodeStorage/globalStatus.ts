@@ -15,6 +15,7 @@ export interface StorageRootMigrationStatus {
 export interface LimCodeGlobalStatus {
   schemaVersion: typeof STORAGE_VERSION;
   dataRootPath: string;
+  proxy: string;
   updatedAt: string;
   lastMigration?: StorageRootMigrationStatus;
 }
@@ -22,11 +23,13 @@ export interface LimCodeGlobalStatus {
 export function loadGlobalStatus(context: vscode.ExtensionContext): LimCodeGlobalStatus {
   const stored = context.globalState.get<Partial<LimCodeGlobalStatus>>(LIMCODE_GLOBAL_STATUS_KEY);
   const dataRootPath = normalizeDataRootPath(stored?.dataRootPath, { fallbackToDefault: true });
+  const proxy = typeof stored?.proxy === 'string' ? stored.proxy.trim() : '';
   const lastMigration = normalizeLastMigration(stored?.lastMigration);
 
   return {
     schemaVersion: STORAGE_VERSION,
     dataRootPath: sameFsPath(dataRootPath, context.globalStorageUri.fsPath) ? '' : dataRootPath,
+    proxy,
     updatedAt: typeof stored?.updatedAt === 'string' ? stored.updatedAt : '',
     ...(lastMigration ? { lastMigration } : {})
   };
@@ -35,13 +38,16 @@ export function loadGlobalStatus(context: vscode.ExtensionContext): LimCodeGloba
 export async function saveGlobalStatus(
   context: vscode.ExtensionContext,
   dataRootPath: string,
+  proxy: string,
   lastMigration?: StorageRootMigrationStatus
 ): Promise<LimCodeGlobalStatus> {
   const previous = loadGlobalStatus(context);
   const normalizedDataRootPath = normalizeStatusDataRootPath(context, dataRootPath);
+  const normalizedProxy = typeof proxy === 'string' ? proxy.trim() : '';
   const status: LimCodeGlobalStatus = {
     schemaVersion: STORAGE_VERSION,
     dataRootPath: normalizedDataRootPath,
+    proxy: normalizedProxy,
     updatedAt: new Date().toISOString(),
     ...(lastMigration ? { lastMigration } : previous.lastMigration ? { lastMigration: previous.lastMigration } : {})
   };
@@ -53,6 +59,7 @@ export function createGlobalSettingsRecord(context: vscode.ExtensionContext): Gl
   const status = loadGlobalStatus(context);
   return {
     dataFilePath: status.dataRootPath,
+    proxy: status.proxy,
     activeDataRootPath: resolveDataRootUri(context, status.dataRootPath).fsPath,
     defaultDataRootPath: context.globalStorageUri.fsPath
   };

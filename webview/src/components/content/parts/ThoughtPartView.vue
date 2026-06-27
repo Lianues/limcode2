@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { IconBulb } from '@tabler/icons-vue';
+import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
+import StreamingIndicatorTail from '../StreamingIndicatorTail.vue';
 import { useSmoothStreamingText } from '../useSmoothStreamingText';
 import CollapsibleContentBlock from '../CollapsibleContentBlock.vue';
 
@@ -8,11 +10,13 @@ const props = withDefaults(
   defineProps<{
     text: string;
     streaming?: boolean;
+    streamingPhase?: 'waiting' | 'thinking' | 'writing';
     durationMs?: number;
   }>(),
-  { streaming: false }
+  { streaming: false, streamingPhase: 'thinking' }
 );
 
+const globalSettings = useGlobalSettingsStore();
 const expanded = ref(false);
 const { displayedText } = useSmoothStreamingText(
   () => props.text,
@@ -20,7 +24,7 @@ const { displayedText } = useSmoothStreamingText(
 );
 const preview = computed(() => lastNonEmptyLine(displayedText.value) || '正在思考...');
 const tailText = computed(() => {
-  if (props.streaming) return '思考中';
+  if (props.streaming) return globalSettings.appearance.streamingTextThinking;
   return props.durationMs !== undefined ? `已思考 ${formatThoughtDuration(props.durationMs)}` : '思考完成';
 });
 
@@ -72,7 +76,7 @@ function formatThoughtDuration(durationMs: number): string {
       <span class="thought-tail">{{ tailText }}</span>
     </template>
 
-    <pre class="thought-content">{{ displayedText }}<span v-if="streaming" class="thought-cursor">▋</span></pre>
+    <pre class="thought-content">{{ displayedText }}<StreamingIndicatorTail v-if="streaming" :text="globalSettings.appearance.streamingTextThinking" variant="thinking" /></pre>
   </CollapsibleContentBlock>
 </template>
 
@@ -110,9 +114,5 @@ function formatThoughtDuration(durationMs: number): string {
   font: inherit;
   font-style: italic;
   line-height: 1.5;
-}
-
-.thought-cursor {
-  animation: lc-content-cursor-blink var(--lc-content-cursor-blink-duration) steps(2, start) infinite;
 }
 </style>

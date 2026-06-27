@@ -103,7 +103,6 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
     retryOnError: typeof input?.retryOnError === 'boolean' ? input.retryOnError : DEFAULT_LLM_RETRY_ON_ERROR,
     retryMaxAttempts: finiteRetryMaxAttempts(input?.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     contextWindowTokens,
-    ...(optionalString(input?.proxy) ? { proxy: optionalString(input?.proxy) } : {}),
     ...(headers ? { headers } : {}),
     ...(generationConfig ? { generationConfig } : {}),
     ...(requestBody ? { requestBody } : {}),
@@ -188,12 +187,6 @@ function isKnownToolCallFormat(format: unknown): format is LlmToolCallFormat {
 function stringOrDefault(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
-
-function optionalString(value: unknown): string | undefined {
-  const trimmed = typeof value === 'string' ? value.trim() : '';
-  return trimmed || undefined;
-}
-
 function finiteTimestamp(value: unknown, fallback: number): number {
   const timestamp = Number(value);
   return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : fallback;

@@ -70,6 +70,8 @@ export function useBridgeBootstrap(): void {
         return;
       }
       globalSettings.requestChannelSettings();
+      globalSettings.ensureAppearance();
+
       if (message.payload?.meta?.conversationId) {
         clientState.setCurrentConversation(message.payload.meta.conversationId);
       }

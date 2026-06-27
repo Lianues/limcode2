@@ -1,7 +1,7 @@
 import type { CommandSink, Entity, WorldReader } from '../../../ecs/types';
 import { LlmRequest, Message, Streaming } from '../chat/components';
 import { LlmInvocation } from '../llm/components';
-import type { ContentPart, MessageContent, MessageStopReason } from '../../../../shared/protocol';
+import type { MessageContent, MessageStopReason } from '../../../../shared/protocol';
 
 export type RunLlmCleanupReasonKind =
   | 'paused'
@@ -38,14 +38,14 @@ export function cleanupRunLlmRequests(world: WorldReader, cmd: CommandSink, run:
         ...modelMessage,
         status: 'error',
         stopReason,
-        content: appendStopNote(modelMessage.content, stopNote)
+        ...(stopNote ? { content: appendStopNote(modelMessage.content, stopNote) } : {})
       });
     }
 
     if (data.invocation !== undefined) {
       const invocation = world.get(data.invocation, LlmInvocation);
       if (invocation) {
-        cmd.add(data.invocation, LlmInvocation, { ...invocation, status: 'cancelled', completedAt: Date.now(), error: stopNote });
+        cmd.add(data.invocation, LlmInvocation, { ...invocation, status: 'cancelled', completedAt: Date.now(), ...(stopNote ? { error: stopNote } : {}) });
       }
     }
 
@@ -55,11 +55,12 @@ export function cleanupRunLlmRequests(world: WorldReader, cmd: CommandSink, run:
 }
 
 function appendStopNote(content: MessageContent, note: string): MessageContent {
+  if (!note) return content;
   const parts = [...content.parts];
   const last = parts[parts.length - 1];
   const noteText = parts.length === 0 ? note : `\n\n${note}`;
   if (last && 'text' in last && last.text === noteText) return content;
-  parts.push({ text: noteText } satisfies ContentPart);
+  parts.push({ text: noteText });
   return { ...content, parts };
 }
 
@@ -80,12 +81,12 @@ function stopReasonForCleanupReason(kind: RunLlmCleanupReasonKind): MessageStopR
   }
 }
 
-function noteForCleanupReason(kind: RunLlmCleanupReasonKind): string {
+function noteForCleanupReason(kind: RunLlmCleanupReasonKind): string | undefined {
   switch (kind) {
     case 'paused':
       return '[任务已暂停] 当前回复已暂停，可稍后恢复继续执行。';
     case 'user_cancelled':
-      return '[任务已终止] 已手动停止当前回复。';
+      return undefined;
     case 'stale':
       return '[任务已失效] 当前上下文已变化，本次回复已停止。';
     case 'retry_replaced':

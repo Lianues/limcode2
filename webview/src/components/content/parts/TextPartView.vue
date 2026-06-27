@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, shallowRef, watch } from 'vue';
+import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
+import StreamingIndicatorTail from '../StreamingIndicatorTail.vue';
 import { useSmoothStreamingText } from '../useSmoothStreamingText';
 import { renderMarkdown } from '../markdown/markdownRenderer';
 
@@ -7,10 +9,21 @@ const props = withDefaults(
   defineProps<{
     text: string;
     streaming?: boolean;
+    streamingPhase?: 'waiting' | 'thinking' | 'writing';
     markdown?: boolean;
   }>(),
-  { streaming: false, markdown: false }
+  { streaming: false, streamingPhase: 'writing', markdown: false }
 );
+
+const globalSettings = useGlobalSettingsStore();
+
+const tailText = computed(() => {
+  switch (props.streamingPhase) {
+    case 'waiting': return globalSettings.appearance.streamingTextWaiting;
+    case 'thinking': return globalSettings.appearance.streamingTextThinking;
+    case 'writing': return globalSettings.appearance.streamingTextWriting;
+  }
+});
 
 const { displayedText, replacing: replaceAnimating } = useSmoothStreamingText(
   () => props.text,
@@ -89,9 +102,9 @@ function clearScheduledRender(): void {
   <div v-if="markdownReady" class="rc-markdown-shell" :class="{ streaming, replacing: replaceAnimating }">
     <div v-if="renderedHtml" class="rc-markdown" v-html="renderedHtml"></div>
     <pre v-else class="rc-text">{{ displayedText }}</pre>
-    <span v-if="streaming" class="rc-cursor">▋</span>
+    <StreamingIndicatorTail v-if="streaming" :text="tailText" :variant="streamingPhase" />
   </div>
-  <pre v-else class="rc-text" :class="{ replacing: replaceAnimating }">{{ displayedText }}<span v-if="streaming" class="rc-cursor">▋</span></pre>
+  <pre v-else class="rc-text" :class="{ replacing: replaceAnimating }">{{ displayedText }}<StreamingIndicatorTail v-if="streaming" :text="tailText" :variant="streamingPhase" /></pre>
 </template>
 
 <style scoped>
@@ -200,14 +213,5 @@ function clearScheduledRender(): void {
 .rc-markdown :deep(img) {
   max-width: 100%;
   height: auto;
-}
-
-.rc-cursor {
-  animation: lc-content-cursor-blink var(--lc-content-cursor-blink-duration) steps(2, start) infinite;
-}
-
-.rc-markdown-shell > .rc-cursor {
-  display: inline-block;
-  margin-left: 1px;
 }
 </style>

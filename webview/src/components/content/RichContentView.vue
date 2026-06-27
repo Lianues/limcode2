@@ -43,6 +43,20 @@ function nodeStreaming(node: RichRenderNode, index: number): boolean {
   return node.kind === 'text';
 }
 
+/**
+ * 判断当前流式阶段：
+ *   - 'waiting'：流式中但还没有任何内容块
+ *   - 'thinking'：最后一个内容块是正在输出的思考
+ *   - 'writing'：最后一个内容块是正在输出的正文
+ */
+function streamingPhase(): 'waiting' | 'thinking' | 'writing' {
+  if (!props.streaming) return 'writing';
+  if (nodes.value.length === 0) return 'waiting';
+  const last = nodes.value[nodes.value.length - 1]!;
+  if (last.kind === 'thought' && last.props.thoughtOpen === true) return 'thinking';
+  return 'writing';
+}
+
 function withToolBatchMeta(inputNodes: RichRenderNode[]): RichRenderNode[] {
   const result = inputNodes.map((node) => ({ ...node, props: { ...node.props } }));
   let segment: ToolCallNodeInfo[] = [];
@@ -157,6 +171,7 @@ function isBlockingToolCall(call: ToolCallRecord): boolean {
         :message-id="messageId"
         :markdown="markdown"
         :streaming="nodeStreaming(node, index)"
+        :streaming-phase="streamingPhase()"
       />
     </template>
     <!-- 流式中但还没有任何内容块：渲染一个仅含光标的空文本节点。 -->
@@ -166,6 +181,7 @@ function isBlockingToolCall(call: ToolCallRecord): boolean {
       :text="''"
       :markdown="markdown"
       :streaming="true"
+      :streaming-phase="'waiting'"
     />
   </div>
 </template>

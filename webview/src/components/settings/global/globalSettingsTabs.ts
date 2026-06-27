@@ -1,13 +1,14 @@
 import type { Component } from 'vue';
-import { IconArchive, IconMessage, IconServer, IconSettings2, IconSettingsAi, IconTool } from '@tabler/icons-vue';
+import { IconArchive, IconImageGeneration, IconMessage, IconServer, IconSettings2, IconSettingsAi, IconTool } from '@tabler/icons-vue';
 import ChannelSettingsTab from './ChannelSettingsTab.vue';
 import CheckpointSettingsTab from './CheckpointSettingsTab.vue';
+import AppearanceSettingsTab from './AppearanceSettingsTab.vue';
 import OtherSettingsTab from './OtherSettingsTab.vue';
 import SystemPromptSettingsTab from './SystemPromptSettingsTab.vue';
 import ToolSettingsTab from './ToolSettingsTab.vue';
 import WorkEnvironmentSettingsTab from './WorkEnvironmentSettingsTab.vue';
 
-export type GlobalSettingsTabKey = 'channels' | 'prompts' | 'tools' | 'checkpoints' | 'work-environments' | 'other';
+export type GlobalSettingsTabKey = 'channels' | 'prompts' | 'tools' | 'checkpoints' | 'work-environments' | 'appearance' | 'other';
 
 export interface GlobalSettingsTabDefinition {
   key: GlobalSettingsTabKey;
@@ -52,6 +53,13 @@ export const GLOBAL_SETTINGS_TABS: readonly GlobalSettingsTabDefinition[] = [
     description: '本地、服务器及后续扩展环境',
     icon: IconServer,
     component: WorkEnvironmentSettingsTab
+  },
+  {
+    key: 'appearance',
+    label: '外观',
+    description: '自定义流式状态文字与动效',
+    icon: IconImageGeneration,
+    component: AppearanceSettingsTab
   },
   {
     key: 'other',

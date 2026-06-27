@@ -1,3 +1,4 @@
+import { createProxyFetch } from './proxyFetch';
 import { LlmEventType } from '../world/modules/llm/events';
 import type {
   LlmCompactRequest,
@@ -51,7 +52,6 @@ type UnifiedLLMCompactResponse = import('unified-llm-provider').LLMCompactRespon
 type UnifiedLLMStreamChunk = import('unified-llm-provider').LLMStreamChunk;
 type UnifiedFunctionDeclaration = import('unified-llm-provider').FunctionDeclaration;
 type UnifiedModelCatalogEntry = import('unified-llm-provider').ModelCatalogEntry;
-type UndiciModule = typeof import('undici');
 
 interface UnifiedDryRunResult {
   url: string;
@@ -73,6 +73,7 @@ interface UnifiedDryRunCapable {
 
 export interface LlmProviderOptions {
   settings: MaybeProvider<LlmProviderConfigRecord, LlmSettingsRequest>;
+  proxy?: MaybeProvider<string>;
   compressionSettings?: LlmCompressionSettingsProvider;
   activeCompressionSettings?: (conversationId?: string) => LlmCompressionConfigRecord | undefined | Promise<LlmCompressionConfigRecord | undefined>;
 
@@ -183,10 +184,10 @@ export async function startLlmProvider(
 
     const unified = await importUnifiedLlmProvider();
     const registry = unified.createBootstrapExtensionRegistry();
-    const proxy = normalizeOptionalString(settings.proxy);
-    const proxyFetch = proxy ? await createUndiciFetch() : undefined;
+    const proxy = normalizeOptionalString(await resolveMaybe(options.proxy));
+    const proxyFetch = proxy ? createProxyFetch(proxy) : undefined;
     const headers = mergeHeaders(await resolveMaybe(options.headers), settings.headers);
-    if (proxy) console.log(`[LimCode] LLM proxy enabled: ${proxy} (fetch=undici)`);
+    if (proxy) console.log(`[LimCode] LLM proxy enabled: ${proxy}`);
     const provider = unified.createLLMFromConfig({
       provider: settings.provider,
       model: settings.model,
@@ -211,7 +212,7 @@ export async function startLlmProvider(
         }
         return;
       } catch (error) {
-        if (isAbortError(error)) return;
+        if (isAbortError(error) || signal?.aborted) return;
         const failure = failureFromCaughtError(error);
         const nextRetryCount = retryCount + 1;
         const canRetry = retryEnabled
@@ -250,7 +251,7 @@ export async function startLlmProvider(
       }
     }
   } catch (error) {
-    if (isAbortError(error)) return;
+    if (isAbortError(error) || signal?.aborted) return;
     const failure = failureFromCaughtError(error);
     emitLlmError(emit, request.id, failure.message, failure.rawError, {
       createdAt: failure.createdAt,
@@ -275,6 +276,7 @@ async function runLlmAttempt(
       outputFormat: 'unified',
       signal
     });
+    if (signal?.aborted) throw createAbortError(`Aborted LLM request: ${request.id}`);
     if (hasUnifiedError(response)) {
       throw new LlmAttemptFailureError(failureFromProviderError(response.error, { rawResponse: response.rawResponse }));
     }
@@ -295,6 +297,7 @@ async function runLlmAttempt(
       outputFormat: 'unified',
       signal
     })) {
+      if (signal?.aborted) throw createAbortError(`Aborted LLM request: ${request.id}`);
       if (hasUnifiedError(chunk)) {
         const failure = failureFromProviderError(chunk.error, {
           rawChunk: (chunk as { rawChunk?: unknown }).rawChunk ?? chunk,
@@ -316,10 +319,12 @@ async function runLlmAttempt(
       emitUnifiedChunk(request.id, chunk, emit);
     }
   } catch (error) {
+    if (isAbortError(error) || signal?.aborted) throw createAbortError(`Aborted LLM request: ${request.id}`);
     if (activeThoughtBlock) finishThoughtBlock(request.id, activeThoughtBlock, Date.now(), emit);
     throw error;
   }
 
+  if (signal?.aborted) throw createAbortError(`Aborted LLM request: ${request.id}`);
   const finishedAt = Date.now();
   const finishedMark = nowMonotonicMs();
   if (activeThoughtBlock) finishThoughtBlock(request.id, activeThoughtBlock, finishedAt, emit);
@@ -492,7 +497,8 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
 
   const unified = await importUnifiedLlmProvider();
   const registry = unified.createBootstrapExtensionRegistry();
-  const proxy = normalizeOptionalString(runtimeSettings.proxy);
+  const proxy = normalizeOptionalString(await resolveMaybe(options.proxy));
+  const proxyFetch = proxy ? createProxyFetch(proxy) : undefined;
   const headers = mergeHeaders(await resolveMaybe(options.headers), runtimeSettings.headers);
   const provider = unified.createLLMFromConfig({
     provider: runtimeSettings.provider,
@@ -502,7 +508,7 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
     ...(runtimeSettings.contextWindowTokens ? { contextWindow: runtimeSettings.contextWindowTokens } : {}),
     ...(headers ? { headers } : {}),
     ...(runtimeSettings.requestBody ? { requestBody: runtimeSettings.requestBody } : {}),
-    ...(proxy ? { proxy } : {})
+    ...(proxy ? { proxy, fetch: proxyFetch } : {})
   }, registry.llmProviders);
 
   const dryRun = (provider as unknown as Partial<UnifiedDryRunCapable>).dryRun;
@@ -639,8 +645,8 @@ async function compactWithOpenAIResponses(
 
   const unified = await importUnifiedLlmProvider();
   const registry = unified.createBootstrapExtensionRegistry();
-  const proxy = normalizeOptionalString(settings.proxy);
-  const proxyFetch = proxy ? await createUndiciFetch() : undefined;
+  const proxy = normalizeOptionalString(await resolveMaybe(options.proxy));
+  const proxyFetch = proxy ? createProxyFetch(proxy) : undefined;
   const headers = mergeHeaders(await resolveMaybe(options.headers), settings.headers);
   const provider = unified.createLLMFromConfig({
     provider: settings.provider,
@@ -719,8 +725,8 @@ async function generateSummaryText(
 
   const unified = await importUnifiedLlmProvider();
   const registry = unified.createBootstrapExtensionRegistry();
-  const proxy = normalizeOptionalString(settings.proxy);
-  const proxyFetch = proxy ? await createUndiciFetch() : undefined;
+  const proxy = normalizeOptionalString(await resolveMaybe(options.proxy));
+  const proxyFetch = proxy ? createProxyFetch(proxy) : undefined;
   const headers = mergeHeaders(await resolveMaybe(options.headers), settings.headers);
   const provider = unified.createLLMFromConfig({
     provider: settings.provider,
@@ -840,7 +846,6 @@ function modelCatalogEntryToRecord(model: UnifiedModelCatalogEntry): LlmProvider
 }
 
 function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmProviderConfigRecord {
-  const proxy = normalizeOptionalString(settings?.proxy);
   const headers = normalizeHeaders(settings?.headers);
   const generationConfig = settings?.generationConfig;
   const requestBody = settings?.requestBody;
@@ -859,7 +864,6 @@ function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmPr
     retryOnError: settings?.retryOnError !== false ? DEFAULT_LLM_RETRY_ON_ERROR : false,
     retryMaxAttempts,
     ...(contextWindowTokens ? { contextWindowTokens } : {}),
-    ...(proxy ? { proxy } : {}),
     ...(headers ? { headers } : {}),
     ...(nonEmptyRecord(generationConfig) ? { generationConfig } : {}),
     ...(nonEmptyRecord(requestBody) ? { requestBody } : {}),
@@ -1256,19 +1260,6 @@ async function importUnifiedLlmProvider(): Promise<UnifiedModule> {
   const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<UnifiedModule>;
   return dynamicImport('unified-llm-provider');
 }
-
-async function createUndiciFetch(): Promise<typeof fetch> {
-  const undici = await importUndici();
-  // VS Code Extension Host 的 global fetch 可能不是 undici 实现，会忽略 dispatcher。
-  // 这里仅在用户显式配置 LLM proxy 时指定 undici.fetch；ProxyAgent/requestTls 仍由 unified-llm-provider@0.1.3 维护。
-  return undici.fetch as unknown as typeof fetch;
-}
-
-async function importUndici(): Promise<UndiciModule> {
-  const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<UndiciModule>;
-  return dynamicImport('undici');
-}
-
 function createAbortError(message: string): Error {
   const error = new Error(message);
   error.name = 'AbortError';

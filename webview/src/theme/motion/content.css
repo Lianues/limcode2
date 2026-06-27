@@ -7,10 +7,36 @@
   --lc-content-output-background: var(--lc-content-input-background);
   --lc-content-icon-color: var(--vscode-descriptionForeground);
   --lc-content-block-section-max-height: 180px;
+
+  /* 流式状态文字波浪动画。 */
+  --lc-streaming-wave-duration: 1.6s;
+  --lc-streaming-wave-color-waiting: var(--vscode-testing-iconQueued, #888);
+  --lc-streaming-wave-color-thinking: var(--vscode-editorWarning-foreground, #cca700);
+  --lc-streaming-wave-color-writing: var(--vscode-testing-iconPassedColor, #4caf50);
 }
 
 @keyframes lc-content-cursor-blink {
   to {
+    opacity: 0;
+  }
+}
+
+/* 流式状态文字波浪动画：文字从左到右依次出现亮度脉冲。 */
+@keyframes lc-streaming-wave {
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}
+
+/* 流式状态光标闪烁。 */
+@keyframes lc-streaming-cursor-blink {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
     opacity: 0;
   }
 }

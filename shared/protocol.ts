@@ -21,7 +21,7 @@ export interface WebviewClientMeta {
 
 export const GLOBAL_CLIENT_STATE_STREAM_ID = 'global:state';
 export const GLOBAL_SETTINGS_STREAM_PREFIX = 'settings:global:';
-export const GLOBAL_SETTINGS_SECTIONS = ['common', 'llm', 'llmProviderConfigs', 'llmCompression', 'llmCompressionConfigs', 'checkpointMaintenance'] as const;
+export const GLOBAL_SETTINGS_SECTIONS = ['common', 'llm', 'llmProviderConfigs', 'llmCompression', 'llmCompressionConfigs', 'checkpointMaintenance', 'appearance'] as const;
 export type GlobalSettingsSection = typeof GLOBAL_SETTINGS_SECTIONS[number];
 
 export function globalSettingsStreamId(section: GlobalSettingsSection): string {
@@ -557,7 +557,6 @@ export interface LlmProviderConfigRecord {
   retryOnError: boolean;
   /** 最大重试次数，不包含原始请求；3 表示最多 1 + 3 次请求，-1 表示无限重试。 */
   retryMaxAttempts: number;
-  proxy?: string;
   contextWindowTokens?: number;
   headers?: LlmProviderHeadersRecord;
   generationConfig?: LlmGenerationConfigRecord;
@@ -2093,6 +2092,7 @@ export interface LlmProviderModelsSnapshotPayload {
 
 export interface GlobalSettingsRecord {
   dataFilePath: string;
+  proxy: string;
   activeDataRootPath: string;
   defaultDataRootPath: string;
 }
@@ -2102,7 +2102,15 @@ export interface CheckpointMaintenanceSettingsRecord {
   autoDismissEnabled: boolean;
   autoDismissSeconds: number;
 }
-export type GlobalSettingsSectionValue = GlobalSettingsRecord | LlmSettingsRecord | LlmProviderConfigsRecord | LlmCompressionSettingsRecord | LlmCompressionConfigsRecord | CheckpointMaintenanceSettingsRecord;
+export interface AppearanceSettingsRecord {
+  /** AI 等待响应时显示的文字（流式中但还没有任何内容块时）。 */
+  streamingTextWaiting: string;
+  /** AI 思考中显示的文字（思考内容正在流式输出时）。 */
+  streamingTextThinking: string;
+  /** AI 输出正文时显示的文字（正文正在流式输出时）。 */
+  streamingTextWriting: string;
+}
+export type GlobalSettingsSectionValue = GlobalSettingsRecord | LlmSettingsRecord | LlmProviderConfigsRecord | LlmCompressionSettingsRecord | LlmCompressionConfigsRecord | CheckpointMaintenanceSettingsRecord | AppearanceSettingsRecord;
 export interface GlobalSettingsGetPayload {
   section: GlobalSettingsSection;
 }

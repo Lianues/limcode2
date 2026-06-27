@@ -20,6 +20,11 @@ const { loading: otherLoading, text: otherLoadingText } = useSettingsLoadingText
     </header>
 
     <label class="global-settings-field">
+      <span>网络代理地址（留空则直连；例如 http://127.0.0.1:7890）</span>
+      <input v-model="settings.common.proxy" type="text" placeholder="http://127.0.0.1:7890" />
+    </label>
+
+    <label class="global-settings-field">
       <span>数据目录路径（留空使用 VS Code 默认目录；保存后只迁移并删除旧目录中已注册的插件数据目录）</span>
       <input v-model="settings.common.dataFilePath" type="text" placeholder="例如：D:/limcode/data" />
     </label>

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { LlmCompressionConfigRecord, LlmInvocationSettingsSnapshotRecord, LlmProviderConfigRecord, ToolDefinitionRecord } from '../../shared/protocol';
+import type { GlobalSettingsRecord, LlmCompressionConfigRecord, LlmInvocationSettingsSnapshotRecord, LlmProviderConfigRecord, ToolDefinitionRecord } from '../../shared/protocol';
 import {
   createLlmProviderCapability,
   createCommandCapability,
@@ -8,6 +8,7 @@ import {
   createVsCodeStorageCapability,
   createWebviewCapability
 } from '../capabilities';
+import { createGlobalSettingsRecord } from '../capabilities/vscodeStorage/globalStatus';
 import { createToolRegistry } from '../world/modules';
 import type { ToolSchema } from '../world/modules/llm/contracts';
 import type { RuntimeEnv } from './RuntimeEnv';
@@ -51,7 +52,8 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
       const activeProvider = await storage.loadActiveLlmProviderConfig(conversationId);
       return coerceCompressionConfigForProvider(await storage.loadActiveLlmCompressionConfig(activeProvider.id), activeProvider);
     },
-    headers: { 'User-Agent': 'LimCode/0.0.1' }
+    headers: { 'User-Agent': 'LimCode/0.0.1' },
+    proxy: async () => createGlobalSettingsRecord(context).proxy || undefined
   });
   const fs = createVsCodeFsCapability();
   const webview = createWebviewCapability();

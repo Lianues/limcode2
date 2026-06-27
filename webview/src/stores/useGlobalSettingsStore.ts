@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import {
   GLOBAL_SETTINGS_SECTIONS,
+  type AppearanceSettingsRecord,
   createMessageId,
   DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS,
   DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT,
@@ -51,6 +52,8 @@ interface GlobalSettingsState {
   llmCompressionConfigs: LlmCompressionConfigsRecord;
   /** 存档点维护：自动清理未使用 shadow 仓库的设置。 */
   checkpointMaintenance: CheckpointMaintenanceSettingsRecord;
+  /** 外观：自定义流式状态文字。 */
+  appearance: AppearanceSettingsRecord;
   /** 各 section 的来源文件路径，用于在 UI 展示。 */
   filePaths: Partial<Record<GlobalSettingsSection, string>>;
   /** 等待 llmProviderConfigs 保存完成后再持久化的 active provider id，避免 active id 先于新配置到达后端。 */
@@ -83,7 +86,7 @@ function settingsErrorStatus(requestType: string | undefined, message: string): 
 }
 
 function emptyCommon(): GlobalSettingsRecord {
-  return { dataFilePath: '', activeDataRootPath: '', defaultDataRootPath: '' };
+  return { dataFilePath: '', proxy: '', activeDataRootPath: '', defaultDataRootPath: '' };
 }
 
 function emptyLlm(): LlmSettingsRecord {
@@ -104,6 +107,10 @@ function emptyLlmCompressionConfigs(): LlmCompressionConfigsRecord {
 
 function emptyCheckpointMaintenance(): CheckpointMaintenanceSettingsRecord {
   return { autoCleanupEnabled: true, autoCleanupDays: 7, autoDismissEnabled: true, autoDismissSeconds: 5 };
+}
+
+function emptyAppearance(): AppearanceSettingsRecord {
+  return { streamingTextWaiting: '...少女响应中', streamingTextThinking: '...少女思考中', streamingTextWriting: '...少女编写中' };
 }
 
 function emptyFetchedModelsDialog(): FetchedModelsDialogState {
@@ -144,7 +151,6 @@ function createDefaultProviderConfig(name = '新渠道配置', provider: LlmProv
     retryOnError: DEFAULT_LLM_RETRY_ON_ERROR,
     retryMaxAttempts: DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     contextWindowTokens: providerDefaultContextWindow(provider),
-    proxy: '',
     headers: {},
     generationConfig: {},
     requestBody: {},
@@ -161,7 +167,6 @@ function normalizeProviderConfigForUi(config: LlmProviderConfigRecord): LlmProvi
     provider,
     model,
     models: normalizeModelsForUi(config.models, model),
-    proxy: config.proxy ?? '',
     stream: config.stream !== false,
     retryOnError: config.retryOnError !== false,
     retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
@@ -403,7 +408,6 @@ function toPlainProviderConfig(config: LlmProviderConfigRecord): LlmProviderConf
     retryOnError: config.retryOnError !== false,
     retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     ...(normalizeTokenCount(config.contextWindowTokens) ? { contextWindowTokens: normalizeTokenCount(config.contextWindowTokens) } : {}),
-    ...(config.proxy?.trim() ? { proxy: config.proxy.trim() } : {}),
     ...(sanitizeHeaders(config.headers) ? { headers: sanitizeHeaders(config.headers) } : {}),
     ...(sanitizeGenerationConfig(config.generationConfig) ? { generationConfig: sanitizeGenerationConfig(config.generationConfig) } : {}),
     ...(sanitizeRequestBody(config.requestBody) ? { requestBody: sanitizeRequestBody(config.requestBody) } : {}),
@@ -546,6 +550,7 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
     llmCompression: emptyLlmCompression(),
     llmCompressionConfigs: emptyLlmCompressionConfigs(),
     checkpointMaintenance: emptyCheckpointMaintenance(),
+    appearance: emptyAppearance(),
     filePaths: {},
     pendingActiveProviderConfigIdAfterConfigsSave: '',
     loadedSections: {},
@@ -611,6 +616,7 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
         section: 'common',
         settings: {
           dataFilePath: this.common.dataFilePath,
+          proxy: this.common.proxy,
           activeDataRootPath: this.common.activeDataRootPath,
           defaultDataRootPath: this.common.defaultDataRootPath
         }
@@ -648,6 +654,23 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
           autoCleanupDays: this.checkpointMaintenance.autoCleanupDays,
           autoDismissEnabled: this.checkpointMaintenance.autoDismissEnabled,
           autoDismissSeconds: this.checkpointMaintenance.autoDismissSeconds
+        }
+      });
+    },
+    ensureAppearance(): void {
+      if (this.loadedSections.appearance || this.loadingSettingsSections.appearance) return;
+      this.markLoadingSettingSection('appearance');
+      bridge.request(BridgeMessageType.GlobalSettingsGet, { section: 'appearance' });
+    },
+    saveAppearance(): void {
+      this.markPendingSettingSection('appearance');
+      this.status = '正在保存外观设置...';
+      bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
+        section: 'appearance',
+        settings: {
+          streamingTextWaiting: this.appearance.streamingTextWaiting,
+          streamingTextThinking: this.appearance.streamingTextThinking,
+          streamingTextWriting: this.appearance.streamingTextWriting
         }
       });
     },
@@ -1038,6 +1061,8 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
         this.llmCompressionConfigs = { configs: settings.configs.map((config) => normalizeCompressionConfigForUi(config)) };
       } else if (payload.section === 'checkpointMaintenance') {
         this.checkpointMaintenance = { ...emptyCheckpointMaintenance(), ...(payload.settings as CheckpointMaintenanceSettingsRecord) };
+      } else if (payload.section === 'appearance') {
+        this.appearance = { ...emptyAppearance(), ...(payload.settings as AppearanceSettingsRecord) };
       } else {
         this.common = payload.settings as GlobalSettingsRecord;
       }

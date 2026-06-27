@@ -88,6 +88,19 @@ const invocationGenerationConfigJson = computed(() => selectedInvocationSettings
 const invocationRequestBodyJson = computed(() => selectedInvocationSettings.value?.requestBody ? stringifyJson(selectedInvocationSettings.value.requestBody) : '');
 const invocationHeadersJson = computed(() => selectedInvocationSettings.value?.headers ? stringifyJson(selectedInvocationSettings.value.headers) : '');
 const invocationUsageJson = computed(() => selectedInvocation.value?.usageMetadata ? stringifyJson(selectedInvocation.value.usageMetadata) : '');
+const invocationTimeToFirstTokenMs = computed(() => {
+  const inv = selectedInvocation.value;
+  if (!inv?.startedAt || !inv?.completedAt) return undefined;
+  const total = inv.completedAt - inv.startedAt;
+  const stream = inv.streamOutputDurationMs ?? 0;
+  return total >= stream ? total - stream : undefined;
+});
+const invocationTotalDurationMs = computed(() => {
+  const inv = selectedInvocation.value;
+  if (!inv?.startedAt || !inv?.completedAt) return undefined;
+  const total = inv.completedAt - inv.startedAt;
+  return total >= 0 ? total : undefined;
+});
 const selectedToolCallIdentity = computed(() => {
   const message = selectedMessage.value;
   const ids = new Set<string>();
@@ -566,6 +579,9 @@ function sensitiveHeader(headers: Record<string, string> | undefined): { name: s
                     <div><dt>创建时间</dt><dd>{{ formatTime(selectedInvocation.createdAt) }}</dd></div>
                     <div><dt>开始时间</dt><dd>{{ formatTime(selectedInvocation.startedAt) }}</dd></div>
                     <div><dt>完成时间</dt><dd>{{ formatTime(selectedInvocation.completedAt) }}</dd></div>
+                    <div><dt>输出耗时</dt><dd>{{ selectedInvocation.streamOutputDurationMs !== undefined ? formatDuration(selectedInvocation.streamOutputDurationMs) : '—' }}</dd></div>
+                    <div><dt>首字用时</dt><dd>{{ invocationTimeToFirstTokenMs !== undefined ? formatDuration(invocationTimeToFirstTokenMs) : '—' }}</dd></div>
+                    <div><dt>总耗时</dt><dd>{{ invocationTotalDurationMs !== undefined ? formatDuration(invocationTotalDurationMs) : '—' }}</dd></div>
                   </dl>
                   <div v-if="invocationGenerationConfigJson" class="run-detail-tool-json-block">
                     <span>Generation Config</span>
@@ -678,6 +694,8 @@ function sensitiveHeader(headers: Record<string, string> | undefined): { name: s
                   <div><dt>开始时间</dt><dd>{{ formatTime(selectedInvocation.startedAt) }}</dd></div>
                   <div><dt>完成时间</dt><dd>{{ formatTime(selectedInvocation.completedAt) }}</dd></div>
                   <div><dt>输出耗时</dt><dd>{{ selectedInvocation.streamOutputDurationMs !== undefined ? formatDuration(selectedInvocation.streamOutputDurationMs) : '—' }}</dd></div>
+                  <div><dt>首字用时</dt><dd>{{ invocationTimeToFirstTokenMs !== undefined ? formatDuration(invocationTimeToFirstTokenMs) : '—' }}</dd></div>
+                  <div><dt>总耗时</dt><dd>{{ invocationTotalDurationMs !== undefined ? formatDuration(invocationTotalDurationMs) : '—' }}</dd></div>
                 </dl>
                 <div v-if="invocationGenerationConfigJson" class="run-detail-tool-json-block">
                   <span>Generation Config</span>

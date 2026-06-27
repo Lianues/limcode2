@@ -67,6 +67,7 @@ export interface MessageData {
   status: MsgStatus;
   seq: number;
   createdAt: number;
+  requestStartedAt?: number;
   streamOutputDurationMs?: number;
   usageMetadata?: LlmUsageMetadataRecord;
   stopReason?: MessageStopReason;

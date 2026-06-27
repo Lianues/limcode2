@@ -1239,6 +1239,7 @@ export interface MessageRecord {
   content: MessageContent;
   status: MsgStatus;
   createdAt: number;
+  requestStartedAt?: number;
   streamOutputDurationMs?: number;
   usageMetadata?: LlmUsageMetadataRecord;
   stopReason?: MessageStopReason;

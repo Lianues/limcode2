@@ -322,13 +322,13 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
       case 'error':
         errorMessage = operation.payload.message;
         emitTransientNotice(world, cmd, requestId, requestData, next, 'error', operation.payload);
-        next = withLlmTiming({ ...next, status: 'error' }, operation.payload);
+        next = withLlmTiming({ ...next, status: 'error' }, operation.payload, nextInvocation?.startedAt);
         nextInvocation = markInvocationError(nextInvocation, operation.payload.message, operation.payload);
         shouldFinish = true;
         break;
       case 'done':
         usageMetadata = operation.payload.usageMetadata;
-        next = withLlmTiming({ ...next, status: 'complete' }, operation.payload);
+        next = withLlmTiming({ ...next, status: 'complete' }, operation.payload, nextInvocation?.startedAt);
         nextInvocation = markInvocationComplete(nextInvocation, operation.payload);
         shouldFinish = true;
         break;
@@ -405,9 +405,10 @@ function emitTransientNotice(
 }
 
 function resetMessageForRetry(message: MessageData): MessageData {
-  const { usageMetadata: _usageMetadata, streamOutputDurationMs: _streamOutputDurationMs, stopReason: _stopReason, ...rest } = message;
+  const { usageMetadata: _usageMetadata, streamOutputDurationMs: _streamOutputDurationMs, requestStartedAt: _requestStartedAt, stopReason: _stopReason, ...rest } = message;
   void _usageMetadata;
   void _streamOutputDurationMs;
+  void _requestStartedAt;
   void _stopReason;
   return {
     ...rest,
@@ -466,11 +467,12 @@ function markInvocationError(invocation: LlmInvocationData | undefined, message:
   };
 }
 
-function withLlmTiming(message: MessageData, update: LlmDonePayload | LlmErrorPayload): MessageData {
+function withLlmTiming(message: MessageData, update: LlmDonePayload | LlmErrorPayload, startedAt?: number): MessageData {
   return {
     ...message,
     ...(update.createdAt !== undefined ? { createdAt: update.createdAt } : {}),
     ...(update.streamOutputDurationMs !== undefined ? { streamOutputDurationMs: update.streamOutputDurationMs } : {}),
+    ...(startedAt !== undefined ? { requestStartedAt: startedAt } : {}),
     ...('usageMetadata' in update && update.usageMetadata !== undefined ? { usageMetadata: update.usageMetadata } : {})
   };
 }

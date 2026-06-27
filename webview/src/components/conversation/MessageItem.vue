@@ -9,6 +9,7 @@ import {
   IconCopy,
   IconEdit,
   IconEye,
+  IconHourglassEmpty,
   IconHash,
   IconRefresh,
   IconTrash
@@ -55,7 +56,7 @@ const roleLabel = computed(() => {
   const model = props.message.model?.trim();
   return model || 'AI';
 });
-type RunMetricKey = 'time' | 'duration' | 'speed';
+type RunMetricKey = 'time' | 'ttft' | 'total' | 'speed';
 interface RunMetricDetailItem {
   label: string;
   value: string;
@@ -152,23 +153,42 @@ const runMetricItems = computed<RunMetricItem[]>(() => {
     return [timeMetric].filter((item): item is RunMetricItem => item !== undefined);
   }
 
-  const durationMs = normalizeDurationMs(props.message.streamOutputDurationMs);
+  const streamDurationMs = normalizeDurationMs(props.message.streamOutputDurationMs);
+  const requestStartedAt = normalizeTimestamp(props.message.requestStartedAt);
+  const firstChunkAt = normalizeTimestamp(props.message.createdAt);
+  const ttftMs = requestStartedAt !== undefined && firstChunkAt !== undefined && firstChunkAt >= requestStartedAt
+    ? firstChunkAt - requestStartedAt
+    : undefined;
+  const totalMs = ttftMs !== undefined ? ttftMs + (streamDurationMs ?? 0) : undefined;
   const outputTokens = props.message.usageMetadata
     ? normalizeTokenUsage(props.message.usageMetadata).output
     : undefined;
-  const tokenSpeed = durationMs !== undefined && durationMs > 0 && outputTokens !== undefined
-    ? outputTokens / (durationMs / 1000)
+  const tokenSpeed = streamDurationMs !== undefined && streamDurationMs > 0 && outputTokens !== undefined
+    ? outputTokens / (streamDurationMs / 1000)
     : undefined;
 
   const items: Array<RunMetricItem | undefined> = [
     timeMetric,
-    durationMs !== undefined
+    ttftMs !== undefined
       ? {
-          key: 'duration' as const,
-          label: '耗时',
-          value: formatDurationMs(durationMs),
-          tooltipTitle: '总输出耗时',
-          details: [{ label: '总耗时', value: formatDurationMs(durationMs) }]
+          key: 'ttft' as const,
+          label: '首字',
+          value: formatDurationMs(ttftMs),
+          tooltipTitle: '首字用时',
+          details: [{ label: '首字用时', value: formatDurationMs(ttftMs) }]
+        }
+      : undefined,
+    totalMs !== undefined
+      ? {
+          key: 'total' as const,
+          label: '总耗',
+          value: formatDurationMs(totalMs),
+          tooltipTitle: '总耗时',
+          details: [
+            { label: '总耗时', value: formatDurationMs(totalMs) },
+            ...(ttftMs !== undefined ? [{ label: '首字用时', value: formatDurationMs(ttftMs) }] : []),
+            ...(streamDurationMs !== undefined ? [{ label: '输出耗时', value: formatDurationMs(streamDurationMs) }] : [])
+          ]
         }
       : undefined,
     tokenSpeed !== undefined
@@ -179,7 +199,7 @@ const runMetricItems = computed<RunMetricItem[]>(() => {
           tooltipTitle: '输出 token 速度（含思考）',
           details: [
             { label: '输出 token（含思考）', value: formatExactNumber(outputTokens!) },
-            { label: '总耗时', value: formatDurationMs(durationMs!) },
+            { label: '输出耗时', value: formatDurationMs(streamDurationMs!) },
             { label: '速度', value: formatTokenSpeedExact(tokenSpeed) }
           ]
         }
@@ -744,7 +764,8 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
               :rows="metric.details"
               tabindex="0"
             >
-              <IconClock v-if="metric.key === 'duration'" class="message-run-metric-icon" stroke="2" aria-hidden="true" />
+              <IconHourglassEmpty v-if="metric.key === 'ttft'" class="message-run-metric-icon" stroke="2" aria-hidden="true" />
+              <IconClock v-else-if="metric.key === 'total'" class="message-run-metric-icon" stroke="2" aria-hidden="true" />
               <IconBolt v-else-if="metric.key === 'speed'" class="message-run-metric-icon" stroke="2" aria-hidden="true" />
               <span class="message-run-metric-value">{{ metric.value }}</span>
             </HoverTooltipPanel>

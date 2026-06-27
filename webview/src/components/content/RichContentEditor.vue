@@ -17,6 +17,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   (event: 'update:modelValue', value: string): void;
   (event: 'submit'): void;
+  (event: 'paste-files', files: File[]): void;
 }>();
 
 const textarea = ref<HTMLTextAreaElement | null>(null);
@@ -38,6 +39,27 @@ function onKeydown(event: KeyboardEvent): void {
     event.preventDefault();
     emit('submit');
   }
+}
+
+function onPaste(event: ClipboardEvent): void {
+  const files = collectPastedFiles(event.clipboardData);
+  if (files.length > 0) {
+    event.preventDefault();
+    emit('paste-files', files);
+  }
+}
+
+function collectPastedFiles(data: DataTransfer | null): File[] {
+  if (!data) return [];
+  const files: File[] = [];
+  for (const item of Array.from(data.items)) {
+    if (item.kind === 'file') {
+      const file = item.getAsFile();
+      if (file) files.push(file);
+    }
+  }
+  if (files.length > 0) return files;
+  return Array.from(data.files ?? []);
 }
 
 function queueScrollbarRefresh(): void {
@@ -64,6 +86,7 @@ defineExpose({ focus });
       :disabled="disabled"
       @keydown="onKeydown"
       @input="queueScrollbarRefresh"
+      @paste="onPaste"
     ></textarea>
     <AdvancedScrollbar
       class="rich-editor-scrollbar"

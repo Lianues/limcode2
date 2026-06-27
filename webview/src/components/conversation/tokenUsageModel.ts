@@ -20,6 +20,7 @@ export interface NormalizedTokenUsage {
   output?: number;
   reasoning?: number;
   cached?: number;
+  attachmentTokens?: number;
   totalEstimated?: boolean;
   sourceEstimated?: boolean;
 }
@@ -42,6 +43,7 @@ export interface TokenUsageMessageEntry {
   reasoning?: number;
   tool?: number;
   cached?: number;
+  attachmentTokens?: number;
   totalEstimated: boolean;
   sourceEstimated: boolean;
   fixedRatio?: boolean;
@@ -97,6 +99,7 @@ export function normalizeTokenUsage(usage: LlmUsageMetadataRecord): NormalizedTo
   const reasoning = usageNumber(usage, REASONING_TOKEN_KEYS);
   const cached = usageNumber(usage, CACHED_TOKEN_KEYS);
   const explicitTotal = usageNumber(usage, TOTAL_TOKEN_KEYS);
+  const attachmentTokens = normalizeTokenNumber(usage.attachmentTokenEstimate);
   const output = outputTokensIncludingReasoning(input, rawOutput, reasoning, explicitTotal);
   const fallbackTotal = explicitTotal === undefined ? sumDefined([input, output]) : undefined;
   const sourceEstimated = usage.estimated === true || usage.tokenEstimator === 'tokenx';
@@ -107,6 +110,7 @@ export function normalizeTokenUsage(usage: LlmUsageMetadataRecord): NormalizedTo
     ...(output !== undefined ? { output } : {}),
     ...(reasoning !== undefined ? { reasoning } : {}),
     ...(cached !== undefined ? { cached } : {}),
+    ...(attachmentTokens !== undefined && attachmentTokens > 0 ? { attachmentTokens } : {}),
     ...(sourceEstimated ? { sourceEstimated: true } : {})
   };
 }
@@ -156,6 +160,7 @@ function messageUsageEntry(message: MessageRecord, floorNumber: number, usage: N
     ...(usageParts.output !== undefined ? { output: usageParts.output } : {}),
     ...(usageParts.reasoning !== undefined ? { reasoning: usageParts.reasoning } : {}),
     ...(usageParts.tool !== undefined ? { tool: usageParts.tool } : {}),
+    ...(usage.attachmentTokens !== undefined ? { attachmentTokens: usage.attachmentTokens } : {}),
     totalEstimated: usage.totalEstimated === true,
     sourceEstimated: usage.sourceEstimated === true
   };
@@ -237,3 +242,4 @@ function sumDefined(values: Array<number | undefined>): number | undefined {
 function formatScaledNumber(value: number, scale: number): string {
   return (value / scale).toFixed(1).replace(/\.0$/, '');
 }
+

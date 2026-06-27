@@ -1,6 +1,7 @@
 import { estimateTokenCount } from 'tokenx';
 import { defineBundle, type CommandSink, type Entity } from '../../../ecs/types';
-import type { ContentPart, ContentRole, LlmUsageMetadataRecord, MessageContent, MessageRevisionReason, MsgRole, MsgStatus } from '../../../../shared/protocol';
+import type { ContentPart, ContentRole, InlineDataPart, LlmUsageMetadataRecord, MessageContent, MessageRevisionReason, MsgRole, MsgStatus } from '../../../../shared/protocol';
+import { isInlineDataPart } from '../../../../shared/protocol';
 import {
   Conversation,
   ConversationBranchLink,
@@ -123,11 +124,8 @@ export function spawnUserMessage(cmd: CommandSink, conversation: Entity, text: s
 }
 
 export function spawnUserContentMessage(cmd: CommandSink, conversation: Entity, content: MessageContent): Entity {
-  const visibleText = content.parts.map((part) => {
-    if ('text' in part && part.thought !== true) return part.text;
-    return '';
-  }).join('\n');
-  return spawnMessage(cmd, { parent: conversation, role: 'user', parts: content.parts, status: 'complete', usageMetadata: estimateUserInputUsage(visibleText) });
+  const usageMetadata = estimateUserContentUsage(content);
+  return spawnMessage(cmd, { parent: conversation, role: 'user', parts: content.parts, status: 'complete', usageMetadata });
 }
 
 export function estimateUserInputUsage(text: string): LlmUsageMetadataRecord | undefined {
@@ -135,6 +133,77 @@ export function estimateUserInputUsage(text: string): LlmUsageMetadataRecord | u
   if (!Number.isFinite(estimated) || estimated <= 0) return undefined;
   return { promptTokenCount: estimated, totalTokenCount: estimated, estimated: true, tokenEstimator: 'tokenx' };
 }
+
+export function estimateUserContentUsage(content: MessageContent): LlmUsageMetadataRecord | undefined {
+  const visibleText = content.parts.map((part) => {
+    if ('text' in part && part.thought !== true) return part.text;
+    return '';
+  }).join('\n');
+  const textTokens = estimateTokenCount(visibleText);
+  const attachmentTokens = estimateAttachmentTokens(content.parts);
+  const total = textTokens + attachmentTokens;
+  if (!Number.isFinite(total) || total <= 0) return undefined;
+  return {
+    promptTokenCount: total,
+    totalTokenCount: total,
+    estimated: true,
+    tokenEstimator: 'tokenx',
+    ...(attachmentTokens > 0 ? { attachmentTokenEstimate: attachmentTokens } : {})
+  };
+}
+
+function estimateAttachmentTokens(parts: ContentPart[]): number {
+  let total = 0;
+  for (const part of parts) {
+    if (!isInlineDataPart(part)) continue;
+    total += estimateMultimodalTokens(part);
+  }
+  return total;
+}
+
+function estimateMultimodalTokens(part: InlineDataPart): number {
+  const { mimeType, data, sizeBytes } = part.inlineData;
+  const rawBytes = resolveRawBytes(data, sizeBytes);
+  if (rawBytes <= 0) return 0;
+
+  if (mimeType.startsWith('image/')) return estimateImageTokens(rawBytes);
+  if (mimeType.startsWith('audio/')) return estimateAudioTokens(rawBytes);
+  if (mimeType.startsWith('video/')) return estimateVideoTokens(rawBytes);
+  return estimateDocumentTokens(rawBytes);
+}
+
+function resolveRawBytes(data: string | undefined, sizeBytes: number | undefined): number {
+  if (sizeBytes !== undefined && sizeBytes > 0) return sizeBytes;
+  if (data && data.length > 0) return Math.ceil((data.length * 3) / 4);
+  return 0;
+}
+
+function estimateImageTokens(rawBytes: number): number {
+  const smallThreshold = 100 * 1024;
+  if (rawBytes < smallThreshold) return 258;
+  const tileSize = 300 * 1024;
+  const tiles = Math.ceil(rawBytes / tileSize);
+  return tiles * 258;
+}
+
+function estimateAudioTokens(rawBytes: number): number {
+  const bytesPerSecond = 16 * 1024;
+  const seconds = rawBytes / bytesPerSecond;
+  return Math.max(32, Math.ceil(seconds) * 32);
+}
+
+function estimateVideoTokens(rawBytes: number): number {
+  const bytesPerSecond = 256 * 1024;
+  const seconds = rawBytes / bytesPerSecond;
+  return Math.max(263, Math.ceil(seconds) * 263);
+}
+
+function estimateDocumentTokens(rawBytes: number): number {
+  const bytesPerPage = 100 * 1024;
+  const pages = Math.max(1, Math.ceil(rawBytes / bytesPerPage));
+  return pages * 258;
+}
+
 
 export function cloneMessageToConversation(cmd: CommandSink, conversation: Entity, message: MessageData, overrideContent?: MessageContent): Entity {
   return spawnMessage(cmd, { parent: conversation, role: message.role, model: message.model, parts: overrideContent?.parts ?? message.content.parts, status: message.status === 'streaming' ? 'error' : message.status, usageMetadata: message.usageMetadata, revisionReason: 'created' });

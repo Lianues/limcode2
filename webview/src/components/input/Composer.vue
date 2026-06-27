@@ -172,10 +172,18 @@ function submit(): void {
 
 function openFilePicker(): void { fileInput.value?.click(); }
 
+async function onPasteFiles(files: File[]): Promise<void> {
+  await addFilesAsAttachments(files);
+}
+
 async function onAttachmentFilesChange(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement | null;
   const files = [...(input?.files ?? [])];
   if (input) input.value = '';
+  await addFilesAsAttachments(files);
+}
+
+async function addFilesAsAttachments(files: File[]): Promise<void> {
   for (const file of files) {
     if (file.size > attachmentLimitBytes.value) {
       globalSettings.status = `附件 ${file.name} 超过 ${globalSettings.attachments.maxStoredInlineFileMb || 20}MB，未添加。`;
@@ -425,6 +433,7 @@ function middleEllipsis(value: string, maxLength: number): string {
           :disabled="disabled"
           :rows="5"
           @submit="submit"
+          @paste-files="onPasteFiles"
         />
       </div>
       <div class="composer-zone composer-zone-right" aria-label="输入框右侧功能区">

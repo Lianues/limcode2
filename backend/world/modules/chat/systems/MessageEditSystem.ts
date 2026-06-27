@@ -28,7 +28,7 @@ import {
   MessageBundle,
   spawnConversation,
   spawnConversationBranchLink,
-  estimateUserInputUsage,
+  estimateUserContentUsage,
   spawnMessageRevision,
   spawnUserMessage,
   UserMessageBundle
@@ -102,7 +102,7 @@ export const MessageEditSystem = defineSystem({
       }
       const oldRevision = currentRevisionForMessage(world, message);
       for (const link of currentRevisionLinksForMessage(world, message)) cmd.remove(link, MessageCurrentRevisionLink);
-      const usageMetadata = current.role === 'user' ? estimateUserInputUsage(visibleText(content)) : current.usageMetadata;
+      const usageMetadata = current.role === 'user' ? estimateUserContentUsage(content) : current.usageMetadata;
       cmd.add(message, Message, { ...current, content, status: 'complete', usageMetadata });
       const newRevision = spawnMessageRevision(cmd, message, content, 'edited');
       applySourceEditedPolicies(world, cmd, { message, conversation, oldRevision, newRevision, content });
@@ -182,12 +182,6 @@ function requestCheckpointAfterEdit(cmd: CommandSink, conversationId: string, fl
   });
 }
 
-function visibleText(content: MessageContent): string {
-  return content.parts.map((part) => {
-    if ('text' in part && part.thought !== true) return part.text;
-    return '';
-  }).join('\n');
-}
 
 function spawnEditedMessageRun(world: WorldReader, cmd: CommandSink, conversation: Entity, message: Entity): void {
   const agent = defaultAgentForConversation(world, conversation);

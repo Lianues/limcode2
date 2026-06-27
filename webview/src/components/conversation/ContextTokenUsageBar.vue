@@ -289,6 +289,7 @@ function tokenDetailTooltipRows(item: TokenUsageMessageEntry): TooltipPanelRow[]
     tokenTooltipRow('思考 token', item.reasoning),
     tokenTooltipRow('输出 token（含思考）', item.output),
     tokenTooltipRow('工具 token', item.tool),
+    tokenTooltipRow('附件 token（预估）', item.attachmentTokens),
     tokenTooltipRow('输入 token', item.input)
   ].filter((row): row is TooltipPanelRow => row !== undefined);
 }
@@ -302,6 +303,7 @@ function optionalTokenRows(item: TokenUsageMessageEntry): string[] {
     tokenRow('思考', item.reasoning),
     tokenRow('输出（含思考）', item.output),
     tokenRow('工具', item.tool),
+    tokenRow('附件（预估）', item.attachmentTokens),
     tokenRow('输入', item.input)
   ].filter((row): row is string => row !== undefined);
 }

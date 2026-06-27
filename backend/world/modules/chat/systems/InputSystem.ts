@@ -1,7 +1,7 @@
 import { defineQuery, defineSystem, type Entity, type WorldReader, type CommandSink } from '../../../../ecs/types';
 import { ChatEventType } from '../events';
 import { readEvents } from '../../../events';
-import { Aborted, Conversation, LlmRequest, Message, Streaming } from '../components';
+import { Conversation, LlmRequest, Message, Streaming } from '../components';
 import { UserMessageBundle } from '../bundles';
 import { Agent, AgentConversationLink, ConversationAgentSelection } from '../../agent/components';
 import { AgentRun, AgentRunNeedsModel, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink } from '../../agentRun/components';
@@ -27,9 +27,7 @@ export const InputSystem = defineSystem({
   name: 'InputSystem',
   access: {
     queries: [ConversationsByIdQuery],
-    events: { read: [ChatEventType.Send, ChatEventType.Abort], emit: [CheckpointEventType.Requested] },
-    effects: { emit: ['llm.abort'] },
-    writes: { components: [Aborted] },
+    events: { read: [ChatEventType.Send], emit: [CheckpointEventType.Requested] },
     bundles: [UserMessageBundle, AgentRunBundle]
   },
   run(ctx) {
@@ -38,11 +36,6 @@ export const InputSystem = defineSystem({
       const conversation = findConversation(world, payload.conversationId);
       if (conversation === undefined) continue;
       handleSend(world, cmd, conversation, payload);
-    }
-
-    for (const payload of readEvents(ctx, ChatEventType.Abort)) {
-      const conversation = findConversation(world, payload.conversationId);
-      if (conversation !== undefined) cmd.add(conversation, Aborted, true);
     }
   }
 });

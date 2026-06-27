@@ -35,7 +35,6 @@ import {
   PartOf
 } from '../world/modules/chat/components';
 import type { MessageData } from '../world/modules/chat/components';
-import { ChatEventType } from '../world/modules/chat/events';
 import {
   AgentRun,
   AgentRunInputRevision,
@@ -358,7 +357,6 @@ export class BackendApplication {
     const entity = this.findConversationEntity(conversationId);
     if (entity === undefined) return false;
 
-    this.world.enqueue({ type: ChatEventType.Abort, payload: { conversationId } });
     this.world.enqueue({ type: AgentRunEventType.CancelConversation, payload: { conversationId, reason: 'sidebar_abort' } });
     this.requestSnapshot();
     this.requestSnapshot(conversationId);

@@ -10,8 +10,8 @@
 
   /* 流式状态文字波浪动画。 */
   --lc-streaming-wave-duration: 1.6s;
-  --lc-streaming-wave-color-waiting: var(--vscode-testing-iconQueued, #888);
-  --lc-streaming-wave-color-thinking: var(--vscode-editorWarning-foreground, #cca700);
+  --lc-streaming-wave-color-waiting: var(--vscode-editorWarning-foreground, #cca700);
+  --lc-streaming-wave-color-thinking: #58a6ff;
   --lc-streaming-wave-color-writing: var(--vscode-testing-iconPassedColor, #4caf50);
 }
 

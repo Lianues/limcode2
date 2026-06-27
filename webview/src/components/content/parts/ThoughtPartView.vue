@@ -76,8 +76,11 @@ function formatThoughtDuration(durationMs: number): string {
       <span class="thought-tail">{{ tailText }}</span>
     </template>
 
-    <pre class="thought-content">{{ displayedText }}<StreamingIndicatorTail v-if="streaming" :text="globalSettings.appearance.streamingTextThinking" variant="thinking" /></pre>
+    <div class="thought-content">
+      <pre>{{ displayedText }}</pre>
+    </div>
   </CollapsibleContentBlock>
+  <div v-if="streaming" class="thought-streaming-row"><StreamingIndicatorTail :text="globalSettings.appearance.streamingTextThinking" variant="thinking" /></div>
 </template>
 
 <style scoped>
@@ -114,5 +117,14 @@ function formatThoughtDuration(durationMs: number): string {
   font: inherit;
   font-style: italic;
   line-height: 1.5;
+}
+
+.thought-content > pre {
+  margin: 0;
+}
+
+.thought-streaming-row {
+  margin-top: 4px;
+  font-style: italic;
 }
 </style>

@@ -35,7 +35,7 @@ onMounted(() => {
         <input
           v-model="settings.appearance.streamingTextWaiting"
           type="text"
-          placeholder="...少女响应中"
+          placeholder="...少女等待中"
         />
         <small class="appearance-field-hint">AI 收到请求后、尚未输出任何内容时显示</small>
       </label>

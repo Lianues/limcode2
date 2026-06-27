@@ -78,7 +78,7 @@ export function normalizeCheckpointMaintenanceSettings(input: Partial<Checkpoint
   };
 }
 
-export const DEFAULT_APPEARANCE_STREAMING_TEXT_WAITING = '...少女响应中';
+export const DEFAULT_APPEARANCE_STREAMING_TEXT_WAITING = '...少女等待中';
 export const DEFAULT_APPEARANCE_STREAMING_TEXT_THINKING = '...少女思考中';
 export const DEFAULT_APPEARANCE_STREAMING_TEXT_WRITING = '...少女编写中';
 

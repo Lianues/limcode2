@@ -110,7 +110,7 @@ function emptyCheckpointMaintenance(): CheckpointMaintenanceSettingsRecord {
 }
 
 function emptyAppearance(): AppearanceSettingsRecord {
-  return { streamingTextWaiting: '...少女响应中', streamingTextThinking: '...少女思考中', streamingTextWriting: '...少女编写中' };
+  return { streamingTextWaiting: '...少女等待中', streamingTextThinking: '...少女思考中', streamingTextWriting: '...少女编写中' };
 }
 
 function emptyFetchedModelsDialog(): FetchedModelsDialogState {

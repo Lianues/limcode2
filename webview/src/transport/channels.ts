@@ -56,6 +56,7 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
     case BridgeMessageType.EditToolStatisticsGet:
     case BridgeMessageType.ClientResync:
     case BridgeMessageType.ConversationTimelinePageGet:
+    case BridgeMessageType.FsStatGet:
     case BridgeMessageType.ProjectFoldersGet:
     case BridgeMessageType.RunHistoryPageGet:
     case BridgeMessageType.RunHistoryDetailGet:

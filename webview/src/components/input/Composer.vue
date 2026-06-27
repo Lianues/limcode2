@@ -448,16 +448,6 @@ function middleEllipsis(value: string, maxLength: number): string {
         <button
           type="button"
           class="composer-side-action"
-          aria-label="添加附件"
-          title="添加图片、PDF、文本、音频或视频附件"
-          :disabled="disabled"
-          @click="openFilePicker"
-        >
-          <IconPaperclip class="composer-side-action-icon" stroke="2" aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          class="composer-side-action"
           :aria-label="expandTitle"
           :aria-pressed="editorExpanded"
           :title="expandTitle"
@@ -499,6 +489,16 @@ function middleEllipsis(value: string, maxLength: number): string {
             <path d="M15 18l-3 -3l-3 3" />
             <path d="M12 15v6" />
           </svg>
+        </button>
+        <button
+          type="button"
+          class="composer-side-action"
+          aria-label="添加附件"
+          title="添加图片、PDF、文本、音频或视频附件"
+          :disabled="disabled"
+          @click="openFilePicker"
+        >
+          <IconPaperclip class="composer-side-action-icon" stroke="2" aria-hidden="true" />
         </button>
         <button
           v-if="runSummary.isRunning"

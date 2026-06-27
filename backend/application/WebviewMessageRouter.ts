@@ -38,6 +38,8 @@ import {
   type AttachmentOpenPayload,
   type AttachmentReloadPayload,
   type ContentPart,
+  type FsStatGetPayload,
+  type FsStatResultEntry,
   type ConversationTimelinePageRequest,
   type LlmInvocationSettingsSnapshotRecord,
   type MessageContent,
@@ -486,9 +488,24 @@ export class WebviewMessageRouter {
       case BridgeMessageType.ShowInfo:
         if (message.payload?.message) void vscode.window.showInformationMessage(message.payload.message);
         break;
+      case BridgeMessageType.FsStatGet:
+        if (message.payload) void this.postFsStatResult(clientId, message.payload, message.id);
+        break;
       default:
         break;
     }
+  }
+
+  private async postFsStatResult(clientId: BridgeClientId, payload: FsStatGetPayload, correlationId: string): Promise<void> {
+    const resolvedPaths = resolveDroppedPaths(payload.paths ?? []);
+    const results = await Promise.all(resolvedPaths.map((path) => statPath(path)));
+    this.deps.webview.post(clientId, {
+      id: createMessageId(),
+      type: BridgeMessageType.FsStatResult,
+      channel: 'control',
+      correlationId,
+      payload: { results }
+    });
   }
 
   private async enqueueAfterConversationLoaded(conversationId: string, action: () => void): Promise<void> {
@@ -1013,6 +1030,139 @@ function renderSummaryPart(part: ContentPart): string {
 function safeStringifyJson(value: unknown): string {
   try { return JSON.stringify(value); } catch { return String(value); }
 }
+
+async function statPath(path: string): Promise<FsStatResultEntry> {
+  try {
+    const uri = vscode.Uri.file(path);
+    const stat = await vscode.workspace.fs.stat(uri);
+    const isDirectory = (stat.type & vscode.FileType.Directory) !== 0;
+    return { path: normalizePath(path), isDirectory, exists: true };
+  } catch {
+    return { path: normalizePath(path), isDirectory: false, exists: false };
+  }
+}
+
+/**
+ * 从 webview 拖拽数据中解析出去重的绝对路径。
+ *
+ * webview 传来的 paths 是 dataTransfer 各 type 的原始 getData 结果，
+ * 可能包含 file:// URI、VS Code 内部 JSON payload、纯文本路径等。
+ * 这里统一提取出绝对路径并去重。
+ */
+function resolveDroppedPaths(rawValues: readonly string[]): string[] {
+  const candidates: string[] = [];
+  for (const raw of rawValues) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    collectPathsFromPayload(trimmed, candidates);
+  }
+  return uniquePaths(candidates);
+}
+
+function collectPathsFromPayload(value: string, output: string[]): void {
+  if (value.startsWith('{') || value.startsWith('[')) {
+    try {
+      collectPathsFromJson(JSON.parse(value), output, 0);
+      return;
+    } catch {
+      collectEmbeddedUris(value, output);
+      return;
+    }
+  }
+  if (value.startsWith('"')) {
+    try {
+      const parsed = JSON.parse(value);
+      if (typeof parsed === 'string') {
+        output.push(parsed);
+        return;
+      }
+    } catch {
+      // fall through
+    }
+  }
+  for (const line of value.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    output.push(trimmed);
+  }
+}
+
+function collectPathsFromJson(value: unknown, output: string[], depth: number): void {
+  if (depth > 8 || value === null || value === undefined) return;
+  if (typeof value === 'string') {
+    output.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectPathsFromJson(item, output, depth + 1);
+    return;
+  }
+  if (typeof value !== 'object') return;
+  const record = value as Record<string, unknown>;
+  const scheme = typeof record.scheme === 'string' ? record.scheme : undefined;
+  const path = typeof record.path === 'string' ? record.path : undefined;
+  if (scheme && path) {
+    output.push(path);
+  }
+  for (const key of ['fsPath', 'path', 'resource', 'uri', 'external', 'file', 'target', 'originalResource']) {
+    if (key in record) collectPathsFromJson(record[key], output, depth + 1);
+  }
+}
+
+function collectEmbeddedUris(value: string, output: string[]): void {
+  for (const match of value.matchAll(/(?:file|vscode-remote|vscode-vfs):\/\/[^"'\]\},\s]+/gi)) {
+    output.push(match[0]);
+  }
+  for (const match of value.matchAll(/"(?:fsPath|path|uri)"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/gi)) {
+    try {
+      output.push(JSON.parse(`"${match[1]}"`) as string);
+    } catch {
+      if (match[1]) output.push(match[1]);
+    }
+  }
+}
+
+function uniquePaths(paths: readonly string[]): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of paths) {
+    const normalized = normalizePath(raw);
+    if (!normalized || !looksLikeAbsolutePath(normalized)) continue;
+    const key = normalized.replace(/\/+$/, '').toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function normalizePath(value: string): string {
+  let path = value.trim();
+  // file:// URI → path
+  if (/^file:\/\//i.test(path)) {
+    try {
+      path = decodeURIComponent(new URL(path).pathname);
+    } catch {
+      path = decodeURIComponent(path.replace(/^file:\/\//i, ''));
+    }
+  }
+  // /f:/... → f:/...
+  path = path.replace(/^\/([A-Za-z]:[\\/])/, '$1');
+  // f://... → f:/...
+  path = path.replace(/^([A-Za-z]):?\/\/(.+)$/, (_m, drive: string, rest: string) => `${drive.toUpperCase()}:/${rest.replace(/^\/+/, '')}`);
+  // 统一为正斜杠
+  path = path.replace(/\\/g, '/');
+  // 去掉多余斜杠（保留 drive 冒号后的一个）
+  path = path.replace(/^([A-Za-z]:)\/+/, '$1/').replace(/\/{2,}/g, '/');
+  // 去掉尾部斜杠
+  path = path.replace(/\/+$/, '');
+  return path;
+}
+
+function looksLikeAbsolutePath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || /^\\\\/.test(value) || /^\//.test(value);
+}
+
 
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {

@@ -175,7 +175,9 @@ export enum BridgeMessageType {
   CompressionUpdate = 'compression.update',
   CompressionRegenerate = 'compression.regenerate',
   CompressionDisable = 'compression.disable',
-  CompressionEnable = 'compression.enable'
+  CompressionEnable = 'compression.enable',
+  FsStatGet = 'fs.stat.get',
+  FsStatResult = 'fs.stat.result'
 }
 
 export interface BridgeEnvelope<TType extends string = string, TPayload = unknown> {
@@ -204,6 +206,20 @@ export interface BridgeAckPayload {
 export interface WorkspaceInfo {
   name: string;
   folders: string[];
+}
+
+export interface FsStatGetPayload {
+  paths: string[];
+}
+
+export interface FsStatResultPayload {
+  results: FsStatResultEntry[];
+}
+
+export interface FsStatResultEntry {
+  path: string;
+  isDirectory: boolean;
+  exists: boolean;
 }
 
 export interface SidebarConversationHistoryEntry {
@@ -2332,7 +2348,8 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.WorkEnvironmentRemove, WorkEnvironmentRemovePayload>
   | BridgeEnvelope<BridgeMessageType.WorkEnvironmentImportFromVscode, WorkEnvironmentImportFromVscodePayload>
   | BridgeEnvelope<BridgeMessageType.WorkEnvironmentPolicyScopeSet, WorkEnvironmentPolicyScopeSetPayload>
-  | BridgeEnvelope<BridgeMessageType.WorkEnvironmentPolicyScopeClear, WorkEnvironmentPolicyScopeClearPayload>;
+  | BridgeEnvelope<BridgeMessageType.WorkEnvironmentPolicyScopeClear, WorkEnvironmentPolicyScopeClearPayload>
+  | BridgeEnvelope<BridgeMessageType.FsStatGet, FsStatGetPayload>;
 
 export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.Hello, BridgeHelloPayload>
@@ -2357,7 +2374,8 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.EditToolStatisticsSnapshot, EditToolStatisticsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsSnapshot, GlobalSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsSnapshot, ConversationSettingsSnapshotPayload>
-  | BridgeEnvelope<BridgeMessageType.ProjectFoldersSnapshot, ProjectFoldersSnapshotPayload>;
+  | BridgeEnvelope<BridgeMessageType.ProjectFoldersSnapshot, ProjectFoldersSnapshotPayload>
+  | BridgeEnvelope<BridgeMessageType.FsStatResult, FsStatResultPayload>;
 
 export function createMessageId(): MessageId {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;

@@ -73,6 +73,7 @@ const inputSections = computed(() => toolDisplay.value.inputSections);
 const outputSections = computed(() => toolDisplay.value.outputSections);
 const toolIcon = computed(() => toolDisplay.value.headerIcon ?? IconTool);
 const headerActions = computed(() => toolDisplay.value.headerActions);
+const headerPreview = computed(() => toolDisplay.value.headerPreview);
 const hasArgs = computed(() => inputSections.value.length > 0);
 const hasOutput = computed(() => outputSections.value.length > 0);
 const executionApproved = computed(() => isExecutionApprovedProgress(toolCall.value?.progress));
@@ -254,7 +255,17 @@ function isInternalApprovalProgress(progress: unknown): boolean {
     </template>
     <template #summary>
       <span class="part-card-name" :class="{ 'has-summary': summaryLabel }">{{ part.functionCall.name }}</span>
-      <span v-if="summaryDisplay" class="part-card-summary" :title="summaryLabel">
+      <span v-if="headerPreview" class="part-card-summary is-preview" :title="headerPreview.filePath">
+        <span class="part-card-summary-main">{{ headerPreview.fileName }}</span>
+        <span
+          v-if="(headerPreview.added ?? 0) > 0 || (headerPreview.removed ?? 0) > 0"
+          class="part-card-diff-stats"
+        >
+          <span v-if="(headerPreview.added ?? 0) > 0" class="diff-stat-add">+{{ headerPreview.added }}</span>
+          <span v-if="(headerPreview.removed ?? 0) > 0" class="diff-stat-del">-{{ headerPreview.removed }}</span>
+        </span>
+      </span>
+      <span v-else-if="summaryDisplay" class="part-card-summary" :title="summaryLabel">
         <span class="part-card-summary-main">{{ summaryDisplay.main }}</span>
         <span v-if="summaryDisplay.suffix" class="part-card-summary-suffix">{{ summaryDisplay.suffix }}</span>
       </span>
@@ -437,6 +448,29 @@ function isInternalApprovalProgress(progress: unknown): boolean {
   margin-left: 4px;
   font-style: italic;
   opacity: 0.82;
+}
+
+.part-card-summary.is-preview {
+  gap: 0;
+}
+
+.part-card-diff-stats {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  flex: 0 0 auto;
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+  font-size: var(--font-size-xs);
+}
+
+.diff-stat-add {
+  color: var(--vscode-gitDecoration-addedResourceForeground, #73c991);
+}
+
+.diff-stat-del {
+  color: var(--vscode-gitDecoration-deletedResourceForeground, #f14c4c);
 }
 
 .tool-call-card :deep(.lc-collapsible-actions) {

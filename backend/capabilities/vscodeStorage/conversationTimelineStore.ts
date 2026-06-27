@@ -21,6 +21,7 @@ import { INDEX_FILE, STORAGE_VERSION } from './constants';
 import { createVscodeStoragePaths } from './paths';
 import { readJson, writeJson } from './json';
 import { BUILTIN_TIMELINE_PROJECTIONS, type ConversationTimelineChunkData, type TimelineProjectionSpec } from './timelineProjections';
+import { externalizeClientStateAttachments, markClientStateAttachmentsForClient } from './attachmentStore';
 
 export type StoragePaths = ReturnType<typeof createVscodeStoragePaths>;
 
@@ -153,6 +154,7 @@ export async function loadConversationTimelineDetail(paths: StoragePaths, conver
     }
   }
   sortConversationTimelineDetail(state);
+  markClientStateAttachmentsForClient(state);
   return state;
 }
 
@@ -184,6 +186,7 @@ export async function loadConversationTimelinePage(paths: StoragePaths, request:
     state.checkpointTimelineAnchors.push(...chunk.checkpointTimelineAnchors);
   }
   sortConversationTimelineDetail(state);
+  markClientStateAttachmentsForClient(state);
 
   const projections: Record<string, TimelineProjectionContextRecord> = {};
   const projectionChunk = selected[0];
@@ -221,10 +224,13 @@ export async function loadConversationMessagesByIds(paths: StoragePaths, convers
   const allRecords = await normalizeTimelineChunkIndexRecords(root, index.chunks);
   const records = allRecords.filter((chunk) => chunk.messageIds.some((id) => wanted.has(id)));
   const chunks = await Promise.all(records.map((chunk) => readConversationTimelineChunk(root, chunk)));
-  return chunks
+  const messages = chunks
     .flatMap((chunk) => chunk?.messages ?? [])
     .filter((message) => wanted.has(message.id))
     .sort(compareMessagesBySeq);
+  const state = createEmptyClientState();
+  state.messages = messages;
+  return markClientStateAttachmentsForClient(state).messages;
 }
 export async function loadConversationTimelineRange(paths: StoragePaths, request: {
   conversationId: string;
@@ -256,6 +262,7 @@ export async function loadConversationTimelineRange(paths: StoragePaths, request
     state.checkpointTimelineAnchors.push(...chunk.checkpointTimelineAnchors);
   }
   sortConversationTimelineDetail(state);
+  markClientStateAttachmentsForClient(state);
   return state;
 }
 
@@ -441,6 +448,7 @@ function yieldToExtensionHost(): Promise<void> {
 
 export async function saveConversationTimelineDetail(paths: StoragePaths, conversationId: string, detail: ClientState): Promise<void> {
   const savedAt = new Date().toISOString();
+  const storageDetail = await externalizeClientStateAttachments(paths, detail);
   const root = conversationTimelineRoot(paths, conversationId);
   const previousIndex = await readJson<ConversationTimelineIndexFile>(vscode.Uri.joinPath(root, INDEX_FILE));
   const previousFiles = isConversationTimelineIndex(previousIndex, conversationId)
@@ -453,8 +461,8 @@ export async function saveConversationTimelineDetail(paths: StoragePaths, conver
     vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(root, CONVERSATION_TIMELINE_PROJECTIONS_DIR))
   ]);
 
-  sortConversationTimelineDetail(detail);
-  const chunks = conversationTimelineChunks(detail);
+  sortConversationTimelineDetail(storageDetail);
+  const chunks = conversationTimelineChunks(storageDetail);
   const indexChunks: ConversationTimelineChunkIndexRecord[] = [];
   const projectionStates = createProjectionRuntimeStates(BUILTIN_TIMELINE_PROJECTIONS);
 

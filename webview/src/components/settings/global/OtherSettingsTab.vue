@@ -4,7 +4,12 @@ import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
 
 const settings = useGlobalSettingsStore();
-const { loading: otherLoading, text: otherLoadingText } = useSettingsLoadingText('其他设置', 'global', undefined, { globalSettingsSections: ['common'] as const });
+const { loading: otherLoading, text: otherLoadingText } = useSettingsLoadingText('其他设置', 'global', undefined, { globalSettingsSections: ['common', 'attachments'] as const });
+
+function inputNumber(event: Event): number {
+  const target = event.target as HTMLInputElement | null;
+  return Number(target?.value ?? 20);
+}
 </script>
 
 <template>
@@ -27,6 +32,11 @@ const { loading: otherLoading, text: otherLoadingText } = useSettingsLoadingText
     <label class="global-settings-field">
       <span>数据目录路径（留空使用 VS Code 默认目录；保存后只迁移并删除旧目录中已注册的插件数据目录）</span>
       <input v-model="settings.common.dataFilePath" type="text" placeholder="例如：D:/limcode/data" />
+    </label>
+
+    <label class="global-settings-field">
+      <span>聊天多模态附件保存阈值（MB，默认 20；超过阈值的本地路径附件仅保留路径并在发送时动态读取）</span>
+      <input :value="settings.attachments.maxStoredInlineFileMb" type="number" min="1" max="200" step="1" @change="settings.setAttachmentSettings({ maxStoredInlineFileMb: inputNumber($event) })" />
     </label>
 
     <div class="global-settings-actions">

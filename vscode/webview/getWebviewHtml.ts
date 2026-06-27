@@ -70,6 +70,7 @@ function createContentSecurityPolicy(
   return [
     `default-src 'none';`,
     `img-src ${webview.cspSource} https: data:${devHttpSourceList};`,
+    `media-src ${webview.cspSource} data:${devHttpSourceList};`,
     `font-src ${webview.cspSource}${devHttpSourceList};`,
     `style-src ${webview.cspSource}${devHttpSourceList} 'unsafe-inline';`,
     `script-src 'nonce-${nonce}' ${webview.cspSource}${devHttpSourceList};`,

@@ -6,6 +6,7 @@ import type {
   ToolDefinitionMetadataRecord,
   ToolDefinitionRecord,
   ToolExecutionKind,
+  InlineDataPart,
   WorkEnvironmentRecord
 } from '../../../../shared/protocol';
 import type { ToolSchedulingResolver } from './scheduling';
@@ -20,6 +21,7 @@ export interface ToolDeps {
 export interface ToolResultOut {
   ok: boolean;
   output: unknown;
+  parts?: InlineDataPart[];
   status?: 'success' | 'warning';
 }
 

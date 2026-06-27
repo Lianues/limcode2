@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import {
   GLOBAL_SETTINGS_SECTIONS,
+  type AttachmentSettingsRecord,
   type AppearanceSettingsRecord,
   createMessageId,
   DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS,
@@ -54,6 +55,8 @@ interface GlobalSettingsState {
   checkpointMaintenance: CheckpointMaintenanceSettingsRecord;
   /** 外观：自定义流式状态文字。 */
   appearance: AppearanceSettingsRecord;
+  /** 附件：控制 base64 小附件托管阈值。 */
+  attachments: AttachmentSettingsRecord;
   /** 各 section 的来源文件路径，用于在 UI 展示。 */
   filePaths: Partial<Record<GlobalSettingsSection, string>>;
   /** 等待 llmProviderConfigs 保存完成后再持久化的 active provider id，避免 active id 先于新配置到达后端。 */
@@ -111,6 +114,10 @@ function emptyCheckpointMaintenance(): CheckpointMaintenanceSettingsRecord {
 
 function emptyAppearance(): AppearanceSettingsRecord {
   return { streamingTextWaiting: '...少女等待中', streamingTextThinking: '...少女思考中', streamingTextWriting: '...少女编写中' };
+}
+
+function emptyAttachments(): AttachmentSettingsRecord {
+  return { maxStoredInlineFileMb: 20 };
 }
 
 function emptyFetchedModelsDialog(): FetchedModelsDialogState {
@@ -551,6 +558,7 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
     llmCompressionConfigs: emptyLlmCompressionConfigs(),
     checkpointMaintenance: emptyCheckpointMaintenance(),
     appearance: emptyAppearance(),
+    attachments: emptyAttachments(),
     filePaths: {},
     pendingActiveProviderConfigIdAfterConfigsSave: '',
     loadedSections: {},
@@ -671,6 +679,27 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
           streamingTextWaiting: this.appearance.streamingTextWaiting,
           streamingTextThinking: this.appearance.streamingTextThinking,
           streamingTextWriting: this.appearance.streamingTextWriting
+        }
+      });
+    },
+    ensureAttachments(): void {
+      if (this.loadedSections.attachments || this.loadingSettingsSections.attachments) return;
+      this.markLoadingSettingSection('attachments');
+      bridge.request(BridgeMessageType.GlobalSettingsGet, { section: 'attachments' });
+    },
+    setAttachmentSettings(patch: Partial<AttachmentSettingsRecord>): void {
+      const next = { ...this.attachments, ...patch };
+      next.maxStoredInlineFileMb = Math.min(200, Math.max(1, Math.floor(Number(next.maxStoredInlineFileMb) || 20)));
+      this.attachments = next;
+      this.saveAttachments();
+    },
+    saveAttachments(): void {
+      this.markPendingSettingSection('attachments');
+      this.status = '正在保存附件设置...';
+      bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
+        section: 'attachments',
+        settings: {
+          maxStoredInlineFileMb: this.attachments.maxStoredInlineFileMb
         }
       });
     },
@@ -1063,6 +1092,8 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
         this.checkpointMaintenance = { ...emptyCheckpointMaintenance(), ...(payload.settings as CheckpointMaintenanceSettingsRecord) };
       } else if (payload.section === 'appearance') {
         this.appearance = { ...emptyAppearance(), ...(payload.settings as AppearanceSettingsRecord) };
+      } else if (payload.section === 'attachments') {
+        this.attachments = { ...emptyAttachments(), ...(payload.settings as AttachmentSettingsRecord) };
       } else {
         this.common = payload.settings as GlobalSettingsRecord;
       }

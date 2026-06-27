@@ -42,7 +42,7 @@ export function registerToolEffectHandlers(registry: EffectHandlerRegistry): voi
 }
 
 function toToolStatePayload(toolCallId: string, result: ToolResultOut, durationMs: number): ToolStatePayload {
-  const response = { ok: result.ok, output: result.output };
+  const response = { ok: result.ok, output: result.output, ...(result.parts?.length ? { parts: result.parts } : {}) };
   if (result.ok) {
     const status = result.status === 'warning' ? 'warning' : 'success';
     return { toolCallId, status, result: response, durationMs };

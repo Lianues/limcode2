@@ -7,6 +7,7 @@ import type {
   FsEditFileResult,
   FsFileChangeRecord,
   FsDeletePathTargetType,
+  FsReadBinaryFileResult,
   FsReadFileResult,
   FsReadLine,
   FsWriteFileResult,
@@ -41,6 +42,7 @@ interface RawTextReadResult {
 export function createVsCodeFsCapability(): FsCapability {
   return {
     readFile: (path, startLine, endLine, options) => readWorkspaceTextFile(path, startLine, endLine, options),
+    readBinaryFile: (path, mimeType, options) => readWorkspaceBinaryFile(path, mimeType, options),
     writeFile: (path, content, options) => writeWorkspaceTextFile(path, content, options),
     editFile: (request, options) => editWorkspaceTextFile(request, options),
     deletePath: (path, options) => deleteWorkspacePath(path, options)
@@ -70,6 +72,30 @@ export async function readWorkspaceTextFile(relPath: string, startLine?: number,
     totalLines: fileLines.length,
     lines: selectedLines,
     content: selectedLines.map((line) => `${line.line} ${line.text}`).join('\n')
+  };
+}
+
+export async function readWorkspaceBinaryFile(relPath: string, mimeType: string, options: WorkEnvironmentCapabilityOptions = {}): Promise<FsReadBinaryFileResult> {
+  if (isRemoteServerCommandEnvironment(options.workEnvironment)) {
+    throw new Error('当前远程工作环境暂不支持二进制附件读取。');
+  }
+
+  const normalizedPath = normalizeDisplayPath(relPath);
+  if (!normalizedPath) throw new Error('Missing required argument: path');
+  const normalizedMimeType = typeof mimeType === 'string' && mimeType.trim() ? mimeType.trim() : 'application/octet-stream';
+  const uri = resolveWorkspacePath(normalizedPath, options, 'read');
+  const stat = await workspaceFileStat(uri);
+  if (!stat) throw new Error(`File not found: ${normalizedPath}`);
+  if (stat.type !== vscode.FileType.File) throw new Error(`Not a file: ${normalizedPath}`);
+  const maxBytes = 200 * 1024 * 1024;
+  if (stat.size > maxBytes) throw new Error(`File too large: ${stat.size} bytes (limit ${maxBytes}).`);
+  const data = await vscode.workspace.fs.readFile(uri);
+  return {
+    path: uri.fsPath || normalizedPath,
+    name: path.basename(uri.fsPath || normalizedPath),
+    mimeType: normalizedMimeType,
+    data: Buffer.from(data).toString('base64'),
+    sizeBytes: data.byteLength
   };
 }
 

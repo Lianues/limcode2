@@ -4,6 +4,7 @@ import {
   AGENT_CONVERSATION_LINKS_ROOT_DIR,
   AGENTS_ROOT_DIR,
   CONVERSATION_HISTORY_ROOT_DIR,
+  ATTACHMENTS_ROOT_DIR,
   CONVERSATION_AGENT_SELECTIONS_ROOT_DIR,
   CONVERSATION_MODE_SELECTIONS_ROOT_DIR,
   CONVERSATIONS_ROOT_DIR,
@@ -74,6 +75,8 @@ export interface VscodeStorageUris {
   conversationsIndexUri: vscode.Uri;
   conversationHistoryRootUri: vscode.Uri;
   conversationHistoryIndexUri: vscode.Uri;
+  attachmentsRootUri: vscode.Uri;
+  attachmentsIndexUri: vscode.Uri;
   projectContextsRootUri: vscode.Uri;
   projectContextsIndexUri: vscode.Uri;
   conversationProjectLinksRootUri: vscode.Uri;
@@ -152,6 +155,7 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const modelProfiles = root(globalStorageUri, MODEL_PROFILES_ROOT_DIR);
   const conversations = root(globalStorageUri, CONVERSATIONS_ROOT_DIR);
   const conversationHistory = root(globalStorageUri, CONVERSATION_HISTORY_ROOT_DIR);
+  const attachments = root(globalStorageUri, ATTACHMENTS_ROOT_DIR);
   const projectContexts = root(globalStorageUri, PROJECT_CONTEXTS_ROOT_DIR);
   const conversationProjectLinks = root(globalStorageUri, CONVERSATION_PROJECT_LINKS_ROOT_DIR);
   const workEnvironments = root(globalStorageUri, WORK_ENVIRONMENTS_ROOT_DIR);
@@ -238,6 +242,10 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     conversationHistoryRootPath: conversationHistory.rootUri.fsPath,
     conversationHistoryIndexUri: conversationHistory.indexUri,
     conversationHistoryIndexPath: conversationHistory.indexUri.fsPath,
+    attachmentsRootUri: attachments.rootUri,
+    attachmentsRootPath: attachments.rootUri.fsPath,
+    attachmentsIndexUri: attachments.indexUri,
+    attachmentsIndexPath: attachments.indexUri.fsPath,
     projectContextsRootUri: projectContexts.rootUri,
     projectContextsRootPath: projectContexts.rootUri.fsPath,
     projectContextsIndexUri: projectContexts.indexUri,

@@ -74,11 +74,19 @@ export interface ToolHeaderAction {
   invoke(): void;
 }
 
+export interface ToolHeaderPreview {
+  fileName: string;
+  filePath?: string;
+  added?: number;
+  removed?: number;
+}
+
 export interface ToolDisplayResult {
   inputSections: ToolDisplaySection[];
   outputSections: ToolDisplaySection[];
   headerIcon?: Component;
   headerActions: ToolHeaderAction[];
+  headerPreview?: ToolHeaderPreview;
 }
 
 export type ToolDisplayResolver = (context: ToolDisplayContext) => Partial<ToolDisplayResult> | undefined;

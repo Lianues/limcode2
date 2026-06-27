@@ -11,9 +11,9 @@ export function useChat() {
   function sendMessage(text: string, content?: MessageContent): boolean {
     const conversationId = clientState.currentConversationId;
     const trimmed = text.trim();
-    if (!trimmed || !conversationId) return false;
+    if ((!trimmed && !content?.parts?.length) || !conversationId) return false;
     const agentId = agentStore.activeAgentForConversation(conversationId)?.id;
-    const payload = { conversationId, text: trimmed, ...(content ? { content } : {}), ...(agentId ? { agentId } : {}) };
+    const payload = { conversationId, text: trimmed, ...(content?.parts?.length ? { content } : {}), ...(agentId ? { agentId } : {}) };
     bridge.request(BridgeMessageType.ChatSend, payload);
     return true;
   }
@@ -99,8 +99,8 @@ export function useChat() {
   function updateQueueInput(runId: string, text: string, content?: MessageContent): boolean {
     const conversationId = clientState.currentConversationId;
     const trimmed = text.trim();
-    if (!conversationId || !runId || !trimmed) return false;
-    bridge.request(BridgeMessageType.QueueInputUpdate, { conversationId, runId, text: trimmed, ...(content ? { content } : {}) });
+    if (!conversationId || !runId || (!trimmed && !content?.parts?.length)) return false;
+    bridge.request(BridgeMessageType.QueueInputUpdate, { conversationId, runId, text: trimmed, ...(content?.parts?.length ? { content } : {}) });
     return true;
   }
 

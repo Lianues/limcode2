@@ -24,6 +24,7 @@ import {
 } from '../../shared/protocol';
 import type {
   ContentPart,
+  InlineDataPart,
   LlmCompressionConfigRecord,
   LlmGenerationConfigRecord,
   LlmInvocationSettingsSnapshotRecord,
@@ -78,6 +79,7 @@ export interface LlmProviderOptions {
   activeCompressionSettings?: (conversationId?: string) => LlmCompressionConfigRecord | undefined | Promise<LlmCompressionConfigRecord | undefined>;
 
   headers?: MaybeProvider<Record<string, string>>;
+  resolveAttachment?: (input: { attachmentId?: string; sourcePath?: string; mimeType?: string; name?: string }) => Promise<InlineDataPart | undefined>;
 }
 interface RetryControl {
   cancelRequested: boolean;
@@ -206,7 +208,7 @@ export async function startLlmProvider(
 
     while (true) {
       try {
-        await runLlmAttempt(request, emit, settings, provider, signal);
+        await runLlmAttempt(request, emit, settings, provider, options, signal);
         if (sawRetry) {
           emitLlmRetryRecovered(emit, request.id, '自动重试成功。', retryCount, maxRetries);
         }
@@ -268,10 +270,12 @@ async function runLlmAttempt(
     chat<T>(request: unknown, options: { inputFormat: 'unified'; outputFormat: 'unified'; signal?: AbortSignal }): Promise<T>;
     chatStream<T>(request: unknown, options: { inputFormat: 'unified'; outputFormat: 'unified'; signal?: AbortSignal }): AsyncIterable<T>;
   },
+  options: LlmProviderOptions,
   signal?: AbortSignal
 ): Promise<void> {
+  const preparedRequest = await prepareLlmStartRequestMultimodal(request, options);
   if (settings.stream === false) {
-    const response = await provider.chat<UnifiedLLMResponse>(toUnifiedRequest(request, settings.generationConfig), {
+    const response = await provider.chat<UnifiedLLMResponse>(toUnifiedRequest(preparedRequest, settings.generationConfig), {
       inputFormat: 'unified',
       outputFormat: 'unified',
       signal
@@ -292,7 +296,7 @@ async function runLlmAttempt(
   const timing: LlmAttemptTimingState = { streamTimingChunkCount: 0 };
   let activeThoughtBlock: ActiveThoughtBlock | undefined;
   try {
-    for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(toUnifiedRequest(request, settings.generationConfig), {
+    for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(toUnifiedRequest(preparedRequest, settings.generationConfig), {
       inputFormat: 'unified',
       outputFormat: 'unified',
       signal
@@ -516,7 +520,8 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
     throw new Error('当前 unified-llm-provider 版本不支持 provider.dryRun，请更新依赖。');
   }
 
-  const result = await dryRun.call(provider, toUnifiedRequest(request, runtimeSettings.generationConfig), {
+  const preparedRequest = await prepareLlmStartRequestMultimodal(request, options);
+  const result = await dryRun.call(provider, toUnifiedRequest(preparedRequest, runtimeSettings.generationConfig), {
     inputFormat: 'unified',
     outputFormat: 'unified',
     stream: runtimeSettings.stream !== false,
@@ -802,11 +807,21 @@ function fromUnifiedPart(part: UnifiedPart): ContentPart | undefined {
   }
   const response = record.functionResponse;
   if (isRecord(response) && typeof response.name === 'string') {
-    return { id: typeof response.callId === 'string' ? response.callId : undefined, functionResponse: { name: response.name, response: response.response ?? {} } };
+    const parts = Array.isArray(response.parts)
+      ? response.parts.map(fromUnifiedPart).filter((part): part is InlineDataPart => !!part && isInlineDataPart(part))
+      : [];
+    return {
+      id: typeof response.callId === 'string' ? response.callId : undefined,
+      functionResponse: {
+        name: response.name,
+        response: response.response ?? {},
+        ...(parts.length > 0 ? { parts } : {})
+      }
+    };
   }
   const inlineData = record.inlineData;
   if (isRecord(inlineData) && typeof inlineData.mimeType === 'string' && typeof inlineData.data === 'string') {
-    return { inlineData: { mimeType: inlineData.mimeType, data: inlineData.data } };
+    return { inlineData: { mimeType: inlineData.mimeType, data: inlineData.data, ...(typeof inlineData.name === 'string' ? { name: inlineData.name } : {}) } };
   }
   return undefined;
 }
@@ -985,6 +1000,78 @@ function nonEmptyRecord(value: unknown): value is Record<string, unknown> {
   return isRecord(value) && Object.keys(value).length > 0;
 }
 
+const TOOL_RESPONSE_MULTIMODAL_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'application/pdf', 'text/plain']);
+
+async function prepareLlmStartRequestMultimodal(request: LlmStartRequest, options: LlmProviderOptions): Promise<LlmStartRequest> {
+  const [contents, systemInstruction] = await Promise.all([
+    Promise.all(request.contents.map((content) => prepareLlmContentMultimodal(content, options, false))),
+    request.systemInstruction ? prepareLlmContentMultimodal(request.systemInstruction, options, false) : Promise.resolve(undefined)
+  ]);
+  return {
+    ...request,
+    contents,
+    ...(systemInstruction ? { systemInstruction } : {})
+  };
+}
+
+async function prepareLlmContentMultimodal(content: MessageContent, options: LlmProviderOptions, toolResponse: boolean): Promise<MessageContent> {
+  const parts = await Promise.all(content.parts.map((part) => prepareLlmPartMultimodal(part, options, toolResponse)));
+  return { ...content, parts: parts.flat() };
+}
+
+async function prepareLlmPartMultimodal(part: ContentPart, options: LlmProviderOptions, toolResponse: boolean): Promise<ContentPart[]> {
+  if (isInlineDataPart(part)) return [await prepareInlineDataForLlm(part, options, toolResponse)];
+  if (isFunctionResponsePart(part) && part.functionResponse.parts?.length) {
+    const prepared = await Promise.all(part.functionResponse.parts.map((inlinePart) => prepareInlineDataForLlm(inlinePart, options, true)));
+    const inlineParts = prepared.filter(isInlineDataPart).filter((inlinePart) => isSupportedToolResponseInlineData(inlinePart));
+    const placeholders = prepared.filter(isTextPart).map((textPart) => textPart.text).filter(Boolean);
+    return [{
+      ...part,
+      functionResponse: {
+        ...part.functionResponse,
+        response: placeholders.length > 0 ? withAttachmentPlaceholders(part.functionResponse.response, placeholders) : part.functionResponse.response,
+        ...(inlineParts.length > 0 ? { parts: inlineParts } : {})
+      }
+    }];
+  }
+  return [part];
+}
+
+async function prepareInlineDataForLlm(part: InlineDataPart, options: LlmProviderOptions, toolResponse: boolean): Promise<ContentPart> {
+  if (toolResponse && !isSupportedToolResponseInlineData(part)) return attachmentPlaceholderPart(part, '附件类型不在工具响应白名单中');
+  if (part.inlineData.data) return part;
+  const resolved = options.resolveAttachment
+    ? await options.resolveAttachment({
+      attachmentId: part.inlineData.attachmentId,
+      sourcePath: part.inlineData.sourcePath,
+      mimeType: part.inlineData.mimeType,
+      name: part.inlineData.name
+    })
+    : undefined;
+  if (resolved?.inlineData.data) return resolved;
+  return attachmentPlaceholderPart(part, resolved?.inlineData.error ?? '附件读取失败');
+}
+
+function isSupportedToolResponseInlineData(part: InlineDataPart): boolean {
+  return TOOL_RESPONSE_MULTIMODAL_MIME_TYPES.has(part.inlineData.mimeType);
+}
+
+function withAttachmentPlaceholders(response: unknown, placeholders: string[]): unknown {
+  const key = 'multimodalAttachmentPlaceholders';
+  if (isRecord(response)) {
+    const previous = Array.isArray(response[key]) ? response[key].filter((item): item is string => typeof item === 'string') : [];
+    return { ...response, [key]: [...previous, ...placeholders] };
+  }
+  return { response, [key]: placeholders };
+}
+
+function attachmentPlaceholderPart(part: InlineDataPart, reason: string): ContentPart {
+  const name = part.inlineData.name || part.inlineData.sourcePath || part.inlineData.attachmentId || '未命名附件';
+  return {
+    text: `[附件不可用: ${name}; mimeType=${part.inlineData.mimeType}; reason=${reason}]`
+  };
+}
+
 function toUnifiedRequest(request: LlmStartRequest, generationConfig?: LlmGenerationConfigRecord): UnifiedLLMRequest {
   return {
     contents: request.contents.map(toUnifiedContent),
@@ -1017,11 +1104,28 @@ function toUnifiedPart(part: ContentPart): UnifiedPart {
     };
   }
   if (isFunctionResponsePart(part)) {
-    return {
-      functionResponse: { name: part.functionResponse.name, response: asRecord(part.functionResponse.response), ...(part.id ? { callId: part.id } : {}) }
+    const functionResponse: Record<string, unknown> = {
+      name: part.functionResponse.name,
+      response: asRecord(part.functionResponse.response),
+      ...(part.id ? { callId: part.id } : {})
     };
+    const inlineParts = (part.functionResponse.parts ?? [])
+      .filter((inlinePart) => inlinePart.inlineData.data)
+      .map((inlinePart) => ({
+        inlineData: {
+          mimeType: inlinePart.inlineData.mimeType,
+          data: inlinePart.inlineData.data!,
+          ...(inlinePart.inlineData.name ? { name: inlinePart.inlineData.name } : {})
+        }
+      }));
+    if (inlineParts.length > 0) functionResponse.parts = inlineParts;
+    return {
+      functionResponse
+    } as unknown as UnifiedPart;
   }
-  if (isInlineDataPart(part)) return { inlineData: { mimeType: part.inlineData.mimeType, data: part.inlineData.data } };
+  if (isInlineDataPart(part)) return part.inlineData.data
+    ? { inlineData: { mimeType: part.inlineData.mimeType, data: part.inlineData.data, ...(part.inlineData.name ? { name: part.inlineData.name } : {}) } }
+    : { text: `[inlineData unavailable: ${part.inlineData.name ?? part.inlineData.attachmentId ?? part.inlineData.sourcePath ?? part.inlineData.mimeType}]` };
   if (isFileDataPart(part)) {
     // unified-llm-provider 当前统一 Part 没有 fileData；先作为文本占位保留语义。
     return { text: `[fileData:${part.fileData.mimeType ?? 'unknown'}:${part.fileData.uri}]` };

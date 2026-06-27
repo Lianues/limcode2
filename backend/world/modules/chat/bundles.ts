@@ -150,14 +150,14 @@ function contentRoleForMessage(role: MsgRole): ContentRole { return role; }
 
 export function spawnToolResponseMessage(
   cmd: CommandSink,
-  input: { conversation: Entity; toolCallId: string; toolName: string; status: 'success' | 'warning' | 'error'; response: unknown; durationMs?: number }
+  input: { conversation: Entity; toolCallId: string; toolName: string; status: 'success' | 'warning' | 'error'; response: unknown; parts?: Extract<ContentPart, { inlineData: unknown }>[]; durationMs?: number }
 ): Entity {
   return spawnMessage(cmd, {
     parent: input.conversation,
     role: 'user',
     parts: [{
       id: input.toolCallId,
-      functionResponse: { name: input.toolName, response: input.response },
+      functionResponse: { name: input.toolName, response: input.response, ...(input.parts?.length ? { parts: input.parts } : {}) },
       ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {})
     }],
     status: input.status === 'error' ? 'error' : 'complete'

@@ -20,6 +20,7 @@ export const CONVERSATION_MODE_SELECTIONS_ROOT_DIR = 'conversation-mode-selectio
 export const CONVERSATION_AGENT_SELECTIONS_ROOT_DIR = 'conversation-agent-selections';
 export const CONVERSATIONS_ROOT_DIR = 'conversations';
 export const CONVERSATION_HISTORY_ROOT_DIR = 'conversation-history';
+export const ATTACHMENTS_ROOT_DIR = 'attachments';
 export const PROJECT_CONTEXTS_ROOT_DIR = 'project-contexts';
 export const CONVERSATION_PROJECT_LINKS_ROOT_DIR = 'conversation-project-links';
 export const RUN_HISTORY_ROOT_DIR = 'run-history';
@@ -68,6 +69,7 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
   CONVERSATION_AGENT_SELECTIONS_ROOT_DIR,
   CONVERSATIONS_ROOT_DIR,
   CONVERSATION_HISTORY_ROOT_DIR,
+  ATTACHMENTS_ROOT_DIR,
   PROJECT_CONTEXTS_ROOT_DIR,
   CONVERSATION_PROJECT_LINKS_ROOT_DIR,
   RUN_HISTORY_ROOT_DIR,
@@ -98,3 +100,4 @@ export const LLM_SETTINGS_FILE = 'llm.json';
 export const LLM_COMPRESSION_SETTINGS_FILE = 'llm-compression.json';
 export const CHECKPOINT_MAINTENANCE_SETTINGS_FILE = 'checkpoint-maintenance.json';
 export const APPEARANCE_SETTINGS_FILE = 'appearance.json';
+export const ATTACHMENT_SETTINGS_FILE = 'attachments.json';

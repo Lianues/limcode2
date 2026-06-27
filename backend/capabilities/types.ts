@@ -65,6 +65,14 @@ export interface FsReadFileResult {
   content: string;
 }
 
+export interface FsReadBinaryFileResult {
+  path: string;
+  name: string;
+  mimeType: string;
+  data: string;
+  sizeBytes: number;
+}
+
 export interface FsFileDiffRecord {
   format: 'unified';
   text: string;
@@ -144,6 +152,7 @@ export interface FsEditFileResult {
 
 export interface FsCapability {
   readFile(path: string, startLine?: number, endLine?: number, options?: WorkEnvironmentCapabilityOptions): Promise<FsReadFileResult>;
+  readBinaryFile(path: string, mimeType: string, options?: WorkEnvironmentCapabilityOptions): Promise<FsReadBinaryFileResult>;
   writeFile(path: string, content: string, options?: WorkEnvironmentCapabilityOptions): Promise<FsWriteFileResult>;
   editFile(request: FsEditFileRequest, options?: WorkEnvironmentCapabilityOptions): Promise<FsEditFileResult>;
   deletePath(path: string, options?: WorkEnvironmentCapabilityOptions): Promise<FsDeletePathResult>;
@@ -339,6 +348,11 @@ export interface RuntimePaths {
   conversationHistoryRootPath: string;
   conversationHistoryIndexUri: vscode.Uri;
   conversationHistoryIndexPath: string;
+  /** 多模态小附件数据根目录：<dataRoot>/attachments */
+  attachmentsRootUri: vscode.Uri;
+  attachmentsRootPath: string;
+  attachmentsIndexUri: vscode.Uri;
+  attachmentsIndexPath: string;
   /** 项目路径上下文数据根目录：<dataRoot>/project-contexts */
   projectContextsRootUri: vscode.Uri;
   projectContextsRootPath: string;

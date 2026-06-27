@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { IconFolder, IconListDetails, IconPencilExclamation, IconPlayerStop, IconRobot, IconSend2, IconWorld } from '@tabler/icons-vue';
+import { IconFolder, IconListDetails, IconPaperclip, IconPencilExclamation, IconPlayerStop, IconRobot, IconSend2, IconTrash, IconWorld } from '@tabler/icons-vue';
 import { workEnvironmentDisplayPath, workEnvironmentSortKey as buildWorkEnvironmentSortKey } from '@shared/workEnvironmentCatalog';
-import type { MessageContent, WorkEnvironmentRecord } from '@shared/protocol';
+import type { InlineDataPart, MessageContent, WorkEnvironmentRecord } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
@@ -51,6 +51,7 @@ const agentDropdownCloseSignal = ref(0);
 const modeDropdownCloseSignal = ref(0);
 const channelDropdownCloseSignal = ref(0);
 const workEnvironmentDropdownCloseSignal = ref(0);
+const fileInput = ref<HTMLInputElement | null>(null);
 
 const draft = computed({
   get: () => ui.composerDraft,
@@ -122,6 +123,9 @@ const editorShellStyle = computed(() => {
     '--composer-expanded-editor-height': `${expandedEditorHeight.value}px`
   };
 });
+const selectedAttachments = ref<InlineDataPart[]>([]);
+const hasDraftContent = computed(() => draft.value.trim().length > 0 || selectedAttachments.value.length > 0);
+const attachmentLimitBytes = computed(() => Math.max(1, globalSettings.attachments.maxStoredInlineFileMb || 20) * 1024 * 1024);
 
 let highlightTimer: number | undefined;
 
@@ -135,6 +139,7 @@ watch(
 );
 
 onMounted(() => {
+  globalSettings.ensureAttachments();
   window.addEventListener('keydown', onWindowKeydown);
   window.addEventListener('resize', onWindowResize);
 });
@@ -158,9 +163,69 @@ function onWindowResize(): void {
 
 function submit(): void {
   const text = draft.value.trim();
-  if (!text || props.disabled) return;
-  emit('submit', text);
+  if ((!text && selectedAttachments.value.length === 0) || props.disabled) return;
+  const content = buildMessageContent(text, selectedAttachments.value);
+  emit('submit', text, content);
+  selectedAttachments.value = [];
   if (!ui.isEditing) ui.clearChatDraft();
+}
+
+function openFilePicker(): void { fileInput.value?.click(); }
+
+async function onAttachmentFilesChange(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement | null;
+  const files = [...(input?.files ?? [])];
+  if (input) input.value = '';
+  for (const file of files) {
+    if (file.size > attachmentLimitBytes.value) {
+      globalSettings.status = `附件 ${file.name} 超过 ${globalSettings.attachments.maxStoredInlineFileMb || 20}MB，未添加。`;
+      continue;
+    }
+    const mimeType = file.type || 'application/octet-stream';
+    const data = await readFileAsBase64(file);
+    selectedAttachments.value.push({ inlineData: { mimeType, data, name: file.name, storage: 'embedded', status: 'available', sizeBytes: file.size } });
+  }
+}
+
+function removeAttachment(index: number): void {
+  selectedAttachments.value.splice(index, 1);
+}
+
+function buildMessageContent(text: string, attachments: InlineDataPart[]): MessageContent | undefined {
+  if (attachments.length === 0) return undefined;
+  return {
+    role: 'user',
+    parts: [
+      ...(text ? [{ text }] : []),
+      ...attachments.map((part) => ({ inlineData: { ...part.inlineData } }))
+    ]
+  };
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error('读取附件失败'));
+    reader.onload = () => {
+      const value = typeof reader.result === 'string' ? reader.result : '';
+      resolve(value.replace(/^data:[^,]+,/, ''));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function attachmentDisplayName(part: InlineDataPart): string {
+  return part.inlineData.name || part.inlineData.mimeType;
+}
+
+function attachmentSizeLabel(part: InlineDataPart): string {
+  const bytes = part.inlineData.sizeBytes;
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(kb < 10 ? 1 : 0)} KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
 }
 
 function abortConversation(): void {
@@ -343,6 +408,15 @@ function middleEllipsis(value: string, maxLength: number): string {
     <div class="composer-input-row">
       <div class="composer-zone composer-zone-left" aria-label="输入框左侧功能区"></div>
       <div ref="editorShell" class="composer-editor-shell" :style="editorShellStyle">
+        <div v-if="selectedAttachments.length" class="composer-attachments" aria-label="已选择附件">
+          <span v-for="(attachment, index) in selectedAttachments" :key="`${attachment.inlineData.name}-${index}`" class="composer-attachment-chip">
+            <span class="composer-attachment-name">{{ attachmentDisplayName(attachment) }}</span>
+            <span v-if="attachmentSizeLabel(attachment)" class="composer-attachment-size">{{ attachmentSizeLabel(attachment) }}</span>
+            <button type="button" class="composer-attachment-remove" title="移除附件" @click="removeAttachment(index)">
+              <IconTrash stroke="2" aria-hidden="true" />
+            </button>
+          </span>
+        </div>
         <RichContentEditor
           ref="editor"
           v-model="draft"
@@ -354,6 +428,24 @@ function middleEllipsis(value: string, maxLength: number): string {
         />
       </div>
       <div class="composer-zone composer-zone-right" aria-label="输入框右侧功能区">
+        <input
+          ref="fileInput"
+          type="file"
+          class="composer-file-input"
+          multiple
+          accept="image/png,image/jpeg,image/webp,application/pdf,text/plain,audio/*,video/*"
+          @change="onAttachmentFilesChange"
+        />
+        <button
+          type="button"
+          class="composer-side-action"
+          aria-label="添加附件"
+          title="添加图片、PDF、文本、音频或视频附件"
+          :disabled="disabled"
+          @click="openFilePicker"
+        >
+          <IconPaperclip class="composer-side-action-icon" stroke="2" aria-hidden="true" />
+        </button>
         <button
           type="button"
           class="composer-side-action"
@@ -487,7 +579,7 @@ function middleEllipsis(value: string, maxLength: number): string {
       <button
         type="button"
         class="composer-send"
-        :disabled="disabled || !draft.trim()"
+        :disabled="disabled || !hasDraftContent"
         :aria-label="sendTitle"
         :title="sendTitle"
         @click="submit"
@@ -593,6 +685,68 @@ function middleEllipsis(value: string, maxLength: number): string {
   flex: 1;
   min-width: 0;
   display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.composer-file-input {
+  display: none;
+}
+
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.composer-attachment-chip {
+  max-width: min(260px, 100%);
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: var(--radius-sm);
+  color: var(--vscode-descriptionForeground);
+  background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground) 6%);
+  font-size: var(--font-size-xs);
+}
+
+.composer-attachment-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vscode-foreground);
+}
+
+.composer-attachment-size {
+  flex: 0 0 auto;
+}
+
+.composer-attachment-remove {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+}
+
+.composer-attachment-remove:hover,
+.composer-attachment-remove:focus-visible {
+  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--vscode-editor-background) 86%, var(--vscode-foreground) 14%);
+  outline: none;
+}
+
+.composer-attachment-remove svg {
+  width: 13px;
+  height: 13px;
 }
 
 .composer.is-editor-expanded .composer-editor-shell {

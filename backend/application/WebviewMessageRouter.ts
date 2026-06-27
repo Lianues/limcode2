@@ -35,6 +35,8 @@ import {
   type BridgeClientId,
   type CheckpointDiffOpenPayload,
   type CheckpointRestorePayload,
+  type AttachmentOpenPayload,
+  type AttachmentReloadPayload,
   type ContentPart,
   type ConversationTimelinePageRequest,
   type LlmInvocationSettingsSnapshotRecord,
@@ -44,6 +46,7 @@ import {
   type WebviewToExtensionMessage
 } from '../../shared/protocol';
 import { hydrateConversationDetail } from './clientStateHydration';
+import { materializeAttachmentFileUri, resolveAttachmentForClient } from '../capabilities/vscodeStorage/attachmentStore';
 
 import type { GlobalSettingsBridge } from './GlobalSettingsBridge';
 import type { ConversationSettingsBridge } from './ConversationSettingsBridge';
@@ -430,6 +433,12 @@ export class WebviewMessageRouter {
         break;
       case BridgeMessageType.CheckpointDiffOpen:
         if (message.payload) void this.handleCheckpointDiffOpen(clientId, message.payload, message.id);
+        break;
+      case BridgeMessageType.AttachmentOpen:
+        if (message.payload) void this.handleAttachmentOpen(clientId, message.payload, message.id);
+        break;
+      case BridgeMessageType.AttachmentReload:
+        if (message.payload) void this.postAttachmentReloadResult(clientId, message.payload, message.id);
         break;
       case BridgeMessageType.Ready:
         this.sendBridgeHello(clientId, message.id);
@@ -854,6 +863,37 @@ export class WebviewMessageRouter {
       channel: 'command',
       correlationId,
       payload: { checkpointId: payload.checkpointId, conversationId: payload.conversationId, filePath: payload.filePath, status: result.status, message: result.message }
+    });
+  }
+
+  private async handleAttachmentOpen(clientId: BridgeClientId, payload: AttachmentOpenPayload, correlationId?: string): Promise<void> {
+    try {
+      const uri = await materializeAttachmentFileUri(this.deps.storage.paths, payload);
+      if (!uri) {
+        this.postRequestError(clientId, BridgeMessageType.AttachmentOpen, '无法找到附件文件。', correlationId);
+        return;
+      }
+      await vscode.commands.executeCommand('vscode.open', uri, { preview: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '无法打开附件。';
+      this.postRequestError(clientId, BridgeMessageType.AttachmentOpen, message, correlationId);
+      void vscode.window.showWarningMessage(`LimCode ${message}`);
+    }
+  }
+
+  private async postAttachmentReloadResult(clientId: BridgeClientId, payload: AttachmentReloadPayload, correlationId?: string): Promise<void> {
+    const result = await resolveAttachmentForClient(this.deps.storage.paths, payload);
+    this.deps.webview.post(clientId, {
+      id: createMessageId(),
+      type: BridgeMessageType.AttachmentReloadResult,
+      channel: 'state',
+      correlationId,
+      payload: {
+        request: payload,
+        ...(result.part ? { part: result.part } : {}),
+        status: result.status,
+        ...(result.error ? { error: result.error } : {})
+      }
     });
   }
 

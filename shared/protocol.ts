@@ -21,7 +21,7 @@ export interface WebviewClientMeta {
 
 export const GLOBAL_CLIENT_STATE_STREAM_ID = 'global:state';
 export const GLOBAL_SETTINGS_STREAM_PREFIX = 'settings:global:';
-export const GLOBAL_SETTINGS_SECTIONS = ['common', 'llm', 'llmProviderConfigs', 'llmCompression', 'llmCompressionConfigs', 'checkpointMaintenance', 'appearance'] as const;
+export const GLOBAL_SETTINGS_SECTIONS = ['common', 'llm', 'llmProviderConfigs', 'llmCompression', 'llmCompressionConfigs', 'checkpointMaintenance', 'appearance', 'attachments'] as const;
 export type GlobalSettingsSection = typeof GLOBAL_SETTINGS_SECTIONS[number];
 
 export function globalSettingsStreamId(section: GlobalSettingsSection): string {
@@ -117,6 +117,9 @@ export enum BridgeMessageType {
   ToolResultSubmit = 'tool.result.submit',
   ToolResultReject = 'tool.result.reject',
   CheckpointDiffOpen = 'checkpoint.diff.open',
+  AttachmentOpen = 'attachment.open',
+  AttachmentReload = 'attachment.reload',
+  AttachmentReloadResult = 'attachment.reload.result',
   CheckpointDiffOpenResult = 'checkpoint.diff.open.result',
   EditToolStatisticsGet = 'editTool.statistics.get',
   EditToolStatisticsSnapshot = 'editTool.statistics.snapshot',
@@ -1189,12 +1192,42 @@ export interface FunctionResponsePart {
   functionResponse: {
     name: string;
     response: unknown;
+    parts?: InlineDataPart[];
   };
   durationMs?: number;
 }
 
+export type AttachmentStorageMode = 'embedded' | 'managed' | 'localPath';
+export type AttachmentAvailabilityStatus = 'available' | 'loading' | 'missing' | 'tooLarge' | 'unsupported' | 'failed';
+
+export interface AttachmentRecord {
+  id: string;
+  mimeType: string;
+  name?: string;
+  sizeBytes: number;
+  base64Bytes: number;
+  sha256: string;
+  blobFile: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface InlineDataPart {
-  inlineData: { mimeType: string; data: string };
+  inlineData: {
+    mimeType: string;
+    /** 运行时可用的纯 base64；持久化时小附件会外置到 attachments/blobs。 */
+    data?: string;
+    /** 原始文件名；OpenAI Responses input_file 会作为 filename 发送。 */
+    name?: string;
+    /** 托管附件 id，指向 <dataRoot>/attachments。 */
+    attachmentId?: string;
+    /** 超过托管阈值或用户选择本地引用时的源文件绝对路径。 */
+    sourcePath?: string;
+    storage?: AttachmentStorageMode;
+    status?: AttachmentAvailabilityStatus;
+    error?: string;
+    sizeBytes?: number;
+  };
 }
 
 export interface FileDataPart {
@@ -2103,6 +2136,10 @@ export interface CheckpointMaintenanceSettingsRecord {
   autoDismissEnabled: boolean;
   autoDismissSeconds: number;
 }
+export interface AttachmentSettingsRecord {
+  /** base64 附件超过该大小时不复制进 dataRoot/attachments，默认 20MB。 */
+  maxStoredInlineFileMb: number;
+}
 export interface AppearanceSettingsRecord {
   /** AI 等待响应时显示的文字（流式中但还没有任何内容块时）。 */
   streamingTextWaiting: string;
@@ -2111,7 +2148,7 @@ export interface AppearanceSettingsRecord {
   /** AI 输出正文时显示的文字（正文正在流式输出时）。 */
   streamingTextWriting: string;
 }
-export type GlobalSettingsSectionValue = GlobalSettingsRecord | LlmSettingsRecord | LlmProviderConfigsRecord | LlmCompressionSettingsRecord | LlmCompressionConfigsRecord | CheckpointMaintenanceSettingsRecord | AppearanceSettingsRecord;
+export type GlobalSettingsSectionValue = GlobalSettingsRecord | LlmSettingsRecord | LlmProviderConfigsRecord | LlmCompressionSettingsRecord | LlmCompressionConfigsRecord | CheckpointMaintenanceSettingsRecord | AppearanceSettingsRecord | AttachmentSettingsRecord;
 export interface GlobalSettingsGetPayload {
   section: GlobalSettingsSection;
 }
@@ -2195,6 +2232,22 @@ export interface WorkEnvironmentPolicyScopeClearPayload {
   scopeId?: string;
 }
 
+export interface AttachmentOpenPayload {
+  attachmentId?: string;
+  sourcePath?: string;
+  mimeType?: string;
+  name?: string;
+}
+
+export type AttachmentReloadPayload = AttachmentOpenPayload;
+
+export interface AttachmentReloadResultPayload {
+  request: AttachmentReloadPayload;
+  part?: InlineDataPart;
+  status: AttachmentAvailabilityStatus;
+  error?: string;
+}
+
 export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.Ready, undefined>
   | BridgeEnvelope<BridgeMessageType.Ack, BridgeAckPayload>
@@ -2244,6 +2297,8 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ToolResultSubmit, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ToolResultReject, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointDiffOpen, CheckpointDiffOpenPayload>
+  | BridgeEnvelope<BridgeMessageType.AttachmentOpen, AttachmentOpenPayload>
+  | BridgeEnvelope<BridgeMessageType.AttachmentReload, AttachmentReloadPayload>
   | BridgeEnvelope<BridgeMessageType.EditToolStatisticsGet, undefined>
   | BridgeEnvelope<BridgeMessageType.ClientResync, ClientResyncPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationTimelinePageGet, ConversationTimelinePageRequest>
@@ -2298,6 +2353,7 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.CheckpointShadowStatsSnapshot, CheckpointShadowStatsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointRestoreResult, CheckpointRestoreResultPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointDiffOpenResult, CheckpointDiffOpenResultPayload>
+  | BridgeEnvelope<BridgeMessageType.AttachmentReloadResult, AttachmentReloadResultPayload>
   | BridgeEnvelope<BridgeMessageType.EditToolStatisticsSnapshot, EditToolStatisticsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsSnapshot, GlobalSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsSnapshot, ConversationSettingsSnapshotPayload>

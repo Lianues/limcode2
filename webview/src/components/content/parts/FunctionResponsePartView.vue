@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import type { FunctionResponsePart } from '@shared/protocol';
 import ContentBlockSection from '../ContentBlockSection.vue';
+import InlineDataPartView from './InlineDataPartView.vue';
 
 const props = defineProps<{
   part: FunctionResponsePart;
@@ -26,6 +27,9 @@ function stringifyValue(value: unknown): string {
       <span class="part-card-name">{{ part.functionResponse.name }}</span>
     </header>
     <ContentBlockSection v-if="responseText" kind="output" title="输出" :text="responseText" />
+    <div v-if="part.functionResponse.parts?.length" class="function-response-attachments">
+      <InlineDataPartView v-for="(attachment, index) in part.functionResponse.parts" :key="`${attachment.inlineData.attachmentId ?? attachment.inlineData.name ?? attachment.inlineData.mimeType}-${index}`" :part="attachment" />
+    </div>
   </section>
 </template>
 
@@ -54,5 +58,12 @@ function stringifyValue(value: unknown): string {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
+}
+
+.function-response-attachments {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
 }
 </style>

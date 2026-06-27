@@ -3,7 +3,7 @@ import { DELETE_TOOL_NAME, EDIT_TOOL_NAME, WRITE_TOOL_NAME } from '@shared/proto
 import { bridge, BridgeMessageType } from '@webview/transport';
 import { useCheckpointPolicyStore } from '@webview/stores/useCheckpointPolicyStore';
 import type { CheckpointRecord, CheckpointTimelineAnchorRecord } from '@shared/protocol';
-import type { ToolDisplayContext, ToolDisplayDiff, ToolDisplayResolver, ToolDisplaySection, ToolHeaderAction } from './types';
+import type { ToolDisplayContext, ToolDisplayDiff, ToolDisplayResolver, ToolDisplaySection, ToolHeaderAction, ToolHeaderPreview } from './types';
 
 interface WriteArgs {
   path?: string;
@@ -59,12 +59,14 @@ export const writeToolDisplay: ToolDisplayResolver = (context) => {
   const output = fileChangeOutput(context.result) ?? fileChangeOutput(context.progress);
   const outputSections = fileChangeOutputSections('写入结果', output, context);
   const diff = diffFromOutput(output);
+  const headerPreview = fileHeaderPreview(args.path, output);
 
   return {
     headerIcon: IconWriting,
     inputSections,
     ...(outputSections ? { outputSections } : {}),
-    headerActions: diff ? diffHeaderActions(context, diff) : []
+    headerActions: diff ? diffHeaderActions(context, diff) : [],
+    ...(headerPreview ? { headerPreview } : {})
   };
 };
 
@@ -74,12 +76,14 @@ export const editToolDisplay: ToolDisplayResolver = (context) => {
   const output = fileChangeOutput(context.result) ?? fileChangeOutput(context.progress);
   const outputSections = fileChangeOutputSections('修改结果', output, context);
   const diff = diffFromOutput(output);
+  const headerPreview = fileHeaderPreview(args.path, output);
 
   return {
     headerIcon: IconPencil,
     inputSections,
     ...(outputSections ? { outputSections } : {}),
-    headerActions: diff ? diffHeaderActions(context, diff) : []
+    headerActions: diff ? diffHeaderActions(context, diff) : [],
+    ...(headerPreview ? { headerPreview } : {})
   };
 };
 
@@ -88,12 +92,14 @@ export const deleteToolDisplay: ToolDisplayResolver = (context) => {
   const inputSections = deleteInputSections(args, context);
   const output = fileChangeOutput(context.result) ?? fileChangeOutput(context.progress);
   const outputSections = deleteOutputSections(output, context);
+  const headerPreview = deleteHeaderPreview(args.paths, output);
 
   return {
     headerIcon: IconTrash,
     inputSections,
     ...(outputSections ? { outputSections } : {}),
-    headerActions: []
+    headerActions: [],
+    ...(headerPreview ? { headerPreview } : {})
   };
 };
 
@@ -205,6 +211,52 @@ function diffFromOutput(output: FileChangeOutput | string | undefined): ToolDisp
     }));
   if (files.length === 0) return undefined;
   return { files, summary: output.summary };
+}
+
+function fileHeaderPreview(inputPath: string | undefined, output: FileChangeOutput | string | undefined): ToolHeaderPreview | undefined {
+  const path = normalizePath(inputPath);
+  if (!path) return undefined;
+  const fileName = extractFileName(path);
+  if (!fileName) return undefined;
+
+  const items = fileChangeItems(typeof output === 'object' ? output?.files : undefined);
+  if (items.length > 0) {
+    const matched = items.find((item) => normalizePath(item.path) === path) ?? items[0];
+    return {
+      fileName,
+      filePath: path,
+      added: matched.added,
+      removed: matched.removed
+    };
+  }
+  return { fileName, filePath: path };
+}
+
+function deleteHeaderPreview(paths: string[], output: FileChangeOutput | string | undefined): ToolHeaderPreview | undefined {
+  const firstPath = paths.length > 0 ? normalizePath(paths[0]) : undefined;
+  const path = firstPath ?? normalizePath(typeof output === 'object' ? output?.path : undefined);
+  if (!path) return undefined;
+  const fileName = extractFileName(path);
+  if (!fileName) return undefined;
+
+  const items = fileChangeItems(typeof output === 'object' ? output?.files : undefined);
+  if (items.length > 0) {
+    const matched = items.find((item) => normalizePath(item.path) === path) ?? items[0];
+    return {
+      fileName,
+      filePath: path,
+      added: matched.added,
+      removed: matched.removed
+    };
+  }
+  return { fileName, filePath: path };
+}
+
+function extractFileName(path: string): string | undefined {
+  const trimmed = path.replace(/\/+$/, '');
+  const lastSlash = trimmed.lastIndexOf('/');
+  const name = lastSlash >= 0 ? trimmed.slice(lastSlash + 1) : trimmed;
+  return name.trim() || undefined;
 }
 
 function diffHeaderActions(context: ToolDisplayContext, diff: ToolDisplayDiff): ToolHeaderAction[] {

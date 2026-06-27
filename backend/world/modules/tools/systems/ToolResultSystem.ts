@@ -20,7 +20,7 @@ import { ToolEventType } from '../events';
 import { isTerminalToolStatus, toolStateToResponse, transitionToolState } from '../state';
 import { simplifyToolResponseForModel } from '../responseSimplifier';
 import { readEvents } from '../../../events';
-import type { ToolCallStatus } from '../../../../../shared/protocol';
+import type { InlineDataPart, ToolCallStatus } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
 
 const SettledToolCallsQuery = defineQuery({
@@ -132,12 +132,14 @@ export const ToolResultSystem = defineSystem({
         continue;
       }
 
+      const toolResponse = toolStateToResponse(state);
       const responseMessage = spawnToolResponseMessage(cmd, {
         conversation: target.conversation,
         toolCallId: call.functionCallId ?? call.id,
         toolName: call.name,
         status: state.status,
-        response: simplifyToolResponseForModel(call.name, state.status, toolStateToResponse(state)),
+        response: simplifyToolResponseForModel(call.name, state.status, toolResponse),
+        parts: inlinePartsFromToolResponse(toolResponse),
         durationMs: state.durationMs
       });
       spawnMessageRunLink(cmd, { message: responseMessage, run, role: 'tool_response' });
@@ -222,4 +224,23 @@ function hasPendingToolWork(world: WorldReader, run: Entity, consumedThisPass: R
 
 function isTerminalRunStatus(status: string): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'stale';
+}
+
+
+function inlinePartsFromToolResponse(value: unknown): InlineDataPart[] | undefined {
+  const record = asRecord(value);
+  const parts = Array.isArray(record?.parts) ? record.parts : undefined;
+  if (!parts) return undefined;
+  const result: InlineDataPart[] = [];
+  for (const item of parts) {
+    const part = asRecord(item);
+    const inlineData = asRecord(part?.inlineData);
+    if (typeof inlineData?.mimeType !== 'string') continue;
+    result.push({ inlineData: { ...inlineData, mimeType: inlineData.mimeType } as InlineDataPart['inlineData'] });
+  }
+  return result.length > 0 ? result : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }

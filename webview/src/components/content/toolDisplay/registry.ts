@@ -78,7 +78,8 @@ export function resolveToolDisplay(context: ToolDisplayContext): ToolDisplayResu
     inputSections: custom?.inputSections ?? fallback.inputSections,
     outputSections: custom?.outputSections ?? fallback.outputSections,
     headerIcon: custom?.headerIcon ?? fallback.headerIcon ?? resolveToolHeaderIcon(context.toolName),
-    headerActions: custom?.headerActions ?? fallback.headerActions
+    headerActions: custom?.headerActions ?? fallback.headerActions,
+    headerPreview: custom?.headerPreview
   };
 }
 

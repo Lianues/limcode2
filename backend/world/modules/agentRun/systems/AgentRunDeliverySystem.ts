@@ -285,7 +285,7 @@ function renderPart(part: ContentPart): string {
   if (isTextPart(part)) return part.thought === true ? '' : part.text;
   if (isFunctionCallPart(part)) return `[function_call name=${part.functionCall.name} args=${jsonPreview(part.functionCall.args)}]`;
   if (isFunctionResponsePart(part)) return `[function_response name=${part.functionResponse.name} response=${jsonPreview(part.functionResponse.response)}]`;
-  if (isInlineDataPart(part)) return `[inline_data mimeType=${part.inlineData.mimeType} bytes=${part.inlineData.data.length}]`;
+  if (isInlineDataPart(part)) return `[inline_data mimeType=${part.inlineData.mimeType} name=${part.inlineData.name ?? ''} bytes=${part.inlineData.data?.length ?? part.inlineData.sizeBytes ?? 0}]`;
   if (isFileDataPart(part)) return `[file_data uri=${part.fileData.uri} mimeType=${part.fileData.mimeType ?? 'unknown'}]`;
   return '';
 }

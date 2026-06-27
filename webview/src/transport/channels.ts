@@ -51,6 +51,7 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
     case BridgeMessageType.ToolResultSubmit:
     case BridgeMessageType.ToolResultReject:
     case BridgeMessageType.CheckpointDiffOpen:
+    case BridgeMessageType.AttachmentOpen:
       return 'command';
     case BridgeMessageType.EditToolStatisticsGet:
     case BridgeMessageType.ClientResync:
@@ -62,6 +63,7 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
     case BridgeMessageType.LlmProviderModelsGet:
     case BridgeMessageType.CheckpointGitStatusGet:
     case BridgeMessageType.CheckpointShadowStatsGet:
+    case BridgeMessageType.AttachmentReload:
       return 'state';
     case BridgeMessageType.GlobalSettingsGet:
     case BridgeMessageType.GlobalSettingsUpdate:

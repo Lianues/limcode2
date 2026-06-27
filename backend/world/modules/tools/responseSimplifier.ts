@@ -85,6 +85,10 @@ function simplifyReadResponse(value: unknown): JsonRecord {
   const record = asRecord(value);
   if (!record) return simplifyGenericSuccess(value);
   return withOkFallback(pickDefined({
+    path: stringValue(record.path),
+    name: stringValue(record.name),
+    mimeType: stringValue(record.mimeType),
+    sizeBytes: numberValue(record.sizeBytes),
     totalLines: numberValue(record.totalLines),
     content: stringValue(record.content)
   }), 'success');

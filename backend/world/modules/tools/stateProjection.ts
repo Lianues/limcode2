@@ -95,7 +95,7 @@ function buildToolCallRecord(world: WorldReader, entity: number): ToolCallRecord
     args: call.argsJson,
     ...(summary ? { summary } : {}),
     status: state.status,
-    ...(state.result !== undefined ? { result: state.result } : {}),
+    ...(state.result !== undefined ? { result: stripToolResultAttachments(state.result) } : {}),
     ...(state.error !== undefined ? { error: state.error } : {}),
     ...(state.progress !== undefined ? { progress: state.progress } : {}),
     schedulingMode: scheduling.mode,
@@ -105,6 +105,26 @@ function buildToolCallRecord(world: WorldReader, entity: number): ToolCallRecord
     createdAt: call.createdAt,
     updatedAt: state.updatedAt
   };
+}
+
+function stripToolResultAttachments(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripToolResultAttachments);
+  if (!value || typeof value !== 'object') return value;
+  const record = value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(record)) {
+    if (key === 'parts' && Array.isArray(child)) {
+      result.parts = child.map((part) => {
+        const inlineData = (part as { inlineData?: unknown })?.inlineData;
+        if (!inlineData || typeof inlineData !== 'object') return part;
+        const source = inlineData as Record<string, unknown>;
+        return { inlineData: { ...source, data: undefined } };
+      });
+      continue;
+    }
+    result[key] = stripToolResultAttachments(child);
+  }
+  return result;
 }
 
 function resolveToolCallDisplay(world: WorldReader, entity: number, call: ToolCallData): { autoExpand?: boolean } | undefined {

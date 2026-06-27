@@ -9,6 +9,7 @@ import {
   createWebviewCapability
 } from '../capabilities';
 import { createGlobalSettingsRecord } from '../capabilities/vscodeStorage/globalStatus';
+import { resolveAttachmentForClient } from '../capabilities/vscodeStorage/attachmentStore';
 import { createToolRegistry } from '../world/modules';
 import type { ToolSchema } from '../world/modules/llm/contracts';
 import type { RuntimeEnv } from './RuntimeEnv';
@@ -53,7 +54,11 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
       return coerceCompressionConfigForProvider(await storage.loadActiveLlmCompressionConfig(activeProvider.id), activeProvider);
     },
     headers: { 'User-Agent': 'LimCode/0.0.1' },
-    proxy: async () => createGlobalSettingsRecord(context).proxy || undefined
+    proxy: async () => createGlobalSettingsRecord(context).proxy || undefined,
+    resolveAttachment: async (input) => {
+      const result = await resolveAttachmentForClient(storage.paths, input);
+      return result.status === 'available' ? result.part : undefined;
+    }
   });
   const fs = createVsCodeFsCapability();
   const webview = createWebviewCapability();

@@ -707,9 +707,8 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
             <span class="role-dot" aria-hidden="true"></span>
             <span class="floor-role-name">{{ roleLabel }}</span>
           </span>
-          <span v-if="streaming" class="floor-status-badge is-streaming">正在输入</span>
           <span
-            v-else-if="stopReasonLabel"
+            v-if="stopReasonLabel"
             class="floor-status-badge is-stop"
             :class="stopReasonClass"
             :title="stopReasonTitle"
@@ -1029,21 +1028,6 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
   gap: 6px;
   padding: 1px 6px;
   border-radius: var(--radius-sm);
-}
-
-.floor-status-badge.is-streaming {
-  background-color: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-foreground) 8%);
-}
-
-.floor-status-badge.is-streaming::after {
-  content: '';
-  width: 6px;
-  height: 6px;
-  --lc-status-pulse-color: var(--vscode-testing-iconPassedColor, #4caf50);
-  background-color: var(--vscode-testing-iconPassedColor, #4caf50);
-  border-radius: 50%;
-  display: inline-block;
-  animation: lc-status-pulse-glow var(--lc-status-pulse-duration) infinite ease-in-out;
 }
 
 .floor-status-badge.is-stop {

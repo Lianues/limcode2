@@ -20,6 +20,7 @@ const props = defineProps<{
 const activeTab = ref(props.defaultTab);
 const contentScroller = ref<HTMLElement | null>(null);
 const tabsContainer = ref<HTMLElement | null>(null);
+const scrollbarFading = ref(false);
 const tabElements = new Map<string, HTMLElement>();
 const activeTabMarkerStyle = ref({
   width: '0px',
@@ -122,12 +123,19 @@ onBeforeUnmount(() => {
 
     <div class="settings-content-shell">
       <div ref="contentScroller" class="settings-content">
-        <Transition name="settings-content-switch" mode="out-in">
+        <Transition
+          name="settings-content-switch"
+          mode="out-in"
+          @before-leave="() => (scrollbarFading = true)"
+          @after-enter="() => (scrollbarFading = false)"
+        >
           <component v-if="activeTabComponent" :is="activeTabComponent" :key="activeTab" />
         </Transition>
       </div>
 
-      <AdvancedScrollbar :scroller="contentScroller" :refresh-key="activeTab" show-edge-buttons />
+      <div class="settings-scrollbar-wrapper" :class="{ 'is-fading': scrollbarFading }">
+        <AdvancedScrollbar :scroller="contentScroller" :refresh-key="activeTab" show-edge-buttons />
+      </div>
     </div>
   </section>
 </template>
@@ -253,6 +261,14 @@ onBeforeUnmount(() => {
   display: none;
 }
 
+.settings-scrollbar-wrapper {
+  transition: opacity 0.16s ease;
+}
+
+.settings-scrollbar-wrapper.is-fading {
+  opacity: 0;
+}
+
 .settings-content-switch-enter-active,
 .settings-content-switch-leave-active {
   transition:
@@ -300,6 +316,7 @@ onBeforeUnmount(() => {
 @media (prefers-reduced-motion: reduce) {
   .settings-tab-active-marker,
   .settings-tab,
+  .settings-scrollbar-wrapper,
   .settings-content-switch-enter-active,
   .settings-content-switch-leave-active {
     transition-duration: 1ms;

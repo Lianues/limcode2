@@ -84,11 +84,14 @@ function simplifyCommandResponse(value: unknown, status: ToolCallStatus): JsonRe
 function simplifyReadResponse(value: unknown): JsonRecord {
   const record = asRecord(value);
   if (!record) return simplifyGenericSuccess(value);
+  // inlineData 模式：response 只保留 mimeType 和 sizeBytes，文件名/路径已在 parts 的 inlineData 中
+  if (record.mimeType !== undefined && record.sizeBytes !== undefined && record.content === undefined && record.totalLines === undefined) {
+    return withOkFallback(pickDefined({
+      mimeType: stringValue(record.mimeType),
+      sizeBytes: numberValue(record.sizeBytes)
+    }), 'success');
+  }
   return withOkFallback(pickDefined({
-    path: stringValue(record.path),
-    name: stringValue(record.name),
-    mimeType: stringValue(record.mimeType),
-    sizeBytes: numberValue(record.sizeBytes),
     totalLines: numberValue(record.totalLines),
     content: stringValue(record.content)
   }), 'success');

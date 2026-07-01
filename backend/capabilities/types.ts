@@ -204,8 +204,23 @@ export interface CommandRunArgs {
   command?: string;
   cwd?: string;
   timeout?: number;
-  force?: boolean;
 }
+
+/** 返回给模型的 stdout/stderr 输出上限（保留末尾内容）。 */
+export interface CommandOutputLimits {
+  maxOutputLines: number;
+  maxOutputChars: number;
+}
+
+/**
+ * 命令执行/后台进程状态：
+ * - completed：前台同步执行完毕。
+ * - running：超时转入后台，进程仍在运行。
+ * - exited：后台进程已自然退出（通过 output 读到）。
+ * - killed：后台进程被 kill 终止。
+ * - not_found：output/kill 指定的 processId 不存在（已清理或从未存在）。
+ */
+export type CommandRunStatus = 'completed' | 'running' | 'exited' | 'killed' | 'not_found';
 
 export interface CommandRunResult {
   command: string;
@@ -213,6 +228,14 @@ export interface CommandRunResult {
   killed: boolean;
   stdout: string;
   stderr: string;
+  /** 执行/后台状态；旧调用方（如远程分支）可不填。 */
+  status?: CommandRunStatus;
+  /** 转入后台或针对后台进程操作时的进程 id。 */
+  processId?: string;
+  /** output 模式：进程当前是否仍在运行。 */
+  running?: boolean;
+  /** 因后台 buffer 上限被丢弃的字符数（>0 时提示模型有更早输出被截断）。 */
+  droppedChars?: number;
 }
 
 export type WorkEnvironmentTransferKind = 'auto' | 'file' | 'directory';
@@ -272,7 +295,14 @@ export interface WorkEnvironmentRuntimeCapability {
 export interface CommandCapability {
   readonly toolName: 'shell' | 'bash';
   readonly description: string;
-  run(args: CommandRunArgs, observer?: CommandRunObserver, options?: WorkEnvironmentCapabilityOptions): Promise<CommandRunResult>;
+  /** 执行新命令；超时不再 kill，而是转入后台并返回 { status:'running', processId }。limits 控制返回给模型的输出上限。 */
+  run(args: CommandRunArgs, observer?: CommandRunObserver, options?: WorkEnvironmentCapabilityOptions, limits?: CommandOutputLimits): Promise<CommandRunResult>;
+  /** 读取某后台进程当前已累积的全部日志，并返回其运行状态。 */
+  readOutput(processId: string, limits: CommandOutputLimits): CommandRunResult;
+  /** 终止某后台进程；终止后日志临时保留一小段时间，可用 readOutput 查看最终结果。 */
+  kill(processId: string): CommandRunResult;
+  /** 扩展关闭时终止所有残留后台进程并清理。 */
+  dispose(): void;
 }
 
 export interface WebviewClientRuntimeRecord {

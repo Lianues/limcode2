@@ -481,6 +481,7 @@ export class BackendApplication {
     this.scheduler.dispose();
     for (const disposable of this.disposables.splice(0)) disposable.dispose();
     void this.env.mcp.dispose();
+    this.env.command.dispose();
     this.env.webview.detachAll();
     this.webviewClients.clear();
     void this.persistence.persistImmediately();

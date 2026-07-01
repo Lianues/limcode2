@@ -71,13 +71,24 @@ function simplifyCommandResponse(value: unknown, status: ToolCallStatus): JsonRe
   const stderr = nonEmptyString(record.stderr);
   const exitCode = numberValue(record.exitCode);
   const killed = record.killed === true;
-  const abnormal = status !== 'success' || killed || (exitCode !== undefined && exitCode !== 0) || !!stderr;
+  const runStatus = stringValue(record.status);
+  const processId = nonEmptyString(record.processId);
+  const running = record.running === true;
+  const droppedChars = numberValue(record.droppedChars);
+  // 后台/运行中不算异常；running 时 exitCode 是占位 0，不作为异常判据。
+  const backgrounded = runStatus === 'running' || runStatus === 'exited' || runStatus === 'killed' || runStatus === 'not_found';
+  const abnormal = status !== 'success' || (!running && killed) || (!backgrounded && exitCode !== undefined && exitCode !== 0) || !!stderr;
 
   const result: JsonRecord = {};
   if (stdout) result.stdout = stdout;
   if (stderr) result.stderr = stderr;
+  if (processId) result.processId = processId;
+  // 展示非 completed 的状态，便于模型判断是否需要继续 poll / 已结束。
+  if (runStatus && runStatus !== 'completed') result.status = runStatus;
+  if (running) result.running = true;
+  if (droppedChars !== undefined && droppedChars > 0) result.droppedChars = droppedChars;
   if (abnormal && exitCode !== undefined) result.exitCode = exitCode;
-  if (killed) result.killed = true;
+  if (killed && !running) result.killed = true;
   return withOkFallback(result, status);
 }
 

@@ -81,6 +81,7 @@ import {
 } from '../../workEnvironment/bundles';
 import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey, ToolSchemasKey } from '../resources';
 import { isToolAllowedByPolicy } from '../policy';
+import { isReadonlyCommandCall } from '../definitions/command';
 import {
   compareToolCallOrder,
   isExecutionApproved,
@@ -215,7 +216,7 @@ export const ToolDispatchSystem = defineSystem({
         continue;
       }
 
-      if (requiresExecutionApproval(world, authorization.policy, call.name)) {
+      if (requiresExecutionApproval(world, authorization.policy, call)) {
         awaitApproval(cmd, entity, call, state, authorization.agentId, authorization.runId);
         continue;
       }
@@ -1338,8 +1339,24 @@ function toolGateSettings(world: WorldReader, policy: ToolPolicyData, toolName: 
   };
 }
 
-function requiresExecutionApproval(world: WorldReader, toolPolicy: ToolPolicyData, toolName: string): boolean {
-  return toolGateSettings(world, toolPolicy, toolName).autoApproveExecution === false;
+function requiresExecutionApproval(world: WorldReader, toolPolicy: ToolPolicyData, call: ToolCallData): boolean {
+  if (toolGateSettings(world, toolPolicy, call.name).autoApproveExecution !== false) return false;
+  // 未开启"自动批准执行"时，若该工具开启了"只读命令自动跳过审批"且本次调用被标记为只读，则仍免审批。
+  if (autoApprovesReadonlyCommand(world, toolPolicy, call)) return false;
+  return true;
+}
+
+/** 命令工具专属：config 的 autoApproveReadonly 开启(默认开)且本次调用 readonly=true 时放行。 */
+function autoApprovesReadonlyCommand(world: WorldReader, toolPolicy: ToolPolicyData, call: ToolCallData): boolean {
+  const config = effectiveToolConfig(world, toolPolicy, call.name);
+  if (config?.autoApproveReadonly === undefined || config.autoApproveReadonly === false) return false;
+  return isReadonlyCommandCall(parseToolCallArgs(call.argsJson));
+}
+
+function parseToolCallArgs(argsJson: string | undefined): unknown {
+  if (!argsJson) return {};
+  try { return JSON.parse(argsJson); }
+  catch { return {}; }
 }
 
 function startInlineToolExecution(

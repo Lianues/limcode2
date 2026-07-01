@@ -1,7 +1,6 @@
-import type { CommandCapability } from '../../../../../capabilities/types';
+import type { CommandCapability, CommandOutputLimits } from '../../../../../capabilities/types';
 import type { ToolConfigRecord } from '../../../../../../shared/protocol';
 import type { ToolDefinition } from '../../registry';
-import { normalizeSchedulingHint } from '../../scheduling';
 import { defineToolDefinitionModule } from '../types';
 
 export const commandToolModule = defineToolDefinitionModule({
@@ -10,6 +9,9 @@ export const commandToolModule = defineToolDefinitionModule({
     return createCommandTool(command);
   }
 });
+
+const DEFAULT_MAX_OUTPUT_LINES = 100;
+const DEFAULT_MAX_OUTPUT_CHARS = 10_000;
 
 export function createCommandTool(command: CommandCapability): ToolDefinition {
   return {
@@ -23,31 +25,38 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
             type: 'string',
             description: '必填。用一句简体中文向用户概括本次要执行什么、为什么这样做（面向用户，而非罗列技术细节）。该说明会作为工具消息标题展示给用户。'
           },
+          mode: {
+            type: 'string',
+            description: '操作模式，默认 execute。execute=执行新命令；output=获取某后台进程自上次读取以来的新增输出(需 processId)；kill=终止某后台进程(需 processId)。'
+          },
           command: {
             type: 'string',
             description: command.toolName === 'shell'
-              ? '要执行的 PowerShell 命令。多条命令用分号分隔。路径含空格时用双引号包裹。'
-              : '要执行的 Bash/Shell 命令。多条命令建议用 && 连接。路径含空格时用双引号包裹。'
+              ? '要执行的 PowerShell 命令。多条命令用分号分隔。路径含空格时用双引号包裹。（mode=execute 时必填）'
+              : '要执行的 Bash/Shell 命令。多条命令建议用 && 连接。路径含空格时用双引号包裹。（mode=execute 时必填）'
           },
           cwd: {
             type: 'string',
-            description: '工作目录（相对于工作区根目录），默认为工作区根目录。'
+            description: '工作目录（相对于工作区根目录），默认为工作区根目录。仅 mode=execute 有效。'
           },
           timeout: {
             type: 'number',
-            description: '超时时间（毫秒），默认 30000；设置为 0 表示不启用超时。'
+            description: '必填。前台等待的超时时间（毫秒）。命令在该时间内未结束时不会被终止，而是转入后台继续运行并立即返回其 processId；随后可用 mode=output 获取新增输出、mode=kill 终止。设为 0 表示不前台等待、直接转入后台执行（适合长期运行的服务/进程）。'
           },
-          force: {
-            type: 'boolean',
-            description: '保留字段。当前工具策略阶段未知命令暂时按允许执行处理，黑名单命令仍会拒绝。'
-          },
-          scheduling: {
+          processId: {
             type: 'string',
-            enum: ['auto', 'parallel', 'serial'],
-            description: '工具调度提示。auto=后端按命令只读性自动判断；parallel=明确进入并行批次；serial=按原始顺序串行执行。默认 auto。'
+            description: 'mode=output / mode=kill 时必填。目标后台进程的 id（由 execute 超时转后台时返回）。'
+          },
+          readonly: {
+            type: 'string',
+            description: '本次命令是否只读（不修改文件/系统/网络状态），"true" 表示只读。由你根据命令自行判断。只读命令在开启"只读命令自动跳过审批"时可免审批直接执行；其他命令仍按常规审批。'
+          },
+          wait: {
+            type: 'string',
+            description: '是否等待前面的工具执行完再执行。默认串行(等待)。传 "false" 表示不等待、与前面的工具并行执行。'
           }
         },
-        required: ['explanation', 'command']
+        required: ['explanation', 'timeout']
       },
       metadata: {
         category: 'command',
@@ -73,21 +82,68 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
             type: 'stringList',
             description: '白名单命令会自动执行；当前阶段未知命令也暂时按白名单处理。',
             placeholder: '例如：git status\nnpm run compile'
+          },
+          {
+            key: 'autoApproveReadonly',
+            label: '只读命令自动跳过审批',
+            type: 'boolean',
+            description: '开启后，即使未开启"自动批准执行"，被模型标记为只读(readonly=true)的命令也会自动批准、无需人工确认。',
+            defaultValue: true
+          },
+          {
+            key: 'maxOutputLines',
+            label: '输出最大行数',
+            type: 'number',
+            description: '返回给模型的 stdout/stderr 最多保留的行数（保留末尾若干行）。默认 100。',
+            defaultValue: DEFAULT_MAX_OUTPUT_LINES
+          },
+          {
+            key: 'maxOutputChars',
+            label: '输出最大字符数',
+            type: 'number',
+            description: '返回给模型的 stdout/stderr 最多保留的字符数（保留末尾字符）。默认 10000。',
+            defaultValue: DEFAULT_MAX_OUTPUT_CHARS
           }
         ]
       },
-      defaultConfig: { denyCommands: [], allowCommands: [] }
+      defaultConfig: {
+        denyCommands: [],
+        allowCommands: [],
+        autoApproveReadonly: true,
+        maxOutputLines: DEFAULT_MAX_OUTPUT_LINES,
+        maxOutputChars: DEFAULT_MAX_OUTPUT_CHARS
+      }
     },
     execution: 'runtime',
-    scheduling: (rawArgs) => resolveCommandScheduling(command.toolName, rawArgs),
+    scheduling: (rawArgs) => resolveCommandScheduling(rawArgs),
     summary: summarizeCommandToolCall,
     async execute(rawArgs, deps, ctx) {
       const args = (rawArgs ?? {}) as CommandToolArgs;
+      const config = normalizeCommandToolConfig(ctx?.config);
+      const limits: CommandOutputLimits = { maxOutputLines: config.maxOutputLines, maxOutputChars: config.maxOutputChars };
+      const mode = args.mode === 'output' || args.mode === 'kill' ? args.mode : 'execute';
+
+      if (mode === 'output') {
+        const processId = (args.processId ?? '').trim();
+        if (!processId) return { ok: false, output: '缺少 processId：mode=output 需要指定后台进程 id。' };
+        return { ok: true, output: deps.command.readOutput(processId, limits) };
+      }
+
+      if (mode === 'kill') {
+        const processId = (args.processId ?? '').trim();
+        if (!processId) return { ok: false, output: '缺少 processId：mode=kill 需要指定后台进程 id。' };
+        return { ok: true, output: deps.command.kill(processId) };
+      }
+
       const commandText = (args.command ?? '').trim();
-      const deniedBy = firstMatchedCommandRule(commandText, normalizeCommandToolConfig(ctx?.config).denyCommands);
+      if (!commandText) return { ok: false, output: 'mode=execute 需要提供 command。' };
+      if (typeof args.timeout !== 'number' || !Number.isFinite(args.timeout) || args.timeout < 0) {
+        return { ok: false, output: 'timeout 为必填参数，需为非负的毫秒数（0 表示不设超时）。' };
+      }
+      const deniedBy = firstMatchedCommandRule(commandText, config.denyCommands);
       if (deniedBy) return { ok: false, output: `命令已被工具策略黑名单拒绝：${deniedBy}` };
 
-      const result = await deps.command.run({ ...args, force: true }, {
+      const result = await deps.command.run({ command: args.command, cwd: args.cwd, timeout: args.timeout }, {
         onEvent(event) {
           ctx?.emit({
             kind: event.kind,
@@ -95,14 +151,22 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
             ...(event.payload !== undefined ? { payload: event.payload } : {})
           });
         }
-      }, { workEnvironment: ctx?.workEnvironment });
-      return { ok: result.exitCode === 0, output: result };
+      }, { workEnvironment: ctx?.workEnvironment }, limits);
+      // 转入后台(running)不算失败；否则以退出码判定。
+      const ok = result.status === 'running' || result.exitCode === 0;
+      return { ok, output: result };
     }
   };
 }
 
-type CommandToolArgs = Parameters<CommandCapability['run']>[0] & {
-  scheduling?: string;
+type CommandToolArgs = {
+  command?: string;
+  cwd?: string;
+  timeout?: number;
+  mode?: string;
+  processId?: string;
+  readonly?: string;
+  wait?: string;
   explanation?: string;
 };
 
@@ -113,50 +177,41 @@ function summarizeCommandToolCall(rawArgs: unknown): string | undefined {
   return explanation.replace(/\s+/g, ' ');
 }
 
-function resolveCommandScheduling(toolName: 'shell' | 'bash', rawArgs: unknown): { mode: 'parallel' | 'serial'; reason: string } {
+/** 串并行调度：默认串行；仅当 wait 显式为 "false" 时并行(不等待前面的工具)。 */
+function resolveCommandScheduling(rawArgs: unknown): { mode: 'parallel' | 'serial'; reason: string } {
   const args = (rawArgs ?? {}) as CommandToolArgs;
-  const commandText = (args.command ?? '').trim();
-  const hint = normalizeSchedulingHint(args.scheduling);
-  const readonlyCommand = isReadonlyCommandText(toolName, commandText);
-
-  if (hint === 'serial') return { mode: 'serial', reason: 'explicit_serial' };
-  if (hint === 'parallel') return { mode: 'parallel', reason: 'explicit_parallel' };
-  return readonlyCommand
-    ? { mode: 'parallel', reason: 'auto_readonly_command' }
-    : { mode: 'serial', reason: 'auto_command_side_effect_barrier' };
-}
-function isReadonlyCommandText(toolName: 'shell' | 'bash', command: string): boolean {
-  const trimmed = command.trim();
-  if (!trimmed) return false;
-  if (/(?:^|[^\-])(?:>>?|2>>?)\s*[^&]/.test(trimmed)) return false;
-  const statements = trimmed.split(/\s*(?:;|&&|\|\||\r?\n)\s*/).map((item) => item.trim()).filter(Boolean);
-  return statements.length > 0 && statements.every((statement) => statement.split(/\s*\|\s*/).every((part) => isReadonlyCommandPart(toolName, part)));
+  const wait = typeof args.wait === 'string' ? args.wait.trim().toLowerCase() : '';
+  if (wait === 'false') return { mode: 'parallel', reason: 'explicit_parallel' };
+  return { mode: 'serial', reason: 'default_serial' };
 }
 
-function isReadonlyCommandPart(toolName: 'shell' | 'bash', statement: string): boolean {
-  const tokens = statement.trim().split(/\s+/).filter(Boolean);
-  const first = tokens[0]?.toLowerCase().replace(/\.exe$/, '');
-  if (!first) return false;
-  const rest = tokens.slice(1).map((token) => token.toLowerCase());
-  if (first === 'git') return isReadonlyGitCommand(rest[0]);
-  if (toolName === 'shell') return POWERSHELL_READONLY_COMMANDS.has(first);
-  return BASH_READONLY_COMMANDS.has(first);
+/** 判断某次命令工具调用是否被模型标记为只读（供审批放行使用）。 */
+export function isReadonlyCommandCall(rawArgs: unknown): boolean {
+  const args = (rawArgs ?? {}) as CommandToolArgs;
+  return typeof args.readonly === 'string' && args.readonly.trim().toLowerCase() === 'true';
 }
 
-function isReadonlyGitCommand(subcommand: string | undefined): boolean {
-  return !!subcommand && GIT_READONLY_SUBCOMMANDS.has(subcommand);
+interface NormalizedCommandToolConfig {
+  denyCommands: string[];
+  allowCommands: string[];
+  autoApproveReadonly: boolean;
+  maxOutputLines: number;
+  maxOutputChars: number;
 }
 
-const GIT_READONLY_SUBCOMMANDS = new Set(['status', 'diff', 'log', 'show', 'branch', 'rev-parse', 'ls-files', 'grep', 'describe', 'remote']);
-const BASH_READONLY_COMMANDS = new Set(['pwd', 'ls', 'cat', 'head', 'tail', 'grep', 'rg', 'find', 'sed', 'awk', 'wc', 'stat', 'du', 'df', 'tree', 'echo', 'date', 'which', 'whereis', 'file', 'sort', 'uniq']);
-const POWERSHELL_READONLY_COMMANDS = new Set(['pwd', 'cd', 'dir', 'ls', 'gci', 'get-childitem', 'cat', 'type', 'gc', 'get-content', 'select-string', 'sls', 'findstr', 'rg', 'where.exe', 'where', 'get-location', 'gl', 'get-item', 'gi', 'get-command', 'measure-object', 'sort-object', 'select-object', 'echo', 'write-output', 'date', 'get-date']);
-
-
-function normalizeCommandToolConfig(config: ToolConfigRecord | undefined): { denyCommands: string[]; allowCommands: string[] } {
+function normalizeCommandToolConfig(config: ToolConfigRecord | undefined): NormalizedCommandToolConfig {
   return {
     denyCommands: normalizeStringList(config?.denyCommands),
-    allowCommands: normalizeStringList(config?.allowCommands)
+    allowCommands: normalizeStringList(config?.allowCommands),
+    autoApproveReadonly: config?.autoApproveReadonly !== false,
+    maxOutputLines: normalizePositiveInt(config?.maxOutputLines, DEFAULT_MAX_OUTPUT_LINES),
+    maxOutputChars: normalizePositiveInt(config?.maxOutputChars, DEFAULT_MAX_OUTPUT_CHARS)
   };
+}
+
+function normalizePositiveInt(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return fallback;
+  return Math.floor(value);
 }
 
 function normalizeStringList(value: unknown): string[] {

@@ -1,7 +1,9 @@
+import type { ChildProcess } from 'node:child_process';
 import { execFileSync, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import type { CommandCapability, CommandRunArgs, CommandRunObserver, CommandRunResult, WorkEnvironmentCapabilityOptions } from './types';
+import type { CommandCapability, CommandOutputLimits, CommandRunArgs, CommandRunObserver, CommandRunResult, WorkEnvironmentCapabilityOptions } from './types';
 import {
   WORK_ENVIRONMENT_CAPABILITY,
   workEnvironmentDisplayName,
@@ -10,7 +12,10 @@ import {
 import { isRemoteServerCommandEnvironment, runRemoteServerCommand } from './workEnvironmentProvider';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const MAX_OUTPUT_CHARS = 120_000;
+/** 后台进程完整日志 buffer 的上限（远大于给模型的软上限，避免过早丢弃可能被 output 读取的历史）。 */
+const BACKGROUND_MAX_CHARS = 200_000;
+/** 兜底的输出上限（调用方未显式传入 limits 时使用）。 */
+const DEFAULT_OUTPUT_LIMITS: CommandOutputLimits = { maxOutputLines: 100, maxOutputChars: 10_000 };
 const STREAM_EVENT_FLUSH_INTERVAL_MS = 100;
 const STREAM_EVENT_FLUSH_CHARS = 8 * 1024;
 const MAX_STREAM_EVENT_DELTA_CHARS = 16 * 1024;
@@ -38,15 +43,107 @@ interface CommandSafetyConfig {
   isDangerous?: (args: string[]) => boolean;
 }
 
+/** 一个转入后台运行的命令进程；进程结束后日志持久保留，直到被 output 读取或扩展退出才清理。 */
+interface BackgroundProcessHandle {
+  processId: string;
+  child: ChildProcess;
+  kind: ShellKind;
+  command: string;
+  cwd: string;
+  stdout: AppendBuffer;
+  stderr: AppendBuffer;
+  status: 'running' | 'exited' | 'killed';
+  exitCode: number | null;
+  startedAt: number;
+  exitedAt?: number;
+}
+
 export function createCommandCapability(): CommandCapability {
   const profile = detectCommandProfile();
+  const registry = new Map<string, BackgroundProcessHandle>();
   return {
     toolName: profile.toolName,
     description: profile.description,
-    run(args, observer, options) {
-      return runCommand(profile, args, observer, options);
+    run(args, observer, options, limits) {
+      return runCommand(profile, registry, args, observer, options, limits ?? DEFAULT_OUTPUT_LIMITS);
+    },
+    readOutput(processId, limits) {
+      return readBackgroundOutput(registry, processId, limits ?? DEFAULT_OUTPUT_LIMITS);
+    },
+    kill(processId) {
+      return killBackgroundProcess(registry, processId);
+    },
+    dispose() {
+      disposeRegistry(registry);
     }
   };
+}
+
+function generateProcessId(registry: Map<string, BackgroundProcessHandle>): string {
+  let id = '';
+  do {
+    id = `bg_${Date.now().toString(36)}_${randomBytes(4).toString('hex')}`;
+  } while (registry.has(id));
+  return id;
+}
+
+function readBackgroundOutput(registry: Map<string, BackgroundProcessHandle>, processId: string, limits: CommandOutputLimits): CommandRunResult {
+  const handle = registry.get(processId);
+  if (!handle) {
+    return { command: '', exitCode: 1, killed: false, status: 'not_found', processId, running: false, stdout: '', stderr: `未找到后台进程：${processId}（可能已结束并被清理）。` };
+  }
+  const out = handle.stdout.snapshot();
+  const err = handle.stderr.snapshot();
+  const running = handle.status === 'running';
+  const dropped = out.dropped + err.dropped;
+  // 进程仍在运行 → 保留 handle 供继续轮询；已结束 → 本次读取即为最终结果，读完即删除。
+  if (!running) registry.delete(processId);
+  return {
+    command: handle.command,
+    exitCode: handle.exitCode ?? 0,
+    killed: handle.status === 'killed',
+    status: running ? 'running' : handle.status,
+    processId,
+    running,
+    stdout: truncateOutput(out.text, limits),
+    stderr: truncateOutput(err.text, limits),
+    ...(dropped > 0 ? { droppedChars: dropped } : {})
+  };
+}
+
+function killBackgroundProcess(registry: Map<string, BackgroundProcessHandle>, processId: string): CommandRunResult {
+  const handle = registry.get(processId);
+  if (!handle) {
+    return { command: '', exitCode: 1, killed: false, status: 'not_found', processId, running: false, stdout: '', stderr: `未找到后台进程：${processId}（可能已结束并被清理）。` };
+  }
+  if (handle.status === 'running') {
+    handle.status = 'killed';
+    handle.exitedAt = Date.now();
+    killProcessTree(handle.child.pid, handle.kind);
+  }
+  // kill 只终止进程；日志持久保留，直到被 output 读取或扩展退出才清理（本次返回当前全量日志作即时反馈）。
+  const out = handle.stdout.snapshot();
+  const err = handle.stderr.snapshot();
+  return {
+    command: handle.command,
+    exitCode: handle.exitCode ?? 0,
+    killed: true,
+    status: 'killed',
+    processId,
+    running: false,
+    stdout: truncateOutput(out.text, DEFAULT_OUTPUT_LIMITS),
+    stderr: truncateOutput(err.text, DEFAULT_OUTPUT_LIMITS)
+  };
+}
+
+function disposeRegistry(registry: Map<string, BackgroundProcessHandle>): void {
+  for (const handle of registry.values()) {
+    if (handle.status === 'running') {
+      handle.status = 'killed';
+      killProcessTree(handle.child.pid, handle.kind);
+    }
+  }
+  registry.clear();
 }
 
 function detectCommandProfile(): CommandProfile {
@@ -55,8 +152,9 @@ function detectCommandProfile(): CommandProfile {
       kind: 'powershell',
       toolName: 'shell',
       commandPrefix: PS_UTF8_PREFIX,
-      description: `在项目目录下通过 PowerShell 后台执行非交互命令。返回 stdout、stderr 和退出码。
-内置安全检查：危险命令拒绝；工具策略黑名单拒绝；未知命令当前暂时按允许执行处理。
+      description: `在项目目录下通过 PowerShell 执行非交互命令(mode=execute)。返回 stdout、stderr 和退出码。
+超时行为：命令在 timeout(必填,毫秒)内未结束时不会被终止，而是转入后台继续运行并返回 processId(timeout=0 表示直接转后台)；随后可用 mode=output 查看当前全部输出、mode=kill 终止。后台进程结束后日志会一直保留，直到你用 mode=output 读取一次(读取即清理)。
+安全拦截：① 代码内置危险命令黑名单(如格式化磁盘/关机/rm -rf 根目录，不可绕过)；② 用户在工具策略里配置的命令黑名单。
 命令规范：多条命令用分号 ; 分隔；路径含空格时用双引号；长输出建议加 | Select-Object -First N。
 编码规范：工具默认把 PowerShell 输入/输出设为 UTF-8；如读取非 UTF-8 文件，请在命令中显式指定 -Encoding。`
     };
@@ -66,8 +164,9 @@ function detectCommandProfile(): CommandProfile {
     kind: 'bash',
     toolName: 'bash',
     executable: process.env.SHELL || '/bin/bash',
-    description: `在项目目录下通过 Bash/Shell 后台执行非交互命令。返回 stdout、stderr 和退出码。
-内置安全检查：危险命令拒绝；工具策略黑名单拒绝；未知命令当前暂时按允许执行处理。
+    description: `在项目目录下通过 Bash/Shell 执行非交互命令(mode=execute)。返回 stdout、stderr 和退出码。
+超时行为：命令在 timeout(必填,毫秒)内未结束时不会被终止，而是转入后台继续运行并返回 processId(timeout=0 表示直接转后台)；随后可用 mode=output 查看当前全部输出、mode=kill 终止。后台进程结束后日志会一直保留，直到你用 mode=output 读取一次(读取即清理)。
+安全拦截：① 代码内置危险命令黑名单(如 rm -rf /、mkfs、shutdown 等，不可绕过)；② 用户在工具策略里配置的命令黑名单。
 命令规范：多条命令建议用 && 连接；路径含空格时用双引号；长输出建议加 | head -n N。`
   };
 }
@@ -84,7 +183,7 @@ function resolvePowerShell(): string {
   return cachedPowerShell;
 }
 
-async function runCommand(profile: CommandProfile, args: CommandRunArgs, observer?: CommandRunObserver, options: WorkEnvironmentCapabilityOptions = {}): Promise<CommandRunResult> {
+async function runCommand(profile: CommandProfile, registry: Map<string, BackgroundProcessHandle>, args: CommandRunArgs, observer: CommandRunObserver | undefined, options: WorkEnvironmentCapabilityOptions = {}, limits: CommandOutputLimits = DEFAULT_OUTPUT_LIMITS): Promise<CommandRunResult> {
   const command = (args.command ?? '').trim();
   if (!command) return failedResult('', 'Missing required argument: command');
 
@@ -97,31 +196,31 @@ async function runCommand(profile: CommandProfile, args: CommandRunArgs, observe
   const safetyKind: ShellKind = remoteEnvironment ? 'bash' : profile.kind;
   const safety = classifyCommand(safetyKind, command);
   if (safety === 'deny') {
-    return failedResult(command, `安全拒绝: ${getDenyReason(safetyKind, command) ?? '命令被安全策略拒绝'}\n此操作在黑名单中，force 参数也无法绕过。`);
-  }
-  if (safety === 'unknown' && args.force !== true) {
-    return failedResult(command, `命令不在安全白名单中，已拒绝执行。请确认风险后设置 force: true 重试。`);
+    return failedResult(command, `安全拒绝: ${getDenyReason(safetyKind, command) ?? '命令被安全策略拒绝'}\n该操作在黑名单中，无法绕过。`);
   }
 
   if (remoteEnvironment) {
+    // TODO: 远程 SSH 分支暂不支持超时转后台，超时仍会终止；后台管理仅本地命令可用。
     const raw = await runRemoteServerCommand(remoteEnvironment, args, observer);
-    return annotateResult('bash', raw);
+    return annotateResult('bash', { ...raw, status: raw.killed ? 'killed' : 'completed' });
   }
 
   const cwd = resolveWorkDir(args.cwd, options);
   const timeout = resolveTimeout(args.timeout);
-  const raw = await executeCommand(profile, command, cwd, timeout, observer);
+  const raw = await executeCommand(profile, registry, command, cwd, timeout, limits, observer);
   return annotateResult(profile.kind, raw);
 }
 
-function executeCommand(profile: CommandProfile, command: string, cwd: string, timeout: number, observer?: CommandRunObserver): Promise<CommandRunResult> {
+function executeCommand(profile: CommandProfile, registry: Map<string, BackgroundProcessHandle>, command: string, cwd: string, timeout: number, limits: CommandOutputLimits, observer?: CommandRunObserver): Promise<CommandRunResult> {
   const wrappedCommand = `${profile.commandPrefix ?? ''}${command}`;
   return new Promise((resolve) => {
-    const stdout = new OutputAccumulator(MAX_OUTPUT_CHARS);
-    const stderr = new OutputAccumulator(MAX_OUTPUT_CHARS);
-    const streamEvents = createStreamEventEmitter(observer);
-    let killed = false;
+    const stdout = new AppendBuffer(BACKGROUND_MAX_CHARS);
+    const stderr = new AppendBuffer(BACKGROUND_MAX_CHARS);
+    let streamEvents = createStreamEventEmitter(observer);
+    const startedAt = Date.now();
     let settled = false;
+    let backgrounded = false;
+    let handle: BackgroundProcessHandle | undefined;
 
     const child = spawn(commandExecutable(profile), commandArgs(profile, wrappedCommand), {
       cwd,
@@ -130,26 +229,59 @@ function executeCommand(profile: CommandProfile, command: string, cwd: string, t
       env: nonInteractiveEnv(profile.kind)
     });
 
-    const timeoutTimer = timeout > 0
-      ? setTimeout(() => {
-        killed = true;
-        killProcessTree(child.pid, profile.kind);
-      }, timeout)
-      : undefined;
+    // 转入后台继续运行（不再 kill），立即以 running 状态 resolve 前台 promise。
+    // 触发时机：timeout>0 到点触发；timeout===0 生成子进程后立即触发。
+    const moveToBackground = (): void => {
+      if (settled) return;
+      backgrounded = true;
+      settled = true;
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      streamEvents.flush();
+      streamEvents = createStreamEventEmitter(undefined); // 停止向已终态的 toolCall 推流，仅写 buffer
+      const processId = generateProcessId(registry);
+      handle = { processId, child, kind: profile.kind, command, cwd, stdout, stderr, status: 'running', exitCode: null, startedAt };
+      registry.set(processId, handle);
+      // 返回截至转后台一刻的输出（全量快照；完整日志随进程继续累积，后续 output 可再全量读取）。
+      const out = stdout.snapshot();
+      const err = stderr.snapshot();
+      resolve({
+        command,
+        exitCode: 0,
+        killed: false,
+        status: 'running',
+        processId,
+        running: true,
+        stdout: truncateOutput(out.text, limits),
+        stderr: truncateOutput(err.text, limits)
+      });
+    };
+
+    const timeoutTimer = timeout > 0 ? setTimeout(moveToBackground, timeout) : undefined;
     timeoutTimer?.unref?.();
 
-    const settle = (exitCode: number): void => {
+    const settleForeground = (exitCode: number): void => {
       if (settled) return;
       settled = true;
       if (timeoutTimer) clearTimeout(timeoutTimer);
       streamEvents.flush();
+      const out = stdout.snapshot();
+      const err = stderr.snapshot();
       resolve({
         command,
         exitCode,
-        killed,
-        stdout: stdout.value(),
-        stderr: stderr.value()
+        killed: false,
+        status: 'completed',
+        stdout: truncateOutput(out.text, limits),
+        stderr: truncateOutput(err.text, limits)
       });
+    };
+
+    const finalizeBackground = (exitCode: number): void => {
+      if (!handle) return;
+      handle.exitCode = exitCode;
+      handle.exitedAt = Date.now();
+      if (handle.status !== 'killed') handle.status = 'exited';
+      // 进程结束后日志持久保留在 registry 中，直到被 output 读取或扩展退出才清理。
     };
 
     child.stdout?.setEncoding('utf8');
@@ -166,12 +298,22 @@ function executeCommand(profile: CommandProfile, command: string, cwd: string, t
       const message = error instanceof Error ? error.message : String(error);
       stderr.append(message);
       streamEvents.push('stderr', message);
-      settle(1);
+      if (backgrounded) finalizeBackground(1);
+      else settleForeground(1);
     });
     child.once('close', (code, signal) => {
-      settle(killed ? (code ?? 1) : (code ?? (signal ? 1 : 0)));
+      const exitCode = code ?? (signal ? 1 : 0);
+      if (backgrounded) {
+        streamEvents.flush(); // 让退出前的残余输出进 buffer，供最后一次 output 读取
+        finalizeBackground(exitCode);
+      } else {
+        settleForeground(exitCode);
+      }
     });
     child.stdin?.end();
+
+    // timeout=0：不做前台等待，子进程一启动即转入后台执行。
+    if (timeout === 0) moveToBackground();
   });
 }
 
@@ -185,40 +327,50 @@ function commandExecutable(profile: CommandProfile): string {
   return profile.executable ?? resolvePowerShell();
 }
 
-class OutputAccumulator {
-  private head = '';
-  private tail = '';
-  private totalLength = 0;
-  private truncated = false;
+/**
+ * 追加式输出缓冲：保留当前日志正文，随时可全量读取（不依赖任何读取游标/历史）。
+ * 总量超过 maxChars 时环形丢弃最旧字符，并累计 droppedChars 供提示。
+ */
+class AppendBuffer {
+  private buffer = '';
+  private droppedChars = 0;
 
   public constructor(private readonly maxChars: number) {}
 
   public append(value: string): void {
     if (!value) return;
-    const nextTotal = this.totalLength + value.length;
-
-    if (!this.truncated && nextTotal <= this.maxChars) {
-      this.head += value;
-      this.totalLength = nextTotal;
-      return;
+    this.buffer += value;
+    if (this.buffer.length > this.maxChars) {
+      const overflow = this.buffer.length - this.maxChars;
+      this.buffer = this.buffer.slice(overflow);
+      this.droppedChars += overflow;
     }
-
-    const half = Math.max(1, Math.floor(this.maxChars / 2));
-    if (!this.truncated) {
-      const combined = this.head + value;
-      this.head = combined.slice(0, half);
-      this.tail = combined.slice(-half);
-      this.truncated = true;
-    } else {
-      this.tail = (this.tail + value).slice(-half);
-    }
-    this.totalLength = nextTotal;
   }
 
-  public value(): string {
-    if (!this.truncated) return this.head;
-    return `${this.head}\n\n... (已截断，共 ${this.totalLength} 字符) ...\n\n${this.tail}`;
+  /** 读取当前保留的全部日志正文。与调用次数无关，每次都返回当前已累积的完整内容。 */
+  public snapshot(): { text: string; dropped: number } {
+    return { text: this.buffer, dropped: this.droppedChars };
   }
+}
+
+/**
+ * 按上限截断给模型的输出：先保留末尾 maxOutputLines 行，再按 maxOutputChars 保留末尾字符。
+ * （命令的结论/错误/进度通常在末尾，故取尾部。）
+ */
+function truncateOutput(text: string, limits: CommandOutputLimits): string {
+  if (!text) return text;
+  let out = text;
+  if (limits.maxOutputLines > 0) {
+    const lines = out.split('\n');
+    if (lines.length > limits.maxOutputLines) {
+      const omitted = lines.length - limits.maxOutputLines;
+      out = `... (共 ${lines.length} 行，已省略前 ${omitted} 行) ...\n${lines.slice(-limits.maxOutputLines).join('\n')}`;
+    }
+  }
+  if (limits.maxOutputChars > 0 && out.length > limits.maxOutputChars) {
+    out = `... (已按 ${limits.maxOutputChars} 字符上限截断) ...\n${out.slice(-limits.maxOutputChars)}`;
+  }
+  return out;
 }
 
 type StreamOutputKind = 'stdout' | 'stderr';
@@ -337,7 +489,9 @@ function annotateResult(kind: ShellKind, result: CommandRunResult): CommandRunRe
     stderr = stderr ? `${stderr}\n${note}` : note;
   };
 
-  if (result.killed) append('(命令执行超时被终止。如需更长时间，请增加 timeout 参数。)');
+  if (result.status === 'running' && result.processId) {
+    append(`(命令已超时，转入后台继续运行；processId=${result.processId}。用 mode="output" + 该 processId 获取新增输出，或 mode="kill" 终止。)`);
+  }
 
   if (result.exitCode === 1 && !stderr) {
     const cmd = result.command.trim();

@@ -8,7 +8,11 @@ const SKILL_SOURCES: readonly SkillSource[] = ['agents', 'claude', 'global'];
 interface SkillsToolArgs { name?: unknown; source?: unknown }
 
 function normalizeSource(value: unknown): SkillSource | undefined {
-  return typeof value === 'string' && (SKILL_SOURCES as readonly string[]).includes(value) ? value as SkillSource : undefined;
+  if (typeof value !== 'string') return undefined;
+  // Accept both the dotted display form (`.agents`/`.claude`) surfaced in the tool
+  // description and the bare source id.
+  const normalized = value.trim().replace(/^\./, '').toLowerCase();
+  return (SKILL_SOURCES as readonly string[]).includes(normalized) ? normalized as SkillSource : undefined;
 }
 
 export const skillsToolModule = defineToolDefinitionModule({
@@ -21,18 +25,20 @@ export const skillsToolModule = defineToolDefinitionModule({
 export const skillsTool: ToolDefinition = {
   declaration: {
     name: SKILLS_TOOL_NAME,
-    description: `载入一个技能（skill）的完整说明正文，把它的指导步骤纳入当前上下文。
+    description: `Load a skill's full instructions into the current context and follow its steps.
 
-技能是预置的专项工作流/领域知识，来自三种来源：agents=项目 .agents/skills/，claude=项目 .claude/skills/，global=数据根 skills/。当某个已启用技能与当前任务相关时，先用本工具按 name + source 载入它的 SKILL.md 正文，再按其中的步骤执行。可用技能列表见本工具描述末尾（每项都标注了 name 与 source）。
+A skill is a prepackaged workflow / domain playbook. Skills come from three sources: .agents (project .agents/skills/), .claude (project .claude/skills/), and global (data-root skills/). When an available skill fits the task, call this tool with the skill's \`name\` (and \`source\` to disambiguate) to load its SKILL.md body, then follow it.
 
-返回结果包含：entryPath（SKILL.md 绝对路径）与 body（SKILL.md 正文）。技能自带的脚本/资源由正文说明，其相对路径均相对 entryPath 所在目录；需要时用 read 读取或 shell/bash 执行。`,
+Returns \`entryPath\` (absolute path to SKILL.md) and \`body\` (the SKILL.md contents). Any bundled scripts/resources are described in the body; their relative paths resolve against the directory containing entryPath — use read to inspect them or shell/bash to run them.
+
+The available skills are listed as YAML at the end of this description; each entry carries its \`name\` and \`source\`.`,
     parameters: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: '技能名称（其目录 slug）。必须是可用技能列表中的一个。' },
-        source: { type: 'string', enum: ['agents', 'claude', 'global'], description: '技能来源：agents=项目 .agents/skills/；claude=项目 .claude/skills/；global=数据根 skills/。按可用技能列表中该技能标注的 source 传入。' }
+        name: { type: 'string', description: 'The skill name (its directory slug), taken from the available skills list.' },
+        source: { type: 'string' }
       },
-      required: ['name', 'source']
+      required: ['name']
     },
     metadata: {
       category: 'general',

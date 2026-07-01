@@ -10,7 +10,7 @@ import { isSkillEnabledByPolicy } from './policy';
 import { activeSkillPolicyForRun } from './queries';
 import { SkillCatalogKey } from './resources';
 
-const SOURCE_LABEL: Record<string, string> = { agents: '.agents', claude: '.claude', global: '全局' };
+const SOURCE_DISPLAY: Record<string, string> = { agents: '.agents', claude: '.claude', global: 'global' };
 
 /**
  * 动态把「当前 run 已启用的技能」注入 skills 工具描述，让 AI 感知可用技能。
@@ -35,13 +35,26 @@ export const skillsToolSchemaContributor: ToolSchemaContributor = {
 
 function composeSkillsDescription(baseDescription: string, skills: Array<{ name: string; slug: string; description: string; source: string }>): string {
   if (skills.length === 0) {
-    return `${baseDescription}\n\n当前没有可用技能。`;
+    return `${baseDescription}\n\nAvailable skills: none.`;
   }
   const lines = skills.map((skill) => {
-    const label = SOURCE_LABEL[skill.source] ?? skill.source;
-    const detail = skill.description.trim();
-    // 调用时传 name=slug + source。
-    return `- name=${skill.slug}, source=${skill.source}（${label}${skill.name && skill.name !== skill.slug ? ` · ${skill.name}` : ''}）${detail ? `：${detail}` : ''}`;
+    const source = SOURCE_DISPLAY[skill.source] ?? skill.source;
+    const description = skill.description.trim();
+    return [
+      `- name: ${skill.slug}`,
+      `  source: ${source}`,
+      `  description: ${yamlScalar(description)}`
+    ].join('\n');
   });
-  return `${baseDescription}\n\n可用技能（调用 skills({ name, source }) 载入对应正文）：\n${lines.join('\n')}`;
+  return `${baseDescription}\n\nAvailable skills (YAML):\n${lines.join('\n')}`;
+}
+
+/** 把自由文本描述编码为安全的 YAML 标量：双引号包裹并转义换行/引号/反斜杠。 */
+function yamlScalar(value: string): string {
+  if (!value) return '""';
+  const escaped = value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\r?\n/g, '\\n');
+  return `"${escaped}"`;
 }

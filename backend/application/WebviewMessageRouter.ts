@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { World } from '../ecs/types';
-import type { LlmCapability, StorageCapability, WebviewCapability } from '../capabilities/types';
+import type { CommandCapability, LlmCapability, StorageCapability, WebviewCapability } from '../capabilities/types';
 import { ChatEventType } from '../world/modules/chat/events';
 import { AgentRunEventType } from '../world/modules/agentRun/events';
 import { AgentRun } from '../world/modules/agentRun/components';
@@ -33,6 +33,7 @@ import {
   isInlineDataPart,
   isProviderContextPart,
   isTextPart,
+  type BackgroundCommandOutputGetPayload,
   type BridgeClientId,
   type CheckpointDiffOpenPayload,
   type CheckpointRestorePayload,
@@ -63,6 +64,7 @@ export interface WebviewMessageRouterDeps {
   clients: WebviewClientRegistry;
   storage: StorageCapability;
   llm: LlmCapability;
+  command: CommandCapability;
   globalSettingsBridge: GlobalSettingsBridge;
   conversationSettingsBridge: ConversationSettingsBridge;
   isHydrated: () => boolean;
@@ -518,11 +520,32 @@ export class WebviewMessageRouter {
       case BridgeMessageType.FsStatGet:
         if (message.payload) void this.postFsStatResult(clientId, message.payload, message.id);
         break;
+      case BridgeMessageType.BackgroundCommandOutputGet:
+        if (message.payload) this.postBackgroundCommandOutputResult(clientId, message.payload, message.id);
+        break;
       default:
         break;
     }
   }
 
+
+  private postBackgroundCommandOutputResult(clientId: BridgeClientId, payload: BackgroundCommandOutputGetPayload, correlationId: string): void {
+    const processId = payload.processId.trim();
+    if (!processId) {
+      this.postRequestError(clientId, BridgeMessageType.BackgroundCommandOutputGet, '缺少后台命令 processId。', correlationId);
+      return;
+    }
+    const consume = payload.consume !== false;
+    const output = this.deps.command.readOutput(processId, { maxOutputLines: 1000, maxOutputChars: 100_000 }, { consume });
+    const terminal = output.running === false || output.status === 'exited' || output.status === 'killed' || output.status === 'not_found';
+    this.deps.webview.post(clientId, {
+      id: createMessageId(),
+      type: BridgeMessageType.BackgroundCommandOutputResult,
+      channel: 'state',
+      correlationId,
+      payload: { ...output, processId, consumed: consume && terminal }
+    });
+  }
   private async postFsStatResult(clientId: BridgeClientId, payload: FsStatGetPayload, correlationId: string): Promise<void> {
     const resolvedPaths = resolveDroppedPaths(payload.paths ?? []);
     const results = await Promise.all(resolvedPaths.map((path) => statPath(path)));

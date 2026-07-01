@@ -25,6 +25,7 @@ import {
   AGENT_ANSWER_SUBMISSION_LINKS_ROOT_DIR,
   AGENT_ANSWER_TARGET_LINKS_ROOT_DIR,
   SETTINGS_ROOT_DIR,
+  BACKGROUND_COMMANDS_ROOT_DIR,
   SYSTEM_PROMPT_SCOPE_LINKS_ROOT_DIR,
   SYSTEM_PROMPTS_ROOT_DIR,
   TOOL_POLICY_SCOPE_LINKS_ROOT_DIR,
@@ -138,6 +139,8 @@ export interface VscodeStorageUris {
   agentAnswerSubmissionLinksIndexUri: vscode.Uri;
   agentAnswerTargetLinksRootUri: vscode.Uri;
   agentAnswerTargetLinksIndexUri: vscode.Uri;
+  backgroundCommandsRootUri: vscode.Uri;
+  backgroundCommandsIndexUri: vscode.Uri;
   settingsRootUri: vscode.Uri;
   llmSettingsUri: vscode.Uri;
 }
@@ -192,6 +195,7 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const agentAnswers = root(globalStorageUri, AGENT_ANSWERS_ROOT_DIR);
   const agentAnswerSubmissionLinks = root(globalStorageUri, AGENT_ANSWER_SUBMISSION_LINKS_ROOT_DIR);
   const agentAnswerTargetLinks = root(globalStorageUri, AGENT_ANSWER_TARGET_LINKS_ROOT_DIR);
+  const backgroundCommands = root(globalStorageUri, BACKGROUND_COMMANDS_ROOT_DIR);
   const settingsRootUri = vscode.Uri.joinPath(globalStorageUri, SETTINGS_ROOT_DIR);
   const llmSettingsUri = vscode.Uri.joinPath(settingsRootUri, LLM_SETTINGS_FILE);
 
@@ -372,6 +376,10 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     agentAnswerTargetLinksRootPath: agentAnswerTargetLinks.rootUri.fsPath,
     agentAnswerTargetLinksIndexUri: agentAnswerTargetLinks.indexUri,
     agentAnswerTargetLinksIndexPath: agentAnswerTargetLinks.indexUri.fsPath,
+    backgroundCommandsRootUri: backgroundCommands.rootUri,
+    backgroundCommandsRootPath: backgroundCommands.rootUri.fsPath,
+    backgroundCommandsIndexUri: backgroundCommands.indexUri,
+    backgroundCommandsIndexPath: backgroundCommands.indexUri.fsPath,
     settingsRootUri,
     settingsRootPath: settingsRootUri.fsPath,
     llmSettingsUri,

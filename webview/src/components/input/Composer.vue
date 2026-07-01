@@ -17,6 +17,7 @@ import RichContentEditor from '@webview/components/content/RichContentEditor.vue
 import QueuePanel, { type QueueItem } from '@webview/components/input/QueuePanel.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
 import ContextTokenUsageBar from '@webview/components/conversation/ContextTokenUsageBar.vue';
+import BackgroundCommandPanel from '@webview/components/input/BackgroundCommandPanel.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -500,6 +501,7 @@ function middleEllipsis(value: string, maxLength: number): string {
         >
           <IconPaperclip class="composer-side-action-icon" stroke="2" aria-hidden="true" />
         </button>
+        <BackgroundCommandPanel />
         <button
           v-if="runSummary.isRunning"
           type="button"

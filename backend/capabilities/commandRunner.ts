@@ -1,9 +1,10 @@
 import type { ChildProcess } from 'node:child_process';
+import * as fs from 'node:fs';
 import { execFileSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import type { CommandCapability, CommandOutputLimits, CommandRunArgs, CommandRunObserver, CommandRunResult, WorkEnvironmentCapabilityOptions } from './types';
+import type { CommandCapability, CommandOutputLimits, CommandRunArgs, CommandRunObserver, CommandRunResult, RuntimePaths, WorkEnvironmentCapabilityOptions } from './types';
 import {
   WORK_ENVIRONMENT_CAPABILITY,
   workEnvironmentDisplayName,
@@ -16,6 +17,9 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const BACKGROUND_MAX_CHARS = 200_000;
 /** 兜底的输出上限（调用方未显式传入 limits 时使用）。 */
 const DEFAULT_OUTPUT_LIMITS: CommandOutputLimits = { maxOutputLines: 100, maxOutputChars: 10_000 };
+const BACKGROUND_COMMAND_RECORDS_DIR = 'records';
+const BACKGROUND_COMMAND_STORAGE_VERSION = 1;
+const BACKGROUND_PERSIST_DEBOUNCE_MS = 250;
 const STREAM_EVENT_FLUSH_INTERVAL_MS = 100;
 const STREAM_EVENT_FLUSH_CHARS = 8 * 1024;
 const MAX_STREAM_EVENT_DELTA_CHARS = 16 * 1024;
@@ -43,6 +47,38 @@ interface CommandSafetyConfig {
   isDangerous?: (args: string[]) => boolean;
 }
 
+type BackgroundCommandPathsProvider = () => Pick<RuntimePaths, 'backgroundCommandsRootPath' | 'backgroundCommandsIndexPath'>;
+
+interface BackgroundCommandIndexRecord {
+  processId: string;
+  file: string;
+  status: 'running' | 'exited' | 'killed';
+  updatedAt: number;
+}
+
+interface BackgroundCommandIndexFile {
+  version: number;
+  records: BackgroundCommandIndexRecord[];
+}
+
+interface PersistedBackgroundProcessRecord {
+  version: number;
+  processId: string;
+  kind: ShellKind;
+  command: string;
+  cwd: string;
+  stdout: string;
+  stderr: string;
+  droppedStdoutChars: number;
+  droppedStderrChars: number;
+  status: 'running' | 'exited' | 'killed';
+  exitCode: number | null;
+  killed: boolean;
+  startedAt: number;
+  updatedAt: number;
+  exitedAt?: number;
+}
+
 /** 一个转入后台运行的命令进程；进程结束后日志持久保留，直到被 output 读取或扩展退出才清理。 */
 interface BackgroundProcessHandle {
   processId: string;
@@ -56,96 +92,114 @@ interface BackgroundProcessHandle {
   exitCode: number | null;
   startedAt: number;
   exitedAt?: number;
+  persistTimer?: ReturnType<typeof setTimeout>;
+  suppressPersist?: boolean;
 }
 
-export function createCommandCapability(): CommandCapability {
+export function createCommandCapability(capabilityOptions: { paths?: BackgroundCommandPathsProvider } = {}): CommandCapability {
   const profile = detectCommandProfile();
   const registry = new Map<string, BackgroundProcessHandle>();
+  const archived = new Map<string, PersistedBackgroundProcessRecord>();
+  let persistedLoaded = false;
+  const ensurePersistedLoaded = (): void => {
+    if (persistedLoaded) return;
+    persistedLoaded = true;
+    loadPersistedBackgroundRecords(capabilityOptions.paths, archived);
+  };
   return {
     toolName: profile.toolName,
     description: profile.description,
     run(args, observer, options, limits) {
-      return runCommand(profile, registry, args, observer, options, limits ?? DEFAULT_OUTPUT_LIMITS);
+      ensurePersistedLoaded();
+      return runCommand(profile, registry, archived, capabilityOptions.paths, args, observer, options, limits ?? DEFAULT_OUTPUT_LIMITS);
     },
-    readOutput(processId, limits) {
-      return readBackgroundOutput(registry, processId, limits ?? DEFAULT_OUTPUT_LIMITS);
+    readOutput(processId, limits, options) {
+      ensurePersistedLoaded();
+      return readBackgroundOutput(registry, archived, capabilityOptions.paths, processId, limits ?? DEFAULT_OUTPUT_LIMITS, { consume: options?.consume !== false });
     },
     kill(processId) {
-      return killBackgroundProcess(registry, processId);
+      ensurePersistedLoaded();
+      return killBackgroundProcess(registry, archived, capabilityOptions.paths, processId);
     },
     dispose() {
-      disposeRegistry(registry);
+      ensurePersistedLoaded();
+      disposeRegistry(registry, capabilityOptions.paths);
     }
   };
 }
 
-function generateProcessId(registry: Map<string, BackgroundProcessHandle>): string {
+function generateProcessId(registry: Map<string, BackgroundProcessHandle>, archived: Map<string, PersistedBackgroundProcessRecord>): string {
   let id = '';
   do {
     id = `bg_${Date.now().toString(36)}_${randomBytes(4).toString('hex')}`;
-  } while (registry.has(id));
+  } while (registry.has(id) || archived.has(id));
   return id;
 }
 
-function readBackgroundOutput(registry: Map<string, BackgroundProcessHandle>, processId: string, limits: CommandOutputLimits): CommandRunResult {
+function readBackgroundOutput(
+  registry: Map<string, BackgroundProcessHandle>,
+  archived: Map<string, PersistedBackgroundProcessRecord>,
+  pathsProvider: BackgroundCommandPathsProvider | undefined,
+  processId: string,
+  limits: CommandOutputLimits,
+  options: { consume?: boolean } = { consume: true }
+): CommandRunResult {
   const handle = registry.get(processId);
-  if (!handle) {
-    return { command: '', exitCode: 1, killed: false, status: 'not_found', processId, running: false, stdout: '', stderr: `未找到后台进程：${processId}（可能已结束并被清理）。` };
+  if (handle) {
+    flushPersist(handle, pathsProvider);
+    const result = resultFromHandle(handle, limits);
+    if (handle.status !== 'running' && options.consume !== false) {
+      registry.delete(processId);
+      deletePersistedBackgroundRecord(pathsProvider, archived, processId);
+    }
+    return result;
   }
-  const out = handle.stdout.snapshot();
-  const err = handle.stderr.snapshot();
-  const running = handle.status === 'running';
-  const dropped = out.dropped + err.dropped;
-  // 进程仍在运行 → 保留 handle 供继续轮询；已结束 → 本次读取即为最终结果，读完即删除。
-  if (!running) registry.delete(processId);
-  return {
-    command: handle.command,
-    exitCode: handle.exitCode ?? 0,
-    killed: handle.status === 'killed',
-    status: running ? 'running' : handle.status,
-    processId,
-    running,
-    stdout: truncateOutput(out.text, limits),
-    stderr: truncateOutput(err.text, limits),
-    ...(dropped > 0 ? { droppedChars: dropped } : {})
-  };
-}
 
-function killBackgroundProcess(registry: Map<string, BackgroundProcessHandle>, processId: string): CommandRunResult {
+  const record = archived.get(processId);
+  if (record) {
+    const result = resultFromPersistedRecord(record, limits);
+    if (record.status !== 'running' && options.consume !== false) deletePersistedBackgroundRecord(pathsProvider, archived, processId);
+    return result;
+  }
+
+  return { command: '', exitCode: 1, killed: false, status: 'not_found', processId, running: false, stdout: '', stderr: `未找到后台进程：${processId}（可能已结束并被清理）。` };
+}
+function killBackgroundProcess(
+  registry: Map<string, BackgroundProcessHandle>,
+  archived: Map<string, PersistedBackgroundProcessRecord>,
+  pathsProvider: BackgroundCommandPathsProvider | undefined,
+  processId: string
+): CommandRunResult {
   const handle = registry.get(processId);
   if (!handle) {
+    const record = archived.get(processId);
+    if (record) {
+      const result = resultFromPersistedRecord({ ...record, status: 'killed', killed: true, exitCode: record.exitCode ?? 1, updatedAt: Date.now(), exitedAt: Date.now() }, DEFAULT_OUTPUT_LIMITS);
+      deletePersistedBackgroundRecord(pathsProvider, archived, processId);
+      return result;
+    }
     return { command: '', exitCode: 1, killed: false, status: 'not_found', processId, running: false, stdout: '', stderr: `未找到后台进程：${processId}（可能已结束并被清理）。` };
   }
   if (handle.status === 'running') {
     handle.status = 'killed';
     handle.exitedAt = Date.now();
+    handle.suppressPersist = true;
     killProcessTree(handle.child.pid, handle.kind);
   }
-  // kill 只终止进程；日志持久保留，直到被 output 读取或扩展退出才清理（本次返回当前全量日志作即时反馈）。
-  const out = handle.stdout.snapshot();
-  const err = handle.stderr.snapshot();
-  return {
-    command: handle.command,
-    exitCode: handle.exitCode ?? 0,
-    killed: true,
-    status: 'killed',
-    processId,
-    running: false,
-    stdout: truncateOutput(out.text, DEFAULT_OUTPUT_LIMITS),
-    stderr: truncateOutput(err.text, DEFAULT_OUTPUT_LIMITS)
-  };
+  flushPersist(handle, pathsProvider);
+  deletePersistedBackgroundRecord(pathsProvider, archived, processId);
+  return resultFromHandle(handle, DEFAULT_OUTPUT_LIMITS);
 }
-
-function disposeRegistry(registry: Map<string, BackgroundProcessHandle>): void {
+function disposeRegistry(registry: Map<string, BackgroundProcessHandle>, pathsProvider: BackgroundCommandPathsProvider | undefined): void {
   for (const handle of registry.values()) {
     if (handle.status === 'running') {
-      handle.status = 'killed';
+      markAbnormalTermination(handle, '扩展关闭或重启后无法恢复后台进程，已标记为异常终止。');
       killProcessTree(handle.child.pid, handle.kind);
     }
+    flushPersist(handle, pathsProvider);
   }
   registry.clear();
 }
-
 function detectCommandProfile(): CommandProfile {
   if (process.platform === 'win32') {
     return {
@@ -183,7 +237,7 @@ function resolvePowerShell(): string {
   return cachedPowerShell;
 }
 
-async function runCommand(profile: CommandProfile, registry: Map<string, BackgroundProcessHandle>, args: CommandRunArgs, observer: CommandRunObserver | undefined, options: WorkEnvironmentCapabilityOptions = {}, limits: CommandOutputLimits = DEFAULT_OUTPUT_LIMITS): Promise<CommandRunResult> {
+async function runCommand(profile: CommandProfile, registry: Map<string, BackgroundProcessHandle>, archived: Map<string, PersistedBackgroundProcessRecord>, pathsProvider: BackgroundCommandPathsProvider | undefined, args: CommandRunArgs, observer: CommandRunObserver | undefined, options: WorkEnvironmentCapabilityOptions = {}, limits: CommandOutputLimits = DEFAULT_OUTPUT_LIMITS): Promise<CommandRunResult> {
   const command = (args.command ?? '').trim();
   if (!command) return failedResult('', 'Missing required argument: command');
 
@@ -207,11 +261,11 @@ async function runCommand(profile: CommandProfile, registry: Map<string, Backgro
 
   const cwd = resolveWorkDir(args.cwd, options);
   const timeout = resolveTimeout(args.timeout);
-  const raw = await executeCommand(profile, registry, command, cwd, timeout, limits, observer);
+  const raw = await executeCommand(profile, registry, archived, pathsProvider, command, cwd, timeout, limits, observer);
   return annotateResult(profile.kind, raw);
 }
 
-function executeCommand(profile: CommandProfile, registry: Map<string, BackgroundProcessHandle>, command: string, cwd: string, timeout: number, limits: CommandOutputLimits, observer?: CommandRunObserver): Promise<CommandRunResult> {
+function executeCommand(profile: CommandProfile, registry: Map<string, BackgroundProcessHandle>, archived: Map<string, PersistedBackgroundProcessRecord>, pathsProvider: BackgroundCommandPathsProvider | undefined, command: string, cwd: string, timeout: number, limits: CommandOutputLimits, observer?: CommandRunObserver): Promise<CommandRunResult> {
   const wrappedCommand = `${profile.commandPrefix ?? ''}${command}`;
   return new Promise((resolve) => {
     const stdout = new AppendBuffer(BACKGROUND_MAX_CHARS);
@@ -238,9 +292,10 @@ function executeCommand(profile: CommandProfile, registry: Map<string, Backgroun
       if (timeoutTimer) clearTimeout(timeoutTimer);
       streamEvents.flush();
       streamEvents = createStreamEventEmitter(undefined); // 停止向已终态的 toolCall 推流，仅写 buffer
-      const processId = generateProcessId(registry);
+      const processId = generateProcessId(registry, archived);
       handle = { processId, child, kind: profile.kind, command, cwd, stdout, stderr, status: 'running', exitCode: null, startedAt };
       registry.set(processId, handle);
+      persistHandle(handle, pathsProvider);
       // 返回截至转后台一刻的输出（全量快照；完整日志随进程继续累积，后续 output 可再全量读取）。
       const out = stdout.snapshot();
       const err = stderr.snapshot();
@@ -281,22 +336,25 @@ function executeCommand(profile: CommandProfile, registry: Map<string, Backgroun
       handle.exitCode = exitCode;
       handle.exitedAt = Date.now();
       if (handle.status !== 'killed') handle.status = 'exited';
-      // 进程结束后日志持久保留在 registry 中，直到被 output 读取或扩展退出才清理。
+      persistHandle(handle, pathsProvider);
     };
 
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
     child.stdout?.on('data', (chunk: string) => {
       stdout.append(chunk);
+      if (handle) schedulePersist(handle, pathsProvider);
       streamEvents.push('stdout', chunk);
     });
     child.stderr?.on('data', (chunk: string) => {
       stderr.append(chunk);
+      if (handle) schedulePersist(handle, pathsProvider);
       streamEvents.push('stderr', chunk);
     });
     child.once('error', (error) => {
       const message = error instanceof Error ? error.message : String(error);
       stderr.append(message);
+      if (handle) schedulePersist(handle, pathsProvider);
       streamEvents.push('stderr', message);
       if (backgrounded) finalizeBackground(1);
       else settleForeground(1);
@@ -331,6 +389,245 @@ function commandExecutable(profile: CommandProfile): string {
  * 追加式输出缓冲：保留当前日志正文，随时可全量读取（不依赖任何读取游标/历史）。
  * 总量超过 maxChars 时环形丢弃最旧字符，并累计 droppedChars 供提示。
  */
+function resultFromHandle(handle: BackgroundProcessHandle, limits: CommandOutputLimits): CommandRunResult {
+  const out = handle.stdout.snapshot();
+  const err = handle.stderr.snapshot();
+  const running = handle.status === 'running';
+  const dropped = out.dropped + err.dropped;
+  return {
+    command: handle.command,
+    exitCode: handle.exitCode ?? 0,
+    killed: handle.status === 'killed',
+    status: running ? 'running' : handle.status,
+    processId: handle.processId,
+    running,
+    stdout: truncateOutput(out.text, limits),
+    stderr: truncateOutput(err.text, limits),
+    ...(dropped > 0 ? { droppedChars: dropped } : {})
+  };
+}
+
+function resultFromPersistedRecord(record: PersistedBackgroundProcessRecord, limits: CommandOutputLimits): CommandRunResult {
+  const running = record.status === 'running';
+  const dropped = record.droppedStdoutChars + record.droppedStderrChars;
+  return {
+    command: record.command,
+    exitCode: record.exitCode ?? 0,
+    killed: record.killed || record.status === 'killed',
+    status: running ? 'running' : record.status,
+    processId: record.processId,
+    running,
+    stdout: truncateOutput(record.stdout, limits),
+    stderr: truncateOutput(record.stderr, limits),
+    ...(dropped > 0 ? { droppedChars: dropped } : {})
+  };
+}
+
+function schedulePersist(handle: BackgroundProcessHandle, pathsProvider: BackgroundCommandPathsProvider | undefined): void {
+  if (handle.suppressPersist || handle.persistTimer) return;
+  handle.persistTimer = setTimeout(() => {
+    handle.persistTimer = undefined;
+    persistHandle(handle, pathsProvider);
+  }, BACKGROUND_PERSIST_DEBOUNCE_MS);
+  handle.persistTimer.unref?.();
+}
+
+function flushPersist(handle: BackgroundProcessHandle, pathsProvider: BackgroundCommandPathsProvider | undefined): void {
+  if (handle.persistTimer) {
+    clearTimeout(handle.persistTimer);
+    handle.persistTimer = undefined;
+  }
+  persistHandle(handle, pathsProvider);
+}
+
+function persistHandle(handle: BackgroundProcessHandle, pathsProvider: BackgroundCommandPathsProvider | undefined): void {
+  if (handle.suppressPersist) return;
+  savePersistedBackgroundRecord(pathsProvider, persistedRecordFromHandle(handle));
+}
+
+function persistedRecordFromHandle(handle: BackgroundProcessHandle): PersistedBackgroundProcessRecord {
+  const out = handle.stdout.snapshot();
+  const err = handle.stderr.snapshot();
+  return {
+    version: BACKGROUND_COMMAND_STORAGE_VERSION,
+    processId: handle.processId,
+    kind: handle.kind,
+    command: handle.command,
+    cwd: handle.cwd,
+    stdout: out.text,
+    stderr: err.text,
+    droppedStdoutChars: out.dropped,
+    droppedStderrChars: err.dropped,
+    status: handle.status,
+    exitCode: handle.exitCode,
+    killed: handle.status === 'killed',
+    startedAt: handle.startedAt,
+    updatedAt: Date.now(),
+    ...(handle.exitedAt !== undefined ? { exitedAt: handle.exitedAt } : {})
+  };
+}
+
+function markAbnormalTermination(handle: BackgroundProcessHandle, reason: string): void {
+  handle.status = 'exited';
+  handle.exitCode = handle.exitCode ?? 1;
+  handle.exitedAt = Date.now();
+  handle.stderr.append(`${handle.stderr.snapshot().text ? '\n' : ''}[LimCode] ${reason}`);
+}
+
+function loadPersistedBackgroundRecords(pathsProvider: BackgroundCommandPathsProvider | undefined, archived: Map<string, PersistedBackgroundProcessRecord>): void {
+  const locations = backgroundCommandStorageLocations(pathsProvider);
+  if (!locations) return;
+  const index = readBackgroundCommandIndex(locations.indexPath);
+  let changed = false;
+  for (const entry of index.records) {
+    const filePath = path.join(locations.recordsRootPath, entry.file);
+    const record = readJsonFile<PersistedBackgroundProcessRecord>(filePath);
+    if (!isPersistedBackgroundProcessRecord(record)) {
+      changed = true;
+      continue;
+    }
+    let next = record;
+    if (record.status === 'running') {
+      next = {
+        ...record,
+        status: 'exited',
+        exitCode: 1,
+        killed: false,
+        stderr: appendLine(record.stderr, '[LimCode] 扩展重启后无法恢复后台进程，已标记为异常终止。'),
+        updatedAt: Date.now(),
+        exitedAt: Date.now()
+      };
+      writeJsonFile(filePath, next);
+      changed = true;
+    }
+    entry.status = next.status;
+    entry.updatedAt = next.updatedAt;
+    archived.set(next.processId, next);
+  }
+  if (changed) writeBackgroundCommandIndex(locations.indexPath, { version: BACKGROUND_COMMAND_STORAGE_VERSION, records: index.records.filter((entry) => archived.has(entry.processId)) });
+}
+
+function savePersistedBackgroundRecord(pathsProvider: BackgroundCommandPathsProvider | undefined, record: PersistedBackgroundProcessRecord): void {
+  const locations = backgroundCommandStorageLocations(pathsProvider);
+  if (!locations) return;
+  try {
+    fs.mkdirSync(locations.recordsRootPath, { recursive: true });
+    const index = readBackgroundCommandIndex(locations.indexPath);
+    let entry = index.records.find((candidate) => candidate.processId === record.processId);
+    if (!entry) {
+      entry = {
+        processId: record.processId,
+        file: `${formatTimestamp(record.startedAt)}-${safeFileName(record.processId)}.json`,
+        status: record.status,
+        updatedAt: record.updatedAt
+      };
+      index.records.push(entry);
+    } else {
+      entry.status = record.status;
+      entry.updatedAt = record.updatedAt;
+    }
+    writeJsonFile(path.join(locations.recordsRootPath, entry.file), record);
+    writeBackgroundCommandIndex(locations.indexPath, index);
+  } catch (error) {
+    console.warn('[LimCode] Failed to persist background command output:', error);
+  }
+}
+
+function deletePersistedBackgroundRecord(pathsProvider: BackgroundCommandPathsProvider | undefined, archived: Map<string, PersistedBackgroundProcessRecord>, processId: string): void {
+  archived.delete(processId);
+  const locations = backgroundCommandStorageLocations(pathsProvider);
+  if (!locations) return;
+  try {
+    const index = readBackgroundCommandIndex(locations.indexPath);
+    const entry = index.records.find((candidate) => candidate.processId === processId);
+    if (entry) {
+      try { fs.unlinkSync(path.join(locations.recordsRootPath, entry.file)); } catch { /* ignore missing record */ }
+    }
+    writeBackgroundCommandIndex(locations.indexPath, { version: BACKGROUND_COMMAND_STORAGE_VERSION, records: index.records.filter((candidate) => candidate.processId !== processId) });
+  } catch (error) {
+    console.warn('[LimCode] Failed to delete background command output:', error);
+  }
+}
+
+function backgroundCommandStorageLocations(pathsProvider: BackgroundCommandPathsProvider | undefined): { rootPath: string; indexPath: string; recordsRootPath: string } | undefined {
+  const paths = pathsProvider?.();
+  if (!paths) return undefined;
+  return {
+    rootPath: paths.backgroundCommandsRootPath,
+    indexPath: paths.backgroundCommandsIndexPath,
+    recordsRootPath: path.join(paths.backgroundCommandsRootPath, BACKGROUND_COMMAND_RECORDS_DIR)
+  };
+}
+
+function readBackgroundCommandIndex(indexPath: string): BackgroundCommandIndexFile {
+  const value = readJsonFile<BackgroundCommandIndexFile>(indexPath);
+  if (!value || !Array.isArray(value.records)) return { version: BACKGROUND_COMMAND_STORAGE_VERSION, records: [] };
+  return { version: BACKGROUND_COMMAND_STORAGE_VERSION, records: value.records.filter(isBackgroundCommandIndexRecord) };
+}
+
+function writeBackgroundCommandIndex(indexPath: string, index: BackgroundCommandIndexFile): void {
+  fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+  writeJsonFile(indexPath, { version: BACKGROUND_COMMAND_STORAGE_VERSION, records: index.records });
+}
+
+function readJsonFile<T>(filePath: string): T | undefined {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8')) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeJsonFile(filePath: string, value: unknown): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+}
+
+function isBackgroundCommandIndexRecord(value: unknown): value is BackgroundCommandIndexRecord {
+  const record = asRecord(value);
+  return !!record && typeof record.processId === 'string' && typeof record.file === 'string' && isBackgroundStatus(record.status) && typeof record.updatedAt === 'number';
+}
+
+function isPersistedBackgroundProcessRecord(value: unknown): value is PersistedBackgroundProcessRecord {
+  const record = asRecord(value);
+  return !!record
+    && record.version === BACKGROUND_COMMAND_STORAGE_VERSION
+    && typeof record.processId === 'string'
+    && (record.kind === 'powershell' || record.kind === 'bash')
+    && typeof record.command === 'string'
+    && typeof record.cwd === 'string'
+    && typeof record.stdout === 'string'
+    && typeof record.stderr === 'string'
+    && typeof record.droppedStdoutChars === 'number'
+    && typeof record.droppedStderrChars === 'number'
+    && isBackgroundStatus(record.status)
+    && (typeof record.exitCode === 'number' || record.exitCode === null)
+    && typeof record.killed === 'boolean'
+    && typeof record.startedAt === 'number'
+    && typeof record.updatedAt === 'number';
+}
+
+function isBackgroundStatus(value: unknown): value is 'running' | 'exited' | 'killed' {
+  return value === 'running' || value === 'exited' || value === 'killed';
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function appendLine(text: string, line: string): string {
+  return text ? `${text}\n${line}` : line;
+}
+
+function formatTimestamp(value: number): string {
+  const date = new Date(value);
+  const pad = (input: number, length = 2): string => String(input).padStart(length, '0');
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}-${pad(date.getMilliseconds(), 3)}`;
+}
+
+function safeFileName(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 80) || 'background-command';
+}
 class AppendBuffer {
   private buffer = '';
   private droppedChars = 0;

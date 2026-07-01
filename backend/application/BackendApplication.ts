@@ -165,6 +165,7 @@ export class BackendApplication {
       clients: this.webviewClients,
       storage: this.env.storage,
       llm: this.env.llm,
+      command: this.env.command,
       globalSettingsBridge: this.globalSettingsBridge,
       conversationSettingsBridge: this.conversationSettingsBridge,
       isHydrated: () => this.hydrated,

@@ -13,6 +13,7 @@ import { useConversationTimelineStore } from '@webview/stores/useConversationTim
 import { bridge, BridgeMessageType } from '@webview/transport';
 import TaskListDisplay from '@webview/components/taskList/TaskListDisplay.vue';
 import { resolveToolDisplay } from '../toolDisplay/registry';
+import { parseShellArgs, parseShellResultOutput } from '../toolDisplay/shellToolModel';
 import ContentBlockSection from '../ContentBlockSection.vue';
 import CollapsibleContentBlock from '../CollapsibleContentBlock.vue';
 import ToolDiffView from '../toolDisplay/ToolDiffView.vue';
@@ -82,8 +83,13 @@ const needsChangeApplyDecision = computed(() => toolCall.value?.status === 'awai
 const needsResultSubmitDecision = computed(() => toolCall.value?.status === 'awaiting_result_submit');
 const hasDetails = computed(() => hasArgs.value || hasOutput.value || Boolean(toolCall.value?.error) || executionApproved.value);
 const autoExpandDetails = computed(() => toolCall.value?.display?.autoExpand === true);
-const statusLabel = computed(() => toolCall.value ? labelForToolCall(toolCall.value) : '工具请求已生成');
-const statusTitle = computed(() => toolCall.value ? `工具状态：${toolCall.value.status}` : '等待后端创建工具调用记录');
+const commandRuntimeStatus = computed(() => toolCall.value ? shellRuntimeStatusLabel(toolCall.value) : undefined);
+const statusLabel = computed(() => commandRuntimeStatus.value?.label ?? (toolCall.value ? labelForToolCall(toolCall.value) : '工具请求已生成'));
+const statusTitle = computed(() => {
+  if (!toolCall.value) return '等待后端创建工具调用记录';
+  const runtimeStatus = commandRuntimeStatus.value?.status;
+  return runtimeStatus ? '工具状态：' + toolCall.value.status + ' · shell ' + runtimeStatus : '工具状态：' + toolCall.value.status;
+});
 const durationLabel = computed(() => {
   const duration = toolCall.value?.durationMs;
   if (duration === undefined) return undefined;
@@ -99,6 +105,17 @@ const summaryDisplay = computed(() => {
     ? { main: lineRangeMatch[1] ?? '', suffix: lineRangeMatch[2] }
     : { main: summary };
 });
+const commandAccessLabel = computed(() => {
+  if (!isCommandTool(props.part.functionCall.name)) return undefined;
+  const args = parseShellArgs(props.part.functionCall.args);
+  return args.readonly?.trim().toLowerCase() === 'true' ? '只读' : '读写';
+});
+const commandAccessPrefix = computed(() => {
+  const label = commandAccessLabel.value;
+  if (!label) return undefined;
+  return summaryDisplay.value ? `${label} ·` : label;
+});
+const summaryTitle = computed(() => [commandAccessLabel.value, summaryLabel.value].filter(Boolean).join(' · ') || undefined);
 const hasBatchMeta = computed(() => props.batchIndex !== undefined && props.batchMode !== undefined && props.batchState !== undefined);
 const batchModeLabel = computed(() => props.batchMode === 'parallel' ? '并行批次' : '串行批次');
 const batchStateLabel = computed(() => {
@@ -127,6 +144,10 @@ watch(() => toolCall.value?.id, () => {
   userChangedExpanded.value = false;
   expanded.value = autoExpandDetails.value;
 });
+
+function isCommandTool(toolName: string): boolean {
+  return toolName === 'shell' || toolName === 'bash';
+}
 
 function stringifyValue(value: unknown): string {
   if (typeof value === 'string') return value;
@@ -164,6 +185,16 @@ function invokeHeaderAction(action: ToolHeaderAction): void {
   action.invoke();
 }
 
+function shellRuntimeStatusLabel(call: ToolCallRecord): { label: string; status: string } | undefined {
+  if (!isCommandTool(call.name)) return undefined;
+  const output = parseShellResultOutput(call.result);
+  if (!output) return undefined;
+  if (output.running === true || output.status === 'running') return { label: '后台运行中', status: 'running' };
+  if (output.killed === true || output.status === 'killed') return { label: '已终止', status: 'killed' };
+  if (typeof output.exitCode === 'number' && output.exitCode !== 0) return { label: '异常终止', status: output.status ?? 'exited' };
+  if (output.status === 'exited') return { label: '已退出', status: 'exited' };
+  return undefined;
+}
 function labelForToolCall(call: ToolCallRecord): string {
   if (call.status === 'awaiting_approval' && isExecutionApprovedProgress(call.progress)) return '已批准，等待前序批次';
   if (call.status === 'error' && isDeniedResult(call.result)) {
@@ -254,7 +285,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
       <component :is="toolIcon" :stroke="2" aria-hidden="true" />
     </template>
     <template #summary>
-      <span class="part-card-name" :class="{ 'has-summary': summaryLabel }">{{ part.functionCall.name }}</span>
+      <span class="part-card-name" :class="{ 'has-summary': summaryLabel || commandAccessLabel }">{{ part.functionCall.name }}</span>
       <span v-if="headerPreview" class="part-card-summary is-preview" :title="headerPreview.filePath">
         <span class="part-card-summary-main">{{ headerPreview.fileName }}</span>
         <span
@@ -265,9 +296,10 @@ function isInternalApprovalProgress(progress: unknown): boolean {
           <span v-if="(headerPreview.removed ?? 0) > 0" class="diff-stat-del">-{{ headerPreview.removed }}</span>
         </span>
       </span>
-      <span v-else-if="summaryDisplay" class="part-card-summary" :title="summaryLabel">
-        <span class="part-card-summary-main">{{ summaryDisplay.main }}</span>
-        <span v-if="summaryDisplay.suffix" class="part-card-summary-suffix">{{ summaryDisplay.suffix }}</span>
+      <span v-else-if="summaryDisplay || commandAccessLabel" class="part-card-summary" :title="summaryTitle">
+        <span v-if="commandAccessPrefix" class="part-card-summary-prefix">{{ commandAccessPrefix }}</span>
+        <span v-if="summaryDisplay" class="part-card-summary-main">{{ summaryDisplay.main }}</span>
+        <span v-if="summaryDisplay?.suffix" class="part-card-summary-suffix">{{ summaryDisplay.suffix }}</span>
       </span>
     </template>
     <template #trail>
@@ -434,6 +466,13 @@ function isInternalApprovalProgress(progress: unknown): boolean {
   font-size: var(--font-size-xs);
   font-weight: 400;
   opacity: 0.86;
+}
+
+.part-card-summary-prefix {
+  flex: 0 0 auto;
+  margin-right: 4px;
+  color: color-mix(in srgb, var(--vscode-descriptionForeground) 92%, var(--vscode-foreground) 8%);
+  font-weight: 500;
 }
 
 .part-card-summary-main {

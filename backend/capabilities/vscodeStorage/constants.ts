@@ -30,6 +30,7 @@ export const AGENT_ANSWERS_ROOT_DIR = 'agent-answers';
 export const AGENT_ANSWER_SUBMISSION_LINKS_ROOT_DIR = 'agent-answer-submission-links';
 export const AGENT_ANSWER_TARGET_LINKS_ROOT_DIR = 'agent-answer-target-links';
 export const SETTINGS_ROOT_DIR = 'settings';
+export const BACKGROUND_COMMANDS_ROOT_DIR = 'background-commands';
 export const WORK_ENVIRONMENTS_ROOT_DIR = 'work-environments';
 export const CONVERSATION_WORK_ENVIRONMENT_LINKS_ROOT_DIR = 'conversation-work-environment-links';
 export const RUN_WORK_ENVIRONMENT_LINKS_ROOT_DIR = 'run-work-environment-links';
@@ -97,6 +98,7 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
   COMPRESSION_CONTEXT_VARIANTS_ROOT_DIR,
   COMPRESSION_BLOCK_LLM_INVOCATION_LINKS_ROOT_DIR,
   COMPRESSION_LLM_INVOCATIONS_ROOT_DIR,
+  BACKGROUND_COMMANDS_ROOT_DIR,
   SETTINGS_ROOT_DIR
 ] as const;
 

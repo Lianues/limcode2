@@ -297,8 +297,8 @@ export interface CommandCapability {
   readonly description: string;
   /** 执行新命令；超时不再 kill，而是转入后台并返回 { status:'running', processId }。limits 控制返回给模型的输出上限。 */
   run(args: CommandRunArgs, observer?: CommandRunObserver, options?: WorkEnvironmentCapabilityOptions, limits?: CommandOutputLimits): Promise<CommandRunResult>;
-  /** 读取某后台进程当前已累积的全部日志，并返回其运行状态。 */
-  readOutput(processId: string, limits: CommandOutputLimits): CommandRunResult;
+  /** 读取某后台进程当前已累积的全部日志，并返回其运行状态；默认读取终态日志后清理，consume=false 仅同步。 */
+  readOutput(processId: string, limits: CommandOutputLimits, options?: { consume?: boolean }): CommandRunResult;
   /** 终止某后台进程；终止后日志临时保留一小段时间，可用 readOutput 查看最终结果。 */
   kill(processId: string): CommandRunResult;
   /** 扩展关闭时终止所有残留后台进程并清理。 */
@@ -537,6 +537,11 @@ export interface RuntimePaths {
   agentAnswerTargetLinksIndexUri: vscode.Uri;
   agentAnswerTargetLinksIndexPath: string;
 
+  /** 后台命令日志数据根目录：<dataRoot>/background-commands */
+  backgroundCommandsRootUri: vscode.Uri;
+  backgroundCommandsRootPath: string;
+  backgroundCommandsIndexUri: vscode.Uri;
+  backgroundCommandsIndexPath: string;
   /** 通用设置根目录：<dataRoot>/settings */
   settingsRootUri: vscode.Uri;
   settingsRootPath: string;

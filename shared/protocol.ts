@@ -182,7 +182,9 @@ export enum BridgeMessageType {
   CompressionDisable = 'compression.disable',
   CompressionEnable = 'compression.enable',
   FsStatGet = 'fs.stat.get',
-  FsStatResult = 'fs.stat.result'
+  FsStatResult = 'fs.stat.result',
+  BackgroundCommandOutputGet = 'backgroundCommand.output.get',
+  BackgroundCommandOutputResult = 'backgroundCommand.output.result'
 }
 
 export interface BridgeEnvelope<TType extends string = string, TPayload = unknown> {
@@ -2417,6 +2419,24 @@ export interface AttachmentReloadResultPayload {
   error?: string;
 }
 
+export interface BackgroundCommandOutputGetPayload {
+  processId: string;
+  consume?: boolean;
+}
+
+export interface BackgroundCommandOutputResultPayload {
+  processId: string;
+  command: string;
+  exitCode: number;
+  killed: boolean;
+  stdout: string;
+  stderr: string;
+  status?: 'completed' | 'running' | 'exited' | 'killed' | 'not_found';
+  running?: boolean;
+  droppedChars?: number;
+  consumed?: boolean;
+}
+
 export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.Ready, undefined>
   | BridgeEnvelope<BridgeMessageType.Ack, BridgeAckPayload>
@@ -2507,7 +2527,8 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.WorkEnvironmentImportFromVscode, WorkEnvironmentImportFromVscodePayload>
   | BridgeEnvelope<BridgeMessageType.WorkEnvironmentPolicyScopeSet, WorkEnvironmentPolicyScopeSetPayload>
   | BridgeEnvelope<BridgeMessageType.WorkEnvironmentPolicyScopeClear, WorkEnvironmentPolicyScopeClearPayload>
-  | BridgeEnvelope<BridgeMessageType.FsStatGet, FsStatGetPayload>;
+  | BridgeEnvelope<BridgeMessageType.FsStatGet, FsStatGetPayload>
+  | BridgeEnvelope<BridgeMessageType.BackgroundCommandOutputGet, BackgroundCommandOutputGetPayload>;
 
 export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.Hello, BridgeHelloPayload>
@@ -2533,7 +2554,8 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsSnapshot, GlobalSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsSnapshot, ConversationSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ProjectFoldersSnapshot, ProjectFoldersSnapshotPayload>
-  | BridgeEnvelope<BridgeMessageType.FsStatResult, FsStatResultPayload>;
+  | BridgeEnvelope<BridgeMessageType.FsStatResult, FsStatResultPayload>
+  | BridgeEnvelope<BridgeMessageType.BackgroundCommandOutputResult, BackgroundCommandOutputResultPayload>;
 
 export function createMessageId(): MessageId {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;

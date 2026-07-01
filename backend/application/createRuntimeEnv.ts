@@ -29,10 +29,10 @@ export interface RuntimeEnvSetup {
  * 只负责把 VS Code 侧能力实现组装成 RuntimeEnv，不包含领域规则。
  */
 export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSetup {
-  const command = createCommandCapability();
+  const storage = createVsCodeStorageCapability(context);
+  const command = createCommandCapability({ paths: () => storage.paths });
   const workEnvironment = createWorkEnvironmentRuntimeCapability();
   const registry = createToolRegistry(command);
-  const storage = createVsCodeStorageCapability(context);
   const mcp = new McpRuntimeManager(storage);
   const llm = createLlmProviderCapability({
     settings: async (request) => {

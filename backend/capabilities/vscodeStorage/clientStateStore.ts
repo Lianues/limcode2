@@ -41,6 +41,8 @@ import type {
   ToolCallRecord,
   ToolPolicyRecord,
   ToolPolicyScopeLinkRecord,
+  SkillPolicyRecord,
+  SkillPolicyScopeLinkRecord,
   WorkEnvironmentRecord,
   ShadowRepositoryRecord,
   ConversationWorkEnvironmentLinkRecord,
@@ -186,6 +188,8 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
     modes,
     toolPolicies,
     toolPolicyScopeLinks,
+    skillPolicies,
+    skillPolicyScopeLinks,
     systemPrompts,
     systemPromptScopeLinks,
     runtimeContexts,
@@ -210,6 +214,8 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
     loadSkeletonRecords<ModeRecord>('modes', [paths.modesRootUri, paths.modesIndexUri], 'mode'),
     loadSkeletonRecords<ToolPolicyRecord>('toolPolicies', [paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri], 'toolPolicy'),
     loadSkeletonRecords<ToolPolicyScopeLinkRecord>('toolPolicyScopeLinks', [paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri], 'link'),
+    loadSkeletonRecords<SkillPolicyRecord>('skillPolicies', [paths.skillPoliciesRootUri, paths.skillPoliciesIndexUri], 'skillPolicy'),
+    loadSkeletonRecords<SkillPolicyScopeLinkRecord>('skillPolicyScopeLinks', [paths.skillPolicyScopeLinksRootUri, paths.skillPolicyScopeLinksIndexUri], 'link'),
     loadSkeletonRecords<SystemPromptRecord>('systemPrompts', [paths.systemPromptsRootUri, paths.systemPromptsIndexUri], 'systemPrompt'),
     loadSkeletonRecords<SystemPromptScopeLinkRecord>('systemPromptScopeLinks', [paths.systemPromptScopeLinksRootUri, paths.systemPromptScopeLinksIndexUri], 'link'),
     loadSkeletonRecords<RuntimeContextRecord>('runtimeContexts', [paths.runtimeContextsRootUri, paths.runtimeContextsIndexUri], 'runtimeContext'),
@@ -235,6 +241,8 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
   state.modes = modes;
   state.toolPolicies = toolPolicies;
   state.toolPolicyScopeLinks = toolPolicyScopeLinks;
+  state.skillPolicies = skillPolicies;
+  state.skillPolicyScopeLinks = skillPolicyScopeLinks;
   state.systemPrompts = systemPrompts;
   state.systemPromptScopeLinks = systemPromptScopeLinks;
   state.runtimeContexts = runtimeContexts;
@@ -426,6 +434,8 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
     saveRecords(paths.modesRootUri, paths.modesIndexUri, state.modes, 'mode', (record) => record.name || record.id),
     saveRecords(paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri, state.toolPolicies, 'toolPolicy', (record) => record.name || record.id),
     saveRecords(paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri, state.toolPolicyScopeLinks, 'link'),
+    saveRecords(paths.skillPoliciesRootUri, paths.skillPoliciesIndexUri, state.skillPolicies, 'skillPolicy', (record) => record.name || record.id),
+    saveRecords(paths.skillPolicyScopeLinksRootUri, paths.skillPolicyScopeLinksIndexUri, state.skillPolicyScopeLinks, 'link'),
     saveRecords(paths.systemPromptsRootUri, paths.systemPromptsIndexUri, state.systemPrompts, 'systemPrompt', (record) => record.name || record.id),
     saveRecords(paths.systemPromptScopeLinksRootUri, paths.systemPromptScopeLinksIndexUri, state.systemPromptScopeLinks, 'link'),
     saveRecords(paths.runtimeContextsRootUri, paths.runtimeContextsIndexUri, state.runtimeContexts, 'runtimeContext', (record) => record.name || record.id),

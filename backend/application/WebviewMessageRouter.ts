@@ -9,6 +9,7 @@ import { LlmInvocation, MessageLlmInvocationLink, RunLlmInvocationLink } from '.
 import { buildLlmStartRequestForRun } from '../world/modules/chat/systems/LlmDispatchSystem';
 import { CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSourceLink } from '../world/modules/compression/components';
 import { ToolEventType } from '../world/modules/tools/events';
+import { SkillEventType } from '../world/modules/skill/events';
 import { ModeEventType } from '../world/modules/mode/events';
 import { WorkEnvironmentEventType } from '../world/modules/workEnvironment/events';
 import { CheckpointEventType } from '../world/modules/checkpoint/events';
@@ -69,6 +70,7 @@ export interface WebviewMessageRouterDeps {
   getProjectFolderCandidates: () => ProjectFolderCandidateRecord[];
   setConversationProjectFolder: (input: SetConversationProjectFolderInput) => boolean;
   importWorkEnvironmentsFromVscode: () => Promise<number>;
+  refreshSkillCatalog: () => Promise<void>;
 }
 
 /**
@@ -121,6 +123,20 @@ export class WebviewMessageRouter {
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ToolEventType.PolicyScopeClearRequested, payload: message.payload });
         this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.SkillPolicyScopeSet:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: SkillEventType.PolicyScopeSetRequested, payload: message.payload });
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.SkillPolicyScopeClear:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: SkillEventType.PolicyScopeClearRequested, payload: message.payload });
+        this.deps.requestSnapshot();
+        break;
+      case BridgeMessageType.SkillCatalogRefresh:
+        if (!this.deps.isHydrated()) return;
+        void this.deps.refreshSkillCatalog().catch((error) => this.postRequestError(clientId, message.type, error instanceof Error ? error.message : '无法刷新技能目录。', message.id));
         break;
       case BridgeMessageType.ToolExecutionApprove:
         if (!this.deps.isHydrated() || !message.payload) return;

@@ -6,6 +6,7 @@ import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.
 import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingInline.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
 import ToolPolicyEditor from '@webview/components/settings/tools/ToolPolicyEditor.vue';
+import SkillPolicyEditor from '@webview/components/settings/skills/SkillPolicyEditor.vue';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
 import WorkEnvironmentPolicyEditor from '@webview/components/settings/workEnvironment/WorkEnvironmentPolicyEditor.vue';
@@ -205,6 +206,14 @@ function escapeHtml(value: string): string {
         :scope-id="activeMode.id"
         title="模式工具策略"
         description="这个模式启用时会优先使用这里的工具策略；未配置时继承全局策略。"
+      />
+
+      <SkillPolicyEditor
+        v-if="activeMode"
+        scope-kind="mode"
+        :scope-id="activeMode.id"
+        title="模式技能策略"
+        description="这个模式启用时会优先使用这里的技能策略；未配置时继承全局策略。"
       />
 
       <CheckpointPolicyEditor

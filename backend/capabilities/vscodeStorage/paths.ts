@@ -29,6 +29,8 @@ import {
   SYSTEM_PROMPTS_ROOT_DIR,
   TOOL_POLICY_SCOPE_LINKS_ROOT_DIR,
   TOOL_POLICIES_ROOT_DIR,
+  SKILL_POLICIES_ROOT_DIR,
+  SKILL_POLICY_SCOPE_LINKS_ROOT_DIR,
   WORK_ENVIRONMENTS_ROOT_DIR,
   CONVERSATION_WORK_ENVIRONMENT_LINKS_ROOT_DIR,
   RUN_WORK_ENVIRONMENT_LINKS_ROOT_DIR,
@@ -57,6 +59,10 @@ export interface VscodeStorageUris {
   toolPoliciesIndexUri: vscode.Uri;
   toolPolicyScopeLinksRootUri: vscode.Uri;
   toolPolicyScopeLinksIndexUri: vscode.Uri;
+  skillPoliciesRootUri: vscode.Uri;
+  skillPoliciesIndexUri: vscode.Uri;
+  skillPolicyScopeLinksRootUri: vscode.Uri;
+  skillPolicyScopeLinksIndexUri: vscode.Uri;
   systemPromptsRootUri: vscode.Uri;
   systemPromptsIndexUri: vscode.Uri;
   runtimeContextsRootUri: vscode.Uri;
@@ -146,6 +152,8 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const modes = root(globalStorageUri, MODES_ROOT_DIR);
   const toolPolicies = root(globalStorageUri, TOOL_POLICIES_ROOT_DIR);
   const toolPolicyScopeLinks = root(globalStorageUri, TOOL_POLICY_SCOPE_LINKS_ROOT_DIR);
+  const skillPolicies = root(globalStorageUri, SKILL_POLICIES_ROOT_DIR);
+  const skillPolicyScopeLinks = root(globalStorageUri, SKILL_POLICY_SCOPE_LINKS_ROOT_DIR);
   const systemPrompts = root(globalStorageUri, SYSTEM_PROMPTS_ROOT_DIR);
   const runtimeContexts = root(globalStorageUri, RUNTIME_CONTEXTS_ROOT_DIR);
   const runtimeContextScopeLinks = root(globalStorageUri, RUNTIME_CONTEXT_SCOPE_LINKS_ROOT_DIR);
@@ -206,6 +214,14 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     toolPolicyScopeLinksRootPath: toolPolicyScopeLinks.rootUri.fsPath,
     toolPolicyScopeLinksIndexUri: toolPolicyScopeLinks.indexUri,
     toolPolicyScopeLinksIndexPath: toolPolicyScopeLinks.indexUri.fsPath,
+    skillPoliciesRootUri: skillPolicies.rootUri,
+    skillPoliciesRootPath: skillPolicies.rootUri.fsPath,
+    skillPoliciesIndexUri: skillPolicies.indexUri,
+    skillPoliciesIndexPath: skillPolicies.indexUri.fsPath,
+    skillPolicyScopeLinksRootUri: skillPolicyScopeLinks.rootUri,
+    skillPolicyScopeLinksRootPath: skillPolicyScopeLinks.rootUri.fsPath,
+    skillPolicyScopeLinksIndexUri: skillPolicyScopeLinks.indexUri,
+    skillPolicyScopeLinksIndexPath: skillPolicyScopeLinks.indexUri.fsPath,
     systemPromptsRootUri: systemPrompts.rootUri,
     systemPromptsRootPath: systemPrompts.rootUri.fsPath,
     systemPromptsIndexUri: systemPrompts.indexUri,

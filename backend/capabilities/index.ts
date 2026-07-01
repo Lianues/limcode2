@@ -5,3 +5,4 @@ export { createCommandCapability } from './commandRunner';
 export { createWorkEnvironmentRuntimeCapability } from './workEnvironmentTransfer';
 export { createVsCodeStorageCapability } from './vscodeStorage';
 export { createWebviewCapability } from './vscodeWebview';
+export { createSkillCatalogCapability } from './skillCatalog';

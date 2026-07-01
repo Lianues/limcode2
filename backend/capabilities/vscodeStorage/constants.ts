@@ -6,6 +6,8 @@ export const AGENTS_ROOT_DIR = 'agents';
 export const MODES_ROOT_DIR = 'modes';
 export const TOOL_POLICIES_ROOT_DIR = 'tool-policies';
 export const TOOL_POLICY_SCOPE_LINKS_ROOT_DIR = 'tool-policy-scope-links';
+export const SKILL_POLICIES_ROOT_DIR = 'skill-policies';
+export const SKILL_POLICY_SCOPE_LINKS_ROOT_DIR = 'skill-policy-scope-links';
 export const SYSTEM_PROMPTS_ROOT_DIR = 'system-prompts';
 export const MODEL_PROFILES_ROOT_DIR = 'model-profiles';
 export const AGENT_CONVERSATION_LINKS_ROOT_DIR = 'agent-conversation-links';
@@ -55,6 +57,8 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
   MODES_ROOT_DIR,
   TOOL_POLICIES_ROOT_DIR,
   TOOL_POLICY_SCOPE_LINKS_ROOT_DIR,
+  SKILL_POLICIES_ROOT_DIR,
+  SKILL_POLICY_SCOPE_LINKS_ROOT_DIR,
   SYSTEM_PROMPTS_ROOT_DIR,
   MODEL_PROFILES_ROOT_DIR,
   AGENT_CONVERSATION_LINKS_ROOT_DIR,

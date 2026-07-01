@@ -9,5 +9,6 @@ export * from './workEnvironment';
 export * from './runtimeContext';
 export * from './llm';
 export * from './tools';
+export * from './skill';
 export * from './checkpoint';
 export * from './compression';

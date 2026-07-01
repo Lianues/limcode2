@@ -4,6 +4,7 @@ import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingI
 import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
 import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
 import ToolPolicyEditor from '@webview/components/settings/tools/ToolPolicyEditor.vue';
+import SkillPolicyEditor from '@webview/components/settings/skills/SkillPolicyEditor.vue';
 import WorkEnvironmentPolicyEditor from '@webview/components/settings/workEnvironment/WorkEnvironmentPolicyEditor.vue';
 import CheckpointPolicyEditor from '@webview/components/settings/checkpoints/CheckpointPolicyEditor.vue';
 import CheckpointListPanel from '@webview/components/settings/checkpoints/CheckpointListPanel.vue';
@@ -70,6 +71,14 @@ function reload(): void {
       :scope-id="settings.common.conversationId"
       title="对话工具策略"
       description="默认继承全局工具策略；修改任一工具后会为当前对话创建独立覆盖。"
+    />
+
+    <SkillPolicyEditor
+      v-if="hasConversation"
+      scope-kind="conversation"
+      :scope-id="settings.common.conversationId"
+      title="对话技能策略"
+      description="默认继承全局技能策略；修改任一技能开关后会为当前对话创建独立覆盖。"
     />
 
     <CheckpointPolicyEditor

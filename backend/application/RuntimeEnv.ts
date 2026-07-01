@@ -5,6 +5,7 @@ import type {
   FsCapability,
   LlmCapability,
   RuntimePaths,
+  SkillCatalogCapability,
   StorageCapability,
   WebviewCapability,
   WorkEnvironmentRuntimeCapability
@@ -30,4 +31,5 @@ export interface RuntimeEnv {
   paths: RuntimePaths;
   tools: ToolCapability;
   mcp: McpRuntimeManager;
+  skills: SkillCatalogCapability;
 }

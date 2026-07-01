@@ -6,7 +6,8 @@ import {
   createWorkEnvironmentRuntimeCapability,
   createVsCodeFsCapability,
   createVsCodeStorageCapability,
-  createWebviewCapability
+  createWebviewCapability,
+  createSkillCatalogCapability
 } from '../capabilities';
 import { createGlobalSettingsRecord } from '../capabilities/vscodeStorage/globalStatus';
 import { resolveAttachmentForClient } from '../capabilities/vscodeStorage/attachmentStore';
@@ -65,6 +66,7 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
   });
   const fs = createVsCodeFsCapability();
   const webview = createWebviewCapability();
+  const skills = createSkillCatalogCapability(context);
   const toolRuntimeDefinitions = registry.list();
   const toolSchemas = schemasForTools(toolRuntimeDefinitions);
   const toolDefinitions = recordsForTools(toolRuntimeDefinitions);
@@ -79,7 +81,8 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
       storage,
       get paths() { return storage.paths; },
       tools: { registry: toolRuntimeDefinitions },
-      mcp
+      mcp,
+      skills
     },
     toolSchemas,
     toolDefinitions

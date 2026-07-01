@@ -98,7 +98,7 @@ const toolScopeOptions = computed<SettingsDropdownOption[]>(() => [
   }))
 ]);
 
-const TOOL_SCOPE_ORDER: ToolDomainScope[] = ['agent', 'file', 'command', 'conversation', 'workEnvironment', 'task', 'general'];
+const TOOL_SCOPE_ORDER: ToolDomainScope[] = ['agent', 'file', 'command', 'conversation', 'workEnvironment', 'task', 'skill', 'general'];
 
 function updateSelectedToolScope(value: string): void {
   selectedToolScope.value = value === 'all' || value.startsWith('mcp:') || TOOL_SCOPE_ORDER.includes(value as ToolDomainScope)
@@ -227,6 +227,7 @@ function scopeLabel(scope: ToolDomainScope): string {
     case 'conversation': return '对话';
     case 'workEnvironment': return '工作环境';
     case 'task': return '任务';
+    case 'skill': return '技能';
     case 'general': return '通用';
   }
 }

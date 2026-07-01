@@ -110,6 +110,9 @@ export enum BridgeMessageType {
   QueueInputUpdate = 'queue.input.update',
   ToolPolicyScopeSet = 'toolPolicy.scope.set',
   ToolPolicyScopeClear = 'toolPolicy.scope.clear',
+  SkillPolicyScopeSet = 'skillPolicy.scope.set',
+  SkillPolicyScopeClear = 'skillPolicy.scope.clear',
+  SkillCatalogRefresh = 'skill.catalog.refresh',
   ToolExecutionApprove = 'tool.execution.approve',
   ToolExecutionReject = 'tool.execution.reject',
   ToolChangeApply = 'tool.change.apply',
@@ -301,7 +304,7 @@ export type ToolExecutionKind = 'runtime' | 'agentRun';
 export type ToolSchedulingMode = 'parallel' | 'serial';
 export type ToolRiskLevel = 'read' | 'write' | 'command' | 'agent';
 export type ToolDefinitionCategory = 'filesystem' | 'command' | 'agent' | 'general';
-export type ToolDomainScope = 'agent' | 'file' | 'command' | 'conversation' | 'workEnvironment' | 'task' | 'general';
+export type ToolDomainScope = 'agent' | 'file' | 'command' | 'conversation' | 'workEnvironment' | 'task' | 'skill' | 'general';
 export type ToolConfigFieldType = 'string' | 'number' | 'boolean' | 'stringList' | 'globList' | 'enum' | 'json';
 export type ToolConfigValue = string | number | boolean | null | string[] | number[] | boolean[] | unknown[] | Record<string, unknown>;
 export type ToolConfigRecord = Record<string, ToolConfigValue>;
@@ -372,6 +375,7 @@ export const DELETE_TOOL_NAME = 'delete';
 export const ALLOW_OUTSIDE_PROJECT_PATHS_CONFIG_KEY = 'allowOutsideProjectPaths';
 export const SUBMIT_AGENT_ANSWER_TOOL_NAME = 'submit_agent_answer';
 export const READ_AGENT_ANSWER_TOOL_NAME = 'read_agent_answer';
+export const SKILLS_TOOL_NAME = 'skills';
 
 export type EditToolMode = 'patch' | 'hunk' | 'insert' | 'delete';
 
@@ -763,6 +767,46 @@ export interface ToolPolicyScopeLinkRecord {
   /** global scope 无 scopeId；agentSystem 当前预留为普通 id；其余 scope 使用对应领域对象 id。 */
   scopeId?: string;
   toolPolicyId: string;
+  role: PolicyBindingRole;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 技能来源：local=项目 .agents/skills/；global=数据根 skills/。 */
+export type SkillSource = 'local' | 'global';
+/** 技能策略作用域，与 ToolPolicyScopeKind 保持一致，便于不同 scope 复用配置。 */
+export type SkillPolicyScopeKind = ToolPolicyScopeKind;
+
+/** 磁盘扫描出的技能定义。不落 record-store，来自 SkillCatalog 资源投影，类似 ToolDefinitionRecord。 */
+export interface SkillDefinitionRecord {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  source: SkillSource;
+  path: string;
+  dir: string;
+  workspaceFolderUri?: string;
+}
+
+/** 单个来源分组的技能开关配置：组总开关 + 组内被停用技能 id。 */
+export interface SkillPolicySourceConfigRecord {
+  enabled: boolean;
+  disabledSkills?: string[];
+}
+
+export interface SkillPolicyRecord {
+  id: string;
+  name: string;
+  sourceConfigs?: Partial<Record<SkillSource, SkillPolicySourceConfigRecord>>;
+}
+
+export interface SkillPolicyScopeLinkRecord {
+  id: string;
+  scopeKind: SkillPolicyScopeKind;
+  /** global scope 无 scopeId；agentSystem 当前预留为普通 id；其余 scope 使用对应领域对象 id。 */
+  scopeId?: string;
+  skillPolicyId: string;
   role: PolicyBindingRole;
   createdAt: number;
   updatedAt: number;
@@ -1689,6 +1733,9 @@ export interface ClientStateRecordByTable {
   modes: ModeRecord;
   toolPolicies: ToolPolicyRecord;
   toolPolicyScopeLinks: ToolPolicyScopeLinkRecord;
+  skillDefinitions: SkillDefinitionRecord;
+  skillPolicies: SkillPolicyRecord;
+  skillPolicyScopeLinks: SkillPolicyScopeLinkRecord;
   systemPrompts: SystemPromptRecord;
   systemPromptScopeLinks: SystemPromptScopeLinkRecord;
   promptPlaceholders: PromptPlaceholderRecord;
@@ -1879,6 +1926,16 @@ export interface ToolPolicyScopeSetPayload {
 }
 export interface ToolPolicyScopeClearPayload {
   scopeKind: ToolPolicyScopeKind;
+  scopeId?: string;
+}
+export interface SkillPolicyScopeSetPayload {
+  scopeKind: SkillPolicyScopeKind;
+  scopeId?: string;
+  name?: string;
+  sourceConfigs?: Partial<Record<SkillSource, SkillPolicySourceConfigRecord>>;
+}
+export interface SkillPolicyScopeClearPayload {
+  scopeKind: SkillPolicyScopeKind;
   scopeId?: string;
 }
 export interface CheckpointPolicyScopeSetPayload {
@@ -2291,6 +2348,10 @@ export interface WorkEnvironmentImportFromVscodePayload {
   includeDefaultSshConfig?: boolean;
 }
 
+export interface SkillCatalogRefreshPayload {
+  reason?: string;
+}
+
 export interface WorkEnvironmentPolicyScopeSetPayload {
   scopeKind: WorkEnvironmentPolicyScopeKind;
   scopeId?: string;
@@ -2361,6 +2422,9 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.QueueInputUpdate, QueueInputUpdatePayload>
   | BridgeEnvelope<BridgeMessageType.ToolPolicyScopeSet, ToolPolicyScopeSetPayload>
   | BridgeEnvelope<BridgeMessageType.ToolPolicyScopeClear, ToolPolicyScopeClearPayload>
+  | BridgeEnvelope<BridgeMessageType.SkillPolicyScopeSet, SkillPolicyScopeSetPayload>
+  | BridgeEnvelope<BridgeMessageType.SkillPolicyScopeClear, SkillPolicyScopeClearPayload>
+  | BridgeEnvelope<BridgeMessageType.SkillCatalogRefresh, SkillCatalogRefreshPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointPolicyScopeSet, CheckpointPolicyScopeSetPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointPolicyScopeClear, CheckpointPolicyScopeClearPayload>
   | BridgeEnvelope<BridgeMessageType.ToolExecutionApprove, ToolDecisionPayload>

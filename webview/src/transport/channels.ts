@@ -35,6 +35,9 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
     case BridgeMessageType.WorkEnvironmentPolicyScopeClear:
     case BridgeMessageType.ToolPolicyScopeSet:
     case BridgeMessageType.ToolPolicyScopeClear:
+    case BridgeMessageType.SkillPolicyScopeSet:
+    case BridgeMessageType.SkillPolicyScopeClear:
+    case BridgeMessageType.SkillCatalogRefresh:
     case BridgeMessageType.RuntimeContextScopeSet:
     case BridgeMessageType.RuntimeContextScopeClear:
     case BridgeMessageType.RuntimeContextRefresh:

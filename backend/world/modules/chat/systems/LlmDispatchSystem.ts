@@ -111,7 +111,7 @@ export const LlmDispatchSystem = defineSystem({
     reads: { components: LlmContextLookupComponents },
     writes: { components: [RunCompressionBlockLink], mutationMode: 'create' },
     bundles: [AgentRunBundle],
-    resources: { read: [ToolSchemasKey, ToolDefinitionsKey] },
+    resources: { read: [ToolSchemasKey, ToolDefinitionsKey, ...(TOOL_SCHEMA_CONTRIBUTOR_READS.resources ?? [])] },
     effects: { emit: ['llm.start'] }
   },
   run({ world, cmd }) {

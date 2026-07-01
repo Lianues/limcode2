@@ -1,5 +1,6 @@
 import type { Component } from 'vue';
 import {
+  IconBook,
   IconFileDescription,
   IconMessageDots,
   IconPencil,
@@ -17,6 +18,7 @@ import {
   EDIT_TOOL_NAME,
   READ_AGENT_ANSWER_TOOL_NAME,
   READ_TOOL_NAME,
+  SKILLS_TOOL_NAME,
   SUBMIT_AGENT_ANSWER_TOOL_NAME,
   SWITCH_WORK_ENVIRONMENT_TOOL_NAME,
   TASK_LIST_TOOL_NAME,
@@ -28,6 +30,7 @@ import { deleteToolDisplay, editToolDisplay, writeToolDisplay } from './fileChan
 import { readConversationToolDisplay } from './readConversationToolDisplay';
 import { readFileToolDisplay } from './readFileToolDisplay';
 import { runAgentToolDisplay } from './runAgentToolDisplay';
+import { skillsToolDisplay } from './skillsToolDisplay';
 import { shellToolDisplay } from './shellToolDisplay';
 import { switchWorkEnvironmentToolDisplay } from './switchWorkEnvironmentToolDisplay';
 import { taskListToolDisplay } from './taskListToolDisplay';
@@ -47,7 +50,8 @@ const TOOL_DISPLAY_RESOLVERS: Record<string, ToolDisplayResolver> = {
   shell: shellToolDisplay,
   bash: shellToolDisplay,
   [SWITCH_WORK_ENVIRONMENT_TOOL_NAME]: switchWorkEnvironmentToolDisplay,
-  [TRANSFER_TOOL_NAME]: transferFilesToolDisplay
+  [TRANSFER_TOOL_NAME]: transferFilesToolDisplay,
+  [SKILLS_TOOL_NAME]: skillsToolDisplay
 };
 
 const TOOL_HEADER_ICONS: Record<string, Component> = {
@@ -63,7 +67,8 @@ const TOOL_HEADER_ICONS: Record<string, Component> = {
   shell: IconTerminal2,
   bash: IconTerminal2,
   [SWITCH_WORK_ENVIRONMENT_TOOL_NAME]: IconSwitch,
-  [TRANSFER_TOOL_NAME]: IconTransfer
+  [TRANSFER_TOOL_NAME]: IconTransfer,
+  [SKILLS_TOOL_NAME]: IconBook
 };
 
 export function resolveToolHeaderIcon(toolName: string): Component {

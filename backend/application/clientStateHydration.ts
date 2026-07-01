@@ -30,6 +30,7 @@ import {
 import { ConversationProjectLink, ProjectContext } from '../world/modules/project/components';
 import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolResultConsumed, ToolState } from '../world/modules/tools/components';
 import { isTerminalToolStatus } from '../world/modules/tools/state';
+import { SkillPolicy, SkillPolicyScopeLink } from '../world/modules/skill/components';
 import {
   ConversationWorkEnvironmentLink,
   RunWorkEnvironmentLink,
@@ -122,6 +123,7 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState, opt
 
   const modeEntities = hydrateRecordsUnique(world, state.modes, Mode);
   const toolPolicyEntities = hydrateRecordsUnique(world, state.toolPolicies, ToolPolicy);
+  const skillPolicyEntities = hydrateRecordsUnique(world, state.skillPolicies, SkillPolicy);
   const systemPromptEntities = hydrateRecordsUnique(world, state.systemPrompts, SystemPrompt);
   const runtimeContextEntities = hydrateRecordsUnique(world, state.runtimeContexts, RuntimeContext);
   const runtimeContextSnapshotEntities = existingRecords(world, RuntimeContextSnapshot);
@@ -227,6 +229,14 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState, opt
     conversations: conversationEntities,
     modes: modeEntities,
     toolPolicies: toolPolicyEntities,
+    runs: new Map()
+  });
+
+  hydrateSkillPolicyScopeLinks(world, state, {
+    agents: agentEntities,
+    conversations: conversationEntities,
+    modes: modeEntities,
+    skillPolicies: skillPolicyEntities,
     runs: new Map()
   });
   hydrateAgentAnswerLinks(world, state, { answers: agentAnswerEntities, agents: agentEntities, conversations: conversationEntities, runs: new Map(), toolCalls: new Map() });
@@ -1013,6 +1023,43 @@ function hydrateToolPolicyScopeLinks(world: World, state: ClientState, maps: Too
       scopeKind: record.scopeKind,
       ...(record.scopeId ? { scopeId: record.scopeId } : {}),
       toolPolicy,
+      ...scope.data,
+      role: record.role,
+      createdAt: record.createdAt || Date.now(),
+      updatedAt: record.updatedAt || record.createdAt || Date.now()
+    });
+  }
+}
+
+interface SkillPolicyScopeHydrationMaps {
+  agents: Map<string, Entity>;
+  conversations: Map<string, Entity>;
+  modes: Map<string, Entity>;
+  skillPolicies: Map<string, Entity>;
+  runs: Map<string, Entity>;
+}
+
+function hydrateSkillPolicyScopeLinks(world: World, state: ClientState, maps: SkillPolicyScopeHydrationMaps): void {
+  const existing = existingIds(world, SkillPolicyScopeLink);
+  for (const record of state.skillPolicyScopeLinks ?? []) {
+    if (existing.has(record.id)) continue;
+    const skillPolicy = maps.skillPolicies.get(record.skillPolicyId);
+    if (skillPolicy === undefined) continue;
+    const scope = resolveHydratedToolPolicyScope(record.scopeKind, record.scopeId, {
+      agents: maps.agents,
+      conversations: maps.conversations,
+      modes: maps.modes,
+      toolPolicies: maps.skillPolicies,
+      runs: maps.runs
+    });
+    if (!scope.ok) continue;
+    const entity = world.spawn();
+    existing.add(record.id);
+    world.add(entity, SkillPolicyScopeLink, {
+      id: record.id,
+      scopeKind: record.scopeKind,
+      ...(record.scopeId ? { scopeId: record.scopeId } : {}),
+      skillPolicy,
       ...scope.data,
       role: record.role,
       createdAt: record.createdAt || Date.now(),

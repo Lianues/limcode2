@@ -32,6 +32,7 @@ import type {
   CheckpointTriggerKind,
   ToolCallEventRecord,
   ToolCallRecord,
+  SkillDefinitionRecord,
   WebviewClientMeta,
   WorkEnvironmentRecord
 } from '../../shared/protocol';
@@ -161,6 +162,18 @@ export interface FsCapability {
 export interface WorkEnvironmentCapabilityOptions {
   workEnvironment?: WorkEnvironmentRecord;
   allowOutsideProjectPaths?: boolean;
+}
+
+/**
+ * 技能目录扫描能力。
+ * 从项目 <projectRoot>/.agents/skills/ 与数据根 <dataRoot>/skills/ 扫描 SKILL.md，
+ * 产出 SkillDefinitionRecord 列表；skills 工具执行时按 id/name 读取正文。
+ */
+export interface SkillCatalogCapability {
+  list(): SkillDefinitionRecord[];
+  get(idOrName: string): SkillDefinitionRecord | undefined;
+  readBody(idOrName: string): Promise<string>;
+  refresh(): Promise<void>;
 }
 
 export interface CommandRunEvent {
@@ -293,6 +306,16 @@ export interface RuntimePaths {
   toolPolicyScopeLinksRootPath: string;
   toolPolicyScopeLinksIndexUri: vscode.Uri;
   toolPolicyScopeLinksIndexPath: string;
+  /** SkillPolicy 数据根目录：<dataRoot>/skill-policies */
+  skillPoliciesRootUri: vscode.Uri;
+  skillPoliciesRootPath: string;
+  skillPoliciesIndexUri: vscode.Uri;
+  skillPoliciesIndexPath: string;
+  /** SkillPolicy 与各作用域的关系数据根目录：<dataRoot>/skill-policy-scope-links */
+  skillPolicyScopeLinksRootUri: vscode.Uri;
+  skillPolicyScopeLinksRootPath: string;
+  skillPolicyScopeLinksIndexUri: vscode.Uri;
+  skillPolicyScopeLinksIndexPath: string;
   /** SystemPrompt 数据根目录：<dataRoot>/system-prompts */
   systemPromptsRootUri: vscode.Uri;
   systemPromptsRootPath: string;

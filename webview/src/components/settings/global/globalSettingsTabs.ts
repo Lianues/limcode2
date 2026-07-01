@@ -1,5 +1,5 @@
 import type { Component } from 'vue';
-import { IconArchive, IconImageGeneration, IconMessage, IconPlugConnected, IconServer, IconSettings2, IconSettingsAi, IconTool } from '@tabler/icons-vue';
+import { IconArchive, IconBook, IconImageGeneration, IconMessage, IconPlugConnected, IconServer, IconSettings2, IconSettingsAi, IconTool } from '@tabler/icons-vue';
 import ChannelSettingsTab from './ChannelSettingsTab.vue';
 import CheckpointSettingsTab from './CheckpointSettingsTab.vue';
 import AppearanceSettingsTab from './AppearanceSettingsTab.vue';
@@ -7,11 +7,12 @@ import OtherSettingsTab from './OtherSettingsTab.vue';
 import SystemPromptSettingsTab from './SystemPromptSettingsTab.vue';
 import ToolSettingsTab from './ToolSettingsTab.vue';
 import McpToolSettingsTab from './McpToolSettingsTab.vue';
+import SkillSettingsTab from './SkillSettingsTab.vue';
 import WorkEnvironmentSettingsTab from './WorkEnvironmentSettingsTab.vue';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 
-export type GlobalSettingsTabKey = 'channels' | 'prompts' | 'tools' | 'mcp-tools' | 'checkpoints' | 'work-environments' | 'appearance' | 'other';
+export type GlobalSettingsTabKey = 'channels' | 'prompts' | 'tools' | 'mcp-tools' | 'skills' | 'checkpoints' | 'work-environments' | 'appearance' | 'other';
 
 export interface GlobalSettingsTabDefinition {
   key: GlobalSettingsTabKey;
@@ -70,6 +71,13 @@ export const GLOBAL_SETTINGS_TABS: readonly GlobalSettingsTabDefinition[] = [
     component: McpToolSettingsTab,
     loading: isMcpTabLoading,
     loadingText: mcpTabLoadingText
+  },
+  {
+    key: 'skills',
+    label: '技能',
+    description: '技能发现与默认策略',
+    icon: IconBook,
+    component: SkillSettingsTab
   },
   {
     key: 'checkpoints',

@@ -1,6 +1,7 @@
 import type { AccessDeclaration, ComponentType, Entity, ResourceKey, WorldReader } from '../../../ecs/types';
 import type { ToolSchema } from '../llm/contracts';
 import { workEnvironmentToolSchemaContributor } from '../workEnvironment/toolSchemaContributor';
+import { skillsToolSchemaContributor } from '../skill/skillsToolSchemaContributor';
 import { editToolSchemaContributor } from './editToolSchemaContributor';
 
 export interface ToolSchemaBuildContext {
@@ -18,7 +19,8 @@ export interface ToolSchemaContributor {
 
 export const TOOL_SCHEMA_CONTRIBUTORS = [
   editToolSchemaContributor,
-  workEnvironmentToolSchemaContributor
+  workEnvironmentToolSchemaContributor,
+  skillsToolSchemaContributor
 ] as const satisfies readonly ToolSchemaContributor[];
 
 export const TOOL_SCHEMA_CONTRIBUTOR_READS: AccessDeclaration = mergeContributorReads(TOOL_SCHEMA_CONTRIBUTORS);

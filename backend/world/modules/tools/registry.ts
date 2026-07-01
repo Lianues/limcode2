@@ -1,4 +1,4 @@
-import type { CommandCapability, FsCapability, StorageCapability, WorkEnvironmentRuntimeCapability } from '../../../capabilities/types';
+import type { CommandCapability, FsCapability, SkillCatalogCapability, StorageCapability, WorkEnvironmentRuntimeCapability } from '../../../capabilities/types';
 import type {
   ToolCallEventKind,
   ToolConfigRecord,
@@ -17,6 +17,7 @@ export interface ToolDeps {
   command: CommandCapability;
   workEnvironment: WorkEnvironmentRuntimeCapability;
   storage: StorageCapability;
+  skills: SkillCatalogCapability;
 }
 
 export interface ToolResultOut {

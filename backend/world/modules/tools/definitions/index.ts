@@ -10,6 +10,7 @@ import { taskListToolModule } from './taskList';
 import { transferFilesToolModule } from './transferFiles';
 import { writeToolModule } from './write';
 import { readConversationToolModule } from './conversationContext';
+import { skillsToolModule } from './skills';
 import type { ToolDefinitionContext, ToolDefinitionModule } from './types';
 
 export * from './types';
@@ -24,6 +25,7 @@ export { switchWorkEnvironmentToolModule, switchWorkEnvironmentTool } from './sw
 export { taskListToolModule, taskListTool } from './taskList';
 export { transferFilesToolModule, transferFilesTool } from './transferFiles';
 export { readConversationToolModule, readConversationTool } from './conversationContext';
+export { skillsToolModule, skillsTool } from './skills';
 
 const BUILTIN_TOOL_MODULES: readonly ToolDefinitionModule[] = [
   taskListToolModule,
@@ -34,6 +36,7 @@ const BUILTIN_TOOL_MODULES: readonly ToolDefinitionModule[] = [
   writeToolModule,
   deleteToolModule,
   readConversationToolModule,
+  skillsToolModule,
   submitAgentAnswerToolModule,
   readAgentAnswerToolModule,
   runAgentToolModule,

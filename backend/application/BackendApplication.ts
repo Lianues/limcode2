@@ -19,6 +19,7 @@ import {
   projectPlugin,
   runtimeContextPlugin,
   toolsPlugin,
+  skillPlugin,
   workEnvironmentPlugin
 } from '../world/modules';
 import type { AgentSpawnRequestData } from '../world/modules/agent/requests';
@@ -96,6 +97,7 @@ import { WebviewMessageRouter } from './WebviewMessageRouter';
 import { conversationCreatedAtFromId, createNewConversationTitle, displayConversationTitle } from '../../shared/conversationTitle';
 import { loadRemoteServerWorkEnvironmentRecordsFromVscode } from './workEnvironments/vscodeSshImport';
 import { McpToolSourcesKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey, ToolSchemasKey } from '../world/modules/tools/resources';
+import { SkillCatalogKey } from '../world/modules/skill/resources';
 
 export interface CreateConversationOptions {
   projectFolderUri?: string;
@@ -167,12 +169,14 @@ export class BackendApplication {
       ensureConversationDetailLoaded: (conversationId) => this.ensureConversationDetailLoaded(conversationId),
       getProjectFolderCandidates: () => this.getProjectFolderCandidates(),
       setConversationProjectFolder: (input) => this.setConversationProjectFolder(input),
-      importWorkEnvironmentsFromVscode: () => this.importWorkEnvironmentsFromVscode()
+      importWorkEnvironmentsFromVscode: () => this.importWorkEnvironmentsFromVscode(),
+      refreshSkillCatalog: () => this.syncSkillCatalogResource()
     });
 
     registerApplicationEffectHandlers(this.effectHandlers);
     this.disposables.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
       this.syncWorkEnvironmentsFromWorkspaceFolders();
+      void this.syncSkillCatalogResource();
     }));
 
     this.scheduler = new Scheduler(this.world, {
@@ -192,7 +196,7 @@ export class BackendApplication {
 
     installWorldPlugins(
       { world: this.world, scheduler: this.scheduler },
-      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), modePlugin(), projectPlugin(), workEnvironmentPlugin(), runtimeContextPlugin(), checkpointPlugin(), compressionPlugin(), llmPlugin(), agentAnswerPlugin(), toolsPlugin({ toolSchemas, toolDefinitions, toolRuntimeDefinitions: this.env.tools.registry }), chatPlugin(), agentRunPlugin()]
+      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), modePlugin(), projectPlugin(), workEnvironmentPlugin(), runtimeContextPlugin(), checkpointPlugin(), compressionPlugin(), llmPlugin(), agentAnswerPlugin(), toolsPlugin({ toolSchemas, toolDefinitions, toolRuntimeDefinitions: this.env.tools.registry }), skillPlugin(), chatPlugin(), agentRunPlugin()]
     );
     registerClientSyncSystems(this.scheduler);
 
@@ -501,6 +505,7 @@ export class BackendApplication {
       this.startDeferredClientStateSkeletonLoad();
       this.startCheckpointShadowAutoCleanup();
       void this.refreshMcpRuntime(true);
+      void this.syncSkillCatalogResource();
       this.resolveHydrated();
     }
   }
@@ -551,6 +556,10 @@ export class BackendApplication {
     if (payload.section === 'mcpServers' || payload.section === 'common') {
       await this.refreshMcpRuntime(payload.refreshMcpTools === true);
     }
+    if (payload.section === 'common') {
+      // 数据根目录切换后，全局技能来源 <dataRoot>/skills 会变化，需重新扫描技能目录。
+      await this.syncSkillCatalogResource();
+    }
   }
 
   private async refreshMcpRuntime(discover: boolean): Promise<void> {
@@ -568,6 +577,12 @@ export class BackendApplication {
     this.world.setResource(ToolDefinitionsKey, recordsForTools(mergedTools));
     this.world.setResource(McpToolSourcesKey, this.env.mcp.sourceRecords());
     this.requestSnapshot();
+  }
+
+  private async syncSkillCatalogResource(): Promise<void> {
+    await this.env.skills.refresh();
+    this.world.setResource(SkillCatalogKey, this.env.skills.list());
+    if (this.hydrated) this.requestSnapshot();
   }
 
   private flushPendingSnapshots(): void {

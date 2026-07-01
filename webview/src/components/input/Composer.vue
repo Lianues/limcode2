@@ -18,6 +18,7 @@ import QueuePanel, { type QueueItem } from '@webview/components/input/QueuePanel
 import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
 import ContextTokenUsageBar from '@webview/components/conversation/ContextTokenUsageBar.vue';
 import BackgroundCommandPanel from '@webview/components/input/BackgroundCommandPanel.vue';
+import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -53,6 +54,7 @@ const modeDropdownCloseSignal = ref(0);
 const channelDropdownCloseSignal = ref(0);
 const workEnvironmentDropdownCloseSignal = ref(0);
 const fileInput = ref<HTMLInputElement | null>(null);
+const attachmentScroller = ref<HTMLElement | null>(null);
 
 const draft = computed({
   get: () => ui.composerDraft,
@@ -125,6 +127,7 @@ const editorShellStyle = computed(() => {
   };
 });
 const selectedAttachments = ref<InlineDataPart[]>([]);
+const attachmentRefreshKey = computed(() => selectedAttachments.value.map((part, index) => index + ':' + (part.inlineData.name ?? '') + ':' + (part.inlineData.sizeBytes ?? 0)).join('|'));
 const hasDraftContent = computed(() => draft.value.trim().length > 0 || selectedAttachments.value.length > 0);
 const attachmentLimitBytes = computed(() => Math.max(1, globalSettings.attachments.maxStoredInlineFileMb || 20) * 1024 * 1024);
 
@@ -235,6 +238,24 @@ function attachmentSizeLabel(part: InlineDataPart): string {
   if (kb < 1024) return `${kb.toFixed(kb < 10 ? 1 : 0)} KB`;
   const mb = kb / 1024;
   return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
+}
+
+function onAttachmentWheel(event: WheelEvent): void {
+  const element = attachmentScroller.value;
+  if (!element) return;
+  const maxScrollLeft = element.scrollWidth - element.clientWidth;
+  if (maxScrollLeft <= 1) return;
+
+  const rawDelta = event.deltaX || event.deltaY;
+  if (!rawDelta) return;
+  event.preventDefault();
+
+  const unit = event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+    ? element.clientWidth
+    : event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? 24
+      : 1;
+  element.scrollLeft = Math.max(0, Math.min(maxScrollLeft, element.scrollLeft + rawDelta * unit));
 }
 
 function abortConversation(): void {
@@ -396,36 +417,50 @@ function middleEllipsis(value: string, maxLength: number): string {
 <template>
   <div class="composer" :class="{ 'is-editing': ui.isEditing, 'is-highlighted': highlighted, 'is-editor-expanded': editorExpanded }">
     <div class="composer-zone composer-zone-top" aria-label="输入框上方功能区">
-      <QueuePanel
-        @edit="onQueueEdit"
-        @delete="onQueueDelete"
-        @force-send="onQueueForceSend"
-        @reorder="onQueueReorder"
-        @pause="onQueuePause"
-        @resume="onQueueResume"
-        @resume-all="onQueueResumeAll"
-      />
-      <div v-if="ui.isEditing" class="composer-edit-indicator">
-        <span class="composer-edit-indicator-icon" aria-hidden="true">
-          <IconPencilExclamation stroke="2" />
-        </span>
-        <span class="composer-edit-text">{{ ui.editingQueueRunId ? '正在编辑排队消息，发送后替换原排队消息。' : '正在编辑消息，发送前需要确认。' }}</span>
-        <button type="button" class="composer-edit-cancel" @click="ui.cancelEditMode">取消编辑</button>
+      <div class="composer-top-main">
+        <QueuePanel
+          @edit="onQueueEdit"
+          @delete="onQueueDelete"
+          @force-send="onQueueForceSend"
+          @reorder="onQueueReorder"
+          @pause="onQueuePause"
+          @resume="onQueueResume"
+          @resume-all="onQueueResumeAll"
+        />
+        <div v-if="ui.isEditing" class="composer-edit-indicator">
+          <span class="composer-edit-indicator-icon" aria-hidden="true">
+            <IconPencilExclamation stroke="2" />
+          </span>
+          <span class="composer-edit-text">{{ ui.editingQueueRunId ? '正在编辑排队消息，发送后替换原排队消息。' : '正在编辑消息，发送前需要确认。' }}</span>
+          <button type="button" class="composer-edit-cancel" @click="ui.cancelEditMode">取消编辑</button>
+        </div>
+        <div v-if="selectedAttachments.length" class="composer-attachments-shell">
+          <div ref="attachmentScroller" class="composer-attachments" aria-label="已选择附件" @wheel="onAttachmentWheel">
+            <span v-for="(attachment, index) in selectedAttachments" :key="`${attachment.inlineData.name}-${index}`" class="composer-attachment-chip">
+              <span class="composer-attachment-name">{{ attachmentDisplayName(attachment) }}</span>
+              <span v-if="attachmentSizeLabel(attachment)" class="composer-attachment-size">{{ attachmentSizeLabel(attachment) }}</span>
+              <button type="button" class="composer-attachment-remove" title="移除附件" @click="removeAttachment(index)">
+                <IconTrash stroke="2" aria-hidden="true" />
+              </button>
+            </span>
+          </div>
+          <AdvancedScrollbar
+            class="composer-attachments-scrollbar"
+            :scroller="attachmentScroller"
+            :refresh-key="attachmentRefreshKey"
+            variant="minimal"
+            orientation="horizontal"
+          />
+        </div>
+      </div>
+      <div class="composer-top-actions">
+        <BackgroundCommandPanel />
       </div>
     </div>
 
     <div class="composer-input-row">
       <div class="composer-zone composer-zone-left" aria-label="输入框左侧功能区"></div>
       <div ref="editorShell" class="composer-editor-shell" :style="editorShellStyle">
-        <div v-if="selectedAttachments.length" class="composer-attachments" aria-label="已选择附件">
-          <span v-for="(attachment, index) in selectedAttachments" :key="`${attachment.inlineData.name}-${index}`" class="composer-attachment-chip">
-            <span class="composer-attachment-name">{{ attachmentDisplayName(attachment) }}</span>
-            <span v-if="attachmentSizeLabel(attachment)" class="composer-attachment-size">{{ attachmentSizeLabel(attachment) }}</span>
-            <button type="button" class="composer-attachment-remove" title="移除附件" @click="removeAttachment(index)">
-              <IconTrash stroke="2" aria-hidden="true" />
-            </button>
-          </span>
-        </div>
         <RichContentEditor
           ref="editor"
           v-model="draft"
@@ -501,7 +536,6 @@ function middleEllipsis(value: string, maxLength: number): string {
         >
           <IconPaperclip class="composer-side-action-icon" stroke="2" aria-hidden="true" />
         </button>
-        <BackgroundCommandPanel />
         <button
           v-if="runSummary.isRunning"
           type="button"
@@ -640,7 +674,26 @@ function middleEllipsis(value: string, maxLength: number): string {
 }
 
 .composer-zone-top {
+  min-height: 28px;
+  align-items: flex-start;
   justify-content: space-between;
+}
+
+.composer-top-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.composer-top-actions {
+  flex: 0 0 auto;
+  min-height: 28px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  margin-left: auto;
 }
 
 .composer-zone-bottom {
@@ -704,15 +757,38 @@ function middleEllipsis(value: string, maxLength: number): string {
   display: none;
 }
 
-.composer-attachments {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
+.composer-attachments-shell {
+  position: relative;
+  width: 100%;
   min-width: 0;
+  height: 32px;
+  padding-bottom: 6px;
+}
+
+.composer-attachments {
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--space-1);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.composer-attachments::-webkit-scrollbar {
+  display: none;
+}
+
+.composer-attachments-scrollbar {
+  z-index: 2;
 }
 
 .composer-attachment-chip {
-  max-width: min(260px, 100%);
+  flex: 0 0 auto;
+  max-width: min(260px, 72vw);
   min-height: 24px;
   display: inline-flex;
   align-items: center;

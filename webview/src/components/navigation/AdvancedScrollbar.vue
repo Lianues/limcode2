@@ -22,13 +22,15 @@ const props = withDefaults(
     showEdgeButtons?: boolean;
     showMarkerPreview?: boolean;
     variant?: 'default' | 'minimal';
+    orientation?: 'vertical' | 'horizontal';
   }>(),
   {
     markers: () => [],
     showMarkers: false,
     showEdgeButtons: false,
     showMarkerPreview: false,
-    variant: 'default'
+    variant: 'default',
+    orientation: 'vertical'
   }
 );
 
@@ -60,6 +62,7 @@ const panelPaddingBlock = 16;
 const panelGap = 5;
 const panelTitleEstimatedHeight = 24;
 const panelRowEstimatedHeight = 40;
+const isHorizontal = computed(() => props.orientation === 'horizontal');
 const maxScroll = computed(() => Math.max(0, scrollHeight.value - clientHeight.value));
 const canScroll = computed(() => maxScroll.value > 1);
 const thumbHeight = computed(() => {
@@ -72,10 +75,10 @@ const thumbTop = computed(() => {
   if (!canScroll.value) return 0;
   return (scrollTop.value / maxScroll.value) * trackTravel.value;
 });
-const thumbStyle = computed(() => ({
-  height: `${thumbHeight.value}px`,
-  transform: `translateY(${thumbTop.value}px)`
-}));
+const thumbStyle = computed(() => isHorizontal.value
+  ? { width: `${thumbHeight.value}px`, transform: `translateX(${thumbTop.value}px)` }
+  : { height: `${thumbHeight.value}px`, transform: `translateY(${thumbTop.value}px)` }
+);
 const trackOffsetTop = computed(() => {
   const root = scrollbarRootRef.value;
   const track = trackRef.value;
@@ -131,7 +134,9 @@ function clamp(value: number, min: number, max: number): number {
 function setScrollTop(value: number, behavior: ScrollBehavior = 'auto'): void {
   const element = props.scroller;
   if (!element) return;
-  element.scrollTo({ top: clamp(value, 0, maxScroll.value), behavior });
+  const nextValue = clamp(value, 0, maxScroll.value);
+  if (isHorizontal.value) element.scrollTo({ left: nextValue, behavior });
+  else element.scrollTo({ top: nextValue, behavior });
 }
 
 function scrollToTop(): void {
@@ -166,7 +171,7 @@ function scrollToMarker(marker: MarkerView): void {
 
 function rebuildMarkers(): void {
   const element = props.scroller;
-  if (!props.showMarkers || !element || !trackHeight.value || !canScroll.value) {
+  if (isHorizontal.value || !props.showMarkers || !element || !trackHeight.value || !canScroll.value) {
     markerViews.value = [];
     activeMarkerId.value = undefined;
     return;
@@ -200,10 +205,10 @@ function syncMetrics(): void {
   rootHeight.value = scrollbarRootRef.value?.clientHeight ?? 0;
   markerPanelHeight.value = markerPanelRef.value?.offsetHeight ?? 0;
 
-  scrollTop.value = element.scrollTop;
-  scrollHeight.value = element.scrollHeight;
-  clientHeight.value = element.clientHeight;
-  trackHeight.value = track?.clientHeight ?? 0;
+  scrollTop.value = isHorizontal.value ? element.scrollLeft : element.scrollTop;
+  scrollHeight.value = isHorizontal.value ? element.scrollWidth : element.scrollHeight;
+  clientHeight.value = isHorizontal.value ? element.clientWidth : element.clientHeight;
+  trackHeight.value = isHorizontal.value ? (track?.clientWidth ?? 0) : (track?.clientHeight ?? 0);
   if (!hoverTrackY.value && trackHeight.value) hoverTrackY.value = thumbTop.value + thumbHeight.value / 2;
   rebuildMarkers();
 }
@@ -271,7 +276,9 @@ function updateHoverFromPointer(event: PointerEvent): void {
   const track = trackRef.value;
   if (!track || !trackHeight.value) return;
   const rect = track.getBoundingClientRect();
-  hoverTrackY.value = clamp(event.clientY - rect.top, 0, trackHeight.value);
+  hoverTrackY.value = isHorizontal.value
+    ? clamp(event.clientX - rect.left, 0, trackHeight.value)
+    : clamp(event.clientY - rect.top, 0, trackHeight.value);
 }
 
 function onTrackPointerMove(event: PointerEvent): void {
@@ -282,8 +289,8 @@ function onTrackPointerDown(event: PointerEvent): void {
   if (event.target !== trackRef.value || !canScroll.value) return;
   updateHoverFromPointer(event);
 
-  const y = hoverTrackY.value - thumbHeight.value / 2;
-  const nextScrollTop = (clamp(y, 0, trackTravel.value) / trackTravel.value) * maxScroll.value;
+  const pointerPosition = hoverTrackY.value - thumbHeight.value / 2;
+  const nextScrollTop = (clamp(pointerPosition, 0, trackTravel.value) / trackTravel.value) * maxScroll.value;
   setScrollTop(nextScrollTop, 'smooth');
 }
 
@@ -292,7 +299,7 @@ function onThumbPointerDown(event: PointerEvent): void {
   event.preventDefault();
   openPanel(event);
   dragging.value = true;
-  dragStartY = event.clientY;
+  dragStartY = isHorizontal.value ? event.clientX : event.clientY;
   dragStartScrollTop = scrollTop.value;
   window.addEventListener('pointermove', onDragPointerMove);
   window.addEventListener('pointerup', stopDrag, { once: true });
@@ -303,7 +310,7 @@ function onDragPointerMove(event: PointerEvent): void {
   if (!dragging.value) return;
   event.preventDefault();
   updateHoverFromPointer(event);
-  const deltaY = event.clientY - dragStartY;
+  const deltaY = (isHorizontal.value ? event.clientX : event.clientY) - dragStartY;
   const nextScrollTop = dragStartScrollTop + (deltaY / trackTravel.value) * maxScroll.value;
   setScrollTop(nextScrollTop);
 }
@@ -381,7 +388,8 @@ onBeforeUnmount(() => {
       'is-expanded': panelOpen,
       'has-edge-buttons': showEdgeButtons,
       'has-markers': showMarkers,
-      'is-minimal': variant === 'minimal'
+      'is-minimal': variant === 'minimal',
+      'is-horizontal': isHorizontal
     }"
     aria-hidden="false"
     @pointerenter="openPanel"
@@ -405,14 +413,14 @@ onBeforeUnmount(() => {
       ref="trackRef"
       class="scroll-track"
       role="scrollbar"
-      aria-orientation="vertical"
+      :aria-orientation="isHorizontal ? 'horizontal' : 'vertical'"
       :aria-valuemin="0"
       :aria-valuemax="Math.round(maxScroll)"
       :aria-valuenow="Math.round(scrollTop)"
       @pointermove="onTrackPointerMove"
       @pointerdown="onTrackPointerDown"
     >
-      <template v-if="showMarkers">
+      <template v-if="showMarkers && !isHorizontal">
         <button
           v-for="marker in markerViews"
           :key="marker.id"
@@ -620,6 +628,47 @@ onBeforeUnmount(() => {
 .advanced-scrollbar.is-minimal .scroll-thumb:hover,
 .advanced-scrollbar.is-minimal.is-dragging .scroll-thumb {
   background: color-mix(in srgb, var(--vscode-foreground) 68%, transparent);
+}
+
+.advanced-scrollbar.is-horizontal {
+  top: auto;
+  right: 4px;
+  bottom: 2px;
+  left: 4px;
+  width: auto;
+  height: 8px;
+  flex-direction: row;
+}
+
+.advanced-scrollbar.is-horizontal .scroll-track {
+  min-width: 40px;
+  min-height: 0;
+}
+
+.advanced-scrollbar.is-horizontal .scroll-thumb {
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  right: auto;
+  min-width: 32px;
+  min-height: 0;
+  height: auto;
+  will-change: transform, width;
+}
+
+.advanced-scrollbar.is-horizontal.is-minimal {
+  right: 2px;
+  bottom: 0;
+  left: 2px;
+  width: auto;
+  height: 6px;
+}
+
+.advanced-scrollbar.is-horizontal.is-minimal .scroll-thumb {
+  top: 1px;
+  bottom: 1px;
+  left: 0;
+  right: auto;
 }
 
 .advanced-scrollbar.is-minimal.is-hidden {

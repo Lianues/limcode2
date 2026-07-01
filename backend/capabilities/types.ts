@@ -33,6 +33,9 @@ import type {
   ToolCallEventRecord,
   ToolCallRecord,
   SkillDefinitionRecord,
+  SkillSource,
+  RuleFileRecord,
+  RuleScope,
   WebviewClientMeta,
   WorkEnvironmentRecord
 } from '../../shared/protocol';
@@ -171,8 +174,19 @@ export interface WorkEnvironmentCapabilityOptions {
  */
 export interface SkillCatalogCapability {
   list(): SkillDefinitionRecord[];
-  get(idOrName: string): SkillDefinitionRecord | undefined;
-  readBody(idOrName: string): Promise<string>;
+  get(name: string, source?: SkillSource): SkillDefinitionRecord | undefined;
+  readBody(name: string, source?: SkillSource): Promise<string>;
+  refresh(): Promise<void>;
+}
+
+/**
+ * 规则文件扫描能力。
+ * 从项目根 <projectRoot>/{AGENTS,CLAUDE}.md 与数据根 <dataRoot>/{AGENTS,CLAUDE}.md 读取规则，
+ * 产出 RuleFileRecord 列表；AGENTS.md 可写回，CLAUDE.md 只读兼容。
+ */
+export interface RulesCatalogCapability {
+  list(): RuleFileRecord[];
+  writeAgents(scope: RuleScope, content: string): Promise<void>;
   refresh(): Promise<void>;
 }
 

@@ -10,5 +10,6 @@ export * from './runtimeContext';
 export * from './llm';
 export * from './tools';
 export * from './skill';
+export * from './rules';
 export * from './checkpoint';
 export * from './compression';

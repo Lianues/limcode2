@@ -10,7 +10,7 @@ import { isSkillEnabledByPolicy } from './policy';
 import { activeSkillPolicyForRun } from './queries';
 import { SkillCatalogKey } from './resources';
 
-const SOURCE_LABEL: Record<string, string> = { local: '项目', global: '全局' };
+const SOURCE_LABEL: Record<string, string> = { agents: '.agents', claude: '.claude', global: '全局' };
 
 /**
  * 动态把「当前 run 已启用的技能」注入 skills 工具描述，让 AI 感知可用技能。
@@ -33,14 +33,15 @@ export const skillsToolSchemaContributor: ToolSchemaContributor = {
   }
 };
 
-function composeSkillsDescription(baseDescription: string, skills: Array<{ name: string; description: string; source: string }>): string {
+function composeSkillsDescription(baseDescription: string, skills: Array<{ name: string; slug: string; description: string; source: string }>): string {
   if (skills.length === 0) {
     return `${baseDescription}\n\n当前没有可用技能。`;
   }
   const lines = skills.map((skill) => {
     const label = SOURCE_LABEL[skill.source] ?? skill.source;
     const detail = skill.description.trim();
-    return `- ${skill.name}（${label}）${detail ? `：${detail}` : ''}`;
+    // 调用时传 name=slug + source。
+    return `- name=${skill.slug}, source=${skill.source}（${label}${skill.name && skill.name !== skill.slug ? ` · ${skill.name}` : ''}）${detail ? `：${detail}` : ''}`;
   });
-  return `${baseDescription}\n\n可用技能（调用 skills({ name }) 载入对应正文）：\n${lines.join('\n')}`;
+  return `${baseDescription}\n\n可用技能（调用 skills({ name, source }) 载入对应正文）：\n${lines.join('\n')}`;
 }

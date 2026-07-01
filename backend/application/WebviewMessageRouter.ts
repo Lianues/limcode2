@@ -46,6 +46,7 @@ import {
   type MessageContent,
   type LlmProviderModelsGetPayload,
   type ProjectFolderCandidateRecord,
+  type RuleScope,
   type WebviewToExtensionMessage
 } from '../../shared/protocol';
 import { hydrateConversationDetail } from './clientStateHydration';
@@ -71,6 +72,8 @@ export interface WebviewMessageRouterDeps {
   setConversationProjectFolder: (input: SetConversationProjectFolderInput) => boolean;
   importWorkEnvironmentsFromVscode: () => Promise<number>;
   refreshSkillCatalog: () => Promise<void>;
+  refreshRulesCatalog: () => Promise<void>;
+  saveRuleFile: (scope: RuleScope, content: string) => Promise<void>;
 }
 
 /**
@@ -137,6 +140,14 @@ export class WebviewMessageRouter {
       case BridgeMessageType.SkillCatalogRefresh:
         if (!this.deps.isHydrated()) return;
         void this.deps.refreshSkillCatalog().catch((error) => this.postRequestError(clientId, message.type, error instanceof Error ? error.message : '无法刷新技能目录。', message.id));
+        break;
+      case BridgeMessageType.RulesFileSave:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        void this.deps.saveRuleFile(message.payload.scope, message.payload.content).catch((error) => this.postRequestError(clientId, message.type, error instanceof Error ? error.message : '无法保存规则文件。', message.id));
+        break;
+      case BridgeMessageType.RulesCatalogRefresh:
+        if (!this.deps.isHydrated()) return;
+        void this.deps.refreshRulesCatalog().catch((error) => this.postRequestError(clientId, message.type, error instanceof Error ? error.message : '无法刷新规则目录。', message.id));
         break;
       case BridgeMessageType.ToolExecutionApprove:
         if (!this.deps.isHydrated() || !message.payload) return;

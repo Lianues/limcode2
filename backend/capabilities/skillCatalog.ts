@@ -4,62 +4,62 @@ import type { SkillCatalogCapability } from './types';
 import { resolveDataRootUri } from './vscodeStorage/globalStatus';
 
 const SKILL_ENTRY_FILE = 'SKILL.md';
-const LOCAL_SKILLS_SEGMENTS = ['.agents', 'skills'] as const;
+/** 项目级技能来源与其目录段。三者相互独立，同名 slug 各自保留。 */
+const PROJECT_SKILL_ROOTS: readonly { source: SkillSource; segments: readonly string[] }[] = [
+  { source: 'agents', segments: ['.agents', 'skills'] },
+  { source: 'claude', segments: ['.claude', 'skills'] }
+];
 const GLOBAL_SKILLS_SEGMENT = 'skills';
+/** 来源展示顺序，仅用于列表排序。 */
+const SOURCE_ORDER: readonly SkillSource[] = ['agents', 'claude', 'global'];
 
 /**
  * 技能目录扫描能力实现。
- * 局部技能：<workspaceFolder>/.agents/skills/<slug>/SKILL.md
+ * .agents 技能：<workspaceFolder>/.agents/skills/<slug>/SKILL.md
+ * .claude 技能：<workspaceFolder>/.claude/skills/<slug>/SKILL.md
  * 全局技能：<dataRoot>/skills/<slug>/SKILL.md
  * SKILL.md 采用 YAML frontmatter（name/description）+ markdown 正文，与 Claude Code 一致。
+ * 三种来源相互独立（source 不同 → id 不同），同名 slug 可共存；调用方用 (name, source) 精确定位。
  */
 export function createSkillCatalogCapability(context: vscode.ExtensionContext): SkillCatalogCapability {
   let skills: SkillDefinitionRecord[] = [];
 
-  function findByIdOrName(idOrName: string): SkillDefinitionRecord | undefined {
-    const key = idOrName.trim();
+  function findSkill(name: string, source?: SkillSource): SkillDefinitionRecord | undefined {
+    const key = name.trim();
     if (!key) return undefined;
-    return skills.find((skill) => skill.id === key)
-      ?? skills.find((skill) => skill.name === key)
-      ?? skills.find((skill) => skill.slug === key);
+    const matches = (skill: SkillDefinitionRecord): boolean =>
+      (skill.slug === key || skill.name === key || skill.id === key) && (source === undefined || skill.source === source);
+    return skills.find(matches);
   }
 
   async function refresh(): Promise<void> {
     const discovered: SkillDefinitionRecord[] = [];
-    const seenIds = new Set<string>();
 
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
-      const root = vscode.Uri.joinPath(folder.uri, ...LOCAL_SKILLS_SEGMENTS);
-      const items = await scanSkillsRoot(root, 'local', folder.uri.toString());
-      appendUnique(discovered, seenIds, items);
+      for (const { source, segments } of PROJECT_SKILL_ROOTS) {
+        const root = vscode.Uri.joinPath(folder.uri, ...segments);
+        discovered.push(...await scanSkillsRoot(root, source, folder.uri.toString()));
+      }
     }
 
     const globalRoot = vscode.Uri.joinPath(resolveDataRootUri(context), GLOBAL_SKILLS_SEGMENT);
-    appendUnique(discovered, seenIds, await scanSkillsRoot(globalRoot, 'global'));
+    discovered.push(...await scanSkillsRoot(globalRoot, 'global'));
 
-    discovered.sort((left, right) => left.source.localeCompare(right.source) || left.name.localeCompare(right.name));
+    discovered.sort((left, right) => SOURCE_ORDER.indexOf(left.source) - SOURCE_ORDER.indexOf(right.source) || left.name.localeCompare(right.name));
     skills = discovered;
   }
 
   return {
     list: () => skills,
-    get: (idOrName) => findByIdOrName(idOrName),
-    async readBody(idOrName) {
-      const skill = findByIdOrName(idOrName);
-      if (!skill) throw new Error(`未找到技能：${idOrName}`);
+    get: (name, source) => findSkill(name, source),
+    async readBody(name, source) {
+      const skill = findSkill(name, source);
+      if (!skill) throw new Error(`未找到技能：${name}${source ? `（来源 ${source}）` : ''}`);
       const raw = await readTextFile(vscode.Uri.file(skill.path));
       return stripFrontmatter(raw).trim();
     },
     refresh
   };
-}
-
-function appendUnique(target: SkillDefinitionRecord[], seenIds: Set<string>, items: SkillDefinitionRecord[]): void {
-  for (const item of items) {
-    if (seenIds.has(item.id)) continue;
-    seenIds.add(item.id);
-    target.push(item);
-  }
 }
 
 async function scanSkillsRoot(root: vscode.Uri, source: SkillSource, workspaceFolderUri?: string): Promise<SkillDefinitionRecord[]> {

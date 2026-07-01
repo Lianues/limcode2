@@ -313,6 +313,7 @@ export const CLIENT_STATE_TABLES = {
   skillDefinitions: upsertRemoveTable('skillDefinition', 'skillDefinition'),
   skillPolicies: upsertRemoveTable('skillPolicy', 'skillPolicy'),
   skillPolicyScopeLinks: upsertRemoveTable('skillPolicyScopeLink', 'link'),
+  ruleFiles: upsertRemoveTable('ruleFile', 'ruleFile'),
   systemPrompts: upsertRemoveTable('systemPrompt', 'systemPrompt', { cascadeRemove: [{ table: 'systemPromptScopeLinks', foreignKey: 'systemPromptId' }, { table: 'runSystemPromptLinks', foreignKey: 'systemPromptId' }] }),
   systemPromptScopeLinks: upsertRemoveTable('systemPromptScopeLink', 'link', { globalSnapshot: true }),
   promptPlaceholders: upsertRemoveTable('promptPlaceholder', 'placeholder'),

@@ -6,3 +6,4 @@ export { createWorkEnvironmentRuntimeCapability } from './workEnvironmentTransfe
 export { createVsCodeStorageCapability } from './vscodeStorage';
 export { createWebviewCapability } from './vscodeWebview';
 export { createSkillCatalogCapability } from './skillCatalog';
+export { createRulesCatalogCapability } from './rulesCatalog';

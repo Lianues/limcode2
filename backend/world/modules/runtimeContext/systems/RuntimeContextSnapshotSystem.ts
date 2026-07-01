@@ -1,5 +1,6 @@
 import { defineSystem, type CommandSink, type ComponentType, type Entity, type WorldReader } from '../../../../ecs/types';
-import { createMessageId } from '../../../../../shared/protocol';
+import { createMessageId, type RuleKind, type RuleScope } from '../../../../../shared/protocol';
+import { RulesCatalogKey } from '../../rules/resources';
 import { readEvents } from '../../../events';
 import { Agent } from '../../agent/components';
 import { AgentRun, AgentRunTargetLink } from '../../agentRun/components';
@@ -55,7 +56,8 @@ export const RuntimeContextSnapshotSystem = defineSystem({
         RuntimeContextSnapshot,
         ConversationRuntimeContextSnapshotLink,
         RunRuntimeContextSnapshotLink
-      ]
+      ],
+      resources: [RulesCatalogKey]
     },
     writes: { components: [RuntimeContextSnapshot, ConversationRuntimeContextSnapshotLink, RunRuntimeContextSnapshotLink], mutationMode: 'update' },
     events: { read: [RuntimeContextEventType.Refresh, RuntimeContextEventType.SnapshotClear] },
@@ -123,7 +125,6 @@ function ensureConversationSnapshot(world: WorldReader, cmd: CommandSink, run: E
 
 function buildSnapshot(world: WorldReader, run: Entity | undefined, conversation: Entity): Parameters<typeof spawnRuntimeContextSnapshot>[1] | undefined {
   const contexts = run !== undefined ? runtimeContextsForRun(world, run, conversation) : runtimeContextsForConversation(world, conversation);
-  if (contexts.length === 0) return undefined;
   const nowDate = new Date();
   const renderedParts = contexts
     .map((context) => {
@@ -133,9 +134,17 @@ function buildSnapshot(world: WorldReader, run: Entity | undefined, conversation
       return name ? `[${name}]\n${text}` : text;
     })
     .filter(Boolean);
-  if (renderedParts.length === 0) return undefined;
-  const template = contexts.map((context) => `[${context.name}]\n${context.template}`).join('\n\n');
-  const text = renderedParts.join('\n\n');
+
+  // 规则区域：AGENTS.md / CLAUDE.md 原样注入（不走 placeholder 渲染，避免用户文件里的 {{}} 被破坏），
+  // 全局在前、项目在后。对话开始时随快照冻结一次，对话中不自动重载。
+  const ruleParts = buildRuleParts(world);
+
+  const allParts = [...renderedParts, ...ruleParts];
+  if (allParts.length === 0) return undefined;
+
+  const contextTemplate = contexts.map((context) => `[${context.name}]\n${context.template}`).join('\n\n');
+  const template = [contextTemplate, ...ruleParts].filter(Boolean).join('\n\n');
+  const text = allParts.join('\n\n');
   const now = Date.now();
   return {
     id: `runtime-context-snapshot:${createMessageId()}`,
@@ -147,6 +156,31 @@ function buildSnapshot(world: WorldReader, run: Entity | undefined, conversation
     sourceHash: runtimeContextSourceHash(`${template}\n---\n${text}`),
     now
   };
+}
+
+const RULE_REGION_LABEL: Record<RuleScope, Record<RuleKind, string>> = {
+  global: { AGENTS: '全局规则 (AGENTS.md)', CLAUDE: '全局规则 (CLAUDE.md)' },
+  project: { AGENTS: '项目规则 (AGENTS.md)', CLAUDE: '项目规则 (CLAUDE.md)' }
+};
+
+/** 规则区域顺序：全局在前、项目在后；同一作用域 AGENTS 在前、CLAUDE 在后。 */
+const RULE_REGION_ORDER: ReadonlyArray<{ scope: RuleScope; kind: RuleKind }> = [
+  { scope: 'global', kind: 'AGENTS' },
+  { scope: 'global', kind: 'CLAUDE' },
+  { scope: 'project', kind: 'AGENTS' },
+  { scope: 'project', kind: 'CLAUDE' }
+];
+
+function buildRuleParts(world: WorldReader): string[] {
+  const rules = world.tryGetResource(RulesCatalogKey) ?? [];
+  const parts: string[] = [];
+  for (const { scope, kind } of RULE_REGION_ORDER) {
+    const rule = rules.find((candidate) => candidate.scope === scope && candidate.kind === kind);
+    const content = rule?.content.trim();
+    if (!rule?.exists || !content) continue;
+    parts.push(`[${RULE_REGION_LABEL[scope][kind]}]\n${content}`);
+  }
+  return parts;
 }
 
 function clearConversationSnapshotLinks(world: WorldReader, cmd: { despawn(entity: Entity): void }, conversation: Entity): void {

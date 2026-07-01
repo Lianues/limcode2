@@ -9,7 +9,7 @@ import { SkillEventType } from '../events';
 import { SkillCatalogKey } from '../resources';
 import type { SkillPolicyScopeKind, SkillPolicySourceConfigRecord, SkillSource } from '../../../../../shared/protocol';
 
-const SKILL_SOURCES: readonly SkillSource[] = ['local', 'global'];
+const SKILL_SOURCES: readonly SkillSource[] = ['agents', 'claude', 'global'];
 
 export const SkillPolicyScopeSystem = defineSystem({
   name: 'SkillPolicyScopeSystem',

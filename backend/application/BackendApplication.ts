@@ -20,6 +20,7 @@ import {
   runtimeContextPlugin,
   toolsPlugin,
   skillPlugin,
+  rulesPlugin,
   workEnvironmentPlugin
 } from '../world/modules';
 import type { AgentSpawnRequestData } from '../world/modules/agent/requests';
@@ -80,6 +81,7 @@ import type {
   MessageContent,
   ProjectFolderCandidateRecord,
   ConversationOriginKind,
+  RuleScope,
   SidebarHistoryScopeKind,
   SidebarConversationHistoryEntry,
   WebviewClientMeta,
@@ -98,6 +100,7 @@ import { conversationCreatedAtFromId, createNewConversationTitle, displayConvers
 import { loadRemoteServerWorkEnvironmentRecordsFromVscode } from './workEnvironments/vscodeSshImport';
 import { McpToolSourcesKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey, ToolSchemasKey } from '../world/modules/tools/resources';
 import { SkillCatalogKey } from '../world/modules/skill/resources';
+import { RulesCatalogKey } from '../world/modules/rules/resources';
 
 export interface CreateConversationOptions {
   projectFolderUri?: string;
@@ -170,13 +173,16 @@ export class BackendApplication {
       getProjectFolderCandidates: () => this.getProjectFolderCandidates(),
       setConversationProjectFolder: (input) => this.setConversationProjectFolder(input),
       importWorkEnvironmentsFromVscode: () => this.importWorkEnvironmentsFromVscode(),
-      refreshSkillCatalog: () => this.syncSkillCatalogResource()
+      refreshSkillCatalog: () => this.syncSkillCatalogResource(),
+      refreshRulesCatalog: () => this.syncRulesCatalogResource(),
+      saveRuleFile: (scope, content) => this.saveRuleFile(scope, content)
     });
 
     registerApplicationEffectHandlers(this.effectHandlers);
     this.disposables.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
       this.syncWorkEnvironmentsFromWorkspaceFolders();
       void this.syncSkillCatalogResource();
+      void this.syncRulesCatalogResource();
     }));
 
     this.scheduler = new Scheduler(this.world, {
@@ -196,7 +202,7 @@ export class BackendApplication {
 
     installWorldPlugins(
       { world: this.world, scheduler: this.scheduler },
-      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), modePlugin(), projectPlugin(), workEnvironmentPlugin(), runtimeContextPlugin(), checkpointPlugin(), compressionPlugin(), llmPlugin(), agentAnswerPlugin(), toolsPlugin({ toolSchemas, toolDefinitions, toolRuntimeDefinitions: this.env.tools.registry }), skillPlugin(), chatPlugin(), agentRunPlugin()]
+      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), modePlugin(), projectPlugin(), workEnvironmentPlugin(), runtimeContextPlugin(), checkpointPlugin(), compressionPlugin(), llmPlugin(), agentAnswerPlugin(), toolsPlugin({ toolSchemas, toolDefinitions, toolRuntimeDefinitions: this.env.tools.registry }), skillPlugin(), rulesPlugin(), chatPlugin(), agentRunPlugin()]
     );
     registerClientSyncSystems(this.scheduler);
 
@@ -506,6 +512,7 @@ export class BackendApplication {
       this.startCheckpointShadowAutoCleanup();
       void this.refreshMcpRuntime(true);
       void this.syncSkillCatalogResource();
+      void this.syncRulesCatalogResource();
       this.resolveHydrated();
     }
   }
@@ -559,6 +566,8 @@ export class BackendApplication {
     if (payload.section === 'common') {
       // 数据根目录切换后，全局技能来源 <dataRoot>/skills 会变化，需重新扫描技能目录。
       await this.syncSkillCatalogResource();
+      // 同理，全局规则来源 <dataRoot>/{AGENTS,CLAUDE}.md 也随数据根变化，需重新扫描规则。
+      await this.syncRulesCatalogResource();
     }
   }
 
@@ -583,6 +592,17 @@ export class BackendApplication {
     await this.env.skills.refresh();
     this.world.setResource(SkillCatalogKey, this.env.skills.list());
     if (this.hydrated) this.requestSnapshot();
+  }
+
+  private async syncRulesCatalogResource(): Promise<void> {
+    await this.env.rules.refresh();
+    this.world.setResource(RulesCatalogKey, this.env.rules.list());
+    if (this.hydrated) this.requestSnapshot();
+  }
+
+  private async saveRuleFile(scope: RuleScope, content: string): Promise<void> {
+    await this.env.rules.writeAgents(scope, content);
+    await this.syncRulesCatalogResource();
   }
 
   private flushPendingSnapshots(): void {

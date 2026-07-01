@@ -113,6 +113,8 @@ export enum BridgeMessageType {
   SkillPolicyScopeSet = 'skillPolicy.scope.set',
   SkillPolicyScopeClear = 'skillPolicy.scope.clear',
   SkillCatalogRefresh = 'skill.catalog.refresh',
+  RulesFileSave = 'rules.file.save',
+  RulesCatalogRefresh = 'rules.catalog.refresh',
   ToolExecutionApprove = 'tool.execution.approve',
   ToolExecutionReject = 'tool.execution.reject',
   ToolChangeApply = 'tool.change.apply',
@@ -772,8 +774,8 @@ export interface ToolPolicyScopeLinkRecord {
   updatedAt: number;
 }
 
-/** 技能来源：local=项目 .agents/skills/；global=数据根 skills/。 */
-export type SkillSource = 'local' | 'global';
+/** 技能来源：agents=项目 .agents/skills/；claude=项目 .claude/skills/；global=数据根 skills/。三者相互独立，同名 slug 可共存。 */
+export type SkillSource = 'agents' | 'claude' | 'global';
 /** 技能策略作用域，与 ToolPolicyScopeKind 保持一致，便于不同 scope 复用配置。 */
 export type SkillPolicyScopeKind = ToolPolicyScopeKind;
 
@@ -810,6 +812,30 @@ export interface SkillPolicyScopeLinkRecord {
   role: PolicyBindingRole;
   createdAt: number;
   updatedAt: number;
+}
+
+/** 规则来源：project=项目根 AGENTS.md/CLAUDE.md；global=数据根 AGENTS.md/CLAUDE.md。 */
+export type RuleScope = 'project' | 'global';
+/** 规则文件类型：AGENTS 为我们维护（可读写）的主文件；CLAUDE 仅作兼容只读读取。 */
+export type RuleKind = 'AGENTS' | 'CLAUDE';
+
+/**
+ * 磁盘扫描出的规则文件。不落 record-store，来自 RulesCatalog 资源投影。
+ * 其正文在对话开始时冻结进 runtime 上下文快照，注入所有 agent 的提示词。
+ */
+export interface RuleFileRecord {
+  id: string;
+  scope: RuleScope;
+  kind: RuleKind;
+  /** AGENTS=true（可编辑保存）；CLAUDE=false（只读预览）。 */
+  editable: boolean;
+  /** 目标文件绝对 fsPath；即使文件不存在也给出，便于保存时创建。 */
+  path: string;
+  exists: boolean;
+  /** 文件正文；不存在时为空串。 */
+  content: string;
+  /** project 作用域对应的 workspace folder uri，global 作用域无。 */
+  workspaceFolderUri?: string;
 }
 
 export interface SystemPromptRecord {
@@ -1736,6 +1762,7 @@ export interface ClientStateRecordByTable {
   skillDefinitions: SkillDefinitionRecord;
   skillPolicies: SkillPolicyRecord;
   skillPolicyScopeLinks: SkillPolicyScopeLinkRecord;
+  ruleFiles: RuleFileRecord;
   systemPrompts: SystemPromptRecord;
   systemPromptScopeLinks: SystemPromptScopeLinkRecord;
   promptPlaceholders: PromptPlaceholderRecord;
@@ -2352,6 +2379,16 @@ export interface SkillCatalogRefreshPayload {
   reason?: string;
 }
 
+export interface RulesFileSavePayload {
+  scope: RuleScope;
+  /** 仅 AGENTS.md 可写；CLAUDE.md 为只读兼容读取，不通过此通道保存。 */
+  content: string;
+}
+
+export interface RulesCatalogRefreshPayload {
+  reason?: string;
+}
+
 export interface WorkEnvironmentPolicyScopeSetPayload {
   scopeKind: WorkEnvironmentPolicyScopeKind;
   scopeId?: string;
@@ -2425,6 +2462,8 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.SkillPolicyScopeSet, SkillPolicyScopeSetPayload>
   | BridgeEnvelope<BridgeMessageType.SkillPolicyScopeClear, SkillPolicyScopeClearPayload>
   | BridgeEnvelope<BridgeMessageType.SkillCatalogRefresh, SkillCatalogRefreshPayload>
+  | BridgeEnvelope<BridgeMessageType.RulesFileSave, RulesFileSavePayload>
+  | BridgeEnvelope<BridgeMessageType.RulesCatalogRefresh, RulesCatalogRefreshPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointPolicyScopeSet, CheckpointPolicyScopeSetPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointPolicyScopeClear, CheckpointPolicyScopeClearPayload>
   | BridgeEnvelope<BridgeMessageType.ToolExecutionApprove, ToolDecisionPayload>

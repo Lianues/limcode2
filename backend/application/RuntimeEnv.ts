@@ -6,6 +6,7 @@ import type {
   LlmCapability,
   RuntimePaths,
   SkillCatalogCapability,
+  RulesCatalogCapability,
   StorageCapability,
   WebviewCapability,
   WorkEnvironmentRuntimeCapability
@@ -32,4 +33,5 @@ export interface RuntimeEnv {
   tools: ToolCapability;
   mcp: McpRuntimeManager;
   skills: SkillCatalogCapability;
+  rules: RulesCatalogCapability;
 }

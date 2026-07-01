@@ -31,9 +31,10 @@ interface SkillSourceGroup {
   skills: SkillDefinitionRecord[];
 }
 
-const SKILL_SOURCES: readonly SkillSource[] = ['local', 'global'];
+const SKILL_SOURCES: readonly SkillSource[] = ['agents', 'claude', 'global'];
 const SOURCE_META: Record<SkillSource, { label: string; hint: string }> = {
-  local: { label: '局部技能', hint: '来自当前项目 .agents/skills/ 目录。' },
+  agents: { label: '.agents 技能', hint: '来自当前项目 .agents/skills/ 目录。' },
+  claude: { label: '.claude 技能', hint: '来自当前项目 .claude/skills/ 目录（Claude Code 兼容）。' },
   global: { label: '全局技能', hint: '来自数据根 skills/ 目录，所有项目共享。' }
 };
 
@@ -120,14 +121,18 @@ function toggleSkill(skill: SkillDefinitionRecord, enabled: boolean): void {
   commit(nextConfigs);
 }
 
+function allSourceConfigs(enabled: boolean): Partial<Record<SkillSource, SkillPolicySourceConfigRecord>> {
+  return Object.fromEntries(SKILL_SOURCES.map((source) => [source, { enabled }])) as Partial<Record<SkillSource, SkillPolicySourceConfigRecord>>;
+}
+
 function enableAll(): void {
   if (props.readonly) return;
-  commit({ local: { enabled: true }, global: { enabled: true } });
+  commit(allSourceConfigs(true));
 }
 
 function disableAll(): void {
   if (props.readonly) return;
-  commit({ local: { enabled: false }, global: { enabled: false } });
+  commit(allSourceConfigs(false));
 }
 
 function restoreInheritance(): void {
@@ -180,7 +185,7 @@ function toggleSkillExpanded(id: string): void {
     <div class="skill-list-shell">
       <div ref="scroller" class="skill-list-scroll">
         <div v-if="skills.length === 0" class="skill-list-empty">
-          未发现技能。将 SKILL.md 放入项目 .agents/skills/&lt;名称&gt;/ 或数据根 skills/&lt;名称&gt;/ 后会自动出现。
+          未发现技能。将 SKILL.md 放入项目 .agents/skills/&lt;名称&gt;/、.claude/skills/&lt;名称&gt;/ 或数据根 skills/&lt;名称&gt;/ 后会自动出现。
         </div>
         <template v-else>
           <section v-for="group in groups" :key="group.source" class="skill-source-group" aria-label="技能来源分组">

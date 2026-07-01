@@ -1,6 +1,7 @@
 import { bridge, BridgeMessageType } from '@webview/transport';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
+import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import type { CompressionBlockRecord } from '@shared/protocol';
 
 export interface CreateCompressionOptions {
@@ -12,6 +13,7 @@ export interface CreateCompressionOptions {
 export function useCompression() {
   const clientState = useClientStateStore();
   const conversationTimeline = useConversationTimelineStore();
+  const globalSettings = useGlobalSettingsStore();
 
   function createCompression(options: CreateCompressionOptions | string = {}): boolean {
     const input = typeof options === 'string' ? { methodConfigId: options } : options;
@@ -28,11 +30,13 @@ export function useCompression() {
     }
     const minimumMessageCount = input.startMessageId || input.endMessageId ? 1 : 2;
     if (conversationTimeline.currentMessages.length < minimumMessageCount) return false;
+    const methodKind = globalSettings.activeCompressionConfig?.kind;
     bridge.request(BridgeMessageType.CompressionCreate, {
       conversationId,
       ...(input.startMessageId ? { startMessageId: input.startMessageId } : {}),
       ...(input.endMessageId ? { endMessageId: input.endMessageId } : {}),
-      ...(input.methodConfigId ? { methodConfigId: input.methodConfigId } : {})
+      ...(input.methodConfigId ? { methodConfigId: input.methodConfigId } : {}),
+      ...(methodKind ? { methodKind } : {})
     });
     return true;
   }

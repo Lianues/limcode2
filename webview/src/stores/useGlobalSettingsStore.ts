@@ -34,7 +34,7 @@ import {
 import { createDefaultLlmCompressionConfig } from '@shared/protocol';
 import { bridge, BridgeMessageType } from '@webview/transport';
 
-type SelectableCompressionMethodKind = 'openai_responses_compact' | 'llm_summary' | 'deterministic_summary';
+type SelectableCompressionMethodKind = 'openai_responses_compact' | 'llm_summary' | 'segmented_summary' | 'deterministic_summary';
 const TOKEN_STEP = 1_000;
 const CHANNEL_SETTINGS_SECTIONS = ['llm', 'llmProviderConfigs', 'llmCompression', 'llmCompressionConfigs'] as const satisfies readonly GlobalSettingsSection[];
 type GlobalSettingsSectionMessages = Partial<Record<GlobalSettingsSection, string>>;
@@ -949,7 +949,7 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       if (safeKind === 'openai_responses_compact') {
         config.openaiResponsesCompact = { ...(config.openaiResponsesCompact ?? {}), createSummaryFallback: true };
       }
-      if (safeKind === 'llm_summary' && !config.llmSummary) {
+      if ((safeKind === 'llm_summary' || safeKind === 'segmented_summary') && !config.llmSummary) {
         config.llmSummary = createDefaultLlmCompressionConfig('临时').llmSummary;
       }
       config.updatedAt = Date.now();

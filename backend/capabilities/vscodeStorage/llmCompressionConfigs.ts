@@ -166,7 +166,7 @@ function normalizeLlmSummary(input: unknown): LlmCompressionConfigRecord['llmSum
 }
 
 function isKnownKind(value: unknown): value is LlmCompressionMethodKind {
-  return value === 'disabled' || value === 'openai_responses_compact' || value === 'llm_summary' || value === 'deterministic_summary' || value === 'manual_summary';
+  return value === 'disabled' || value === 'openai_responses_compact' || value === 'llm_summary' || value === 'segmented_summary' || value === 'deterministic_summary' || value === 'manual_summary';
 }
 
 function isKnownFallbackMode(value: unknown): value is LlmCompressionFallbackMode {

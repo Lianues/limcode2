@@ -16,10 +16,13 @@ import {
   isFunctionResponsePart,
   DEFAULT_LLM_COMPRESSION_SUMMARY_SYSTEM_PROMPT,
   DEFAULT_LLM_COMPRESSION_SUMMARY_USER_PROMPT,
+  DEFAULT_SEGMENTED_SUMMARY_SYSTEM_PROMPT,
+  DEFAULT_SEGMENTED_SUMMARY_USER_PROMPT,
   isInlineDataPart,
   DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
   DEFAULT_LLM_RETRY_ON_ERROR,
   isTextPart,
+  isVisibleTextPart,
   isProviderContextPart
 } from '../../shared/protocol';
 import type {
@@ -581,6 +584,7 @@ function ensureDefaultCompressionMethodsRegistered(): void {
   if (compressionMethodHandlers.size > 0) return;
   registerLlmCompressionMethod('openai_responses_compact', compactWithOpenAIResponses);
   registerLlmCompressionMethod('llm_summary', compactWithSummary);
+  registerLlmCompressionMethod('segmented_summary', compactWithSegmentedSummary);
   registerLlmCompressionMethod('deterministic_summary', compactWithSummary);
   registerLlmCompressionMethod('manual_summary', compactWithSummary);
 }
@@ -703,18 +707,91 @@ async function compactWithSummary(
   };
 }
 
-interface GeneratedSummaryTextResult { text: string; settings?: LlmProviderConfigRecord }
-
-async function generateSummaryText(
+/**
+ * 分段总结拼接：按回合分别总结后机械拼接。
+ * - 每个回合并行调用 LLM 总结（回合1前情=历史总结，回合N前情=上一回合的最终正式回答原文）；
+ * - 提取每段 <summary></summary>，无标签则回退原文；
+ * - 拼接为 [过去总结逐字?] + ## 回合N，包裹成 [Context Summary]。
+ */
+async function compactWithSegmentedSummary(
   request: LlmCompactRequest,
   methodConfig: LlmCompressionConfigRecord,
   options: LlmProviderOptions,
   signal?: AbortSignal
-): Promise<GeneratedSummaryTextResult> {
-  if (methodConfig.kind === 'deterministic_summary' || methodConfig.kind === 'manual_summary') {
-    return { text: deterministicSummary(request.contents) };
-  }
+): Promise<LlmCompactResult> {
+  const segments = request.segments && request.segments.length > 0 ? request.segments : [request.contents];
+  const provider = await resolveSummaryProvider(request, methodConfig, options);
 
+  // 分段模式固定使用内置中文分段提示词，不复用 llmSummary 的通用 systemPrompt/userPrompt(避免存量配置污染)；
+  // provider/model/generationConfig 仍从 llmSummary 读取，“跟随当前渠道”不受影响。
+  const summarySettings = methodConfig.llmSummary;
+  const systemPrompt = DEFAULT_SEGMENTED_SUMMARY_SYSTEM_PROMPT;
+  const userPrompt = DEFAULT_SEGMENTED_SUMMARY_USER_PROMPT;
+
+  const priorSummaryText = request.priorSummaryContents?.length ? plainTextOfContents(request.priorSummaryContents) : '';
+  const priorContexts = segments.map((segment, index) => {
+    if (index === 0) return priorSummaryText;
+    return finalAnswerTextOf(segments[index - 1]);
+  });
+
+  const roundSummaries = await Promise.all(segments.map((segment, index) =>
+    summarizeSingleRound(provider, { systemPrompt, userPrompt, generationConfig: summarySettings?.generationConfig }, segment, priorContexts[index] || '无', signal)
+  ));
+
+  const parts: string[] = [];
+  if (priorSummaryText) parts.push(`━━━ 早前对话摘要 ━━━\n${priorSummaryText}`);
+  roundSummaries.forEach((summary, index) => parts.push(`━━━ 回合 ${index + 1} ━━━\n${summary}`));
+  const joined = parts.join('\n\n');
+
+  const contents: MessageContent[] = [{ role: 'user', parts: [{ text: `[Context Summary]\n\n${joined}` }] }];
+  return {
+    id: `summary-${request.blockId}`,
+    object: 'limcode.context_summary',
+    createdAt: Date.now(),
+    contents,
+    ...(provider.settings ? { settingsSnapshot: snapshotFromSettings(provider.settings, methodConfig) } : {}),
+    methodConfig
+  };
+}
+
+/** 提取内容里的可见文本（用于逐字保留历史总结，不加 role 前缀）；剥离外层 [Context Summary] 标签避免嵌套。 */
+function plainTextOfContents(contents: MessageContent[]): string {
+  const text = contents
+    .flatMap((content) => content.parts.filter(isVisibleTextPart).map((part) => part.text))
+    .join('\n')
+    .trim();
+  return text.replace(/^\[Context Summary\]\s*/, '').trim();
+}
+
+/** 取一个回合中最后一条“正式回答”(model + 可见文本) 的可见文本，用作下一回合前情。 */
+function finalAnswerTextOf(segment: MessageContent[]): string {
+  for (let index = segment.length - 1; index >= 0; index -= 1) {
+    const content = segment[index];
+    if (content.role !== 'model') continue;
+    const text = content.parts.filter(isVisibleTextPart).map((part) => part.text).join('\n').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+const SUMMARY_TAG_PATTERN = /<summary>([\s\S]*?)<\/summary>/i;
+function extractSummaryTag(text: string): string {
+  const match = SUMMARY_TAG_PATTERN.exec(text);
+  return (match ? match[1] : text).trim();
+}
+
+interface ResolvedSummaryProvider {
+  provider: ReturnType<UnifiedModule['createLLMFromConfig']> | undefined;
+  settings: LlmProviderConfigRecord;
+  stream: boolean;
+}
+
+/** 组装总结用 provider（复用运行时渠道解析 + 代理/头合并）；无 API Key 时 provider 为 undefined 表示回退确定性摘要。 */
+async function resolveSummaryProvider(
+  request: LlmCompactRequest,
+  methodConfig: LlmCompressionConfigRecord,
+  options: LlmProviderOptions
+): Promise<ResolvedSummaryProvider> {
   const summarySettings = methodConfig.llmSummary;
   const providerConfigId = summarySettings?.providerConfigId?.trim();
   const model = summarySettings?.model?.trim();
@@ -726,7 +803,7 @@ async function generateSummaryText(
     ...(providerConfigId || model ? { model: { ...(providerConfigId ? { providerConfigId } : {}), model: model || '' } } : {})
   }, options);
 
-  if (!settings.apiKey) return { text: deterministicSummary(request.contents), settings };
+  if (!settings.apiKey) return { provider: undefined, settings, stream: false };
 
   const unified = await importUnifiedLlmProvider();
   const registry = unified.createBootstrapExtensionRegistry();
@@ -743,28 +820,80 @@ async function generateSummaryText(
     ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
     ...(proxy ? { proxy, fetch: proxyFetch } : {})
   }, registry.llmProviders);
+  return { provider, settings, stream: settings.stream !== false };
+}
 
+interface SummaryPromptSettings { systemPrompt: string; userPrompt: string; generationConfig?: LlmGenerationConfigRecord }
+
+async function summarizeSingleRound(
+  resolved: ResolvedSummaryProvider,
+  prompt: SummaryPromptSettings,
+  segment: MessageContent[],
+  priorContext: string,
+  signal?: AbortSignal
+): Promise<string> {
+  const fallback = () => deterministicSummary(segment);
+  if (!resolved.provider) return fallback();
+
+  const transcript = renderContentsForSummary(segment);
+  const userText = `${prompt.userPrompt}\n\n【前情(只读，不要重新总结)】\n${priorContext}\n\n【本回合记录】\n${transcript}`;
+  const summaryRequest = {
+    contents: [{ role: 'user', parts: [{ text: userText }] }],
+    systemInstruction: { parts: [{ text: prompt.systemPrompt }] },
+    generationConfig: prompt.generationConfig ?? resolved.settings.generationConfig
+  };
+
+  if (resolved.stream) {
+    let text = '';
+    for await (const chunk of resolved.provider.chatStream<UnifiedLLMStreamChunk>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified', signal })) {
+      text += chunk.textDelta ?? visibleTextFromParts(chunk.partsDelta ?? []);
+    }
+    const trimmed = text.trim();
+    return trimmed ? extractSummaryTag(trimmed) : fallback();
+  }
+
+  const response = await resolved.provider.chat<UnifiedLLMResponse>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified', signal });
+  const trimmed = visibleTextFromParts(response.content?.parts ?? []).trim();
+  return trimmed ? extractSummaryTag(trimmed) : fallback();
+}
+
+interface GeneratedSummaryTextResult { text: string; settings?: LlmProviderConfigRecord }
+
+async function generateSummaryText(
+  request: LlmCompactRequest,
+  methodConfig: LlmCompressionConfigRecord,
+  options: LlmProviderOptions,
+  signal?: AbortSignal
+): Promise<GeneratedSummaryTextResult> {
+  if (methodConfig.kind === 'deterministic_summary' || methodConfig.kind === 'manual_summary') {
+    return { text: deterministicSummary(request.contents) };
+  }
+
+  const resolved = await resolveSummaryProvider(request, methodConfig, options);
+  if (!resolved.provider) return { text: deterministicSummary(request.contents), settings: resolved.settings };
+
+  const summarySettings = methodConfig.llmSummary;
   const systemPrompt = summarySettings?.systemPrompt?.trim() || DEFAULT_LLM_COMPRESSION_SUMMARY_SYSTEM_PROMPT;
   const userPrompt = summarySettings?.userPrompt?.trim() || DEFAULT_LLM_COMPRESSION_SUMMARY_USER_PROMPT;
   const transcript = renderContentsForSummary(request.contents);
   const summaryRequest = {
     contents: [{ role: 'user', parts: [{ text: `${userPrompt}\n\n${transcript}` }] }],
     systemInstruction: { parts: [{ text: systemPrompt }] },
-    generationConfig: summarySettings?.generationConfig ?? settings.generationConfig
+    generationConfig: summarySettings?.generationConfig ?? resolved.settings.generationConfig
   };
 
-  if (settings.stream !== false) {
+  if (resolved.stream) {
     let text = '';
-    for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified', signal })) {
+    for await (const chunk of resolved.provider.chatStream<UnifiedLLMStreamChunk>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified', signal })) {
       text += chunk.textDelta ?? visibleTextFromParts(chunk.partsDelta ?? []);
     }
-    return { text: text.trim() || deterministicSummary(request.contents), settings };
+    return { text: text.trim() || deterministicSummary(request.contents), settings: resolved.settings };
   }
 
-  const response = await provider.chat<UnifiedLLMResponse>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified', signal });
+  const response = await resolved.provider.chat<UnifiedLLMResponse>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified', signal });
 
   const text = visibleTextFromParts(response.content?.parts ?? []).trim();
-  return { text: text || deterministicSummary(request.contents), settings };
+  return { text: text || deterministicSummary(request.contents), settings: resolved.settings };
 }
 
 function normalizeCompressionConfig(input: LlmCompressionConfigRecord | undefined, fallbackKind?: LlmCompressionConfigRecord['kind']): LlmCompressionConfigRecord {

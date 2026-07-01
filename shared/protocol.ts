@@ -472,7 +472,7 @@ export interface LlmProviderConfigsRecord {
   configs: LlmProviderConfigRecord[];
 }
 
-export type LlmCompressionMethodKind = 'disabled' | 'openai_responses_compact' | 'llm_summary' | 'deterministic_summary' | 'manual_summary';
+export type LlmCompressionMethodKind = 'disabled' | 'openai_responses_compact' | 'llm_summary' | 'segmented_summary' | 'deterministic_summary' | 'manual_summary';
 export type LlmCompressionTriggerMode = 'manual' | 'token_threshold';
 export type LlmCompressionFallbackMode = 'use_summary' | 'use_raw_history' | 'block_and_ask' | 'auto_generate_summary';
 export type LlmCompressionThresholdUnit = 'percent' | 'tokens';
@@ -484,6 +484,24 @@ export const DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT = 90;
 export const DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS = 20_000;
 export const DEFAULT_LLM_COMPRESSION_SUMMARY_SYSTEM_PROMPT = 'You have written a partial transcript for the initial task above. Please write a summary of the transcript. The purpose of this summary is to provide continuity so you can continue to make progress towards solving the task in a future context, where the raw history above may not be accessible and will be replaced with this summary. Write down anything that would be helpful, including the state, next steps, learnings etc. You must wrap your summary in a <summary></summary> block.';
 export const DEFAULT_LLM_COMPRESSION_SUMMARY_USER_PROMPT = 'Transcript:';
+export const DEFAULT_SEGMENTED_SUMMARY_SYSTEM_PROMPT = [
+  '你正在对一段很长的对话做“分段”压缩。下面【本回合记录】是对话中的一个回合的完整记录',
+  '(一个回合 = 从一条用户消息开始，到下一条用户消息之前为止，中间包含模型的思考、工具调用、工具结果和文字回复)。',
+  '请把这个回合压缩成简洁但信息完整、可在未来上下文中替代原文使用的摘要。',
+  '',
+  '必须包含：',
+  '- 本回合中用户的意图/请求',
+  '- 模型采取的主要动作(调用了哪些工具、关键参数、返回的主要结果)',
+  '- 得出的结论/决定/查明的事实',
+  '- 回合结束时的状态与遗留任务/下一步',
+  '',
+  '规则：',
+  '- 只总结本回合。“前情”仅用于保持连贯的只读参考，不要重新总结它。',
+  '- 文件路径、函数名、标识符、数字等关键细节要按原文保留，不要编造。',
+  '- 输出连贯的纯文本段落，不要使用 Markdown 标题(#)，以免与拼接时的分段标题冲突。',
+  '- 必须把最终摘要用 <summary></summary> 标签包裹，标签外不要写其它内容。'
+].join('\n');
+export const DEFAULT_SEGMENTED_SUMMARY_USER_PROMPT = '请总结下面这个回合。';
 
 export interface LlmCompressionSettingsRecord {
   defaultConfigId?: string;
@@ -545,7 +563,7 @@ export function createDefaultLlmCompressionConfig(name = '默认压缩方法'): 
   return {
     id: `llm-compression-config-${createMessageId()}`,
     name,
-    kind: 'llm_summary',
+    kind: 'segmented_summary',
     trigger: {
       mode: 'token_threshold',
       thresholdUnit: 'percent',
@@ -554,8 +572,6 @@ export function createDefaultLlmCompressionConfig(name = '默认压缩方法'): 
       reserveLatestUserMessageTokens: DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS
     },
     llmSummary: {
-      systemPrompt: DEFAULT_LLM_COMPRESSION_SUMMARY_SYSTEM_PROMPT,
-      userPrompt: DEFAULT_LLM_COMPRESSION_SUMMARY_USER_PROMPT,
       targetTokens: 2000
     },
     fallbackPolicy: { whenNativeUnavailable: 'use_summary' },

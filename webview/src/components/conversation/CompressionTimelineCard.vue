@@ -38,6 +38,7 @@ const methodLabel = computed(() => {
   switch (props.block.methodKind) {
     case 'openai_responses_compact': return 'OpenAI 原生压缩';
     case 'llm_summary': return 'LLM 总结';
+    case 'segmented_summary': return '分段总结拼接';
     case 'deterministic_summary': return '确定性摘要';
     case 'manual_summary': return '手动摘要';
     case 'disabled': return '已关闭';

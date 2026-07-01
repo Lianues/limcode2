@@ -31,7 +31,7 @@ const settings = useGlobalSettingsStore();
 const { loading: channelLoading, text: channelLoadingText } = useSettingsLoadingText('渠道配置', 'global', undefined, {
   globalSettingsSections: ['llm', 'llmProviderConfigs', 'llmCompression', 'llmCompressionConfigs'] as const
 });
-type SelectableCompressionMethodKind = 'openai_responses_compact' | 'llm_summary' | 'deterministic_summary';
+type SelectableCompressionMethodKind = 'openai_responses_compact' | 'llm_summary' | 'segmented_summary' | 'deterministic_summary';
 const TOKEN_STEP = 1_000;
 const createOpen = ref(false);
 const createProvider = ref<LlmProviderKind>('openai-compatible');
@@ -62,7 +62,7 @@ const activeConfigId = computed({
   set: (configId: string) => settings.selectLlmProviderConfig(configId)
 });
 const activeCompressionMethodKind = computed<SelectableCompressionMethodKind>(() => {
-  const kind = settings.activeCompressionConfig?.kind ?? 'llm_summary';
+  const kind = settings.activeCompressionConfig?.kind ?? 'segmented_summary';
   if (kind === 'openai_responses_compact' && compressionProviderConfig.value?.provider !== 'openai-responses') return 'llm_summary';
   if (kind === 'disabled' || kind === 'manual_summary') return 'llm_summary';
   return kind;
@@ -89,11 +89,12 @@ const compressionProviderOptions = computed<SettingsDropdownOption[]>(() => [
 ]);
 const compressionMethodOptions = computed<SettingsDropdownOption[]>(() => {
   const base: SettingsDropdownOption[] = [
+    { value: 'segmented_summary', label: '分段总结拼接' },
     { value: 'llm_summary', label: 'LLM 总结' },
     { value: 'deterministic_summary', label: '确定性摘要' }
   ];
   if (compressionProviderConfig.value?.provider === 'openai-responses') {
-    base.splice(1, 0, { value: 'openai_responses_compact', label: 'OpenAI 原生压缩' });
+    base.splice(2, 0, { value: 'openai_responses_compact', label: 'OpenAI 原生压缩' });
   }
   return base;
 });
@@ -256,6 +257,7 @@ function compressionKindLabel(kind: LlmCompressionMethodKind | undefined): strin
   switch (kind) {
     case 'openai_responses_compact': return 'OpenAI 原生压缩';
     case 'llm_summary': return 'LLM 总结';
+    case 'segmented_summary': return '分段总结拼接';
     case 'deterministic_summary': return '确定性摘要';
     case 'manual_summary': return '手动摘要';
     case 'disabled': return '关闭';

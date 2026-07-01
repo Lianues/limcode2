@@ -67,6 +67,10 @@ export interface LlmCompactRequest {
   methodConfigId?: string;
   methodKind?: LlmCompressionConfigRecord['kind'];
   contents: MessageContent[];
+  /** 分段总结：按回合切分的消息组（仅 segmented_summary 使用）。 */
+  segments?: MessageContent[][];
+  /** 分段总结：作为“回合1前情”的历史总结内容（逐字保留，不重新总结）。 */
+  priorSummaryContents?: MessageContent[];
   sourceHash?: string;
 }
 

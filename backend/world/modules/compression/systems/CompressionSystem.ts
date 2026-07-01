@@ -10,7 +10,7 @@ import { LlmInvocation } from '../../llm/components';
 import { CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSourceLink, CompressionContextVariant, RunCompressionBlockLink } from '../components';
 import { CompressionEventType } from '../events';
 import type { CompressionBlockRecord, ContentPart, MessageContent } from '../../../../../shared/protocol';
-import { isFileDataPart, isFunctionCallPart, isFunctionResponsePart, isInlineDataPart, isProviderContextPart, isTextPart } from '../../../../../shared/protocol';
+import { isFileDataPart, isFunctionCallPart, isFunctionResponsePart, isInlineDataPart, isProviderContextPart, isTextPart, isVisibleTextPart } from '../../../../../shared/protocol';
 
 const COMPRESSION_COMPONENTS = [
   Conversation,
@@ -60,6 +60,15 @@ export const CompressionSystem = defineSystem({
   }
 });
 
+interface CompressionSelection {
+  selected: Entity[];
+  contents: MessageContent[];
+  startSeq: number;
+  anchor: { id: string; seq: number };
+  segments?: MessageContent[][];
+  priorSummaryContents?: MessageContent[];
+}
+
 function createCompressionBlock(
   world: WorldReader,
   cmd: CommandSink,
@@ -67,13 +76,39 @@ function createCompressionBlock(
 ): void {
   const conversation = findConversation(world, payload.conversationId);
   if (conversation === undefined) return;
-  const selected = selectMessagesForCompression(world, conversation, payload.startMessageId, payload.endMessageId);
-  if (selected.length === 0) return;
+  const methodKind = payload.methodKind ?? 'llm_summary';
 
+  const selection = methodKind === 'segmented_summary'
+    ? prepareSegmentedSelection(world, conversation, payload)
+    : prepareFullSelection(world, conversation, payload);
+  if (!selection) return;
+
+  spawnCompressionBlock(world, cmd, conversation, methodKind, payload, selection);
+}
+
+function prepareFullSelection(
+  world: WorldReader,
+  conversation: Entity,
+  payload: { startMessageId?: string; endMessageId?: string }
+): CompressionSelection | undefined {
+  const selected = selectMessagesForCompression(world, conversation, payload.startMessageId, payload.endMessageId);
+  if (selected.length === 0) return undefined;
   const first = world.get(selected[0], Message)!;
   const last = world.get(selected[selected.length - 1], Message)!;
-  const now = Date.now();
   const contents = selected.map((entity) => world.get(entity, Message)?.content).filter((content): content is MessageContent => !!content);
+  return { selected, contents, startSeq: first.seq, anchor: { id: last.id, seq: last.seq } };
+}
+
+function spawnCompressionBlock(
+  world: WorldReader,
+  cmd: CommandSink,
+  conversation: Entity,
+  methodKind: CompressionBlockRecord['methodKind'],
+  payload: { conversationId: string; methodConfigId?: string; trigger?: 'manual' | 'auto' },
+  selection: CompressionSelection
+): void {
+  const { selected, contents, anchor } = selection;
+  const now = Date.now();
   const sourceHash = hashText(JSON.stringify(contents));
   const tokenCountBefore = estimateContentsTokens(contents);
 
@@ -85,12 +120,12 @@ function createCompressionBlock(
     conversation,
     title: payload.trigger === 'auto' ? '自动上下文压缩' : '上下文压缩',
     status: 'running',
-    methodKind: payload.methodKind ?? 'llm_summary',
+    methodKind,
     ...(payload.methodConfigId ? { methodConfigId: payload.methodConfigId } : {}),
-    anchorMessageId: last.id,
-    anchorSeq: last.seq,
-    startSeq: first.seq,
-    endSeq: last.seq,
+    anchorMessageId: anchor.id,
+    anchorSeq: anchor.seq,
+    startSeq: selection.startSeq,
+    endSeq: anchor.seq,
     sourceMessageCount: selected.length,
     tokenCountBefore,
     sourceHash,
@@ -143,8 +178,10 @@ function createCompressionBlock(
       conversationId: payload.conversationId,
       invocationId,
       ...(payload.methodConfigId ? { methodConfigId: payload.methodConfigId } : {}),
-      ...(payload.methodKind ? { methodKind: payload.methodKind } : {}),
+      methodKind,
       contents,
+      ...(selection.segments ? { segments: selection.segments } : {}),
+      ...(selection.priorSummaryContents ? { priorSummaryContents: selection.priorSummaryContents } : {}),
       sourceHash
     }
   });
@@ -319,6 +356,120 @@ function selectMessagesForCompression(world: WorldReader, conversation: Entity, 
 
 function containsOnlyProviderContext(content: MessageContent | undefined): boolean {
   return !!content && content.parts.length > 0 && content.parts.every(isProviderContextPart);
+}
+
+/**
+ * 分段总结的增量选择：
+ * - 只取上一完成块边界之后、到 endBoundary 为止的消息；
+ * - 按“回合”切分（正式回答闭合一个回合），只压缩已闭合回合；
+ * - 末尾未闭合回合不纳入（靠 contextPolicy 以原文保留）；
+ * - 若上一完成块存在其总结，作为“回合1前情”逐字传下去（不重新总结）。
+ */
+function prepareSegmentedSelection(
+  world: WorldReader,
+  conversation: Entity,
+  payload: { endMessageId?: string }
+): CompressionSelection | undefined {
+  const allMessages = conversationMessages(world, conversation);
+  if (allMessages.some((entity) => world.get(entity, Message)?.status === 'streaming')) return undefined;
+  const messages = allMessages.filter((entity) => !containsOnlyProviderContext(world.get(entity, Message)?.content));
+  if (messages.length === 0) return undefined;
+
+  const endEntity = payload.endMessageId ? messages.find((entity) => world.get(entity, Message)?.id === payload.endMessageId) : undefined;
+  const endBoundarySeq = endEntity
+    ? world.get(endEntity, Message)!.seq
+    : world.get(messages[messages.length - 1], Message)!.seq;
+
+  const predecessor = latestCompleteBlockBelow(world, conversation, endBoundarySeq);
+  const predecessorBlock = predecessor !== undefined ? world.get(predecessor, CompressionBlock) : undefined;
+  const startBoundarySeq = predecessorBlock ? (predecessorBlock.endSeq ?? predecessorBlock.anchorSeq ?? 0) : -1;
+
+  const increment = messages.filter((entity) => {
+    const seq = world.get(entity, Message)?.seq ?? 0;
+    return seq > startBoundarySeq && seq <= endBoundarySeq;
+  });
+  if (increment.length === 0) return undefined;
+
+  const closedRounds = splitEntitiesIntoRounds(world, increment);
+  if (closedRounds.length === 0) return undefined;
+
+  const selected = closedRounds.flat();
+  const contents = selected.map((entity) => world.get(entity, Message)?.content).filter((content): content is MessageContent => !!content);
+  const segments = closedRounds.map((round) => round.map((entity) => world.get(entity, Message)?.content).filter((content): content is MessageContent => !!content));
+  const firstSeq = world.get(selected[0], Message)!.seq;
+  const lastMessage = world.get(selected[selected.length - 1], Message)!;
+  const priorSummaryContents = predecessor !== undefined ? summaryVariantContents(world, predecessor) : undefined;
+
+  return {
+    selected,
+    contents,
+    startSeq: firstSeq,
+    anchor: { id: lastMessage.id, seq: lastMessage.seq },
+    segments,
+    ...(priorSummaryContents ? { priorSummaryContents } : {})
+  };
+}
+
+/**
+ * 切分回合：一个回合 = 一段“用户诉求 → 模型干活 → 模型正式回答”的完整交互。
+ * - 只有在当前回合“已闭合”(已出现过模型正式回答)之后，再遇到真实用户消息才切分开新回合；
+ *   因此连续的多条用户消息(补充/追加/打断)会并入同一回合，而不会各自成为残缺回合。
+ * - 模型正式回答(model + 可见文本 + 无工具调用)将当前回合标记为已闭合；模型工具调用会重置为未闭合
+ *   (即便之前已回答过，正式回答后又调工具则视为继续干活)。因此中途的纯文本不会误判切断。
+ * - 末尾回合只有已闭合时才纳入；进行中的末尾回合(如以工具调用结尾)整体丢弃，靠原文保留。
+ */
+function splitEntitiesIntoRounds(world: WorldReader, entities: Entity[]): Entity[][] {
+  const rounds: Entity[][] = [];
+  let current: Entity[] = [];
+  let currentClosed = false;
+  for (const entity of entities) {
+    const content = world.get(entity, Message)?.content;
+    if (currentClosed && isRealUserMessage(content) && current.length > 0) {
+      rounds.push(current);
+      current = [];
+      currentClosed = false;
+    }
+    current.push(entity);
+    if (content?.role === 'model') currentClosed = isFinalAnswer(content);
+  }
+  if (current.length > 0 && currentClosed) rounds.push(current);
+  return rounds;
+}
+
+/** 真实用户消息：role=user 且不是工具结果(functionResponse)。工具结果虽然也是 user role，但属于回合内部。 */
+function isRealUserMessage(content: MessageContent | undefined): boolean {
+  if (!content || content.role !== 'user') return false;
+  return !content.parts.some(isFunctionResponsePart);
+}
+
+/** 正式回答：model 消息含可见文本且无待处理工具调用。 */
+function isFinalAnswer(content: MessageContent): boolean {
+  return content.parts.some(isVisibleTextPart) && !content.parts.some(isFunctionCallPart);
+}
+
+/** 该会话中 anchorSeq 严格小于 upperSeq 的最新完成块（用于增量起点与前情来源；regenerate 时天然排除自身/更新块）。 */
+function latestCompleteBlockBelow(world: WorldReader, conversation: Entity, upperSeq: number): Entity | undefined {
+  return world.query(CompressionBlock)
+    .filter((entity) => {
+      const block = world.get(entity, CompressionBlock);
+      if (!block || block.conversation !== conversation || block.status !== 'complete') return false;
+      return (block.anchorSeq ?? block.endSeq ?? 0) < upperSeq;
+    })
+    .sort((left, right) => {
+      const leftBlock = world.get(left, CompressionBlock)!;
+      const rightBlock = world.get(right, CompressionBlock)!;
+      return (rightBlock.anchorSeq ?? rightBlock.endSeq ?? 0) - (leftBlock.anchorSeq ?? leftBlock.endSeq ?? 0)
+        || rightBlock.createdAt - leftBlock.createdAt
+        || rightBlock.id.localeCompare(leftBlock.id);
+    })[0];
+}
+
+function summaryVariantContents(world: WorldReader, block: Entity): MessageContent[] | undefined {
+  const variant = world.query(CompressionContextVariant)
+    .map((entity) => world.get(entity, CompressionContextVariant))
+    .filter((candidate): candidate is NonNullable<typeof candidate> => !!candidate && candidate.block === block && candidate.kind === 'provider_neutral_summary')
+    .sort((left, right) => right.createdAt - left.createdAt)[0];
+  return variant?.contents;
 }
 
 function currentRevisionForMessage(world: WorldReader, message: Entity): { id: string } | undefined {

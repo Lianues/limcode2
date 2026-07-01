@@ -9,12 +9,14 @@ import type {
   LlmCompressionConfigsRecord,
   LlmCompressionSettingsRecord,
   LlmProviderConfigsRecord,
-  LlmSettingsRecord
+  LlmSettingsRecord,
+  McpServersSettingsRecord
 } from '../../../shared/protocol';
 import type { StorageCapability } from '../types';
 import { loadGlobalSettingsFile, writeGlobalSettingsFile } from './globalSettings';
 import { loadLlmProviderConfigsSettings, saveLlmProviderConfigsSettings } from './llmProviderConfigs';
 import { loadLlmCompressionConfigsSettings, normalizeLlmCompressionSettings, saveLlmCompressionConfigsSettings } from './llmCompressionConfigs';
+import { loadMcpServersSettings, saveMcpServersSettings } from './mcpServers';
 import {
   createGlobalSettingsRecord,
   LIMCODE_GLOBAL_STATUS_LABEL,
@@ -247,6 +249,10 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
         const stored = await loadLlmCompressionConfigsSettings(paths);
         return { section, settings: stored.settings, filePath: stored.filePath };
       }
+      if (section === 'mcpServers') {
+        const stored = await loadMcpServersSettings(paths);
+        return { section, settings: stored.settings, filePath: stored.filePath };
+      }
       await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
       return loadGlobalSettingsFile(paths.settingsRootUri, section);
     },
@@ -268,6 +274,10 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       }
       if (section === 'llmCompressionConfigs') {
         const stored = await saveLlmCompressionConfigsSettings(paths, settings as Partial<LlmCompressionConfigsRecord> | undefined);
+        return { section, settings: stored.settings, filePath: stored.filePath };
+      }
+      if (section === 'mcpServers') {
+        const stored = await saveMcpServersSettings(paths, settings as Partial<McpServersSettingsRecord> | undefined);
         return { section, settings: stored.settings, filePath: stored.filePath };
       }
       await vscode.workspace.fs.createDirectory(paths.settingsRootUri);

@@ -13,6 +13,7 @@ const props = withDefaults(
     confirmLabel?: string;
     cancelLabel?: string;
     required?: boolean;
+    validate?: (value: string) => string;
   }>(),
   {
     description: '',
@@ -21,7 +22,8 @@ const props = withDefaults(
     placeholder: '',
     confirmLabel: '保存',
     cancelLabel: '取消',
-    required: true
+    required: true,
+    validate: undefined
   }
 );
 
@@ -38,7 +40,10 @@ const descriptionId = `${panelId}-description`;
 const errorId = `${panelId}-error`;
 
 const trimmedDraft = computed(() => draft.value.trim());
-const errorText = computed(() => props.required && !trimmedDraft.value ? '标题不能为空' : '');
+const errorText = computed(() => {
+  if (props.required && !trimmedDraft.value) return '标题不能为空';
+  return props.validate?.(trimmedDraft.value) ?? '';
+});
 const canConfirm = computed(() => !errorText.value);
 const describedBy = computed(() => {
   const ids: string[] = [];

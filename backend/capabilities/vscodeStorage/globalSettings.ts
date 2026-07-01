@@ -21,7 +21,7 @@ interface GlobalSettingsFile<T> {
   settings: T;
 }
 
-type FileBackedGlobalSettingsSection = Exclude<GlobalSettingsSection, 'common' | 'llmProviderConfigs' | 'llmCompressionConfigs'>;
+type FileBackedGlobalSettingsSection = Exclude<GlobalSettingsSection, 'common' | 'llmProviderConfigs' | 'llmCompressionConfigs' | 'mcpServers'>;
 
 const GLOBAL_SETTINGS_SECTION_SPECS: Record<FileBackedGlobalSettingsSection, {
   fileName: string;
@@ -172,7 +172,7 @@ function sameSettings(section: GlobalSettingsSection, a: GlobalSettingsSectionVa
 }
 
 function getFileBackedSpec(section: GlobalSettingsSection): (typeof GLOBAL_SETTINGS_SECTION_SPECS)[FileBackedGlobalSettingsSection] {
-  if (section === 'common' || section === 'llmProviderConfigs' || section === 'llmCompressionConfigs') {
+  if (section === 'common' || section === 'llmProviderConfigs' || section === 'llmCompressionConfigs' || section === 'mcpServers') {
     throw new Error(`Global settings section "${section}" is not stored by the generic file-backed settings handler.`);
   }
   return GLOBAL_SETTINGS_SECTION_SPECS[section];

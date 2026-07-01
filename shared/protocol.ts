@@ -21,7 +21,7 @@ export interface WebviewClientMeta {
 
 export const GLOBAL_CLIENT_STATE_STREAM_ID = 'global:state';
 export const GLOBAL_SETTINGS_STREAM_PREFIX = 'settings:global:';
-export const GLOBAL_SETTINGS_SECTIONS = ['common', 'llm', 'llmProviderConfigs', 'llmCompression', 'llmCompressionConfigs', 'checkpointMaintenance', 'appearance', 'attachments'] as const;
+export const GLOBAL_SETTINGS_SECTIONS = ['common', 'llm', 'llmProviderConfigs', 'llmCompression', 'llmCompressionConfigs', 'checkpointMaintenance', 'appearance', 'attachments', 'mcpServers'] as const;
 export type GlobalSettingsSection = typeof GLOBAL_SETTINGS_SECTIONS[number];
 
 export function globalSettingsStreamId(section: GlobalSettingsSection): string {
@@ -349,9 +349,17 @@ export interface ToolDefinitionRecord {
   description: string;
   parameters: unknown;
   execution: ToolExecutionKind;
+  source?: ToolDefinitionSourceRecord;
   metadata?: ToolDefinitionMetadataRecord;
   configSchema?: ToolConfigSchemaRecord;
   defaultConfig?: ToolConfigRecord;
+}
+
+export interface ToolDefinitionSourceRecord {
+  kind: 'builtin' | 'mcp';
+  sourceId?: string;
+  sourceName?: string;
+  originalToolName?: string;
 }
 
 export const TASK_LIST_TOOL_NAME = 'update_task_list';
@@ -720,12 +728,17 @@ export interface ToolPolicyToolConfigRecord {
   config: ToolConfigRecord;
 }
 
+export interface ToolPolicySourceConfigRecord {
+  enabled: boolean;
+  disabledTools?: string[];
+}
 
 export interface ToolPolicyRecord {
   id: string;
   name: string;
   allowedTools: string[];
   toolConfigs?: Record<string, ToolPolicyToolConfigRecord>;
+  sourceConfigs?: Record<string, ToolPolicySourceConfigRecord>;
 }
 
 export interface ToolPolicyScopeLinkRecord {
@@ -1656,6 +1669,7 @@ export interface CompressionTogglePayload { conversationId: string; blockId: str
 export interface ClientStateRecordByTable {
   agents: AgentRecord;
   toolDefinitions: ToolDefinitionRecord;
+  mcpToolSources: McpToolSourceRecord;
   modes: ModeRecord;
   toolPolicies: ToolPolicyRecord;
   toolPolicyScopeLinks: ToolPolicyScopeLinkRecord;
@@ -1845,6 +1859,7 @@ export interface ToolPolicyScopeSetPayload {
   name?: string;
   allowedTools: string[];
   toolConfigs?: Record<string, ToolPolicyToolConfigRecord>;
+  sourceConfigs?: Record<string, ToolPolicySourceConfigRecord>;
 }
 export interface ToolPolicyScopeClearPayload {
   scopeKind: ToolPolicyScopeKind;
@@ -2156,6 +2171,31 @@ export interface AttachmentSettingsRecord {
   /** base64 附件超过该大小时不复制进 dataRoot/attachments，默认 20MB。 */
   maxStoredInlineFileMb: number;
 }
+export type McpServerTransportRecord =
+  | { kind: 'stdio'; command: string; args?: string[]; env?: Record<string, string>; cwd?: string }
+  | { kind: 'http'; url: string; headers?: Record<string, string> };
+export interface McpServerConfigRecord {
+  id: string;
+  name: string;
+  enabled: boolean;
+  transport: McpServerTransportRecord;
+  createdAt: number;
+  updatedAt: number;
+}
+export interface McpServersSettingsRecord {
+  servers: McpServerConfigRecord[];
+}
+export type McpToolSourceStatus = 'disabled' | 'idle' | 'connecting' | 'connected' | 'error';
+export interface McpToolSourceRecord {
+  id: string;
+  name: string;
+  transportKind: McpServerTransportRecord['kind'];
+  enabled: boolean;
+  status: McpToolSourceStatus;
+  toolCount: number;
+  lastError?: string;
+  updatedAt: number;
+}
 export interface AppearanceSettingsRecord {
   /** AI 等待响应时显示的文字（流式中但还没有任何内容块时）。 */
   streamingTextWaiting: string;
@@ -2164,7 +2204,7 @@ export interface AppearanceSettingsRecord {
   /** AI 输出正文时显示的文字（正文正在流式输出时）。 */
   streamingTextWriting: string;
 }
-export type GlobalSettingsSectionValue = GlobalSettingsRecord | LlmSettingsRecord | LlmProviderConfigsRecord | LlmCompressionSettingsRecord | LlmCompressionConfigsRecord | CheckpointMaintenanceSettingsRecord | AppearanceSettingsRecord | AttachmentSettingsRecord;
+export type GlobalSettingsSectionValue = GlobalSettingsRecord | LlmSettingsRecord | LlmProviderConfigsRecord | LlmCompressionSettingsRecord | LlmCompressionConfigsRecord | CheckpointMaintenanceSettingsRecord | AppearanceSettingsRecord | AttachmentSettingsRecord | McpServersSettingsRecord;
 export interface GlobalSettingsGetPayload {
   section: GlobalSettingsSection;
 }
@@ -2176,6 +2216,7 @@ export interface GlobalSettingsSnapshotPayload {
 export interface GlobalSettingsUpdatePayload {
   section: GlobalSettingsSection;
   settings: GlobalSettingsSectionValue;
+  refreshMcpTools?: boolean;
 }
 export interface ConversationSettingsRecord {
   conversationId: string;

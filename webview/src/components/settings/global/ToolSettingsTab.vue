@@ -21,7 +21,7 @@ const { loading: toolLoading, text: toolLoadingText } = useSettingsLoadingText('
     <ToolPolicyEditor
       scope-kind="global"
       title="全局默认工具策略"
-      description="新对话或未单独设置工具策略的作用域会继承这里的启用状态。"
+      description="新对话或未单独设置工具策略的作用域会继承这里的启用状态。MCP 工具注册与连接状态在 MCP 工具页签中集中管理。"
     />
   </section>
 </template>

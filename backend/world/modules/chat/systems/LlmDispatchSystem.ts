@@ -23,7 +23,8 @@ import {
 } from '../../agentRun/components';
 import { CompressionBlock, CompressionContextVariant, RunCompressionBlockLink } from '../../compression/components';
 import { ToolCall, ToolPolicyScopeLink, ToolState } from '../../tools/components';
-import { ToolSchemasKey } from '../../tools/resources';
+import { ToolDefinitionsKey, ToolSchemasKey } from '../../tools/resources';
+import { isToolAllowedByPolicy } from '../../tools/policy';
 import { buildRuntimeToolSchemas, TOOL_SCHEMA_CONTRIBUTOR_READS } from '../../tools/schemaContributors';
 import {
   ConversationRuntimeContextSnapshotLink,
@@ -110,7 +111,7 @@ export const LlmDispatchSystem = defineSystem({
     reads: { components: LlmContextLookupComponents },
     writes: { components: [RunCompressionBlockLink], mutationMode: 'create' },
     bundles: [AgentRunBundle],
-    resources: { read: [ToolSchemasKey] },
+    resources: { read: [ToolSchemasKey, ToolDefinitionsKey] },
     effects: { emit: ['llm.start'] }
   },
   run({ world, cmd }) {
@@ -164,8 +165,12 @@ export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmSt
     : { providerConfigId: modelProfile.providerConfigId, provider: modelProfile.provider, model: modelProfile.model } satisfies LlmModelSettings;
   const toolPolicy = activeToolPolicyForRun(world, input.run);
   const allTools = input.tools ?? world.tryGetResource(ToolSchemasKey) ?? [];
+  const definitionsByName = new Map((world.tryGetResource(ToolDefinitionsKey) ?? []).map((tool) => [tool.name, tool]));
   const filteredTools = toolPolicy
-    ? allTools.filter((tool) => toolPolicy.allowedTools.includes(tool.name))
+    ? allTools.filter((tool) => {
+        const definition = definitionsByName.get(tool.name);
+        return definition ? isToolAllowedByPolicy(toolPolicy, definition) : toolPolicy.allowedTools.includes(tool.name);
+      })
     : [];
   const tools = buildRuntimeToolSchemas(filteredTools, { world, run: input.run, conversation: context.conversation });
   const contextPolicy = activeContextPolicyForRun(world, input.run);

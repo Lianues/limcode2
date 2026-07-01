@@ -1,14 +1,17 @@
 import type { Component } from 'vue';
-import { IconArchive, IconImageGeneration, IconMessage, IconServer, IconSettings2, IconSettingsAi, IconTool } from '@tabler/icons-vue';
+import { IconArchive, IconImageGeneration, IconMessage, IconPlugConnected, IconServer, IconSettings2, IconSettingsAi, IconTool } from '@tabler/icons-vue';
 import ChannelSettingsTab from './ChannelSettingsTab.vue';
 import CheckpointSettingsTab from './CheckpointSettingsTab.vue';
 import AppearanceSettingsTab from './AppearanceSettingsTab.vue';
 import OtherSettingsTab from './OtherSettingsTab.vue';
 import SystemPromptSettingsTab from './SystemPromptSettingsTab.vue';
 import ToolSettingsTab from './ToolSettingsTab.vue';
+import McpToolSettingsTab from './McpToolSettingsTab.vue';
 import WorkEnvironmentSettingsTab from './WorkEnvironmentSettingsTab.vue';
+import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 
-export type GlobalSettingsTabKey = 'channels' | 'prompts' | 'tools' | 'checkpoints' | 'work-environments' | 'appearance' | 'other';
+export type GlobalSettingsTabKey = 'channels' | 'prompts' | 'tools' | 'mcp-tools' | 'checkpoints' | 'work-environments' | 'appearance' | 'other';
 
 export interface GlobalSettingsTabDefinition {
   key: GlobalSettingsTabKey;
@@ -16,6 +19,25 @@ export interface GlobalSettingsTabDefinition {
   description: string;
   icon: Component;
   component: Component;
+  loading?: () => boolean;
+  loadingText?: () => string;
+}
+
+function isMcpTabLoading(): boolean {
+  const settings = useGlobalSettingsStore();
+  const clientState = useClientStateStore();
+  return clientState.settingsClientStateLoading
+    || settings.loadingSettingsSections.mcpServers === true
+    || settings.pendingSettingsSections.mcpServers === true
+    || clientState.mcpToolSources.some((source) => source.status === 'connecting');
+}
+
+function mcpTabLoadingText(): string {
+  const settings = useGlobalSettingsStore();
+  const clientState = useClientStateStore();
+  if (settings.pendingSettingsSections.mcpServers) return settings.status || '正在处理 MCP 工具...';
+  if (clientState.mcpToolSources.some((source) => source.status === 'connecting')) return '正在连接 MCP...';
+  return '正在加载 MCP...';
 }
 
 export const GLOBAL_SETTINGS_TABS: readonly GlobalSettingsTabDefinition[] = [
@@ -39,6 +61,15 @@ export const GLOBAL_SETTINGS_TABS: readonly GlobalSettingsTabDefinition[] = [
     description: '工具注册与默认策略',
     icon: IconTool,
     component: ToolSettingsTab
+  },
+  {
+    key: 'mcp-tools',
+    label: 'MCP',
+    description: 'MCP 服务注册与工具开关',
+    icon: IconPlugConnected,
+    component: McpToolSettingsTab,
+    loading: isMcpTabLoading,
+    loadingText: mcpTabLoadingText
   },
   {
     key: 'checkpoints',

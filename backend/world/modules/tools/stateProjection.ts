@@ -1,4 +1,4 @@
-import type { ClientState, ToolCallEventRecord, ToolCallRecord, ToolDefinitionRecord, ToolPolicyScopeLinkRecord } from '../../../../shared/protocol';
+import type { ClientState, McpToolSourceRecord, ToolCallEventRecord, ToolCallRecord, ToolDefinitionRecord, ToolPolicyScopeLinkRecord } from '../../../../shared/protocol';
 import type { AccessDeclaration, WorldReader } from '../../../ecs/types';
 import { Agent } from '../agent/components';
 import {
@@ -11,7 +11,7 @@ import {
 import { activeToolPolicyForRun, runForToolCall } from '../agentRun/queries';
 import { Conversation, Message, PartOf } from '../chat/components';
 import { ConversationModeSelection, Mode, ToolPolicy } from '../mode/components';
-import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey } from './resources';
+import { McpToolSourcesKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey } from './resources';
 import { toolSchedulingDecision } from './scheduling';
 import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolPolicyScopeLinkData } from './components';
 
@@ -35,12 +35,12 @@ export const toolsRuntimeStateProjectionReads: AccessDeclaration = {
     ToolResultConsumed,
     ToolPolicyScopeLink
   ],
-  resources: [ToolDefinitionsKey, ToolRuntimeDefinitionsKey]
+  resources: [ToolDefinitionsKey, ToolRuntimeDefinitionsKey, McpToolSourcesKey]
 };
 
 export const toolsClientStateProjectionReads: AccessDeclaration = {
   ...toolsRuntimeStateProjectionReads,
-  resources: [ToolDefinitionsKey, ToolRuntimeDefinitionsKey]
+  resources: [ToolDefinitionsKey, ToolRuntimeDefinitionsKey, McpToolSourcesKey]
 };
 
 export const toolsStateProjectionReads = toolsClientStateProjectionReads;
@@ -67,8 +67,10 @@ export function projectToolsRuntimeState(world: WorldReader): Partial<ClientStat
 
 export function projectToolsClientState(world: WorldReader): Partial<ClientState> {
   const toolDefinitions = world.tryGetResource(ToolDefinitionsKey) ?? [];
+  const mcpToolSources = world.tryGetResource(McpToolSourcesKey) ?? [];
   return {
     toolDefinitions: toolDefinitions.map((tool): ToolDefinitionRecord => ({ ...tool })),
+    mcpToolSources: mcpToolSources.map((source): McpToolSourceRecord => ({ ...source })),
     ...projectToolsRuntimeState(world)
   };
 }

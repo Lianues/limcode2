@@ -6,6 +6,7 @@ import type {
   ToolConfigValue,
   ToolDefinitionRecord,
   ToolDomainScope,
+  ToolPolicySourceConfigRecord,
   ToolPolicyScopeKind,
   ToolPolicyToolConfigRecord
 } from '@shared/protocol';
@@ -14,6 +15,7 @@ import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.
 import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingInline.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
 import LcCheckbox from '@webview/components/ui/LcCheckbox.vue';
+import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useToolPolicyStore } from '@webview/stores/useToolPolicyStore';
 import { resolveToolHeaderIcon } from '@webview/components/content/toolDisplay/registry';
 import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
@@ -31,23 +33,36 @@ const props = withDefaults(defineProps<{
 });
 
 const store = useToolPolicyStore();
+const clientState = useClientStateStore();
 const { loading: toolLoading, text: toolLoadingText } = useSettingsLoadingText('工具配置', () => props.scopeKind, () => props.scopeId);
 const scroller = ref<HTMLElement | null>(null);
 const expandedToolNames = ref<string[]>([]);
 
 const tools = computed(() => store.toolDefinitions);
-type ToolScopeFilter = 'all' | ToolDomainScope;
+const builtinTools = computed(() => tools.value.filter((tool) => tool.source?.kind !== 'mcp'));
+const mcpTools = computed(() => tools.value.filter((tool) => tool.source?.kind === 'mcp'));
+const mcpSourceGroups = computed(() => clientState.mcpToolSources.map((source) => ({
+  source,
+  tools: mcpTools.value.filter((tool) => tool.source?.sourceId === source.id)
+})));
+type ToolScopeFilter = 'all' | ToolDomainScope | `mcp:${string}`;
 const selectedToolScope = ref<ToolScopeFilter>('all');
 const localResolution = computed(() => store.localPolicyFor(props.scopeKind, props.scopeId));
 const effectiveResolution = computed(() => store.effectivePolicyFor(props.scopeKind, props.scopeId));
 const effectivePolicy = computed(() => effectiveResolution.value.policy);
 const hasLocalOverride = computed(() => props.scopeKind === 'global' || !!localResolution.value.policy);
 const allowedSet = computed(() => new Set(effectivePolicy.value?.allowedTools ?? []));
-const enabledCount = computed(() => tools.value.filter((tool) => allowedSet.value.has(tool.name)).length);
-const visibleTools = computed(() => selectedToolScope.value === 'all'
-  ? tools.value
-  : tools.value.filter((tool) => toolScope(tool) === selectedToolScope.value));
-const visibleEnabledCount = computed(() => visibleTools.value.filter((tool) => allowedSet.value.has(tool.name)).length);
+const enabledCount = computed(() => tools.value.filter((tool) => isToolEnabled(tool)).length);
+const visibleTools = computed(() => {
+  const scope = selectedToolScope.value;
+  if (scope === 'all') return tools.value;
+  if (scope.startsWith('mcp:')) {
+    const sourceId = scope.slice('mcp:'.length);
+    return mcpTools.value.filter((tool) => tool.source?.sourceId === sourceId);
+  }
+  return builtinTools.value.filter((tool) => toolScope(tool) === scope);
+});
+const visibleEnabledCount = computed(() => visibleTools.value.filter((tool) => isToolEnabled(tool)).length);
 const canRestoreInheritance = computed(() => props.scopeKind !== 'global' && hasLocalOverride.value && !props.readonly);
 const canRestoreDefault = computed(() => {
   if (props.scopeKind !== 'global' || props.readonly) return false;
@@ -57,7 +72,7 @@ const isUsingToolDefaults = computed(() => {
   if (props.scopeKind !== 'global') return false;
   const policy = effectivePolicy.value;
   if (!policy) return false;
-  const expectedAllowed = tools.value.filter((tool) => tool.metadata?.defaultEnabled !== false).map((tool) => tool.name).sort();
+  const expectedAllowed = builtinTools.value.filter((tool) => tool.metadata?.defaultEnabled !== false).map((tool) => tool.name).sort();
   const actualAllowed = [...policy.allowedTools].sort();
   if (expectedAllowed.length !== actualAllowed.length || !expectedAllowed.every((name, i) => name === actualAllowed[i])) return false;
   const configs = policy.toolConfigs ?? {};
@@ -72,15 +87,21 @@ const sourceLabel = computed(() => {
 const toolScopeOptions = computed<SettingsDropdownOption[]>(() => [
   { value: 'all', label: '全部领域', description: `${tools.value.length} 个工具` },
   ...TOOL_SCOPE_ORDER.map((scope) => {
-    const count = tools.value.filter((tool) => toolScope(tool) === scope).length;
+    const count = builtinTools.value.filter((tool) => toolScope(tool) === scope).length;
     return { value: scope, label: scopeLabel(scope), description: `${count} 个工具`, disabled: count === 0 };
-  })
+  }),
+  ...mcpSourceGroups.value.map(({ source, tools: sourceTools }) => ({
+    value: `mcp:${source.id}`,
+    label: `MCP · ${source.name}`,
+    description: `${sourceTools.length} 个工具`,
+    disabled: sourceTools.length === 0
+  }))
 ]);
 
 const TOOL_SCOPE_ORDER: ToolDomainScope[] = ['agent', 'file', 'command', 'conversation', 'workEnvironment', 'task', 'general'];
 
 function updateSelectedToolScope(value: string): void {
-  selectedToolScope.value = value === 'all' || TOOL_SCOPE_ORDER.includes(value as ToolDomainScope)
+  selectedToolScope.value = value === 'all' || value.startsWith('mcp:') || TOOL_SCOPE_ORDER.includes(value as ToolDomainScope)
     ? value as ToolScopeFilter
     : 'all';
 }
@@ -96,11 +117,49 @@ function nextAllowed(toolName: string, enabled: boolean): string[] {
   return tools.value.map((tool) => tool.name).filter((name) => names.has(name));
 }
 
+function isToolEnabled(tool: ToolDefinitionRecord): boolean {
+  if (allowedSet.value.has(tool.name)) return true;
+  if (tool.source?.kind !== 'mcp') return false;
+  const sourceId = tool.source.sourceId;
+  if (!sourceId) return false;
+  const sourceConfig = effectivePolicy.value?.sourceConfigs?.[sourceId];
+  if (!sourceConfig?.enabled) return false;
+  return !(sourceConfig.disabledTools ?? []).includes(tool.name);
+}
+
+function isMcpSourceEnabled(sourceId: string): boolean {
+  return effectivePolicy.value?.sourceConfigs?.[sourceId]?.enabled === true;
+}
+
+function toggleMcpSource(sourceId: string, enabled: boolean): void {
+  if (props.readonly) return;
+  const nextConfigs = cloneSourceConfigs();
+  nextConfigs[sourceId] = {
+    ...(nextConfigs[sourceId] ?? {}),
+    enabled,
+    disabledTools: nextConfigs[sourceId]?.disabledTools ?? []
+  };
+  store.setPolicyForScope(props.scopeKind, props.scopeId, effectivePolicy.value?.allowedTools ?? [], effectivePolicy.value?.name, cloneToolConfigs(), nextConfigs);
+}
+
+function toggleMcpSourceTool(tool: ToolDefinitionRecord, enabled: boolean): void {
+  if (props.readonly || tool.source?.kind !== 'mcp' || !tool.source.sourceId) return;
+  const sourceId = tool.source.sourceId;
+  const nextConfigs = cloneSourceConfigs();
+  const current = nextConfigs[sourceId] ?? { enabled: true, disabledTools: [] };
+  const disabled = new Set(current.disabledTools ?? []);
+  if (enabled) disabled.delete(tool.name);
+  else disabled.add(tool.name);
+  nextConfigs[sourceId] = { enabled: current.enabled !== false, ...(disabled.size > 0 ? { disabledTools: [...disabled] } : {}) };
+  const nextAllowed = enabled ? effectivePolicy.value?.allowedTools ?? [] : (effectivePolicy.value?.allowedTools ?? []).filter((name) => name !== tool.name);
+  store.setPolicyForScope(props.scopeKind, props.scopeId, nextAllowed, effectivePolicy.value?.name, cloneToolConfigs(), nextConfigs);
+}
+
 function toggleTool(tool: ToolDefinitionRecord): void {
   if (props.readonly) return;
-  const nextEnabled = !allowedSet.value.has(tool.name);
+  const nextEnabled = !isToolEnabled(tool);
   if (!nextEnabled) collapseToolConfig(tool.name);
-  store.setPolicyForScope(props.scopeKind, props.scopeId, nextAllowed(tool.name, nextEnabled), effectivePolicy.value?.name, cloneToolConfigs());
+  store.setPolicyForScope(props.scopeKind, props.scopeId, nextAllowed(tool.name, nextEnabled), effectivePolicy.value?.name, cloneToolConfigs(), cloneSourceConfigs());
 }
 
 function isToolConfigExpanded(toolName: string): boolean { return expandedToolNames.value.includes(toolName); }
@@ -117,13 +176,13 @@ function collapseToolConfig(toolName: string): void {
 
 function enableAll(): void {
   if (props.readonly) return;
-  store.setPolicyForScope(props.scopeKind, props.scopeId, tools.value.map((tool) => tool.name), effectivePolicy.value?.name, cloneToolConfigs());
+  store.setPolicyForScope(props.scopeKind, props.scopeId, builtinTools.value.map((tool) => tool.name), effectivePolicy.value?.name, cloneToolConfigs(), cloneSourceConfigs());
 }
 
 function disableAll(): void {
   if (props.readonly) return;
   expandedToolNames.value = [];
-  store.setPolicyForScope(props.scopeKind, props.scopeId, [], effectivePolicy.value?.name, cloneToolConfigs());
+  store.setPolicyForScope(props.scopeKind, props.scopeId, [], effectivePolicy.value?.name, cloneToolConfigs(), cloneSourceConfigs());
 }
 
 function restoreInheritance(): void {
@@ -134,9 +193,9 @@ function restoreInheritance(): void {
 function inheritDefaults(): void {
   if (!canRestoreDefault.value) return;
   const defaultAllowed = tools.value
-    .filter((tool) => tool.metadata?.defaultEnabled !== false)
+    .filter((tool) => tool.source?.kind !== 'mcp' && tool.metadata?.defaultEnabled !== false)
     .map((tool) => tool.name);
-  store.setPolicyForScope(props.scopeKind, props.scopeId, defaultAllowed, effectivePolicy.value?.name, {});
+  store.setPolicyForScope(props.scopeKind, props.scopeId, defaultAllowed, effectivePolicy.value?.name, {}, {});
 }
 
 function riskLabel(tool: ToolDefinitionRecord): string {
@@ -234,6 +293,17 @@ function cloneToolConfigs(): Record<string, ToolPolicyToolConfigRecord> {
   return result;
 }
 
+function cloneSourceConfigs(): Record<string, ToolPolicySourceConfigRecord> {
+  const result: Record<string, ToolPolicySourceConfigRecord> = {};
+  for (const [sourceId, record] of Object.entries(effectivePolicy.value?.sourceConfigs ?? {})) {
+    result[sourceId] = {
+      enabled: record.enabled === true,
+      ...(record.disabledTools?.length ? { disabledTools: [...record.disabledTools] } : {})
+    };
+  }
+  return result;
+}
+
 function configForTool(tool: ToolDefinitionRecord): ToolConfigRecord {
   return {
     ...(tool.defaultConfig ?? {}),
@@ -257,7 +327,7 @@ function updateStringListField(tool: ToolDefinitionRecord, field: ToolConfigFiel
   });
   const nextConfigs = cloneToolConfigs();
   nextConfigs[tool.name] = { ...(nextConfigs[tool.name] ?? {}), config };
-  store.setPolicyForScope(props.scopeKind, props.scopeId, effectivePolicy.value?.allowedTools ?? [], effectivePolicy.value?.name, nextConfigs);
+  store.setPolicyForScope(props.scopeKind, props.scopeId, effectivePolicy.value?.allowedTools ?? [], effectivePolicy.value?.name, nextConfigs, cloneSourceConfigs());
 }
 
 function updateScalarField(tool: ToolDefinitionRecord, field: ToolConfigFieldRecord, value: ToolConfigValue): void {
@@ -265,7 +335,7 @@ function updateScalarField(tool: ToolDefinitionRecord, field: ToolConfigFieldRec
   const config = sanitizeConfigForTool(tool, { ...configForTool(tool), [field.key]: value });
   const nextConfigs = cloneToolConfigs();
   nextConfigs[tool.name] = { ...(nextConfigs[tool.name] ?? {}), config };
-  store.setPolicyForScope(props.scopeKind, props.scopeId, effectivePolicy.value?.allowedTools ?? [], effectivePolicy.value?.name, nextConfigs);
+  store.setPolicyForScope(props.scopeKind, props.scopeId, effectivePolicy.value?.allowedTools ?? [], effectivePolicy.value?.name, nextConfigs, cloneSourceConfigs());
 }
 
 type ToolGateSettingKey = 'autoApproveExecution' | 'autoApplyChange' | 'autoSubmitResult';
@@ -277,7 +347,7 @@ function updateGateSetting(tool: ToolDefinitionRecord, key: ToolGateSettingKey, 
     ...(nextConfigs[tool.name] ?? { config: sanitizeConfigForTool(tool, configForTool(tool)) }),
     [key]: value
   };
-  store.setPolicyForScope(props.scopeKind, props.scopeId, effectivePolicy.value?.allowedTools ?? [], effectivePolicy.value?.name, nextConfigs);
+  store.setPolicyForScope(props.scopeKind, props.scopeId, effectivePolicy.value?.allowedTools ?? [], effectivePolicy.value?.name, nextConfigs, cloneSourceConfigs());
 }
 
 function toolGateValue(tool: ToolDefinitionRecord, key: ToolGateSettingKey): boolean {
@@ -295,7 +365,7 @@ function updateDisplayAutoExpand(tool: ToolDefinitionRecord, value: boolean): vo
     ...(nextConfigs[tool.name] ?? { config: sanitizeConfigForTool(tool, configForTool(tool)) }),
     display: { ...(nextConfigs[tool.name]?.display ?? {}), autoExpand: value }
   };
-  store.setPolicyForScope(props.scopeKind, props.scopeId, effectivePolicy.value?.allowedTools ?? [], effectivePolicy.value?.name, nextConfigs);
+  store.setPolicyForScope(props.scopeKind, props.scopeId, effectivePolicy.value?.allowedTools ?? [], effectivePolicy.value?.name, nextConfigs, cloneSourceConfigs());
 }
 
 function displayAutoExpandValue(tool: ToolDefinitionRecord): boolean {
@@ -371,12 +441,49 @@ function inputNumber(event: Event): number {
       <button v-else type="button" class="secondary" :disabled="!canRestoreInheritance" @click="restoreInheritance">恢复继承</button>
     </div>
 
+    <section v-if="mcpSourceGroups.length > 0" class="mcp-source-section" aria-label="MCP 工具来源">
+      <div class="mcp-source-heading">
+        <span>MCP 来源</span>
+        <small>来源开关控制整组 MCP 工具；展开单工具后仍可调整执行确认与显示。</small>
+      </div>
+      <div class="mcp-source-list">
+        <article v-for="group in mcpSourceGroups" :key="group.source.id" class="mcp-source-item">
+          <div class="mcp-source-row">
+            <LcCheckbox
+              class="mcp-source-toggle"
+              :model-value="isMcpSourceEnabled(group.source.id)"
+              :disabled="readonly || group.source.status !== 'connected' || group.tools.length === 0"
+              @update:model-value="toggleMcpSource(group.source.id, $event)"
+            >
+              <span class="mcp-source-copy">
+                <span class="mcp-source-name">{{ group.source.name }}</span>
+                <span class="mcp-source-meta">{{ group.source.transportKind }} · {{ group.source.status }} · {{ group.source.toolCount }} 个工具</span>
+              </span>
+            </LcCheckbox>
+          </div>
+          <p v-if="group.source.lastError" class="mcp-source-error">{{ group.source.lastError }}</p>
+          <div v-if="group.tools.length > 0" class="mcp-source-tools">
+            <LcCheckbox
+              v-for="tool in group.tools"
+              :key="tool.name"
+              class="mcp-tool-chip"
+              :model-value="isToolEnabled(tool)"
+              :disabled="readonly || !isMcpSourceEnabled(group.source.id)"
+              @update:model-value="toggleMcpSourceTool(tool, $event)"
+            >
+              <span>{{ tool.source?.originalToolName ?? tool.name }}</span>
+            </LcCheckbox>
+          </div>
+        </article>
+      </div>
+    </section>
+
     <div class="tool-list-shell">
       <div ref="scroller" class="tool-list-scroll">
         <div v-if="tools.length === 0" class="tool-list-empty">等待后端返回工具定义...</div>
         <div v-else-if="visibleTools.length === 0" class="tool-list-empty">当前工具领域没有可配置工具。</div>
         <template v-else>
-          <article v-for="tool in visibleTools" :key="tool.name" class="tool-item" :class="{ 'is-enabled': allowedSet.has(tool.name) }">
+          <article v-for="tool in visibleTools" :key="tool.name" class="tool-item" :class="{ 'is-enabled': isToolEnabled(tool) }">
             <div class="tool-item-header">
               <button type="button" class="tool-item-main" :disabled="readonly" @click="toggleTool(tool)">
                 <span class="tool-toggle" aria-hidden="true"></span>
@@ -422,7 +529,7 @@ function inputNumber(event: Event): number {
                     <p v-if="editModeStatisticsText(tool)" class="tool-definition-mode-note is-statistics">{{ editModeStatisticsText(tool) }}</p>
                   </div>
 
-                  <template v-if="allowedSet.has(tool.name)">
+                  <template v-if="isToolEnabled(tool)">
                     <div class="tool-config-group tool-config-permissions">
                     <div class="tool-config-group-heading">
                       <span class="tool-config-group-title">权限与显示</span>
@@ -627,6 +734,98 @@ function inputNumber(event: Event): number {
 
 .tool-policy-actions button:disabled {
   opacity: 0.45;
+}
+
+.mcp-source-section {
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: color-mix(in srgb, var(--vscode-editor-background) 96%, var(--vscode-foreground) 4%);
+}
+
+.mcp-source-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mcp-source-heading span {
+  font-weight: 650;
+}
+
+.mcp-source-heading small,
+.mcp-source-meta,
+.mcp-source-error {
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
+.mcp-source-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.mcp-source-item {
+  border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 88%, transparent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: transparent;
+}
+
+.mcp-source-toggle {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.mcp-source-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mcp-source-name {
+  font-weight: 600;
+}
+
+.mcp-source-error {
+  margin: 0;
+  color: var(--vscode-errorForeground);
+}
+
+.mcp-source-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.mcp-tool-chip {
+  min-height: 24px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+  display: inline-grid;
+  grid-template-columns: 14px auto;
+  gap: var(--space-1);
+  align-items: center;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  font-size: var(--font-size-xs);
+}
+
+.mcp-tool-chip:hover:not(:disabled),
+.mcp-tool-chip:focus-visible {
+  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%);
 }
 
 .tool-list-shell {

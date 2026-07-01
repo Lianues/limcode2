@@ -7,6 +7,7 @@ import type {
   LlmProviderKind,
   ModeIconKey,
   ModeSource,
+  ToolPolicySourceConfigRecord,
   ToolPolicyToolConfigRecord
 } from '../../../../shared/protocol';
 
@@ -26,6 +27,7 @@ export interface ToolPolicyData {
   name: string;
   allowedTools: string[];
   toolConfigs?: Record<string, ToolPolicyToolConfigRecord>;
+  sourceConfigs?: Record<string, ToolPolicySourceConfigRecord>;
 }
 export const ToolPolicy = defineComponent<ToolPolicyData>('ToolPolicy');
 

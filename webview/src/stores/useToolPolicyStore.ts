@@ -6,6 +6,7 @@ import type {
   ToolConfigValue,
   ToolDefinitionRecord,
   ToolPolicyRecord,
+  ToolPolicySourceConfigRecord,
   ToolPolicyScopeKind,
   ToolPolicyScopeLinkRecord,
   ToolPolicyScopeSetPayload,
@@ -61,6 +62,18 @@ function cloneToolConfigs(toolConfigs: Record<string, ToolPolicyToolConfigRecord
       ...(typeof record.autoApplyChange === 'boolean' ? { autoApplyChange: record.autoApplyChange } : {}),
       ...(typeof record.autoSubmitResult === 'boolean' ? { autoSubmitResult: record.autoSubmitResult } : {}),
       ...(record.display ? { display: { ...record.display } } : {})
+    };
+  }
+  return cloned;
+}
+
+function cloneSourceConfigs(sourceConfigs: Record<string, ToolPolicySourceConfigRecord> | undefined): Record<string, ToolPolicySourceConfigRecord> | undefined {
+  if (!sourceConfigs) return undefined;
+  const cloned: Record<string, ToolPolicySourceConfigRecord> = {};
+  for (const [sourceId, record] of Object.entries(sourceConfigs)) {
+    cloned[sourceId] = {
+      enabled: record.enabled === true,
+      ...(record.disabledTools?.length ? { disabledTools: [...record.disabledTools] } : {})
     };
   }
   return cloned;
@@ -161,7 +174,7 @@ export const useToolPolicyStore = defineStore('toolPolicy', {
       const fallback = clientState.toolPolicies[0];
       return fallback ? { policy: fallback, inheritedFrom: 'global' } : {};
     },
-    setPolicyForScope(scopeKind: ToolPolicyScopeKind, scopeId: string | undefined, allowedTools: string[], name?: string, toolConfigs?: Record<string, ToolPolicyToolConfigRecord>): void {
+    setPolicyForScope(scopeKind: ToolPolicyScopeKind, scopeId: string | undefined, allowedTools: string[], name?: string, toolConfigs?: Record<string, ToolPolicyToolConfigRecord>, sourceConfigs?: Record<string, ToolPolicySourceConfigRecord>): void {
       const clientState = useClientStateStore();
       const validNames = new Set(clientState.toolDefinitions.map((tool) => tool.name));
       const sanitized = allowedTools
@@ -169,14 +182,16 @@ export const useToolPolicyStore = defineStore('toolPolicy', {
         .filter((tool, index, list) => !!tool && validNames.has(tool) && list.indexOf(tool) === index);
 
       const plainToolConfigs = cloneToolConfigs(toolConfigs);
-      this.applyOptimisticPolicyScopeSet(scopeKind, scopeId, sanitized, name, plainToolConfigs);
+      const plainSourceConfigs = cloneSourceConfigs(sourceConfigs);
+      this.applyOptimisticPolicyScopeSet(scopeKind, scopeId, sanitized, name, plainToolConfigs, plainSourceConfigs);
 
       const payload: ToolPolicyScopeSetPayload = {
         scopeKind,
         ...(scopeIdFor(scopeKind, scopeId) ? { scopeId: scopeIdFor(scopeKind, scopeId) } : {}),
         ...(name?.trim() ? { name: name.trim() } : {}),
         allowedTools: sanitized,
-        ...(plainToolConfigs !== undefined ? { toolConfigs: plainToolConfigs } : {})
+        ...(plainToolConfigs !== undefined ? { toolConfigs: plainToolConfigs } : {}),
+        ...(plainSourceConfigs !== undefined ? { sourceConfigs: plainSourceConfigs } : {})
       };
       bridge.request(BridgeMessageType.ToolPolicyScopeSet, payload);
     },
@@ -189,7 +204,7 @@ export const useToolPolicyStore = defineStore('toolPolicy', {
         ...(scopeIdFor(scopeKind, scopeId) ? { scopeId: scopeIdFor(scopeKind, scopeId) } : {})
       });
     },
-    applyOptimisticPolicyScopeSet(scopeKind: ToolPolicyScopeKind, scopeId: string | undefined, allowedTools: string[], name?: string, toolConfigs?: Record<string, ToolPolicyToolConfigRecord>): void {
+    applyOptimisticPolicyScopeSet(scopeKind: ToolPolicyScopeKind, scopeId: string | undefined, allowedTools: string[], name?: string, toolConfigs?: Record<string, ToolPolicyToolConfigRecord>, sourceConfigs?: Record<string, ToolPolicySourceConfigRecord>): void {
       const clientState = useClientStateStore();
       const normalizedScopeId = scopeIdFor(scopeKind, scopeId);
       const existingLink = latestLink(clientState.toolPolicyScopeLinks.filter((candidate) => scopeLinkMatches(candidate, scopeKind, normalizedScopeId)));
@@ -204,6 +219,11 @@ export const useToolPolicyStore = defineStore('toolPolicy', {
           ? { toolConfigs: cloneToolConfigs(toolConfigs) ?? {} }
           : existingPolicy?.toolConfigs
             ? { toolConfigs: cloneToolConfigs(existingPolicy.toolConfigs) ?? {} }
+            : {}),
+        ...(sourceConfigs !== undefined
+          ? { sourceConfigs: cloneSourceConfigs(sourceConfigs) ?? {} }
+          : existingPolicy?.sourceConfigs
+            ? { sourceConfigs: cloneSourceConfigs(existingPolicy.sourceConfigs) ?? {} }
             : {})
       };
       upsertById(clientState.toolPolicies, nextPolicy);

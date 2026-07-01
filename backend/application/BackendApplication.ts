@@ -84,7 +84,8 @@ import type {
   WebviewClientMeta,
   WebviewToExtensionMessage
 } from '../../shared/protocol';
-import { createRuntimeEnv } from './createRuntimeEnv';
+import { createRuntimeEnv, recordsForTools, schemasForTools } from './createRuntimeEnv';
+import { dedupeMcpToolNames } from './mcpRuntimeManager';
 import { createDefaultAgentSpawnRequest, DEFAULT_AGENT_ID } from './defaults';
 import { hydrateClientStateSkeleton, hydrateConversationDetail } from './clientStateHydration';
 import { ClientStatePersistence } from './ClientStatePersistence';
@@ -94,6 +95,7 @@ import { WebviewClientRegistry } from './WebviewClientRegistry';
 import { WebviewMessageRouter } from './WebviewMessageRouter';
 import { conversationCreatedAtFromId, createNewConversationTitle, displayConversationTitle } from '../../shared/conversationTitle';
 import { loadRemoteServerWorkEnvironmentRecordsFromVscode } from './workEnvironments/vscodeSshImport';
+import { McpToolSourcesKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey, ToolSchemasKey } from '../world/modules/tools/resources';
 
 export interface CreateConversationOptions {
   projectFolderUri?: string;
@@ -135,6 +137,7 @@ export class BackendApplication {
   public constructor(context: vscode.ExtensionContext) {
     const { env, toolSchemas, toolDefinitions } = createRuntimeEnv(context);
     this.env = env;
+    this.env.mcp.setStateChangeListener(() => this.syncMcpRuntimeResources());
     this.persistence = new ClientStatePersistence(this.world, this.env.storage, {
       renderLoadedConversationIds: () => this.renderLoadedConversationDetails,
       runHistoryLoadedConversationIds: () => this.runHistoryLoadedConversationDetails
@@ -142,7 +145,8 @@ export class BackendApplication {
     this.globalSettingsBridge = new GlobalSettingsBridge({
       storage: this.env.storage,
       webview: this.env.webview,
-      beforeDataRootChange: () => this.persistence.persistImmediately({ force: true, throwOnError: true })
+      beforeDataRootChange: () => this.persistence.persistImmediately({ force: true, throwOnError: true }),
+      afterUpdate: (payload) => this.afterGlobalSettingsUpdate(payload)
     });
     this.conversationSettingsBridge = new ConversationSettingsBridge({
       world: this.world,
@@ -466,6 +470,7 @@ export class BackendApplication {
   public dispose(): void {
     this.scheduler.dispose();
     for (const disposable of this.disposables.splice(0)) disposable.dispose();
+    void this.env.mcp.dispose();
     this.env.webview.detachAll();
     this.webviewClients.clear();
     void this.persistence.persistImmediately();
@@ -495,6 +500,7 @@ export class BackendApplication {
       // 否则启动时会临时生成只包含当前本地目录的全局策略，覆盖用户勾选的 SSH / 允许列表。
       this.startDeferredClientStateSkeletonLoad();
       this.startCheckpointShadowAutoCleanup();
+      void this.refreshMcpRuntime(true);
       this.resolveHydrated();
     }
   }
@@ -539,6 +545,29 @@ export class BackendApplication {
       return;
     }
     this.world.enqueue({ type: ClientSyncEventType.Resync, payload: conversationId ? { conversationId } : {} });
+  }
+
+  private async afterGlobalSettingsUpdate(payload: { section: string; refreshMcpTools?: boolean }): Promise<void> {
+    if (payload.section === 'mcpServers' || payload.section === 'common') {
+      await this.refreshMcpRuntime(payload.refreshMcpTools === true);
+    }
+  }
+
+  private async refreshMcpRuntime(discover: boolean): Promise<void> {
+    await this.env.mcp.refreshFromSettings({ discover });
+    this.syncMcpRuntimeResources();
+  }
+
+  private syncMcpRuntimeResources(): void {
+    const builtinTools = this.env.tools.registry.filter((tool) => tool.declaration.source?.kind !== 'mcp');
+    const mcpTools = dedupeMcpToolNames(this.env.mcp.runtimeTools(), builtinTools.map((tool) => tool.declaration.name));
+    const mergedTools = [...builtinTools, ...mcpTools];
+    this.env.tools.registry.splice(0, this.env.tools.registry.length, ...mergedTools);
+    this.world.setResource(ToolRuntimeDefinitionsKey, this.env.tools.registry);
+    this.world.setResource(ToolSchemasKey, schemasForTools(mergedTools));
+    this.world.setResource(ToolDefinitionsKey, recordsForTools(mergedTools));
+    this.world.setResource(McpToolSourcesKey, this.env.mcp.sourceRecords());
+    this.requestSnapshot();
   }
 
   private flushPendingSnapshots(): void {

@@ -295,6 +295,7 @@ export const CLIENT_STATE_TABLES = {
     ]
   }),
   toolDefinitions: upsertRemoveTable('toolDefinition', 'toolDefinition'),
+  mcpToolSources: upsertRemoveTable('mcpToolSource', 'source'),
   modes: upsertRemoveTable('mode', 'mode', {
     cascadeRemove: [
       { table: 'conversationModeSelections', foreignKey: 'modeId' },

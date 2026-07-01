@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { Component, ComponentPublicInstance } from 'vue';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
+import SettingsLoadingInline from './SettingsLoadingInline.vue';
 
 export interface SettingsScopeTabDefinition<TKey extends string = string> {
   key: TKey;
@@ -9,6 +10,8 @@ export interface SettingsScopeTabDefinition<TKey extends string = string> {
   description: string;
   icon: Component;
   component: Component;
+  loading?: () => boolean;
+  loadingText?: () => string;
 }
 
 const props = defineProps<{
@@ -115,7 +118,13 @@ onBeforeUnmount(() => {
       >
         <component :is="tab.icon" class="tab-icon" stroke="2" aria-hidden="true" />
         <span class="tab-text">
-          <span class="tab-label">{{ tab.label }}</span>
+          <span class="tab-label-line">
+            <span class="tab-label">{{ tab.label }}</span>
+            <SettingsLoadingInline
+              :show="tab.loading?.() === true"
+              :text="tab.loadingText?.() ?? '正在加载...'"
+            />
+          </span>
           <span class="tab-description">{{ tab.description }}</span>
         </span>
       </button>
@@ -229,6 +238,26 @@ onBeforeUnmount(() => {
 .tab-label {
   font-weight: 600;
   line-height: 1.3;
+}
+
+.tab-label-line {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.tab-label-line :deep(.settings-loading-inline) {
+  min-width: 0;
+  max-width: 96px;
+  margin-left: 0;
+  padding-inline: var(--space-1);
+}
+
+.tab-label-line :deep(.settings-loading-inline > span:last-child) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tab-description {

@@ -5,6 +5,7 @@ import type {
   ToolConfigSchemaRecord,
   ToolDefinitionMetadataRecord,
   ToolDefinitionRecord,
+  ToolDefinitionSourceRecord,
   ToolExecutionKind,
   InlineDataPart,
   WorkEnvironmentRecord
@@ -46,6 +47,7 @@ export interface ToolDeclaration {
   name: string;
   description: string;
   parameters: unknown;
+  source?: ToolDefinitionSourceRecord;
   metadata?: ToolDefinitionMetadataRecord;
   configSchema?: ToolConfigSchemaRecord;
   defaultConfig?: ToolConfigRecord;
@@ -115,6 +117,7 @@ export function toolDefinitionRecord(tool: ToolDefinition): ToolDefinitionRecord
     description: tool.declaration.description,
     parameters: tool.declaration.parameters,
     execution: tool.execution as ToolExecutionKind,
+    ...(tool.declaration.source ? { source: tool.declaration.source } : {}),
     ...(tool.declaration.metadata ? { metadata: tool.declaration.metadata } : {}),
     ...(tool.declaration.configSchema ? { configSchema: tool.declaration.configSchema } : {}),
     ...(tool.declaration.defaultConfig ? { defaultConfig: tool.declaration.defaultConfig } : {})

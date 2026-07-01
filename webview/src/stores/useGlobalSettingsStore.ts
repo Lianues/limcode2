@@ -26,7 +26,10 @@ import {
   type LlmRequestBodyRecord,
   type LlmProviderModelsSnapshotPayload,
   type LlmProviderConfigsRecord,
-  type LlmSettingsRecord
+  type LlmSettingsRecord,
+  type McpServerConfigRecord,
+  type McpServersSettingsRecord,
+  type McpServerTransportRecord
 } from '@shared/protocol';
 import { createDefaultLlmCompressionConfig } from '@shared/protocol';
 import { bridge, BridgeMessageType } from '@webview/transport';
@@ -57,6 +60,7 @@ interface GlobalSettingsState {
   appearance: AppearanceSettingsRecord;
   /** 附件：控制 base64 小附件托管阈值。 */
   attachments: AttachmentSettingsRecord;
+  mcpServers: McpServersSettingsRecord;
   /** 各 section 的来源文件路径，用于在 UI 展示。 */
   filePaths: Partial<Record<GlobalSettingsSection, string>>;
   /** 等待 llmProviderConfigs 保存完成后再持久化的 active provider id，避免 active id 先于新配置到达后端。 */
@@ -120,6 +124,10 @@ function emptyAttachments(): AttachmentSettingsRecord {
   return { maxStoredInlineFileMb: 20 };
 }
 
+function emptyMcpServers(): McpServersSettingsRecord {
+  return { servers: [] };
+}
+
 function emptyFetchedModelsDialog(): FetchedModelsDialogState {
   return { open: false, loading: false, configId: '', models: [] };
 }
@@ -164,6 +172,31 @@ function createDefaultProviderConfig(name = '新渠道配置', provider: LlmProv
     createdAt: now,
     updatedAt: now
   };
+}
+
+function createDefaultMcpServerConfig(name = '新 MCP 服务', transportKind: McpServerTransportRecord['kind'] = 'stdio'): McpServerConfigRecord {
+  const now = Date.now();
+  const id = `mcp-${slugId(name)}-${createMessageId()}`;
+  return {
+    id,
+    name,
+    enabled: false,
+    transport: transportKind === 'http'
+      ? { kind: 'http', url: 'http://127.0.0.1:3000/mcp', headers: {} }
+      : { kind: 'stdio', command: '', args: [], env: {} },
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function slugId(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'server';
+}
+
+function isDuplicateMcpServerName(servers: readonly McpServerConfigRecord[], name: string, excludeServerId?: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  if (!normalized) return false;
+  return servers.some((server) => server.id !== excludeServerId && server.name.trim().toLowerCase() === normalized);
 }
 
 function normalizeProviderConfigForUi(config: LlmProviderConfigRecord): LlmProviderConfigRecord {
@@ -423,6 +456,34 @@ function toPlainProviderConfig(config: LlmProviderConfigRecord): LlmProviderConf
   };
 }
 
+function toPlainMcpServer(server: McpServerConfigRecord): McpServerConfigRecord {
+  return {
+    id: server.id,
+    name: server.name.trim() || server.id,
+    enabled: server.enabled === true,
+    transport: toPlainMcpTransport(server.transport),
+    createdAt: server.createdAt,
+    updatedAt: server.updatedAt
+  };
+}
+
+function toPlainMcpTransport(transport: McpServerTransportRecord): McpServerTransportRecord {
+  if (transport.kind === 'http') {
+    const headers = sanitizeHeaders(transport.headers) ?? {};
+    return { kind: 'http', url: transport.url.trim(), ...(Object.keys(headers).length > 0 ? { headers } : {}) };
+  }
+  const args = (transport.args ?? []).map((arg) => String(arg).trim()).filter(Boolean);
+  const env = sanitizeHeaders(transport.env) ?? {};
+  const cwd = transport.cwd?.trim();
+  return {
+    kind: 'stdio',
+    command: transport.command.trim(),
+    ...(args.length > 0 ? { args } : {}),
+    ...(Object.keys(env).length > 0 ? { env } : {}),
+    ...(cwd ? { cwd } : {})
+  };
+}
+
 function toPlainGenerationConfig(config: LlmGenerationConfigRecord | undefined): LlmGenerationConfigRecord | undefined {
   const sanitized = sanitizeGenerationConfig(config);
   if (!sanitized) return undefined;
@@ -559,6 +620,7 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
     checkpointMaintenance: emptyCheckpointMaintenance(),
     appearance: emptyAppearance(),
     attachments: emptyAttachments(),
+    mcpServers: emptyMcpServers(),
     filePaths: {},
     pendingActiveProviderConfigIdAfterConfigsSave: '',
     loadedSections: {},
@@ -702,6 +764,48 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
           maxStoredInlineFileMb: this.attachments.maxStoredInlineFileMb
         }
       });
+    },
+    ensureMcpServers(): void {
+      if (this.loadedSections.mcpServers || this.loadingSettingsSections.mcpServers) return;
+      this.markLoadingSettingSection('mcpServers');
+      bridge.request(BridgeMessageType.GlobalSettingsGet, { section: 'mcpServers' });
+    },
+    saveMcpServers(refreshMcpTools = false): void {
+      this.markPendingSettingSection('mcpServers');
+      this.status = refreshMcpTools ? '正在尝试获取 MCP 工具...' : '正在保存 MCP 服务...';
+      bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
+        section: 'mcpServers',
+        settings: {
+          servers: this.mcpServers.servers.map(toPlainMcpServer)
+        },
+        ...(refreshMcpTools ? { refreshMcpTools: true } : {})
+      });
+    },
+    createMcpServer(name = '新 MCP 服务', transportKind: McpServerTransportRecord['kind'] = 'stdio'): void {
+      const resolved = name.trim() || '新 MCP 服务';
+      if (isDuplicateMcpServerName(this.mcpServers.servers, resolved)) return;
+      this.mcpServers.servers.push(createDefaultMcpServerConfig(resolved, transportKind));
+      this.saveMcpServers();
+    },
+    updateMcpServer(serverId: string, patch: Partial<McpServerConfigRecord>): void {
+      const server = this.mcpServers.servers.find((candidate) => candidate.id === serverId);
+      if (!server) return;
+      if (typeof patch.name === 'string' && isDuplicateMcpServerName(this.mcpServers.servers, patch.name, serverId)) return;
+      Object.assign(server, patch, { updatedAt: Date.now() });
+      this.saveMcpServers();
+    },
+    deleteMcpServer(serverId: string): void {
+      const next = this.mcpServers.servers.filter((server) => server.id !== serverId);
+      if (next.length === this.mcpServers.servers.length) return;
+      this.mcpServers.servers = next;
+      this.saveMcpServers();
+    },
+    testMcpServer(serverId: string): void {
+      const server = this.mcpServers.servers.find((candidate) => candidate.id === serverId);
+      if (!server) return;
+      server.enabled = true;
+      server.updatedAt = Date.now();
+      this.saveMcpServers(true);
     },
     queueLlmProviderConfigsAutoSave(): void {
       touchLlmProviderConfigsRevision();
@@ -1094,6 +1198,9 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
         this.appearance = { ...emptyAppearance(), ...(payload.settings as AppearanceSettingsRecord) };
       } else if (payload.section === 'attachments') {
         this.attachments = { ...emptyAttachments(), ...(payload.settings as AttachmentSettingsRecord) };
+      } else if (payload.section === 'mcpServers') {
+        const settings = payload.settings as McpServersSettingsRecord;
+        this.mcpServers = { servers: [...(settings.servers ?? [])].sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id)) };
       } else {
         this.common = payload.settings as GlobalSettingsRecord;
       }

@@ -15,6 +15,7 @@ export interface GlobalSettingsBridgeDeps {
   storage: StorageCapability;
   webview: WebviewCapability;
   beforeDataRootChange?: () => Promise<void>;
+  afterUpdate?: (payload: GlobalSettingsUpdatePayload) => Promise<void> | void;
 }
 
 /**
@@ -50,6 +51,7 @@ export class GlobalSettingsBridge {
       }
 
       const stored = await this.deps.storage.saveGlobalSettings(payload.section, payload.settings);
+      await this.deps.afterUpdate?.(payload);
       this.deps.webview.broadcastToStream(
         globalSettingsStreamId(payload.section),
         this.createSnapshotMessage(stored, correlationId)

@@ -75,6 +75,7 @@
     "vue-tsc": "^2.0.26"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@tabler/icons-vue": "^3.44.0",
     "markdown-it": "^14.2.0",
     "pinia": "^2.3.1",

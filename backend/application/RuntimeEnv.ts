@@ -1,4 +1,5 @@
 import type { ToolDefinition } from '../world/modules/tools/registry';
+import type { McpRuntimeManager } from './mcpRuntimeManager';
 import type {
   CommandCapability,
   FsCapability,
@@ -28,4 +29,5 @@ export interface RuntimeEnv {
   storage: StorageCapability;
   paths: RuntimePaths;
   tools: ToolCapability;
+  mcp: McpRuntimeManager;
 }

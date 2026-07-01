@@ -5,7 +5,7 @@ export { projectToolsClientState };
 
 export const toolsClientSyncContributor = defineClientStateContributor({
   key: 'tools',
-  tables: ['toolDefinitions', 'toolCalls', 'toolCallEvents', 'toolPolicyScopeLinks'],
+  tables: ['toolDefinitions', 'mcpToolSources', 'toolCalls', 'toolCallEvents', 'toolPolicyScopeLinks'],
   reads: toolsClientStateProjectionReads,
   project: projectToolsClientState,
   worker: {

@@ -80,6 +80,7 @@ import {
   WorkEnvironmentBundle
 } from '../../workEnvironment/bundles';
 import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey, ToolSchemasKey } from '../resources';
+import { isToolAllowedByPolicy } from '../policy';
 import {
   compareToolCallOrder,
   isExecutionApproved,
@@ -243,7 +244,8 @@ function authorizeRunToolExecution(world: WorldReader, toolCall: Entity, call: T
   const conversation = world.get(target.conversation, Conversation);
   const policy = activeToolPolicyForRun(world, run);
   if (!policy) return { ok: false, reason: `AgentRun ${runData.id} 没有 active ToolPolicy。` };
-  if (!policy.allowedTools.includes(call.name)) {
+  const definition = (world.tryGetResource(ToolDefinitionsKey) ?? []).find((tool) => tool.name === call.name);
+  if (!definition || !isToolAllowedByPolicy(policy, definition)) {
     return { ok: false, reason: `AgentRun ${runData.id} 不允许执行工具 ${call.name}。` };
   }
   if ((call.name === SWITCH_WORK_ENVIRONMENT_TOOL_NAME || call.name === TRANSFER_TOOL_NAME) && effectiveWorkEnvironmentPolicyForRun(world, run).policy?.enabled === false) {

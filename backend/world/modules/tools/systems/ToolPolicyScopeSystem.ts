@@ -7,7 +7,7 @@ import { Mode, ToolPolicy } from '../../mode/components';
 import { ToolPolicyScopeLink, type ToolPolicyScopeLinkData } from '../components';
 import { ToolEventType } from '../events';
 import { ToolDefinitionsKey } from '../resources';
-import type { ToolConfigRecord, ToolConfigValue, ToolPolicyScopeKind, ToolPolicyToolConfigRecord } from '../../../../../shared/protocol';
+import type { ToolConfigRecord, ToolConfigValue, ToolPolicyScopeKind, ToolPolicySourceConfigRecord, ToolPolicyToolConfigRecord } from '../../../../../shared/protocol';
 
 export const ToolPolicyScopeSystem = defineSystem({
   name: 'ToolPolicyScopeSystem',
@@ -31,11 +31,18 @@ export const ToolPolicyScopeSystem = defineSystem({
       const now = Date.now();
       const policyName = payload.name?.trim() || defaultPolicyName(payload.scopeKind);
       const nextToolConfigs = payload.toolConfigs !== undefined ? sanitizeToolConfigs(world, payload.toolConfigs) : undefined;
+      const nextSourceConfigs = payload.sourceConfigs !== undefined ? sanitizeSourceConfigs(world, payload.sourceConfigs) : undefined;
 
       if (existing) {
         const currentPolicy = world.get(existing.link.toolPolicy, ToolPolicy);
         if (currentPolicy) {
-          cmd.add(existing.link.toolPolicy, ToolPolicy, { ...currentPolicy, name: policyName, allowedTools, ...(nextToolConfigs !== undefined ? { toolConfigs: nextToolConfigs } : {}) });
+          cmd.add(existing.link.toolPolicy, ToolPolicy, {
+            ...currentPolicy,
+            name: policyName,
+            allowedTools,
+            ...(nextToolConfigs !== undefined ? { toolConfigs: nextToolConfigs } : {}),
+            ...(nextSourceConfigs !== undefined ? { sourceConfigs: nextSourceConfigs } : {})
+          });
           cmd.add(existing.entity, ToolPolicyScopeLink, { ...existing.link, updatedAt: now });
         }
         continue;
@@ -46,7 +53,8 @@ export const ToolPolicyScopeSystem = defineSystem({
         id: policyIdForScope(payload.scopeKind, scope.scopeId),
         name: policyName,
         allowedTools,
-        ...(nextToolConfigs !== undefined && Object.keys(nextToolConfigs).length > 0 ? { toolConfigs: nextToolConfigs } : {})
+        ...(nextToolConfigs !== undefined && Object.keys(nextToolConfigs).length > 0 ? { toolConfigs: nextToolConfigs } : {}),
+        ...(nextSourceConfigs !== undefined && Object.keys(nextSourceConfigs).length > 0 ? { sourceConfigs: nextSourceConfigs } : {})
       });
 
       const link = cmd.spawn();
@@ -77,6 +85,36 @@ interface ResolvedToolPolicyScope {
   ok: true;
   scopeId?: string;
   data: Partial<{ conversation: Entity; agent: Entity; mode: Entity; run: Entity; agentSystemId: string }>;
+}
+
+function sanitizeSourceConfigs(
+  world: WorldReader,
+  rawConfigs: Record<string, ToolPolicySourceConfigRecord> | undefined
+): Record<string, ToolPolicySourceConfigRecord> {
+  const mcpTools = (world.tryGetResource(ToolDefinitionsKey) ?? []).filter((tool) => tool.source?.kind === 'mcp' && tool.source.sourceId);
+  const toolsBySource = new Map<string, Set<string>>();
+  for (const tool of mcpTools) {
+    const sourceId = tool.source?.sourceId;
+    if (!sourceId) continue;
+    const names = toolsBySource.get(sourceId) ?? new Set<string>();
+    names.add(tool.name);
+    toolsBySource.set(sourceId, names);
+  }
+
+  const result: Record<string, ToolPolicySourceConfigRecord> = {};
+  for (const [rawSourceId, rawConfig] of Object.entries(rawConfigs ?? {})) {
+    const sourceId = rawSourceId.trim();
+    const sourceTools = toolsBySource.get(sourceId);
+    if (!sourceId || !sourceTools) continue;
+    const disabledTools = [...new Set(rawConfig.disabledTools ?? [])]
+      .map((name) => name.trim())
+      .filter((name) => sourceTools.has(name));
+    result[sourceId] = {
+      enabled: rawConfig.enabled === true,
+      ...(disabledTools.length > 0 ? { disabledTools } : {})
+    };
+  }
+  return result;
 }
 
 type ScopeResult = ResolvedToolPolicyScope | { ok: false };

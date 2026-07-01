@@ -12,7 +12,9 @@ import { createGlobalSettingsRecord } from '../capabilities/vscodeStorage/global
 import { resolveAttachmentForClient } from '../capabilities/vscodeStorage/attachmentStore';
 import { createToolRegistry } from '../world/modules';
 import type { ToolSchema } from '../world/modules/llm/contracts';
+import { toolDefinitionRecord, type ToolDefinition } from '../world/modules/tools/registry';
 import type { RuntimeEnv } from './RuntimeEnv';
+import { McpRuntimeManager } from './mcpRuntimeManager';
 
 export interface RuntimeEnvSetup {
   env: RuntimeEnv;
@@ -29,6 +31,7 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
   const workEnvironment = createWorkEnvironmentRuntimeCapability();
   const registry = createToolRegistry(command);
   const storage = createVsCodeStorageCapability(context);
+  const mcp = new McpRuntimeManager(storage);
   const llm = createLlmProviderCapability({
     settings: async (request) => {
       if (request && 'settingsSnapshot' in request && request.settingsSnapshot) return resolveSnapshotLlmProviderConfig(storage, request.settingsSnapshot, request.conversationId);
@@ -62,8 +65,9 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
   });
   const fs = createVsCodeFsCapability();
   const webview = createWebviewCapability();
-  const toolSchemas = registry.schemas();
-  const toolDefinitions = registry.records();
+  const toolRuntimeDefinitions = registry.list();
+  const toolSchemas = schemasForTools(toolRuntimeDefinitions);
+  const toolDefinitions = recordsForTools(toolRuntimeDefinitions);
 
   return {
     env: {
@@ -74,11 +78,24 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
       webview,
       storage,
       get paths() { return storage.paths; },
-      tools: { registry: registry.list() }
+      tools: { registry: toolRuntimeDefinitions },
+      mcp
     },
     toolSchemas,
     toolDefinitions
   };
+}
+
+export function schemasForTools(tools: readonly ToolDefinition[]): ToolSchema[] {
+  return tools.map((tool) => ({
+    name: tool.declaration.name,
+    description: tool.declaration.description,
+    parameters: tool.declaration.parameters
+  }));
+}
+
+export function recordsForTools(tools: readonly ToolDefinition[]): ToolDefinitionRecord[] {
+  return tools.map((tool) => toolDefinitionRecord(tool));
 }
 
 function coerceCompressionConfigForProvider(

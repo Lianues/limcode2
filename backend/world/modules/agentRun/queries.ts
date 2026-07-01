@@ -1,5 +1,5 @@
 import type { ComponentType, Entity, WorldReader } from '../../../ecs/types';
-import type { ConfigScopeKind, ToolPolicyScopeKind, ToolPolicyToolConfigRecord } from '../../../../shared/protocol';
+import type { ConfigScopeKind, ToolPolicyScopeKind, ToolPolicySourceConfigRecord, ToolPolicyToolConfigRecord } from '../../../../shared/protocol';
 import { Agent, AgentConversationLink, AgentKind, ConversationAgentSelection, type ConversationAgentSelectionData } from '../agent/components';
 import {
   ConversationModeSelection,
@@ -381,7 +381,15 @@ function intersectToolPolicies(policies: ToolPolicyData[], id: string): ToolPoli
   }
 
   const toolConfigs: Record<string, ToolPolicyToolConfigRecord> = {};
+  const sourceConfigs: Record<string, ToolPolicySourceConfigRecord> = {};
   for (const policy of policies) {
+    for (const [sourceId, sourceConfig] of Object.entries(policy.sourceConfigs ?? {})) {
+      const previous = sourceConfigs[sourceId];
+      sourceConfigs[sourceId] = {
+        enabled: previous?.enabled === false || sourceConfig.enabled === false ? false : sourceConfig.enabled || previous?.enabled === true,
+        disabledTools: [...new Set([...(previous?.disabledTools ?? []), ...(sourceConfig.disabledTools ?? [])])]
+      };
+    }
     for (const [toolName, config] of Object.entries(policy.toolConfigs ?? {})) {
       const previous = toolConfigs[toolName];
       toolConfigs[toolName] = {
@@ -402,7 +410,8 @@ function intersectToolPolicies(policies: ToolPolicyData[], id: string): ToolPoli
     id,
     name: 'Effective Tool Policy',
     allowedTools: [...allowed],
-    ...(Object.keys(toolConfigs).length > 0 ? { toolConfigs } : {})
+    ...(Object.keys(toolConfigs).length > 0 ? { toolConfigs } : {}),
+    ...(Object.keys(sourceConfigs).length > 0 ? { sourceConfigs } : {})
   };
 }
 

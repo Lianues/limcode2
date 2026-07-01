@@ -6,7 +6,7 @@ import { ClientStateContributorsKey } from '../../clientSync/resources';
 import { StorageStateContributorsKey } from '../../storageProjection/resources';
 import { toolsClientSyncContributor } from './clientSync';
 import { toolsStorageStateContributor } from './storageProjection';
-import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey, ToolSchemasKey } from './resources';
+import { McpToolSourcesKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey, ToolSchemasKey } from './resources';
 import { registerToolSystems } from './systems';
 
 export interface ToolsPluginOptions {
@@ -22,6 +22,7 @@ export function toolsPlugin(options: ToolsPluginOptions): WorldPlugin {
       ctx.world.setResource(ToolSchemasKey, options.toolSchemas);
       ctx.world.setResource(ToolDefinitionsKey, options.toolDefinitions);
       ctx.world.setResource(ToolRuntimeDefinitionsKey, options.toolRuntimeDefinitions);
+      ctx.world.setResource(McpToolSourcesKey, []);
       ctx.world.getResource(ClientStateContributorsKey).register(toolsClientSyncContributor);
       ctx.world.getResource(StorageStateContributorsKey).register(toolsStorageStateContributor);
       registerToolSystems(ctx.scheduler);

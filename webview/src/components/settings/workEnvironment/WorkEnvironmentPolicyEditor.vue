@@ -50,7 +50,7 @@ const defaultEnvironmentId = computed(() => effectivePolicy.value?.defaultWorkEn
 const activeEnvironment = computed(() => environments.value.find((item) => item.id === activeEnvironmentId.value) ?? environments.value[0]);
 const activeDetailEditor = computed(() => workEnvironmentDetailEditorForKind(activeEnvironment.value?.kind));
 const canDeleteActiveEnvironment = computed(() => !props.readonly && canRemoveWorkEnvironment(activeEnvironment.value));
-const policyEnabled = computed(() => effectivePolicy.value?.enabled !== false);
+const policyEnabled = computed(() => effectivePolicy.value?.enabled === true);
 const sourceLabel = computed(() => {
   if (props.scopeKind === 'global') return '全局默认策略';
   if (hasLocalOverride.value) return '当前作用域覆盖';

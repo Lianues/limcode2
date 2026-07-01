@@ -28,6 +28,7 @@ export const WorkEnvironmentPolicyDefaultSystem = defineSystem({
     const policy = upsertWorkEnvironmentPolicy(world, cmd, {
       id: workEnvironmentPolicyIdForScope('global'),
       name: '全局默认工作环境策略',
+      enabled: false,
       allowedWorkEnvironmentIds: ids,
       defaultWorkEnvironmentId: ids[0]
     });

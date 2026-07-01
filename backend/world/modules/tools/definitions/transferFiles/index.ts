@@ -16,34 +16,34 @@ export const transferFilesTool: ToolDefinition = {
   declaration: {
     name: TRANSFER_TOOL_NAME,
     description: [
-      '在不同工作环境之间传输文件或目录。支持本地工作区 ↔ 远程服务器、远程服务器 ↔ 远程服务器、本地 ↔ 本地。',
-      'fromEnvironment / toEnvironment 使用工作环境 id；也可以使用 current 表示当前 active 工作环境。',
-      'fromPath / toPath 支持相对路径和绝对路径；相对路径会分别按 fromEnvironment / toEnvironment 的 root/workdir 解析。',
-      '路径以 / 或 \\ 结尾表示目录；type=auto 时会根据源路径 stat 结果自动判断。',
-      '默认 overwrite=false，目标存在会失败；文件写入采用临时文件 + 校验 + rename。',
-      '工具策略默认允许项目外路径；关闭后源路径和目标路径都必须解析在各自工作环境根目录内。'
+      'Transfer files or directories between work environments. Supports local workspace ↔ remote server, remote server ↔ remote server, and local ↔ local.',
+      'fromEnvironment / toEnvironment take a work environment id; you can also use current to refer to the currently active work environment.',
+      'fromPath / toPath accept relative and absolute paths; relative paths are resolved against the root/workdir of fromEnvironment / toEnvironment respectively.',
+      'A path ending with / or \\ denotes a directory; when type=auto, the kind is inferred from the stat result of the source path.',
+      'overwrite defaults to false, so the transfer fails if the target exists; files are written via a temp file + verification + rename.',
+      'The tool policy allows paths outside the project by default; when disabled, both the source and target paths must resolve inside their respective work environment roots.'
     ].join('\n'),
     parameters: {
       type: 'object',
       properties: {
         transfers: {
           type: 'array',
-          description: '传输任务数组。必须是数组，即使只传一个文件也要用数组。',
+          description: 'Array of transfer tasks. Must be an array, even when transferring a single file.',
           items: {
             type: 'object',
             properties: {
-              fromEnvironment: { type: 'string', description: '源工作环境 id，或 current 表示当前 active 工作环境。' },
-              fromPath: { type: 'string', description: '源路径，支持相对路径或绝对路径。相对路径按 fromEnvironment 的 root/workdir 解析；目录建议以 / 或 \\ 结尾。' },
-              toEnvironment: { type: 'string', description: '目标工作环境 id，或 current 表示当前 active 工作环境。' },
-              toPath: { type: 'string', description: '目标路径，支持相对路径或绝对路径。相对路径按 toEnvironment 的 root/workdir 解析；传目录时表示目标目录本身。' },
-              type: { type: 'string', enum: ['auto', 'file', 'directory'], description: '传输类型，默认 auto。' },
-              overwrite: { type: 'boolean', description: '目标存在时是否覆盖，默认 false。' },
-              createDirs: { type: 'boolean', description: '是否自动创建目标父目录/目标目录，默认 true。' }
+              fromEnvironment: { type: 'string', description: 'Source work environment id, or current for the currently active work environment.' },
+              fromPath: { type: 'string', description: 'Source path, relative or absolute. Relative paths are resolved against the root/workdir of fromEnvironment; directories should end with / or \\.' },
+              toEnvironment: { type: 'string', description: 'Target work environment id, or current for the currently active work environment.' },
+              toPath: { type: 'string', description: 'Target path, relative or absolute. Relative paths are resolved against the root/workdir of toEnvironment; a directory path refers to the target directory itself.' },
+              type: { type: 'string', enum: ['auto', 'file', 'directory'], description: 'Transfer type, defaults to auto.' },
+              overwrite: { type: 'boolean', description: 'Whether to overwrite when the target exists, defaults to false.' },
+              createDirs: { type: 'boolean', description: 'Whether to automatically create the target parent directory / target directory, defaults to true.' }
             },
             required: ['fromEnvironment', 'fromPath', 'toEnvironment', 'toPath']
           }
         },
-        verify: { type: 'string', enum: ['none', 'size'], description: '校验模式。none=不校验；size=比较源/目标文件大小（默认）。' }
+        verify: { type: 'string', enum: ['none', 'size'], description: 'Verification mode. none = no verification; size = compare source/target file sizes (default).' }
       },
       required: ['transfers']
     },
@@ -52,7 +52,7 @@ export const transferFilesTool: ToolDefinition = {
       scope: 'file',
       riskLevel: 'write',
       readonly: false,
-      defaultEnabled: true,
+      defaultEnabled: false,
       requiresApproval: true,
       checkpoint: { before: true, after: true }
     },

@@ -13,15 +13,15 @@ export const switchWorkEnvironmentToolModule = defineToolDefinitionModule({
 export const switchWorkEnvironmentTool: ToolDefinition = {
   declaration: {
     name: SWITCH_WORK_ENVIRONMENT_TOOL_NAME,
-    description: `切换当前工作环境。工作环境决定 read、edit、write、shell/bash 等工具解析相对路径和默认 cwd 时使用的根目录。
+    description: `Switch the current work environment. The work environment determines the root directory that tools like read, edit, write, and shell/bash use when resolving relative paths and the default cwd.
 
-传入目标工作环境 id 即可。切换后后续工具参数保持不变，仍使用相对路径 / 相对 cwd。`,
+Just pass the target work environment id. After switching, subsequent tool arguments stay the same and still use relative paths / relative cwd.`,
     parameters: {
       type: 'object',
       properties: {
         workEnvironmentId: {
           type: 'string',
-          description: '目标工作环境 id。使用工具定义中列出的工作环境 id。'
+          description: 'Target work environment id. Use one of the work environment ids listed in the tool definition.'
         }
       },
       required: ['workEnvironmentId']
@@ -31,7 +31,7 @@ export const switchWorkEnvironmentTool: ToolDefinition = {
       scope: 'workEnvironment',
       riskLevel: 'read',
       readonly: true,
-      defaultEnabled: true,
+      defaultEnabled: false,
       checkpoint: { before: false, after: false }
     }
   },

@@ -60,7 +60,7 @@ function augmentSwitchWorkEnvironmentTool(tool: ToolSchema, context: Parameters<
 }
 
 function augmentTransferFilesTool(tool: ToolSchema, context: Parameters<NonNullable<ToolSchemaContributor['augment']>>[1]): ToolSchema {
-  const environmentText = workEnvironmentToolDefinitionText(context, '可用于文件传输的工作环境（fromEnvironment/toEnvironment 请传 id；也可传 current 表示当前 active）：');
+  const environmentText = workEnvironmentToolDefinitionText(context, 'Work environments available for file transfer (pass the id for fromEnvironment/toEnvironment; current refers to the active one):');
   return {
     ...tool,
     description: [tool.description, environmentText].filter(Boolean).join('\n\n'),
@@ -68,14 +68,14 @@ function augmentTransferFilesTool(tool: ToolSchema, context: Parameters<NonNulla
   };
 }
 
-function workEnvironmentToolDefinitionText(context: Parameters<NonNullable<ToolSchemaContributor['augment']>>[1], title = '可切换工作环境（请传 workEnvironmentId 精确切换）：'): string {
+function workEnvironmentToolDefinitionText(context: Parameters<NonNullable<ToolSchemaContributor['augment']>>[1], title = 'Switchable work environments (pass workEnvironmentId to switch precisely):'): string {
   const environments = allowedWorkEnvironmentsForRun(context.world, context.run);
-  if (environments.length === 0) return '当前没有可切换的工作环境。';
+  if (environments.length === 0) return 'There are currently no switchable work environments.';
   const lines = [
     title,
     ...environments.slice(0, 20).map((item) => `- ${formatToolEnvironmentLine(item.data)}`)
   ];
-  if (environments.length > 20) lines.push(`...另有 ${environments.length - 20} 个工作环境未列出`);
+  if (environments.length > 20) lines.push(`...and ${environments.length - 20} more work environment(s) not listed`);
   return lines.join('\n');
 }
 
@@ -94,7 +94,7 @@ function withWorkEnvironmentIdParameterHints(parameters: unknown, environmentTex
       ...properties,
       workEnvironmentId: {
         ...workEnvironmentId,
-        description: `${typeof workEnvironmentId.description === 'string' ? workEnvironmentId.description : '目标工作环境 id。'}\n${environmentText}`
+        description: `${typeof workEnvironmentId.description === 'string' ? workEnvironmentId.description : 'Target work environment id.'}\n${environmentText}`
       }
     }
   };
@@ -127,7 +127,7 @@ function withEnvironmentFieldDescriptions(properties: Record<string, unknown>, e
     if ((key === 'fromEnvironment' || key === 'toEnvironment') && isPlainObject(value)) {
       return [key, {
         ...value,
-        description: `${typeof value.description === 'string' ? value.description : '工作环境 id。'}\n${environmentText}`
+        description: `${typeof value.description === 'string' ? value.description : 'Work environment id.'}\n${environmentText}`
       }];
     }
     return [key, value];

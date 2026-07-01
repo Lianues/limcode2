@@ -166,7 +166,7 @@ export function upsertWorkEnvironmentPolicy(
   const policy: WorkEnvironmentPolicyData = {
     id: input.id,
     name: input.name.trim() || '工作环境策略',
-    enabled: input.enabled ?? previous?.enabled ?? true,
+    enabled: input.enabled ?? previous?.enabled ?? false,
     allowedWorkEnvironmentIds,
     ...(defaultWorkEnvironmentId ? { defaultWorkEnvironmentId } : {}),
     createdAt: previous?.createdAt ?? now,

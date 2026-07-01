@@ -10,8 +10,13 @@ const PROJECT_SKILL_ROOTS: readonly { source: SkillSource; segments: readonly st
   { source: 'claude', segments: ['.claude', 'skills'] }
 ];
 const GLOBAL_SKILLS_SEGMENT = 'skills';
-/** 来源展示顺序，仅用于列表排序。 */
+/** 来源优先级（也用于列表展示排序）：.agents > .claude > 全局。未指定 source 时按此顺序取最优先者。 */
 const SOURCE_ORDER: readonly SkillSource[] = ['agents', 'claude', 'global'];
+
+function sourceRank(source: SkillSource): number {
+  const index = SOURCE_ORDER.indexOf(source);
+  return index === -1 ? SOURCE_ORDER.length : index;
+}
 
 /**
  * 技能目录扫描能力实现。
@@ -29,7 +34,10 @@ export function createSkillCatalogCapability(context: vscode.ExtensionContext): 
     if (!key) return undefined;
     const matches = (skill: SkillDefinitionRecord): boolean =>
       (skill.slug === key || skill.name === key || skill.id === key) && (source === undefined || skill.source === source);
-    return skills.find(matches);
+    const candidates = skills.filter(matches);
+    if (candidates.length <= 1) return candidates[0];
+    // 未指定 source 且 name 命中多个来源时，按来源优先级返回最优先者（.agents > .claude > 全局）。
+    return [...candidates].sort((left, right) => sourceRank(left.source) - sourceRank(right.source))[0];
   }
 
   async function refresh(): Promise<void> {

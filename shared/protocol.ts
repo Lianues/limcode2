@@ -408,10 +408,8 @@ export type TaskListToolMode = 'rewrite' | 'update';
 export interface TaskListToolItemRecord {
   /** 面向用户展示的任务标题；update 模式下也作为匹配键。 */
   title: string;
-  /** 任务的补充说明、验收条件或上下文。 */
+  /** 任务的补充说明、验收条件或上下文；任务进行中时也作为当前活动文案展示。 */
   description?: string;
-  /** 任务进行中时适合展示的现在进行时文案。 */
-  activeForm?: string;
   /** 不传时前端回放会沿用旧状态；新任务默认 pending。 */
   status?: TaskListItemStatus;
   /** update 模式下删除同标题任务。 */

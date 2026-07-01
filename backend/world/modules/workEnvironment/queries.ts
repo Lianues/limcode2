@@ -277,7 +277,7 @@ function fallbackPolicy(world: WorldReader): WorkEnvironmentPolicyResolution {
   const now = Date.now();
   const ids = availableWorkEnvironments(world).map((item) => item.data.id);
   return ids.length > 0
-    ? { policy: { id: 'work-environment-policy:fallback', name: '默认工作环境策略', enabled: true, allowedWorkEnvironmentIds: ids, defaultWorkEnvironmentId: ids[0], createdAt: now, updatedAt: now }, inheritedFrom: 'fallback' }
+    ? { policy: { id: 'work-environment-policy:fallback', name: '默认工作环境策略', enabled: false, allowedWorkEnvironmentIds: ids, defaultWorkEnvironmentId: ids[0], createdAt: now, updatedAt: now }, inheritedFrom: 'fallback' }
     : { inheritedFrom: 'fallback' };
 }
 

@@ -35,7 +35,6 @@ export interface TaskListItemView {
   key: string;
   title: string;
   description?: string;
-  activeForm?: string;
   status: TaskListItemStatus;
   createdOrder: number;
   updatedOrder: number;
@@ -142,7 +141,6 @@ export function taskListDisplayItemsFromOperation(operation: TaskListToolOperati
     key: titleKey(item.title),
     title: item.title,
     ...(item.description ? { description: item.description } : {}),
-    ...(item.activeForm ? { activeForm: item.activeForm } : {}),
     status: item.status ?? 'pending',
     createdOrder: index,
     updatedOrder: index,
@@ -154,7 +152,7 @@ export function formatTaskListProgress(snapshot: TaskListSnapshotView): string {
   const { stats } = snapshot;
   if (stats.total === 0) return '当前没有任务。';
   const active = snapshot.activeItem;
-  return `${stats.completed}/${stats.total} 已完成，${stats.open} 个未完成${active ? ` · 当前：${active.activeForm || active.title}` : ''}`;
+  return `${stats.completed}/${stats.total} 已完成，${stats.open} 个未完成${active ? ` · 当前：${active.description || active.title}` : ''}`;
 }
 
 export function taskListStatusLabel(status: TaskListItemStatus): string {
@@ -257,13 +255,11 @@ function normalizeOperationItem(value: unknown): TaskListToolItemRecord | undefi
   const title = stringValue(record.title);
   if (!title) return undefined;
   const description = stringValue(record.description);
-  const activeForm = stringValue(record.activeForm);
   const status = taskStatusValue(record.status);
   const deletion = record.delete === true;
   return {
     title,
     ...(description ? { description } : {}),
-    ...(activeForm ? { activeForm } : {}),
     ...(status && !deletion ? { status } : {}),
     ...(deletion ? { delete: true } : {})
   };
@@ -297,7 +293,6 @@ export function applyTaskListOperationToSnapshot(
       key,
       title: input.title,
       description: input.description ?? existing?.description,
-      activeForm: input.activeForm ?? existing?.activeForm,
       status,
       createdOrder: existing?.createdOrder ?? nextCreatedOrder++,
       updatedOrder: order.operationIndex * 10_000 + index,
@@ -370,7 +365,6 @@ function placeholderDeletedItem(input: TaskListToolItemRecord, index: number): T
     key: titleKey(input.title),
     title: input.title,
     description: input.description,
-    activeForm: input.activeForm,
     status: 'cancelled',
     createdOrder: index,
     updatedOrder: index
@@ -420,7 +414,6 @@ function cloneItem(item: TaskListItemView): TaskListItemView {
     key: item.key,
     title: item.title,
     description: item.description,
-    activeForm: item.activeForm,
     status: item.status,
     createdOrder: item.createdOrder,
     updatedOrder: item.updatedOrder,

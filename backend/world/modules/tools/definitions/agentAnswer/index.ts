@@ -20,13 +20,13 @@ export const readAgentAnswerToolModule = defineToolDefinitionModule({
 export const submitAgentAnswerTool: ToolDefinition = {
   declaration: {
     name: SUBMIT_AGENT_ANSWER_TOOL_NAME,
-    description: '把当前 AgentRun 的阶段性结论或最终回答提交给指定 answerBridgeId。未传 answerBridgeId 时默认使用当前 run_agent 任务分配的 answerBridgeId；显式传 answerBridgeId 时可把内容提交到其它回答通道。',
+    description: "Submit this AgentRun's interim conclusion or final answer to a given answerBridgeId. When answerBridgeId is omitted, the default answerBridgeId assigned to the current run_agent task is used; pass answerBridgeId explicitly to submit to a different answer channel.",
     parameters: {
       type: 'object',
       properties: {
-        answerBridgeId: { type: 'string', description: '可选。目标 answerBridgeId。未传时使用当前 run_agent 任务里的默认 answerBridgeId。' },
-        title: { type: 'string', description: '提交内容标题。用于主 Agent 快速判断这份回答的主题。' },
-        content: { type: 'string', description: '提交给主 Agent 的完整内容。' }
+        answerBridgeId: { type: 'string', description: 'Optional. Target answerBridgeId. Defaults to the answerBridgeId of the current run_agent task when omitted.' },
+        title: { type: 'string', description: 'Title of the submitted content. Lets the parent agent quickly grasp the topic of this answer.' },
+        content: { type: 'string', description: 'The full content submitted to the parent agent.' }
       },
       required: ['title', 'content']
     },
@@ -50,13 +50,12 @@ export const submitAgentAnswerTool: ToolDefinition = {
 export const readAgentAnswerTool: ToolDefinition = {
   declaration: {
     name: READ_AGENT_ANSWER_TOOL_NAME,
-    description: '按 run_agent 或 submit_agent_answer 响应中的 answerBridgeId 读取已保存的 AgentAnswer 正文。不读取普通 conversation transcript。',
+    description: 'Read a saved AgentAnswer body by the answerBridgeId returned in a run_agent or submit_agent_answer response. Does not read the regular conversation transcript.',
     parameters: {
       type: 'object',
       properties: {
-        answerBridgeId: { type: 'string', description: 'run_agent 或 submit_agent_answer 返回的 answerBridgeId。' }
-      },
-      required: ['answerBridgeId']
+        answerBridgeId: { type: 'string', description: 'The answerBridgeId returned by run_agent or submit_agent_answer.' }
+      }
     },
     metadata: {
       category: 'agent',

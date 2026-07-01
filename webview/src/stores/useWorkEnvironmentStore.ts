@@ -89,7 +89,7 @@ function fallbackPolicy(): WorkEnvironmentPolicyRecord | undefined {
   const ids = availableEnvironmentIds();
   if (ids.length === 0) return undefined;
   const now = Date.now();
-  return { id: 'work-environment-policy:fallback', name: '默认工作环境策略', enabled: true, allowedWorkEnvironmentIds: ids, defaultWorkEnvironmentId: ids[0], createdAt: now, updatedAt: now };
+  return { id: 'work-environment-policy:fallback', name: '默认工作环境策略', enabled: false, allowedWorkEnvironmentIds: ids, defaultWorkEnvironmentId: ids[0], createdAt: now, updatedAt: now };
 }
 
 function sanitizePolicyInput(allowedIds: string[], defaultId?: string): { allowed: string[]; defaultId?: string } {
@@ -183,7 +183,7 @@ export const useWorkEnvironmentStore = defineStore('workEnvironment', {
     },
     setPolicyForScope(scopeKind: WorkEnvironmentPolicyScopeKind, scopeId: string | undefined, allowedIds: string[], defaultId?: string, name?: string, enabled?: boolean): void {
       const sanitized = sanitizePolicyInput(allowedIds, defaultId);
-      const resolvedEnabled = enabled ?? this.effectivePolicyFor(scopeKind, scopeId).policy?.enabled ?? true;
+      const resolvedEnabled = enabled ?? this.effectivePolicyFor(scopeKind, scopeId).policy?.enabled ?? false;
       this.applyOptimisticPolicyScopeSet(scopeKind, scopeId, sanitized.allowed, sanitized.defaultId, name, resolvedEnabled);
       const payload: WorkEnvironmentPolicyScopeSetPayload = {
         scopeKind,
@@ -214,7 +214,7 @@ export const useWorkEnvironmentStore = defineStore('workEnvironment', {
       const policy: WorkEnvironmentPolicyRecord = {
         id: policyId,
         name: name?.trim() || existingPolicy?.name || defaultPolicyName(scopeKind),
-        enabled: enabled ?? existingPolicy?.enabled ?? true,
+        enabled: enabled ?? existingPolicy?.enabled ?? false,
         allowedWorkEnvironmentIds: allowedIds,
         ...(defaultId ? { defaultWorkEnvironmentId: defaultId } : {}),
         createdAt: existingPolicy?.createdAt ?? now,
@@ -314,7 +314,7 @@ export const useWorkEnvironmentStore = defineStore('workEnvironment', {
       const global = this.effectivePolicyFor('global').policy;
       const allowed = uniqueAllowed([...(global?.allowedWorkEnvironmentIds ?? availableEnvironmentIds()), workEnvironmentId]);
       const defaultId = global?.defaultWorkEnvironmentId && allowed.includes(global.defaultWorkEnvironmentId) ? global.defaultWorkEnvironmentId : allowed[0];
-      this.applyOptimisticPolicyScopeSet('global', undefined, allowed, defaultId, global?.name, global?.enabled ?? true);
+      this.applyOptimisticPolicyScopeSet('global', undefined, allowed, defaultId, global?.name, global?.enabled ?? false);
     }
   }
 });

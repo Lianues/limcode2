@@ -62,7 +62,7 @@ function changeLabel(item: TaskListDisplayItem): string | undefined {
 }
 
 function showActiveForm(item: TaskListDisplayItem): boolean {
-  return !isDeleted(item) && item.status === 'in_progress' && !!item.activeForm;
+  return !isDeleted(item) && item.status === 'in_progress' && !!item.description && !props.showDescription;
 }
 </script>
 
@@ -96,7 +96,7 @@ function showActiveForm(item: TaskListDisplayItem): boolean {
             {{ item.description }}
           </p>
           <p v-if="showActiveForm(item)" class="task-list-item-active">
-            {{ item.activeForm }}
+            {{ item.description }}
           </p>
         </div>
       </li>

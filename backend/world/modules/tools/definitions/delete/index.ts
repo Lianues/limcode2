@@ -42,8 +42,7 @@ export const deleteTool: ToolDefinition = {
           description: 'File or directory paths to delete. Always use an array, even for one path. Relative paths are resolved from the current work environment root; absolute paths are supported when allowed by tool policy.',
           items: { type: 'string', description: 'File or directory path to delete.' }
         }
-      },
-      required: ['paths']
+      }
     },
     metadata: {
       category: 'filesystem',

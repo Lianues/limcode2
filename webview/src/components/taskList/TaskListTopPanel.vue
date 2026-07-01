@@ -25,7 +25,7 @@ const visible = computed(() => snapshot.value.items.length > 0);
 const progressLabel = computed(() => formatTaskListProgress(snapshot.value));
 const activeLabel = computed(() => {
   const active = snapshot.value.activeItem;
-  return active ? active.activeForm || active.title : '';
+  return active ? active.description || active.title : '';
 });
 const statsLabel = computed(() => {
   const stats = snapshot.value.stats;

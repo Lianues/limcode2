@@ -21,24 +21,19 @@ const ITEM_SCHEMA: Record<string, unknown> = {
   properties: {
     title: {
       type: 'string',
-      description: '任务标题。update 模式下优先按 title 匹配已有任务；建议使用简短动宾短语。'
+      description: 'Task title. In update mode this is also used as the key to match existing tasks; prefer a short verb-object phrase.'
     },
     description: {
       type: 'string',
-      description: '任务的补充说明、验收条件或上下文。'
-    },
-    activeForm: {
-      type: 'string',
-      description: '任务进行中时显示的现在进行时文案，例如「运行类型检查」。'
+      description: 'Additional notes, acceptance criteria, or context for the task. Also shown as the current-activity line while the task is in progress.'
     },
     status: {
       type: 'string',
-      enum: TASK_LIST_ITEM_STATUSES,
-      description: '任务状态：pending 待处理；in_progress 进行中；completed 已完成；blocked 受阻；cancelled 已取消。'
+      description: 'Task status: pending, in_progress, completed, blocked, or cancelled.'
     },
     delete: {
       type: 'boolean',
-      description: '仅 update 模式使用。设为 true 时删除同 title 的任务。'
+      description: 'Only used in update mode. Set to true to delete the task with the same title.'
     }
   },
   required: ['title']
@@ -54,31 +49,31 @@ export const taskListToolModule = defineToolDefinitionModule({
 export const taskListTool: ToolDefinition = {
   declaration: {
     name: TASK_LIST_TOOL_NAME,
-    description: `更新当前对话的结构化任务清单。这个工具只记录结构化任务清单操作，不会修改工作区文件。
+    description: `Update the structured task list for the current conversation. This tool only records structured task list operations; it does not modify workspace files.
 
-使用模式：
-- mode="rewrite"：本次 items 是当前任务/计划应显示的完整任务清单，会替换前序任务清单。
-- mode="update"：本次 items 只是增量变更；按 title 匹配已有任务并更新，不存在则新增；delete=true 删除同 title 任务。
+Modes:
+- mode="rewrite": the items are the full task list that should currently be shown for the task/plan, and they replace the previous task list.
+- mode="update": the items are incremental changes; existing tasks are matched and updated by title, new titles are added, and delete=true removes the task with the same title.
 
-使用规则：
-- 复杂、多步骤、跨文件或用户明确要求跟踪进度时，先用 rewrite 创建 3-8 个任务。
-- 开始某项工作前，把该项设为 in_progress；完成后立即设为 completed。
-- 同一时间只保留一个 in_progress；前端会把旧的 in_progress 自动退回 pending。
-- 遇到新的、明显不是同一批工作的用户任务/新计划/新阶段时，使用 rewrite，避免不同任务混在一个清单里。
-- 继续同一批工作时使用 update，只提交发生变化的条目即可。
-- 这不是最终回复文本；前端会根据当前对话中的工具调用动态显示任务清单。`,
+Usage rules:
+- For complex, multi-step, cross-file work, or when the user explicitly asks to track progress, first use rewrite to create 3-8 tasks.
+- Before starting a piece of work, set it to in_progress; mark it completed as soon as it is done.
+- Keep only one in_progress task at a time; the frontend automatically moves the previous in_progress task back to pending.
+- When a new, clearly separate user task / new plan / new phase comes up, use rewrite so unrelated tasks are not mixed into one list.
+- When continuing the same batch of work, use update and only submit the entries that changed.
+- This is not the final reply text; the frontend renders the task list dynamically from the tool calls in the current conversation.`,
     parameters: {
       type: 'object',
       properties: {
         mode: {
           type: 'string',
           enum: ['rewrite', 'update'],
-          description: 'rewrite=重写完整任务清单；update=增量更新任务清单。'
+          description: 'rewrite = replace the full task list; update = apply incremental changes to the task list.'
         },
         items: {
           type: 'array',
           items: ITEM_SCHEMA,
-          description: '任务条目。rewrite 表示完整清单；update 表示变更条目。'
+          description: 'Task entries. In rewrite mode this is the full list; in update mode these are the changed entries.'
         }
       },
       required: ['mode', 'items']
@@ -121,7 +116,7 @@ function summarizeTaskListToolCall(rawArgs: unknown): string | undefined {
 
 function normalizeTaskListOperation(rawArgs: unknown): TaskListToolOperationRecord {
   const args = asRecord(rawArgs) as TaskListToolArgs | undefined;
-  if (!args) throw new Error('update_task_list 参数必须是对象');
+  if (!args) throw new Error('update_task_list arguments must be an object');
 
   const mode = normalizeMode(args.mode);
   const items = normalizeItems(args.items, mode);
@@ -134,41 +129,37 @@ function normalizeTaskListOperation(rawArgs: unknown): TaskListToolOperationReco
 
 function normalizeMode(value: unknown): TaskListToolMode {
   if (value === 'rewrite' || value === 'update') return value;
-  throw new Error('mode 必须是 rewrite 或 update');
+  throw new Error('mode must be rewrite or update');
 }
 
 function normalizeItems(value: unknown, mode: TaskListToolMode): TaskListToolItemRecord[] {
-  if (!Array.isArray(value)) throw new Error('items 必须是数组');
+  if (!Array.isArray(value)) throw new Error('items must be an array');
   return value.map((item, index) => normalizeItem(item, index, mode));
 }
 
 function normalizeItem(value: unknown, index: number, mode: TaskListToolMode): TaskListToolItemRecord {
   const record = asRecord(value);
-  if (!record) throw new Error(`items[${index}] 必须是对象`);
+  if (!record) throw new Error(`items[${index}] must be an object`);
 
   const title = asRequiredString(record.title, `items[${index}].title`);
   const deletion = record.delete === true;
   if (mode === 'rewrite' && deletion) {
-    throw new Error(`items[${index}].delete 只能在 update 模式使用`);
+    throw new Error(`items[${index}].delete can only be used in update mode`);
   }
 
   const description = asOptionalString(record.description);
-  const activeForm = asOptionalString(record.activeForm);
-  const status = deletion ? undefined : normalizeOptionalStatus(record.status, index);
+  const status = deletion ? undefined : normalizeOptionalStatus(record.status);
 
   return {
     title,
     ...(description ? { description } : {}),
-    ...(activeForm ? { activeForm } : {}),
     ...(status ? { status } : {}),
     ...(deletion ? { delete: true } : {})
   };
 }
 
-function normalizeOptionalStatus(value: unknown, index: number): TaskListItemStatus | undefined {
-  if (value === undefined) return undefined;
-  if (isTaskStatus(value)) return value;
-  throw new Error(`items[${index}].status 必须是 ${TASK_LIST_ITEM_STATUSES.join(' / ')} 之一`);
+function normalizeOptionalStatus(value: unknown): TaskListItemStatus | undefined {
+  return isTaskStatus(value) ? value : undefined;
 }
 
 function isTaskStatus(value: unknown): value is TaskListItemStatus {
@@ -182,9 +173,9 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function asRequiredString(value: unknown, label: string): string {
-  if (typeof value !== 'string') throw new Error(`${label} 必须是非空字符串`);
+  if (typeof value !== 'string') throw new Error(`${label} must be a non-empty string`);
   const text = value.trim().replace(/\s+/g, ' ');
-  if (!text) throw new Error(`${label} 必须是非空字符串`);
+  if (!text) throw new Error(`${label} must be a non-empty string`);
   return text;
 }
 

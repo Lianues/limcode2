@@ -24,7 +24,10 @@ const viewportHeight = ref(0);
 const measuredHeights = ref<Record<string, number>>({});
 
 let attachedScroller: HTMLElement | null = null;
-let resizeObserver: ResizeObserver | undefined;
+let scrollerResizeObserver: ResizeObserver | undefined;
+let rowResizeObserver: ResizeObserver | undefined;
+const observedRowElements = new Map<string, HTMLElement>();
+const observedElementKeys = new WeakMap<HTMLElement, string>();
 
 const rowKeys = computed(() => props.rows.map((row, index) => keyFor(row, index)));
 const rowHeights = computed(() => rowKeys.value.map((key) => measuredHeights.value[key] ?? props.estimatedHeight));
@@ -69,15 +72,30 @@ function attachScroller(element: HTMLElement | null | undefined): void {
   if (!element) return;
   attachedScroller = element;
   element.addEventListener('scroll', syncScroller, { passive: true });
-  resizeObserver = new ResizeObserver(syncScroller);
-  resizeObserver.observe(element);
+  scrollerResizeObserver = new ResizeObserver(syncScroller);
+  scrollerResizeObserver.observe(element);
+  rowResizeObserver = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      if (!(entry.target instanceof HTMLElement)) continue;
+      const key = observedElementKeys.get(entry.target);
+      if (!key) continue;
+      measureRowElement(key, entry.target);
+    }
+    syncScroller();
+  });
+  for (const [key, rowElement] of observedRowElements) {
+    observedElementKeys.set(rowElement, key);
+    rowResizeObserver.observe(rowElement);
+  }
   syncScroller();
 }
 
 function detachScroller(): void {
   if (attachedScroller) attachedScroller.removeEventListener('scroll', syncScroller);
-  resizeObserver?.disconnect();
-  resizeObserver = undefined;
+  scrollerResizeObserver?.disconnect();
+  scrollerResizeObserver = undefined;
+  rowResizeObserver?.disconnect();
+  rowResizeObserver = undefined;
   attachedScroller = null;
 }
 
@@ -88,8 +106,28 @@ function syncScroller(): void {
 }
 
 function setRowElement(row: ConversationTimelineViewRow, absoluteIndex: number, element: Element | null): void {
-  if (!(element instanceof HTMLElement)) return;
   const key = keyFor(row, absoluteIndex);
+  const previousElement = observedRowElements.get(key);
+  if (previousElement && previousElement !== element) {
+    rowResizeObserver?.unobserve(previousElement);
+    observedRowElements.delete(key);
+  }
+
+  if (!(element instanceof HTMLElement)) return;
+
+  const previousKey = observedElementKeys.get(element);
+  if (previousKey && previousKey !== key) {
+    observedRowElements.delete(previousKey);
+    rowResizeObserver?.unobserve(element);
+  }
+
+  observedRowElements.set(key, element);
+  observedElementKeys.set(element, key);
+  rowResizeObserver?.observe(element);
+  measureRowElement(key, element);
+}
+
+function measureRowElement(key: string, element: HTMLElement): void {
   const height = Math.max(1, Math.ceil(element.getBoundingClientRect().height));
   if (measuredHeights.value[key] === height) return;
   measuredHeights.value = { ...measuredHeights.value, [key]: height };

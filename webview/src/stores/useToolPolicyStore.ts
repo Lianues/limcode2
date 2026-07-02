@@ -1,7 +1,5 @@
 import { defineStore } from 'pinia';
 import type {
-  EditToolStatisticsRecord,
-  ExtensionToWebviewMessage,
   ToolConfigRecord,
   ToolConfigValue,
   ToolDefinitionRecord,
@@ -111,20 +109,8 @@ function upsertById<T extends { id: string }>(list: T[], record: T): void {
   else list.push(record);
 }
 
-function emptyEditToolStatistics(): EditToolStatisticsRecord {
-  return {
-    modes: {
-      patch: { mode: 'patch', attempts: 0, successes: 0, failures: 0, successRate: 0 },
-      hunk: { mode: 'hunk', attempts: 0, successes: 0, failures: 0, successRate: 0 },
-      insert: { mode: 'insert', attempts: 0, successes: 0, failures: 0, successRate: 0 },
-      delete: { mode: 'delete', attempts: 0, successes: 0, failures: 0, successRate: 0 }
-    },
-    updatedAt: 0
-  };
-}
-
 export const useToolPolicyStore = defineStore('toolPolicy', {
-  state: () => ({ editToolStatistics: emptyEditToolStatistics(), editToolStatisticsListening: false, editToolStatisticsLoading: false, editToolStatisticsLoaded: false }),
+  state: () => ({}),
   getters: {
     toolDefinitions(): ToolDefinitionRecord[] {
       const clientState = useClientStateStore();
@@ -136,24 +122,6 @@ export const useToolPolicyStore = defineStore('toolPolicy', {
     }
   },
   actions: {
-    ensureEditToolStatisticsListener(): void {
-      if (this.editToolStatisticsListening) return;
-      this.editToolStatisticsListening = true;
-      bridge.on(BridgeMessageType.EditToolStatisticsSnapshot, (message: Extract<ExtensionToWebviewMessage, { type: BridgeMessageType.EditToolStatisticsSnapshot }>) => {
-        this.editToolStatistics = message.payload?.statistics ?? emptyEditToolStatistics();
-        this.editToolStatisticsLoading = false;
-        this.editToolStatisticsLoaded = true;
-      });
-    },
-    requestEditToolStatistics(): void {
-      this.ensureEditToolStatisticsListener();
-      this.editToolStatisticsLoading = true;
-      bridge.request(BridgeMessageType.EditToolStatisticsGet);
-    },
-    ensureEditToolStatistics(): void {
-      if (this.editToolStatisticsLoaded || this.editToolStatisticsLoading) return;
-      this.requestEditToolStatistics();
-    },
     localPolicyFor(scopeKind: ToolPolicyScopeKind, scopeId?: string): ToolPolicyResolution {
       const clientState = useClientStateStore();
       const link = latestLink(clientState.toolPolicyScopeLinks.filter((candidate) => scopeLinkMatches(candidate, scopeKind, scopeId)));

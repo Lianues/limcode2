@@ -40,6 +40,9 @@ const MAX_RESULT_CHARS = 16_000;
 interface DeliveryEnvelope {
   ok: true;
   status: 'completed';
+  runId?: string;
+  agentId?: string;
+  conversationId?: string;
   answerBridgeId?: string;
   answerSubmitted?: boolean;
   title?: string;
@@ -214,6 +217,11 @@ function activeNotificationRunForConversation(world: WorldReader, conversation: 
 
 function buildDeliveryEnvelope(world: WorldReader, runEntity: Entity, includeTranscript: TranscriptInclusion): DeliveryEnvelope {
   const source = runSource(world, runEntity);
+  const run = world.get(runEntity, AgentRun);
+  const target = runTarget(world, runEntity);
+  const agent = target ? world.get(target.agent, Agent) : undefined;
+  const conversation = target ? world.get(target.conversation, Conversation) : undefined;
+  const targetIds = { ...(run?.id ? { runId: run.id } : {}), ...(agent?.id ? { agentId: agent.id } : {}), ...(conversation?.id ? { conversationId: conversation.id } : {}) };
   const answerBridgeId = source?.answerBridgeId?.trim();
   const submittedAnswerEntity = answerBridgeId ? agentAnswerById(world, answerBridgeId) : undefined;
   const submittedAnswer = submittedAnswerEntity !== undefined ? world.get(submittedAnswerEntity, AgentAnswer) : undefined;
@@ -223,6 +231,7 @@ function buildDeliveryEnvelope(world: WorldReader, runEntity: Entity, includeTra
     return {
       ok: true,
       status: 'completed',
+      ...targetIds,
       ...(answerBridgeId ? { answerBridgeId, answerSubmitted: true } : {}),
       title: submittedAnswer.title,
       content: submittedAnswer.content
@@ -232,6 +241,7 @@ function buildDeliveryEnvelope(world: WorldReader, runEntity: Entity, includeTra
   return {
     ok: true,
     status: 'completed',
+    ...targetIds,
     ...(answerBridgeId ? { answerBridgeId, answerSubmitted: false } : {}),
     content: fallback,
     ...(answerBridgeId ? { message: '子 Agent 未通过 submit_agent_answer 提交内容，已返回最终自然语言回复。' } : {})

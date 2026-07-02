@@ -56,8 +56,6 @@ import { createVscodeStoragePaths } from './paths';
 import { loadRecordStore, saveRecordStore } from './recordStore';
 import { readJson, writeJson } from './json';
 import {
-  loadConversationLatestMessages,
-  loadConversationMessagesByIds,
   loadConversationTimelinePage,
   loadConversationTimelineRange,
   loadConversationTimelineDetail,
@@ -335,14 +333,6 @@ export async function loadConversationTimelinePageFromStores(paths: StoragePaths
   const compression = await loadConversationCompressionDetail(paths, request.conversationId);
   if (compression) copyCompressionTables(page.state, compression);
   return page;
-}
-
-export async function loadConversationLatestMessagesFromStores(paths: StoragePaths, conversationId: string, limit?: number): Promise<MessageRecord[]> {
-  return loadConversationLatestMessages(paths, conversationId, limit);
-}
-
-export async function loadConversationMessagesByIdsFromStores(paths: StoragePaths, conversationId: string, messageIds: readonly string[]): Promise<MessageRecord[]> {
-  return loadConversationMessagesByIds(paths, conversationId, messageIds);
 }
 
 export async function loadConversationTimelineRangeFromStores(paths: StoragePaths, request: {

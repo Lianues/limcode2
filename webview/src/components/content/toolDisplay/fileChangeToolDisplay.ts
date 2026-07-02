@@ -12,7 +12,6 @@ interface WriteArgs {
 
 interface EditArgs {
   path?: string;
-  patch?: string;
   hunks?: unknown;
   insert?: { line?: number; content?: string };
   delete?: { startLine?: number; endLine?: number };
@@ -126,7 +125,6 @@ function editInputSections(args: EditArgs, context: ToolDisplayContext): ToolDis
     title: '修改参数',
     rows: parameterRows([
       { label: 'path', value: path },
-      { label: 'patch', value: typeof args.patch === 'string' ? `${args.patch.length} 字符` : undefined },
       { label: 'hunks', value: Array.isArray(args.hunks) ? `${args.hunks.length} 个` : undefined },
       { label: 'insert', value: args.insert ? `第 ${args.insert.line} 行，${args.insert.content?.length ?? 0} 字符` : undefined },
       { label: 'delete', value: args.delete ? `第 ${args.delete.startLine}-${args.delete.endLine} 行` : undefined }
@@ -184,7 +182,7 @@ function fileChangeOutputSections(title: string, output: FileChangeOutput | stri
     { label: 'path', value: normalizePath(output.path) || undefined },
     { label: 'mode', value: stringValue(output.mode) },
     { label: 'action', value: actionLabel(stringValue(output.action)) },
-    { label: 'hunks', value: hunkCountText(output) },
+    { label: 'edits', value: editCountText(output) },
     { label: 'fallback', value: stringValue(output.fallbackMode) },
     { label: 'changedFiles', value: changedFilesText(output.changedFiles) }
   ]);
@@ -355,7 +353,6 @@ function editArgs(value: unknown): EditArgs {
   if (!record) return {};
   return {
     path: stringValue(record.path),
-    patch: stringValue(record.patch),
     hunks: record.hunks,
     insert: asRecord(record.insert) ? { line: numberValue(asRecord(record.insert)?.line), content: stringValue(asRecord(record.insert)?.content) } : undefined,
     delete: asRecord(record.delete) ? { startLine: numberValue(asRecord(record.delete)?.startLine), endLine: numberValue(asRecord(record.delete)?.endLine) } : undefined
@@ -367,7 +364,7 @@ function deleteArgs(value: unknown): DeleteArgs {
   return { paths: stringArray(record?.paths) };
 }
 
-function hunkCountText(output: FileChangeOutput): string | undefined {
+function editCountText(output: FileChangeOutput): string | undefined {
   if (output.totalHunks === undefined && output.applied === undefined && output.failed === undefined) return undefined;
   return `${numberValue(output.applied) ?? 0}/${numberValue(output.totalHunks) ?? 0} 成功，${numberValue(output.failed) ?? 0} 失败`;
 }

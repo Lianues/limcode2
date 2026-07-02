@@ -1,9 +1,10 @@
 import type { ToolDefinition } from '../../registry';
-import { normalizeSchedulingHint } from '../../scheduling';
 import { defineToolDefinitionModule } from '../types';
 
+export const RUN_AGENT_TOOL_NAME = 'run_agent';
+
 export const runAgentToolModule = defineToolDefinitionModule({
-  id: 'run_agent',
+  id: RUN_AGENT_TOOL_NAME,
   create() {
     return runAgentTool;
   }
@@ -12,105 +13,49 @@ export const runAgentToolModule = defineToolDefinitionModule({
 export const runAgentTool: ToolDefinition = {
   execution: 'agentRun',
   declaration: {
-    name: 'run_agent',
-    description: `启动一个 AgentRun，让指定 Agent 或指定类型 Agent 执行任务。所有 Agent 都是平等的一等对象；本工具只是创建一次新的 AgentRun，不引入子 Agent / 委派 Agent 的特殊执行核心。
+    name: RUN_AGENT_TOOL_NAME,
+    description: `启动一个 AgentRun，让已有 Agent 继续执行任务，或创建一个新 Agent 执行任务。
 
-可通过 agent.id/agentId 指定已有 Agent；通过 agent.type/type 按蓝图选择或创建 Agent；通过 conversation 决定 same/fresh/reuse/fork/branch；通过 mode 覆盖 systemPrompt/modelProfile/toolPolicy/context/delivery/edit；通过 delivery 决定结果如何回流。
-
-每次调用都会分配 answerBridgeId。目标 Agent 可通过 submit_agent_answer 提交正文；同步模式下 run_agent 会直接返回已提交正文，异步模式下调用方可稍后用 read_agent_answer({ answerBridgeId }) 读取。默认由 AI 自己选择同步/异步。`,
+使用方式：
+- 传 agent.id：必须是已存在的 Agent；任务会追加到该 Agent 已关联的对话中。找不到该 id 会直接报错。
+- 不传 agent.id：按 agent.type 创建一个新的 Agent 和新的对话；agent.type 不传时默认 general-purpose。
+- prompt 内应写清楚任务、背景、角色和补充信息，不再提供额外 context / conversation / mode / delivery 参数。
+- timeout 为前台等待时间（毫秒）：0 表示直接转后台；超过 timeout 后 AgentRun 会继续在后台运行，工具立即返回 agentId/runId/conversationId/answerBridgeId。`,
     parameters: {
       type: 'object',
       properties: {
-        prompt: { type: 'string', description: '交给目标 AgentRun 执行的任务描述，应尽量详细清晰。' },
+        prompt: {
+          type: 'string',
+          description: '交给目标 AgentRun 执行的任务描述。请在这里写清楚任务、背景、角色和所有补充信息。'
+        },
         agent: {
           type: 'object',
-          description: '目标 Agent 选择器。id 指定已有 Agent；type 按蓝图 kind 找或创建 Agent。',
           properties: {
-            id: { type: 'string', description: '已有 Agent id。指定后优先使用该 Agent。' },
-            type: { type: 'string', description: 'Agent 蓝图 kind，例如 general-purpose、explore、reviewer。默认 general-purpose。' },
-            name: { type: 'string', description: '按 type 创建 Agent 时使用的可选名称。' },
-            createIfMissing: { type: 'boolean', description: '指定 agent.id 但找不到时，是否允许按 type 创建。默认 false。' }
-          }
-        },
-        agentId: { type: 'string', description: 'agent.id 的简写。' },
-        type: { type: 'string', description: 'agent.type 的简写。默认 general-purpose。' },
-        context: { type: 'string', description: '可选背景。目标 run 是否读取历史由 conversation/context policy 决定；这里用于显式补充关键上下文。' },
-        conversation: {
-          type: 'object',
-          description: '目标 conversation 策略。',
-          properties: {
-            mode: { type: 'string', description: 'fresh | reuse | fork | same | branch' },
-            reuseKey: { type: 'string' },
-            conversationId: { type: 'string' },
-            history: { type: 'string', description: 'none | summary | last_n | full | selected/selected_messages | since/since_message' },
-            lastN: { type: 'number' },
-            sinceMessageId: { type: 'string' },
-            branchFromRevisionId: { type: 'string' },
-            revisionId: { type: 'string' },
-            visibility: { type: 'string', description: 'visible | hidden | collapsed' },
-            selectedMessageIds: { type: 'array', items: { type: 'string' } },
-            includeSourceContext: { type: 'boolean', description: '是否把 source conversation 中按 history policy 选中的上下文作为文本块注入目标 run。' },
-            includeSourceToolResult: { type: 'boolean', description: '是否把 source tool call 的状态/结果作为文本块注入目标 run。' }
-          }
-        },
-        mode: {
-          type: 'object',
-          description: 'Run 级完整 mode 覆盖。',
-          properties: {
-            modeId: { type: 'string' },
-            systemPromptId: { type: 'string' },
-            systemPromptText: { type: 'string', description: 'Run 级临时追加 system prompt 文本。' },
-            modelProfileId: { type: 'string' },
-            toolPolicyId: { type: 'string' },
-            contextPolicyId: { type: 'string' },
-            deliveryPolicyId: { type: 'string' },
-            editPolicyId: { type: 'string' },
-            contextPolicy: {
-              type: 'object',
-              description: 'Inline 临时 ContextPolicy，优先于 contextPolicyId / conversation.history shorthand。',
-              properties: {
-                historyMode: { type: 'string', description: 'none | full | last_n | since_message | selected_messages | summary' },
-                lastN: { type: 'number' },
-                sinceMessageId: { type: 'string' },
-                selectedMessageIds: { type: 'array', items: { type: 'string' } },
-                includeSourceContext: { type: 'boolean' },
-                includeSourceToolResult: { type: 'boolean' }
-              }
+            id: {
+              type: 'string',
+              description: '已有 Agent id。传入后会追加到该 Agent 的对话；找不到时直接报错。需要新开对话时不要传 id。'
             },
-            deliveryPolicy: {
-              type: 'object',
-              description: 'Inline 临时 DeliveryPolicy，优先于 deliveryPolicyId / delivery shorthand。',
-              properties: {
-                mode: { type: 'string', description: 'direct_reply | tool_response | notification | append_to_source_conversation | silent' },
-                includeTranscript: { type: 'string', description: 'none | summary | selected | full | link' }
-              }
-            },
-            editPolicy: {
-              type: 'object',
-              description: 'Inline 临时 EditPolicy，优先于 editPolicyId / blueprint default。',
-              properties: {
-                onSourceEdited: { type: 'string', description: 'ignore_snapshot | abort_and_restart | append_correction | branch_new_run | mark_stale' },
-                onNewUserMessageWhileRunning: { type: 'string', description: 'queue_next_run | interrupt_current | append_to_target | ignore' }
-              }
+            type: {
+              type: 'string',
+              description: '未传 agent.id 时使用的 Agent 蓝图 kind。可用类型会由后端运行时按当前蓝图列表补充到工具说明中；默认 general-purpose。'
             }
           }
         },
-        delivery: {
-          type: 'object',
-          description: '结果回流策略。',
-          properties: {
-            mode: { type: 'string', description: 'tool_response | notification | append_to_source_conversation | silent' },
-            includeTranscript: { type: 'string', description: 'none | summary | selected | full | link' }
-          }
+        timeout: {
+          type: 'number',
+          description: '必填。前台等待 AgentRun 完成的超时时间（毫秒）。设为 0 表示不前台等待、直接转后台执行；超过该时间后会转入后台继续运行并返回 agentId/runId/conversationId/answerBridgeId。'
         },
-        run_in_background: { type: 'boolean', description: 'true 时默认使用 notification 回流；false/缺省时默认 tool_response 同步回流。' },
+        wait: {
+          type: 'string',
+          description: '是否等待前面的工具执行完再启动。默认不等待、并行启动；传 "true" 表示等待前面的工具完成后再启动。'
+        },
         scheduling: {
           type: 'string',
-          enum: ['auto', 'parallel', 'serial'],
-          description: '工具调度提示。后台/通知型 AgentRun 可并行；同步 tool_response 默认串行。'
+          enum: ['parallel', 'serial'],
+          description: '工具调度模式。默认 parallel；如果任务会互相影响，请显式传 serial。'
         }
       },
-      required: ['prompt']
+      required: ['prompt', 'timeout']
     },
     metadata: {
       category: 'agent',
@@ -119,73 +64,37 @@ export const runAgentTool: ToolDefinition = {
       readonly: false,
       defaultEnabled: true,
       checkpoint: { before: true, after: true }
-    },
-    configSchema: {
-      fields: [
-        {
-          key: 'launchMode',
-          label: '运行模式',
-          type: 'enum',
-          description: 'auto=让 AI 根据任务选择同步/异步；sync=强制同步等待并直接返回子 Agent 正文；async=强制异步启动，稍后用 answerBridgeId 读取。',
-          options: [
-            { label: '让 AI 自己选择', value: 'auto', description: '默认。AI 可用 run_in_background/delivery 自行决定。' },
-            { label: '同步模式', value: 'sync', description: '强制 tool_response，同步等待完成并返回正文。' },
-            { label: '异步模式', value: 'async', description: '强制后台启动，返回 answerBridgeId 后稍后读取。' }
-          ],
-          defaultValue: 'auto'
-        }
-      ]
-    },
-    defaultConfig: { launchMode: 'auto' }
+    }
   },
   scheduling: resolveRunAgentScheduling,
   summary: summarizeRunAgentToolCall
 };
 
 interface RunAgentSchedulingArgs {
-  run_in_background?: boolean;
+  timeout?: number;
+  wait?: string;
   scheduling?: string;
-  delivery?: { mode?: string };
-  mode?: { deliveryPolicy?: { mode?: string } };
 }
 
 function summarizeRunAgentToolCall(rawArgs: unknown): string | undefined {
-  const args = (rawArgs ?? {}) as RunAgentSchedulingArgs & { prompt?: unknown; agent?: { type?: unknown; id?: unknown }; type?: unknown; agentId?: unknown };
+  const args = (rawArgs ?? {}) as RunAgentSchedulingArgs & { prompt?: unknown; agent?: { type?: unknown; id?: unknown } };
   const prompt = typeof args.prompt === 'string' ? normalizeSummaryText(args.prompt) : '';
-  const target = typeof args.agent?.type === 'string' && args.agent.type.trim()
-    ? args.agent.type.trim()
-    : typeof args.type === 'string' && args.type.trim()
-      ? args.type.trim()
-      : typeof args.agent?.id === 'string' && args.agent.id.trim()
-        ? args.agent.id.trim()
-        : typeof args.agentId === 'string' && args.agentId.trim()
-          ? args.agentId.trim()
-          : 'Agent';
+  const target = typeof args.agent?.id === 'string' && args.agent.id.trim()
+    ? args.agent.id.trim()
+    : typeof args.agent?.type === 'string' && args.agent.type.trim()
+      ? args.agent.type.trim()
+      : 'general-purpose';
   return prompt ? `运行 ${target} · ${truncateSummary(prompt, 96)}` : `运行 ${target}`;
 }
 
 function resolveRunAgentScheduling(rawArgs: unknown): { mode: 'parallel' | 'serial'; reason: string } {
   const args = (rawArgs ?? {}) as RunAgentSchedulingArgs;
-  const hint = normalizeSchedulingHint(args.scheduling);
-  const background = isBackgroundRunAgent(args);
+  if (args.scheduling === 'serial') return { mode: 'serial', reason: 'explicit_serial' };
+  if (args.scheduling === 'parallel') return { mode: 'parallel', reason: 'explicit_parallel' };
 
-  if (hint === 'serial') return { mode: 'serial', reason: 'explicit_serial' };
-  if (hint === 'parallel') {
-    return background
-      ? { mode: 'parallel', reason: 'explicit_parallel_background_run_agent' }
-      : { mode: 'serial', reason: 'explicit_parallel_rejected_sync_run_agent' };
-  }
-  return background
-    ? { mode: 'parallel', reason: 'auto_background_run_agent' }
-    : { mode: 'serial', reason: 'auto_sync_run_agent_barrier' };
-}
-
-function isBackgroundRunAgent(args: RunAgentSchedulingArgs): boolean {
-  if (args.run_in_background === true) return true;
-  const deliveryMode = args.delivery?.mode ?? args.mode?.deliveryPolicy?.mode;
-  return deliveryMode === 'notification'
-    || deliveryMode === 'silent'
-    || deliveryMode === 'append_to_source_conversation';
+  const wait = typeof args.wait === 'string' ? args.wait.trim().toLowerCase() : '';
+  if (wait === 'true') return { mode: 'serial', reason: 'wait_true' };
+  return { mode: 'parallel', reason: 'default_parallel' };
 }
 
 function normalizeSummaryText(value: string): string {

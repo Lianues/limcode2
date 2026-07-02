@@ -17,8 +17,6 @@ import type {
   ExtensionToWebviewMessage,
   GlobalSettingsSection,
   GlobalSettingsSectionValue,
-  EditToolMode,
-  EditToolStatisticsRecord,
   LlmCompressionConfigRecord,
   MessageRecord,
   LlmProviderConfigRecord,
@@ -39,6 +37,7 @@ import type {
   WebviewClientMeta,
   WorkEnvironmentRecord
 } from '../../shared/protocol';
+import type { EditToolMode } from '../../shared/protocol';
 import type { TimelineProjectionContextRecord } from '../../shared/timelineProjection';
 
 export type Emit = (event: WorldEvent) => void;
@@ -85,10 +84,10 @@ export interface FsFileDiffRecord {
   truncated: boolean;
 }
 
-export interface FsStructuredEditHunk {
+export interface FsHunkEditRequest {
   oldContent: string;
   newContent: string;
-  startLine?: number;
+  replaceAll?: boolean;
 }
 
 export interface FsInsertEditRequest {
@@ -101,14 +100,10 @@ export interface FsDeleteEditRequest {
   endLine: number;
 }
 
-export interface FsEditFileRequest {
-  path: string;
-  mode: EditToolMode;
-  patch?: string;
-  hunks?: FsStructuredEditHunk[];
-  insert?: FsInsertEditRequest;
-  delete?: FsDeleteEditRequest;
-}
+export type FsEditFileRequest =
+  | { path: string; mode: 'hunk'; hunks: FsHunkEditRequest[] }
+  | { path: string; mode: 'insert'; insert: FsInsertEditRequest }
+  | { path: string; mode: 'delete'; delete: FsDeleteEditRequest };
 
 export type FsFileWriteAction = 'created' | 'modified' | 'unchanged' | 'deleted';
 
@@ -568,8 +563,6 @@ export interface StorageCapability {
     chunkId?: string
   ): Promise<TimelineProjectionContextRecord | undefined>;
   loadConversationTimelinePage(request: ConversationTimelinePageRequest): Promise<ConversationTimelinePageRecord>;
-  loadConversationLatestMessages(conversationId: string, limit?: number): Promise<MessageRecord[]>;
-  loadConversationMessagesByIds(conversationId: string, messageIds: readonly string[]): Promise<MessageRecord[]>;
   loadConversationTimelineRange(request: {
     conversationId: string;
     mode: 'suffix' | 'prefix' | 'between';
@@ -595,8 +588,6 @@ export interface StorageCapability {
   createShadowCheckpoint(request: ShadowCheckpointCreateRequest): Promise<CheckpointRecord>;
   restoreShadowCheckpoint(request: CheckpointRestorePayload): Promise<ShadowCheckpointRestoreResult>;
   openShadowCheckpointDiff(request: ShadowCheckpointDiffOpenRequest): Promise<ShadowCheckpointDiffOpenResult>;
-  loadEditToolStatistics(): Promise<EditToolStatisticsRecord>;
-  recordEditToolModeResult(mode: EditToolMode, success: boolean): Promise<EditToolStatisticsRecord>;
   collectShadowWorktreeStats(): Promise<ShadowRepositoryDiskStatRecord[]>;
   deleteShadowWorktrees(storageKeys: string[]): Promise<{ deletedStorageKeys: string[] }>;
   cleanupUnusedShadowWorktrees(maxAgeDays: number): Promise<{ deletedStorageKeys: string[] }>;

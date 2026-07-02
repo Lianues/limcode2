@@ -2,7 +2,6 @@ import type { Component } from 'vue';
 import {
   IconBook,
   IconFileDescription,
-  IconMessageDots,
   IconPencil,
   IconPlaylistAdd,
   IconSwitch,
@@ -27,7 +26,6 @@ import {
 } from '@shared/protocol';
 import { readAgentAnswerToolDisplay, submitAgentAnswerToolDisplay } from './agentAnswerToolDisplay';
 import { deleteToolDisplay, editToolDisplay, writeToolDisplay } from './fileChangeToolDisplay';
-import { readConversationToolDisplay } from './readConversationToolDisplay';
 import { readFileToolDisplay } from './readFileToolDisplay';
 import { runAgentToolDisplay } from './runAgentToolDisplay';
 import { skillsToolDisplay } from './skillsToolDisplay';
@@ -43,7 +41,6 @@ const TOOL_DISPLAY_RESOLVERS: Record<string, ToolDisplayResolver> = {
   [EDIT_TOOL_NAME]: editToolDisplay,
   [WRITE_TOOL_NAME]: writeToolDisplay,
   [DELETE_TOOL_NAME]: deleteToolDisplay,
-  read_conversation: readConversationToolDisplay,
   run_agent: runAgentToolDisplay,
   [SUBMIT_AGENT_ANSWER_TOOL_NAME]: submitAgentAnswerToolDisplay,
   [READ_AGENT_ANSWER_TOOL_NAME]: readAgentAnswerToolDisplay,
@@ -60,7 +57,6 @@ const TOOL_HEADER_ICONS: Record<string, Component> = {
   [EDIT_TOOL_NAME]: IconPencil,
   [WRITE_TOOL_NAME]: IconWriting,
   [DELETE_TOOL_NAME]: IconTrash,
-  read_conversation: IconMessageDots,
   run_agent: IconUsers,
   [SUBMIT_AGENT_ANSWER_TOOL_NAME]: IconUsers,
   [READ_AGENT_ANSWER_TOOL_NAME]: IconUsers,

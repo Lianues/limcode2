@@ -2,7 +2,7 @@ import type { AccessDeclaration, ComponentType, Entity, ResourceKey, WorldReader
 import type { ToolSchema } from '../llm/contracts';
 import { workEnvironmentToolSchemaContributor } from '../workEnvironment/toolSchemaContributor';
 import { skillsToolSchemaContributor } from '../skill/skillsToolSchemaContributor';
-import { editToolSchemaContributor } from './editToolSchemaContributor';
+import { runAgentToolSchemaContributor } from './runAgentToolSchemaContributor';
 
 export interface ToolSchemaBuildContext {
   world: WorldReader;
@@ -18,7 +18,7 @@ export interface ToolSchemaContributor {
 }
 
 export const TOOL_SCHEMA_CONTRIBUTORS = [
-  editToolSchemaContributor,
+  runAgentToolSchemaContributor,
   workEnvironmentToolSchemaContributor,
   skillsToolSchemaContributor
 ] as const satisfies readonly ToolSchemaContributor[];

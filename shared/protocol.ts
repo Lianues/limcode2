@@ -126,8 +126,6 @@ export enum BridgeMessageType {
   AttachmentReload = 'attachment.reload',
   AttachmentReloadResult = 'attachment.reload.result',
   CheckpointDiffOpenResult = 'checkpoint.diff.open.result',
-  EditToolStatisticsGet = 'editTool.statistics.get',
-  EditToolStatisticsSnapshot = 'editTool.statistics.snapshot',
   ClientResync = 'client.resync',
   ClientSnapshot = 'state.snapshot',
   ClientPatch = 'state.patch',
@@ -381,21 +379,7 @@ export const SUBMIT_AGENT_ANSWER_TOOL_NAME = 'submit_agent_answer';
 export const READ_AGENT_ANSWER_TOOL_NAME = 'read_agent_answer';
 export const SKILLS_TOOL_NAME = 'skills';
 
-export type EditToolMode = 'patch' | 'hunk' | 'insert' | 'delete';
-
-export interface EditToolModeStatisticsRecord {
-  mode: EditToolMode;
-  attempts: number;
-  successes: number;
-  failures: number;
-  successRate: number;
-  updatedAt?: number;
-}
-
-export interface EditToolStatisticsRecord {
-  modes: Record<EditToolMode, EditToolModeStatisticsRecord>;
-  updatedAt: number;
-}
+export type EditToolMode = 'hunk' | 'insert' | 'delete';
 
 export const TASK_LIST_ITEM_STATUSES = [
   'pending',
@@ -1200,8 +1184,6 @@ export interface CheckpointDiffOpenResultPayload {
   status: 'opened' | 'failed';
   message: string;
 }
-
-export interface EditToolStatisticsSnapshotPayload { statistics: EditToolStatisticsRecord }
 
 export interface CheckpointPolicyScopeLinkRecord {
   id: string;
@@ -2493,7 +2475,6 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.CheckpointDiffOpen, CheckpointDiffOpenPayload>
   | BridgeEnvelope<BridgeMessageType.AttachmentOpen, AttachmentOpenPayload>
   | BridgeEnvelope<BridgeMessageType.AttachmentReload, AttachmentReloadPayload>
-  | BridgeEnvelope<BridgeMessageType.EditToolStatisticsGet, undefined>
   | BridgeEnvelope<BridgeMessageType.ClientResync, ClientResyncPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationTimelinePageGet, ConversationTimelinePageRequest>
   | BridgeEnvelope<BridgeMessageType.RunHistoryPageGet, ConversationRunHistoryPageRequest>
@@ -2550,7 +2531,6 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.CheckpointRestoreResult, CheckpointRestoreResultPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointDiffOpenResult, CheckpointDiffOpenResultPayload>
   | BridgeEnvelope<BridgeMessageType.AttachmentReloadResult, AttachmentReloadResultPayload>
-  | BridgeEnvelope<BridgeMessageType.EditToolStatisticsSnapshot, EditToolStatisticsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.GlobalSettingsSnapshot, GlobalSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsSnapshot, ConversationSettingsSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ProjectFoldersSnapshot, ProjectFoldersSnapshotPayload>

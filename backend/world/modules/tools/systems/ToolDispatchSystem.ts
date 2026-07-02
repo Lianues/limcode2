@@ -4,6 +4,7 @@ import { Agent, AgentConversationLink, AgentKind } from '../../agent/components'
 import {
   AgentBlueprintsKey,
   type BuiltinAgentDefinition,
+  type BuiltinAgentRegistry,
   type BuiltinModeDefinition
 } from '../../agent/blueprints';
 import { AgentFromBlueprintBundle, linkAgentToConversation, selectAgentForConversation, spawnAgentProfileFromBlueprint } from '../../agent/bundles';
@@ -82,6 +83,7 @@ import {
 import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey, ToolSchemasKey } from '../resources';
 import { isToolAllowedByPolicy } from '../policy';
 import { isReadonlyCommandCall } from '../definitions/command';
+import { RUN_AGENT_TOOL_NAME } from '../definitions/runAgent';
 import {
   compareToolCallOrder,
   isExecutionApproved,
@@ -140,9 +142,12 @@ const QueuedToolCallsQuery = defineQuery({
     WorkEnvironmentPolicy,
     WorkEnvironmentPolicyScopeLink,
     ConversationWorkEnvironmentLink,
-    RunWorkEnvironmentLink
+    RunWorkEnvironmentLink,
+    RunDeliveryPolicy,
+    RunDeliveryPolicyLink
   ],
-  write: [ToolState, AgentRun, AgentAnswer],
+  write: [ToolState, AgentRun, AgentAnswer, RunDeliveryPolicy],
+  remove: [InFlight],
   add: [InFlight],
   mutationMode: 'update',
   role: 'work'
@@ -159,6 +164,8 @@ export const ToolDispatchSystem = defineSystem({
   },
   run(ctx) {
     const { world, cmd } = ctx;
+    backgroundTimedOutRunAgentTools(world, cmd);
+
     const handled = new Set<Entity>();
 
     for (const request of readEvents(ctx, ToolEventType.ExecutionRejectRequested)) {
@@ -443,6 +450,81 @@ function executeReadAgentAnswerTool(world: WorldReader, cmd: CommandSink, entity
   });
 }
 
+function backgroundTimedOutRunAgentTools(world: WorldReader, cmd: CommandSink): void {
+  const now = Date.now();
+  for (const entity of world.query(ToolCall, ToolState)) {
+    const call = world.get(entity, ToolCall);
+    const state = world.get(entity, ToolState);
+    if (!call || !state || call.name !== RUN_AGENT_TOOL_NAME || state.status !== 'executing') continue;
+    const progress = runAgentToolProgress(state.progress);
+    const timeoutMs = progress.timeoutMs;
+    const startedAt = progress.startedAt ?? call.createdAt;
+    if (timeoutMs === undefined || timeoutMs <= 0) continue;
+    if (now - startedAt < timeoutMs) continue;
+
+    const run = progress.runId ? findAgentRunById(world, progress.runId) : undefined;
+    if (run !== undefined) setRunDeliveryPolicyMode(world, cmd, run, 'notification');
+    completeRunAgentToolAsBackground(cmd, entity, call, state, progress, 'timeout');
+  }
+}
+
+function runAgentToolProgress(value: unknown): RunAgentToolProgress {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const record = value as Record<string, unknown>;
+  return {
+    childRunId: typeof record.childRunId === 'string' ? record.childRunId : undefined,
+    runId: typeof record.runId === 'string' ? record.runId : undefined,
+    agentId: typeof record.agentId === 'string' ? record.agentId : undefined,
+    conversationId: typeof record.conversationId === 'string' ? record.conversationId : undefined,
+    answerBridgeId: typeof record.answerBridgeId === 'string' ? record.answerBridgeId : undefined,
+    timeoutMs: typeof record.timeoutMs === 'number' && Number.isFinite(record.timeoutMs) ? record.timeoutMs : undefined,
+    startedAt: typeof record.startedAt === 'number' && Number.isFinite(record.startedAt) ? record.startedAt : undefined
+  };
+}
+
+function completeRunAgentToolAsBackground(
+  cmd: CommandSink,
+  entity: Entity,
+  call: ToolCallData,
+  state: ToolStateData,
+  progress: RunAgentToolProgress,
+  reason: 'timeout' | 'timeout_zero'
+): void {
+  const started = state.status === 'executing'
+    ? { state, startedAt: progress.startedAt ?? call.createdAt }
+    : startInlineToolExecution(cmd, entity, call, state, progress);
+  const now = Date.now();
+  const durationMs = Math.max(0, now - started.startedAt);
+  const result = {
+    ok: true,
+    status: 'backgrounded',
+    reason,
+    ...(progress.agentId ? { agentId: progress.agentId } : {}),
+    ...(progress.runId ? { runId: progress.runId } : {}),
+    ...(progress.conversationId ? { conversationId: progress.conversationId } : {}),
+    ...(progress.answerBridgeId ? { answerBridgeId: progress.answerBridgeId } : {}),
+    message: reason === 'timeout_zero'
+      ? 'AgentRun 已直接转入后台执行；稍后可用 answerBridgeId 读取提交内容。'
+      : 'AgentRun 超过 timeout，已转入后台继续执行；稍后可用 answerBridgeId 读取提交内容。'
+  };
+  cmd.add(entity, ToolState, transitionToolState(started.state, 'success', { result, durationMs }, now));
+  cmd.remove(entity, InFlight);
+  spawnToolCallEvent(cmd, { toolCall: entity, toolCallId: call.id, kind: 'completed', status: 'success', at: now, elapsedMs: Math.max(0, now - call.createdAt), durationMs, payload: result });
+}
+
+function setRunDeliveryPolicyMode(world: WorldReader, cmd: CommandSink, run: Entity, mode: DeliveryMode): void {
+  const link = world.query(RunDeliveryPolicyLink)
+    .map((entity) => world.get(entity, RunDeliveryPolicyLink))
+    .filter((candidate): candidate is NonNullable<typeof candidate> => !!candidate && candidate.run === run && candidate.role === 'active')
+    .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id))[0];
+  const policy = link ? world.get(link.policy, RunDeliveryPolicy) : undefined;
+  if (!link || !policy) {
+    applyRunDeliveryPolicy(cmd, run, { mode, includeTranscript: 'summary' });
+    return;
+  }
+  cmd.add(link.policy, RunDeliveryPolicy, { ...policy, mode, includeTranscript: policy.includeTranscript ?? 'summary' });
+}
+
 function optionalRecordId<TKey extends string>(key: TKey, value: string | undefined): { [K in TKey]?: string } {
   const id = value?.trim();
   return id ? { [key]: id } as { [K in TKey]?: string } : {};
@@ -533,54 +615,24 @@ function executeSwitchWorkEnvironmentTool(world: WorldReader, cmd: CommandSink, 
 
 interface RunAgentArgs {
   prompt?: string;
-  agentId?: string;
-  type?: string;
   agent?: {
     id?: string;
     type?: string;
-    name?: string;
-    createIfMissing?: boolean;
   };
-  context?: string;
-  run_in_background?: boolean;
-  conversation?: {
-    mode?: string;
-    conversationId?: string;
-    reuseKey?: string;
-    history?: string;
-    lastN?: number;
-    sinceMessageId?: string;
-    selectedMessageIds?: string[];
-    branchFromRevisionId?: string;
-    revisionId?: string;
-    visibility?: ConversationVisibility;
-    includeSourceContext?: boolean;
-    includeSourceToolResult?: boolean;
-  };
-  delivery?: { mode?: string; includeTranscript?: string };
-  mode?: {
-    modeId?: string;
-    systemPromptId?: string;
-    systemPromptText?: string;
-    modelProfileId?: string;
-    toolPolicyId?: string;
-    contextPolicyId?: string;
-    deliveryPolicyId?: string;
-    editPolicyId?: string;
-    contextPolicy?: {
-      historyMode?: string;
-      lastN?: number;
-      sinceMessageId?: string;
-      selectedMessageIds?: string[];
-      includeSourceContext?: boolean;
-      includeSourceToolResult?: boolean;
-    };
-    deliveryPolicy?: { mode?: string; includeTranscript?: string };
-    editPolicy?: { onSourceEdited?: string; onNewUserMessageWhileRunning?: string };
-  };
+  timeout?: number;
+  wait?: string;
+  scheduling?: string;
 }
 
-type RunAgentLaunchMode = 'auto' | 'sync' | 'async';
+interface RunAgentToolProgress {
+  childRunId?: string;
+  runId?: string;
+  agentId?: string;
+  conversationId?: string;
+  answerBridgeId?: string;
+  timeoutMs?: number;
+  startedAt?: number;
+}
 
 interface ResolvedConversation {
   conversation: Entity;
@@ -642,20 +694,107 @@ function resolveRunAgentPolicyDefaults(_definition: BuiltinAgentDefinition, _mod
   };
 }
 
-function resolveDeliveryPolicy(
-  args: RunAgentArgs,
-  defaultPolicy: RunDeliveryPolicyBlueprint,
-  background: boolean,
-  linkedPolicy?: RunDeliveryPolicyData
-): RunDeliveryPolicyBlueprint {
-  const mode = normalizeDeliveryMode(
-    args.delivery?.mode ?? args.mode?.deliveryPolicy?.mode ?? linkedPolicy?.mode ?? defaultPolicy.mode,
-    background
-  );
+function normalizeRunAgentTimeout(value: unknown): { ok: true; value: number } | { ok: false; reason: string } {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return { ok: false, reason: 'run_agent.timeout 为必填参数，需为非负毫秒数；0 表示直接转后台。' };
+  }
+  return { ok: true, value: Math.floor(value) };
+}
+
+interface ResolvedRunAgentTarget {
+  targetAgent: Entity;
+  targetAgentId: string;
+  definition: BuiltinAgentDefinition;
+  resolved: { ok: true; value: ResolvedConversation } | { ok: false; reason: string };
+}
+
+function resolveRunAgentTarget(
+  world: WorldReader,
+  cmd: CommandSink,
+  input: {
+    blueprints: BuiltinAgentRegistry;
+    requestedAgentId?: string;
+    requestedKind: string;
+    sourceConversation: Entity;
+    toolCallEntity: Entity;
+    prompt: string;
+  }
+): { ok: true; value: ResolvedRunAgentTarget } | { ok: false; reason: string } {
+  if (input.requestedAgentId) {
+    const existingAgent = findAgentById(world, input.requestedAgentId);
+    if (existingAgent === undefined) return { ok: false, reason: `指定 Agent 不存在: ${input.requestedAgentId}` };
+    const agentData = world.get(existingAgent, Agent);
+    if (!agentData) return { ok: false, reason: `指定 Agent 数据不完整: ${input.requestedAgentId}` };
+    const kind = world.get(existingAgent, AgentKind)?.kind || input.requestedKind;
+    const definition = resolveAgentDefinition(input.blueprints, kind) ?? definitionFromExistingAgent(agentData, kind);
+    return {
+      ok: true,
+      value: {
+        targetAgent: existingAgent,
+        targetAgentId: agentData.id,
+        definition,
+        resolved: resolveRunAgentConversation(world, cmd, {
+          sourceConversation: input.sourceConversation,
+          targetAgent: existingAgent,
+          targetAgentId: agentData.id,
+          kind,
+          toolCallEntity: input.toolCallEntity,
+          prompt: input.prompt,
+          appendToExistingAgent: true
+        })
+      }
+    };
+  }
+
+  const definition = resolveAgentDefinition(input.blueprints, input.requestedKind);
+  if (!definition) return { ok: false, reason: `未知 Agent 类型: ${input.requestedKind}。可用类型：${availableAgentTypes(input.blueprints).join(', ')}` };
+  const targetAgentId = createRunAgentAgentId(world, definition.kind);
+  const targetAgent = spawnAgentProfileFromBlueprint(cmd, { definition, agentId: targetAgentId });
   return {
-    mode,
-    includeTranscript: normalizeTranscript(args.delivery?.includeTranscript ?? args.mode?.deliveryPolicy?.includeTranscript ?? linkedPolicy?.includeTranscript ?? defaultPolicy.includeTranscript)
+    ok: true,
+    value: {
+      targetAgent,
+      targetAgentId,
+      definition,
+      resolved: resolveRunAgentConversation(world, cmd, {
+        sourceConversation: input.sourceConversation,
+        targetAgent,
+        targetAgentId,
+        kind: definition.kind,
+        toolCallEntity: input.toolCallEntity,
+        prompt: input.prompt,
+        appendToExistingAgent: false
+      })
+    }
   };
+}
+
+function resolveAgentDefinition(blueprints: BuiltinAgentRegistry, kind: string): BuiltinAgentDefinition | undefined {
+  return blueprints.agents[kind]
+    ?? Object.values(blueprints.agents).find((candidate) => candidate.kind === kind || candidate.id === kind);
+}
+
+function definitionFromExistingAgent(agent: { id: string; name: string; description?: string }, kind: string): BuiltinAgentDefinition {
+  return {
+    id: agent.id,
+    kind,
+    name: agent.name,
+    description: agent.description,
+    systemPrompt: '',
+    toolPolicy: { allowedTools: [] }
+  };
+}
+
+function availableAgentTypes(blueprints: BuiltinAgentRegistry): string[] {
+  return Object.values(blueprints.agents).map((definition) => definition.kind);
+}
+
+function createRunAgentAgentId(world: WorldReader, kind: string): string {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const id = `agent-${slug(kind)}-${createMessageId()}`;
+    if (findAgentById(world, id) === undefined) return id;
+  }
+  return `agent-${slug(kind)}-${Date.now().toString(36)}`;
 }
 
 function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
@@ -672,51 +811,36 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     return;
   }
 
+  const timeout = normalizeRunAgentTimeout(args.timeout);
+  if (!timeout.ok) {
+    rejectToolCall(cmd, entity, call, state, timeout.reason);
+    return;
+  }
+
   const parentTarget = runTarget(world, authorization.run);
   if (!parentTarget) {
     rejectToolCall(cmd, entity, call, state, '无法解析父 AgentRun 目标。');
     return;
   }
 
-  const requestedAgentId = args.agent?.id?.trim() || args.agentId?.trim();
-  const requestedKind = args.agent?.type?.trim() || args.type?.trim();
+  const requestedAgentId = args.agent?.id?.trim();
+  const requestedKind = args.agent?.type?.trim() || 'general-purpose';
   const blueprints = world.getResource(AgentBlueprintsKey);
-  const existingAgent = requestedAgentId ? findAgentById(world, requestedAgentId) : undefined;
-  if (requestedAgentId && existingAgent === undefined && args.agent?.createIfMissing !== true) {
-    rejectToolCall(cmd, entity, call, state, `指定 Agent 不存在: ${requestedAgentId}`);
-    return;
-  }
-  const kind = requestedKind || (existingAgent !== undefined ? world.get(existingAgent, AgentKind)?.kind : undefined) || 'general-purpose';
-  const existingAgentData = existingAgent !== undefined ? world.get(existingAgent, Agent) : undefined;
-  const definition = blueprints.agents[kind]
-    ?? Object.values(blueprints.agents).find((candidate) => candidate.kind === kind || candidate.id === kind)
-    ?? (existingAgentData ? {
-      id: existingAgentData.id,
-      kind,
-      name: existingAgentData.name,
-      description: existingAgentData.description,
-      systemPrompt: '',
-      toolPolicy: { allowedTools: [] }
-    } satisfies BuiltinAgentDefinition : undefined);
-  if (!definition) {
-    rejectToolCall(cmd, entity, call, state, `未知 Agent 类型: ${kind}`);
+  const resolvedTarget = resolveRunAgentTarget(world, cmd, {
+    blueprints,
+    requestedAgentId,
+    requestedKind,
+    sourceConversation: parentTarget.conversation,
+    toolCallEntity: entity,
+    prompt
+  });
+  if (!resolvedTarget.ok) {
+    rejectToolCall(cmd, entity, call, state, resolvedTarget.reason);
     return;
   }
 
-  const targetAgent = existingAgent ?? findAgentByKind(world, kind) ?? spawnAgentProfileFromBlueprint(cmd, { definition, agentId: requestedAgentId ?? definition.id, agentName: args.agent?.name ?? definition.name });
-  const targetAgentId = world.get(targetAgent, Agent)?.id ?? requestedAgentId ?? definition.id;
-  const targetModeBlueprint = resolveTargetModeBlueprint(blueprints.modes, args.mode?.modeId);
-  const policyDefaults = resolveRunAgentPolicyDefaults(definition, targetModeBlueprint);
-  const resolved = resolveTargetConversation(world, cmd, {
-    sourceConversation: parentTarget.conversation,
-    targetAgent,
-    targetAgentId,
-    kind,
-    toolCallEntity: entity,
-    prompt,
-    args,
-    defaultPolicy: policyDefaults.conversationPolicy
-  });
+  const { targetAgent, targetAgentId, definition, resolved } = resolvedTarget.value;
+  const policyDefaults = resolveRunAgentPolicyDefaults(definition, undefined);
   if (!resolved.ok) {
     rejectToolCall(cmd, entity, call, state, resolved.reason);
     return;
@@ -741,26 +865,15 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     });
   }
 
-  const fullPrompt = args.context?.trim()
-    ? `Context:\n${args.context.trim()}\n\nTask:\n${prompt}`
-    : prompt;
   const answerBridgeId = `agent-answer:${createMessageId()}`;
-  const promptWithAnswerBridge = `${fullPrompt}\n\n[Agent answer bridge]\n本次任务已分配默认 answerBridgeId：${answerBridgeId}。当你需要把阶段性结论或最终正文提交给来源 Agent 时，请调用 submit_agent_answer({ title, content })，未传 answerBridgeId 时会自动使用这个 answerBridgeId；如果用户要求提交到其它 answerBridgeId，可显式传 submit_agent_answer({ answerBridgeId, title, content })。最终自然语言回复可以保持简短。`;
+  const promptWithAnswerBridge = `${prompt}\n\n[Agent answer bridge]\n本次任务已分配默认 answerBridgeId：${answerBridgeId}。当你需要把阶段性结论或最终正文提交给来源 Agent 时，请调用 submit_agent_answer({ title, content })，未传 answerBridgeId 时会自动使用这个 answerBridgeId；如果用户要求提交到其它 answerBridgeId，可显式传 submit_agent_answer({ answerBridgeId, title, content })。最终自然语言回复可以保持简短。`;
   const inputMessage = spawnUserMessage(cmd, resolved.value.conversation, promptWithAnswerBridge);
-  const linkedDeliveryPolicy = args.mode?.deliveryPolicyId ? findByRecordId<RunDeliveryPolicyData>(world, RunDeliveryPolicy, args.mode.deliveryPolicyId) : undefined;
-  const launchDeliveryMode = args.delivery?.mode ?? args.mode?.deliveryPolicy?.mode ?? (linkedDeliveryPolicy !== undefined ? world.get(linkedDeliveryPolicy, RunDeliveryPolicy)?.mode : undefined);
-  const launchMode = normalizeRunAgentLaunchMode(effectiveToolConfig(world, authorization.policy, call.name)?.launchMode);
-  const background = launchMode === 'async'
-    ? true
-    : launchMode === 'sync'
-      ? false
-      : args.run_in_background === true || isAsyncDeliveryMode(launchDeliveryMode);
-  let baseDeliveryPolicy = resolveDeliveryPolicy(args, policyDefaults.deliveryPolicy, background, linkedDeliveryPolicy !== undefined ? world.get(linkedDeliveryPolicy, RunDeliveryPolicy) : undefined);
-  if (launchMode === 'sync') {
-    baseDeliveryPolicy = { ...baseDeliveryPolicy, mode: 'tool_response' };
-  } else if (launchMode === 'async' && !isAsyncDeliveryMode(baseDeliveryPolicy.mode)) {
-    baseDeliveryPolicy = { ...baseDeliveryPolicy, mode: 'notification' };
-  }
+  const background = timeout.value === 0;
+  const baseDeliveryPolicy: RunDeliveryPolicyBlueprint = {
+    ...policyDefaults.deliveryPolicy,
+    mode: background ? 'notification' : 'tool_response',
+    includeTranscript: 'summary'
+  };
   const deliveryMode = baseDeliveryPolicy.mode;
   const includeTranscript = baseDeliveryPolicy.includeTranscript;
   const childRun = spawnAgentRun(cmd, {
@@ -783,24 +896,26 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     selectRunWorkEnvironment(world, cmd, childRun, inheritedWorkEnvironment.entity);
   }
   applyRunConversationPolicy(cmd, childRun, resolved.value);
-  applyRunContextPolicy(cmd, childRun, args, resolved.value, policyDefaults.contextPolicy);
+  applyRunContextPolicy(cmd, childRun, policyDefaults.contextPolicy);
   applyRunDeliveryPolicy(cmd, childRun, baseDeliveryPolicy);
   applyRunEditPolicy(cmd, childRun, policyDefaults.editPolicy);
-  applyRunModeOverrides(world, cmd, childRun, args.mode);
 
   const childRunId = `run${childRun}`;
-  if (deliveryMode === 'notification' || deliveryMode === 'silent' || deliveryMode === 'append_to_source_conversation') {
-    const started = startInlineToolExecution(cmd, entity, call, state, { childRunId, runId: childRunId, conversationId: resolved.value.conversationId, deliveryMode });
-    const now = Date.now();
-    const durationMs = Math.max(0, now - started.startedAt);
-    const result = { ok: true, status: 'async_launched', answerBridgeId, message: 'AgentRun 已在后台启动；稍后可用 read_agent_answer({ answerBridgeId }) 读取提交内容。' };
-    cmd.add(entity, ToolState, transitionToolState(started.state, 'success', { result, durationMs }, now));
-    spawnToolCallEvent(cmd, { toolCall: entity, toolCallId: call.id, kind: 'completed', status: 'success', at: now, elapsedMs: Math.max(0, now - call.createdAt), durationMs, payload: result });
+  const now = Date.now();
+  const progress: RunAgentToolProgress = {
+    childRunId,
+    runId: childRunId,
+    agentId: targetAgentId,
+    conversationId: resolved.value.conversationId,
+    answerBridgeId,
+    timeoutMs: timeout.value,
+    startedAt: now
+  };
+  if (background) {
+    completeRunAgentToolAsBackground(cmd, entity, call, state, progress, 'timeout_zero');
     return;
   }
 
-  const now = Date.now();
-  const progress = { childRunId, runId: childRunId, conversationId: resolved.value.conversationId, answerBridgeId };
   cmd.add(entity, ToolState, transitionToolState(state, 'executing', { progress }, now));
   spawnToolCallEvent(cmd, {
     toolCall: entity,
@@ -814,73 +929,65 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
   cmd.add(entity, InFlight, { kind: 'tool', startedAt: now });
 }
 
-function resolveTargetConversation(
+function resolveRunAgentConversation(
   world: WorldReader,
   cmd: CommandSink,
-  input: { sourceConversation: Entity; targetAgent: Entity; targetAgentId: string; kind: string; toolCallEntity: Entity; prompt: string; args: RunAgentArgs; defaultPolicy: RunConversationPolicyBlueprint }
+  input: {
+    sourceConversation: Entity;
+    targetAgent: Entity;
+    targetAgentId: string;
+    kind: string;
+    toolCallEntity: Entity;
+    prompt: string;
+    appendToExistingAgent: boolean;
+  }
 ): { ok: true; value: ResolvedConversation } | { ok: false; reason: string } {
-  const conversationArgs = input.args.conversation ?? {};
-  const policyMode = conversationArgs.mode ? normalizeConversationPolicyMode(conversationArgs.mode) : input.defaultPolicy.mode;
-  const visibility = conversationArgs.visibility ?? input.defaultPolicy.visibility ?? (policyMode === 'same_conversation' || policyMode === 'reuse_conversation' ? 'visible' : 'collapsed');
-  const explicitConversationId = conversationArgs.conversationId ?? input.defaultPolicy.conversationId;
-
-  if (explicitConversationId) {
-    const explicit = findConversationById(world, explicitConversationId);
-    if (explicit === undefined) return { ok: false, reason: `指定 conversation 不存在: ${explicitConversationId}` };
-    const conversationId = world.get(explicit, Conversation)?.id ?? explicitConversationId;
-    ensureAgentConversationLink(world, cmd, input.targetAgent, explicit, 'participant');
-    if (policyMode === 'fork_conversation') {
-      copyProjectedHistory(world, cmd, input.sourceConversation, explicit, conversationArgs);
-      spawnConversationBranchLink(cmd, { sourceConversation: input.sourceConversation, targetConversation: explicit, kind: 'fork' });
+  if (input.appendToExistingAgent) {
+    const existingConversation = defaultConversationForAgent(world, input.targetAgent);
+    if (existingConversation !== undefined) {
+      ensureAgentConversationLink(world, cmd, input.targetAgent, existingConversation, 'default');
+      const conversationId = world.get(existingConversation, Conversation)?.id ?? String(existingConversation);
+      selectAgentForConversation(cmd, { agent: input.targetAgent, conversation: existingConversation, conversationId, agentId: input.targetAgentId });
+      return {
+        ok: true,
+        value: {
+          conversation: existingConversation,
+          conversationId,
+          policyMode: 'reuse_conversation',
+          visibility: world.get(existingConversation, Conversation)?.visibility ?? 'collapsed'
+        }
+      };
     }
-    if (policyMode === 'branch_from_revision') {
-      const branch = copyBranchFromRevision(world, cmd, input.sourceConversation, explicit, conversationArgs.branchFromRevisionId ?? conversationArgs.revisionId);
-      if (!branch.ok) return branch;
-      spawnConversationBranchLink(cmd, { sourceConversation: input.sourceConversation, targetConversation: explicit, sourceRevision: branch.revision, kind: 'branch_from_revision' });
-      return { ok: true, value: { conversation: explicit, conversationId, policyMode, branchRevision: branch.revision, visibility, explicitConversationId, branchFromRevisionId: conversationArgs.branchFromRevisionId ?? conversationArgs.revisionId } };
-    }
-    return { ok: true, value: { conversation: explicit, conversationId, policyMode, reuseKey: conversationArgs.reuseKey ?? input.defaultPolicy.reuseKey, visibility, explicitConversationId } };
   }
 
-  if (policyMode === 'same_conversation') {
-    ensureAgentConversationLink(world, cmd, input.targetAgent, input.sourceConversation, 'participant');
-    const conversationId = world.get(input.sourceConversation, Conversation)?.id ?? String(input.sourceConversation);
-    return { ok: true, value: { conversation: input.sourceConversation, conversationId, policyMode, visibility } };
-  }
-
-  if (policyMode === 'reuse_conversation') {
-    const reuseKey = conversationArgs.reuseKey?.trim() || input.defaultPolicy.reuseKey || `${input.kind}:default`;
-    const reused = findReuseConversation(world, reuseKey, input.targetAgent);
-    if (reused !== undefined) {
-      ensureAgentConversationLink(world, cmd, input.targetAgent, reused, 'default');
-      const conversationId = world.get(reused, Conversation)?.id ?? String(reused);
-      return { ok: true, value: { conversation: reused, conversationId, policyMode, reuseKey, visibility } };
-    }
-    const conversationId = `conversation-reuse-${slug(reuseKey)}-${input.toolCallEntity}`;
-    const conversation = spawnConversation(cmd, { id: conversationId, title: `${input.kind}: ${reuseKey}`, visibility });
-    initializeCreatedRunAgentConversation(world, cmd, input, conversation, conversationId);
-    spawnConversationReuseLink(cmd, { key: reuseKey, conversation, agent: input.targetAgent });
-    return { ok: true, value: { conversation, conversationId, policyMode, created: true, reuseKey, visibility } };
-  }
-
-  const conversationId = `conversation-${input.kind}-${input.toolCallEntity}`;
-  const conversation = spawnConversation(cmd, { id: conversationId, title: `${input.kind}: ${input.prompt.slice(0, 40)}`, visibility });
+  const conversationId = `conversation-${slug(input.targetAgentId)}-${input.toolCallEntity}`;
+  const conversation = spawnConversation(cmd, {
+    id: conversationId,
+    title: `${input.kind}: ${input.prompt.slice(0, 40)}`,
+    visibility: 'collapsed'
+  });
   initializeCreatedRunAgentConversation(world, cmd, input, conversation, conversationId);
+  return {
+    ok: true,
+    value: {
+      conversation,
+      conversationId,
+      policyMode: 'new_conversation',
+      created: true,
+      visibility: 'collapsed'
+    }
+  };
+}
 
-  if (policyMode === 'fork_conversation') {
-    copyProjectedHistory(world, cmd, input.sourceConversation, conversation, conversationArgs);
-    spawnConversationBranchLink(cmd, { sourceConversation: input.sourceConversation, targetConversation: conversation, kind: 'fork' });
-    return { ok: true, value: { conversation, conversationId, policyMode, created: true, visibility } };
-  }
+function defaultConversationForAgent(world: WorldReader, agent: Entity): Entity | undefined {
+  return world.query(AgentConversationLink)
+    .map((entity) => world.get(entity, AgentConversationLink))
+    .filter((link): link is NonNullable<typeof link> => !!link && link.agent === agent)
+    .sort((left, right) => rolePriority(right.role) - rolePriority(left.role) || right.updatedAt - left.updatedAt || right.id.localeCompare(left.id))[0]?.conversation;
+}
 
-  if (policyMode === 'branch_from_revision') {
-    const branch = copyBranchFromRevision(world, cmd, input.sourceConversation, conversation, conversationArgs.branchFromRevisionId ?? conversationArgs.revisionId);
-    if (!branch.ok) return branch;
-    spawnConversationBranchLink(cmd, { sourceConversation: input.sourceConversation, targetConversation: conversation, sourceRevision: branch.revision, kind: 'branch_from_revision' });
-    return { ok: true, value: { conversation, conversationId, policyMode, created: true, branchRevision: branch.revision, visibility, branchFromRevisionId: conversationArgs.branchFromRevisionId ?? conversationArgs.revisionId } };
-  }
-
-  return { ok: true, value: { conversation, conversationId, policyMode, created: true, visibility } };
+function rolePriority(role: string): number {
+  return role === 'default' ? 2 : role === 'participant' ? 1 : 0;
 }
 
 function initializeCreatedRunAgentConversation(
@@ -915,71 +1022,6 @@ function inheritPrimaryProjectFromSourceConversation(world: WorldReader, cmd: Co
   return entity;
 }
 
-
-function copyProjectedHistory(world: WorldReader, cmd: CommandSink, sourceConversation: Entity, targetConversation: Entity, args: NonNullable<RunAgentArgs['conversation']>): void {
-  const messages = selectedMessagesForPolicy(world, sourceConversation, normalizeHistoryMode(args.history), args);
-  const historyMode = normalizeHistoryMode(args.history);
-  if (historyMode === 'summary') {
-    const summary = messages.map((entity) => {
-      const message = world.get(entity, Message);
-      return message ? `${message.role}: ${message.content.parts.map((part) => 'text' in part && part.thought !== true ? part.text : '').join('')}` : '';
-    }).filter(Boolean).join('\n\n');
-    if (summary.trim()) spawnUserMessage(cmd, targetConversation, `[Projected conversation summary]\n${summary.slice(0, 12000)}`);
-    return;
-  }
-  for (const entity of messages) {
-    const message = world.get(entity, Message);
-    if (message) cloneMessageToConversation(cmd, targetConversation, message);
-  }
-}
-
-function copyBranchFromRevision(world: WorldReader, cmd: CommandSink, sourceConversation: Entity, targetConversation: Entity, revisionId: string | undefined): { ok: true; revision: Entity } | { ok: false; reason: string } {
-  if (!revisionId) return { ok: false, reason: 'branch_from_revision 需要 branchFromRevisionId/revisionId。' };
-  const revision = findRevisionById(world, revisionId);
-  if (revision === undefined) return { ok: false, reason: `指定 revision 不存在: ${revisionId}` };
-  const sourceMessage = world.get(revision, PartOf)?.parent;
-  if (sourceMessage === undefined) return { ok: false, reason: `revision ${revisionId} 没有关联 message。` };
-  const sourceMessages = conversationMessages(world, sourceConversation);
-  const cutoff = sourceMessages.indexOf(sourceMessage);
-  if (cutoff < 0) return { ok: false, reason: `revision ${revisionId} 所属 message 不在 source conversation 中。` };
-  const revisionData = world.get(revision, MessageRevision);
-  for (const entity of sourceMessages.slice(0, cutoff + 1)) {
-    const message = world.get(entity, Message);
-    if (!message) continue;
-    const overrideContent: MessageContent | undefined = entity === sourceMessage ? revisionData?.content : undefined;
-    cloneMessageToConversation(cmd, targetConversation, message, overrideContent);
-  }
-  return { ok: true, revision };
-}
-
-function selectedMessagesForPolicy(world: WorldReader, sourceConversation: Entity, historyMode: ContextHistoryMode, args: NonNullable<RunAgentArgs['conversation']>): Entity[] {
-  const messages = conversationMessages(world, sourceConversation);
-  switch (historyMode) {
-    case 'none': return [];
-    case 'last_n': return messages.slice(-(args.lastN ?? 20));
-    case 'selected_messages': {
-      const ids = new Set(args.selectedMessageIds ?? []);
-      return messages.filter((entity) => ids.has(world.get(entity, Message)?.id ?? ''));
-    }
-    case 'since_message': {
-      const index = messages.findIndex((entity) => world.get(entity, Message)?.id === args.sinceMessageId);
-      return index >= 0 ? messages.slice(index) : messages;
-    }
-    case 'summary':
-    case 'full':
-    default:
-      return messages;
-  }
-}
-
-function findReuseConversation(world: WorldReader, key: string, agent: Entity): Entity | undefined {
-  const link = world
-    .query(ConversationReuseLink)
-    .map((entity) => world.get(entity, ConversationReuseLink))
-    .find((candidate) => candidate?.key === key && (candidate.agent === undefined || candidate.agent === agent));
-  return link?.conversation;
-}
-
 function ensureAgentConversationLink(world: WorldReader, cmd: CommandSink, agent: Entity, conversation: Entity, role: 'default' | 'participant' | 'reviewer'): void {
   const exists = world.query(AgentConversationLink).some((entity) => {
     const link = world.get(entity, AgentConversationLink);
@@ -988,78 +1030,9 @@ function ensureAgentConversationLink(world: WorldReader, cmd: CommandSink, agent
   if (!exists) linkAgentToConversation(cmd, { agent, conversation, role });
 }
 
-function findConversationById(world: WorldReader, id: string): Entity | undefined {
-  return world.query(Conversation).find((entity) => world.get(entity, Conversation)?.id === id);
-}
-
-function findRevisionById(world: WorldReader, id: string): Entity | undefined {
-  return world.query(MessageRevision).find((entity) => world.get(entity, MessageRevision)?.id === id);
-}
-
-function normalizeConversationPolicyMode(mode: string | undefined): ConversationPolicyMode {
-  switch (mode) {
-    case 'same':
-    case 'same_conversation': return 'same_conversation';
-    case 'reuse':
-    case 'reuse_conversation': return 'reuse_conversation';
-    case 'fork':
-    case 'fork_conversation': return 'fork_conversation';
-    case 'branch':
-    case 'branch_from_revision': return 'branch_from_revision';
-    case 'fresh':
-    case 'new':
-    case 'new_conversation':
-    default: return 'new_conversation';
-  }
-}
-
-function normalizeHistoryMode(mode: string | undefined): ContextHistoryMode {
-  switch (mode) {
-    case 'none': return 'none';
-    case 'last_n': return 'last_n';
-    case 'selected':
-    case 'selected_messages': return 'selected_messages';
-    case 'since':
-    case 'since_message': return 'since_message';
-    case 'summary': return 'summary';
-    case 'full':
-    default: return 'full';
-  }
-}
-
-function normalizeDeliveryMode(mode: string | undefined, background: boolean): DeliveryMode {
-  switch (mode) {
-    case 'append_to_source_conversation': return 'append_to_source_conversation';
-    case 'silent': return 'silent';
-    case 'notification': return 'notification';
-    case 'tool_response': return 'tool_response';
-    default: return background ? 'notification' : 'tool_response';
-  }
-}
-
-function isAsyncDeliveryMode(mode: string | undefined): boolean {
-  return mode === 'notification' || mode === 'append_to_source_conversation' || mode === 'silent';
-}
-
-function normalizeTranscript(value: string | undefined): TranscriptInclusion {
-  switch (value) {
-    case 'none': return 'none';
-    case 'selected': return 'selected';
-    case 'full': return 'full';
-    case 'link': return 'link';
-    case 'summary':
-    default: return 'summary';
-  }
-}
-
 function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'default';
 }
-function normalizeRunAgentLaunchMode(value: unknown): RunAgentLaunchMode {
-  return value === 'sync' || value === 'async' ? value : 'auto';
-}
-
-
 
 function applyRunConversationPolicy(cmd: CommandSink, run: Entity, resolved: ResolvedConversation): void {
   const policy = cmd.spawn();
@@ -1076,8 +1049,7 @@ function applyRunConversationPolicy(cmd: CommandSink, run: Entity, resolved: Res
   cmd.add(link, RunConversationPolicyLink, { id: `run-conversation-policy-link:${run}`, run, policy, role: 'active', createdAt: now, updatedAt: now });
 }
 
-function applyRunContextPolicy(cmd: CommandSink, run: Entity, args: RunAgentArgs, resolved: ResolvedConversation, defaultPolicy: RunContextPolicyBlueprint): void {
-  const contextPolicy = resolveContextPolicy(args, resolved, defaultPolicy);
+function applyRunContextPolicy(cmd: CommandSink, run: Entity, contextPolicy: RunContextPolicyBlueprint): void {
   const policy = cmd.spawn();
   cmd.add(policy, RunContextPolicy, {
     id: `run-context-policy:${run}`,
@@ -1086,37 +1058,6 @@ function applyRunContextPolicy(cmd: CommandSink, run: Entity, args: RunAgentArgs
   const link = cmd.spawn();
   const now = Date.now();
   cmd.add(link, RunContextPolicyLink, { id: `run-context-policy-link:${run}`, run, policy, role: 'active', createdAt: now, updatedAt: now });
-}
-
-function resolveContextPolicy(args: RunAgentArgs, resolved: ResolvedConversation, defaultPolicy: RunContextPolicyBlueprint): RunContextPolicyBlueprint {
-  const shorthand = args.conversation;
-  const hasShorthand = !!shorthand && (
-    shorthand.history !== undefined
-    || shorthand.lastN !== undefined
-    || shorthand.sinceMessageId !== undefined
-    || shorthand.selectedMessageIds !== undefined
-    || shorthand.includeSourceContext !== undefined
-    || shorthand.includeSourceToolResult !== undefined
-  );
-  const base = hasShorthand
-    ? {
-        historyMode: contextHistoryModeForResolvedConversation(resolved, args),
-        lastN: shorthand?.lastN,
-        sinceMessageId: shorthand?.sinceMessageId,
-        selectedMessageIds: shorthand?.selectedMessageIds,
-        includeSourceContext: shorthand?.includeSourceContext,
-        includeSourceToolResult: shorthand?.includeSourceToolResult
-      }
-    : defaultPolicy;
-  if (resolved.policyMode === 'fork_conversation' || resolved.policyMode === 'branch_from_revision') return { ...base, historyMode: 'full' };
-  return { ...base, historyMode: base.historyMode ?? 'full' };
-}
-
-function contextHistoryModeForResolvedConversation(resolved: ResolvedConversation, args: RunAgentArgs): ContextHistoryMode {
-  // fork/branch 已经在目标 conversation 中投影出所需历史；LLM 上下文应读取完整目标投影，
-  // 避免 selected/since 使用源 message id 再过滤克隆后的 message 而丢失上下文。
-  if (resolved.policyMode === 'fork_conversation' || resolved.policyMode === 'branch_from_revision') return 'full';
-  return normalizeHistoryMode(args.conversation?.history);
 }
 
 function applyRunDeliveryPolicy(cmd: CommandSink, run: Entity, deliveryPolicy: RunDeliveryPolicyBlueprint): void {
@@ -1133,121 +1074,6 @@ function applyRunEditPolicy(cmd: CommandSink, run: Entity, editPolicy: RunEditPo
   const link = cmd.spawn();
   const now = Date.now();
   cmd.add(link, RunEditPolicyLink, { id: `run-edit-policy-link:${run}`, run, policy, role: 'active', createdAt: now, updatedAt: now });
-}
-
-function applyRunModeOverrides(world: WorldReader, cmd: CommandSink, run: Entity, mode?: RunAgentArgs['mode']): void {
-  if (!mode) return;
-  const now = Date.now();
-  const modeEntity = mode.modeId ? findByRecordId(world, Mode, mode.modeId) : undefined;
-  if (modeEntity !== undefined) {
-    const link = cmd.spawn();
-    cmd.add(link, RunModeLink, { id: `run-mode:${run}:${mode.modeId}`, run, mode: modeEntity, role: 'active', createdAt: now, updatedAt: now });
-  }
-  const systemPrompt = mode.systemPromptId ? findByRecordId(world, SystemPrompt, mode.systemPromptId) : undefined;
-  if (systemPrompt !== undefined) {
-    const link = cmd.spawn();
-    cmd.add(link, RunSystemPromptLink, { id: `run-system-prompt:${run}:${mode.systemPromptId}`, run, systemPrompt, role: 'active', createdAt: now, updatedAt: now });
-  }
-  const inlineSystemPromptText = mode.systemPromptText?.trim();
-  if (inlineSystemPromptText) {
-    const prompt = cmd.spawn();
-    cmd.add(prompt, SystemPrompt, {
-      id: `run-system-prompt-inline:${run}`,
-      name: 'Run Inline System Prompt',
-      text: inlineSystemPromptText
-    });
-    const link = cmd.spawn();
-    cmd.add(link, RunSystemPromptLink, { id: `run-system-prompt-inline-link:${run}`, run, systemPrompt: prompt, role: 'active', createdAt: now, updatedAt: now });
-  }
-  const modelProfile = mode.modelProfileId ? findByRecordId(world, ModelProfile, mode.modelProfileId) : undefined;
-  if (modelProfile !== undefined) {
-    const link = cmd.spawn();
-    cmd.add(link, RunModelProfileLink, { id: `run-model-profile:${run}:${mode.modelProfileId}`, run, modelProfile, role: 'active', createdAt: now, updatedAt: now });
-  }
-  const toolPolicy = mode.toolPolicyId ? findByRecordId(world, ToolPolicy, mode.toolPolicyId) : undefined;
-  if (toolPolicy !== undefined) {
-    const link = cmd.spawn();
-    cmd.add(link, RunToolPolicyLink, { id: `run-tool-policy:${run}:${mode.toolPolicyId}`, run, toolPolicy, role: 'active', createdAt: now, updatedAt: now });
-  }
-  const contextPolicy = mode.contextPolicyId ? findByRecordId(world, RunContextPolicy, mode.contextPolicyId) : undefined;
-  if (contextPolicy !== undefined) linkRunPolicy(cmd, RunContextPolicyLink, `run-context-policy:${run}:${mode.contextPolicyId}`, run, contextPolicy, now);
-
-  const deliveryPolicy = mode.deliveryPolicyId ? findByRecordId(world, RunDeliveryPolicy, mode.deliveryPolicyId) : undefined;
-  if (deliveryPolicy !== undefined) linkRunPolicy(cmd, RunDeliveryPolicyLink, `run-delivery-policy:${run}:${mode.deliveryPolicyId}`, run, deliveryPolicy, now);
-
-  const editPolicy = mode.editPolicyId ? findByRecordId(world, RunEditPolicy, mode.editPolicyId) : undefined;
-  if (editPolicy !== undefined) linkRunPolicy(cmd, RunEditPolicyLink, `run-edit-policy:${run}:${mode.editPolicyId}`, run, editPolicy, now);
-
-  if (mode.contextPolicy) {
-    const policy = cmd.spawn();
-    cmd.add(policy, RunContextPolicy, {
-      id: `run-context-policy-inline:${run}`,
-      historyMode: normalizeHistoryMode(mode.contextPolicy.historyMode),
-      lastN: mode.contextPolicy.lastN,
-      sinceMessageId: mode.contextPolicy.sinceMessageId,
-      selectedMessageIds: mode.contextPolicy.selectedMessageIds,
-      includeSourceContext: mode.contextPolicy.includeSourceContext,
-      includeSourceToolResult: mode.contextPolicy.includeSourceToolResult
-    });
-    linkRunPolicy(cmd, RunContextPolicyLink, `run-context-policy-inline-link:${run}`, run, policy, Date.now());
-  }
-
-  if (mode.deliveryPolicy) {
-    const policy = cmd.spawn();
-    cmd.add(policy, RunDeliveryPolicy, {
-      id: `run-delivery-policy-inline:${run}`,
-      mode: normalizeDeliveryMode(mode.deliveryPolicy.mode, false),
-      includeTranscript: normalizeTranscript(mode.deliveryPolicy.includeTranscript)
-    });
-    linkRunPolicy(cmd, RunDeliveryPolicyLink, `run-delivery-policy-inline-link:${run}`, run, policy, Date.now());
-  }
-
-  if (mode.editPolicy) {
-    const policy = cmd.spawn();
-    cmd.add(policy, RunEditPolicy, {
-      id: `run-edit-policy-inline:${run}`,
-      onSourceEdited: normalizeSourceEditBehavior(mode.editPolicy.onSourceEdited),
-      onNewUserMessageWhileRunning: normalizeNewMessageWhileRunningBehavior(mode.editPolicy.onNewUserMessageWhileRunning)
-    });
-    linkRunPolicy(cmd, RunEditPolicyLink, `run-edit-policy-inline-link:${run}`, run, policy, Date.now());
-  }
-}
-
-function linkRunPolicy<T>(
-  cmd: CommandSink,
-  component: { id: symbol },
-  id: string,
-  run: Entity,
-  policy: Entity,
-  now: number
-): void {
-  const link = cmd.spawn();
-  cmd.add(link, component as never, { id, run, policy, role: 'active', createdAt: now, updatedAt: now } as never);
-}
-
-function normalizeSourceEditBehavior(value: string | undefined): SourceEditBehavior {
-  switch (value) {
-    case 'ignore_snapshot': return 'ignore_snapshot';
-    case 'abort_and_restart': return 'abort_and_restart';
-    case 'append_correction': return 'append_correction';
-    case 'branch_new_run': return 'branch_new_run';
-    case 'mark_stale':
-    default: return 'mark_stale';
-  }
-}
-
-function normalizeNewMessageWhileRunningBehavior(value: string | undefined): NewMessageWhileRunningBehavior {
-  switch (value) {
-    case 'interrupt_current': return 'interrupt_current';
-    case 'append_to_target': return 'append_to_target';
-    case 'ignore': return 'ignore';
-    case 'queue_next_run':
-    default: return 'queue_next_run';
-  }
-}
-
-function findByRecordId<T extends { id: string }>(world: WorldReader, component: { id: symbol }, id: string): Entity | undefined {
-  return world.query(component as never).find((entity) => (world.get(entity, component as never) as T | undefined)?.id === id);
 }
 
 function dispatchApprovedAwaitingCalls(world: WorldReader, cmd: CommandSink, handled: Set<Entity>): void {
@@ -1313,6 +1139,10 @@ function findAgentById(world: WorldReader, id: string): Entity | undefined {
 
 function findAgentByKind(world: WorldReader, kind: string): Entity | undefined {
   return world.query(Agent).find((agent) => world.get(agent, AgentKind)?.kind === kind || world.get(agent, Agent)?.id === kind);
+}
+
+function findAgentRunById(world: WorldReader, id: string): Entity | undefined {
+  return world.query(AgentRun).find((run) => world.get(run, AgentRun)?.id === id);
 }
 
 function isAgentRunTool(world: WorldReader, toolName: string): boolean {

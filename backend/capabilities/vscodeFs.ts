@@ -27,7 +27,7 @@ import {
   writeRemoteServerTextFile
 } from './workEnvironmentProvider';
 import { buildFileDiffRecord } from './fileDiff';
-import { applyHunkEdit, applyInsertEdit, applyPatchEdit, applyDeleteEdit } from './editStrategies';
+import { applyHunkEdit, applyInsertEdit, applyDeleteEdit } from './editStrategies';
 
 const MAX_BYTES = 256 * 1024;
 const MAX_EDIT_READ_BYTES = 2 * 1024 * 1024;
@@ -138,12 +138,12 @@ export async function editWorkspaceTextFile(
   if (!before.existed) throw new Error(`File not found: ${path}`);
 
   const applied =
-    request.mode === 'patch' ? applyPatchEdit(before.content, request.patch ?? '')
-    : request.mode === 'insert' ? applyInsertEdit(before.content, request.insert?.line ?? 0, request.insert?.content ?? '')
-    : request.mode === 'delete' ? applyDeleteEdit(before.content, request.delete?.startLine ?? 0, request.delete?.endLine ?? 0)
-    : applyHunkEdit(before.content, request.hunks ?? []);
+    request.mode === 'insert' ? applyInsertEdit(before.content, request.insert.line, request.insert.content)
+    : request.mode === 'delete' ? applyDeleteEdit(before.content, request.delete.startLine, request.delete.endLine)
+    : applyHunkEdit(before.content, request.hunks);
+
   if (applied.applied <= 0) {
-    const firstError = applied.results.find((item) => !item.success)?.error ?? 'No hunks were applied.';
+    const firstError = applied.results.find((item) => !item.success)?.error ?? 'No edit operations were applied.';
     throw new Error(`edit(${request.mode}) failed: ${firstError}`);
   }
 
@@ -367,5 +367,5 @@ function writeSummary(path: string, action: FsWriteFileResult['action']): string
 function editSummary(path: string, mode: FsEditFileRequest['mode'], action: FsEditFileResult['action'], applied: number, failed: number, fallbackMode: string | undefined): string {
   if (action === 'unchanged') return `${path} 内容未变化`;
   const fallback = fallbackMode ? `，fallback=${fallbackMode}` : '';
-  return `已用 ${mode} 模式修改 ${path}（成功 ${applied} 个 hunk，失败 ${failed} 个${fallback}）`;
+  return `已用 ${mode} 模式修改 ${path}（成功 ${applied} 个操作，失败 ${failed} 个${fallback}）`;
 }

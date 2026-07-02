@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, ref } from 'vue';
 import type {
   ToolConfigFieldRecord,
   ToolConfigRecord,
@@ -105,10 +105,6 @@ function updateSelectedToolScope(value: string): void {
     ? value as ToolScopeFilter
     : 'all';
 }
-
-onMounted(() => {
-  store.ensureEditToolStatistics();
-});
 
 function nextAllowed(toolName: string, enabled: boolean): string[] {
   const names = new Set(effectivePolicy.value?.allowedTools ?? []);
@@ -236,44 +232,13 @@ function executionLabel(tool: ToolDefinitionRecord): string {
   return tool.execution === 'agentRun' ? 'AgentRun' : 'Runtime';
 }
 
-type EditToolMode = 'hunk' | 'patch';
-
 function toolDescription(tool: ToolDefinitionRecord): string {
-  if (tool.name === EDIT_TOOL_NAME) return editModeDescription(editModeForTool(tool));
   return tool.description || '后端未提供描述。';
-}
-
-function editModeForTool(tool: ToolDefinitionRecord): EditToolMode {
-  return configForTool(tool).mode === 'patch' ? 'patch' : 'hunk';
-}
-
-function editModeDescription(mode: EditToolMode): string {
-  if (mode === 'patch') {
-    return '当前 AI 将看到 Patch 模式定义：edit({ path, patch })。patch 使用单文件 unified diff，支持标准 @@ hunk；行号失败后会尝试上下文搜索、search/replace 和 loose @@ 兜底。历史工具调用记录不会回写，只影响后续模型请求看到的工具定义。';
-  }
-  return '当前 AI 将看到 Hunk 结构化模式定义：edit({ path, hunks })。每个 hunk 使用 oldContent/newContent/startLine；优先唯一精确匹配，重复内容用 startLine 定位，精确失败时尝试行首缩进兜底。历史工具调用记录不会回写，只影响后续模型请求看到的工具定义。';
 }
 
 function editModeShortLabel(tool: ToolDefinitionRecord): string | undefined {
   if (tool.name !== EDIT_TOOL_NAME) return undefined;
-  return editModeForTool(tool) === 'patch'
-    ? '当前模式：Patch · AI 参数为 path + patch（insert/delete 始终可用）'
-    : '当前模式：Hunk · AI 参数为 path + hunks（insert/delete 始终可用）';
-}
-
-function editModeStatisticsText(tool: ToolDefinitionRecord): string | undefined {
-  if (tool.name !== EDIT_TOOL_NAME) return undefined;
-  if (store.editToolStatisticsLoading && !store.editToolStatisticsLoaded) return '统计加载中...';
-  const hunk = store.editToolStatistics.modes.hunk;
-  const patch = store.editToolStatistics.modes.patch;
-  const insert = store.editToolStatistics.modes.insert;
-  const del = store.editToolStatistics.modes.delete;
-  return `Hunk：${formatModeStatistics(hunk.successes, hunk.attempts, hunk.successRate)}；Patch：${formatModeStatistics(patch.successes, patch.attempts, patch.successRate)}；Insert：${formatModeStatistics(insert.successes, insert.attempts, insert.successRate)}；Delete：${formatModeStatistics(del.successes, del.attempts, del.successRate)}`;
-}
-
-function formatModeStatistics(successes: number, attempts: number, successRate: number): string {
-  if (attempts <= 0) return '暂无调用';
-  return `${successes}/${attempts} 成功（${Math.round(successRate * 100)}%）`;
+  return '当前模式：Hunk 查找替换 · path + hunks[]；每个 hunk 含 oldContent / newContent / replaceAll，insert/delete 仍可用';
 }
 
 function toolIcon(tool: ToolDefinitionRecord) {
@@ -527,7 +492,6 @@ function inputNumber(event: Event): number {
                     </div>
                     <p class="tool-definition-description">{{ toolDescription(tool) }}</p>
                     <p v-if="editModeShortLabel(tool)" class="tool-definition-mode-note">{{ editModeShortLabel(tool) }}</p>
-                    <p v-if="editModeStatisticsText(tool)" class="tool-definition-mode-note is-statistics">{{ editModeStatisticsText(tool) }}</p>
                   </div>
 
                   <template v-if="isToolEnabled(tool)">
@@ -1078,11 +1042,6 @@ function inputNumber(event: Event): number {
   color: var(--vscode-foreground);
   background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-foreground) 8%);
   font-size: var(--font-size-xs);
-}
-
-.tool-definition-mode-note.is-statistics {
-  color: var(--vscode-descriptionForeground);
-  background: color-mix(in srgb, var(--vscode-editor-background) 96%, var(--vscode-foreground) 4%);
 }
 
 .tool-config-disabled-note {

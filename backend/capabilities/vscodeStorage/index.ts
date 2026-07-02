@@ -2,8 +2,6 @@ import * as vscode from 'vscode';
 import type {
   ConversationLlmSettingsRecord,
   ConversationSettingsRecord,
-  EditToolMode,
-  EditToolStatisticsRecord,
   GlobalSettingsRecord,
   GlobalSettingsSectionValue,
   LlmCompressionConfigsRecord,
@@ -31,8 +29,6 @@ import {
   appendToolCallEventRecord,
   loadClientStateSkeletonFromStores,
   loadConversationDetailFromStores,
-  loadConversationLatestMessagesFromStores,
-  loadConversationMessagesByIdsFromStores,
   loadConversationRunDetailFromStores,
   loadConversationRunHistoryPageFromStores,
   loadConversationTimelinePageFromStores,
@@ -130,14 +126,6 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       const paths = getPaths();
       return loadConversationTimelinePageFromStores(paths, request);
     },
-    async loadConversationLatestMessages(conversationId, limit) {
-      const paths = getPaths();
-      return loadConversationLatestMessagesFromStores(paths, conversationId, limit);
-    },
-    async loadConversationMessagesByIds(conversationId, messageIds) {
-      const paths = getPaths();
-      return loadConversationMessagesByIdsFromStores(paths, conversationId, messageIds);
-    },
     async loadConversationTimelineRange(request) {
       const paths = getPaths();
       return loadConversationTimelineRangeFromStores(paths, request);
@@ -208,14 +196,6 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     async openShadowCheckpointDiff(request) {
       const paths = getPaths();
       return openShadowCheckpointDiff(paths, request);
-    },
-    async loadEditToolStatistics() {
-      const paths = getPaths();
-      return loadEditToolStatistics(paths);
-    },
-    async recordEditToolModeResult(mode, success) {
-      const paths = getPaths();
-      return recordEditToolModeResult(paths, mode, success);
     },
     async collectShadowWorktreeStats() {
       const paths = getPaths();
@@ -368,54 +348,3 @@ function normalizeConversationLlmSettings(
   return { conversationId, activeProviderConfigId: typeof settings?.activeProviderConfigId === 'string' ? settings.activeProviderConfigId.trim() : '' };
 }
 
-function editToolStatisticsUri(paths: StoragePaths): vscode.Uri {
-  return vscode.Uri.joinPath(paths.settingsRootUri, 'edit-tool-statistics.json');
-}
-
-async function loadEditToolStatistics(paths: StoragePaths): Promise<EditToolStatisticsRecord> {
-  return normalizeEditToolStatistics(await readJson<Partial<EditToolStatisticsRecord>>(editToolStatisticsUri(paths)));
-}
-
-async function recordEditToolModeResult(paths: StoragePaths, mode: EditToolMode, success: boolean): Promise<EditToolStatisticsRecord> {
-  await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
-  const uri = editToolStatisticsUri(paths);
-  const current = normalizeEditToolStatistics(await readJson<Partial<EditToolStatisticsRecord>>(uri));
-  const previous = current.modes[mode];
-  const attempts = previous.attempts + 1;
-  const successes = previous.successes + (success ? 1 : 0);
-  const failures = previous.failures + (success ? 0 : 1);
-  const now = Date.now();
-  const next: EditToolStatisticsRecord = {
-    modes: {
-      ...current.modes,
-      [mode]: normalizeEditModeStatistics({ mode, attempts, successes, failures, updatedAt: now })
-    },
-    updatedAt: now
-  };
-  await writeJson(uri, next);
-  return next;
-}
-
-function normalizeEditToolStatistics(input: Partial<EditToolStatisticsRecord> | undefined): EditToolStatisticsRecord {
-  const now = Date.now();
-  return {
-    modes: {
-      patch: normalizeEditModeStatistics({ mode: 'patch', ...(input?.modes?.patch ?? {}) }),
-      hunk: normalizeEditModeStatistics({ mode: 'hunk', ...(input?.modes?.hunk ?? {}) }),
-      insert: normalizeEditModeStatistics({ mode: 'insert', ...(input?.modes?.insert ?? {}) }),
-      delete: normalizeEditModeStatistics({ mode: 'delete', ...(input?.modes?.delete ?? {}) })
-    },
-    updatedAt: finiteNonNegativeInteger(input?.updatedAt, now)
-  };
-}
-
-function normalizeEditModeStatistics(input: Partial<EditToolStatisticsRecord['modes'][EditToolMode]> & { mode: EditToolMode }): EditToolStatisticsRecord['modes'][EditToolMode] {
-  const attempts = finiteNonNegativeInteger(input.attempts, 0);
-  const successes = Math.min(attempts, finiteNonNegativeInteger(input.successes, 0));
-  const failures = Math.max(0, attempts - successes);
-  return { mode: input.mode, attempts, successes, failures, successRate: attempts > 0 ? successes / attempts : 0, ...(input.updatedAt !== undefined ? { updatedAt: finiteNonNegativeInteger(input.updatedAt, Date.now()) } : {}) };
-}
-
-function finiteNonNegativeInteger(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : fallback;
-}

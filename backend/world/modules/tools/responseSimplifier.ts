@@ -30,8 +30,6 @@ export function simplifyToolResponseForModel(toolName: string, status: ToolCallS
       return simplifyCommandResponse(value, status);
     case READ_TOOL_NAME:
       return isError ? errorResponse(value) : simplifyReadResponse(value);
-    case 'read_conversation':
-      return isError ? errorResponse(value) : simplifyReadConversationResponse(value);
     case WRITE_TOOL_NAME:
       return isError ? errorResponse(value) : simplifyWriteResponse(value);
     case EDIT_TOOL_NAME:
@@ -105,14 +103,6 @@ function simplifyReadResponse(value: unknown): JsonRecord {
   return withOkFallback(pickDefined({
     totalLines: numberValue(record.totalLines),
     content: stringValue(record.content)
-  }), 'success');
-}
-
-function simplifyReadConversationResponse(value: unknown): JsonRecord {
-  const record = asRecord(value);
-  if (!record) return simplifyGenericSuccess(value);
-  return withOkFallback(pickDefined({
-    messages: Array.isArray(record.messages) ? record.messages : undefined
   }), 'success');
 }
 

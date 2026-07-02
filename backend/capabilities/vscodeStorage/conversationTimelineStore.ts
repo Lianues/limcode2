@@ -206,32 +206,6 @@ export async function loadConversationTimelinePage(paths: StoragePaths, request:
   };
 }
 
-export async function loadConversationLatestMessages(paths: StoragePaths, conversationId: string, limit = 50): Promise<MessageRecord[]> {
-  const page = await loadConversationTimelinePage(paths, {
-    conversationId,
-    direction: 'initial',
-    chunkCount: Math.max(1, Math.ceil(Math.max(1, limit) / CONVERSATION_TIMELINE_CHUNK_SIZE))
-  });
-  return page.state.messages.sort(compareMessagesBySeq).slice(-Math.max(1, limit));
-}
-
-export async function loadConversationMessagesByIds(paths: StoragePaths, conversationId: string, messageIds: readonly string[]): Promise<MessageRecord[]> {
-  const wanted = new Set(messageIds);
-  if (wanted.size === 0) return [];
-  const root = conversationTimelineRoot(paths, conversationId);
-  const index = await readJson<ConversationTimelineIndexFile>(vscode.Uri.joinPath(root, INDEX_FILE));
-  if (!isConversationTimelineIndex(index, conversationId)) return [];
-  const allRecords = await normalizeTimelineChunkIndexRecords(root, index.chunks);
-  const records = allRecords.filter((chunk) => chunk.messageIds.some((id) => wanted.has(id)));
-  const chunks = await Promise.all(records.map((chunk) => readConversationTimelineChunk(root, chunk)));
-  const messages = chunks
-    .flatMap((chunk) => chunk?.messages ?? [])
-    .filter((message) => wanted.has(message.id))
-    .sort(compareMessagesBySeq);
-  const state = createEmptyClientState();
-  state.messages = messages;
-  return markClientStateAttachmentsForClient(state).messages;
-}
 export async function loadConversationTimelineRange(paths: StoragePaths, request: {
   conversationId: string;
   mode: 'suffix' | 'prefix' | 'between';

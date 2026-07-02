@@ -1,20 +1,16 @@
 import { EDIT_TOOL_NAME, type EditToolMode } from '../../../../../../shared/protocol';
-import type { FsStructuredEditHunk, FsInsertEditRequest, FsDeleteEditRequest, FsEditFileRequest } from '../../../../../capabilities/types';
-import type { ToolConfigRecord } from '../../../../../../shared/protocol';
-import type { ToolDefinition, ToolDeps } from '../../registry';
+import type { FsDeleteEditRequest, FsEditFileRequest, FsHunkEditRequest, FsInsertEditRequest } from '../../../../../capabilities/types';
+import type { ToolDefinition } from '../../registry';
 import { staticToolScheduling } from '../../scheduling';
 import { defineToolDefinitionModule } from '../types';
 import { allowOutsideProjectPathsDefaultConfig, allowOutsideProjectPathsField, allowOutsideProjectPathsFromConfig, filePathPolicyDescription } from '../filePathPolicy';
 
 interface EditArgs {
   path?: string;
-  patch?: string;
   hunks?: unknown;
   insert?: { line?: number; content?: string };
   delete?: { startLine?: number; endLine?: number };
 }
-
-export const EDIT_TOOL_MODE_DEFAULT: EditToolMode = 'hunk';
 
 export const editToolModule = defineToolDefinitionModule({
   id: EDIT_TOOL_NAME,
@@ -26,8 +22,8 @@ export const editToolModule = defineToolDefinitionModule({
 export const editTool: ToolDefinition = {
   declaration: {
     name: EDIT_TOOL_NAME,
-    description: hunkModeDescription(),
-    parameters: hunkModeParameters(),
+    description: editToolDescription(),
+    parameters: editToolParameters(),
     metadata: {
       category: 'filesystem',
       scope: 'file',
@@ -40,31 +36,18 @@ export const editTool: ToolDefinition = {
       checkpoint: { before: true, after: true }
     },
     configSchema: {
-      fields: [
-        {
-          key: 'mode',
-          label: '编辑模式',
-          type: 'enum',
-          description: '选择 edit 工具暴露给 AI 的参数格式与内部兜底策略。hunk=结构化 oldContent/newContent；patch=unified diff patch。',
-          defaultValue: EDIT_TOOL_MODE_DEFAULT,
-          options: [
-            { label: 'Hunk 结构化模式', value: 'hunk', description: '使用 hunks[{ oldContent, newContent, startLine? }]，含唯一匹配、行号定位与缩进兜底。' },
-            { label: 'Patch 模式', value: 'patch', description: '使用 unified diff patch 字符串，含 hunk 行号、上下文搜索、search/replace 与 loose @@ 兜底。' }
-          ]
-        },
-        allowOutsideProjectPathsField(false)
-      ]
+      fields: [allowOutsideProjectPathsField(false)]
     },
-    defaultConfig: { mode: EDIT_TOOL_MODE_DEFAULT, ...allowOutsideProjectPathsDefaultConfig(false) }
+    defaultConfig: { ...allowOutsideProjectPathsDefaultConfig(false) }
   },
   execution: 'runtime',
   scheduling: staticToolScheduling('serial', 'filesystem_edit_side_effect'),
   summary: summarizeEditToolCall,
   async execute(rawArgs, deps, ctx) {
     const args = (rawArgs ?? {}) as EditArgs;
-    const runtimeMode = detectEditMode(args, ctx?.config);
+    const runtimeMode = detectEditMode(args);
     const path = normalizeDisplayPath(args.path);
-    if (!path) return { ok: false, output: await failedOutput(deps, runtimeMode, path, 'Missing required argument: path') };
+    if (!path) return { ok: false, output: failedOutput(runtimeMode, path, 'Missing required argument: path') };
 
     try {
       const request = buildEditRequest(path, args, runtimeMode);
@@ -72,25 +55,37 @@ export const editTool: ToolDefinition = {
         workEnvironment: ctx?.workEnvironment,
         allowOutsideProjectPaths: allowOutsideProjectPathsFromConfig(ctx?.config, false)
       });
-      await recordStatistics(deps, runtimeMode, result.success);
       return { ok: result.success, output: result, ...(result.failed > 0 ? { status: 'warning' as const } : {}) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return { ok: false, output: await failedOutput(deps, runtimeMode, path, message) };
+      return { ok: false, output: failedOutput(runtimeMode, path, message) };
     }
   }
 };
 
-export function editModeFromConfig(config: ToolConfigRecord | undefined): EditToolMode {
-  return config?.mode === 'patch' ? 'patch' : 'hunk';
+export function editToolDescription(): string {
+  return [hunkModeDescription(), insertDeleteDescription()].join('\n');
+}
+
+export function editToolParameters(): unknown {
+  const base = hunkModeParameters() as { type: string; properties: Record<string, unknown>; required: string[] };
+  return {
+    ...base,
+    properties: {
+      ...base.properties,
+      insert: insertModeParameters(),
+      delete: deleteModeParameters()
+    },
+    required: ['path']
+  };
 }
 
 export function hunkModeDescription(): string {
   return [
-    'Modify one UTF-8 text file using structured hunks.',
-    'This mode accepts hunks[{ oldContent, newContent, startLine? }]. Each hunk replaces one exact oldContent block with newContent.',
-    'Fallback strategy: if oldContent is unique it is replaced directly; if repeated, startLine is used after accounting for prior hunk line offsets; if exact matching fails, a conservative leading-indentation-only fallback is attempted and replacement indentation is remapped.',
-    'Use multiple hunks in one call for multiple independent edits in the same file. For new files or full rewrites, use write.',
+    'Modify one UTF-8 text file using hunk-style search/replace.',
+    'Primary hunk arguments: { path, hunks }. hunks is an ordered array; each hunk is { oldContent, newContent, replaceAll? }.',
+    'Each oldContent is matched as exact existing text against the current file after prior hunks are applied. By default only the first match is replaced for that hunk. Set hunk.replaceAll=true to replace every non-overlapping match.',
+    'Use multiple hunks in one call for multiple independent edits in the same file. Use write for new files or full rewrites. Use insert/delete for line-based edits.',
     filePathPolicyDescription(false)
   ].join('\n');
 }
@@ -102,13 +97,13 @@ export function hunkModeParameters(): unknown {
       path: { type: 'string', description: 'File path. Relative paths are resolved from the current work environment root; absolute paths are supported when allowed by tool policy.' },
       hunks: {
         type: 'array',
-        description: 'Ordered edit hunks. Each hunk replaces oldContent with newContent. Use startLine only to disambiguate repeated oldContent.',
+        description: 'Ordered hunk blocks. Each hunk performs exact search/replace in this same file. Use multiple hunks to modify multiple locations in one call.',
         items: {
           type: 'object',
           properties: {
-            oldContent: { type: 'string', description: 'Existing file text to replace. Include enough context so it is unique whenever possible.' },
-            newContent: { type: 'string', description: 'Replacement text exactly as it should appear in the final file.' },
-            startLine: { type: 'number', description: 'Optional 1-based line hint from the original file, used only when oldContent has multiple matches.' }
+            oldContent: { type: 'string', description: 'Existing file text to find. Must be an exact substring of the current file at the time this hunk runs.' },
+            newContent: { type: 'string', description: 'Replacement text exactly as it should appear in the final file. Use an empty string to remove the matched text.' },
+            replaceAll: { type: 'boolean', description: 'Whether this hunk replaces every non-overlapping oldContent match. Defaults to false, replacing only the first match.' }
           },
           required: ['oldContent', 'newContent']
         }
@@ -118,35 +113,13 @@ export function hunkModeParameters(): unknown {
   };
 }
 
-export function patchModeDescription(): string {
-  return [
-    'Modify one UTF-8 text file using a unified diff patch string.',
-    'This mode accepts { path, patch }. The patch may include ---/+++ headers and one or more @@ -oldStart,oldCount +newStart,newCount @@ hunks for this single file.',
-    'Fallback strategy: each hunk first applies by line number; if that fails, the context+deleted block is searched globally and applied only when unique. If some hunks still fail, hunks are converted to search/replace blocks and retried. Bare @@ hunks without line numbers are parsed with a loose search/replace fallback.',
-    'Do not include multi-file patches or /dev/null create/delete patches. Use write for new files and delete for deleting files/directories.',
-    filePathPolicyDescription(false)
-  ].join('\n');
-}
-
-export function patchModeParameters(): unknown {
-  return {
-    type: 'object',
-    properties: {
-      path: { type: 'string', description: 'File path. Relative paths are resolved from the current work environment root; absolute paths are supported when allowed by tool policy.' },
-      patch: {
-        type: 'string',
-        description: 'Unified diff patch for this single file. Hunk lines use prefix space=context, -=delete, +=add. Bare @@ hunks are allowed as a loose fallback when enough context is present.'
-      }
-    },
-    required: ['path', 'patch']
-  };
-}
-
 export function insertDeleteDescription(): string {
   return [
-    '\nLine-based methods (always available, choose per call):',
+    '',
+    'Line-based modes remain available:',
     '- insert: provide insert={ line, content } to insert text before the given 1-based line number. Use line N+1 to append after the last line.',
-    '- delete: provide delete={ startLine, endLine } to remove lines in the inclusive range [startLine, endLine].'
+    '- delete: provide delete={ startLine, endLine } to remove lines in the inclusive range [startLine, endLine].',
+    'When using insert or delete, hunks is not required.'
   ].join('\n');
 }
 
@@ -172,29 +145,21 @@ export function deleteModeParameters(): unknown {
   };
 }
 
-
-function buildPatchModeRequest(path: string, args: EditArgs): { path: string; mode: 'patch'; patch: string } {
-  if (typeof args.patch !== 'string' || args.patch.trim().length === 0) throw new Error('Missing required argument for patch mode: patch');
-  return { path, mode: 'patch', patch: args.patch };
-}
-
-function buildHunkModeRequest(path: string, args: EditArgs): { path: string; mode: 'hunk'; hunks: FsStructuredEditHunk[] } {
-  const hunks = normalizeStructuredHunks(args.hunks);
-  if (hunks.length === 0) throw new Error('Missing required argument for hunk mode: hunks');
-  return { path, mode: 'hunk', hunks };
-}
-
-function detectEditMode(args: EditArgs, config: ToolConfigRecord | undefined): EditToolMode {
-  if (args.insert && typeof args.insert.line === 'number' && typeof args.insert.content === 'string') return 'insert';
-  if (args.delete && typeof args.delete.startLine === 'number' && typeof args.delete.endLine === 'number') return 'delete';
-  return editModeFromConfig(config);
+function detectEditMode(args: EditArgs): EditToolMode {
+  if (args.insert !== undefined) return 'insert';
+  if (args.delete !== undefined) return 'delete';
+  return 'hunk';
 }
 
 function buildEditRequest(path: string, args: EditArgs, mode: EditToolMode): FsEditFileRequest {
   if (mode === 'insert') return buildInsertModeRequest(path, args);
   if (mode === 'delete') return buildDeleteModeRequest(path, args);
-  if (mode === 'patch') return buildPatchModeRequest(path, args);
   return buildHunkModeRequest(path, args);
+}
+
+function buildHunkModeRequest(path: string, args: EditArgs): { path: string; mode: 'hunk'; hunks: FsHunkEditRequest[] } {
+  const hunks = normalizeHunks(args.hunks);
+  return { path, mode: 'hunk', hunks };
 }
 
 function buildInsertModeRequest(path: string, args: EditArgs): { path: string; mode: 'insert'; insert: FsInsertEditRequest } {
@@ -211,24 +176,20 @@ function buildDeleteModeRequest(path: string, args: EditArgs): { path: string; m
   return { path, mode: 'delete', delete: { startLine: Math.max(1, Math.floor(args.delete.startLine)), endLine: Math.max(1, Math.floor(args.delete.endLine)) } };
 }
 
-
-function normalizeStructuredHunks(value: unknown): FsStructuredEditHunk[] {
-  if (!Array.isArray(value)) return [];
-  const result: FsStructuredEditHunk[] = [];
-  for (const item of value) {
+function normalizeHunks(value: unknown): FsHunkEditRequest[] {
+  if (!Array.isArray(value)) throw new Error('Missing required argument for hunk mode: hunks');
+  if (value.length === 0) throw new Error('Missing required argument for hunk mode: hunks must not be empty');
+  return value.map((item, index) => {
     const record = asRecord(item);
-    if (!record || typeof record.oldContent !== 'string' || typeof record.newContent !== 'string') continue;
-    result.push({
-      oldContent: record.oldContent,
-      newContent: record.newContent,
-      ...(typeof record.startLine === 'number' && Number.isFinite(record.startLine) ? { startLine: Math.max(1, Math.floor(record.startLine)) } : {})
-    });
-  }
-  return result;
+    if (!record || typeof record.oldContent !== 'string' || typeof record.newContent !== 'string') {
+      throw new Error(`Invalid hunk ${index}: each hunk must contain string oldContent and newContent`);
+    }
+    if (record.oldContent.length === 0) throw new Error(`Invalid hunk ${index}: oldContent must not be empty`);
+    return { oldContent: record.oldContent, newContent: record.newContent, replaceAll: record.replaceAll === true };
+  });
 }
 
-async function failedOutput(deps: ToolDeps, mode: EditToolMode, path: string, error: string): Promise<Record<string, unknown>> {
-  await recordStatistics(deps, mode, false);
+function failedOutput(mode: EditToolMode, path: string, error: string): Record<string, unknown> {
   return {
     kind: 'file_edit.result',
     mode,
@@ -237,14 +198,6 @@ async function failedOutput(deps: ToolDeps, mode: EditToolMode, path: string, er
     error,
     summary: `edit(${mode}) failed: ${error}`
   };
-}
-
-async function recordStatistics(deps: ToolDeps, mode: EditToolMode, success: boolean): Promise<void> {
-  try {
-    await deps.storage.recordEditToolModeResult(mode, success);
-  } catch (error) {
-    console.warn('[LimCode] Failed to record edit tool mode statistics.', error);
-  }
 }
 
 function summarizeEditToolCall(rawArgs: unknown): string | undefined {

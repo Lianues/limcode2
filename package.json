@@ -1,5 +1,5 @@
 {
-  "name": "limcode-vscode-assistant",
+  "name": "limcode",
   "displayName": "LimCode",
   "description": "VS Code extension with a TypeScript ECS backend, Vue webview frontend, and a basic AI chat flow.",
   "version": "0.0.1",

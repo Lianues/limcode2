@@ -87,6 +87,7 @@ function formatThoughtDuration(durationMs: number): string {
 .thought-panel {
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-sm);
+  min-width: 0;
 }
 
 .thought-preview {
@@ -121,6 +122,12 @@ function formatThoughtDuration(durationMs: number): string {
 
 .thought-content > pre {
   margin: 0;
+  max-width: 100%;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  font: inherit;
 }
 
 .thought-streaming-row {

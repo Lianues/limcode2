@@ -155,6 +155,29 @@ export function formatTaskListProgress(snapshot: TaskListSnapshotView): string {
   return `${stats.completed}/${stats.total} 已完成，${stats.open} 个未完成${active ? ` · 当前：${active.description || active.title}` : ''}`;
 }
 
+export function formatTaskListSnapshotForContext(snapshot: TaskListSnapshotView): string {
+  const lines = [
+    '[Current Task List Snapshot]',
+    '以下内容由上下文压缩流程自动追加，表示压缩边界处的当前 task list；它覆盖上方任何更早的 task list 快照。后续未压缩的 update_task_list 工具调用应继续在此基础上更新。',
+    `进度：${formatTaskListProgress(snapshot)}`
+  ];
+
+  if (snapshot.stats.total === 0) {
+    lines.push('任务：当前没有任务。');
+    return lines.join('\n');
+  }
+
+  lines.push('任务：');
+  snapshot.items.forEach((item, index) => {
+    const statusLabel = taskListStatusLabel(item.status);
+    lines.push(`${index + 1}. [${item.status} / ${statusLabel}] ${singleLine(item.title)}`);
+    if (item.description) {
+      lines.push(`   说明：${singleLine(item.description)}`);
+    }
+  });
+  return lines.join('\n');
+}
+
 export function taskListStatusLabel(status: TaskListItemStatus): string {
   return TASK_LIST_STATUS_LABELS[status];
 }
@@ -447,6 +470,10 @@ function taskStatusValue(value: unknown): TaskListItemStatus | undefined {
   return typeof value === 'string' && (TASK_LIST_ITEM_STATUSES as readonly string[]).includes(value)
     ? value as TaskListItemStatus
     : undefined;
+}
+
+function singleLine(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
 }
 
 function parseJson(value: string): unknown {

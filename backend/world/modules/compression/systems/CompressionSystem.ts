@@ -9,10 +9,12 @@ import type { LlmCompactDonePayload, LlmCompactErrorPayload } from '../../llm/ev
 import { LlmInvocation } from '../../llm/components';
 import { CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSourceLink, CompressionContextVariant, RunCompressionBlockLink } from '../components';
 import { CompressionEventType } from '../events';
-import type { CompressionBlockRecord, ContentPart, MessageContent } from '../../../../../shared/protocol';
+import { ToolCall, ToolState } from '../../tools/components';
+import type { CompressionBlockRecord, ContentPart, MessageContent, MessageRecord, ToolCallRecord } from '../../../../../shared/protocol';
 import { isFileDataPart, isFunctionCallPart, isFunctionResponsePart, isInlineDataPart, isProviderContextPart, isTextPart, isVisibleTextPart } from '../../../../../shared/protocol';
+import { buildTaskListTimeline, formatTaskListSnapshotForContext } from '../../../../../shared/taskListProjection';
 
-const COMPRESSION_COMPONENTS = [
+const COMPRESSION_WRITE_COMPONENTS = [
   Conversation,
   Message,
   PartOf,
@@ -26,12 +28,13 @@ const COMPRESSION_COMPONENTS = [
   LlmInvocation,
   CompressionBlockLlmInvocationLink
 ] as const;
+const COMPRESSION_READ_COMPONENTS = [...COMPRESSION_WRITE_COMPONENTS, ToolCall, ToolState] as const;
 
 export const CompressionSystem = defineSystem({
   name: 'CompressionSystem',
   access: {
-    reads: { components: COMPRESSION_COMPONENTS },
-    writes: { components: COMPRESSION_COMPONENTS, mutationMode: 'update' },
+    reads: { components: COMPRESSION_READ_COMPONENTS },
+    writes: { components: COMPRESSION_WRITE_COMPONENTS, mutationMode: 'update' },
     events: {
       read: [
         CompressionEventType.Create,
@@ -194,8 +197,10 @@ function completeCompressionBlock(world: WorldReader, cmd: CommandSink, payload:
   if (block.sourceHash && payload.result.methodConfig && payload.result.methodConfig.id === 'stale') return;
   const now = payload.completedAt;
   const methodKind = payload.result.methodConfig?.kind ?? block.methodKind;
-  const tokenCountAfter = estimateContentsTokens(payload.result.contents);
-  const summaryPreview = previewFromContents(payload.result.contents) || block.summaryPreview;
+  const taskListSnapshotText = taskListSnapshotTextForBoundary(world, block.conversation, block.endSeq ?? block.anchorSeq);
+  const compactedContents = taskListSnapshotText ? appendTextToContents(payload.result.contents, taskListSnapshotText) : payload.result.contents;
+  const tokenCountAfter = estimateContentsTokens(compactedContents);
+  const summaryPreview = previewFromContents(compactedContents) || block.summaryPreview;
   cmd.add(blockEntity, CompressionBlock, {
     ...block,
     status: 'complete',
@@ -214,7 +219,7 @@ function completeCompressionBlock(world: WorldReader, cmd: CommandSink, payload:
     id: `compression-variant-${nativeVariant}`,
     block: blockEntity,
     kind: isNative ? 'provider_native' : 'provider_neutral_summary',
-    contents: payload.result.contents,
+    contents: compactedContents,
     compatibility: isNative ? { provider: 'openai-responses', format: 'openai-responses', endpoint: 'responses.compact' } : undefined,
     ...(payload.result.usageMetadata ? { usageMetadata: payload.result.usageMetadata } : {}),
     ...(payload.result.rawResponse !== undefined ? { rawResponse: payload.result.rawResponse } : {}),
@@ -225,12 +230,14 @@ function completeCompressionBlock(world: WorldReader, cmd: CommandSink, payload:
   if (isNative && !hasSummaryVariant(world, blockEntity)) {
     const sourceContents = sourceContentsForBlock(world, blockEntity);
     const summary = deterministicSummary(sourceContents);
+    const summaryContents: MessageContent[] = [{ role: 'user', parts: [{ text: `[Context Summary]\n\n${summary}` }] }];
+    const summaryContentsWithTaskList = taskListSnapshotText ? appendTextToContents(summaryContents, taskListSnapshotText) : summaryContents;
     const summaryVariant = cmd.spawn();
     cmd.add(summaryVariant, CompressionContextVariant, {
       id: `compression-variant-${summaryVariant}`,
       block: blockEntity,
       kind: 'provider_neutral_summary',
-      contents: [{ role: 'user', parts: [{ text: `[Context Summary]\n\n${summary}` }] }],
+      contents: summaryContentsWithTaskList,
       createdAt: now,
       updatedAt: now
     });
@@ -491,6 +498,99 @@ function hasSummaryVariant(world: WorldReader, block: Entity): boolean {
     const variant = world.get(entity, CompressionContextVariant);
     return variant?.block === block && variant.kind === 'provider_neutral_summary';
   });
+}
+
+function taskListSnapshotTextForBoundary(world: WorldReader, conversation: Entity, boundarySeq: number | undefined): string | undefined {
+  const conversationData = world.get(conversation, Conversation);
+  if (!conversationData) return undefined;
+
+  const messageEntities = conversationMessages(world, conversation)
+    .filter((entity) => {
+      const message = world.get(entity, Message);
+      if (!message || message.status === 'streaming') return false;
+      return boundarySeq === undefined || message.seq <= boundarySeq;
+    });
+  if (messageEntities.length === 0) return undefined;
+
+  const messages = messageEntities
+    .map((entity) => messageRecordForTaskListSnapshot(world, entity, conversationData.id))
+    .filter((record): record is MessageRecord => record !== undefined);
+  if (messages.length === 0) return undefined;
+
+  const messageEntitySet = new Set(messageEntities);
+  const toolCalls = world.query(ToolCall, ToolState, PartOf)
+    .map((entity) => toolCallRecordForTaskListSnapshot(world, entity, messageEntitySet))
+    .filter((record): record is ToolCallRecord => record !== undefined);
+  if (toolCalls.length === 0) return undefined;
+
+  const snapshot = buildTaskListTimeline({ messages, toolCalls, conversationId: conversationData.id }).snapshot;
+  return snapshot.stats.total > 0 ? formatTaskListSnapshotForContext(snapshot) : undefined;
+}
+
+function messageRecordForTaskListSnapshot(world: WorldReader, entity: Entity, conversationId: string): MessageRecord | undefined {
+  const message = world.get(entity, Message);
+  if (!message) return undefined;
+  return {
+    id: message.id,
+    conversationId,
+    role: message.role,
+    ...(message.model ? { model: message.model } : {}),
+    content: message.content,
+    status: message.status,
+    createdAt: message.createdAt,
+    ...(message.requestStartedAt !== undefined ? { requestStartedAt: message.requestStartedAt } : {}),
+    ...(message.streamOutputDurationMs !== undefined ? { streamOutputDurationMs: message.streamOutputDurationMs } : {}),
+    ...(message.usageMetadata !== undefined ? { usageMetadata: message.usageMetadata } : {}),
+    ...(message.stopReason !== undefined ? { stopReason: message.stopReason } : {}),
+    seq: message.seq
+  };
+}
+
+function toolCallRecordForTaskListSnapshot(world: WorldReader, entity: Entity, messageEntities: ReadonlySet<Entity>): ToolCallRecord | undefined {
+  const call = world.get(entity, ToolCall);
+  const state = world.get(entity, ToolState);
+  const messageEntity = world.get(entity, PartOf)?.parent;
+  if (!call || !state || messageEntity === undefined || !messageEntities.has(messageEntity)) return undefined;
+  const message = world.get(messageEntity, Message);
+  if (!message) return undefined;
+  return {
+    id: call.id,
+    messageId: message.id,
+    name: call.name,
+    ...(call.functionCallId ? { functionCallId: call.functionCallId } : {}),
+    args: call.argsJson,
+    status: state.status,
+    ...(state.result !== undefined ? { result: state.result } : {}),
+    ...(state.error !== undefined ? { error: state.error } : {}),
+    ...(state.progress !== undefined ? { progress: state.progress } : {}),
+    ...(state.durationMs !== undefined ? { durationMs: state.durationMs } : {}),
+    createdAt: call.createdAt,
+    updatedAt: state.updatedAt
+  };
+}
+
+function appendTextToContents(contents: MessageContent[], text: string): MessageContent[] {
+  const suffix = text.trim();
+  if (!suffix) return contents;
+  for (let contentIndex = contents.length - 1; contentIndex >= 0; contentIndex -= 1) {
+    const content = contents[contentIndex];
+    const partIndex = lastVisibleTextPartIndex(content.parts);
+    if (partIndex < 0) continue;
+    const part = content.parts[partIndex];
+    if (!isTextPart(part)) continue;
+    return contents.map((item, index) => index === contentIndex
+      ? { ...item, parts: item.parts.map((candidate, candidateIndex) => candidateIndex === partIndex ? { ...part, text: `${part.text.trimEnd()}\n\n${suffix}` } : candidate) }
+      : item);
+  }
+  return [...contents, { role: 'user', parts: [{ text: suffix }] }];
+}
+
+function lastVisibleTextPartIndex(parts: ContentPart[]): number {
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index];
+    if (isTextPart(part) && part.thought !== true && part.text.trim()) return index;
+  }
+  return -1;
 }
 
 function findConversation(world: WorldReader, conversationId: string): Entity | undefined {

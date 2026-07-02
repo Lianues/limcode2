@@ -1,7 +1,6 @@
 import {
   CLIENT_STATE_TABLES,
   CLIENT_STATE_TABLE_KEYS,
-  copyClientStateTables,
   GENERIC_CLIENT_MUTATION_APPLY_BY_KIND,
   GENERIC_CLIENT_PATCH_APPLY_BY_KIND,
   GLOBAL_CLIENT_STATE_TABLE_KEYS,
@@ -232,8 +231,21 @@ function applyMutation(record: ClientStateMutableRecord, patch: Record<string, u
     const list = getPathValue(record, path);
     const index = patch[apply.indexField];
     if (!Array.isArray(list) || typeof index !== 'number') return;
-    list.splice(index, 0, patch[apply.itemField]);
+    list.splice(index, 0, cloneValue(patch[apply.itemField]));
   }
+}
+
+function copyClientStateTables<TTarget extends ClientState>(
+  target: TTarget,
+  source: ClientState,
+  keys: readonly ClientStateTableKey[]
+): TTarget {
+  const writableTarget = target as unknown as Record<ClientStateTableKey, unknown>;
+  const readableSource = source as unknown as Record<ClientStateTableKey, ClientStateMutableRecord[]>;
+  for (const key of keys) {
+    writableTarget[key] = readableSource[key].map(cloneRecord);
+  }
+  return target;
 }
 
 function resolveMutationPath(path: readonly ClientStateMutationPathSegment[], patch: Record<string, unknown>): ClientStatePathKey[] | undefined {
@@ -298,8 +310,19 @@ function upsertMany<T extends { id: string }>(list: T[], items: readonly T[]): v
 
 function upsert<T extends { id: string }>(list: T[], item: T): void {
   const index = list.findIndex((candidate) => candidate.id === item.id);
-  if (index >= 0) list[index] = item;
-  else list.push(item);
+  const next = cloneRecord(item);
+  if (index >= 0) list[index] = next;
+  else list.push(next);
+}
+
+function cloneRecord<T extends { id: string }>(record: T): T {
+  return cloneValue(record);
+}
+
+function cloneValue<T>(value: T): T {
+  if (value === undefined || value === null) return value;
+  if (typeof structuredClone === 'function') return structuredClone(value);
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function removeById<T extends { id: string }>(list: T[], id: string): void {

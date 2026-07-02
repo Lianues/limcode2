@@ -82,7 +82,7 @@ export function useBridgeBootstrap(): void {
     bridge.on(BridgeMessageType.ClientSnapshot, (message) => {
       if (!message.payload) return;
       clientState.applyClientSnapshot(message.payload.streamId, message.payload.streamSeq, message.payload.state);
-      conversationTimeline.applyClientStateSnapshot(message.payload.streamId, message.payload.state);
+      conversationTimeline.applyClientStateSnapshot(message.payload.streamId, message.payload.streamSeq, message.payload.state);
     })
   );
 
@@ -94,7 +94,9 @@ export function useBridgeBootstrap(): void {
         message.payload.streamSeq,
         message.payload.patches
       );
-      conversationTimeline.applyClientStatePatch(message.payload.streamId, message.payload.streamSeq, message.payload.patches);
+      if (applied) {
+        conversationTimeline.applyClientStatePatch(message.payload.streamId, message.payload.streamSeq, message.payload.patches);
+      }
       if (!applied) resync();
     })
   );

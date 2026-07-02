@@ -210,7 +210,7 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       timeline.streamSeq = payload.streamSeq;
       if (payload.pageInfo) timeline.pageInfo = { ...(timeline.pageInfo ?? createEmptyPageInfo(payload.conversationId)), ...payload.pageInfo };
     },
-    applyClientStateSnapshot(streamId: string, state: ClientState): void {
+    applyClientStateSnapshot(streamId: string, streamSeq: number, state: ClientState): void {
       const conversationId = conversationIdFromClientStateStreamId(streamId);
       if (!conversationId) return;
       const timeline = this.ensureTimeline(conversationId);
@@ -220,6 +220,7 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
         timeline.chunkById = {};
       }
       mergeClientState(timeline.state, state);
+      timeline.streamSeq = streamSeq;
     },
     applyClientStatePatch(streamId: string, streamSeq: number, patches: ClientPatchOp[]): void {
       const conversationId = conversationIdFromClientStateStreamId(streamId);
@@ -276,8 +277,14 @@ function mergeClientState(target: ClientState, source: ClientState): void {
 
 function upsert<T extends { id: string }>(list: T[], item: T): void {
   const index = list.findIndex((candidate) => candidate.id === item.id);
-  if (index >= 0) list[index] = item;
-  else list.push(item);
+  const next = cloneRecord(item);
+  if (index >= 0) list[index] = next;
+  else list.push(next);
+}
+
+function cloneRecord<T extends { id: string }>(record: T): T {
+  if (typeof structuredClone === 'function') return structuredClone(record);
+  return JSON.parse(JSON.stringify(record)) as T;
 }
 
 function sortTable(tableKey: ClientStateTableKey, list: ClientStateRecord[]): void {

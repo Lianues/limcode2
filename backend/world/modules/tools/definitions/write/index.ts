@@ -42,6 +42,11 @@ export const writeTool: ToolDefinition = {
       defaultEnabled: true,
       defaultAutoExpand: true,
       defaultAutoApproveExecution: false,
+      supportsChangeApply: true,
+      supportsDiffPreview: true,
+      defaultAutoOpenDiffPreview: false,
+      defaultAutoApplyChange: true,
+      defaultAutoApplyChangeDelaySeconds: 3,
       requiresApproval: true,
       checkpoint: { before: true, after: true }
     },
@@ -55,11 +60,11 @@ export const writeTool: ToolDefinition = {
     const args = (rawArgs ?? {}) as WriteArgs;
     if (!args.path) return { ok: false, output: 'Missing required argument: path' };
     if (typeof args.content !== 'string') return { ok: false, output: 'Missing required argument: content' };
-    const result = await deps.fs.writeFile(args.path, args.content, {
+    const result = await deps.fs.proposeWriteFile(args.path, args.content, {
       workEnvironment: ctx?.workEnvironment,
       allowOutsideProjectPaths: allowOutsideProjectPathsFromConfig(ctx?.config, false)
     });
-    return { ok: result.success, output: result };
+    return { ok: result.success, output: result, ...(result.pending ? { status: 'awaiting_change_apply' as const } : {}) };
   }
 };
 

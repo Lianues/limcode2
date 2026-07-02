@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { World } from '../ecs/types';
-import type { CommandCapability, LlmCapability, StorageCapability, WebviewCapability } from '../capabilities/types';
+import type { CommandCapability, FsCapability, LlmCapability, StorageCapability, WebviewCapability, FsPendingFileChangeProposal } from '../capabilities/types';
 import { ChatEventType } from '../world/modules/chat/events';
 import { AgentRunEventType } from '../world/modules/agentRun/events';
 import { AgentRun } from '../world/modules/agentRun/components';
@@ -9,6 +9,10 @@ import { LlmInvocation, MessageLlmInvocationLink, RunLlmInvocationLink } from '.
 import { buildLlmStartRequestForRun } from '../world/modules/chat/systems/LlmDispatchSystem';
 import { CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSourceLink } from '../world/modules/compression/components';
 import { ToolEventType } from '../world/modules/tools/events';
+import { ToolCall, ToolState } from '../world/modules/tools/components';
+import { activeToolPolicyForRun, runForToolCall } from '../world/modules/agentRun/queries';
+import { activeWorkEnvironmentForRun, toPublicWorkEnvironmentRecord } from '../world/modules/workEnvironment/queries';
+import { allowOutsideProjectPathsFromConfig } from '../world/modules/tools/definitions/filePathPolicy';
 import { SkillEventType } from '../world/modules/skill/events';
 import { ModeEventType } from '../world/modules/mode/events';
 import { WorkEnvironmentEventType } from '../world/modules/workEnvironment/events';
@@ -42,6 +46,7 @@ import {
   type ContentPart,
   type FsStatGetPayload,
   type FsStatResultEntry,
+  type ToolDiffOpenPayload,
   type ConversationTimelinePageRequest,
   type LlmInvocationSettingsSnapshotRecord,
   type MessageContent,
@@ -63,6 +68,7 @@ export interface WebviewMessageRouterDeps {
   webview: WebviewCapability;
   clients: WebviewClientRegistry;
   storage: StorageCapability;
+  fs: FsCapability;
   llm: LlmCapability;
   command: CommandCapability;
   globalSettingsBridge: GlobalSettingsBridge;
@@ -158,6 +164,13 @@ export class WebviewMessageRouter {
       case BridgeMessageType.ToolExecutionReject:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ToolEventType.ExecutionRejectRequested, payload: message.payload });
+        break;
+      case BridgeMessageType.ToolDiffOpen:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        void this.handleToolDiffOpen(message.payload).catch((error) => {
+          const messageText = error instanceof Error ? error.message : '无法打开实时差异视图。';
+          void vscode.window.showWarningMessage(`LimCode ${messageText}`);
+        });
         break;
       case BridgeMessageType.ToolChangeApply:
         if (!this.deps.isHydrated() || !message.payload) return;
@@ -855,6 +868,32 @@ export class WebviewMessageRouter {
     }
   }
 
+  private async handleToolDiffOpen(payload: ToolDiffOpenPayload): Promise<void> {
+    if (payload.conversationId) await this.deps.ensureConversationDetailLoaded(payload.conversationId);
+    const entity = this.findToolCallEntity(payload.toolCallId);
+    const call = entity !== undefined ? this.deps.world.get(entity, ToolCall) : undefined;
+    const state = entity !== undefined ? this.deps.world.get(entity, ToolState) : undefined;
+    if (entity === undefined || !call || !state) {
+      void vscode.window.showWarningMessage('LimCode 无法找到该工具调用。');
+      return;
+    }
+    const proposal = this.pendingFileChangeProposal(state.result);
+    if (!proposal) {
+      void vscode.window.showWarningMessage('LimCode 该工具调用没有可预览的文件变更提案。');
+      return;
+    }
+
+    const run = runForToolCall(this.deps.world, entity);
+    const policy = run !== undefined ? activeToolPolicyForRun(this.deps.world, run) : undefined;
+    const config = policy?.toolConfigs?.[call.name]?.config;
+    const workEnvironment = run !== undefined ? activeWorkEnvironmentForRun(this.deps.world, run)?.data : undefined;
+    const result = await this.deps.fs.openPendingFileChangeDiff(proposal, {
+      ...(workEnvironment ? { workEnvironment: toPublicWorkEnvironmentRecord(workEnvironment) } : {}),
+      allowOutsideProjectPaths: allowOutsideProjectPathsFromConfig(config, false)
+    });
+    if (result.status === 'failed') void vscode.window.showWarningMessage(`LimCode ${result.message}`);
+  }
+
   private async handleCheckpointDiffOpen(clientId: BridgeClientId, payload: CheckpointDiffOpenPayload, correlationId?: string): Promise<void> {
     try {
       await this.deps.ensureConversationDetailLoaded(payload.conversationId);
@@ -948,6 +987,24 @@ export class WebviewMessageRouter {
 
   private findCheckpointEntity(checkpointId: string): number | undefined {
     return this.deps.world.query(Checkpoint).find((entity) => this.deps.world.get(entity, Checkpoint)?.id === checkpointId);
+  }
+
+  private findToolCallEntity(toolCallId: string): number | undefined {
+    return this.deps.world.query(ToolCall, ToolState).find((entity) => this.deps.world.get(entity, ToolCall)?.id === toolCallId);
+  }
+
+  private pendingFileChangeProposal(result: unknown): FsPendingFileChangeProposal | undefined {
+    const output = this.asPlainRecord(this.asPlainRecord(result)?.output);
+    const proposal = this.asPlainRecord(output?.proposal);
+    if (proposal?.kind !== 'file_change.proposal') return undefined;
+    if (proposal.operation !== 'write' && proposal.operation !== 'edit') return undefined;
+    if (typeof proposal.path !== 'string' || typeof proposal.baseContent !== 'string' || typeof proposal.targetContent !== 'string') return undefined;
+    if (typeof proposal.baseExisted !== 'boolean' || !Array.isArray(proposal.applyHunks)) return undefined;
+    return proposal as unknown as FsPendingFileChangeProposal;
+  }
+
+  private asPlainRecord(value: unknown): Record<string, unknown> | undefined {
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
   }
 
   private async ensureRunDetailHydrated(conversationId: string, runId: string): Promise<void> {

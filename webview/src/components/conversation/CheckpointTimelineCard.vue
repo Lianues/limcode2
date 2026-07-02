@@ -9,11 +9,14 @@ import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/Co
 
 const LOCAL_DAY_MS = 86_400_000;
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   checkpoint: CheckpointRecord;
   anchor?: CheckpointTimelineAnchorRecord;
   phase?: 'stable' | 'entering' | 'exiting';
-}>();
+  variant?: 'timeline' | 'panel';
+}>(), {
+  variant: 'timeline'
+});
 
 const checkpointStore = useCheckpointPolicyStore();
 const clientState = useClientStateStore();
@@ -249,7 +252,7 @@ function pad2(value: number): string {
 </script>
 
 <template>
-  <section class="checkpoint-timeline-card" :class="[`is-${checkpoint.status}`, phase ? `is-${phase}` : undefined]">
+  <section class="checkpoint-timeline-card" :class="[`is-${checkpoint.status}`, `is-${variant}`, phase ? `is-${phase}` : undefined]">
     <div class="checkpoint-card-main">
       <IconGitCommit class="checkpoint-leading-icon" stroke="2" aria-hidden="true" />
       <span class="checkpoint-project" :title="projectLabel">{{ projectLabel }}</span>
@@ -320,9 +323,22 @@ function pad2(value: number): string {
   box-sizing: border-box;
 }
 
+.checkpoint-timeline-card.is-panel {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: var(--radius-sm);
+  background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, var(--vscode-editor-background)));
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
+}
+
 .checkpoint-timeline-card.is-exiting {
   pointer-events: none;
   animation: lc-message-exit-right var(--lc-message-exit-duration) var(--lc-motion-exit-standard) forwards;
+}
+
+.checkpoint-timeline-card.is-entering {
+  animation: lc-message-enter var(--lc-message-enter-duration) var(--lc-motion-enter-emphasized) both;
 }
 
 .checkpoint-card-main {
@@ -332,6 +348,10 @@ function pad2(value: number): string {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.checkpoint-timeline-card.is-panel .checkpoint-card-main {
+  gap: 6px;
 }
 
 .checkpoint-leading-icon {
@@ -361,6 +381,11 @@ function pad2(value: number): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.checkpoint-timeline-card.is-panel .checkpoint-project {
+  flex: 1 1 180px;
+  max-width: 100%;
 }
 
 .checkpoint-commit {

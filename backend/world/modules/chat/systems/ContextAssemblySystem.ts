@@ -8,8 +8,11 @@ import { ConversationModeSelection, Mode, ModelProfile, ModelProfileScopeLink } 
 import { LlmRequest, Conversation, Message } from '../components';
 import { ModelMessageBundle, LlmRequestBundle, MessageBundle, spawnMessage, spawnModelMessage, spawnLlmRequest } from '../bundles';
 import { CheckpointEventType } from '../../checkpoint/events';
+import { spawnCheckpointBarrier } from '../../checkpoint/barriers';
+import { CheckpointBarrier } from '../../checkpoint/components';
 import { LlmInvocation, MessageLlmInvocationLink, RunLlmInvocationLink } from '../../llm/components';
 import { LlmInvocationBundle, MessageLlmInvocationLinkBundle, spawnLlmInvocation, spawnMessageLlmInvocationLink, spawnRunLlmInvocationLink } from '../../llm/bundles';
+import { createMessageId } from '../../../../../shared/protocol';
 
 const RunsNeedingModelQuery = defineQuery({
   name: 'RunsNeedingModel',
@@ -42,7 +45,7 @@ export const ContextAssemblySystem = defineSystem({
     queries: [RunsNeedingModelQuery, ActiveLlmRequestsQuery, LlmInvocationLookupQuery],
     reads: { components: [RunModeLink, RunModelProfileLink, ConversationModeSelection, Mode, ModelProfile, ModelProfileScopeLink] },
     bundles: [ModelMessageBundle, MessageBundle, LlmRequestBundle, LlmInvocationBundle, MessageLlmInvocationLinkBundle],
-    writes: { components: [AgentRun, MessageRunLink] },
+    writes: { components: [AgentRun, MessageRunLink, CheckpointBarrier] },
     events: { read: [LlmEventType.InvocationResolved, LlmEventType.InvocationResolveError], emit: [CheckpointEventType.Requested] },
     effects: { emit: ['llm.resolveInvocation'] }
   },
@@ -107,8 +110,8 @@ function materializeResolvedInvocation(world: WorldReader, cmd: CommandSink, pay
   const modelMessage = spawnModelMessage(cmd, target.conversation, payload.settings.displayModelName ?? payload.settings.modelName ?? payload.settings.modelId);
   spawnMessageRunLink(cmd, { message: modelMessage, run, role: 'model' });
   spawnMessageLlmInvocationLink(cmd, { message: modelMessage, invocation });
-  spawnLlmRequest(cmd, { run, conversation: target.conversation, modelMessage, invocation, requestId: payload.requestId });
-  requestLlmResponseBeforeCheckpoint(world, cmd, run, target.conversation, modelMessage);
+  const request = spawnLlmRequest(cmd, { run, conversation: target.conversation, modelMessage, invocation, requestId: payload.requestId });
+  requestLlmResponseBeforeCheckpoint(world, cmd, run, target.conversation, modelMessage, request, payload.requestId);
 }
 
 function materializeInvocationResolveError(world: WorldReader, cmd: CommandSink, payload: LlmInvocationResolveErrorPayload): void {
@@ -147,13 +150,34 @@ function modelSettingsForRun(world: WorldReader, run: Entity): { model?: LlmMode
     : { model: { providerConfigId: modelProfile.providerConfigId, provider: modelProfile.provider, model: modelProfile.model } };
 }
 
-function requestLlmResponseBeforeCheckpoint(world: WorldReader, cmd: CommandSink, run: Entity, conversation: Entity, modelMessage: Entity): void {
+function requestLlmResponseBeforeCheckpoint(
+  world: WorldReader,
+  cmd: CommandSink,
+  run: Entity,
+  conversation: Entity,
+  modelMessage: Entity,
+  llmRequest: Entity,
+  llmRequestId: string
+): void {
   const runData = world.get(run, AgentRun);
   const conversationData = world.get(conversation, Conversation);
   if (!runData || !conversationData) return;
+  const checkpointId = createMessageId();
+  spawnCheckpointBarrier(cmd, {
+    checkpointId,
+    conversation,
+    trigger: 'llm_response_before',
+    targetKind: 'llm_request',
+    targetRun: run,
+    targetRunId: runData.id,
+    targetMessage: modelMessage,
+    targetMessageId: spawnedMessageId(modelMessage),
+    targetLlmRequest: llmRequest,
+    targetLlmRequestId: llmRequestId
+  });
   cmd.enqueue({
     type: CheckpointEventType.Requested,
-    payload: { conversationId: conversationData.id, runId: runData.id, floorMessageId: spawnedMessageId(modelMessage), anchorPosition: 'before', trigger: 'llm_response_before' }
+    payload: { checkpointId, conversationId: conversationData.id, runId: runData.id, floorMessageId: spawnedMessageId(modelMessage), anchorPosition: 'before', trigger: 'llm_response_before' }
   });
 }
 

@@ -10,14 +10,14 @@ import { cleanupRunLlmRequests } from '../../agentRun/llmRequestCleanup';
 import { defaultAgentForConversation, effectiveEditPolicyForRun, findAgentById, runTarget } from '../../agentRun/queries';
 import type { ChatSendPayload, MessageContent } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
-import { Checkpoint } from '../../checkpoint/components';
+import { Checkpoint, CheckpointBarrier } from '../../checkpoint/components';
 import { conversationMessages } from '../queries';
 import { materializeUserInputMessage } from '../userInputMaterialization';
 
 const ConversationsByIdQuery = defineQuery({
   name: 'ConversationsById',
   all: [Conversation],
-  read: [Conversation, Agent, AgentConversationLink, ConversationAgentSelection, AgentRun, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink, LlmRequest, Message, Checkpoint],
+  read: [Conversation, Agent, AgentConversationLink, ConversationAgentSelection, AgentRun, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink, LlmRequest, Message, Checkpoint, CheckpointBarrier],
   write: [AgentRun, Message],
   remove: [AgentRunNeedsModel, Streaming, LlmRequest],
   role: 'work'
@@ -27,6 +27,7 @@ export const InputSystem = defineSystem({
   name: 'InputSystem',
   access: {
     queries: [ConversationsByIdQuery],
+    writes: { components: [CheckpointBarrier], mutationMode: 'create' },
     events: { read: [ChatEventType.Send], emit: [CheckpointEventType.Requested] },
     bundles: [UserMessageBundle, AgentRunBundle]
   },

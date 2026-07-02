@@ -1,4 +1,4 @@
-import type { ClientState, McpToolSourceRecord, ToolCallEventRecord, ToolCallRecord, ToolDefinitionRecord, ToolPolicyScopeLinkRecord } from '../../../../shared/protocol';
+import type { ClientState, McpToolSourceRecord, ToolCallEventRecord, ToolCallRecord, ToolDefinitionRecord, ToolPolicyScopeLinkRecord, ToolChangeApplyPolicyRecord, ToolDisplayPolicyRecord } from '../../../../shared/protocol';
 import type { AccessDeclaration, WorldReader } from '../../../ecs/types';
 import { Agent } from '../agent/components';
 import {
@@ -88,6 +88,7 @@ function buildToolCallRecord(world: WorldReader, entity: number): ToolCallRecord
   const scheduling = toolSchedulingDecision(world, entity);
   const summary = resolveToolCallSummary(world, call);
   const display = resolveToolCallDisplay(world, entity, call);
+  const changeApply = resolveToolCallChangeApply(world, entity, call);
 
   return {
     id: call.id,
@@ -103,6 +104,7 @@ function buildToolCallRecord(world: WorldReader, entity: number): ToolCallRecord
     schedulingMode: scheduling.mode,
     ...(scheduling.reason ? { schedulingReason: scheduling.reason } : {}),
     ...(display ? { display } : {}),
+    ...(changeApply ? { changeApply } : {}),
     ...(state.durationMs !== undefined ? { durationMs: state.durationMs } : {}),
     createdAt: call.createdAt,
     updatedAt: state.updatedAt
@@ -115,6 +117,10 @@ function stripToolResultAttachments(value: unknown): unknown {
   const record = value as Record<string, unknown>;
   const result: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(record)) {
+    if (key === 'proposal') {
+      result.proposal = stripFileChangeProposal(child);
+      continue;
+    }
     if (key === 'parts' && Array.isArray(child)) {
       result.parts = child.map((part) => {
         const inlineData = (part as { inlineData?: unknown })?.inlineData;
@@ -129,17 +135,53 @@ function stripToolResultAttachments(value: unknown): unknown {
   return result;
 }
 
-function resolveToolCallDisplay(world: WorldReader, entity: number, call: ToolCallData): { autoExpand?: boolean } | undefined {
+function stripFileChangeProposal(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  return {
+    kind: record.kind,
+    operation: record.operation,
+    path: record.path,
+    baseExisted: record.baseExisted
+  };
+}
+
+function resolveToolCallDisplay(world: WorldReader, entity: number, call: ToolCallData): ToolDisplayPolicyRecord | undefined {
   const run = runForToolCall(world, entity);
   if (run === undefined) return undefined;
   const display = activeToolPolicyForRun(world, run)?.toolConfigs?.[call.name]?.display;
-  if (display?.autoExpand === true) return { autoExpand: true };
-  if (display?.autoExpand === false) return { autoExpand: false };
   const definitions = world.tryGetResource(ToolRuntimeDefinitionsKey) ?? [];
   const definition = definitions.find((tool) => tool.declaration.name === call.name);
-  return definition?.declaration.metadata?.defaultAutoExpand ? { autoExpand: true } : undefined;
+  const metadata = definition?.declaration.metadata;
+  const resolved: ToolDisplayPolicyRecord = {};
+  if (display?.autoExpand !== undefined) resolved.autoExpand = display.autoExpand;
+  else if (metadata?.defaultAutoExpand === true) resolved.autoExpand = true;
+  if (metadata?.supportsDiffPreview === true) {
+    if (display?.autoOpenDiffPreview !== undefined) resolved.autoOpenDiffPreview = display.autoOpenDiffPreview;
+    else if (metadata.defaultAutoOpenDiffPreview === true) resolved.autoOpenDiffPreview = true;
+  }
+  return Object.keys(resolved).length > 0 ? resolved : undefined;
 }
 
+function resolveToolCallChangeApply(world: WorldReader, entity: number, call: ToolCallData): ToolChangeApplyPolicyRecord | undefined {
+  const definitions = world.tryGetResource(ToolRuntimeDefinitionsKey) ?? [];
+  const definition = definitions.find((tool) => tool.declaration.name === call.name);
+  const metadata = definition?.declaration.metadata;
+  if (metadata?.supportsChangeApply !== true) return undefined;
+
+  const run = runForToolCall(world, entity);
+  const config = run === undefined ? undefined : activeToolPolicyForRun(world, run)?.toolConfigs?.[call.name];
+  const delay = normalizeAutoApplyDelay(config?.autoApplyChangeDelaySeconds ?? metadata.defaultAutoApplyChangeDelaySeconds ?? 3);
+  return {
+    autoApply: config?.autoApplyChange ?? metadata.defaultAutoApplyChange ?? true,
+    autoApplyDelaySeconds: delay
+  };
+}
+
+function normalizeAutoApplyDelay(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 3;
+  return Math.min(600, Math.max(0, Math.floor(value)));
+}
 
 function resolveToolCallSummary(world: WorldReader, call: ToolCallData): string | undefined {
   const definitions = world.tryGetResource(ToolRuntimeDefinitionsKey) ?? [];

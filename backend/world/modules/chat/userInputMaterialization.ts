@@ -1,5 +1,6 @@
 import type { CommandSink, Entity, WorldReader } from '../../../ecs/types';
-import type { MessageContent } from '../../../../shared/protocol';
+import { createMessageId, type MessageContent } from '../../../../shared/protocol';
+import { spawnCheckpointBarrier } from '../checkpoint/barriers';
 import { Checkpoint } from '../checkpoint/components';
 import { CheckpointEventType } from '../checkpoint/events';
 import { spawnUserContentMessage, spawnUserMessage } from './bundles';
@@ -17,7 +18,7 @@ export function materializeUserInputMessage(
   const needsInitialCheckpoint = isFirstMessage && !hasInitialCheckpoint(world, conversation);
   const message = spawnInputMessage(cmd, conversation, content);
   if (needsInitialCheckpoint) requestInitialCheckpoint(cmd, conversationId);
-  requestUserMessageCheckpoints(cmd, conversationId, message);
+  requestUserMessageCheckpoints(cmd, conversationId, conversation, message);
   return message;
 }
 
@@ -40,11 +41,20 @@ function requestInitialCheckpoint(cmd: CommandSink, conversationId: string): voi
   });
 }
 
-function requestUserMessageCheckpoints(cmd: CommandSink, conversationId: string, floorMessage: Entity): void {
+function requestUserMessageCheckpoints(cmd: CommandSink, conversationId: string, conversation: Entity, floorMessage: Entity): void {
   const floorMessageId = `m${floorMessage}`;
+  const beforeCheckpointId = createMessageId();
+  spawnCheckpointBarrier(cmd, {
+    checkpointId: beforeCheckpointId,
+    conversation,
+    trigger: 'user_message_before',
+    targetKind: 'message_llm',
+    targetMessage: floorMessage,
+    targetMessageId: floorMessageId
+  });
   cmd.enqueue({
     type: CheckpointEventType.Requested,
-    payload: { conversationId, trigger: 'user_message_before', floorMessageId, anchorPosition: 'before' }
+    payload: { checkpointId: beforeCheckpointId, conversationId, trigger: 'user_message_before', floorMessageId, anchorPosition: 'before' }
   });
 
   cmd.enqueue({

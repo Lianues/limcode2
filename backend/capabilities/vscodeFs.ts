@@ -6,7 +6,9 @@ import type {
   FsEditFileRequest,
   FsEditFileResult,
   FsFileChangeRecord,
+  FsFileWriteAction,
   FsDeletePathTargetType,
+  FsPendingFileChangeProposal,
   FsReadBinaryFileResult,
   FsReadFileResult,
   FsReadLine,
@@ -26,11 +28,13 @@ import {
   RemoteFileNotFoundError,
   writeRemoteServerTextFile
 } from './workEnvironmentProvider';
-import { buildFileDiffRecord } from './fileDiff';
+import { buildFileDiffRecord, buildFileReplacementHunks } from './fileDiff';
 import { applyHunkEdit, applyInsertEdit, applyDeleteEdit } from './editStrategies';
 
 const MAX_BYTES = 256 * 1024;
 const MAX_EDIT_READ_BYTES = 2 * 1024 * 1024;
+const LIVE_DIFF_SCHEME = 'limcode-live-diff';
+const LIVE_DIFF_DOCUMENT_TTL_MS = 10 * 60 * 1000;
 
 interface RawTextReadResult {
   path: string;
@@ -38,13 +42,20 @@ interface RawTextReadResult {
   content: string;
 }
 
+let liveDiffProviderDisposable: vscode.Disposable | undefined;
+const liveDiffDocuments = new Map<string, string>();
+
 /** 函数式 VSCode FS capability 适配器。 */
 export function createVsCodeFsCapability(): FsCapability {
   return {
     readFile: (path, startLine, endLine, options) => readWorkspaceTextFile(path, startLine, endLine, options),
     readBinaryFile: (path, mimeType, options) => readWorkspaceBinaryFile(path, mimeType, options),
     writeFile: (path, content, options) => writeWorkspaceTextFile(path, content, options),
+    proposeWriteFile: (path, content, options) => proposeWorkspaceTextFileWrite(path, content, options),
     editFile: (request, options) => editWorkspaceTextFile(request, options),
+    proposeEditFile: (request, options) => proposeWorkspaceTextFileEdit(request, options),
+    applyPendingFileChange: (proposal, options) => applyPendingWorkspaceFileChange(proposal, options),
+    openPendingFileChangeDiff: (proposal, options) => openPendingWorkspaceFileChangeDiff(proposal, options),
     deletePath: (path, options) => deleteWorkspacePath(path, options)
   };
 }
@@ -100,34 +111,32 @@ export async function readWorkspaceBinaryFile(relPath: string, mimeType: string,
 }
 
 export async function writeWorkspaceTextFile(relPath: string, content: string, options: WorkEnvironmentCapabilityOptions = {}): Promise<FsWriteFileResult> {
+  const result = await proposeWorkspaceTextFileWrite(relPath, content, options);
+  if (result.action !== 'unchanged' && result.proposal) await writeWorkspaceRawTextFile(result.path, result.proposal.targetContent, options);
+  const { pending: _pending, proposal: _proposal, ...written } = result;
+  return written;
+}
+
+export async function proposeWorkspaceTextFileWrite(relPath: string, content: string, options: WorkEnvironmentCapabilityOptions = {}): Promise<FsWriteFileResult> {
   const path = normalizeDisplayPath(relPath);
   if (!path) throw new Error('Missing required argument: path');
   if (typeof content !== 'string') throw new Error('Missing required argument: content');
 
   const before = await readWorkspaceRawTextFile(path, MAX_EDIT_READ_BYTES, options);
-  const action = before.existed ? (before.content === content ? 'unchanged' : 'modified') : 'created';
-  const diff = action === 'unchanged' ? undefined : buildFileDiffRecord(path, before.content, content, before.existed);
-  if (action !== 'unchanged') await writeWorkspaceRawTextFile(path, content, options);
-
-  const change: FsFileChangeRecord = {
-    path,
-    action,
-    added: diff?.added ?? 0,
-    removed: diff?.removed ?? 0,
-    ...(diff ? { diff } : {})
-  };
-  return {
-    kind: 'file_write.result',
-    path,
-    success: true,
-    action,
-    summary: writeSummary(path, action),
-    changedFiles: action === 'unchanged' ? [] : [path],
-    files: [change]
-  };
+  return buildWriteFileResult(path, before, content, true);
 }
 
 export async function editWorkspaceTextFile(
+  request: FsEditFileRequest,
+  options: WorkEnvironmentCapabilityOptions = {}
+): Promise<FsEditFileResult> {
+  const result = await proposeWorkspaceTextFileEdit(request, options);
+  if (result.action !== 'unchanged' && result.proposal) await writeWorkspaceRawTextFile(result.path, result.proposal.targetContent, options);
+  const { pending: _pending, proposal: _proposal, ...written } = result;
+  return written;
+}
+
+export async function proposeWorkspaceTextFileEdit(
   request: FsEditFileRequest,
   options: WorkEnvironmentCapabilityOptions = {}
 ): Promise<FsEditFileResult> {
@@ -149,8 +158,6 @@ export async function editWorkspaceTextFile(
 
   const action = applied.newContent === before.content ? 'unchanged' : 'modified';
   const diff = action === 'unchanged' ? undefined : buildFileDiffRecord(path, before.content, applied.newContent, true);
-  if (action !== 'unchanged') await writeWorkspaceRawTextFile(path, applied.newContent, options);
-
   const change: FsFileChangeRecord = {
     path,
     action,
@@ -171,8 +178,204 @@ export async function editWorkspaceTextFile(
     results: applied.results,
     summary: editSummary(path, request.mode, action, applied.applied, applied.failed, applied.fallbackMode),
     changedFiles: action === 'unchanged' ? [] : [path],
+    files: [change],
+    ...(action !== 'unchanged'
+      ? {
+          pending: true,
+          proposal: {
+            kind: 'file_change.proposal',
+            operation: 'edit',
+            path,
+            baseExisted: true,
+            baseContent: before.content,
+            targetContent: applied.newContent,
+            applyHunks: request.mode === 'hunk' ? request.hunks : buildFileReplacementHunks(before.content, applied.newContent),
+            editMode: request.mode,
+            editResults: applied.results,
+            ...(applied.fallbackMode ? { editFallbackMode: applied.fallbackMode } : {})
+          }
+        }
+      : {})
+  };
+}
+
+export async function applyPendingWorkspaceFileChange(
+  proposal: FsPendingFileChangeProposal,
+  options: WorkEnvironmentCapabilityOptions = {}
+): Promise<FsWriteFileResult | FsEditFileResult> {
+  const preview = await previewPendingWorkspaceFileChange(proposal, options);
+  if (preview.action !== 'unchanged') await writeWorkspaceRawTextFile(preview.path, preview.targetContent, options);
+  return proposal.operation === 'write'
+    ? buildWriteFileResult(preview.path, { path: preview.path, existed: preview.existed, content: preview.currentContent }, preview.targetContent, false)
+    : buildEditFileResultFromAppliedProposal(proposal, preview);
+}
+
+export async function openPendingWorkspaceFileChangeDiff(
+  proposal: FsPendingFileChangeProposal,
+  options: WorkEnvironmentCapabilityOptions = {}
+): Promise<{ status: 'opened' | 'failed'; message: string }> {
+  try {
+    const preview = await previewPendingWorkspaceFileChange(proposal, options);
+    if (preview.action === 'unchanged') return { status: 'failed', message: '当前文件已经包含该变更，无需打开差异。' };
+    ensureLiveDiffProviderRegistered();
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const leftUri = liveDiffUri(`${id}-current`, preview.path, preview.currentContent);
+    const rightUri = liveDiffUri(`${id}-proposed`, preview.path, preview.targetContent);
+    await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, `${preview.path}: 当前 ↔ 提案`, { preview: true });
+    return { status: 'opened', message: '已打开实时差异视图。' };
+  } catch (error) {
+    return { status: 'failed', message: error instanceof Error ? error.message : '无法打开实时差异视图。' };
+  }
+}
+
+function buildWriteFileResult(path: string, before: RawTextReadResult, targetContent: string, includeProposal: boolean): FsWriteFileResult {
+  const action = before.existed ? (before.content === targetContent ? 'unchanged' : 'modified') : 'created';
+  const diff = action === 'unchanged' ? undefined : buildFileDiffRecord(path, before.content, targetContent, before.existed);
+  const change: FsFileChangeRecord = {
+    path,
+    action,
+    added: diff?.added ?? 0,
+    removed: diff?.removed ?? 0,
+    ...(diff ? { diff } : {})
+  };
+  return {
+    kind: 'file_write.result',
+    path,
+    success: true,
+    ...(includeProposal && action !== 'unchanged' ? { pending: true } : {}),
+    action,
+    summary: writeSummary(path, action),
+    changedFiles: action === 'unchanged' ? [] : [path],
+    files: [change],
+    ...(includeProposal && action !== 'unchanged'
+      ? {
+          proposal: {
+            kind: 'file_change.proposal',
+            operation: 'write',
+            path,
+            baseExisted: before.existed,
+            baseContent: before.content,
+            targetContent,
+            applyHunks: before.existed ? buildFileReplacementHunks(before.content, targetContent) : [],
+            writeAction: action
+          }
+        }
+      : {})
+  };
+}
+
+interface PendingFileChangePreview {
+  path: string;
+  existed: boolean;
+  currentContent: string;
+  targetContent: string;
+  action: FsFileWriteAction;
+  applied?: ReturnType<typeof applyHunkEdit>;
+}
+
+async function previewPendingWorkspaceFileChange(
+  proposal: FsPendingFileChangeProposal,
+  options: WorkEnvironmentCapabilityOptions
+): Promise<PendingFileChangePreview> {
+  if (!proposal || proposal.kind !== 'file_change.proposal') throw new Error('缺少可应用的文件变更提案。');
+  const path = normalizeDisplayPath(proposal.path);
+  if (!path) throw new Error('文件变更提案缺少路径。');
+  const current = await readWorkspaceRawTextFile(path, MAX_EDIT_READ_BYTES, options);
+
+  if (!current.existed) {
+    if (proposal.baseExisted) throw new Error(`文件不存在，无法应用提案：${path}`);
+    return {
+      path,
+      existed: false,
+      currentContent: '',
+      targetContent: proposal.targetContent,
+      action: proposal.targetContent ? 'created' : 'unchanged'
+    };
+  }
+
+  if (!proposal.baseExisted && proposal.operation === 'write') {
+    throw new Error(`文件已存在，无法按“新建文件”提案应用：${path}`);
+  }
+
+  const hunks = proposal.applyHunks ?? [];
+  if (hunks.length === 0) {
+    if (current.content === proposal.targetContent) {
+      return { path, existed: true, currentContent: current.content, targetContent: current.content, action: 'unchanged' };
+    }
+    if (current.content === proposal.baseContent) {
+      return { path, existed: true, currentContent: current.content, targetContent: proposal.targetContent, action: 'modified' };
+    }
+    throw new Error('该变更提案没有可应用的 diff hunk。');
+  }
+
+  const applied = applyHunkEdit(current.content, hunks);
+  if (applied.failed > 0 || applied.applied <= 0) {
+    const firstError = applied.results.find((item) => !item.success)?.error ?? 'diff 内容无法匹配当前文件。';
+    throw new Error(`无法应用 ${path} 的变更：${firstError}`);
+  }
+  return {
+    path,
+    existed: true,
+    currentContent: current.content,
+    targetContent: applied.newContent,
+    action: applied.newContent === current.content ? 'unchanged' : 'modified',
+    applied
+  };
+}
+
+function buildEditFileResultFromAppliedProposal(
+  proposal: FsPendingFileChangeProposal,
+  preview: PendingFileChangePreview
+): FsEditFileResult {
+  const diff = preview.action === 'unchanged' ? undefined : buildFileDiffRecord(preview.path, preview.currentContent, preview.targetContent, true);
+  const change: FsFileChangeRecord = {
+    path: preview.path,
+    action: preview.action === 'created' || preview.action === 'deleted' ? 'modified' : preview.action,
+    added: diff?.added ?? 0,
+    removed: diff?.removed ?? 0,
+    ...(diff ? { diff } : {})
+  };
+  const applied = preview.applied;
+  const appliedCount = applied?.applied ?? (preview.action === 'unchanged' ? 0 : 1);
+  const failedCount = applied?.failed ?? 0;
+  return {
+    kind: 'file_edit.result',
+    mode: proposal.editMode ?? 'hunk',
+    path: preview.path,
+    success: true,
+    action: preview.action === 'unchanged' ? 'unchanged' : 'modified',
+    totalHunks: applied?.totalHunks ?? proposal.applyHunks.length,
+    applied: appliedCount,
+    failed: failedCount,
+    ...(proposal.editFallbackMode ? { fallbackMode: proposal.editFallbackMode } : {}),
+    results: applied?.results ?? proposal.editResults ?? [],
+    summary: editSummary(preview.path, proposal.editMode ?? 'hunk', preview.action === 'unchanged' ? 'unchanged' : 'modified', appliedCount, failedCount, proposal.editFallbackMode),
+    changedFiles: preview.action === 'unchanged' ? [] : [preview.path],
     files: [change]
   };
+}
+
+function ensureLiveDiffProviderRegistered(): vscode.Disposable {
+  if (liveDiffProviderDisposable) return liveDiffProviderDisposable;
+  liveDiffProviderDisposable = vscode.workspace.registerTextDocumentContentProvider(LIVE_DIFF_SCHEME, {
+    provideTextDocumentContent(uri) {
+      return liveDiffDocuments.get(uri.toString()) ?? '';
+    }
+  });
+  return liveDiffProviderDisposable;
+}
+
+function liveDiffUri(id: string, filePath: string, content: string): vscode.Uri {
+  const uri = vscode.Uri.from({
+    scheme: LIVE_DIFF_SCHEME,
+    authority: 'file-change',
+    path: `/${normalizeDisplayPath(filePath) || 'file'}`,
+    query: new URLSearchParams({ id }).toString()
+  });
+  const key = uri.toString();
+  liveDiffDocuments.set(key, content);
+  setTimeout(() => liveDiffDocuments.delete(key), LIVE_DIFF_DOCUMENT_TTL_MS).unref?.();
+  return uri;
 }
 
 export async function deleteWorkspacePath(relPath: string, options: WorkEnvironmentCapabilityOptions = {}): Promise<FsDeletePathResult> {

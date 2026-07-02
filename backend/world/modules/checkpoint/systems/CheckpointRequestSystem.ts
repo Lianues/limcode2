@@ -7,7 +7,7 @@ import { Conversation, Message, PartOf } from '../../chat/components';
 import { Mode, ConversationModeSelection } from '../../mode/components';
 import { ConversationProjectLink, ProjectContext, type ProjectContextData } from '../../project/components';
 import { ToolCall } from '../../tools/components';
-import { Checkpoint, CheckpointPolicy, CheckpointPolicyScopeLink, CheckpointTimelineAnchor, ConversationCheckpointRepositoryLink, ShadowRepository } from '../components';
+import { Checkpoint, CheckpointBarrier, CheckpointPolicy, CheckpointPolicyScopeLink, CheckpointTimelineAnchor, ConversationCheckpointRepositoryLink, ShadowRepository } from '../components';
 import { CheckpointEventType, type CheckpointRequestedPayload } from '../events';
 import {
   CheckpointBundle,
@@ -20,6 +20,7 @@ import { effectiveCheckpointPolicyForRequest, findRunById } from '../queries';
 import { effectiveCheckpointToolTriggerConfig, triggerConfigKey } from '../policy';
 import type { CheckpointFloorAnchorPosition, CheckpointPolicyRecord } from '../../../../../shared/protocol';
 import { ToolDefinitionsKey } from '../../tools/resources';
+import { markCheckpointBarrierPending, releaseCheckpointBarriers } from '../barriers';
 
 const CheckpointRequestQuery = defineQuery({
   name: 'CheckpointRequest',
@@ -36,6 +37,7 @@ const CheckpointRequestQuery = defineQuery({
     Message,
     PartOf,
     ToolCall,
+    CheckpointBarrier,
     CheckpointPolicy,
     CheckpointPolicyScopeLink,
     ShadowRepository,
@@ -56,14 +58,27 @@ export const CheckpointRequestSystem = defineSystem({
   run(ctx) {
     const { world, cmd } = ctx;
     for (const payload of readEvents(ctx, CheckpointEventType.Requested)) {
+      const checkpointId = payload.checkpointId ?? createMessageId();
       const conversation = findConversationById(world, payload.conversationId);
-      if (conversation === undefined) continue;
+      if (conversation === undefined) {
+        releaseCheckpointBarriers(world, cmd, checkpointId, 'missing_conversation');
+        continue;
+      }
       const project = primaryProjectForConversation(world, conversation);
-      if (!project) continue;
+      if (!project) {
+        releaseCheckpointBarriers(world, cmd, checkpointId, 'missing_project');
+        continue;
+      }
       const run = findRunById(world, payload.runId);
       const resolution = effectiveCheckpointPolicyForRequest(world, { conversation, ...(run !== undefined ? { run } : {}) });
-      if (!resolution.policy.enabled) continue;
-      if (!checkpointTriggerEnabled(world, payload, resolution.policy)) continue;
+      if (!resolution.policy.enabled) {
+        releaseCheckpointBarriers(world, cmd, checkpointId, 'policy_disabled');
+        continue;
+      }
+      if (!checkpointTriggerEnabled(world, payload, resolution.policy)) {
+        releaseCheckpointBarriers(world, cmd, checkpointId, 'trigger_disabled');
+        continue;
+      }
 
       const repository = ensureShadowRepository(world, cmd, { conversationId: payload.conversationId, projectUri: project.data.uri });
       const repositoryId = shadowRepositoryIdFor(payload.conversationId, project.data.uri);
@@ -80,7 +95,6 @@ export const CheckpointRequestSystem = defineSystem({
       });
 
       const anchor = resolveCheckpointAnchor(world, payload, conversation);
-      const checkpointId = createMessageId();
       const now = Date.now();
       const pendingCheckpoint = cmd.spawn();
       cmd.add(pendingCheckpoint, Checkpoint, {
@@ -99,6 +113,7 @@ export const CheckpointRequestSystem = defineSystem({
         const floorMessage = findConversationMessageById(world, conversation, anchor.floorMessageId);
         if (floorMessage !== undefined) addCheckpointTimelineAnchor(world, cmd, { checkpoint: pendingCheckpoint, checkpointId, conversation, floorMessage, anchor, now });
       }
+      markCheckpointBarrierPending(world, cmd, checkpointId, pendingCheckpoint);
       cmd.effect({
         kind: 'checkpoint.create',
         checkpointId,

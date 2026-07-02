@@ -396,6 +396,7 @@ function intersectToolPolicies(policies: ToolPolicyData[], id: string): ToolPoli
         config: { ...(previous?.config ?? {}), ...(config.config ?? {}) },
         autoApproveExecution: previous?.autoApproveExecution === false || config.autoApproveExecution === false ? false : config.autoApproveExecution ?? previous?.autoApproveExecution,
         autoApplyChange: previous?.autoApplyChange === false || config.autoApplyChange === false ? false : config.autoApplyChange ?? previous?.autoApplyChange,
+        autoApplyChangeDelaySeconds: config.autoApplyChangeDelaySeconds ?? previous?.autoApplyChangeDelaySeconds,
         autoSubmitResult: previous?.autoSubmitResult === false || config.autoSubmitResult === false ? false : config.autoSubmitResult ?? previous?.autoSubmitResult,
         ...(config.display || previous?.display ? { display: { ...(previous?.display ?? {}), ...(config.display ?? {}) } } : {})
       };

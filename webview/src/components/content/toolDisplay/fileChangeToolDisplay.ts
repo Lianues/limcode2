@@ -32,6 +32,7 @@ interface FileChangeOutput {
   applied?: number;
   failed?: number | unknown[];
   fallbackMode?: string;
+  pending?: boolean;
   changedFiles?: unknown;
   paths?: unknown;
   requestedPaths?: unknown;
@@ -178,6 +179,7 @@ function fileChangeOutputSections(title: string, output: FileChangeOutput | stri
 
   const rows = parameterRows([
     { label: 'summary', value: stringValue(output.summary) },
+    { label: 'status', value: output.pending === true ? '等待应用' : undefined },
     { label: 'error', value: stringValue(output.error) },
     { label: 'path', value: normalizePath(output.path) || undefined },
     { label: 'mode', value: stringValue(output.mode) },
@@ -260,9 +262,31 @@ function extractFileName(path: string): string | undefined {
 function diffHeaderActions(context: ToolDisplayContext, diff: ToolDisplayDiff): ToolHeaderAction[] {
   const filePath = diff.files[0]?.path;
   const toolCallId = context.toolCall?.id;
-  const conversationId = context.currentConversationId;
-  if (!filePath || !toolCallId || !conversationId) return [];
+  if (!filePath || !toolCallId) return [];
+  if (context.toolCall?.status === 'awaiting_change_apply') return liveDiffHeaderAction(context, toolCallId);
+  if (context.toolCall?.status === 'applying_change') return disabledDiffHeaderAction(toolCallId, '更改正在应用，完成后可查看存档点差异');
+  return checkpointDiffHeaderAction(context, toolCallId, filePath);
+}
 
+function liveDiffHeaderAction(context: ToolDisplayContext, toolCallId: string): ToolHeaderAction[] {
+  return [{
+    id: `open-live-diff-${toolCallId}`,
+    label: '查看差异',
+    title: '在 VS Code Diff 编辑器中查看当前文件与工具提案的实时差异',
+    icon: IconFileDiff,
+    disabled: false,
+    invoke: () => {
+      bridge.request(BridgeMessageType.ToolDiffOpen, {
+        toolCallId,
+        ...(context.currentConversationId ? { conversationId: context.currentConversationId } : {})
+      });
+    }
+  }];
+}
+
+function checkpointDiffHeaderAction(context: ToolDisplayContext, toolCallId: string, filePath: string): ToolHeaderAction[] {
+  const conversationId = context.currentConversationId;
+  if (!conversationId) return disabledDiffHeaderAction(toolCallId, '当前对话未就绪，无法查看存档点差异');
   const availability = checkpointDiffAvailability(context, toolCallId);
   return [{
     id: `open-shadow-diff-${toolCallId}`,
@@ -281,6 +305,17 @@ function diffHeaderActions(context: ToolDisplayContext, diff: ToolDisplayDiff): 
   }];
 }
 
+function disabledDiffHeaderAction(toolCallId: string, title: string): ToolHeaderAction[] {
+  return [{
+    id: `open-diff-disabled-${toolCallId}`,
+    label: '查看差异',
+    title,
+    icon: IconFileDiff,
+    disabled: true,
+    invoke: () => undefined
+  }];
+}
+
 function checkpointDiffAvailability(
   context: ToolDisplayContext,
   toolCallId: string
@@ -288,7 +323,7 @@ function checkpointDiffAvailability(
   const checkpointStore = useCheckpointPolicyStore();
   checkpointStore.ensureShadowStats();
   const anchor = latestAfterCheckpointAnchor(context.checkpointTimelineAnchors ?? [], toolCallId);
-  if (!anchor) return { title: '等待 shadow 存档点创建后可查看 VS Code 差异' };
+  if (!anchor) return { title: '等待工具应用后的存档点创建后可查看差异' };
   const checkpoint = context.checkpoints?.find((item) => item.id === anchor.checkpointId);
   if (!checkpoint) return { title: '等待存档点同步到前端后可查看差异' };
   if (checkpoint.status === 'pending') return { title: '存档点正在创建，稍后可查看差异' };
@@ -299,7 +334,7 @@ function checkpointDiffAvailability(
   if (shadowStat && !shadowStat.exists) return { title: 'shadow 仓库已删除，无法查看差异' };
   if (!shadowStat && checkpointStore.shadowStatsLoaded) return { title: 'shadow 仓库不存在，无法查看差异' };
   if (!shadowStat && checkpointStore.shadowStatsLoading) return { title: '正在确认 shadow 仓库状态，请稍候' };
-  return { checkpoint, title: '在 VS Code Diff 编辑器中查看 shadow 存档差异' };
+  return { checkpoint, title: '在 VS Code Diff 编辑器中查看应用后的存档点差异' };
 }
 
 function latestAfterCheckpointAnchor(anchors: readonly CheckpointTimelineAnchorRecord[], toolCallId: string): CheckpointTimelineAnchorRecord | undefined {

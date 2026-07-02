@@ -252,6 +252,7 @@ function cloneToolConfigs(): Record<string, ToolPolicyToolConfigRecord> {
       config: { ...(record.config ?? {}) },
       ...(typeof record.autoApproveExecution === 'boolean' ? { autoApproveExecution: record.autoApproveExecution } : {}),
       ...(typeof record.autoApplyChange === 'boolean' ? { autoApplyChange: record.autoApplyChange } : {}),
+      ...(typeof record.autoApplyChangeDelaySeconds === 'number' ? { autoApplyChangeDelaySeconds: record.autoApplyChangeDelaySeconds } : {}),
       ...(typeof record.autoSubmitResult === 'boolean' ? { autoSubmitResult: record.autoSubmitResult } : {}),
       ...(record.display ? { display: { ...record.display } } : {})
     };
@@ -324,6 +325,33 @@ function toolGateValue(tool: ToolDefinitionRecord, key: ToolGateSettingKey): boo
   return tool.metadata?.defaultAutoSubmitResult ?? true;
 }
 
+function supportsChangeApply(tool: ToolDefinitionRecord): boolean {
+  return tool.metadata?.supportsChangeApply === true;
+}
+
+function supportsDiffPreview(tool: ToolDefinitionRecord): boolean {
+  return tool.metadata?.supportsDiffPreview === true;
+}
+
+function updateAutoApplyChangeDelay(tool: ToolDefinitionRecord, value: number): void {
+  if (props.readonly || !supportsChangeApply(tool)) return;
+  const nextConfigs = cloneToolConfigs();
+  nextConfigs[tool.name] = {
+    ...(nextConfigs[tool.name] ?? { config: sanitizeConfigForTool(tool, configForTool(tool)) }),
+    autoApplyChangeDelaySeconds: Math.min(600, Math.max(0, Math.floor(value)))
+  };
+  store.setPolicyForScope(props.scopeKind, props.scopeId, effectivePolicy.value?.allowedTools ?? [], effectivePolicy.value?.name, nextConfigs, cloneSourceConfigs());
+}
+
+function autoApplyChangeDelayValue(tool: ToolDefinitionRecord): number {
+  const value = effectivePolicy.value?.toolConfigs?.[tool.name]?.autoApplyChangeDelaySeconds;
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.min(600, Math.max(0, Math.floor(value)));
+  const defaultValue = tool.metadata?.defaultAutoApplyChangeDelaySeconds;
+  return typeof defaultValue === 'number' && Number.isFinite(defaultValue)
+    ? Math.min(600, Math.max(0, Math.floor(defaultValue)))
+    : 3;
+}
+
 function updateDisplayAutoExpand(tool: ToolDefinitionRecord, value: boolean): void {
   if (props.readonly) return;
   const nextConfigs = cloneToolConfigs();
@@ -338,6 +366,23 @@ function displayAutoExpandValue(tool: ToolDefinitionRecord): boolean {
   const display = effectivePolicy.value?.toolConfigs?.[tool.name]?.display;
   if (display?.autoExpand !== undefined) return display.autoExpand;
   return tool.metadata?.defaultAutoExpand === true;
+}
+
+function updateDisplayAutoOpenDiffPreview(tool: ToolDefinitionRecord, value: boolean): void {
+  if (props.readonly || !supportsDiffPreview(tool)) return;
+  const nextConfigs = cloneToolConfigs();
+  nextConfigs[tool.name] = {
+    ...(nextConfigs[tool.name] ?? { config: sanitizeConfigForTool(tool, configForTool(tool)) }),
+    display: { ...(nextConfigs[tool.name]?.display ?? {}), autoOpenDiffPreview: value }
+  };
+  store.setPolicyForScope(props.scopeKind, props.scopeId, effectivePolicy.value?.allowedTools ?? [], effectivePolicy.value?.name, nextConfigs, cloneSourceConfigs());
+}
+
+function displayAutoOpenDiffPreviewValue(tool: ToolDefinitionRecord): boolean {
+  if (!supportsDiffPreview(tool)) return false;
+  const display = effectivePolicy.value?.toolConfigs?.[tool.name]?.display;
+  if (display?.autoOpenDiffPreview !== undefined) return display.autoOpenDiffPreview;
+  return tool.metadata?.defaultAutoOpenDiffPreview === true;
 }
 
 function sanitizeConfigForTool(tool: ToolDefinitionRecord, config: ToolConfigRecord): ToolConfigRecord {
@@ -496,61 +541,96 @@ function inputNumber(event: Event): number {
 
                   <template v-if="isToolEnabled(tool)">
                     <div class="tool-config-group tool-config-permissions">
-                    <div class="tool-config-group-heading">
-                      <span class="tool-config-group-title">权限与显示</span>
-                      <small>控制执行确认、更改应用、结果回传，以及聊天区工具卡片的默认展开行为。</small>
+                      <div class="tool-config-group-heading">
+                        <span class="tool-config-group-title">权限与显示</span>
+                        <small>控制执行确认、结果回传，以及聊天区工具卡片的默认展示行为。</small>
+                      </div>
+                      <div class="tool-permission-options">
+                        <LcCheckbox
+                          class="tool-permission-card"
+                          :class="{ 'is-enabled': toolGateValue(tool, 'autoApproveExecution') }"
+                          :model-value="toolGateValue(tool, 'autoApproveExecution')"
+                          :disabled="readonly"
+                          @update:model-value="updateGateSetting(tool, 'autoApproveExecution', $event)"
+                        >
+                          <span class="permission-copy">
+                            <span class="permission-title">自动批准执行</span>
+                            <span class="permission-desc">开启时工具请求会直接进入执行；关闭时先询问用户。</span>
+                          </span>
+                        </LcCheckbox>
+                        <LcCheckbox
+                          v-if="supportsChangeApply(tool)"
+                          class="tool-permission-card"
+                          :class="{ 'is-enabled': toolGateValue(tool, 'autoApplyChange') }"
+                          :model-value="toolGateValue(tool, 'autoApplyChange')"
+                          :disabled="readonly"
+                          @update:model-value="updateGateSetting(tool, 'autoApplyChange', $event)"
+                        >
+                          <span class="permission-copy">
+                            <span class="permission-title">自动应用更改</span>
+                            <span class="permission-desc">开启后，工具进入待应用阶段时按下方延迟自动应用。</span>
+                          </span>
+                        </LcCheckbox>
+                        <LcCheckbox
+                          v-if="supportsDiffPreview(tool)"
+                          class="tool-permission-card"
+                          :class="{ 'is-enabled': displayAutoOpenDiffPreviewValue(tool) }"
+                          :model-value="displayAutoOpenDiffPreviewValue(tool)"
+                          :disabled="readonly"
+                          @update:model-value="updateDisplayAutoOpenDiffPreview(tool, $event)"
+                        >
+                          <span class="permission-copy">
+                            <span class="permission-title">自动打开差异预览</span>
+                            <span class="permission-desc">有可用存档点时，自动触发聊天卡片里的“查看差异”。</span>
+                          </span>
+                        </LcCheckbox>
+                        <LcCheckbox
+                          class="tool-permission-card"
+                          :class="{ 'is-enabled': toolGateValue(tool, 'autoSubmitResult') }"
+                          :model-value="toolGateValue(tool, 'autoSubmitResult')"
+                          :disabled="readonly"
+                          @update:model-value="updateGateSetting(tool, 'autoSubmitResult', $event)"
+                        >
+                          <span class="permission-copy">
+                            <span class="permission-title">自动回传结果</span>
+                            <span class="permission-desc">开启时工具结果自动发给 AI；关闭时先确认是否回传。</span>
+                          </span>
+                        </LcCheckbox>
+                        <LcCheckbox
+                          class="tool-permission-card"
+                          :class="{ 'is-enabled': displayAutoExpandValue(tool) }"
+                          :model-value="displayAutoExpandValue(tool)"
+                          :disabled="readonly"
+                          @update:model-value="updateDisplayAutoExpand(tool, $event)"
+                        >
+                          <span class="permission-copy">
+                            <span class="permission-title">自动展开内容</span>
+                            <span class="permission-desc">开启时聊天里的该工具调用会默认展开内容面板；用户仍可手动收起。</span>
+                          </span>
+                        </LcCheckbox>
+                      </div>
+                      <label
+                        v-if="supportsChangeApply(tool) && toolGateValue(tool, 'autoApplyChange')"
+                        class="tool-delay-field"
+                      >
+                        <span class="tool-delay-copy">
+                          <span class="permission-title">自动应用延迟</span>
+                          <span class="permission-desc">填 0 表示直接应用；默认 3 秒。</span>
+                        </span>
+                        <span class="tool-delay-input">
+                          <input
+                            type="number"
+                            min="0"
+                            max="600"
+                            step="1"
+                            :value="autoApplyChangeDelayValue(tool)"
+                            :readonly="readonly"
+                            @change="updateAutoApplyChangeDelay(tool, inputNumber($event))"
+                          />
+                          <span>秒</span>
+                        </span>
+                      </label>
                     </div>
-                    <div class="tool-permission-options">
-                      <LcCheckbox
-                        class="tool-permission-card"
-                        :class="{ 'is-enabled': toolGateValue(tool, 'autoApproveExecution') }"
-                        :model-value="toolGateValue(tool, 'autoApproveExecution')"
-                        :disabled="readonly"
-                        @update:model-value="updateGateSetting(tool, 'autoApproveExecution', $event)"
-                      >
-                        <span class="permission-copy">
-                          <span class="permission-title">自动批准执行</span>
-                          <span class="permission-desc">开启时工具请求会直接进入执行；关闭时先询问用户。</span>
-                        </span>
-                      </LcCheckbox>
-                      <LcCheckbox
-                        class="tool-permission-card"
-                        :class="{ 'is-enabled': toolGateValue(tool, 'autoApplyChange') }"
-                        :model-value="toolGateValue(tool, 'autoApplyChange')"
-                        :disabled="readonly"
-                        @update:model-value="updateGateSetting(tool, 'autoApplyChange', $event)"
-                      >
-                        <span class="permission-copy">
-                          <span class="permission-title">自动应用更改</span>
-                          <span class="permission-desc">仅对预览型工具生效；开启时生成的更改提案会自动落盘。</span>
-                        </span>
-                      </LcCheckbox>
-                      <LcCheckbox
-                        class="tool-permission-card"
-                        :class="{ 'is-enabled': toolGateValue(tool, 'autoSubmitResult') }"
-                        :model-value="toolGateValue(tool, 'autoSubmitResult')"
-                        :disabled="readonly"
-                        @update:model-value="updateGateSetting(tool, 'autoSubmitResult', $event)"
-                      >
-                        <span class="permission-copy">
-                          <span class="permission-title">自动回传结果</span>
-                          <span class="permission-desc">开启时工具结果自动发给 AI；关闭时先确认是否回传。</span>
-                        </span>
-                      </LcCheckbox>
-                      <LcCheckbox
-                        class="tool-permission-card"
-                        :class="{ 'is-enabled': displayAutoExpandValue(tool) }"
-                        :model-value="displayAutoExpandValue(tool)"
-                        :disabled="readonly"
-                        @update:model-value="updateDisplayAutoExpand(tool, $event)"
-                      >
-                        <span class="permission-copy">
-                          <span class="permission-title">自动展开内容</span>
-                          <span class="permission-desc">开启时聊天里的该工具调用会默认展开内容面板；用户仍可手动收起。</span>
-                        </span>
-                      </LcCheckbox>
-                    </div>
-                  </div>
 
                   <div v-if="tool.configSchema?.fields?.length" class="tool-config-group tool-specific-config">
                     <div class="tool-config-group-heading">
@@ -1123,6 +1203,51 @@ function inputNumber(event: Event): number {
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-xs);
   line-height: 1.4;
+}
+
+.tool-delay-field {
+  margin-top: var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 88%, transparent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+  background: var(--vscode-editor-background);
+}
+
+.tool-delay-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tool-delay-input {
+  min-width: max-content;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+}
+
+.tool-delay-input input {
+  width: 64px;
+  min-height: 28px;
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-2);
+  color: var(--vscode-input-foreground, var(--vscode-foreground));
+  background: var(--vscode-input-background, var(--vscode-editor-background));
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-delay-input input:focus {
+  border-color: color-mix(in srgb, var(--vscode-panel-border) 70%, var(--vscode-foreground) 30%);
+  outline: none;
 }
 
 .tool-config-checkbox {

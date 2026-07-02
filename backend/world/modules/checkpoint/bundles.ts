@@ -8,6 +8,7 @@ import {
   Checkpoint,
   CheckpointPolicy,
   CheckpointPolicyScopeLink,
+  CheckpointBarrier,
   CheckpointTimelineAnchor,
   ConversationCheckpointRepositoryLink,
   ShadowRepository,
@@ -19,7 +20,7 @@ import type { CheckpointPolicyScopeKind } from '../../../../shared/protocol';
 
 export const CheckpointBundle = defineBundle({
   name: 'CheckpointBundle',
-  writes: [CheckpointPolicy, CheckpointPolicyScopeLink, ShadowRepository, ConversationCheckpointRepositoryLink, Checkpoint, CheckpointTimelineAnchor],
+  writes: [CheckpointPolicy, CheckpointPolicyScopeLink, ShadowRepository, ConversationCheckpointRepositoryLink, Checkpoint, CheckpointTimelineAnchor, CheckpointBarrier],
   mutationMode: 'update',
   spawns: true,
   despawns: true

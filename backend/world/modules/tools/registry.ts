@@ -24,7 +24,7 @@ export interface ToolResultOut {
   ok: boolean;
   output: unknown;
   parts?: InlineDataPart[];
-  status?: 'success' | 'warning';
+  status?: 'success' | 'warning' | 'awaiting_change_apply';
 }
 
 export interface ToolRuntimeEvent {

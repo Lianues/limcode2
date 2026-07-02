@@ -117,6 +117,7 @@ export enum BridgeMessageType {
   RulesCatalogRefresh = 'rules.catalog.refresh',
   ToolExecutionApprove = 'tool.execution.approve',
   ToolExecutionReject = 'tool.execution.reject',
+  ToolDiffOpen = 'tool.diff.open',
   ToolChangeApply = 'tool.change.apply',
   ToolChangeReject = 'tool.change.reject',
   ToolResultSubmit = 'tool.result.submit',
@@ -342,8 +343,14 @@ export interface ToolDefinitionMetadataRecord {
   defaultEnabled?: boolean;
   requiresApproval?: boolean;
   defaultAutoExpand?: boolean;
+  /** true 表示工具执行结果存在“待应用更改”阶段，适合显示自动应用/手动应用配置。 */
+  supportsChangeApply?: boolean;
+  /** true 表示工具结果可通过存档点打开 VS Code diff 预览。 */
+  supportsDiffPreview?: boolean;
+  defaultAutoOpenDiffPreview?: boolean;
   defaultAutoApproveExecution?: boolean;
   defaultAutoApplyChange?: boolean;
+  defaultAutoApplyChangeDelaySeconds?: number;
   defaultAutoSubmitResult?: boolean;
   checkpoint?: Partial<CheckpointToolTriggerConfigRecord>;
 }
@@ -713,6 +720,15 @@ export type ConversationModeSelectionRole = 'active';
 export interface ToolDisplayPolicyRecord {
   /** true 时前端默认展开该工具调用的内容面板；false/未设置则默认收起。 */
   autoExpand?: boolean;
+  /** true 时前端在“查看差异”按钮可用后自动打开 VS Code diff 预览。 */
+  autoOpenDiffPreview?: boolean;
+}
+
+export interface ToolChangeApplyPolicyRecord {
+  /** true 时前端/运行时可在进入等待应用阶段后自动发起应用。 */
+  autoApply?: boolean;
+  /** 0 表示直接应用；大于 0 表示等待对应秒数后自动应用。 */
+  autoApplyDelaySeconds?: number;
 }
 
 export interface ToolPolicyToolConfigRecord {
@@ -724,6 +740,8 @@ export interface ToolPolicyToolConfigRecord {
    * 对 read、shell、switch_work_environment 等无更改提案或立即副作用工具无影响。
    */
   autoApplyChange?: boolean;
+  /** 0 表示直接应用；未设置时使用工具定义默认值。 */
+  autoApplyChangeDelaySeconds?: number;
   /**
    * 是否自动把工具结果提交给 AI，作为后续模型上下文的一部分。
    * 关闭时工具执行/更改应用完成后会等待用户确认结果回传；
@@ -1407,6 +1425,7 @@ export interface ToolCallRecord {
   schedulingMode?: ToolSchedulingMode;
   schedulingReason?: string;
   display?: ToolDisplayPolicyRecord;
+  changeApply?: ToolChangeApplyPolicyRecord;
   durationMs?: number;
   createdAt: number;
   updatedAt: number;
@@ -1924,6 +1943,10 @@ export interface ToolDecisionPayload {
   toolCallId: string;
   conversationId?: string;
   reason?: string;
+}
+export interface ToolDiffOpenPayload {
+  toolCallId: string;
+  conversationId?: string;
 }
 export interface ToolPolicyScopeSetPayload {
   scopeKind: ToolPolicyScopeKind;
@@ -2468,6 +2491,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.CheckpointPolicyScopeClear, CheckpointPolicyScopeClearPayload>
   | BridgeEnvelope<BridgeMessageType.ToolExecutionApprove, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ToolExecutionReject, ToolDecisionPayload>
+  | BridgeEnvelope<BridgeMessageType.ToolDiffOpen, ToolDiffOpenPayload>
   | BridgeEnvelope<BridgeMessageType.ToolChangeApply, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ToolChangeReject, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ToolResultSubmit, ToolDecisionPayload>

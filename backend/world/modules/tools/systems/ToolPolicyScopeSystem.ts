@@ -147,17 +147,21 @@ function sanitizeToolConfigs(
       if (allowedFields.size > 0 && !allowedFields.has(key)) continue;
       if (isToolConfigValue(value)) config[key] = value;
     }
+    const supportsChangeApply = definition.metadata?.supportsChangeApply === true;
+    const display = sanitizeDisplayPolicy(rawRecord.display, definition.metadata?.supportsDiffPreview === true);
     const nextRecord: ToolPolicyToolConfigRecord = {
       config,
       ...(typeof rawRecord.autoApproveExecution === 'boolean' ? { autoApproveExecution: rawRecord.autoApproveExecution } : {}),
-      ...(typeof rawRecord.autoApplyChange === 'boolean' ? { autoApplyChange: rawRecord.autoApplyChange } : {}),
+      ...(supportsChangeApply && typeof rawRecord.autoApplyChange === 'boolean' ? { autoApplyChange: rawRecord.autoApplyChange } : {}),
+      ...(supportsChangeApply ? normalizedAutoApplyChangeDelay(rawRecord.autoApplyChangeDelaySeconds) : {}),
       ...(typeof rawRecord.autoSubmitResult === 'boolean' ? { autoSubmitResult: rawRecord.autoSubmitResult } : {}),
-      ...(isDisplayPolicy(rawRecord.display) ? { display: rawRecord.display } : {})
+      ...(display ? { display } : {})
     };
     if (
       Object.keys(config).length > 0
       || nextRecord.autoApproveExecution !== undefined
       || nextRecord.autoApplyChange !== undefined
+      || nextRecord.autoApplyChangeDelaySeconds !== undefined
       || nextRecord.autoSubmitResult !== undefined
       || nextRecord.display !== undefined
     ) result[toolName] = nextRecord;
@@ -165,8 +169,18 @@ function sanitizeToolConfigs(
   return result;
 }
 
-function isDisplayPolicy(value: unknown): value is { autoExpand?: boolean } {
-  return isPlainRecord(value) && (value.autoExpand === undefined || typeof value.autoExpand === 'boolean');
+function normalizedAutoApplyChangeDelay(value: unknown): { autoApplyChangeDelaySeconds?: number } {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return {};
+  return { autoApplyChangeDelaySeconds: Math.min(600, Math.max(0, Math.floor(value))) };
+}
+
+function sanitizeDisplayPolicy(value: unknown, supportsDiffPreview: boolean): { autoExpand?: boolean; autoOpenDiffPreview?: boolean } | undefined {
+  if (!isPlainRecord(value)) return undefined;
+  const display = {
+    ...(typeof value.autoExpand === 'boolean' ? { autoExpand: value.autoExpand } : {}),
+    ...(supportsDiffPreview && typeof value.autoOpenDiffPreview === 'boolean' ? { autoOpenDiffPreview: value.autoOpenDiffPreview } : {})
+  };
+  return Object.keys(display).length > 0 ? display : undefined;
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

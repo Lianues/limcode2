@@ -32,6 +32,11 @@ export const editTool: ToolDefinition = {
       defaultEnabled: true,
       defaultAutoExpand: true,
       defaultAutoApproveExecution: false,
+      supportsChangeApply: true,
+      supportsDiffPreview: true,
+      defaultAutoOpenDiffPreview: false,
+      defaultAutoApplyChange: true,
+      defaultAutoApplyChangeDelaySeconds: 3,
       requiresApproval: true,
       checkpoint: { before: true, after: true }
     },
@@ -51,11 +56,15 @@ export const editTool: ToolDefinition = {
 
     try {
       const request = buildEditRequest(path, args, runtimeMode);
-      const result = await deps.fs.editFile(request, {
+      const result = await deps.fs.proposeEditFile(request, {
         workEnvironment: ctx?.workEnvironment,
         allowOutsideProjectPaths: allowOutsideProjectPathsFromConfig(ctx?.config, false)
       });
-      return { ok: result.success, output: result, ...(result.failed > 0 ? { status: 'warning' as const } : {}) };
+      return {
+        ok: result.success,
+        output: result,
+        ...(result.pending ? { status: 'awaiting_change_apply' as const } : result.failed > 0 ? { status: 'warning' as const } : {})
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, output: failedOutput(runtimeMode, path, message) };

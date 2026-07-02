@@ -119,10 +119,28 @@ export interface FsWriteFileResult {
   kind: 'file_write.result';
   path: string;
   success: boolean;
+  pending?: boolean;
   action: FsFileWriteAction;
   summary: string;
   changedFiles: string[];
   files: FsFileChangeRecord[];
+  proposal?: FsPendingFileChangeProposal;
+}
+
+export type FsPendingFileChangeOperation = 'write' | 'edit';
+
+export interface FsPendingFileChangeProposal {
+  kind: 'file_change.proposal';
+  operation: FsPendingFileChangeOperation;
+  path: string;
+  baseExisted: boolean;
+  baseContent: string;
+  targetContent: string;
+  applyHunks: FsHunkEditRequest[];
+  writeAction?: FsFileWriteAction;
+  editMode?: EditToolMode;
+  editResults?: unknown[];
+  editFallbackMode?: string;
 }
 
 export type FsDeletePathTargetType = 'file' | 'directory';
@@ -138,6 +156,7 @@ export interface FsEditFileResult {
   mode: EditToolMode;
   path: string;
   success: boolean;
+  pending?: boolean;
   action: Extract<FsFileWriteAction, 'modified' | 'unchanged'>;
   totalHunks: number;
   applied: number;
@@ -147,13 +166,18 @@ export interface FsEditFileResult {
   summary: string;
   changedFiles: string[];
   files: FsFileChangeRecord[];
+  proposal?: FsPendingFileChangeProposal;
 }
 
 export interface FsCapability {
   readFile(path: string, startLine?: number, endLine?: number, options?: WorkEnvironmentCapabilityOptions): Promise<FsReadFileResult>;
   readBinaryFile(path: string, mimeType: string, options?: WorkEnvironmentCapabilityOptions): Promise<FsReadBinaryFileResult>;
   writeFile(path: string, content: string, options?: WorkEnvironmentCapabilityOptions): Promise<FsWriteFileResult>;
+  proposeWriteFile(path: string, content: string, options?: WorkEnvironmentCapabilityOptions): Promise<FsWriteFileResult>;
   editFile(request: FsEditFileRequest, options?: WorkEnvironmentCapabilityOptions): Promise<FsEditFileResult>;
+  proposeEditFile(request: FsEditFileRequest, options?: WorkEnvironmentCapabilityOptions): Promise<FsEditFileResult>;
+  applyPendingFileChange(proposal: FsPendingFileChangeProposal, options?: WorkEnvironmentCapabilityOptions): Promise<FsWriteFileResult | FsEditFileResult>;
+  openPendingFileChangeDiff(proposal: FsPendingFileChangeProposal, options?: WorkEnvironmentCapabilityOptions): Promise<{ status: 'opened' | 'failed'; message: string }>;
   deletePath(path: string, options?: WorkEnvironmentCapabilityOptions): Promise<FsDeletePathResult>;
 }
 

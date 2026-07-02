@@ -6,7 +6,6 @@ import { useConversationTimelineStore } from '@webview/stores/useConversationTim
 import { useChat } from '@webview/composables/useChat';
 import { useRunHistoryStore } from '@webview/stores/useRunHistoryStore';
 import { useCompression } from '@webview/composables/useCompression';
-import CheckpointTimelineCard from './CheckpointTimelineCard.vue';
 import { checkpointBeforeMessageFloor } from './checkpointRollback';
 import CompressionTimelineCard from './CompressionTimelineCard.vue';
 import MessageItem from './MessageItem.vue';
@@ -168,14 +167,8 @@ function maybeLoadOlder(): void {
         @close-error-block="onCloseErrorBlock"
         @cancel-error-retry="onCancelErrorRetry"
       />
-      <CheckpointTimelineCard
-        v-else-if="row.kind === 'checkpoint'"
-        :checkpoint="row.checkpoint"
-        :anchor="row.anchor"
-        :phase="row.phase"
-      />
       <CompressionTimelineCard
-        v-else
+        v-else-if="row.kind === 'compression'"
         :block="row.block"
         :phase="row.phase"
         @delete="deleteCompression"
@@ -200,7 +193,8 @@ function maybeLoadOlder(): void {
 }
 
 .message-empty-container {
-  padding: var(--space-6) var(--space-4);
+  padding: var(--space-6) var(--conversation-content-padding-right, var(--space-4))
+    var(--space-6) var(--conversation-content-padding-left, var(--space-4));
 }
 
 .message-empty {

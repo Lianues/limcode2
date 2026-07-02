@@ -1,6 +1,11 @@
 import { computed, ref, shallowRef } from 'vue';
 import { defineStore } from 'pinia';
-import { buildConversationTimelineRows, type ConversationCheckpointTimelineRow, type ConversationCompressionTimelineRow } from '@shared/conversationTimeline';
+import {
+  buildConversationTimelineRows,
+  type ConversationCheckpointTimelineRow,
+  type ConversationCompressionTimelineRow,
+  type ConversationTimelineRow
+} from '@shared/conversationTimeline';
 import { isVisibleTextPart, type CheckpointRecord, type CheckpointTimelineAnchorRecord, type CompressionBlockRecord, type LlmTransientNoticePayload, type MessageRecord } from '@shared/protocol';
 
 export type MessageViewPhase = 'stable' | 'entering' | 'exiting';
@@ -17,14 +22,16 @@ export interface MessageViewRow {
   phase: MessageViewPhase;
 }
 
-export interface CheckpointViewRow extends ConversationCheckpointTimelineRow {
+export interface CheckpointMarkerView extends ConversationCheckpointTimelineRow {
   phase: MessageViewPhase;
+  expanded: boolean;
 }
+
 export interface CompressionViewRow extends ConversationCompressionTimelineRow {
   phase: MessageViewPhase;
 }
 
-export type ConversationTimelineViewRow = MessageViewRow | CheckpointViewRow | CompressionViewRow;
+export type ConversationTimelineViewRow = MessageViewRow | CompressionViewRow;
 
 export interface ComposerSnapshot {
   draft: string;
@@ -57,6 +64,15 @@ export interface LlmErrorBlockRecord {
   updatedAt: number;
 }
 
+interface TimelineSyncSnapshot {
+  messages: MessageRecord[];
+  checkpoints: CheckpointRecord[];
+  checkpointAnchors: CheckpointTimelineAnchorRecord[];
+  compressionBlocks: CompressionBlockRecord[];
+  floorByMessageId: Record<string, number>;
+  totalMessageCount: number;
+}
+
 // CSS 动画是 100ms；JS 计时保持一致，让新增/删除节奏更利落。
 const MESSAGE_ANIMATION_SETTLE_MS = 100;
 const MESSAGE_ENTER_MS = MESSAGE_ANIMATION_SETTLE_MS;
@@ -75,8 +91,10 @@ const MESSAGE_EXIT_ACTION_DELAY_MS = MESSAGE_EXIT_MS;
 export const useConversationUiStore = defineStore('conversationUi', () => {
   const messageRows = shallowRef<MessageViewRow[]>([]);
   const timelineRows = shallowRef<ConversationTimelineViewRow[]>([]);
+  const checkpointMarkers = shallowRef<CheckpointMarkerView[]>([]);
   const llmErrorBlocks = shallowRef<LlmErrorBlockRecord[]>([]);
   const enteringMessageIds = ref<Set<string>>(new Set());
+  const expandedCheckpointRowId = ref<string | undefined>();
   const composerSnapshots = ref<Record<ComposerMode, ComposerSnapshot>>({
     chat: createComposerSnapshot(),
     edit: createComposerSnapshot()
@@ -90,6 +108,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
 
   const seenMessageIds = new Set<string>();
   const enterTimers = new Map<string, number>();
+  let lastTimelineSnapshot: TimelineSyncSnapshot = createEmptyTimelineSyncSnapshot();
   let initializedMessages = false;
   let exitingFromId: string | undefined;
   let exitActionTimer: number | undefined;
@@ -111,6 +130,15 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     floorByMessageId: Readonly<Record<string, number>> = {},
     totalMessageCount = messages.length
   ): void {
+    lastTimelineSnapshot = {
+      messages: [...messages],
+      checkpoints: [...checkpoints],
+      checkpointAnchors: [...checkpointAnchors],
+      compressionBlocks: [...compressionBlocks],
+      floorByMessageId: { ...floorByMessageId },
+      totalMessageCount
+    };
+
     const currentIds = new Set(messages.map((message) => message.id));
     pruneErrorBlocks(currentIds);
     for (const id of [...enterTimers.keys()]) {
@@ -132,33 +160,57 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
 
     if (exitingFromId && !currentIds.has(exitingFromId)) clearExitState();
 
+    rebuildTimelineRows();
+  }
+
+  function rebuildTimelineRows(): void {
+    const { messages, checkpoints, checkpointAnchors, compressionBlocks, floorByMessageId, totalMessageCount } = lastTimelineSnapshot;
     const messageIndexById = new Map(messages.map((message, index) => [message.id, index]));
-    const rows = buildConversationTimelineRows({ messages, checkpoints, checkpointAnchors, compressionBlocks }).map((row): ConversationTimelineViewRow => {
+    const allRows = buildConversationTimelineRows({ messages, checkpoints, checkpointAnchors, compressionBlocks });
+    pruneExpandedCheckpointRows(allRows);
+
+    checkpointMarkers.value = allRows
+      .filter((row): row is ConversationCheckpointTimelineRow => row.kind === 'checkpoint')
+      .map((row): CheckpointMarkerView => ({
+        ...row,
+        expanded: expandedCheckpointRowId.value === row.id,
+        phase: phaseForAnchoredTimelineRow(row, messageIndexById, messages)
+      }));
+
+    const rows = allRows.flatMap((row): ConversationTimelineViewRow[] => {
+      if (row.kind === 'checkpoint') return [];
       if (row.kind === 'message') {
         const messageIndex = messageIndexById.get(row.message.id) ?? 0;
         const floorNumber = floorByMessageId[row.message.id] ?? row.messageFloorNumber;
-        return {
+        return [{
           ...row,
           messageFloorNumber: floorNumber,
           deleteCount: Math.max(1, totalMessageCount - floorNumber + 1),
           phase: phaseForMessage(row.message.id, messageIndex, messages)
-        };
+        }];
       }
       if (row.kind === 'compression') {
-        const floorIndex = row.floorMessageId ? messageIndexById.get(row.floorMessageId) ?? -1 : -1;
-        return {
+        return [{
           ...row,
-          phase: floorIndex >= 0 && row.floorMessageId ? phaseForMessage(row.floorMessageId, floorIndex, messages) : 'stable'
-        };
+          phase: phaseForAnchoredTimelineRow(row, messageIndexById, messages)
+        }];
       }
-      const floorIndex = row.floorMessageId ? messageIndexById.get(row.floorMessageId) ?? -1 : -1;
-      return {
-        ...row,
-        phase: floorIndex >= 0 && row.floorMessageId ? phaseForMessage(row.floorMessageId, floorIndex, messages) : 'stable'
-      };
+      return [];
     });
     timelineRows.value = rows;
     messageRows.value = rows.filter((row): row is MessageViewRow => row.kind === 'message');
+  }
+
+  function pruneExpandedCheckpointRows(rows: readonly ConversationTimelineRow[]): void {
+    const validCheckpointRowIds = new Set(rows.filter((row) => row.kind === 'checkpoint').map((row) => row.id));
+    if (expandedCheckpointRowId.value && !validCheckpointRowIds.has(expandedCheckpointRowId.value)) {
+      expandedCheckpointRowId.value = undefined;
+    }
+  }
+
+  function toggleCheckpointMarker(rowId: string): void {
+    expandedCheckpointRowId.value = expandedCheckpointRowId.value === rowId ? undefined : rowId;
+    rebuildTimelineRows();
   }
 
   function playExitFrom(messageId: string, action: () => void, delay = MESSAGE_EXIT_ACTION_DELAY_MS): void {
@@ -220,6 +272,16 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     return 'stable';
   }
 
+  function phaseForAnchoredTimelineRow(
+    row: ConversationCheckpointTimelineRow | ConversationCompressionTimelineRow,
+    messageIndexById: ReadonlyMap<string, number>,
+    messages: readonly MessageRecord[]
+  ): MessageViewPhase {
+    const messageId = row.floorMessageId;
+    const index = messageId ? messageIndexById.get(messageId) ?? -1 : -1;
+    return index >= 0 && messageId ? phaseForMessage(messageId, index, messages) : 'stable';
+  }
+
   function llmErrorBlocksForMessage(messageId: string): LlmErrorBlockRecord[] {
     return llmErrorBlocks.value.filter((block) => block.messageId === messageId);
   }
@@ -267,18 +329,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
   }
 
   function refreshRowPhases(): void {
-    const messages = messageRows.value.map((item) => item.message);
-    const messageIndexById = new Map(messages.map((message, index) => [message.id, index]));
-    const rows = timelineRows.value.map((row) => {
-      const messageId = row.kind === 'message' ? row.message.id : row.floorMessageId;
-      const index = messageId ? messageIndexById.get(messageId) ?? -1 : -1;
-      return {
-        ...row,
-        phase: index >= 0 && messageId ? phaseForMessage(messageId, index, messages) : 'stable'
-      };
-    });
-    timelineRows.value = rows;
-    messageRows.value = rows.filter((row): row is MessageViewRow => row.kind === 'message');
+    rebuildTimelineRows();
   }
 
   function markEntering(id: string): void {
@@ -319,6 +370,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
   return {
     messageRows,
     timelineRows,
+    checkpointMarkers,
     llmErrorBlocks,
     composerMode,
     composerHighlightKey,
@@ -330,6 +382,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     isEditing,
     syncMessages,
     syncTimeline,
+    toggleCheckpointMarker,
     playExitFrom,
     startEditMessage,
     startEditQueueItem,
@@ -360,6 +413,17 @@ function createComposerSnapshot(draft = ''): ComposerSnapshot {
       right: {},
       bottom: {}
     }
+  };
+}
+
+function createEmptyTimelineSyncSnapshot(): TimelineSyncSnapshot {
+  return {
+    messages: [],
+    checkpoints: [],
+    checkpointAnchors: [],
+    compressionBlocks: [],
+    floorByMessageId: {},
+    totalMessageCount: 0
   };
 }
 

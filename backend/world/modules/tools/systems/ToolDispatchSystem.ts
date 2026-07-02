@@ -68,6 +68,7 @@ import {
 import { ConversationProjectLink, ProjectContext } from '../../project/components';
 import { CheckpointEventType } from '../../checkpoint/events';
 import { ConversationProjectLinkBundle } from '../../project/bundles';
+import { CheckpointBarrier, type CheckpointBarrierData } from '../../checkpoint/components';
 import {
   activeWorkEnvironmentForRun,
   allowedWorkEnvironmentsForRun,
@@ -82,7 +83,11 @@ import {
 } from '../../workEnvironment/bundles';
 import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey, ToolSchemasKey } from '../resources';
 import { isToolAllowedByPolicy } from '../policy';
+import { spawnCheckpointBarrier, consumeReleasedCheckpointBarrier, newestBarrierForTarget } from '../../checkpoint/barriers';
+import { effectiveCheckpointPolicyForRequest } from '../../checkpoint/queries';
+import { effectiveCheckpointToolTriggerConfig } from '../../checkpoint/policy';
 import { isReadonlyCommandCall } from '../definitions/command';
+import { allowOutsideProjectPathsFromConfig } from '../definitions/filePathPolicy';
 import { RUN_AGENT_TOOL_NAME } from '../definitions/runAgent';
 import {
   compareToolCallOrder,
@@ -107,6 +112,7 @@ import {
   type ToolConfigRecord,
   type TranscriptInclusion
 } from '../../../../../shared/protocol';
+import type { FsPendingFileChangeProposal } from '../../../../capabilities/types';
 
 const QueuedToolCallsQuery = defineQuery({
   name: 'QueuedToolCalls',
@@ -136,6 +142,7 @@ const QueuedToolCallsQuery = defineQuery({
     AgentAnswerSubmissionLink,
     AgentAnswerTargetLink,
     ToolResultConsumed,
+    CheckpointBarrier,
     ProjectContext,
     ConversationProjectLink,
     WorkEnvironment,
@@ -157,16 +164,48 @@ export const ToolDispatchSystem = defineSystem({
   name: 'ToolDispatchSystem',
   access: {
     queries: [QueuedToolCallsQuery],
+    writes: { components: [CheckpointBarrier] },
     resources: { read: [AgentBlueprintsKey, ToolSchemasKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey] },
     bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentAnswerBundle, AgentFromBlueprintBundle, ModeBundle, ConversationProjectLinkBundle, WorkEnvironmentBundle],
-    events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested], emit: [CheckpointEventType.Requested] },
-    effects: { emit: ['tool.run'] }
+    events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested, ToolEventType.ChangeApplyRequested, ToolEventType.ChangeRejectRequested], emit: [CheckpointEventType.Requested] },
+    effects: { emit: ['tool.run', 'tool.change.apply'] }
   },
   run(ctx) {
     const { world, cmd } = ctx;
     backgroundTimedOutRunAgentTools(world, cmd);
 
     const handled = new Set<Entity>();
+
+    for (const request of readEvents(ctx, ToolEventType.ChangeRejectRequested)) {
+      const entity = toolCallEntityById(world, request.toolCallId);
+      if (entity === undefined || handled.has(entity)) continue;
+      const call = world.get(entity, ToolCall);
+      const state = world.get(entity, ToolState);
+      if (!call || !state || state.status !== 'awaiting_change_apply') continue;
+      handled.add(entity);
+      rejectToolCall(cmd, entity, call, state, request.reason?.trim() || '用户拒绝应用更改。');
+    }
+
+    for (const request of readEvents(ctx, ToolEventType.ChangeApplyRequested)) {
+      const entity = toolCallEntityById(world, request.toolCallId);
+      if (entity === undefined || handled.has(entity)) continue;
+      const call = world.get(entity, ToolCall);
+      const state = world.get(entity, ToolState);
+      if (!call || !state || state.status !== 'awaiting_change_apply' || world.has(entity, InFlight)) continue;
+      handled.add(entity);
+
+      const authorization = authorizeRunToolExecution(world, entity, call);
+      if (!authorization.ok) {
+        rejectToolCall(cmd, entity, call, state, authorization.reason);
+        continue;
+      }
+      const proposal = pendingFileChangeProposal(state.result);
+      if (!proposal) {
+        rejectToolCall(cmd, entity, call, state, '工具结果缺少可应用的文件变更提案。');
+        continue;
+      }
+      applyPendingToolChange(world, cmd, entity, call, state, authorization, proposal);
+    }
 
     for (const request of readEvents(ctx, ToolEventType.ExecutionRejectRequested)) {
       const entity = toolCallEntityById(world, request.toolCallId);
@@ -275,6 +314,7 @@ function isRunReadyForToolExecution(authorization: Extract<AuthorizationResult, 
 }
 
 function dispatchToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
+  if (awaitToolExecutionBeforeCheckpoint(world, cmd, entity, call, authorization)) return;
   if (call.name === SUBMIT_AGENT_ANSWER_TOOL_NAME) {
     executeSubmitAgentAnswerTool(world, cmd, entity, call, state, authorization);
     return;
@@ -294,10 +334,41 @@ function dispatchToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, 
   executeRuntimeToolCall(world, cmd, entity, call, state, authorization);
 }
 
-function requestToolExecutionBeforeCheckpoint(cmd: CommandSink, authorization: Extract<AuthorizationResult, { ok: true }>, call: ToolCallData): void {
+function awaitToolExecutionBeforeCheckpoint(
+  world: WorldReader,
+  cmd: CommandSink,
+  entity: Entity,
+  call: ToolCallData,
+  authorization: Extract<AuthorizationResult, { ok: true }>
+): boolean {
+  const existing = newestBarrierForTarget(world, (barrier) => toolExecutionBarrierMatches(barrier, entity, call.id));
+  if (existing) {
+    if (existing.barrier.status === 'released') {
+      consumeReleasedCheckpointBarrier(cmd, existing.entity);
+      return false;
+    }
+    return true;
+  }
+
+  if (!toolExecutionBeforeCheckpointEnabled(world, authorization, call)) return false;
+
+  const target = runTarget(world, authorization.run);
+  if (!target) return false;
+  const checkpointId = createMessageId();
+  spawnCheckpointBarrier(cmd, {
+    checkpointId,
+    conversation: target.conversation,
+    trigger: 'tool_execution_before',
+    targetKind: 'tool_execution',
+    targetRun: authorization.run,
+    targetRunId: authorization.runId,
+    targetToolCall: entity,
+    targetToolCallId: call.id
+  });
   cmd.enqueue({
     type: CheckpointEventType.Requested,
     payload: {
+      checkpointId,
       conversationId: authorization.conversationId,
       runId: authorization.runId,
       toolCallId: call.id,
@@ -306,12 +377,27 @@ function requestToolExecutionBeforeCheckpoint(cmd: CommandSink, authorization: E
       trigger: 'tool_execution_before'
     }
   });
+  return true;
+}
+
+function toolExecutionBarrierMatches(barrier: CheckpointBarrierData, entity: Entity, toolCallId: string): boolean {
+  return barrier.trigger === 'tool_execution_before'
+    && barrier.targetKind === 'tool_execution'
+    && (barrier.targetToolCall === entity || barrier.targetToolCallId === toolCallId);
+}
+
+function toolExecutionBeforeCheckpointEnabled(world: WorldReader, authorization: Extract<AuthorizationResult, { ok: true }>, call: ToolCallData): boolean {
+  const target = runTarget(world, authorization.run);
+  if (!target) return false;
+  const resolution = effectiveCheckpointPolicyForRequest(world, { conversation: target.conversation, run: authorization.run });
+  if (!resolution.policy.enabled) return false;
+  const toolDefinition = (world.tryGetResource(ToolDefinitionsKey) ?? []).find((tool) => tool.name === call.name);
+  return effectiveCheckpointToolTriggerConfig(call.name, resolution.policy.toolTriggers, toolDefinition).before;
 }
 
 function executeRuntimeToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
   const workEnvironment = activeWorkEnvironmentForRun(world, authorization.run)?.data;
   const workEnvironments = allowedWorkEnvironmentsForRun(world, authorization.run).map((item) => toPublicWorkEnvironmentRecord(item.data));
-  requestToolExecutionBeforeCheckpoint(cmd, authorization, call);
   cmd.effect({
     kind: 'tool.run',
     toolCallId: call.id,
@@ -581,7 +667,6 @@ function executeSwitchWorkEnvironmentTool(world: WorldReader, cmd: CommandSink, 
     return;
   }
 
-  requestToolExecutionBeforeCheckpoint(cmd, authorization, call);
   const started = startInlineToolExecution(cmd, entity, call, state, {
     executorAgentId: authorization.agentId,
     runId: authorization.runId,
@@ -846,7 +931,6 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     return;
   }
 
-  requestToolExecutionBeforeCheckpoint(cmd, authorization, call);
   if (resolved.value.created) {
     const sourceConversation = world.get(parentTarget.conversation, Conversation);
     const sourceAgent = world.get(parentTarget.agent, Agent);
@@ -1209,6 +1293,53 @@ function startInlineToolExecution(
     ...(payload !== undefined ? { payload } : {})
   });
   return { state: executing, startedAt };
+}
+
+function applyPendingToolChange(
+  world: WorldReader,
+  cmd: CommandSink,
+  entity: Entity,
+  call: ToolCallData,
+  state: ToolStateData,
+  authorization: Extract<AuthorizationResult, { ok: true }>,
+  proposal: FsPendingFileChangeProposal
+): void {
+  const now = Date.now();
+  const config = effectiveToolConfig(world, authorization.policy, call.name);
+  const workEnvironment = activeWorkEnvironmentForRun(world, authorization.run)?.data;
+  cmd.effect({
+    kind: 'tool.change.apply',
+    toolCallId: call.id,
+    name: call.name,
+    proposal,
+    ...(workEnvironment ? { workEnvironment: toPublicWorkEnvironmentRecord(workEnvironment) } : {}),
+    allowOutsideProjectPaths: allowOutsideProjectPathsFromConfig(config, false)
+  });
+  cmd.add(entity, ToolState, transitionToolState(state, 'applying_change', {}, now));
+  spawnToolCallEvent(cmd, {
+    toolCall: entity,
+    toolCallId: call.id,
+    kind: 'state',
+    status: 'applying_change',
+    at: now,
+    elapsedMs: Math.max(0, now - call.createdAt),
+    payload: { executorAgentId: authorization.agentId, runId: authorization.runId }
+  });
+  cmd.add(entity, InFlight, { kind: 'tool', startedAt: now });
+}
+
+function pendingFileChangeProposal(result: unknown): FsPendingFileChangeProposal | undefined {
+  const output = asPlainRecord(asPlainRecord(result)?.output);
+  const proposal = asPlainRecord(output?.proposal);
+  if (proposal?.kind !== 'file_change.proposal') return undefined;
+  if (proposal.operation !== 'write' && proposal.operation !== 'edit') return undefined;
+  if (typeof proposal.path !== 'string' || typeof proposal.baseContent !== 'string' || typeof proposal.targetContent !== 'string') return undefined;
+  if (typeof proposal.baseExisted !== 'boolean' || !Array.isArray(proposal.applyHunks)) return undefined;
+  return proposal as unknown as FsPendingFileChangeProposal;
+}
+
+function asPlainRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
 function awaitApproval(cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, executorAgentId: string, runId: string): void {

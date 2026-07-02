@@ -39,11 +39,37 @@ export function registerToolEffectHandlers(registry: EffectHandlerRegistry): voi
         emitToolState(emit, { toolCallId: effect.toolCallId, status: 'error', error: message, result: { error: message }, durationMs: Date.now() - startedAt });
       });
   });
+
+  registry.register('tool.change.apply', (effect, env, emit) => {
+    const startedAt = Date.now();
+    env.fs
+      .applyPendingFileChange(effect.proposal, {
+        workEnvironment: effect.workEnvironment,
+        allowOutsideProjectPaths: effect.allowOutsideProjectPaths
+      })
+      .then((output) => {
+        const durationMs = Date.now() - startedAt;
+        const finalState = toToolStatePayload(effect.toolCallId, {
+          ok: output.success,
+          output,
+          ...(output.kind === 'file_edit.result' && output.failed > 0 ? { status: 'warning' as const } : {})
+        }, durationMs);
+        emitToolState(emit, { toolCallId: effect.toolCallId, status: 'change_applied', result: finalState.result, durationMs });
+        emitToolState(emit, finalState);
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        emitToolState(emit, { toolCallId: effect.toolCallId, status: 'error', error: message, result: { error: message }, durationMs: Date.now() - startedAt });
+      });
+  });
 }
 
 function toToolStatePayload(toolCallId: string, result: ToolResultOut, durationMs: number): ToolStatePayload {
   const response = { ok: result.ok, output: result.output, ...(result.parts?.length ? { parts: result.parts } : {}) };
   if (result.ok) {
+    if (result.status === 'awaiting_change_apply') {
+      return { toolCallId, status: 'awaiting_change_apply', result: response, durationMs };
+    }
     const status = result.status === 'warning' ? 'warning' : 'success';
     return { toolCallId, status, result: response, durationMs };
   }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { IconTool } from '@tabler/icons-vue';
 import type {
   FunctionCallPart,
@@ -36,6 +36,10 @@ const clientState = useClientStateStore();
 const conversationTimeline = useConversationTimelineStore();
 const expanded = ref(false);
 const userChangedExpanded = ref(false);
+const autoOpenedActionIds = ref<Set<string>>(new Set());
+const autoApplyCountdown = ref<number | undefined>(undefined);
+let autoApplyTimer: ReturnType<typeof setTimeout> | undefined;
+let autoApplyCountdownTimer: ReturnType<typeof setInterval> | undefined;
 const toolCall = computed<ToolCallRecord | undefined>(() => {
   const partId = props.part.id;
   if (!props.messageId || !partId) return undefined;
@@ -83,6 +87,17 @@ const needsChangeApplyDecision = computed(() => toolCall.value?.status === 'awai
 const needsResultSubmitDecision = computed(() => toolCall.value?.status === 'awaiting_result_submit');
 const hasDetails = computed(() => hasArgs.value || hasOutput.value || Boolean(toolCall.value?.error) || executionApproved.value);
 const autoExpandDetails = computed(() => toolCall.value?.display?.autoExpand === true);
+const autoOpenDiffPreview = computed(() => toolCall.value?.display?.autoOpenDiffPreview === true);
+const autoApplyChange = computed(() => toolCall.value?.changeApply?.autoApply === true);
+const autoApplyDelaySeconds = computed(() => {
+  const value = toolCall.value?.changeApply?.autoApplyDelaySeconds;
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(600, Math.max(0, Math.floor(value))) : 3;
+});
+const autoApplyHint = computed(() => {
+  if (!needsChangeApplyDecision.value || !autoApplyChange.value) return undefined;
+  const remaining = autoApplyCountdown.value ?? autoApplyDelaySeconds.value;
+  return remaining <= 0 ? '即将自动应用更改' : `${remaining} 秒后自动应用更改`;
+});
 const commandRuntimeStatus = computed(() => toolCall.value ? shellRuntimeStatusLabel(toolCall.value) : undefined);
 const statusLabel = computed(() => commandRuntimeStatus.value?.label ?? (toolCall.value ? labelForToolCall(toolCall.value) : '工具请求已生成'));
 const statusTitle = computed(() => {
@@ -143,6 +158,30 @@ watch(autoExpandDetails, (autoExpand) => {
 watch(() => toolCall.value?.id, () => {
   userChangedExpanded.value = false;
   expanded.value = autoExpandDetails.value;
+  autoOpenedActionIds.value = new Set();
+  clearAutoApplyTimers();
+});
+
+watch(
+  () => `${autoOpenDiffPreview.value}:${headerActions.value.map((action) => `${action.id}:${action.disabled === true ? 'disabled' : 'enabled'}`).join('|')}`,
+  () => {
+    if (!autoOpenDiffPreview.value) return;
+    const action = headerActions.value.find((item) => item.id.startsWith('open-live-diff-') && !item.disabled);
+    if (!action || autoOpenedActionIds.value.has(action.id)) return;
+    autoOpenedActionIds.value.add(action.id);
+    action.invoke();
+  },
+  { immediate: true, flush: 'post' }
+);
+
+watch(
+  () => `${toolCall.value?.id ?? ''}:${toolCall.value?.status ?? ''}:${toolCall.value?.updatedAt ?? 0}:${autoApplyChange.value}:${autoApplyDelaySeconds.value}`,
+  scheduleAutoApply,
+  { immediate: true }
+);
+
+onBeforeUnmount(() => {
+  clearAutoApplyTimers();
 });
 
 function isCommandTool(toolName: string): boolean {
@@ -172,7 +211,34 @@ function sendToolDecision(type:
 ): void {
   const call = toolCall.value;
   if (!call) return;
+  if (type === BridgeMessageType.ToolChangeApply || type === BridgeMessageType.ToolChangeReject) clearAutoApplyTimers();
   bridge.request(type, { toolCallId: call.id, conversationId: clientState.currentConversationId });
+}
+
+function scheduleAutoApply(): void {
+  clearAutoApplyTimers();
+  const call = toolCall.value;
+  if (!call || call.status !== 'awaiting_change_apply' || !autoApplyChange.value) return;
+  const delaySeconds = autoApplyDelaySeconds.value;
+  autoApplyCountdown.value = delaySeconds;
+  if (delaySeconds <= 0) {
+    autoApplyTimer = setTimeout(() => sendToolDecision(BridgeMessageType.ToolChangeApply), 0);
+    return;
+  }
+  const startedAt = Date.now();
+  autoApplyCountdownTimer = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+    autoApplyCountdown.value = Math.max(0, delaySeconds - elapsed);
+  }, 250);
+  autoApplyTimer = setTimeout(() => sendToolDecision(BridgeMessageType.ToolChangeApply), delaySeconds * 1000);
+}
+
+function clearAutoApplyTimers(): void {
+  if (autoApplyTimer) clearTimeout(autoApplyTimer);
+  if (autoApplyCountdownTimer) clearInterval(autoApplyCountdownTimer);
+  autoApplyTimer = undefined;
+  autoApplyCountdownTimer = undefined;
+  autoApplyCountdown.value = undefined;
 }
 
 function setExpanded(value: boolean): void {
@@ -381,6 +447,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
     <button type="button" class="secondary" @click="sendToolDecision(BridgeMessageType.ToolExecutionReject)">拒绝</button>
   </div>
   <div v-else-if="needsChangeApplyDecision" class="tool-decision-actions is-external">
+    <span v-if="autoApplyHint" class="tool-decision-hint">{{ autoApplyHint }}</span>
     <button type="button" @click="sendToolDecision(BridgeMessageType.ToolChangeApply)">应用更改</button>
     <button type="button" class="secondary" @click="sendToolDecision(BridgeMessageType.ToolChangeReject)">拒绝更改</button>
   </div>
@@ -661,6 +728,19 @@ function isInternalApprovalProgress(progress: unknown): boolean {
 .tool-decision-actions.is-external {
   margin: 4px 0 0 24px;
   padding-left: 0;
+}
+
+.tool-decision-hint {
+  min-height: 24px;
+  border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 80%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  color: var(--vscode-descriptionForeground);
+  background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground) 6%);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
 }
 
 .tool-decision-actions button {

@@ -1,4 +1,4 @@
-import type { FsFileDiffRecord } from './types';
+import type { FsFileDiffRecord, FsHunkEditRequest } from './types';
 
 const DEFAULT_DIFF_CONTEXT_LINES = 3;
 const MAX_LCS_CELLS = 1_000_000;
@@ -30,6 +30,26 @@ export function buildFileDiffRecord(filePath: string, before: string, after: str
     removed: stats.removed,
     truncated: truncated.truncated
   };
+}
+
+export function buildFileReplacementHunks(before: string, after: string, contextLines = DEFAULT_DIFF_CONTEXT_LINES): FsHunkEditRequest[] {
+  if (before === after) return [];
+  const beforeLines = splitLinesForDiff(before);
+  const afterLines = splitLinesForDiff(after);
+  const ops = numberDiffOps(buildRawDiffOps(beforeLines, afterLines));
+  const ranges = hunkRanges(ops, contextLines);
+  return ranges
+    .map((range) => replacementHunkFromOps(ops.slice(range.start, range.end)))
+    .filter((hunk): hunk is FsHunkEditRequest => !!hunk);
+}
+
+function replacementHunkFromOps(ops: NumberedDiffOp[]): FsHunkEditRequest | undefined {
+  const oldLines = ops.filter((op) => op.type !== 'add').map((op) => op.content);
+  const newLines = ops.filter((op) => op.type !== 'del').map((op) => op.content);
+  const oldContent = oldLines.join('\n');
+  const newContent = newLines.join('\n');
+  if (oldContent === newContent || oldContent.length === 0) return undefined;
+  return { oldContent, newContent };
 }
 
 export function countDiffStats(diff: string): { added: number; removed: number } {

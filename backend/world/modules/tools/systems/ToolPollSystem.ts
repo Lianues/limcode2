@@ -62,7 +62,7 @@ export const ToolPollSystem = defineSystem({
           payload: payload.progress ?? terminalPayload ?? payload.result,
           error: payload.error
         });
-        if (isTerminalToolStatus(next.status)) {
+        if (isTerminalToolStatus(next.status) || next.status === 'awaiting_change_apply') {
           cmd.remove(entity, InFlight);
         }
       } catch (error) {

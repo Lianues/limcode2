@@ -894,8 +894,9 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
 .message-floor {
   position: relative;
   width: 100%;
-  padding: var(--space-4) var(--conversation-content-padding-right, calc(var(--space-4) + 24px))
-    var(--space-4) var(--conversation-content-padding-left, var(--space-4));
+  --message-floor-padding-block: 10px;
+  padding: var(--message-floor-padding-block) var(--conversation-content-padding-right, calc(var(--space-4) + 24px))
+    var(--message-floor-padding-block) var(--conversation-content-padding-left, var(--space-4));
   box-sizing: border-box;
   background-color: color-mix(in srgb, var(--vscode-editor-background) 97%, var(--vscode-foreground) 3%);
   transition: background-color var(--lc-message-bg-transition-duration) ease;
@@ -949,7 +950,7 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
 
 .message-actions {
   position: absolute;
-  top: var(--space-2);
+  top: var(--message-floor-padding-block, var(--space-2));
   right: var(--conversation-content-padding-right, calc(var(--space-4) + 24px));
   display: flex;
   align-items: center;

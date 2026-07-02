@@ -8,6 +8,7 @@ import type {
 } from '../../../../shared/protocol';
 
 export interface CheckpointRequestedPayload {
+  checkpointId?: string;
   conversationId: string;
   trigger: CheckpointTriggerKind;
   runId?: string;

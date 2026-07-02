@@ -84,3 +84,37 @@ export interface CheckpointTimelineAnchorData {
   updatedAt: number;
 }
 export const CheckpointTimelineAnchor = defineComponent<CheckpointTimelineAnchorData>('CheckpointTimelineAnchor');
+
+export type CheckpointBarrierStatus = 'waiting' | 'pending' | 'released';
+export type CheckpointBarrierTargetKind = 'tool_execution' | 'message_llm' | 'llm_request';
+export type CheckpointBarrierReleaseReason =
+  | 'checkpoint_completed'
+  | 'checkpoint_skipped'
+  | 'checkpoint_failed'
+  | 'policy_disabled'
+  | 'trigger_disabled'
+  | 'missing_conversation'
+  | 'missing_project';
+
+export interface CheckpointBarrierData {
+  id: string;
+  checkpointId: string;
+  conversation?: Entity;
+  checkpoint?: Entity;
+  trigger: CheckpointTriggerKind;
+  status: CheckpointBarrierStatus;
+  targetKind: CheckpointBarrierTargetKind;
+  targetRun?: Entity;
+  targetRunId?: string;
+  targetToolCall?: Entity;
+  targetToolCallId?: string;
+  targetMessage?: Entity;
+  targetMessageId?: string;
+  targetLlmRequest?: Entity;
+  targetLlmRequestId?: string;
+  createdAt: number;
+  updatedAt: number;
+  releasedAt?: number;
+  releaseReason?: CheckpointBarrierReleaseReason;
+}
+export const CheckpointBarrier = defineComponent<CheckpointBarrierData>('CheckpointBarrier');

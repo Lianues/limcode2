@@ -4,9 +4,10 @@ import { AgentRun } from '../../agentRun/components';
 import { Conversation, Message } from '../../chat/components';
 import { ProjectContext } from '../../project/components';
 import { ToolCall } from '../../tools/components';
-import { Checkpoint, CheckpointTimelineAnchor, ShadowRepository } from '../components';
+import { Checkpoint, CheckpointBarrier, CheckpointTimelineAnchor, ShadowRepository, type CheckpointBarrierReleaseReason } from '../components';
 import { CheckpointEventType } from '../events';
 import { CheckpointBundle } from '../bundles';
+import { releaseCheckpointBarriers } from '../barriers';
 
 export const CheckpointResultSystem = defineSystem({
   name: 'CheckpointResultSystem',
@@ -14,7 +15,7 @@ export const CheckpointResultSystem = defineSystem({
     return readEvents(ctx, CheckpointEventType.Completed).length > 0;
   },
   access: {
-    reads: { components: [AgentRun, Conversation, Message, ProjectContext, ShadowRepository, ToolCall, Checkpoint, CheckpointTimelineAnchor] },
+    reads: { components: [AgentRun, Conversation, Message, ProjectContext, ShadowRepository, ToolCall, Checkpoint, CheckpointBarrier, CheckpointTimelineAnchor] },
     bundles: [CheckpointBundle],
     events: { read: [CheckpointEventType.Completed] }
   },
@@ -68,9 +69,16 @@ export const CheckpointResultSystem = defineSystem({
           });
         }
       }
+      releaseCheckpointBarriers(world, cmd, payload.checkpointId, releaseReasonForStatus(payload.status));
     }
   }
 });
+
+function releaseReasonForStatus(status: string): CheckpointBarrierReleaseReason {
+  if (status === 'created') return 'checkpoint_completed';
+  if (status === 'skipped') return 'checkpoint_skipped';
+  return 'checkpoint_failed';
+}
 
 function checkpointTimelineAnchorId(checkpointId: string): string {
   return `checkpoint-timeline-anchor:${checkpointId}`;

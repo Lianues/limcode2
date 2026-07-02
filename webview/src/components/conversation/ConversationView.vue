@@ -1,30 +1,34 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
-import { isVisibleTextPart, type MessageContent } from '@shared/protocol';
+import { isVisibleTextPart, type CheckpointRecord, type MessageContent } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
 import { useChat } from '@webview/composables/useChat';
 import { useBottomStickyScroller } from '@webview/composables/useBottomStickyScroller';
 import { useCheckpointPolicyStore } from '@webview/stores/useCheckpointPolicyStore';
+import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import MessageList from './MessageList.vue';
 import Composer from '@webview/components/input/Composer.vue';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 import RunHistoryDetailPanel from './RunHistoryDetailPanel.vue';
+import ConversationTimelineMarkers from './ConversationTimelineMarkers.vue';
 import { checkpointBeforeMessageFloor, rollbackConfirmActionTitle } from './checkpointRollback';
 
 const clientState = useClientStateStore();
 const conversationTimeline = useConversationTimelineStore();
 const conversationUi = useConversationUiStore();
 const checkpointStore = useCheckpointPolicyStore();
+const settings = useGlobalSettingsStore();
 const { currentConversationId } = storeToRefs(clientState);
 const { currentTimeline, currentMessages, currentCheckpoints, currentCheckpointTimelineAnchors, currentCompressionBlocks, currentMessageFloorById, currentTotalMessages } = storeToRefs(conversationTimeline);
 const { sendMessage, editMessage, updateQueueInput } = useChat();
 
 const scroller = ref<HTMLElement | null>(null);
 const conversationBody = ref<HTMLElement | null>(null);
+const autoDismissTimers = new Map<string, number>();
 
 useBottomStickyScroller(scroller);
 
@@ -89,6 +93,19 @@ watch(
   ([messages, checkpoints, checkpointAnchors, compressionBlocks, floorByMessageId, totalMessages]) => conversationUi.syncTimeline(messages, checkpoints, checkpointAnchors, compressionBlocks, floorByMessageId, totalMessages),
   { immediate: true }
 );
+
+watch(
+  [
+    currentCheckpoints,
+    () => settings.loadedSections.checkpointMaintenance,
+    () => settings.checkpointMaintenance.autoDismissEnabled,
+    () => settings.checkpointMaintenance.autoDismissSeconds
+  ],
+  () => syncCheckpointAutoDismiss(),
+  { immediate: true }
+);
+
+onBeforeUnmount(() => clearCheckpointAutoDismissTimers());
 
 function onSubmit(text: string, content?: MessageContent): void {
   if (conversationUi.editingQueueRunId) {
@@ -159,6 +176,49 @@ function nextMessageAfter(messageId: string) {
 function truncatePreview(text: string): string {
   return text.length > 180 ? `${text.slice(0, 180)}...` : text;
 }
+
+function syncCheckpointAutoDismiss(): void {
+  settings.ensureCheckpointMaintenance();
+  if (!settings.loadedSections.checkpointMaintenance || !settings.checkpointMaintenance.autoDismissEnabled) {
+    clearCheckpointAutoDismissTimers();
+    return;
+  }
+
+  const eligibleCheckpoints = new Map(
+    currentCheckpoints.value
+      .filter(checkpointShouldAutoDismiss)
+      .map((checkpoint) => [checkpoint.id, checkpoint])
+  );
+
+  for (const id of [...autoDismissTimers.keys()]) {
+    if (eligibleCheckpoints.has(id)) continue;
+    clearCheckpointAutoDismissTimer(id);
+  }
+
+  const delayMs = Math.max(1, Math.floor(settings.checkpointMaintenance.autoDismissSeconds || 5)) * 1000;
+  for (const checkpoint of eligibleCheckpoints.values()) {
+    if (autoDismissTimers.has(checkpoint.id)) continue;
+    const timer = window.setTimeout(() => {
+      autoDismissTimers.delete(checkpoint.id);
+      checkpointStore.dismissCheckpoint(checkpoint.id, checkpoint.conversationId);
+    }, delayMs);
+    autoDismissTimers.set(checkpoint.id, timer);
+  }
+}
+
+function checkpointShouldAutoDismiss(checkpoint: CheckpointRecord): boolean {
+  return checkpoint.status === 'failed' || (checkpoint.status === 'skipped' && checkpoint.skipReason !== 'no_changes');
+}
+
+function clearCheckpointAutoDismissTimer(id: string): void {
+  const timer = autoDismissTimers.get(id);
+  if (timer !== undefined) window.clearTimeout(timer);
+  autoDismissTimers.delete(id);
+}
+
+function clearCheckpointAutoDismissTimers(): void {
+  for (const id of [...autoDismissTimers.keys()]) clearCheckpointAutoDismissTimer(id);
+}
 </script>
 
 <template>
@@ -167,7 +227,13 @@ function truncatePreview(text: string): string {
       <div ref="scroller" class="conversation-scroll">
         <MessageList :empty-hint="emptyHint" :scroller="scroller" />
       </div>
+      <ConversationTimelineMarkers
+        :markers="conversationUi.checkpointMarkers"
+        :scroller="scroller"
+        @toggle="conversationUi.toggleCheckpointMarker"
+      />
       <AdvancedScrollbar
+        class="conversation-main-scrollbar"
         :scroller="scroller"
         :markers="scrollMarkers"
         show-markers
@@ -196,8 +262,9 @@ function truncatePreview(text: string): string {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  --conversation-content-padding-left: var(--space-4);
-  --conversation-content-padding-right: calc(var(--space-4) + 24px);
+  --conversation-timeline-marker-width: 24px;
+  --conversation-content-padding-left: var(--conversation-timeline-marker-width);
+  --conversation-content-padding-right: var(--conversation-timeline-marker-width);
 }
 
 .conversation-body {
@@ -218,6 +285,10 @@ function truncatePreview(text: string): string {
   width: 0;
   height: 0;
   display: none;
+}
+
+.conversation :deep(.advanced-scrollbar.conversation-main-scrollbar) {
+  right: 0;
 }
 
 .conversation-composer {

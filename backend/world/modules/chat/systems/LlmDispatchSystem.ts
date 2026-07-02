@@ -32,10 +32,12 @@ import {
   RunRuntimeContextSnapshotLink
 } from '../../runtimeContext/components';
 import { PROMPT_CONTEXT_PLACEHOLDER_READS, renderSystemPromptTemplate } from '../../runtimeContext/placeholders';
-import { Conversation, InFlight, LlmRequest, Message, MessageCurrentRevisionLink, PartOf } from '../components';
+import { Conversation, InFlight, LlmRequest, Message, MessageCurrentRevisionLink, PartOf, type LlmRequestData } from '../components';
 import { textContent } from '../../../../../shared/protocol';
 import type { LlmModelSettings, LlmStartRequest, ToolSchema } from '../../llm/contracts';
 import { LlmInvocation } from '../../llm/components';
+import { CheckpointBarrier, type CheckpointBarrierData } from '../../checkpoint/components';
+import { consumeReleasedCheckpointBarrier } from '../../checkpoint/barriers';
 import {
   activeContextPolicyForRun,
   activeModelProfileForRun,
@@ -59,6 +61,7 @@ const LlmContextLookupComponents = [
   Message,
   PartOf,
   MessageRunLink,
+  CheckpointBarrier,
   MessageCurrentRevisionLink,
   AgentRunInputRevision,
   AgentRunSourceLink,
@@ -109,7 +112,7 @@ export const LlmDispatchSystem = defineSystem({
   access: {
     queries: [PendingLlmRequestsQuery],
     reads: { components: LlmContextLookupComponents },
-    writes: { components: [RunCompressionBlockLink], mutationMode: 'create' },
+    writes: { components: [RunCompressionBlockLink, CheckpointBarrier] },
     bundles: [AgentRunBundle],
     resources: { read: [ToolSchemasKey, ToolDefinitionsKey, ...(TOOL_SCHEMA_CONTRIBUTOR_READS.resources ?? [])] },
     effects: { emit: ['llm.start'] }
@@ -123,6 +126,9 @@ export const LlmDispatchSystem = defineSystem({
     for (const request of requests) {
       const data = world.get(request, LlmRequest);
       if (!data) continue;
+      const barriers = checkpointBarriersForLlmRequest(world, request, data);
+      if (barriers.some((item) => item.barrier.status !== 'released')) continue;
+      for (const barrier of barriers) consumeReleasedCheckpointBarrier(cmd, barrier.entity);
 
       const contextPolicy = activeContextPolicyForRun(world, data.run);
       const contextInput = {
@@ -187,6 +193,38 @@ export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmSt
     model,
     ...(settingsSnapshot ? { settingsSnapshot } : {})
   };
+}
+
+function checkpointBarriersForLlmRequest(
+  world: WorldReader,
+  request: Entity,
+  data: LlmRequestData
+): Array<{ entity: Entity; barrier: CheckpointBarrierData }> {
+  const inputMessages = inputMessageEntitiesForRun(world, data.run);
+  return world
+    .query(CheckpointBarrier)
+    .map((entity) => ({ entity, barrier: world.get(entity, CheckpointBarrier) }))
+    .filter((item): item is { entity: Entity; barrier: CheckpointBarrierData } => {
+      const barrier = item.barrier;
+      if (!barrier) return false;
+      if (barrier.targetKind === 'llm_request') {
+        return barrier.targetLlmRequest === request || barrier.targetLlmRequestId === data.id;
+      }
+      if (barrier.targetKind === 'message_llm') {
+        return barrier.targetMessage !== undefined && inputMessages.has(barrier.targetMessage);
+      }
+      return false;
+    })
+    .sort((left, right) => left.barrier.createdAt - right.barrier.createdAt || left.entity - right.entity);
+}
+
+function inputMessageEntitiesForRun(world: WorldReader, run: Entity): Set<Entity> {
+  const result = new Set<Entity>();
+  for (const entity of world.query(MessageRunLink)) {
+    const link = world.get(entity, MessageRunLink);
+    if (link?.run === run && link.role === 'input') result.add(link.message);
+  }
+  return result;
 }
 
 function composeSystemInstruction(prompts: Array<{ name: string; text: string }>): string {

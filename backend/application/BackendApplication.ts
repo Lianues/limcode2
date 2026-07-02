@@ -164,6 +164,7 @@ export class BackendApplication {
       webview: this.env.webview,
       clients: this.webviewClients,
       storage: this.env.storage,
+      fs: this.env.fs,
       llm: this.env.llm,
       command: this.env.command,
       globalSettingsBridge: this.globalSettingsBridge,

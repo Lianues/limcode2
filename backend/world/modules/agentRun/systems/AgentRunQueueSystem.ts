@@ -1,7 +1,7 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
 import { AgentRun, AgentRunNeedsModel, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunSourceLink, AgentRunTargetLink } from '../components';
 import { AgentRunBundle, markRunNeedsModel, spawnMessageRunLink } from '../bundles';
-import { Checkpoint } from '../../checkpoint/components';
+import { Checkpoint, CheckpointBarrier } from '../../checkpoint/components';
 import { CheckpointEventType } from '../../checkpoint/events';
 import { Conversation, LlmRequest, Message, PartOf } from '../../chat/components';
 import { UserMessageBundle } from '../../chat/bundles';
@@ -11,7 +11,7 @@ const QueuedRunsQuery = defineQuery({
   name: 'QueuedAgentRunsWithoutModelRequest',
   all: [AgentRun, AgentRunTargetLink],
   none: [AgentRunNeedsModel],
-  read: [AgentRun, AgentRunTargetLink, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunSourceLink, AgentRunNeedsModel, LlmRequest, Conversation, Message, PartOf, Checkpoint],
+  read: [AgentRun, AgentRunTargetLink, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunSourceLink, AgentRunNeedsModel, LlmRequest, Conversation, Message, PartOf, Checkpoint, CheckpointBarrier],
   add: [AgentRunNeedsModel],
   write: [AgentRunSourceLink],
   remove: [AgentRunQueuedInput],
@@ -23,6 +23,7 @@ export const AgentRunQueueSystem = defineSystem({
   name: 'AgentRunQueueSystem',
   access: {
     queries: [QueuedRunsQuery],
+    writes: { components: [CheckpointBarrier], mutationMode: 'create' },
     events: { emit: [CheckpointEventType.Requested] },
     bundles: [UserMessageBundle, AgentRunBundle]
   },

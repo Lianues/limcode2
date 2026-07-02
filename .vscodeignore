@@ -1,14 +1,24 @@
 .vscode/**
+.agents/**
+.claude/**
+.codex/**
+.iris/**
 backend/**
 shared/**
 vscode/**
 webview/**
-.iris/**
+src/**
+src copy/**
+scripts/**
+docs/**
+milestone/**
+remote-exec/**
 tsconfig*.json
 vite.config.ts
 *.map
-node_modules/**
 .gitignore
+AGENTS.md
+README copy.md
 !dist/**
 !package.json
 !README.md

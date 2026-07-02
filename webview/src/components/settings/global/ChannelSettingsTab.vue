@@ -460,6 +460,21 @@ function cancelDelete(): void {
         <span class="stream-checkbox-text">启用流式生成。普通回复和上下文压缩会复用此配置。</span>
       </div>
 
+      <div class="global-settings-field stream-field">
+        <span>多模态工具</span>
+        <div class="stream-checkbox-row">
+          <LcCheckbox
+            :model-value="activeConfig.enableMultimodalTools !== false"
+            size="sm"
+            aria-label="启用多模态工具"
+            @update:model-value="updateActiveConfigField('enableMultimodalTools', $event)"
+          >
+            <span class="stream-checkbox-enable">启用</span>
+          </LcCheckbox>
+        </div>
+        <span class="stream-checkbox-text">启用后 read 可返回图片、PDF 等附件内容；关闭后 read 只读取文本。</span>
+      </div>
+
       <div class="global-settings-field stream-field retry-field">
         <span>报错自动重试</span>
         <div class="stream-checkbox-row">
@@ -894,4 +909,3 @@ function cancelDelete(): void {
   }
 }
 </style>
-

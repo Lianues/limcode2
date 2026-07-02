@@ -1,4 +1,6 @@
 import { createHash } from 'crypto';
+import { fileURLToPath } from 'url';
+import * as path from 'path';
 import type { Entity, WorldReader, AccessDeclaration } from '../../../ecs/types';
 import type { PromptPlaceholderRecord } from '../../../../shared/protocol';
 import { formatWorkEnvironmentForDisplay } from '../../../../shared/workEnvironmentCatalog';
@@ -121,7 +123,7 @@ function currentWorkspaceText(context: PromptPlaceholderRenderContext, field: 'n
   if (conversation === undefined) return '未绑定工作区。';
   const project = projectContextForConversation(context.world, conversation);
   if (!project) return '未绑定工作区。';
-  return field === 'name' ? project.name : project.uri;
+  return field === 'name' ? project.name : formatWorkspaceUriForPrompt(project.uri);
 }
 
 function projectContextForConversation(world: WorldReader, conversation: Entity): ProjectContextData | undefined {
@@ -134,6 +136,38 @@ function projectContextForConversation(world: WorldReader, conversation: Entity)
 }
 
 type ProjectContextData = { id: string; kind: string; uri: string; name: string; createdAt: number; updatedAt: number };
+
+export function formatWorkspaceUriForPrompt(uri: string): string {
+  const trimmed = uri.trim();
+  if (!trimmed) return '';
+  if (!trimmed.startsWith('file:')) return decodeUriFallback(trimmed);
+  return fileUriToDisplayPath(trimmed) ?? decodeUriFallback(trimmed);
+}
+
+function fileUriToDisplayPath(uri: string): string | undefined {
+  try {
+    const parsed = new URL(uri);
+    if (parsed.protocol !== 'file:') return undefined;
+    const decodedPath = decodeURIComponent(parsed.pathname);
+    const windowsDrivePath = decodedPath.match(/^\/([a-zA-Z]:)(?:\/(.*))?$/);
+    if (windowsDrivePath) {
+      const [, drive, rest = ''] = windowsDrivePath;
+      return rest ? `${drive}\\${rest.replace(/\//g, '\\')}` : `${drive}\\`;
+    }
+    if (process.platform === 'win32') return fileURLToPath(parsed);
+    return path.normalize(fileURLToPath(parsed));
+  } catch {
+    return undefined;
+  }
+}
+
+function decodeUriFallback(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
 
 function formatLocalDate(value: Date): string {
   const year = value.getFullYear();

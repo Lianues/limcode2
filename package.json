@@ -28,6 +28,14 @@
         "category": "LimCode"
       }
     ],
+    "keybindings": [
+      {
+        "command": "limcode.applyLiveDiffPreview",
+        "key": "ctrl+s",
+        "mac": "cmd+s",
+        "when": "resourceScheme == limcode-live-diff"
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
         {

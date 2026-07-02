@@ -73,6 +73,7 @@ export function createDefaultLlmProviderConfig(input: { name?: string } = {}): L
     stream: true,
     retryOnError: DEFAULT_LLM_RETRY_ON_ERROR,
     retryMaxAttempts: DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
+    enableMultimodalTools: true,
     contextWindowTokens: DEFAULT_LLM_CONTEXT_WINDOW_TOKENS,
     createdAt: now,
     updatedAt: now
@@ -102,6 +103,7 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
     stream: typeof input?.stream === 'boolean' ? input.stream : true,
     retryOnError: typeof input?.retryOnError === 'boolean' ? input.retryOnError : DEFAULT_LLM_RETRY_ON_ERROR,
     retryMaxAttempts: finiteRetryMaxAttempts(input?.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
+    enableMultimodalTools: typeof input?.enableMultimodalTools === 'boolean' ? input.enableMultimodalTools : true,
     contextWindowTokens,
     ...(headers ? { headers } : {}),
     ...(generationConfig ? { generationConfig } : {}),

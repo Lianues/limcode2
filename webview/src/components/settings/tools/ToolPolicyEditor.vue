@@ -1243,6 +1243,15 @@ function inputNumber(event: Event): number {
   background: var(--vscode-input-background, var(--vscode-editor-background));
   font: inherit;
   font-variant-numeric: tabular-nums;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.tool-delay-input input::-webkit-outer-spin-button,
+.tool-delay-input input::-webkit-inner-spin-button {
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .tool-delay-input input:focus {

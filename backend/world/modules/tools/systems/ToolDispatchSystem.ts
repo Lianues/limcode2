@@ -54,6 +54,7 @@ import { activeToolPolicyForRun, runForToolCall, runSource, runTarget, toolCallE
 import { AgentAnswerBundle, spawnAgentAnswer } from '../../agentAnswer/bundles';
 import { AgentAnswer, AgentAnswerSubmissionLink, AgentAnswerTargetLink } from '../../agentAnswer/components';
 import { agentAnswerById } from '../../agentAnswer/queries';
+import { LlmInvocation, RunLlmInvocationLink } from '../../llm/components';
 import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
 import { ToolCall, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolStateData } from '../components';
 import { ToolEventType } from '../events';
@@ -106,6 +107,7 @@ import {
   type ConversationPolicyMode,
   type ConversationVisibility,
   type DeliveryMode,
+  type LlmInvocationSettingsSnapshotRecord,
   type MessageContent,
   type NewMessageWhileRunningBehavior,
   type SourceEditBehavior,
@@ -151,7 +153,9 @@ const QueuedToolCallsQuery = defineQuery({
     ConversationWorkEnvironmentLink,
     RunWorkEnvironmentLink,
     RunDeliveryPolicy,
-    RunDeliveryPolicyLink
+    RunDeliveryPolicyLink,
+    LlmInvocation,
+    RunLlmInvocationLink
   ],
   write: [ToolState, AgentRun, AgentAnswer, RunDeliveryPolicy],
   remove: [InFlight],
@@ -236,6 +240,7 @@ export const ToolDispatchSystem = defineSystem({
         markExecutionApproved(cmd, entity, call, state, authorization, true);
         continue;
       }
+      markExecutionApproved(cmd, entity, call, state, authorization, false);
       dispatchToolCall(world, cmd, entity, call, state, authorization);
     }
 
@@ -398,6 +403,7 @@ function toolExecutionBeforeCheckpointEnabled(world: WorldReader, authorization:
 function executeRuntimeToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
   const workEnvironment = activeWorkEnvironmentForRun(world, authorization.run)?.data;
   const workEnvironments = allowedWorkEnvironmentsForRun(world, authorization.run).map((item) => toPublicWorkEnvironmentRecord(item.data));
+  const settingsSnapshot = settingsSnapshotForRun(world, authorization.run);
   cmd.effect({
     kind: 'tool.run',
     toolCallId: call.id,
@@ -406,6 +412,7 @@ function executeRuntimeToolCall(world: WorldReader, cmd: CommandSink, entity: En
     runId: authorization.runId,
     conversationId: authorization.conversationId,
     config: effectiveToolConfig(world, authorization.policy, call.name),
+    ...(settingsSnapshot ? { settingsSnapshot } : {}),
     ...(workEnvironment ? { workEnvironment: toPublicWorkEnvironmentRecord(workEnvironment) } : {}),
     ...(workEnvironments.length > 0 ? { workEnvironments } : {})
   });
@@ -421,6 +428,30 @@ function executeRuntimeToolCall(world: WorldReader, cmd: CommandSink, entity: En
     payload: { executorAgentId: authorization.agentId, runId: authorization.runId }
   });
   cmd.add(entity, InFlight, { kind: 'tool', startedAt: now });
+}
+
+function settingsSnapshotForRun(world: WorldReader, run: Entity): LlmInvocationSettingsSnapshotRecord | undefined {
+  let latest: { settings: LlmInvocationSettingsSnapshotRecord; invocationCreatedAt: number; linkCreatedAt: number; linkId: string } | undefined;
+  for (const entity of world.query(RunLlmInvocationLink)) {
+    const link = world.get(entity, RunLlmInvocationLink);
+    if (!link || link.run !== run) continue;
+    const invocation = world.get(link.invocation, LlmInvocation);
+    if (!invocation?.settings) continue;
+    const candidate = {
+      settings: invocation.settings,
+      invocationCreatedAt: invocation.createdAt,
+      linkCreatedAt: link.createdAt,
+      linkId: link.id
+    };
+    if (!latest
+      || candidate.invocationCreatedAt > latest.invocationCreatedAt
+      || (candidate.invocationCreatedAt === latest.invocationCreatedAt && candidate.linkCreatedAt > latest.linkCreatedAt)
+      || (candidate.invocationCreatedAt === latest.invocationCreatedAt && candidate.linkCreatedAt === latest.linkCreatedAt && candidate.linkId > latest.linkId)
+    ) {
+      latest = candidate;
+    }
+  }
+  return latest?.settings;
 }
 
 interface SubmitAgentAnswerArgs {

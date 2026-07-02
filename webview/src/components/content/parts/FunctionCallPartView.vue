@@ -23,6 +23,10 @@ import type { ToolHeaderAction } from '../toolDisplay/types';
 const props = defineProps<{
   part: FunctionCallPart;
   messageId?: string;
+  partIndex?: number;
+  markdown?: boolean;
+  streaming?: boolean;
+  streamingPhase?: 'waiting' | 'thinking' | 'writing';
   batchIndex?: number;
   batchMode?: ToolSchedulingMode;
   batchState?: 'active' | 'completed' | 'pending';
@@ -82,10 +86,11 @@ const headerPreview = computed(() => toolDisplay.value.headerPreview);
 const hasArgs = computed(() => inputSections.value.length > 0);
 const hasOutput = computed(() => outputSections.value.length > 0);
 const executionApproved = computed(() => isExecutionApprovedProgress(toolCall.value?.progress));
+const executionApprovalPending = computed(() => toolCall.value?.status === 'awaiting_approval' && executionApproved.value);
 const needsExecutionDecision = computed(() => toolCall.value?.status === 'awaiting_approval' && !executionApproved.value);
 const needsChangeApplyDecision = computed(() => toolCall.value?.status === 'awaiting_change_apply');
 const needsResultSubmitDecision = computed(() => toolCall.value?.status === 'awaiting_result_submit');
-const hasDetails = computed(() => hasArgs.value || hasOutput.value || Boolean(toolCall.value?.error) || executionApproved.value);
+const hasDetails = computed(() => hasArgs.value || hasOutput.value || Boolean(toolCall.value?.error) || executionApprovalPending.value);
 const autoExpandDetails = computed(() => toolCall.value?.display?.autoExpand === true);
 const autoOpenDiffPreview = computed(() => toolCall.value?.display?.autoOpenDiffPreview === true);
 const autoApplyChange = computed(() => toolCall.value?.changeApply?.autoApply === true);
@@ -262,7 +267,9 @@ function shellRuntimeStatusLabel(call: ToolCallRecord): { label: string; status:
   return undefined;
 }
 function labelForToolCall(call: ToolCallRecord): string {
-  if (call.status === 'awaiting_approval' && isExecutionApprovedProgress(call.progress)) return '已批准，等待前序批次';
+  if (call.status === 'awaiting_approval' && isExecutionApprovedProgress(call.progress)) {
+    return isWaitingForPreviousProgress(call.progress) ? '已批准，等待前序批次' : '已批准，等待执行';
+  }
   if (call.status === 'error' && isDeniedResult(call.result)) {
     return deniedStatusLabel(call.result, call.error);
   }
@@ -436,8 +443,11 @@ function isInternalApprovalProgress(progress: unknown): boolean {
         />
       </ContentBlockSection>
       <p v-if="toolCall?.error" class="part-card-error">{{ toolCall.error }}</p>
-      <p v-else-if="executionApproved && isWaitingForPreviousProgress(toolCall?.progress)" class="part-card-note">
+      <p v-else-if="executionApprovalPending && isWaitingForPreviousProgress(toolCall?.progress)" class="part-card-note">
         已批准执行，将在前序批次完成后按原始顺序自动继续。
+      </p>
+      <p v-else-if="executionApprovalPending" class="part-card-note">
+        已批准执行，将在存档点完成后自动继续。
       </p>
     </div>
   </CollapsibleContentBlock>

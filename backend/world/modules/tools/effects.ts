@@ -1,4 +1,4 @@
-import type { ToolConfigRecord, WorkEnvironmentRecord } from '../../../../shared/protocol';
+import type { LlmInvocationSettingsSnapshotRecord, ToolConfigRecord, WorkEnvironmentRecord } from '../../../../shared/protocol';
 import type { FsPendingFileChangeProposal } from '../../../capabilities/types';
 
 export interface ToolRunEffect {
@@ -9,6 +9,7 @@ export interface ToolRunEffect {
   runId?: string;
   conversationId?: string;
   config?: ToolConfigRecord;
+  settingsSnapshot?: LlmInvocationSettingsSnapshotRecord;
   workEnvironment?: WorkEnvironmentRecord;
   workEnvironments?: WorkEnvironmentRecord[];
 }

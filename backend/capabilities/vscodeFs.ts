@@ -8,6 +8,7 @@ import type {
   FsFileChangeRecord,
   FsFileWriteAction,
   FsDeletePathTargetType,
+  FsOpenPendingFileChangeDiffOptions,
   FsPendingFileChangeProposal,
   FsReadBinaryFileResult,
   FsReadFileResult,
@@ -34,6 +35,7 @@ import { applyHunkEdit, applyInsertEdit, applyDeleteEdit } from './editStrategie
 const MAX_BYTES = 256 * 1024;
 const MAX_EDIT_READ_BYTES = 2 * 1024 * 1024;
 const LIVE_DIFF_SCHEME = 'limcode-live-diff';
+const LIVE_DIFF_APPLY_COMMAND = 'limcode.applyLiveDiffPreview';
 const LIVE_DIFF_DOCUMENT_TTL_MS = 10 * 60 * 1000;
 
 interface RawTextReadResult {
@@ -43,7 +45,19 @@ interface RawTextReadResult {
 }
 
 let liveDiffProviderDisposable: vscode.Disposable | undefined;
-const liveDiffDocuments = new Map<string, string>();
+const liveDiffDocuments = new Map<string, LiveDiffDocument>();
+
+interface LiveDiffDocument {
+  id: string;
+  role: 'current' | 'proposed';
+  path: string;
+  content: string;
+  saveHandled?: boolean;
+  toolCallId?: string;
+  conversationId?: string;
+  onSave?: FsOpenPendingFileChangeDiffOptions['onSave'];
+  proposal?: FsPendingFileChangeProposal;
+}
 
 /** 函数式 VSCode FS capability 适配器。 */
 export function createVsCodeFsCapability(): FsCapability {
@@ -56,6 +70,7 @@ export function createVsCodeFsCapability(): FsCapability {
     proposeEditFile: (request, options) => proposeWorkspaceTextFileEdit(request, options),
     applyPendingFileChange: (proposal, options) => applyPendingWorkspaceFileChange(proposal, options),
     openPendingFileChangeDiff: (proposal, options) => openPendingWorkspaceFileChangeDiff(proposal, options),
+    closePendingFileChangeDiff: (toolCallId, conversationId) => closePendingWorkspaceFileChangeDiff(toolCallId, conversationId),
     deletePath: (path, options) => deleteWorkspacePath(path, options)
   };
 }
@@ -212,15 +227,24 @@ export async function applyPendingWorkspaceFileChange(
 
 export async function openPendingWorkspaceFileChangeDiff(
   proposal: FsPendingFileChangeProposal,
-  options: WorkEnvironmentCapabilityOptions = {}
+  options: FsOpenPendingFileChangeDiffOptions = {}
 ): Promise<{ status: 'opened' | 'failed'; message: string }> {
   try {
     const preview = await previewPendingWorkspaceFileChange(proposal, options);
     if (preview.action === 'unchanged') return { status: 'failed', message: '当前文件已经包含该变更，无需打开差异。' };
     ensureLiveDiffProviderRegistered();
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const leftUri = liveDiffUri(`${id}-current`, preview.path, preview.currentContent);
-    const rightUri = liveDiffUri(`${id}-proposed`, preview.path, preview.targetContent);
+    const leftUri = liveDiffUri({ id, role: 'current', filePath: preview.path, content: preview.currentContent });
+    const rightUri = liveDiffUri({
+      id,
+      role: 'proposed',
+      filePath: preview.path,
+      content: preview.targetContent,
+      proposal,
+      toolCallId: options.toolCallId,
+      conversationId: options.conversationId,
+      onSave: options.onSave
+    });
     await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, `${preview.path}: 当前 ↔ 提案`, { preview: true });
     return { status: 'opened', message: '已打开实时差异视图。' };
   } catch (error) {
@@ -357,25 +381,124 @@ function buildEditFileResultFromAppliedProposal(
 
 function ensureLiveDiffProviderRegistered(): vscode.Disposable {
   if (liveDiffProviderDisposable) return liveDiffProviderDisposable;
-  liveDiffProviderDisposable = vscode.workspace.registerTextDocumentContentProvider(LIVE_DIFF_SCHEME, {
+  const contentProvider = vscode.workspace.registerTextDocumentContentProvider(LIVE_DIFF_SCHEME, {
     provideTextDocumentContent(uri) {
-      return liveDiffDocuments.get(uri.toString()) ?? '';
+      return liveDiffDocuments.get(uri.toString())?.content ?? '';
     }
   });
+  const applyCommand = vscode.commands.registerCommand(LIVE_DIFF_APPLY_COMMAND, () => {
+    void applyLiveDiffPreviewFromActiveEditor();
+  });
+  liveDiffProviderDisposable = vscode.Disposable.from(contentProvider, applyCommand);
   return liveDiffProviderDisposable;
 }
 
-function liveDiffUri(id: string, filePath: string, content: string): vscode.Uri {
+interface LiveDiffUriInput {
+  id: string;
+  role: LiveDiffDocument['role'];
+  filePath: string;
+  content: string;
+  proposal?: FsPendingFileChangeProposal;
+  toolCallId?: string;
+  conversationId?: string;
+  onSave?: FsOpenPendingFileChangeDiffOptions['onSave'];
+}
+
+function liveDiffUri(input: LiveDiffUriInput): vscode.Uri {
   const uri = vscode.Uri.from({
     scheme: LIVE_DIFF_SCHEME,
     authority: 'file-change',
-    path: `/${normalizeDisplayPath(filePath) || 'file'}`,
-    query: new URLSearchParams({ id }).toString()
+    path: `/${normalizeDisplayPath(input.filePath) || 'file'}`,
+    query: new URLSearchParams({ id: input.id, role: input.role }).toString()
   });
   const key = uri.toString();
-  liveDiffDocuments.set(key, content);
+  liveDiffDocuments.set(key, {
+    id: input.id,
+    role: input.role,
+    path: normalizeDisplayPath(input.filePath) || input.filePath,
+    content: input.content,
+    ...(input.proposal ? { proposal: input.proposal } : {}),
+    ...(input.toolCallId ? { toolCallId: input.toolCallId } : {}),
+    ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+    ...(input.onSave ? { onSave: input.onSave } : {})
+  });
   setTimeout(() => liveDiffDocuments.delete(key), LIVE_DIFF_DOCUMENT_TTL_MS).unref?.();
   return uri;
+}
+
+async function applyLiveDiffPreviewFromActiveEditor(): Promise<void> {
+  const activeUri = vscode.window.activeTextEditor?.document.uri;
+  if (!activeUri || activeUri.scheme !== LIVE_DIFF_SCHEME) {
+    await vscode.commands.executeCommand('workbench.action.files.save');
+    return;
+  }
+
+  const document = liveDiffDocumentForApply(activeUri);
+  if (!document?.proposal || !document.onSave) {
+    void vscode.window.showWarningMessage('LimCode 当前差异预览没有可应用的文件变更。');
+    return;
+  }
+  if (document.saveHandled) return;
+  document.saveHandled = true;
+
+  await document.onSave({
+    toolCallId: document.toolCallId,
+    conversationId: document.conversationId,
+    path: document.path,
+    proposal: document.proposal
+  });
+  await closePendingWorkspaceFileChangeDiff(document.toolCallId, document.conversationId);
+}
+
+function liveDiffDocumentForApply(uri: vscode.Uri): LiveDiffDocument | undefined {
+  const document = liveDiffDocuments.get(uri.toString());
+  if (!document) return undefined;
+  if (document.role === 'proposed') return document;
+  return [...liveDiffDocuments.values()].find((candidate) => candidate.id === document.id && candidate.role === 'proposed');
+}
+
+export async function closePendingWorkspaceFileChangeDiff(toolCallId?: string, conversationId?: string): Promise<void> {
+  const documents = liveDiffDocumentsForToolCall(toolCallId, conversationId);
+  const uriKeys = new Set(documents.map((item) => item.uri.toString()));
+  const tabsToClose: vscode.Tab[] = [];
+
+  for (const group of vscode.window.tabGroups.all) {
+    for (const tab of group.tabs) {
+      if (tabMatchesLiveDiff(tab, uriKeys)) tabsToClose.push(tab);
+    }
+  }
+
+  if (tabsToClose.length > 0) {
+    await vscode.window.tabGroups.close(tabsToClose, true);
+  } else if (vscode.window.activeTextEditor?.document.uri.scheme === LIVE_DIFF_SCHEME) {
+    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+  }
+
+  await vscode.commands.executeCommand('limcode.openPanel', {
+    ...(conversationId ? { conversationId, reuse: true } : {})
+  });
+}
+
+function liveDiffDocumentsForToolCall(toolCallId?: string, conversationId?: string): Array<{ uri: vscode.Uri; document: LiveDiffDocument }> {
+  const entries = [...liveDiffDocuments.entries()]
+    .map(([key, document]) => ({ uri: vscode.Uri.parse(key), document }));
+  const proposed = entries.filter(({ document }) => {
+    if (toolCallId && document.toolCallId === toolCallId) return true;
+    return !toolCallId && conversationId !== undefined && document.conversationId === conversationId;
+  });
+  const ids = new Set(proposed.map(({ document }) => document.id));
+  return entries.filter(({ document }) => ids.has(document.id));
+}
+
+function tabMatchesLiveDiff(tab: vscode.Tab, uriKeys: Set<string>): boolean {
+  const input = tab.input;
+  if (input instanceof vscode.TabInputTextDiff) {
+    return uriKeys.has(input.original.toString()) || uriKeys.has(input.modified.toString());
+  }
+  if (input instanceof vscode.TabInputText) {
+    return uriKeys.has(input.uri.toString());
+  }
+  return false;
 }
 
 export async function deleteWorkspacePath(relPath: string, options: WorkEnvironmentCapabilityOptions = {}): Promise<FsDeletePathResult> {

@@ -143,6 +143,19 @@ export interface FsPendingFileChangeProposal {
   editFallbackMode?: string;
 }
 
+export interface FsPendingFileChangeDiffSaveEvent {
+  toolCallId?: string;
+  conversationId?: string;
+  path: string;
+  proposal: FsPendingFileChangeProposal;
+}
+
+export interface FsOpenPendingFileChangeDiffOptions extends WorkEnvironmentCapabilityOptions {
+  toolCallId?: string;
+  conversationId?: string;
+  onSave?: (event: FsPendingFileChangeDiffSaveEvent) => void | Promise<void>;
+}
+
 export type FsDeletePathTargetType = 'file' | 'directory';
 
 export interface FsDeletePathResult {
@@ -177,7 +190,8 @@ export interface FsCapability {
   editFile(request: FsEditFileRequest, options?: WorkEnvironmentCapabilityOptions): Promise<FsEditFileResult>;
   proposeEditFile(request: FsEditFileRequest, options?: WorkEnvironmentCapabilityOptions): Promise<FsEditFileResult>;
   applyPendingFileChange(proposal: FsPendingFileChangeProposal, options?: WorkEnvironmentCapabilityOptions): Promise<FsWriteFileResult | FsEditFileResult>;
-  openPendingFileChangeDiff(proposal: FsPendingFileChangeProposal, options?: WorkEnvironmentCapabilityOptions): Promise<{ status: 'opened' | 'failed'; message: string }>;
+  openPendingFileChangeDiff(proposal: FsPendingFileChangeProposal, options?: FsOpenPendingFileChangeDiffOptions): Promise<{ status: 'opened' | 'failed'; message: string }>;
+  closePendingFileChangeDiff(toolCallId?: string, conversationId?: string): Promise<void>;
   deletePath(path: string, options?: WorkEnvironmentCapabilityOptions): Promise<FsDeletePathResult>;
 }
 

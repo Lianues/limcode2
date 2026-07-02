@@ -597,6 +597,7 @@ export interface LlmProviderConfigRecord {
   retryOnError: boolean;
   /** 最大重试次数，不包含原始请求；3 表示最多 1 + 3 次请求，-1 表示无限重试。 */
   retryMaxAttempts: number;
+  enableMultimodalTools: boolean;
   contextWindowTokens?: number;
   headers?: LlmProviderHeadersRecord;
   generationConfig?: LlmGenerationConfigRecord;
@@ -622,6 +623,7 @@ export interface LlmInvocationSettingsSnapshotRecord {
   stream?: boolean;
   retryOnError?: boolean;
   retryMaxAttempts?: number;
+  enableMultimodalTools?: boolean;
   contextWindowTokens?: number;
   generationConfig?: LlmGenerationConfigRecord;
   requestBody?: LlmRequestBodyRecord;

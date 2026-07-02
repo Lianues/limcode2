@@ -43,6 +43,36 @@ function nodeStreaming(node: RichRenderNode, index: number): boolean {
   return node.kind === 'text';
 }
 
+function nodeComponentProps(node: RichRenderNode, index: number): Record<string, unknown> {
+  if (node.kind === 'text') {
+    return {
+      ...node.props,
+      markdown: props.markdown,
+      streaming: nodeStreaming(node, index),
+      streamingPhase: streamingPhase()
+    };
+  }
+  if (node.kind === 'thought') {
+    const thoughtProps = { ...node.props };
+    delete thoughtProps.thoughtOpen;
+    return {
+      ...thoughtProps,
+      streaming: nodeStreaming(node, index),
+      streamingPhase: streamingPhase()
+    };
+  }
+  if (node.kind === 'functionCall') {
+    return {
+      ...node.props,
+      messageId: props.messageId
+    };
+  }
+  if (node.kind === 'functionResponse' || node.kind === 'inlineData' || node.kind === 'fileData') {
+    return { part: node.props.part };
+  }
+  return node.props;
+}
+
 /**
  * 判断当前流式阶段：
  *   - 'waiting'：流式中但还没有任何内容块
@@ -167,11 +197,7 @@ function isBlockingToolCall(call: ToolCallRecord): boolean {
         :is="partViewComponent(node.kind)"
         v-for="(node, index) in nodes"
         :key="node.key"
-        v-bind="node.props"
-        :message-id="messageId"
-        :markdown="markdown"
-        :streaming="nodeStreaming(node, index)"
-        :streaming-phase="streamingPhase()"
+        v-bind="nodeComponentProps(node, index)"
       />
     </template>
     <!-- 流式中但还没有任何内容块：渲染一个仅含光标的空文本节点。 -->

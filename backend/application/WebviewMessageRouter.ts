@@ -175,6 +175,7 @@ export class WebviewMessageRouter {
       case BridgeMessageType.ToolChangeApply:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ToolEventType.ChangeApplyRequested, payload: message.payload });
+        void this.deps.fs.closePendingFileChangeDiff(message.payload.toolCallId, message.payload.conversationId);
         break;
       case BridgeMessageType.ToolChangeReject:
         if (!this.deps.isHydrated() || !message.payload) return;
@@ -889,7 +890,18 @@ export class WebviewMessageRouter {
     const workEnvironment = run !== undefined ? activeWorkEnvironmentForRun(this.deps.world, run)?.data : undefined;
     const result = await this.deps.fs.openPendingFileChangeDiff(proposal, {
       ...(workEnvironment ? { workEnvironment: toPublicWorkEnvironmentRecord(workEnvironment) } : {}),
-      allowOutsideProjectPaths: allowOutsideProjectPathsFromConfig(config, false)
+      allowOutsideProjectPaths: allowOutsideProjectPathsFromConfig(config, false),
+      toolCallId: call.id,
+      conversationId: payload.conversationId,
+      onSave: (event) => {
+        this.deps.world.enqueue({
+          type: ToolEventType.ChangeApplyRequested,
+          payload: {
+            toolCallId: event.toolCallId ?? call.id,
+            conversationId: event.conversationId ?? payload.conversationId
+          }
+        });
+      }
     });
     if (result.status === 'failed') void vscode.window.showWarningMessage(`LimCode ${result.message}`);
   }

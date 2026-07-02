@@ -8,6 +8,7 @@ import type {
   ToolDefinitionSourceRecord,
   ToolExecutionKind,
   InlineDataPart,
+  LlmInvocationSettingsSnapshotRecord,
   WorkEnvironmentRecord
 } from '../../../../shared/protocol';
 import type { ToolSchedulingResolver } from './scheduling';
@@ -39,6 +40,7 @@ export interface ToolExecutionContext {
   runId?: string;
   conversationId?: string;
   config?: ToolConfigRecord;
+  settingsSnapshot?: LlmInvocationSettingsSnapshotRecord;
   workEnvironment?: WorkEnvironmentRecord;
   workEnvironments?: WorkEnvironmentRecord[];
   emit(event: ToolRuntimeEvent): void;

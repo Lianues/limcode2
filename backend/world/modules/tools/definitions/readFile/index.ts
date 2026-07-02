@@ -10,8 +10,8 @@ interface ReadFileArgs {
   endLine?: number;
 }
 
-const READ_INLINE_DATA_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'application/pdf', 'text/plain']);
-const EXTENSION_MIME_MAP: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.pdf': 'application/pdf', '.txt': 'text/plain' };
+const READ_MULTIMODAL_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'application/pdf']);
+const EXTENSION_MIME_MAP: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.pdf': 'application/pdf' };
 
 export const readFileToolModule = defineToolDefinitionModule({
   id: READ_TOOL_NAME,
@@ -56,7 +56,10 @@ export const readFileTool: ToolDefinition = {
       return { ok: false, output: 'Missing required argument: path' };
     }
     const mimeType = inferMimeType(args.path);
-    if (mimeType && READ_INLINE_DATA_MIME_TYPES.has(mimeType) && args.startLine === undefined && args.endLine === undefined) {
+    if (mimeType && READ_MULTIMODAL_MIME_TYPES.has(mimeType) && ctx?.settingsSnapshot?.enableMultimodalTools === false) {
+      return { ok: true, status: 'warning', output: multimodalDisabledMessage(mimeType) };
+    }
+    if (mimeType && READ_MULTIMODAL_MIME_TYPES.has(mimeType) && args.startLine === undefined && args.endLine === undefined) {
       const file = await deps.fs.readBinaryFile(args.path, mimeType, {
         workEnvironment: ctx?.workEnvironment,
         allowOutsideProjectPaths: allowOutsideProjectPathsFromConfig(ctx?.config, true)
@@ -109,8 +112,11 @@ function normalizeLineNumber(value: number | undefined): number | undefined {
   return line > 0 ? line : undefined;
 }
 
+function multimodalDisabledMessage(mimeType: string): string {
+  return `当前渠道未启用多模态工具，模型不具备读取 ${mimeType} 附件内容的能力。read 现在只能读取文本文件；如需查看图片、PDF 等附件，请在渠道配置中启用多模态工具。`;
+}
+
 function inferMimeType(filePath: string): string | undefined {
   const ext = filePath.slice(filePath.lastIndexOf('.')).toLowerCase();
   return EXTENSION_MIME_MAP[ext];
 }
-

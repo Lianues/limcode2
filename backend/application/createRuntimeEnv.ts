@@ -136,6 +136,7 @@ async function resolveSnapshotLlmProviderConfig(
     ...(snapshot.stream !== undefined ? { stream: snapshot.stream } : {}),
     ...(snapshot.retryOnError !== undefined ? { retryOnError: snapshot.retryOnError } : {}),
     ...(snapshot.retryMaxAttempts !== undefined ? { retryMaxAttempts: snapshot.retryMaxAttempts } : {}),
+    ...(snapshot.enableMultimodalTools !== undefined ? { enableMultimodalTools: snapshot.enableMultimodalTools } : {}),
     ...(snapshot.contextWindowTokens !== undefined ? { contextWindowTokens: snapshot.contextWindowTokens } : {}),
     ...(snapshot.generationConfig ? { generationConfig: snapshot.generationConfig } : {}),
     ...(snapshot.requestBody ? { requestBody: snapshot.requestBody } : {})

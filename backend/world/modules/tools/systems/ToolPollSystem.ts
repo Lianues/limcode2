@@ -2,7 +2,7 @@ import { defineQuery, defineSystem } from '../../../../ecs/types';
 import { readEvents } from '../../../events';
 import { InFlight } from '../../chat/components';
 import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
-import { ToolCall, ToolState } from '../components';
+import { ToolCall, ToolState, type ToolStateData } from '../components';
 import { ToolEventType } from '../events';
 import { isTerminalToolStatus, transitionToolState } from '../state';
 import { simplifyToolResponseForModel } from '../responseSimplifier';
@@ -30,12 +30,13 @@ export const ToolPollSystem = defineSystem({
   },
   run(ctx) {
     const { world, cmd } = ctx;
+    const pendingStates = new Map<number, ToolStateData>();
     for (const payload of readEvents(ctx, ToolEventType.State)) {
       const entity = world.query(ToolCall, ToolState).find((candidate) => world.get(candidate, ToolCall)?.id === payload.toolCallId);
       if (entity === undefined) continue;
 
       const call = world.get(entity, ToolCall);
-      const current = world.get(entity, ToolState);
+      const current = pendingStates.get(entity) ?? world.get(entity, ToolState);
       if (!call || !current) continue;
 
       try {
@@ -49,6 +50,7 @@ export const ToolPollSystem = defineSystem({
           durationMs: payload.durationMs
         }, now);
         const terminalPayload = isTerminalToolStatus(next.status) && payload.result !== undefined ? simplifyToolResponseForModel(call.name, next.status, payload.result) : undefined;
+        pendingStates.set(entity, next);
         cmd.add(entity, ToolState, next);
         spawnToolCallEvent(cmd, {
           toolCall: entity,

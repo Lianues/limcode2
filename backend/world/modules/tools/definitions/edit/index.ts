@@ -113,12 +113,11 @@ export function hunkModeParameters(): unknown {
             oldContent: { type: 'string', description: 'Existing file text to find. Must be an exact substring of the current file at the time this hunk runs.' },
             newContent: { type: 'string', description: 'Replacement text exactly as it should appear in the final file. Use an empty string to remove the matched text.' },
             replaceAll: { type: 'boolean', description: 'Whether this hunk replaces every non-overlapping oldContent match. Defaults to false, replacing only the first match.' }
-          },
-          required: ['oldContent', 'newContent']
+          }
         }
       }
     },
-    required: ['path', 'hunks']
+    required: ['path']
   };
 }
 
@@ -138,8 +137,7 @@ export function insertModeParameters(): unknown {
     properties: {
       line: { type: 'number', description: '1-based line number before which to insert content. Use line N+1 to append after the last line of the file.' },
       content: { type: 'string', description: 'Text to insert at the specified line position. May contain multiple lines separated by newlines.' }
-    },
-    required: ['line', 'content']
+    }
   };
 }
 
@@ -149,12 +147,14 @@ export function deleteModeParameters(): unknown {
     properties: {
       startLine: { type: 'number', description: '1-based first line to delete (inclusive).' },
       endLine: { type: 'number', description: '1-based last line to delete (inclusive).' }
-    },
-    required: ['startLine', 'endLine']
+    }
   };
 }
 
 function detectEditMode(args: EditArgs): EditToolMode {
+  if (hasRequestedHunks(args.hunks)) return 'hunk';
+  if (hasRequestedInsert(args.insert)) return 'insert';
+  if (hasRequestedDelete(args.delete)) return 'delete';
   if (args.insert !== undefined) return 'insert';
   if (args.delete !== undefined) return 'delete';
   return 'hunk';
@@ -223,4 +223,16 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
+}
+
+function hasRequestedHunks(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0;
+}
+
+function hasRequestedInsert(value: EditArgs['insert']): boolean {
+  return Boolean(value && typeof value.line === 'number' && value.line >= 1 && typeof value.content === 'string' && value.content.length > 0);
+}
+
+function hasRequestedDelete(value: EditArgs['delete']): boolean {
+  return Boolean(value && typeof value.startLine === 'number' && value.startLine >= 1 && typeof value.endLine === 'number' && value.endLine >= 1);
 }

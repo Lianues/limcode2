@@ -10,14 +10,15 @@ import {
 } from '../../../../shared/protocol';
 import { clientStateWithTables, createEmptyClientState, GLOBAL_CLIENT_STATE_TABLE_KEYS } from '../../../../shared/clientStateSchema';
 import { collectChangedClientStateConversationIds } from '../../../../shared/clientStateConversationScope';
-import { defineSystem, type AccessDeclaration } from '../../../ecs/types';
+import { defineSystem, type AccessDeclaration, type WorldReader } from '../../../ecs/types';
 import { readEvents } from '../../events';
 import { LlmRequest } from '../../modules/chat/components';
 import type { ClientStateContributor } from '../contributors';
 import { diffClientStateTables } from '../diff';
 import { ClientSyncEventType } from '../events';
-import { ClientStateContributorsKey, ClientSyncFastPatchStateKey, ClientSyncStateKey, type ClientStreamState, type ClientSyncFastPatchState } from '../resources';
+import { ClientStateContributorsKey, ClientSyncFastPatchStateKey, ClientSyncStateKey, type ClientStreamState, type ClientSyncFastPatchState, type ClientSyncState } from '../resources';
 import { projectClientStateWithCache } from '../projection';
+import { contributorClock } from '../../projection/cache';
 
 export const ClientSyncSystem = defineSystem({
   name: 'ClientSyncSystem',
@@ -56,7 +57,7 @@ export const ClientSyncSystem = defineSystem({
       if (emitFastPatches(cmd, syncState, fastPatchState)) return;
     }
 
-    if (shouldDeferFullSync && !fastPatchState.requireFullSync && !hasResyncRequests && fastPatchState.patches.length === 0) return;
+    if (shouldDeferFullSync && !fastPatchState.requireFullSync && !hasResyncRequests && fastPatchState.patches.length === 0 && canDeferFullSyncForActiveStream(world, contributors, syncState)) return;
 
     const projection = projectClientStateWithCache(world, contributors, syncState);
     const sourceChanged = syncState.lastState === null || projection.changed || fastPatchState.requireFullSync;
@@ -127,8 +128,19 @@ export const ClientSyncSystem = defineSystem({
   }
 });
 
+const DEFERRABLE_ACTIVE_STREAM_CONTRIBUTORS = new Set(['chat']);
+
 function emptyReads(): AccessDeclaration {
   return { components: [], resources: [], events: [], effects: [] };
+}
+
+function canDeferFullSyncForActiveStream(world: WorldReader, contributors: readonly ClientStateContributor[], syncState: ClientSyncState): boolean {
+  if (!syncState.lastState) return false;
+  return contributors.every((contributor) => {
+    const previousClock = syncState.contributorStates[contributor.key]?.clock;
+    const nextClock = contributorClock(world, contributor);
+    return previousClock === nextClock || DEFERRABLE_ACTIVE_STREAM_CONTRIBUTORS.has(contributor.key);
+  });
 }
 
 function emitSnapshot(cmd: { effect(effect: unknown): void }, streamId: string, current: ClientStreamState | undefined, state: ClientState): ClientStreamState {

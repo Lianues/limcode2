@@ -193,7 +193,7 @@ export class BackendApplication {
     this.scheduler = new Scheduler(this.world, {
       applyEffect: (effect) => this.outbox.push(effect as WorldEffect),
       afterPass: () => {
-        flushEffectsWhere(this.outbox, this.env, (event) => this.world.enqueue(event), this.effectHandlers, isRealtimeClientEffect);
+        flushEffectsWhere(this.outbox, this.env, (event) => this.world.enqueue(event), this.effectHandlers, isPassFlushEffect);
       },
       afterTick: () => {
         flushEffects(this.outbox, this.env, (event) => this.world.enqueue(event), this.effectHandlers);
@@ -1123,9 +1123,18 @@ function labelForAgentRunStatus(status: AgentRunStatus): string {
   }
 }
 
-function isRealtimeClientEffect(effect: WorldEffect): boolean {
+function isPassFlushEffect(effect: WorldEffect): boolean {
   const kind = (effect as { kind?: string }).kind;
-  return kind === 'client.patch' || kind === 'client.snapshot' || kind === 'client.transientNotice';
+  return kind === 'client.patch'
+    || kind === 'client.snapshot'
+    || kind === 'client.transientNotice'
+    || kind === 'llm.resolveInvocation'
+    || kind === 'llm.start'
+    || kind === 'llm.compact'
+    || kind === 'llm.abort'
+    || kind === 'tool.run'
+    || kind === 'tool.change.apply'
+    || kind === 'checkpoint.create';
 }
 
 function shouldDeferUntilHydrated(message: WebviewToExtensionMessage): boolean {

@@ -16,6 +16,12 @@ export interface BottomStickyScroller {
   isStickyToBottom: () => boolean;
 }
 
+interface ScrollMetrics {
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+}
+
 const DEFAULT_THRESHOLD_PX = 1;
 const DEFAULT_INTERACTION_THRESHOLD_PX = 5;
 const DEFAULT_SETTLE_MS = 260;
@@ -51,9 +57,35 @@ export function useBottomStickyScroller(
   let contentCheckFrame: number | undefined;
   let stickyUntil = 0;
   let userDetachedFromBottom = false;
+  let lastMetrics: ScrollMetrics | undefined;
+
+  function distanceFromBottom(metrics: ScrollMetrics): number {
+    return metrics.scrollHeight - metrics.scrollTop - metrics.clientHeight;
+  }
+
+  function metricsForElement(element: HTMLElement): ScrollMetrics {
+    return {
+      scrollTop: element.scrollTop,
+      scrollHeight: element.scrollHeight,
+      clientHeight: element.clientHeight
+    };
+  }
+
+  function isNearBottomMetrics(metrics: ScrollMetrics, threshold = thresholdPx): boolean {
+    return distanceFromBottom(metrics) <= threshold;
+  }
+
+  function rememberScrollMetrics(element = scroller.value): void {
+    if (!element) return;
+    lastMetrics = metricsForElement(element);
+  }
+
+  function wasNearBottomBeforeCurrentLayout(threshold = interactionThresholdPx): boolean {
+    return lastMetrics !== undefined && isNearBottomMetrics(lastMetrics, threshold);
+  }
 
   function isNearBottomElement(element: HTMLElement, threshold = thresholdPx): boolean {
-    return element.scrollHeight - element.scrollTop - element.clientHeight <= threshold;
+    return isNearBottomMetrics(metricsForElement(element), threshold);
   }
 
   function isNearBottom(): boolean {
@@ -83,6 +115,7 @@ export function useBottomStickyScroller(
     if (element) {
       userDetachedFromBottom = false;
       element.scrollTop = element.scrollHeight;
+      rememberScrollMetrics(element);
     }
   }
 
@@ -98,16 +131,35 @@ export function useBottomStickyScroller(
       return;
     }
 
-    const nearBottom = isNearBottomElement(element);
+    const currentMetrics = metricsForElement(element);
+    const nearBottom = isNearBottomMetrics(currentMetrics);
     if (nearBottom) {
       stickyToBottom = true;
       userDetachedFromBottom = false;
+      lastMetrics = currentMetrics;
       return;
     }
 
-    if (stickyToBottom && performance.now() < stickyUntil) return;
+    const grewFromPreviousBottom = lastMetrics !== undefined
+      && isNearBottomMetrics(lastMetrics, interactionThresholdPx)
+      && currentMetrics.scrollHeight > lastMetrics.scrollHeight + 1
+      && Math.abs(currentMetrics.scrollTop - lastMetrics.scrollTop) <= 1;
+    if (grewFromPreviousBottom && !userDetachedFromBottom) {
+      stickyToBottom = true;
+      keepStickyDuringContentSettle();
+      return;
+    }
 
+    if (stickyToBottom && performance.now() < stickyUntil) {
+      lastMetrics = currentMetrics;
+      return;
+    }
+
+    if (lastMetrics !== undefined && currentMetrics.scrollTop < lastMetrics.scrollTop - 1) {
+      userDetachedFromBottom = true;
+    }
     stickyToBottom = false;
+    lastMetrics = currentMetrics;
   }
 
   function releaseStickyFromWheel(event: WheelEvent): void {
@@ -166,13 +218,21 @@ export function useBottomStickyScroller(
     const element = scroller.value;
     if (!element) return;
 
-    if (userDetachedFromBottom) return;
+    if (userDetachedFromBottom) {
+      rememberScrollMetrics(element);
+      return;
+    }
 
     const wasSticky = stickyToBottom;
+    const wasNearBottom = wasNearBottomBeforeCurrentLayout();
     const nowNearBottom = isNearBottomElement(element);
-    stickyToBottom = wasSticky || nowNearBottom;
+    stickyToBottom = wasSticky || wasNearBottom || nowNearBottom;
 
-    if (stickyToBottom) keepStickyDuringContentSettle();
+    if (stickyToBottom) {
+      keepStickyDuringContentSettle();
+    } else {
+      rememberScrollMetrics(element);
+    }
   }
 
   function scheduleContentCheck(): void {
@@ -209,6 +269,7 @@ export function useBottomStickyScroller(
     observedScroller = element;
     stickyToBottom = isNearBottomElement(element);
     userDetachedFromBottom = false;
+    rememberScrollMetrics(element);
     element.addEventListener('scroll', updateStickyFromUserScroll, { passive: true });
     element.addEventListener('wheel', releaseStickyFromWheel, { passive: true });
     element.addEventListener('pointerdown', primeStickyFromBottomInteraction, { capture: true });
@@ -241,6 +302,7 @@ export function useBottomStickyScroller(
     }
     observedScroller = null;
     observedContent = null;
+    lastMetrics = undefined;
 
     resizeObserver?.disconnect();
     resizeObserver = undefined;

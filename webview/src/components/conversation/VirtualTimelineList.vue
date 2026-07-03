@@ -128,14 +128,14 @@ function syncScroller(): void {
   const element = attachedScroller;
   const nextViewportHeight = element?.clientHeight ?? 0;
   viewportHeight.value = nextViewportHeight;
-  const maxScrollTop = Math.max(0, totalHeight.value - nextViewportHeight);
+  const scrollHeight = element?.scrollHeight ?? totalHeight.value;
+  const maxScrollTop = Math.max(0, scrollHeight - nextViewportHeight);
   const nextScrollTop = clamp(element?.scrollTop ?? 0, 0, maxScrollTop);
   if (element && element.scrollTop !== nextScrollTop) element.scrollTop = nextScrollTop;
   scrollTop.value = nextScrollTop;
 }
 
-function scheduleAnchorRestore(): void {
-  const anchor = snapshotScrollAnchor();
+function scheduleAnchorRestore(anchor: ScrollAnchorSnapshot | undefined = snapshotScrollAnchor()): void {
   if (!anchor) return;
   pendingAnchor = anchor;
   if (restoreScheduled) return;
@@ -150,10 +150,8 @@ function snapshotScrollAnchor(): ScrollAnchorSnapshot | undefined {
   const element = attachedScroller;
   if (!element || rowKeys.value.length === 0) return undefined;
 
-  const distanceFromBottom = Math.max(0, element.scrollHeight - element.scrollTop - element.clientHeight);
-  if (distanceFromBottom <= BOTTOM_ANCHOR_THRESHOLD_PX) {
-    return { mode: 'bottom', distanceFromBottom };
-  }
+  const bottomAnchor = snapshotBottomAnchor(element, element.scrollHeight);
+  if (bottomAnchor) return bottomAnchor;
 
   const scrollerRect = element.getBoundingClientRect();
   const anchorEntry = [...observedRowElements.entries()]
@@ -167,6 +165,19 @@ function snapshotScrollAnchor(): ScrollAnchorSnapshot | undefined {
     rowKey: anchorEntry.key,
     offsetWithinRow: Math.max(0, element.scrollTop - rowTop)
   };
+}
+
+function snapshotVirtualBottomAnchor(): ScrollAnchorSnapshot | undefined {
+  const element = attachedScroller;
+  if (!element || rowKeys.value.length === 0) return undefined;
+  return snapshotBottomAnchor(element, Math.max(totalHeight.value, element.clientHeight));
+}
+
+function snapshotBottomAnchor(element: HTMLElement, scrollHeight: number): ScrollAnchorSnapshot | undefined {
+  const distanceFromBottom = Math.max(0, scrollHeight - element.scrollTop - element.clientHeight);
+  return distanceFromBottom <= BOTTOM_ANCHOR_THRESHOLD_PX
+    ? { mode: 'bottom', distanceFromBottom }
+    : undefined;
 }
 
 function restorePendingAnchor(): void {
@@ -239,7 +250,7 @@ function setRowElement(row: ConversationTimelineViewRow, absoluteIndex: number, 
 function measureRowElement(key: string, element: HTMLElement): void {
   const height = Math.max(1, Math.ceil(element.getBoundingClientRect().height));
   if (measuredHeights.value[key] === height) return;
-  scheduleAnchorRestore();
+  scheduleAnchorRestore(snapshotVirtualBottomAnchor() ?? snapshotScrollAnchor());
   measuredHeights.value = { ...measuredHeights.value, [key]: height };
 }
 </script>

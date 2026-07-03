@@ -7,21 +7,42 @@ import { loadRecordStore, saveRecordStore } from './recordStore';
 
 const CONVERSATIONS_DIR = 'conversations';
 
-export async function loadConversationCompressionDetail(paths: StoragePaths, conversationId: string): Promise<ClientState | undefined> {
+export interface LoadConversationCompressionDetailOptions {
+  /**
+   * 首屏 timeline 只需要压缩块和摘要变体用于展示，不需要“压缩块 -> 源消息”的明细链接。
+   * 这些 source links 可能非常多，默认仍加载以满足后端 hydrate / 编辑删除 / 失效判断。
+   */
+  includeSourceLinks?: boolean;
+}
+
+export async function loadConversationCompressionDetail(
+  paths: StoragePaths,
+  conversationId: string,
+  options: LoadConversationCompressionDetailOptions = {}
+): Promise<ClientState | undefined> {
+  const includeSourceLinks = options.includeSourceLinks ?? true;
   const state = createEmptyClientState();
   const blocks = await loadRecordStore<CompressionBlockRecord, 'block'>(conversationScopedRoot(paths.compressionBlocksRootUri, conversationId), conversationScopedIndex(paths.compressionBlocksRootUri, conversationId), 'block') ?? [];
   state.compressionBlocks = blocks.filter((block) => block.conversationId === conversationId);
   const blockIds = new Set(state.compressionBlocks.map((block) => block.id));
-  const links = await loadRecordStore<CompressionBlockSourceLinkRecord, 'link'>(conversationScopedRoot(paths.compressionBlockSourceLinksRootUri, conversationId), conversationScopedIndex(paths.compressionBlockSourceLinksRootUri, conversationId), 'link') ?? [];
-  state.compressionBlockSourceLinks = links.filter((link) => blockIds.has(link.blockId));
+
+  if (includeSourceLinks) {
+    const links = await loadRecordStore<CompressionBlockSourceLinkRecord, 'link'>(conversationScopedRoot(paths.compressionBlockSourceLinksRootUri, conversationId), conversationScopedIndex(paths.compressionBlockSourceLinksRootUri, conversationId), 'link') ?? [];
+    state.compressionBlockSourceLinks = links.filter((link) => blockIds.has(link.blockId));
+  }
+
   const variants = await loadRecordStore<CompressionContextVariantRecord, 'variant'>(conversationScopedRoot(paths.compressionContextVariantsRootUri, conversationId), conversationScopedIndex(paths.compressionContextVariantsRootUri, conversationId), 'variant') ?? [];
   state.compressionContextVariants = variants.filter((variant) => blockIds.has(variant.blockId));
+
   const invocationLinks = await loadRecordStore<CompressionBlockLlmInvocationLinkRecord, 'link'>(conversationScopedRoot(paths.compressionBlockLlmInvocationLinksRootUri, conversationId), conversationScopedIndex(paths.compressionBlockLlmInvocationLinksRootUri, conversationId), 'link') ?? [];
   state.compressionBlockLlmInvocationLinks = invocationLinks.filter((link) => blockIds.has(link.blockId));
+
   const invocationIds = new Set(state.compressionBlockLlmInvocationLinks.map((link) => link.invocationId));
   const invocations = await loadRecordStore<LlmInvocationRecord, 'invocation'>(conversationScopedRoot(paths.compressionLlmInvocationsRootUri, conversationId), conversationScopedIndex(paths.compressionLlmInvocationsRootUri, conversationId), 'invocation') ?? [];
   state.llmInvocations = invocations.filter((invocation) => invocationIds.has(invocation.id));
-  return state.compressionBlocks.length || state.compressionBlockSourceLinks.length || state.compressionContextVariants.length || state.compressionBlockLlmInvocationLinks.length || state.llmInvocations.length ? state : undefined;
+
+  const hasCompression = state.compressionBlocks.length || state.compressionBlockSourceLinks.length || state.compressionContextVariants.length || state.compressionBlockLlmInvocationLinks.length || state.llmInvocations.length;
+  return hasCompression ? state : undefined;
 }
 
 export async function saveConversationCompressionDetail(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {

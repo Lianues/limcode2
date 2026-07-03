@@ -270,16 +270,30 @@ function mergeClientState(target: ClientState, source: ClientState): void {
   for (const key of CLIENT_STATE_TABLE_KEYS) {
     const targetList = target[key] as ClientStateRecord[];
     const sourceList = source[key] as ClientStateRecord[];
-    for (const item of sourceList) upsert(targetList, item);
+    upsertAll(targetList, sourceList);
     sortTable(key, targetList);
   }
 }
 
-function upsert<T extends { id: string }>(list: T[], item: T): void {
-  const index = list.findIndex((candidate) => candidate.id === item.id);
-  const next = cloneRecord(item);
-  if (index >= 0) list[index] = next;
-  else list.push(next);
+function upsertAll<T extends { id: string }>(target: T[], source: T[]): void {
+  if (source.length === 0) return;
+  if (target.length === 0) {
+    target.push(...source.map(cloneRecord));
+    return;
+  }
+
+  const indexById = new Map<string, number>();
+  target.forEach((item, index) => indexById.set(item.id, index));
+  for (const item of source) {
+    const next = cloneRecord(item);
+    const index = indexById.get(item.id);
+    if (index !== undefined) {
+      target[index] = next;
+      continue;
+    }
+    indexById.set(item.id, target.length);
+    target.push(next);
+  }
 }
 
 function cloneRecord<T extends { id: string }>(record: T): T {

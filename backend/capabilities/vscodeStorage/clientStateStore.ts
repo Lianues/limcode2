@@ -330,7 +330,7 @@ export async function loadConversationDetailFromStores(
 
 export async function loadConversationTimelinePageFromStores(paths: StoragePaths, request: ConversationTimelinePageRequest): Promise<ConversationTimelinePageRecord> {
   const page = await loadConversationTimelinePage(paths, request);
-  const compression = await loadConversationCompressionDetail(paths, request.conversationId);
+  const compression = await loadConversationCompressionDetail(paths, request.conversationId, { includeSourceLinks: false });
   if (compression) copyCompressionTables(page.state, compression);
   return page;
 }

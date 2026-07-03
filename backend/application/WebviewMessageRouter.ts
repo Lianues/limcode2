@@ -11,7 +11,7 @@ import { CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSo
 import { ToolEventType } from '../world/modules/tools/events';
 import { ToolCall, ToolState } from '../world/modules/tools/components';
 import { activeToolPolicyForRun, runForToolCall } from '../world/modules/agentRun/queries';
-import { activeWorkEnvironmentForRun, toPublicWorkEnvironmentRecord } from '../world/modules/workEnvironment/queries';
+import { activeWorkEnvironmentForRun, pathAccessibleWorkEnvironmentsForRun, toPublicWorkEnvironmentRecord } from '../world/modules/workEnvironment/queries';
 import { allowOutsideProjectPathsFromConfig } from '../world/modules/tools/definitions/filePathPolicy';
 import { SkillEventType } from '../world/modules/skill/events';
 import { ModeEventType } from '../world/modules/mode/events';
@@ -896,8 +896,12 @@ export class WebviewMessageRouter {
     const policy = run !== undefined ? activeToolPolicyForRun(this.deps.world, run) : undefined;
     const config = policy?.toolConfigs?.[call.name]?.config;
     const workEnvironment = run !== undefined ? activeWorkEnvironmentForRun(this.deps.world, run)?.data : undefined;
+    const accessibleWorkEnvironments = run !== undefined
+      ? pathAccessibleWorkEnvironmentsForRun(this.deps.world, run).map((item) => toPublicWorkEnvironmentRecord(item.data))
+      : [];
     const result = await this.deps.fs.openPendingFileChangeDiff(proposal, {
       ...(workEnvironment ? { workEnvironment: toPublicWorkEnvironmentRecord(workEnvironment) } : {}),
+      ...(accessibleWorkEnvironments.length > 0 ? { accessibleWorkEnvironments } : {}),
       allowOutsideProjectPaths: allowOutsideProjectPathsFromConfig(config, false),
       toolCallId: call.id,
       conversationId: payload.conversationId,

@@ -14,7 +14,7 @@ import {
   WorkEnvironmentPolicyScopeLink,
   type WorkEnvironmentData
 } from './components';
-import { allowedWorkEnvironmentsForRun, effectiveWorkEnvironmentPolicyForRun } from './queries';
+import { effectiveWorkEnvironmentPolicyForRun, toolContextWorkEnvironmentsForRun } from './queries';
 import { formatWorkEnvironmentForDisplay } from '../../../../shared/workEnvironmentCatalog';
 
 export const workEnvironmentToolSchemaContributor: ToolSchemaContributor = {
@@ -69,7 +69,7 @@ function augmentTransferFilesTool(tool: ToolSchema, context: Parameters<NonNulla
 }
 
 function workEnvironmentToolDefinitionText(context: Parameters<NonNullable<ToolSchemaContributor['augment']>>[1], title = 'Switchable work environments (pass workEnvironmentId to switch precisely):'): string {
-  const environments = allowedWorkEnvironmentsForRun(context.world, context.run);
+  const environments = toolContextWorkEnvironmentsForRun(context.world, context.run);
   if (environments.length === 0) return 'There are currently no switchable work environments.';
   const lines = [
     title,

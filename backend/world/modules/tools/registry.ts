@@ -43,6 +43,7 @@ export interface ToolExecutionContext {
   settingsSnapshot?: LlmInvocationSettingsSnapshotRecord;
   workEnvironment?: WorkEnvironmentRecord;
   workEnvironments?: WorkEnvironmentRecord[];
+  accessibleWorkEnvironments?: WorkEnvironmentRecord[];
   emit(event: ToolRuntimeEvent): void;
 }
 

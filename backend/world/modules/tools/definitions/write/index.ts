@@ -29,7 +29,7 @@ export const writeTool: ToolDefinition = {
     parameters: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'File path. Relative paths are resolved from the current work environment root; absolute paths are supported when allowed by tool policy.' },
+        path: { type: 'string', description: 'File path. Relative paths are resolved from the current work environment root; absolute paths are supported when allowed by tool policy or when they are inside an explicitly allowed local work environment root.' },
         content: { type: 'string', description: 'Complete UTF-8 content to write to the file.' }
       },
       required: ['path', 'content']
@@ -62,6 +62,7 @@ export const writeTool: ToolDefinition = {
     if (typeof args.content !== 'string') return { ok: false, output: 'Missing required argument: content' };
     const result = await deps.fs.proposeWriteFile(args.path, args.content, {
       workEnvironment: ctx?.workEnvironment,
+      accessibleWorkEnvironments: ctx?.accessibleWorkEnvironments,
       allowOutsideProjectPaths: allowOutsideProjectPathsFromConfig(ctx?.config, false)
     });
     return { ok: result.success, output: result, ...(result.pending ? { status: 'awaiting_change_apply' as const } : {}) };

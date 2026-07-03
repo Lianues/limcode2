@@ -18,6 +18,7 @@ import type {
 } from './types';
 import {
   WORK_ENVIRONMENT_CAPABILITY,
+  isLocalFolderWorkEnvironment,
   workEnvironmentDisplayName,
   workEnvironmentSupportsCapability
 } from '../../shared/workEnvironmentCatalog';
@@ -524,7 +525,7 @@ export async function deleteWorkspacePath(relPath: string, options: WorkEnvironm
   const stat = await workspaceFileStat(uri);
   if (!stat) throw new Error(`Path not found: ${targetPath}`);
   const targetType = fileTypeFromStat(stat, targetPath);
-  assertSafeLocalDeleteTarget(uri, projectRootUri(options));
+  assertSafeLocalDeleteTarget(uri, allowedLocalRootUris(options));
   await vscode.workspace.fs.delete(uri, { recursive: true });
   return deleteResult(targetPath, uri.fsPath || targetPath, targetType);
 }
@@ -622,10 +623,11 @@ function resolveWorkspacePath(
       : vscode.Uri.file(targetPath);
 
   if (options.allowOutsideProjectPaths === false) {
-    if (!root) throw new Error('当前工作区缺少项目根目录，无法限制项目外路径。');
-    assertLocalPathInsideRoot(uri, root);
+    const roots = allowedLocalRootUris(options);
+    if (roots.length === 0) throw new Error('当前工作区缺少项目根目录，无法限制项目外路径。');
+    assertLocalPathInsideAnyRoot(uri, roots);
   }
-  if (resolveOptions.rejectProjectRoot === true) assertSafeLocalDeleteTarget(uri, root);
+  if (resolveOptions.rejectProjectRoot === true) assertSafeLocalDeleteTarget(uri, allowedLocalRootUris(options));
   return uri;
 }
 
@@ -634,10 +636,44 @@ function projectRootUri(options: WorkEnvironmentCapabilityOptions): vscode.Uri |
   if (workEnvironment && workEnvironmentSupportsCapability(workEnvironment, WORK_ENVIRONMENT_CAPABILITY.LocalFileRead)) {
     const rootPath = normalizePathArg(workEnvironment.rootPath);
     if (rootPath) return vscode.Uri.file(rootPath);
-    const uri = normalizePathArg(workEnvironment.uri);
-    if (uri) return vscode.Uri.parse(uri);
+    const uri = uriFromWorkEnvironmentUri(workEnvironment.uri);
+    if (uri) return uri;
   }
   return vscode.workspace.workspaceFolders?.[0]?.uri;
+}
+
+function allowedLocalRootUris(options: WorkEnvironmentCapabilityOptions): vscode.Uri[] {
+  const roots: vscode.Uri[] = [];
+  const add = (uri: vscode.Uri | undefined): void => {
+    if (!uri?.fsPath) return;
+    if (roots.some((existing) => sameLocalPath(existing.fsPath, uri.fsPath))) return;
+    roots.push(uri);
+  };
+
+  add(projectRootUri(options));
+  for (const environment of options.accessibleWorkEnvironments ?? []) {
+    if (!environment.available || !isLocalFolderWorkEnvironment(environment)) continue;
+    add(localRootUriFromWorkEnvironment(environment));
+  }
+
+  return roots;
+}
+
+function localRootUriFromWorkEnvironment(environment: WorkEnvironmentCapabilityOptions['workEnvironment']): vscode.Uri | undefined {
+  if (!environment) return undefined;
+  const rootPath = normalizePathArg(environment.rootPath);
+  if (rootPath) return vscode.Uri.file(rootPath);
+  return uriFromWorkEnvironmentUri(environment.uri);
+}
+
+function uriFromWorkEnvironmentUri(value: string | undefined): vscode.Uri | undefined {
+  const text = normalizePathArg(value);
+  if (!text) return undefined;
+  try {
+    return text.startsWith('file:') ? vscode.Uri.parse(text) : vscode.Uri.file(text);
+  } catch {
+    return undefined;
+  }
 }
 
 function isAbsoluteLocalPath(input: string): boolean {
@@ -648,12 +684,18 @@ function relativeLocalPath(input: string): string {
   return input.replace(/[\\/]+/g, path.sep);
 }
 
-function assertLocalPathInsideRoot(uri: vscode.Uri, root: vscode.Uri): void {
+function assertLocalPathInsideAnyRoot(uri: vscode.Uri, roots: readonly vscode.Uri[]): void {
+  const matched = roots.some((root) => localPathInsideRoot(uri, root));
+  if (matched) return;
+  const rootText = roots.map((root) => root.fsPath).join('；');
+  throw new Error(`路径超出当前项目/工作环境根目录：${uri.fsPath}（roots=${rootText}）`);
+}
+
+function localPathInsideRoot(uri: vscode.Uri, root: vscode.Uri): boolean {
   const candidate = canonicalLocalPath(uri.fsPath);
   const rootPath = canonicalLocalPath(root.fsPath);
   const relative = path.relative(rootPath, candidate);
-  if (relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative))) return;
-  throw new Error(`路径超出当前项目/工作环境根目录：${uri.fsPath}（root=${root.fsPath}）`);
+  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
 function canonicalLocalPath(input: string): string {
@@ -665,11 +707,14 @@ function sameLocalPath(left: string, right: string): boolean {
   return canonicalLocalPath(left) === canonicalLocalPath(right);
 }
 
-function assertSafeLocalDeleteTarget(uri: vscode.Uri, root: vscode.Uri | undefined): void {
+function assertSafeLocalDeleteTarget(uri: vscode.Uri, protectedRoots: readonly vscode.Uri[] | vscode.Uri | undefined): void {
   const target = path.resolve(uri.fsPath);
   const filesystemRoot = path.parse(target).root;
   if (!target || sameLocalPath(target, filesystemRoot)) throw new Error('拒绝删除本地文件系统根目录。');
-  if (root && sameLocalPath(target, root.fsPath)) throw new Error(`拒绝删除当前项目/工作环境根目录：${target}`);
+  const roots = Array.isArray(protectedRoots) ? protectedRoots : protectedRoots ? [protectedRoots] : [];
+  for (const root of roots) {
+    if (sameLocalPath(target, root.fsPath)) throw new Error(`拒绝删除当前项目/工作环境根目录：${target}`);
+  }
 }
 
 function fileTypeFromStat(stat: vscode.FileStat, targetPath: string): FsDeletePathTargetType {

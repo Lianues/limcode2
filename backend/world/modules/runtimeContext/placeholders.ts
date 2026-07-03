@@ -11,7 +11,7 @@ import { activeModeForRun, runTarget } from '../agentRun/queries';
 import { Conversation } from '../chat/components';
 import { ConversationModeSelection, Mode } from '../mode/components';
 import { ConversationProjectLink, ProjectContext } from '../project/components';
-import { activeWorkEnvironmentForConversation, toPublicWorkEnvironmentRecord } from '../workEnvironment/queries';
+import { runtimeContextWorkEnvironmentsForConversation, toPublicWorkEnvironmentRecord } from '../workEnvironment/queries';
 import {
   ConversationWorkEnvironmentLink,
   RunWorkEnvironmentLink,
@@ -31,8 +31,8 @@ export const RUNTIME_CONTEXT_PLACEHOLDERS: PromptPlaceholderRecord[] = [
   { id: 'runtime:runtime.timestamp', token: '{{$runtime.timestamp}}', label: '初始时间戳', description: '生成运行时快照时的 ISO 时间。', target: 'runtimeContext', order: 10 },
   { id: 'runtime:runtime.date', token: '{{$runtime.date}}', label: '初始日期', description: '生成运行时快照时的本地日期。', target: 'runtimeContext', order: 20 },
   { id: 'runtime:platform.os', token: '{{$platform.os}}', label: '平台', description: '当前扩展宿主的 process.platform。', target: 'runtimeContext', order: 30 },
-  { id: 'runtime:workEnvironment.current', token: '{{$workEnvironment.current}}', label: '初始工作环境', description: '生成快照时对话解析到的当前工作环境；工作环境未启用时为空。', target: 'runtimeContext', order: 40 },
-  { id: 'runtime:workEnvironment.currentSection', token: '{{$workEnvironment.currentSection}}', label: '初始工作环境段落', description: '工作环境启用且可解析时输出 Initial work environment 段落；未启用时为空。', target: 'runtimeContext', order: 45 },
+  { id: 'runtime:workEnvironment.current', token: '{{$workEnvironment.current}}', label: '初始工作环境', description: '生成快照时对话可访问的工作环境；工作环境停用时仍会列出已允许的本地环境。', target: 'runtimeContext', order: 40 },
+  { id: 'runtime:workEnvironment.currentSection', token: '{{$workEnvironment.currentSection}}', label: '初始工作环境段落', description: '输出 Initial work environment 段落；工作环境停用时仍会列出已允许的本地环境。', target: 'runtimeContext', order: 45 },
   { id: 'runtime:workspace.name', token: '{{$workspace.name}}', label: '工作区名称', description: '当前对话绑定的项目/工作区名称。', target: 'runtimeContext', order: 50 },
   { id: 'runtime:workspace.uri', token: '{{$workspace.uri}}', label: '工作区 URI', description: '当前对话绑定的项目/工作区 URI。', target: 'runtimeContext', order: 60 }
 ];
@@ -118,8 +118,9 @@ function resolveRuntimePlaceholder(token: string, context: PromptPlaceholderRend
 function currentWorkEnvironmentText(context: PromptPlaceholderRenderContext): string {
   const conversation = context.conversation ?? (context.run !== undefined ? runTarget(context.world, context.run)?.conversation : undefined);
   if (conversation === undefined) return '';
-  const environment = activeWorkEnvironmentForConversation(context.world, conversation);
-  return environment ? formatWorkEnvironmentForDisplay(toPublicWorkEnvironmentRecord(environment.data)) : '';
+  return runtimeContextWorkEnvironmentsForConversation(context.world, conversation)
+    .map((environment) => formatWorkEnvironmentForDisplay(toPublicWorkEnvironmentRecord(environment.data)))
+    .join('\n');
 }
 
 function currentWorkEnvironmentSectionText(context: PromptPlaceholderRenderContext): string {

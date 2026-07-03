@@ -58,6 +58,7 @@ export const editTool: ToolDefinition = {
       const request = buildEditRequest(path, args, runtimeMode);
       const result = await deps.fs.proposeEditFile(request, {
         workEnvironment: ctx?.workEnvironment,
+        accessibleWorkEnvironments: ctx?.accessibleWorkEnvironments,
         allowOutsideProjectPaths: allowOutsideProjectPathsFromConfig(ctx?.config, false)
       });
       return {
@@ -103,7 +104,7 @@ export function hunkModeParameters(): unknown {
   return {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'File path. Relative paths are resolved from the current work environment root; absolute paths are supported when allowed by tool policy.' },
+      path: { type: 'string', description: 'File path. Relative paths are resolved from the current work environment root; absolute paths are supported when allowed by tool policy or when they are inside an explicitly allowed local work environment root.' },
       hunks: {
         type: 'array',
         description: 'Ordered hunk blocks. Each hunk performs exact search/replace in this same file. Use multiple hunks to modify multiple locations in one call.',

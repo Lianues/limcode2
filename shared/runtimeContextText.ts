@@ -13,8 +13,7 @@ export function stripInitialWorkEnvironmentSection(text: string): string {
     const inlineValue = trimmed.slice('Initial work environment:'.length).trim();
     if (inlineValue) continue;
 
-    const nextLine = lines[index + 1];
-    if (typeof nextLine === 'string' && nextLine.trim() && !looksLikeBracketHeader(nextLine)) {
+    while (index + 1 < lines.length && shouldStripWorkEnvironmentLine(lines[index + 1])) {
       index += 1;
     }
   }
@@ -26,7 +25,19 @@ export function stripInitialWorkEnvironmentSection(text: string): string {
     .trim();
 }
 
+function shouldStripWorkEnvironmentLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  if (looksLikeBracketHeader(trimmed)) return false;
+  if (looksLikeRuntimeSectionHeader(trimmed)) return false;
+  return true;
+}
+
 function looksLikeBracketHeader(line: string): boolean {
   const trimmed = line.trim();
   return trimmed.startsWith('[') && trimmed.endsWith(']');
+}
+
+function looksLikeRuntimeSectionHeader(line: string): boolean {
+  return /:$/.test(line) && !line.includes(' · ');
 }

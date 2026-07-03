@@ -5,11 +5,9 @@ import {
   type LlmCompressionConfigRecord,
   type MessageRecord
 } from '@shared/protocol';
-import { stripInitialWorkEnvironmentSection } from '@shared/runtimeContextText';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
-import { useWorkEnvironmentStore } from '@webview/stores/useWorkEnvironmentStore';
 import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
 import HoverTooltipPanel from '@webview/components/ui/HoverTooltipPanel.vue';
 import {
@@ -46,7 +44,6 @@ interface TokenBarSegment {
 const clientState = useClientStateStore();
 const conversationTimeline = useConversationTimelineStore();
 const globalSettings = useGlobalSettingsStore();
-const workEnvironment = useWorkEnvironmentStore();
 const conversationSettings = useConversationSettingsStore();
 const root = ref<HTMLElement | null>(null);
 const expanded = ref(false);
@@ -425,7 +422,7 @@ function currentRuntimeContextText(): string {
   const conversationId = clientState.currentConversationId;
   const link = latestByUpdatedAt(clientState.conversationRuntimeContextSnapshotLinks.filter((item) => item.conversationId === conversationId && item.role === 'active'));
   const text = clientState.runtimeContextSnapshots.find((snapshot) => snapshot.id === link?.runtimeContextSnapshotId)?.text.trim() ?? '';
-  return workEnvironment.workEnvironmentEnabledForConversation(conversationId) ? text : stripInitialWorkEnvironmentSection(text);
+  return text;
 }
 
 function latestSystemPromptForScope(scopeKind: 'global' | 'agent' | 'mode' | 'conversation', scopeId?: string) {

@@ -151,7 +151,7 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
             ...(event.payload !== undefined ? { payload: event.payload } : {})
           });
         }
-      }, { workEnvironment: ctx?.workEnvironment }, limits);
+      }, { workEnvironment: ctx?.workEnvironment, accessibleWorkEnvironments: ctx?.accessibleWorkEnvironments }, limits);
       // 转入后台(running)不算失败；否则以退出码判定。
       const ok = result.status === 'running' || result.exitCode === 0;
       return { ok, output: result };

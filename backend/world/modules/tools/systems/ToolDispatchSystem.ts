@@ -68,10 +68,11 @@ import { ConversationProjectLinkBundle } from '../../project/bundles';
 import { CheckpointBarrier, type CheckpointBarrierData } from '../../checkpoint/components';
 import {
   activeWorkEnvironmentForRun,
-  allowedWorkEnvironmentsForRun,
   effectiveWorkEnvironmentPolicyForRun,
+  pathAccessibleWorkEnvironmentsForRun,
   resolveWorkEnvironmentBySelector,
-  toPublicWorkEnvironmentRecord
+  toPublicWorkEnvironmentRecord,
+  toolContextWorkEnvironmentsForRun
 } from '../../workEnvironment/queries';
 import {
   selectConversationWorkEnvironment,
@@ -400,7 +401,8 @@ function toolExecutionBeforeCheckpointEnabled(world: WorldReader, authorization:
 
 function executeRuntimeToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
   const workEnvironment = activeWorkEnvironmentForRun(world, authorization.run)?.data;
-  const workEnvironments = allowedWorkEnvironmentsForRun(world, authorization.run).map((item) => toPublicWorkEnvironmentRecord(item.data));
+  const workEnvironments = toolContextWorkEnvironmentsForRun(world, authorization.run).map((item) => toPublicWorkEnvironmentRecord(item.data));
+  const accessibleWorkEnvironments = pathAccessibleWorkEnvironmentsForRun(world, authorization.run).map((item) => toPublicWorkEnvironmentRecord(item.data));
   const settingsSnapshot = settingsSnapshotForRun(world, authorization.run);
   cmd.effect({
     kind: 'tool.run',
@@ -412,7 +414,8 @@ function executeRuntimeToolCall(world: WorldReader, cmd: CommandSink, entity: En
     config: effectiveToolConfig(world, authorization.policy, call.name),
     ...(settingsSnapshot ? { settingsSnapshot } : {}),
     ...(workEnvironment ? { workEnvironment: toPublicWorkEnvironmentRecord(workEnvironment) } : {}),
-    ...(workEnvironments.length > 0 ? { workEnvironments } : {})
+    ...(workEnvironments.length > 0 ? { workEnvironments } : {}),
+    ...(accessibleWorkEnvironments.length > 0 ? { accessibleWorkEnvironments } : {})
   });
   const now = Date.now();
   cmd.add(entity, ToolState, transitionToolState(state, 'executing', {}, now));
@@ -1412,12 +1415,14 @@ function applyPendingToolChange(
   const now = Date.now();
   const config = effectiveToolConfig(world, authorization.policy, call.name);
   const workEnvironment = activeWorkEnvironmentForRun(world, authorization.run)?.data;
+  const accessibleWorkEnvironments = pathAccessibleWorkEnvironmentsForRun(world, authorization.run).map((item) => toPublicWorkEnvironmentRecord(item.data));
   cmd.effect({
     kind: 'tool.change.apply',
     toolCallId: call.id,
     name: call.name,
     proposal,
     ...(workEnvironment ? { workEnvironment: toPublicWorkEnvironmentRecord(workEnvironment) } : {}),
+    ...(accessibleWorkEnvironments.length > 0 ? { accessibleWorkEnvironments } : {}),
     allowOutsideProjectPaths: allowOutsideProjectPathsFromConfig(config, false)
   });
   cmd.add(entity, ToolState, transitionToolState(state, 'applying_change', {}, now));

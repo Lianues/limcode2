@@ -59,7 +59,7 @@ const sourceLabel = computed(() => {
   return '默认策略';
 });
 const enabledCount = computed(() => environments.value.filter((environment) => allowedSet.value.has(environment.id)).length);
-const toolSwitchLabel = computed(() => policyEnabled.value ? '工作环境已启用' : '工作环境已停用');
+const toolSwitchLabel = computed(() => policyEnabled.value ? '切换工具已启用' : '仅作为本地路径边界');
 
 watch(
   () => environments.value.map((item) => item.id).join('|'),
@@ -188,7 +188,7 @@ function detailNote(environment: WorkEnvironmentRecord): string {
         :disabled="readonly"
         @update:model-value="setPolicyEnabled"
       >
-        <span>启用工作环境</span>
+        <span>启用工作环境切换工具</span>
       </LcCheckbox>
       <button type="button" :disabled="readonly" @click="importFromVscode">
         <IconCloudDown stroke="2" aria-hidden="true" />

@@ -105,6 +105,37 @@ export function allowedWorkEnvironmentsForRun(world: WorldReader, run: Entity): 
   return allowedWorkEnvironmentsForResolution(world, resolution);
 }
 
+/**
+ * 返回策略中“勾选允许”的可用环境，不要求工作环境总开关已启用。
+ *
+ * 这个列表用于本地路径安全边界与运行时上下文提示：
+ * - 允许使用项目外路径关闭时，仍应放行已勾选的本地 workspace folder；
+ * - 工作环境功能总开关关闭时，LLM 仍应知道这些本地根目录存在。
+ */
+export function configuredWorkEnvironmentsForConversation(world: WorldReader, conversation: Entity): ResolvedWorkEnvironment[] {
+  return workEnvironmentsForResolution(world, effectiveWorkEnvironmentPolicyForConversation(world, conversation));
+}
+
+export function configuredWorkEnvironmentsForRun(world: WorldReader, run: Entity): ResolvedWorkEnvironment[] {
+  return workEnvironmentsForResolution(world, effectiveWorkEnvironmentPolicyForRun(world, run));
+}
+
+export function pathAccessibleWorkEnvironmentsForRun(world: WorldReader, run: Entity): ResolvedWorkEnvironment[] {
+  return configuredWorkEnvironmentsForRun(world, run).filter((item) => isLocalFolderWorkEnvironment(item.data));
+}
+
+export function runtimeContextWorkEnvironmentsForConversation(world: WorldReader, conversation: Entity): ResolvedWorkEnvironment[] {
+  const resolution = effectiveWorkEnvironmentPolicyForConversation(world, conversation);
+  if (resolution.policy?.enabled === true) return allowedWorkEnvironmentsForResolution(world, resolution);
+  return workEnvironmentsForResolution(world, resolution).filter((item) => isLocalFolderWorkEnvironment(item.data));
+}
+
+export function toolContextWorkEnvironmentsForRun(world: WorldReader, run: Entity): ResolvedWorkEnvironment[] {
+  const resolution = effectiveWorkEnvironmentPolicyForRun(world, run);
+  if (resolution.policy?.enabled === true) return allowedWorkEnvironmentsForResolution(world, resolution);
+  return workEnvironmentsForResolution(world, resolution).filter((item) => isLocalFolderWorkEnvironment(item.data));
+}
+
 export function defaultWorkEnvironment(world: WorldReader): ResolvedWorkEnvironment | undefined {
   return availableWorkEnvironments(world)[0];
 }
@@ -291,6 +322,10 @@ function fallbackPolicy(world: WorldReader): WorkEnvironmentPolicyResolution {
 }
 
 function allowedWorkEnvironmentsForResolution(world: WorldReader, resolution: WorkEnvironmentPolicyResolution): ResolvedWorkEnvironment[] {
+  return workEnvironmentsForResolution(world, resolution);
+}
+
+function workEnvironmentsForResolution(world: WorldReader, resolution: WorkEnvironmentPolicyResolution): ResolvedWorkEnvironment[] {
   const all = availableWorkEnvironments(world);
   const allowedIds = resolution.policy?.allowedWorkEnvironmentIds;
   if (!allowedIds || allowedIds.length === 0) return all;

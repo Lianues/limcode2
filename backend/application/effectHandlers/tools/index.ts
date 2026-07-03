@@ -32,7 +32,7 @@ export function registerToolEffectHandlers(registry: EffectHandlerRegistry): voi
     };
 
     tool
-      .execute(args, { fs: env.fs, command: env.command, workEnvironment: env.workEnvironment, storage: env.storage, skills: env.skills }, { toolCallId: effect.toolCallId, runId: effect.runId, conversationId: effect.conversationId, config: effect.config, settingsSnapshot: effect.settingsSnapshot, workEnvironment: effect.workEnvironment, workEnvironments: effect.workEnvironments, emit: emitRuntimeEvent })
+      .execute(args, { fs: env.fs, command: env.command, workEnvironment: env.workEnvironment, storage: env.storage, skills: env.skills }, { toolCallId: effect.toolCallId, runId: effect.runId, conversationId: effect.conversationId, config: effect.config, settingsSnapshot: effect.settingsSnapshot, workEnvironment: effect.workEnvironment, workEnvironments: effect.workEnvironments, accessibleWorkEnvironments: effect.accessibleWorkEnvironments, emit: emitRuntimeEvent })
       .then((result) => emitToolState(emit, toToolStatePayload(effect.toolCallId, result, Date.now() - startedAt)))
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
@@ -45,6 +45,7 @@ export function registerToolEffectHandlers(registry: EffectHandlerRegistry): voi
     env.fs
       .applyPendingFileChange(effect.proposal, {
         workEnvironment: effect.workEnvironment,
+        accessibleWorkEnvironments: effect.accessibleWorkEnvironments,
         allowOutsideProjectPaths: effect.allowOutsideProjectPaths
       })
       .then((output) => {

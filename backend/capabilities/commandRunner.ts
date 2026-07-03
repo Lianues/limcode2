@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import type { CommandCapability, CommandOutputLimits, CommandRunArgs, CommandRunObserver, CommandRunResult, RuntimePaths, WorkEnvironmentCapabilityOptions } from './types';
 import {
   WORK_ENVIRONMENT_CAPABILITY,
+  isLocalFolderWorkEnvironment,
   workEnvironmentDisplayName,
   workEnvironmentSupportsCapability
 } from '../../shared/workEnvironmentCatalog';
@@ -736,8 +737,13 @@ function resolveWorkDir(cwd: string | undefined, options: WorkEnvironmentCapabil
 
 function workEnvironmentRootPath(options: WorkEnvironmentCapabilityOptions): string | undefined {
   const workEnvironment = options.workEnvironment;
-  if (!workEnvironment || !workEnvironmentSupportsCapability(workEnvironment, WORK_ENVIRONMENT_CAPABILITY.LocalCommand) || workEnvironment.available === false) return undefined;
-  return workEnvironment.rootPath?.trim() || undefined;
+  if (workEnvironment && workEnvironmentSupportsCapability(workEnvironment, WORK_ENVIRONMENT_CAPABILITY.LocalCommand) && workEnvironment.available !== false) {
+    const rootPath = workEnvironment.rootPath?.trim();
+    if (rootPath) return rootPath;
+  }
+  return options.accessibleWorkEnvironments
+    ?.find((environment) => environment.available !== false && isLocalFolderWorkEnvironment(environment) && workEnvironmentSupportsCapability(environment, WORK_ENVIRONMENT_CAPABILITY.LocalCommand) && environment.rootPath?.trim())
+    ?.rootPath?.trim();
 }
 
 function validateCommandWorkEnvironment(options: WorkEnvironmentCapabilityOptions): string | undefined {

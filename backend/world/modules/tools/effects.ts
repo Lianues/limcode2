@@ -12,6 +12,7 @@ export interface ToolRunEffect {
   settingsSnapshot?: LlmInvocationSettingsSnapshotRecord;
   workEnvironment?: WorkEnvironmentRecord;
   workEnvironments?: WorkEnvironmentRecord[];
+  accessibleWorkEnvironments?: WorkEnvironmentRecord[];
 }
 
 export interface ToolChangeApplyEffect {
@@ -20,6 +21,7 @@ export interface ToolChangeApplyEffect {
   name: string;
   proposal: FsPendingFileChangeProposal;
   workEnvironment?: WorkEnvironmentRecord;
+  accessibleWorkEnvironments?: WorkEnvironmentRecord[];
   allowOutsideProjectPaths?: boolean;
 }
 

@@ -32,14 +32,14 @@ export const deleteTool: ToolDefinition = {
       'Delete one or more files/directories from the current work environment.',
       'Use this controlled delete tool first for simple file/folder deletion; avoid shell/bash/PowerShell/rm/del/Remove-Item for ordinary deletions.',
       'Always pass paths as an array, even for a single target. Each item can be a file or folder and is detected automatically. Directories are deleted recursively.',
-      'Supports relative paths and absolute paths. Relative paths are resolved from the current work environment root; by default this tool only allows paths inside the current project/work-environment root.'
+      'Supports relative paths and absolute paths. Relative paths are resolved from the current work environment root; by default this tool only allows paths inside the current project root or explicitly allowed local work environment roots.'
     ].join(' '),
     parameters: {
       type: 'object',
       properties: {
         paths: {
           type: 'array',
-          description: 'File or directory paths to delete. Always use an array, even for one path. Relative paths are resolved from the current work environment root; absolute paths are supported when allowed by tool policy.',
+          description: 'File or directory paths to delete. Always use an array, even for one path. Relative paths are resolved from the current work environment root; absolute paths are supported when allowed by tool policy or when they are inside an explicitly allowed local work environment root.',
           items: { type: 'string', description: 'File or directory path to delete.' }
         }
       }
@@ -71,6 +71,7 @@ export const deleteTool: ToolDefinition = {
       try {
         const result = await deps.fs.deletePath(inputPath, {
           workEnvironment: ctx?.workEnvironment,
+          accessibleWorkEnvironments: ctx?.accessibleWorkEnvironments,
           allowOutsideProjectPaths
         });
         paths.push(toDeletePathStatusItem(result));

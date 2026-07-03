@@ -197,6 +197,12 @@ export interface FsCapability {
 
 export interface WorkEnvironmentCapabilityOptions {
   workEnvironment?: WorkEnvironmentRecord;
+  /**
+   * 当前运行策略允许访问的工作环境集合。
+   * 当 allowOutsideProjectPaths=false 时，本地绝对路径只要落在这些本地环境根目录内也应放行；
+   * allowOutsideProjectPaths=true 仍然优先，表示不做项目/工作环境根目录限制。
+   */
+  accessibleWorkEnvironments?: WorkEnvironmentRecord[];
   allowOutsideProjectPaths?: boolean;
 }
 

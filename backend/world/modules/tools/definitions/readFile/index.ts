@@ -30,7 +30,7 @@ export const readFileTool: ToolDefinition = {
     parameters: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'File path. Relative paths are resolved from the current work environment root; absolute paths are supported when allowed by tool policy.' },
+        path: { type: 'string', description: 'File path. Relative paths are resolved from the current work environment root; absolute paths are supported when allowed by tool policy or when they are inside an explicitly allowed local work environment root.' },
         startLine: { type: 'number', description: '1-based start line (inclusive).' },
         endLine: { type: 'number', description: '1-based end line (inclusive).' },
       },
@@ -62,6 +62,7 @@ export const readFileTool: ToolDefinition = {
     if (mimeType && READ_MULTIMODAL_MIME_TYPES.has(mimeType) && args.startLine === undefined && args.endLine === undefined) {
       const file = await deps.fs.readBinaryFile(args.path, mimeType, {
         workEnvironment: ctx?.workEnvironment,
+        accessibleWorkEnvironments: ctx?.accessibleWorkEnvironments,
         allowOutsideProjectPaths: allowOutsideProjectPathsFromConfig(ctx?.config, true)
       });
       const part: InlineDataPart = {
@@ -79,6 +80,7 @@ export const readFileTool: ToolDefinition = {
     }
     const text = await deps.fs.readFile(args.path, args.startLine, args.endLine, {
       workEnvironment: ctx?.workEnvironment,
+      accessibleWorkEnvironments: ctx?.accessibleWorkEnvironments,
       allowOutsideProjectPaths: allowOutsideProjectPathsFromConfig(ctx?.config, true)
     });
     return { ok: true, output: text };

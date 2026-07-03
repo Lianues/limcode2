@@ -51,6 +51,8 @@ interface PendingRequestUpdate {
   operations: PendingOperation[];
 }
 
+const AUTO_COMPRESSION_DEBUG_PREFIX = '[LimCode][AutoCompressionDebug]';
+
 const LlmInvocationsByIdQuery = defineQuery({
   name: 'LlmInvocationsById',
   all: [LlmInvocation],
@@ -180,9 +182,10 @@ function requestOf(world: WorldReader, requestId: string): Entity | undefined {
 function maybeEnqueueAutoCompression(
   world: WorldReader,
   cmd: CommandSink,
-  input: { conversation: Entity; modelMessage: Entity; invocation?: Entity; usageMetadata?: LlmUsageMetadataRecord }
+  input: { conversation: Entity; endMessage: MessageData; invocation?: Entity; usageMetadata?: LlmUsageMetadataRecord; stage: 'llm_response_after' }
 ): void {
   if (!input.usageMetadata || input.invocation === undefined) return;
+  const conversation = world.get(input.conversation, Conversation);
   const invocation = world.get(input.invocation, LlmInvocation);
   const settings = invocation?.settings;
   const trigger = settings?.compressionTrigger;
@@ -190,18 +193,41 @@ function maybeEnqueueAutoCompression(
 
   const observedTokens = usageTokenCount(input.usageMetadata);
   const thresholdTokens = autoCompressionThresholdTokens(settings);
-  if (observedTokens === undefined || thresholdTokens === undefined || observedTokens < thresholdTokens) return;
+  debugAutoCompression('llm.done.check', {
+    stage: input.stage,
+    conversationId: conversation?.id,
+    endMessage: describeMessageData(input.endMessage),
+    invocationId: invocation?.id,
+    methodKind: settings.compressionMethodKind,
+    compressionConfigId: settings.compressionConfigId,
+    observedTokens,
+    thresholdTokens
+  });
+  if (observedTokens === undefined || thresholdTokens === undefined || observedTokens < thresholdTokens) {
+    debugAutoCompression('llm.done.skipBelowThreshold', { conversationId: conversation?.id, observedTokens, thresholdTokens });
+    return;
+  }
 
-  const endMessage = previousCompressibleMessageBefore(world, input.conversation, input.modelMessage);
-  if (!endMessage || hasCompressionBlockForAnchor(world, input.conversation, endMessage.id)) return;
+  if (hasCompressionBlockForAnchor(world, input.conversation, input.endMessage.id)) {
+    debugAutoCompression('llm.done.skipDuplicateAnchor', {
+      conversationId: conversation?.id,
+      endMessage: describeMessageData(input.endMessage)
+    });
+    return;
+  }
 
-  const conversation = world.get(input.conversation, Conversation);
   if (!conversation) return;
+  debugAutoCompression('llm.done.enqueue', {
+    conversationId: conversation.id,
+    endMessage: describeMessageData(input.endMessage),
+    methodKind: settings.compressionMethodKind,
+    compressionConfigId: settings.compressionConfigId
+  });
   cmd.enqueue({
     type: CompressionEventType.Create,
     payload: {
       conversationId: conversation.id,
-      endMessageId: endMessage.id,
+      endMessageId: input.endMessage.id,
       ...(settings.compressionConfigId ? { methodConfigId: settings.compressionConfigId } : {}),
       ...(settings.compressionMethodKind ? { methodKind: settings.compressionMethodKind } : {}),
       trigger: 'auto' as const
@@ -236,26 +262,6 @@ function finitePositiveNumber(value: unknown): number | undefined {
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
 }
 
-function previousCompressibleMessageBefore(world: WorldReader, conversation: Entity, modelMessage: Entity): MessageData | undefined {
-  const current = world.get(modelMessage, Message);
-  if (!current) return undefined;
-  return world
-    .query(Message, PartOf)
-    .filter((entity) => entity !== modelMessage && world.get(entity, PartOf)?.parent === conversation)
-    .map((entity) => world.get(entity, Message))
-    .filter((message): message is MessageData => !!message && message.seq < current.seq && isCompressionFloorAnchor(message))
-    .sort((left, right) => right.seq - left.seq)
-    [0];
-}
-
-function isCompressionFloorAnchor(message: MessageData): boolean {
-  return !containsOnlyProviderContext(message) && !message.content.parts.some(isFunctionResponsePart);
-}
-
-function containsOnlyProviderContext(message: MessageData): boolean {
-  return message.content.parts.length > 0 && message.content.parts.every(isProviderContextPart);
-}
-
 function hasCompressionBlockForAnchor(world: WorldReader, conversation: Entity, anchorMessageId: string): boolean {
   return world.query(CompressionBlock).some((entity) => {
     const block = world.get(entity, CompressionBlock);
@@ -263,6 +269,36 @@ function hasCompressionBlockForAnchor(world: WorldReader, conversation: Entity, 
       && block.anchorMessageId === anchorMessageId
       && (block.status === 'running' || block.status === 'pending' || block.status === 'complete');
   });
+}
+
+function debugAutoCompression(stage: string, payload: Record<string, unknown>): void {
+  console.log(AUTO_COMPRESSION_DEBUG_PREFIX, stage, payload);
+}
+
+function describeMessageEntity(world: WorldReader, entity: Entity): Record<string, unknown> | undefined {
+  const message = world.get(entity, Message);
+  return message ? describeMessageData(message) : undefined;
+}
+
+function describeMessageData(message: MessageData): Record<string, unknown> {
+  return {
+    id: message.id,
+    seq: message.seq,
+    role: message.role,
+    status: message.status,
+    partKinds: message.content.parts.map(describePartKind),
+    visibleTextLength: message.content.parts
+      .filter(isVisibleTextPart)
+      .reduce((total, part) => total + ('text' in part ? part.text.length : 0), 0)
+  };
+}
+
+function describePartKind(part: ContentPart): string {
+  if (isTextPart(part)) return part.thought === true ? 'thoughtText' : 'text';
+  if (isFunctionCallPart(part)) return `functionCall:${part.functionCall.name}`;
+  if (isFunctionResponsePart(part)) return `functionResponse:${part.functionResponse.name}`;
+  if (isProviderContextPart(part)) return `providerContext:${part.providerContext.itemType ?? part.providerContext.format}`;
+  return Object.keys(part)[0] ?? 'unknown';
 }
 
 
@@ -406,7 +442,14 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
           type: CheckpointEventType.Requested,
           payload: { conversationId: conversation.id, runId: run.id, floorMessageId: current.id, anchorPosition: 'after', trigger: 'llm_response_after' }
         });
-        maybeEnqueueAutoCompression(world, cmd, { conversation: requestData.conversation, modelMessage, invocation: requestData.invocation, usageMetadata });
+        if (waitsForTool) {
+          debugAutoCompression('llm.done.deferForToolResponses', {
+            conversationId: conversation.id,
+            modelMessage: describeMessageData(next)
+          });
+        } else {
+          maybeEnqueueAutoCompression(world, cmd, { conversation: requestData.conversation, endMessage: next, invocation: requestData.invocation, usageMetadata, stage: 'llm_response_after' });
+        }
       }
       cmd.add(requestData.run, AgentRun, {
         ...run,

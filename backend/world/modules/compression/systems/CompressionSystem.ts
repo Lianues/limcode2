@@ -14,6 +14,8 @@ import type { CompressionBlockRecord, ContentPart, MessageContent, MessageRecord
 import { isFileDataPart, isFunctionCallPart, isFunctionResponsePart, isInlineDataPart, isProviderContextPart, isTextPart, isVisibleTextPart } from '../../../../../shared/protocol';
 import { buildTaskListTimeline, formatTaskListSnapshotForContext } from '../../../../../shared/taskListProjection';
 
+const AUTO_COMPRESSION_DEBUG_PREFIX = '[LimCode][AutoCompressionDebug]';
+
 const COMPRESSION_WRITE_COMPONENTS = [
   Conversation,
   Message,
@@ -83,10 +85,38 @@ function createCompressionBlock(
   if (conversation === undefined) return;
   const methodKind = payload.methodKind ?? 'llm_summary';
 
+  debugAutoCompression('compression.create.begin', {
+    payload,
+    conversation: describeConversation(world, conversation),
+    methodKind,
+    messages: describeConversationMessages(world, conversation)
+  });
+
   const selection = methodKind === 'segmented_summary'
     ? prepareSegmentedSelection(world, conversation, payload)
     : prepareFullSelection(world, conversation, payload);
-  if (!selection) return;
+  if (!selection) {
+    debugAutoCompression('compression.create.skipNoSelection', {
+      payload,
+      conversation: describeConversation(world, conversation),
+      methodKind
+    });
+    return;
+  }
+
+  debugAutoCompression('compression.create.selection', {
+    payload,
+    methodKind,
+    selected: selection.selected.map((entity) => describeMessageEntity(world, entity)),
+    requestContents: selection.requestContents.map(describeContent),
+    startSeq: selection.startSeq,
+    sourceMessageCount: selection.sourceMessageCount,
+    anchor: selection.anchor,
+    segmentCount: selection.segments?.length,
+    segments: selection.segments?.map((segment) => segment.map(describeContent)),
+    priorSummaryCount: selection.priorSummaryContents?.length,
+    retainedBlock: selection.retainedBlock !== undefined ? world.get(selection.retainedBlock, CompressionBlock)?.id : undefined
+  });
 
   spawnCompressionBlock(world, cmd, conversation, methodKind, payload, selection);
 }
@@ -158,6 +188,19 @@ function spawnCompressionBlock(
   const block = cmd.spawn();
   const blockId = `compression-block-${block}`;
   const compactRequestId = `compact-${blockId}`;
+  debugAutoCompression('compression.spawnBlock', {
+    blockId,
+    compactRequestId,
+    conversationId: payload.conversationId,
+    methodKind,
+    trigger: payload.trigger,
+    anchor,
+    startSeq: selection.startSeq,
+    endSeq: anchor.seq,
+    selected: selected.map((entity) => describeMessageEntity(world, entity)),
+    tokenCountBefore
+  });
+
   cmd.add(block, CompressionBlock, {
     id: blockId,
     conversation,
@@ -412,14 +455,28 @@ function deleteCompressionBlock(world: WorldReader, cmd: CommandSink, blockId: s
 
 function selectMessagesForCompression(world: WorldReader, conversation: Entity, startMessageId?: string, endMessageId?: string): Entity[] {
   const allMessages = conversationMessages(world, conversation);
-  if (allMessages.some((entity) => world.get(entity, Message)?.status === 'streaming')) return [];
+  if (allMessages.some((entity) => world.get(entity, Message)?.status === 'streaming')) {
+    debugAutoCompression('compression.select.skipStreaming', { conversation: describeConversation(world, conversation), messages: allMessages.map((entity) => describeMessageEntity(world, entity)) });
+    return [];
+  }
   const messages = allMessages.filter((entity) => !containsOnlyProviderContext(world.get(entity, Message)?.content));
   const startIndex = startMessageId ? messages.findIndex((entity) => world.get(entity, Message)?.id === startMessageId) : 0;
   const endIndex = endMessageId ? messages.findIndex((entity) => world.get(entity, Message)?.id === endMessageId) : messages.length - 1;
   if (messages.length === 0) return [];
   const from = Math.max(0, startIndex < 0 ? 0 : startIndex);
   const to = Math.max(from, endIndex < 0 ? messages.length - 1 : endIndex);
-  return messages.slice(from, to + 1);
+  const selected = messages.slice(from, to + 1);
+  debugAutoCompression('compression.select.full', {
+    conversation: describeConversation(world, conversation),
+    startMessageId,
+    endMessageId,
+    startIndex,
+    endIndex,
+    from,
+    to,
+    selected: selected.map((entity) => describeMessageEntity(world, entity))
+  });
+  return selected;
 }
 
 function containsOnlyProviderContext(content: MessageContent | undefined): boolean {
@@ -429,7 +486,7 @@ function containsOnlyProviderContext(content: MessageContent | undefined): boole
 /**
  * 分段总结的增量选择：
  * - 只取上一完成块边界之后、到 endBoundary 为止的消息；
- * - 按“回合”切分（正式回答闭合一个回合），只压缩已闭合回合；
+ * - 按“回合”切分，正式回答或已落地的工具响应都可闭合当前触发边界；
  * - 末尾未闭合回合不纳入（靠 contextPolicy 以原文保留）；
  * - 若上一完成块存在其总结，作为“回合1前情”逐字传下去（不重新总结）。
  */
@@ -459,6 +516,14 @@ function prepareSegmentedSelection(
   if (increment.length === 0) return undefined;
 
   const closedRounds = splitEntitiesIntoRounds(world, increment);
+  debugAutoCompression('compression.segmented.rounds', {
+    payload,
+    conversation: describeConversation(world, conversation),
+    endBoundarySeq,
+    startBoundarySeq,
+    increment: increment.map((entity) => describeMessageEntity(world, entity)),
+    closedRounds: closedRounds.map((round) => round.map((entity) => describeMessageEntity(world, entity)))
+  });
   if (closedRounds.length === 0) return undefined;
 
   const selected = closedRounds.flat();
@@ -489,8 +554,10 @@ function prepareSegmentedSelection(
  * - 只有在当前回合“已闭合”(已出现过模型正式回答)之后，再遇到真实用户消息才切分开新回合；
  *   因此连续的多条用户消息(补充/追加/打断)会并入同一回合，而不会各自成为残缺回合。
  * - 模型正式回答(model + 可见文本 + 无工具调用)将当前回合标记为已闭合；模型工具调用会重置为未闭合
- *   (即便之前已回答过，正式回答后又调工具则视为继续干活)。因此中途的纯文本不会误判切断。
- * - 末尾回合只有已闭合时才纳入；进行中的末尾回合(如以工具调用结尾)整体丢弃，靠原文保留。
+ *   (即便之前已回答过，正式回答后又调工具则视为继续干活)。
+ * - 工具响应消息属于回合内部；当自动压缩锚定在工具响应后时，工具响应也闭合一个可总结边界，
+ *   这样不会把“工具调用 → 工具结果”拆开或把压缩块插到工具结果前面。
+ * - 末尾回合只有已闭合时才纳入；进行中的末尾回合整体丢弃，靠 contextPolicy 以原文保留。
  */
 function splitEntitiesIntoRounds(world: WorldReader, entities: Entity[]): Entity[][] {
   const rounds: Entity[][] = [];
@@ -505,6 +572,7 @@ function splitEntitiesIntoRounds(world: WorldReader, entities: Entity[]): Entity
     }
     current.push(entity);
     if (content?.role === 'model') currentClosed = isFinalAnswer(content);
+    else if (isToolResponseMessage(content)) currentClosed = true;
   }
   if (current.length > 0 && currentClosed) rounds.push(current);
   return rounds;
@@ -519,6 +587,10 @@ function isRealUserMessage(content: MessageContent | undefined): boolean {
 /** 正式回答：model 消息含可见文本且无待处理工具调用。 */
 function isFinalAnswer(content: MessageContent): boolean {
   return content.parts.some(isVisibleTextPart) && !content.parts.some(isFunctionCallPart);
+}
+
+function isToolResponseMessage(content: MessageContent | undefined): boolean {
+  return !!content && content.role === 'user' && content.parts.some(isFunctionResponsePart);
 }
 
 /** 该会话中 anchorSeq 严格小于 upperSeq 的最新完成块（用于增量起点与前情来源；regenerate 时天然排除自身/更新块）。 */
@@ -750,6 +822,65 @@ function renderPart(part: ContentPart): string {
 
 function safeJson(value: unknown): string {
   try { return JSON.stringify(value); } catch { return String(value); }
+}
+
+function debugAutoCompression(stage: string, payload: Record<string, unknown>): void {
+  console.log(AUTO_COMPRESSION_DEBUG_PREFIX, stage, payload);
+}
+
+function describeConversation(world: WorldReader, conversation: Entity): Record<string, unknown> | undefined {
+  const data = world.get(conversation, Conversation);
+  return data ? { entity: conversation, id: data.id, title: data.title } : undefined;
+}
+
+function describeConversationMessages(world: WorldReader, conversation: Entity): Array<Record<string, unknown> | undefined> {
+  return conversationMessages(world, conversation).map((entity) => describeMessageEntity(world, entity));
+}
+
+function describeMessageEntity(world: WorldReader, entity: Entity): Record<string, unknown> | undefined {
+  const message = world.get(entity, Message);
+  return message ? describeMessageData(message) : undefined;
+}
+
+function describeMessageData(message: MessageDataLike): Record<string, unknown> {
+  return {
+    id: message.id,
+    seq: message.seq,
+    role: message.role,
+    status: message.status,
+    partKinds: message.content.parts.map(describePartKind),
+    visibleTextLength: message.content.parts
+      .filter(isVisibleTextPart)
+      .reduce((total, part) => total + ('text' in part ? part.text.length : 0), 0)
+  };
+}
+
+interface MessageDataLike {
+  id: string;
+  seq: number;
+  role: string;
+  status: string;
+  content: MessageContent;
+}
+
+function describeContent(content: MessageContent): Record<string, unknown> {
+  return {
+    role: content.role,
+    partKinds: content.parts.map(describePartKind),
+    visibleTextLength: content.parts
+      .filter(isVisibleTextPart)
+      .reduce((total, part) => total + ('text' in part ? part.text.length : 0), 0)
+  };
+}
+
+function describePartKind(part: ContentPart): string {
+  if (isTextPart(part)) return part.thought === true ? 'thoughtText' : 'text';
+  if (isFunctionCallPart(part)) return `functionCall:${part.functionCall.name}`;
+  if (isFunctionResponsePart(part)) return `functionResponse:${part.functionResponse.name}`;
+  if (isProviderContextPart(part)) return `providerContext:${part.providerContext.itemType ?? part.providerContext.format}`;
+  if (isInlineDataPart(part)) return `inlineData:${part.inlineData.mimeType}`;
+  if (isFileDataPart(part)) return `fileData:${part.fileData.mimeType ?? 'unknown'}`;
+  return Object.keys(part)[0] ?? 'unknown';
 }
 
 function hashText(value: string): string {

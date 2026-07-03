@@ -15,14 +15,20 @@ import { Conversation } from '../../chat/components';
 import { spawnToolResponseMessage, ToolResultMessageBundle } from '../../chat/bundles';
 import { ConversationModeSelection, Mode, ToolPolicy } from '../../mode/components';
 import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
-import { ToolCall, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolStateData } from '../components';
+import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolStateData } from '../components';
 import { ToolEventType } from '../events';
 import { isTerminalToolStatus, toolStateToResponse, transitionToolState } from '../state';
 import { simplifyToolResponseForModel } from '../responseSimplifier';
 import { readEvents } from '../../../events';
-import type { InlineDataPart, ToolCallStatus } from '../../../../../shared/protocol';
+import type { ContentPart, InlineDataPart, LlmInvocationSettingsSnapshotRecord, LlmUsageMetadataRecord, ToolCallStatus } from '../../../../../shared/protocol';
+import { isFunctionResponsePart, isInlineDataPart } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
+import { CompressionBlock } from '../../compression/components';
+import { CompressionEventType } from '../../compression/events';
+import { LlmInvocation, RunLlmInvocationLink, type LlmInvocationData } from '../../llm/components';
 import { isYoloToolPolicy } from '../policy';
+
+const AUTO_COMPRESSION_DEBUG_PREFIX = '[LimCode][AutoCompressionDebug]';
 
 const SettledToolCallsQuery = defineQuery({
   name: 'SettledToolCalls',
@@ -62,8 +68,9 @@ export const ToolResultSystem = defineSystem({
   access: {
     queries: [SettledToolCallsQuery, ActiveToolWorkLookupQuery],
     bundles: [ToolResultMessageBundle, ToolCallEventBundle],
+    reads: { components: [LlmInvocation, RunLlmInvocationLink, ToolCallEvent, CompressionBlock] },
     writes: { components: [AgentRun, AgentRunNeedsModel, MessageRunLink, ToolState] },
-    events: { read: [ToolEventType.ResultSubmitRequested, ToolEventType.ResultRejectRequested], emit: [CheckpointEventType.Requested] }
+    events: { read: [ToolEventType.ResultSubmitRequested, ToolEventType.ResultRejectRequested], emit: [CheckpointEventType.Requested, CompressionEventType.Create] }
   },
   run(ctx) {
     const { world, cmd } = ctx;
@@ -133,18 +140,34 @@ export const ToolResultSystem = defineSystem({
         continue;
       }
 
+      const conversationData = world.get(target.conversation, Conversation);
       const toolResponse = toolStateToResponse(state);
+      const simplifiedResponse = simplifyToolResponseForModel(call.name, state.status, toolResponse);
+      const inlineParts = inlinePartsFromToolResponse(toolResponse);
       const responseMessage = spawnToolResponseMessage(cmd, {
         conversation: target.conversation,
         toolCallId: call.functionCallId ?? call.id,
         toolName: call.name,
         status: state.status,
-        response: simplifyToolResponseForModel(call.name, state.status, toolResponse),
-        parts: inlinePartsFromToolResponse(toolResponse),
+        response: simplifiedResponse,
+        parts: inlineParts,
         durationMs: state.durationMs
       });
+      debugAutoCompression('tool.response.spawned', {
+        runId: runData.id,
+        conversationId: conversationData?.id,
+        toolCallId: call.id,
+        functionCallId: call.functionCallId,
+        toolName: call.name,
+        status: state.status,
+        responseMessageEntity: responseMessage,
+        expectedResponseMessageId: `m${responseMessage}`,
+        partKinds: describeToolResponsePartKinds(call.functionCallId ?? call.id, call.name, simplifiedResponse, inlineParts)
+      });
       spawnMessageRunLink(cmd, { message: responseMessage, run, role: 'tool_response' });
-      const conversationData = world.get(target.conversation, Conversation);
+      cmd.add(entity, ToolResultConsumed, true);
+      consumedThisPass.add(entity);
+      touchedRuns.add(run);
       if (conversationData) {
         cmd.enqueue({
           type: CheckpointEventType.Requested,
@@ -157,10 +180,15 @@ export const ToolResultSystem = defineSystem({
             trigger: 'tool_execution_after'
           }
         });
+        maybeEnqueueAutoCompressionAfterToolResponses(world, cmd, {
+          conversation: target.conversation,
+          conversationId: conversationData.id,
+          run,
+          runId: runData.id,
+          responseMessageId: `m${responseMessage}`,
+          consumedThisPass
+        });
       }
-      cmd.add(entity, ToolResultConsumed, true);
-      consumedThisPass.add(entity);
-      touchedRuns.add(run);
     }
 
     for (const run of touchedRuns) {
@@ -174,6 +202,56 @@ export const ToolResultSystem = defineSystem({
     }
   }
 });
+
+function maybeEnqueueAutoCompressionAfterToolResponses(
+  world: WorldReader,
+  cmd: CommandSink,
+  input: { conversation: Entity; conversationId: string; run: Entity; runId: string; responseMessageId: string; consumedThisPass: ReadonlySet<Entity> }
+): void {
+  if (hasPendingToolWork(world, input.run, input.consumedThisPass)) {
+    debugAutoCompression('tool.response.skipPendingToolWork', { conversationId: input.conversationId, runId: input.runId, responseMessageId: input.responseMessageId });
+    return;
+  }
+
+  const settings = latestInvocationSettingsForRun(world, input.run);
+  const trigger = settings?.compressionTrigger;
+  if (!settings || !trigger || trigger.mode !== 'token_threshold' || settings.compressionMethodKind === 'disabled') return;
+
+  const observedTokens = latestObservedTokensForRun(world, input.run);
+  const thresholdTokens = autoCompressionThresholdTokens(settings);
+  debugAutoCompression('tool.response.check', {
+    conversationId: input.conversationId,
+    runId: input.runId,
+    responseMessageId: input.responseMessageId,
+    methodKind: settings.compressionMethodKind,
+    compressionConfigId: settings.compressionConfigId,
+    observedTokens,
+    thresholdTokens
+  });
+  if (observedTokens === undefined || thresholdTokens === undefined || observedTokens < thresholdTokens) return;
+  if (hasCompressionBlockForAnchor(world, input.conversation, input.responseMessageId)) {
+    debugAutoCompression('tool.response.skipDuplicateAnchor', { conversationId: input.conversationId, responseMessageId: input.responseMessageId });
+    return;
+  }
+
+  debugAutoCompression('tool.response.enqueue', {
+    conversationId: input.conversationId,
+    runId: input.runId,
+    endMessageId: input.responseMessageId,
+    methodKind: settings.compressionMethodKind,
+    compressionConfigId: settings.compressionConfigId
+  });
+  cmd.enqueue({
+    type: CompressionEventType.Create,
+    payload: {
+      conversationId: input.conversationId,
+      endMessageId: input.responseMessageId,
+      ...(settings.compressionConfigId ? { methodConfigId: settings.compressionConfigId } : {}),
+      ...(settings.compressionMethodKind ? { methodKind: settings.compressionMethodKind } : {}),
+      trigger: 'auto' as const
+    }
+  });
+}
 
 function requiresResultSubmitApproval(world: WorldReader, run: Entity, toolName: string, state: ToolStateData): boolean {
   if (hasResultSubmitDecision(state)) return false;
@@ -228,6 +306,84 @@ function isTerminalRunStatus(status: string): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'stale';
 }
 
+function latestInvocationSettingsForRun(world: WorldReader, run: Entity): LlmInvocationSettingsSnapshotRecord | undefined {
+  return latestInvocationForRun(world, run)?.settings;
+}
+
+function latestObservedTokensForRun(world: WorldReader, run: Entity): number | undefined {
+  const invocation = latestInvocationForRun(world, run);
+  return invocation?.usageMetadata ? usageTokenCount(invocation.usageMetadata) : undefined;
+}
+
+function latestInvocationForRun(world: WorldReader, run: Entity): LlmInvocationData | undefined {
+  let latest: { invocation: LlmInvocationData; invocationCreatedAt: number; linkCreatedAt: number; linkId: string } | undefined;
+  for (const entity of world.query(RunLlmInvocationLink)) {
+    const link = world.get(entity, RunLlmInvocationLink);
+    if (!link || link.run !== run) continue;
+    const invocation = world.get(link.invocation, LlmInvocation);
+    if (!invocation) continue;
+    const candidate = { invocation, invocationCreatedAt: invocation.createdAt, linkCreatedAt: link.createdAt, linkId: link.id };
+    if (!latest
+      || candidate.invocationCreatedAt > latest.invocationCreatedAt
+      || (candidate.invocationCreatedAt === latest.invocationCreatedAt && candidate.linkCreatedAt > latest.linkCreatedAt)
+      || (candidate.invocationCreatedAt === latest.invocationCreatedAt && candidate.linkCreatedAt === latest.linkCreatedAt && candidate.linkId > latest.linkId)) {
+      latest = candidate;
+    }
+  }
+  return latest?.invocation;
+}
+
+function autoCompressionThresholdTokens(settings: LlmInvocationSettingsSnapshotRecord): number | undefined {
+  const trigger = settings.compressionTrigger;
+  if (!trigger) return undefined;
+  const contextWindowTokens = finitePositiveNumber(settings.contextWindowTokens);
+  const thresholdPercent = finitePositiveNumber(trigger.thresholdPercent);
+  return finitePositiveNumber(trigger.thresholdTokens)
+    ?? (contextWindowTokens !== undefined && thresholdPercent !== undefined
+      ? Math.floor(contextWindowTokens * Math.min(100, thresholdPercent) / 100)
+      : undefined);
+}
+
+function usageTokenCount(usage: LlmUsageMetadataRecord): number | undefined {
+  const total = finitePositiveNumber(usage.totalTokenCount);
+  if (total !== undefined) return total;
+  const prompt = finitePositiveNumber(usage.promptTokenCount) ?? 0;
+  const candidates = finitePositiveNumber(usage.candidatesTokenCount) ?? 0;
+  const thoughts = finitePositiveNumber(usage.thoughtsTokenCount) ?? 0;
+  const sum = prompt + candidates + thoughts;
+  return sum > 0 ? sum : undefined;
+}
+
+function finitePositiveNumber(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
+}
+
+function hasCompressionBlockForAnchor(world: WorldReader, conversation: Entity, anchorMessageId: string): boolean {
+  return world.query(CompressionBlock).some((entity) => {
+    const block = world.get(entity, CompressionBlock);
+    return block?.conversation === conversation
+      && block.anchorMessageId === anchorMessageId
+      && (block.status === 'running' || block.status === 'pending' || block.status === 'complete');
+  });
+}
+
+
+function debugAutoCompression(stage: string, payload: Record<string, unknown>): void {
+  console.log(AUTO_COMPRESSION_DEBUG_PREFIX, stage, payload);
+}
+
+function describeToolResponsePartKinds(toolCallId: string, toolName: string, response: unknown, inlineParts: InlineDataPart[] | undefined): string[] {
+  const parts: ContentPart[] = [{
+    id: toolCallId,
+    functionResponse: { name: toolName, response, ...(inlineParts?.length ? { parts: inlineParts } : {}) }
+  }];
+  return parts.map((part) => {
+    if (isFunctionResponsePart(part)) return `functionResponse:${part.functionResponse.name}`;
+    if (isInlineDataPart(part)) return `inlineData:${part.inlineData.mimeType}`;
+    return Object.keys(part)[0] ?? 'unknown';
+  });
+}
 
 function inlinePartsFromToolResponse(value: unknown): InlineDataPart[] | undefined {
   const record = asRecord(value);

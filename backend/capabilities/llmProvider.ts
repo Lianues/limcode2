@@ -943,6 +943,14 @@ function fromUnifiedPart(part: UnifiedPart): ContentPart | undefined {
   const record = part as Record<string, unknown>;
   if (isRecord(record.providerContext)) return { providerContext: record.providerContext as never };
   const thoughtSignature = thoughtSignatureFromPart(part);
+  const call = record.functionCall;
+  if (isRecord(call) && typeof call.name === 'string') {
+    return {
+      id: typeof call.callId === 'string' ? call.callId : undefined,
+      functionCall: { name: call.name, args: call.args ?? {} },
+      ...(thoughtSignature ? { thoughtSignature } : {})
+    };
+  }
   if (typeof record.text === 'string' || typeof record.thought === 'boolean' || thoughtSignature) {
     return {
       text: typeof record.text === 'string' ? record.text : '',
@@ -951,10 +959,6 @@ function fromUnifiedPart(part: UnifiedPart): ContentPart | undefined {
       ...(typeof record.thoughtElapsedMs === 'number' ? { thoughtElapsedMs: record.thoughtElapsedMs } : {}),
       ...(typeof record.thoughtDurationMs === 'number' ? { thoughtDurationMs: record.thoughtDurationMs } : {})
     };
-  }
-  const call = record.functionCall;
-  if (isRecord(call) && typeof call.name === 'string') {
-    return { id: typeof call.callId === 'string' ? call.callId : undefined, functionCall: { name: call.name, args: call.args ?? {} } };
   }
   const response = record.functionResponse;
   if (isRecord(response) && typeof response.name === 'string') {
@@ -1243,18 +1247,22 @@ function toUnifiedContent(content: MessageContent): UnifiedContent {
 
 function toUnifiedPart(part: ContentPart): UnifiedPart {
   if (isTextPart(part)) {
+    const thoughtSignatures = thoughtSignaturesFromPortableSignature(part.thoughtSignature);
     return {
       text: part.text,
       ...(part.thought !== undefined ? { thought: part.thought } : {}),
       ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
+      ...(thoughtSignatures ? { thoughtSignatures } : {}),
       ...(part.thoughtElapsedMs !== undefined ? { thoughtElapsedMs: part.thoughtElapsedMs } : {})
     };
   }
   if (isFunctionCallPart(part)) {
+    const thoughtSignatures = thoughtSignaturesFromPortableSignature(part.thoughtSignature);
     return {
       functionCall: { name: part.functionCall.name, args: asRecord(part.functionCall.args), ...(part.id ? { callId: part.id } : {}) },
       // Gemini 会校验带工具调用的 thoughtSignature；作为 part 同层级字段透传给 provider。
-      ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {})
+      ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
+      ...(thoughtSignatures ? { thoughtSignatures } : {})
     };
   }
   if (isFunctionResponsePart(part)) {
@@ -1508,11 +1516,13 @@ function isUnifiedFunctionCallPart(part: UnifiedPart): part is Extract<UnifiedPa
 }
 
 function thoughtSignatureFromPart(part: UnifiedPart): string | undefined {
-  return normalizedSignatureString((part as { thoughtSignature?: unknown }).thoughtSignature);
+  const record = part as { thoughtSignature?: unknown; thoughtSignatures?: unknown };
+  return normalizedSignatureString(record.thoughtSignature) ?? portableThoughtSignatureFromMap(record.thoughtSignatures);
 }
 
 function thoughtSignatureFromChunk(chunk: UnifiedLLMStreamChunk): string | undefined {
-  return normalizedSignatureString((chunk as { thoughtSignature?: unknown }).thoughtSignature);
+  const record = chunk as { thoughtSignature?: unknown; thoughtSignatures?: unknown };
+  return normalizedSignatureString(record.thoughtSignature) ?? portableThoughtSignatureFromMap(record.thoughtSignatures);
 }
 
 function hasThoughtSignatureOnlyOutput(chunk: UnifiedLLMStreamChunk): boolean {
@@ -1526,6 +1536,52 @@ function normalizedSignatureString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+}
+
+const THOUGHT_SIGNATURE_PROVIDER_ORDER = ['gemini', 'claude', 'openai-compatible', 'openai-responses'] as const;
+
+function portableThoughtSignatureFromMap(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  for (const provider of THOUGHT_SIGNATURE_PROVIDER_ORDER) {
+    const signature = portableThoughtSignatureFromEntry(provider, value[provider]);
+    if (signature) return signature;
+  }
+  for (const [provider, raw] of Object.entries(value)) {
+    const signature = portableThoughtSignatureFromEntry(provider, raw);
+    if (signature) return signature;
+  }
+  return undefined;
+}
+
+function portableThoughtSignatureFromEntry(provider: string, raw: unknown): string | undefined {
+  const signature = normalizedSignatureString(raw);
+  if (!signature) return undefined;
+  const parsedSignature = parsePortableThoughtSignature(signature);
+  if (parsedSignature) return `${parsedSignature.provider}:${parsedSignature.value}`;
+  const normalizedProvider = normalizedSignatureProvider(provider);
+  return normalizedProvider ? `${normalizedProvider}:${signature}` : undefined;
+}
+
+function thoughtSignaturesFromPortableSignature(signature: string | undefined): Record<string, string> | undefined {
+  const normalized = normalizedSignatureString(signature);
+  if (!normalized) return undefined;
+  const parsed = parsePortableThoughtSignature(normalized);
+  return parsed ? { [parsed.provider]: parsed.value } : undefined;
+}
+
+function parsePortableThoughtSignature(signature: string): { provider: string; value: string } | undefined {
+  const colonIndex = signature.indexOf(':');
+  if (colonIndex <= 0) return undefined;
+  const provider = normalizedSignatureProvider(signature.slice(0, colonIndex));
+  const value = signature.slice(colonIndex + 1).trim();
+  if (!provider || !value) return undefined;
+  return { provider, value };
+}
+
+function normalizedSignatureProvider(provider: string): string | undefined {
+  const normalized = provider.trim().toLowerCase();
+  if (!normalized || normalized === 'openai' || !/^[a-z0-9_-]+$/.test(normalized)) return undefined;
+  return normalized;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

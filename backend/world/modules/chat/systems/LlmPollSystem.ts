@@ -653,6 +653,15 @@ function finishThoughtPart(message: MessageData, thought: LlmThoughtDonePayload)
     return { ...message, content: { ...message.content, parts } };
   }
   if (thought.thoughtSignature) {
+    for (let index = parts.length - 1; index >= 0; index -= 1) {
+      const part = parts[index];
+      if (!part || !isTextPart(part) || part.thought !== true || part.thoughtDurationMs === undefined || part.thoughtSignature) continue;
+      parts[index] = {
+        ...part,
+        thoughtSignature: thought.thoughtSignature
+      };
+      return { ...message, content: { ...message.content, parts } };
+    }
     return {
       ...message,
       content: {

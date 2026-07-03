@@ -8,6 +8,8 @@ import {
   type ToolSchedulingMode
 } from '@shared/protocol';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
+import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
+import StreamingIndicatorTail from './StreamingIndicatorTail.vue';
 import { partViewComponent, toRenderNodes, type RichRenderNode } from './partRegistry';
 
 const props = defineProps<{
@@ -35,7 +37,14 @@ interface ToolCallNodeInfo {
 }
 
 const conversationTimeline = useConversationTimelineStore();
+const globalSettings = useGlobalSettingsStore();
 const nodes = computed(() => withToolBatchMeta(toRenderNodes(props.parts)));
+const showStandaloneStreamingTail = computed(() => {
+  if (!props.streaming || nodes.value.length === 0) return false;
+  const lastIndex = nodes.value.length - 1;
+  const last = nodes.value[lastIndex];
+  return !!last && !nodeStreaming(last, lastIndex);
+});
 
 function nodeStreaming(node: RichRenderNode, index: number): boolean {
   if (!props.streaming || index !== nodes.value.length - 1) return false;
@@ -199,6 +208,9 @@ function isBlockingToolCall(call: ToolCallRecord): boolean {
         :key="node.key"
         v-bind="nodeComponentProps(node, index)"
       />
+      <div v-if="showStandaloneStreamingTail" class="rich-streaming-tail-row">
+        <StreamingIndicatorTail :text="globalSettings.appearance.streamingTextWriting" variant="writing" />
+      </div>
     </template>
     <!-- 流式中但还没有任何内容块：渲染一个仅含光标的空文本节点。 -->
     <component
@@ -217,6 +229,13 @@ function isBlockingToolCall(call: ToolCallRecord): boolean {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  min-width: 0;
+}
+
+.rich-streaming-tail-row {
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-sm);
+  font-style: italic;
   min-width: 0;
 }
 </style>

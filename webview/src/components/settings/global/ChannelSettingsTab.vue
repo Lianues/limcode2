@@ -63,7 +63,6 @@ const activeConfigId = computed({
 });
 const activeCompressionMethodKind = computed<SelectableCompressionMethodKind>(() => {
   const kind = settings.activeCompressionConfig?.kind ?? 'segmented_summary';
-  if (kind === 'openai_responses_compact' && compressionProviderConfig.value?.provider !== 'openai-responses') return 'llm_summary';
   if (kind === 'disabled' || kind === 'manual_summary') return 'llm_summary';
   return kind;
 });
@@ -93,7 +92,7 @@ const compressionMethodOptions = computed<SettingsDropdownOption[]>(() => {
     { value: 'llm_summary', label: 'LLM 总结' },
     { value: 'deterministic_summary', label: '确定性摘要' }
   ];
-  if (compressionProviderConfig.value?.provider === 'openai-responses') {
+  if (compressionProviderConfig.value?.provider === 'openai-responses' || settings.activeCompressionConfig?.kind === 'openai_responses_compact') {
     base.splice(2, 0, { value: 'openai_responses_compact', label: 'OpenAI 原生压缩' });
   }
   return base;
@@ -570,7 +569,7 @@ function cancelDelete(): void {
         <header class="compression-settings-header">
           <div>
             <label>上下文压缩</label>
-            <p>选择当前渠道使用的压缩方式。非 OpenAI Responses 渠道不会显示 OpenAI 原生压缩。</p>
+            <p>OpenAI 原生压缩必须使用 OpenAI Responses 渠道；调用失败时保留失败状态，不回退为普通摘要。</p>
           </div>
         </header>
         <div class="global-settings-grid compression-settings-grid">

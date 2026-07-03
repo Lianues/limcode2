@@ -227,7 +227,7 @@ function formatCompactNumber(value: number): string {
       <p v-if="block.summaryPreview" class="summary-preview">{{ block.summaryPreview }}</p>
       <p v-if="block.error" class="detail-error">{{ block.error }}</p>
       <p v-if="block.staleReason" class="detail-muted">{{ block.staleReason }}</p>
-      <p v-if="block.methodKind === 'openai_responses_compact'" class="detail-muted">OpenAI 原生压缩块仅在当前模型格式为 openai-responses 且压缩策略仍选中 OpenAI 原生压缩时使用；其他模型会使用普通摘要或原始历史回退。</p>
+      <p v-if="block.methodKind === 'openai_responses_compact'" class="detail-muted">OpenAI 原生压缩块仅在当前模型格式为 openai-responses 且压缩策略仍选中 OpenAI 原生压缩时使用；调用失败会保留失败状态。</p>
     </div>
 
     <ConfirmPanel

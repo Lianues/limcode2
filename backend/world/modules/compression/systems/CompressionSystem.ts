@@ -331,21 +331,6 @@ function completeCompressionBlock(world: WorldReader, cmd: CommandSink, payload:
     updatedAt: now
   });
 
-  if (isNative && !hasSummaryVariant(world, blockEntity)) {
-    const sourceContents = sourceContentsForBlock(world, blockEntity);
-    const summary = deterministicSummary(sourceContents);
-    const summaryContents: MessageContent[] = [{ role: 'user', parts: [{ text: `[Context Summary]\n\n${summary}` }] }];
-    const summaryContentsWithTaskList = taskListSnapshotText ? appendTextToContents(summaryContents, taskListSnapshotText) : summaryContents;
-    const summaryVariant = cmd.spawn();
-    cmd.add(summaryVariant, CompressionContextVariant, {
-      id: `compression-variant-${summaryVariant}`,
-      block: blockEntity,
-      kind: 'provider_neutral_summary',
-      contents: summaryContentsWithTaskList,
-      createdAt: now,
-      updatedAt: now
-    });
-  }
 }
 
 function failCompressionBlock(world: WorldReader, cmd: CommandSink, payload: LlmCompactErrorPayload): void {
@@ -623,40 +608,6 @@ function currentRevisionForMessage(world: WorldReader, message: Entity): { id: s
   return link ? world.get(link.revision, MessageRevision) : undefined;
 }
 
-function sourceContentsForBlock(world: WorldReader, block: Entity, visited = new Set<Entity>()): MessageContent[] {
-  if (visited.has(block)) return [];
-  visited.add(block);
-  const contents: MessageContent[] = [];
-  const links = world.query(CompressionBlockSourceLink)
-    .map((entity) => world.get(entity, CompressionBlockSourceLink))
-    .filter((link): link is NonNullable<typeof link> => !!link && link.block === block)
-    .sort((left, right) => left.order - right.order);
-  for (const link of links) {
-    if (link.sourceKind === 'message') {
-      const content = link.source !== undefined ? world.get(link.source, Message)?.content : undefined;
-      if (content) contents.push(content);
-      continue;
-    }
-    const retainedBlock = link.source;
-    if (retainedBlock === undefined || retainedBlock === block) continue;
-    const retainedSummary = summaryVariantContents(world, retainedBlock);
-    if (retainedSummary?.length) {
-      contents.push(...retainedSummary);
-      continue;
-    }
-    contents.push(...sourceContentsForBlock(world, retainedBlock, visited));
-  }
-  visited.delete(block);
-  return contents;
-}
-
-function hasSummaryVariant(world: WorldReader, block: Entity): boolean {
-  return world.query(CompressionContextVariant).some((entity) => {
-    const variant = world.get(entity, CompressionContextVariant);
-    return variant?.block === block && variant.kind === 'provider_neutral_summary';
-  });
-}
-
 function taskListSnapshotTextForBoundary(world: WorldReader, conversation: Entity, boundarySeq: number | undefined): string | undefined {
   const conversationData = world.get(conversation, Conversation);
   if (!conversationData) return undefined;
@@ -803,11 +754,6 @@ function estimateContentsTokens(contents: MessageContent[]): number {
 function previewFromContents(contents: MessageContent[]): string | undefined {
   const text = contents.flatMap((content) => content.parts.map(renderPart)).join(' ').replace(/\s+/g, ' ').trim();
   return text ? (text.length > 240 ? `${text.slice(0, 239)}…` : text) : undefined;
-}
-
-function deterministicSummary(contents: MessageContent[]): string {
-  const rendered = contents.map((content, index) => `${index + 1}. ${content.role}: ${content.parts.map(renderPart).filter(Boolean).join('\n') || '[empty]'}`).join('\n\n');
-  return rendered.length > 12_000 ? `${rendered.slice(0, 12_000)}\n\n[已截断]` : rendered;
 }
 
 function renderPart(part: ContentPart): string {

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { GlobalSettingsRecord, LlmCompressionConfigRecord, LlmInvocationSettingsSnapshotRecord, LlmProviderConfigRecord, ToolDefinitionRecord } from '../../shared/protocol';
+import type { GlobalSettingsRecord, LlmInvocationSettingsSnapshotRecord, LlmProviderConfigRecord, ToolDefinitionRecord } from '../../shared/protocol';
 import {
   createLlmProviderCapability,
   createCommandCapability,
@@ -52,11 +52,11 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
       const config = request.methodConfigId
         ? await storage.loadLlmCompressionConfigById(request.methodConfigId)
         : await storage.loadActiveLlmCompressionConfig(activeProvider.id);
-      return coerceCompressionConfigForProvider(config, activeProvider);
+      return config;
     },
     activeCompressionSettings: async (conversationId) => {
       const activeProvider = await storage.loadActiveLlmProviderConfig(conversationId);
-      return coerceCompressionConfigForProvider(await storage.loadActiveLlmCompressionConfig(activeProvider.id), activeProvider);
+      return storage.loadActiveLlmCompressionConfig(activeProvider.id);
     },
     headers: { 'User-Agent': 'LimCode/0.0.1' },
     proxy: async () => createGlobalSettingsRecord(context).proxy || undefined,
@@ -102,15 +102,6 @@ export function schemasForTools(tools: readonly ToolDefinition[]): ToolSchema[] 
 
 export function recordsForTools(tools: readonly ToolDefinition[]): ToolDefinitionRecord[] {
   return tools.map((tool) => toolDefinitionRecord(tool));
-}
-
-function coerceCompressionConfigForProvider(
-  config: LlmCompressionConfigRecord | undefined,
-  provider: LlmProviderConfigRecord
-): LlmCompressionConfigRecord | undefined {
-  if (!config) return undefined;
-  if (provider.provider === 'openai-responses' || config.kind !== 'openai_responses_compact') return config;
-  return { ...config, kind: 'llm_summary' };
 }
 
 async function resolveSnapshotLlmProviderConfig(

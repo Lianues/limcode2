@@ -938,21 +938,17 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       this.selectCompressionConfigForActiveProvider(config.id);
     },
     setActiveCompressionMethodKind(kind: SelectableCompressionMethodKind): void {
-      const activeProvider = this.activeLlmProviderConfig;
-      const safeKind: SelectableCompressionMethodKind = activeProvider?.provider !== 'openai-responses' && kind === 'openai_responses_compact'
-        ? 'llm_summary'
-        : kind;
       let config = this.activeCompressionConfig;
       if (!config) {
         config = createDefaultLlmCompressionConfig('默认压缩方法');
         this.llmCompressionConfigs.configs.push(config);
         this.llmCompression.defaultConfigId = config.id;
       }
-      config.kind = safeKind;
-      if (safeKind === 'openai_responses_compact') {
-        config.openaiResponsesCompact = { ...(config.openaiResponsesCompact ?? {}), createSummaryFallback: true };
+      config.kind = kind;
+      if (kind === 'openai_responses_compact') {
+        config.openaiResponsesCompact = { ...(config.openaiResponsesCompact ?? {}), createSummaryFallback: false };
       }
-      if ((safeKind === 'llm_summary' || safeKind === 'segmented_summary') && !config.llmSummary) {
+      if ((kind === 'llm_summary' || kind === 'segmented_summary') && !config.llmSummary) {
         config.llmSummary = createDefaultLlmCompressionConfig('临时').llmSummary;
       }
       config.updatedAt = Date.now();
@@ -972,10 +968,8 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
         else delete target.providerConfigId;
         return target;
       };
-      config.openaiResponsesCompact = applyProvider({ ...(config.openaiResponsesCompact ?? {}), createSummaryFallback: config.openaiResponsesCompact?.createSummaryFallback ?? true });
+      config.openaiResponsesCompact = applyProvider({ ...(config.openaiResponsesCompact ?? {}), createSummaryFallback: false });
       config.llmSummary = applyProvider({ ...(config.llmSummary ?? createDefaultLlmCompressionConfig('临时').llmSummary ?? {}) });
-      const selectedProvider = id ? this.llmProviderConfigs.configs.find((item) => item.id === id) : this.activeLlmProviderConfig;
-      if (selectedProvider?.provider !== 'openai-responses' && config.kind === 'openai_responses_compact') config.kind = 'llm_summary';
       config.updatedAt = Date.now();
       this.queueLlmCompressionConfigsAutoSave();
       this.selectCompressionConfigForActiveProvider(config.id);

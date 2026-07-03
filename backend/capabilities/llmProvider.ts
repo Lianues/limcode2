@@ -27,6 +27,8 @@ import {
 } from '../../shared/protocol';
 import type {
   ContentPart,
+  FunctionCallPart,
+  FunctionResponsePart,
   InlineDataPart,
   LlmCompressionConfigRecord,
   LlmGenerationConfigRecord,
@@ -1158,17 +1160,151 @@ function nonEmptyRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const TOOL_RESPONSE_MULTIMODAL_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'application/pdf', 'text/plain']);
+const TOOL_RESPONSE_CONTEXT_FALLBACK_MESSAGE = '工具调用在本次 LLM 请求上下文中没有对应响应，已自动补充兜底响应。原工具执行结果不可用；如仍需要结果，请重新执行相关操作。';
+
+interface ToolCallContextNormalizationResult {
+  contents: MessageContent[];
+  orphanResponseCount: number;
+  fallbackResponseCount: number;
+}
+
+interface TrackedFunctionCall {
+  part: FunctionCallPart;
+  contentIndex: number;
+  closed: boolean;
+}
 
 async function prepareLlmStartRequestMultimodal(request: LlmStartRequest, options: LlmProviderOptions): Promise<LlmStartRequest> {
   const [contents, systemInstruction] = await Promise.all([
     Promise.all(request.contents.map((content) => prepareLlmContentMultimodal(content, options, false))),
     request.systemInstruction ? prepareLlmContentMultimodal(request.systemInstruction, options, false) : Promise.resolve(undefined)
   ]);
+  const normalized = normalizeToolCallResponseContext(contents);
+  if (normalized.orphanResponseCount > 0 || normalized.fallbackResponseCount > 0) {
+    console.info(`[LimCode] Normalized tool call context for LLM request "${request.id}": orphanResponses=${normalized.orphanResponseCount}, fallbackResponses=${normalized.fallbackResponseCount}.`);
+  }
   return {
     ...request,
-    contents,
+    contents: normalized.contents,
     ...(systemInstruction ? { systemInstruction } : {})
   };
+}
+
+function normalizeToolCallResponseContext(contents: MessageContent[]): ToolCallContextNormalizationResult {
+  const pendingById = new Map<string, TrackedFunctionCall>();
+  const pendingByName = new Map<string, TrackedFunctionCall[]>();
+  const calls: TrackedFunctionCall[] = [];
+  let orphanResponseCount = 0;
+
+  const normalized = contents.map((content, contentIndex) => {
+    let changed = false;
+    const parts = content.parts.map((part) => {
+      if (isFunctionCallPart(part)) {
+        const tracked: TrackedFunctionCall = { part, contentIndex, closed: false };
+        calls.push(tracked);
+        const id = normalizeToolCallId(part.id);
+        if (id) {
+          pendingById.set(id, tracked);
+        } else {
+          const list = pendingByName.get(part.functionCall.name) ?? [];
+          list.push(tracked);
+          pendingByName.set(part.functionCall.name, list);
+        }
+        return part;
+      }
+
+      if (!isFunctionResponsePart(part)) return part;
+
+      const matched = consumeMatchingFunctionCall(part, pendingById, pendingByName);
+      if (matched) return part;
+
+      orphanResponseCount += 1;
+      changed = true;
+      return orphanFunctionResponseTextPart(part);
+    });
+    return changed ? { ...content, parts } : content;
+  });
+
+  const fallbackResponsesByContentIndex = new Map<number, FunctionResponsePart[]>();
+  for (const call of calls) {
+    if (call.closed) continue;
+    const list = fallbackResponsesByContentIndex.get(call.contentIndex) ?? [];
+    list.push(fallbackFunctionResponsePart(call.part));
+    fallbackResponsesByContentIndex.set(call.contentIndex, list);
+  }
+
+  if (fallbackResponsesByContentIndex.size === 0) {
+    return { contents: normalized, orphanResponseCount, fallbackResponseCount: 0 };
+  }
+
+  const repaired: MessageContent[] = [];
+  let fallbackResponseCount = 0;
+  normalized.forEach((content, index) => {
+    repaired.push(content);
+    const fallbackResponses = fallbackResponsesByContentIndex.get(index);
+    if (!fallbackResponses?.length) return;
+    fallbackResponseCount += fallbackResponses.length;
+    repaired.push({ role: 'user', parts: fallbackResponses });
+  });
+
+  return { contents: repaired, orphanResponseCount, fallbackResponseCount };
+}
+
+function consumeMatchingFunctionCall(
+  response: FunctionResponsePart,
+  pendingById: Map<string, TrackedFunctionCall>,
+  pendingByName: Map<string, TrackedFunctionCall[]>
+): TrackedFunctionCall | undefined {
+  const responseId = normalizeToolCallId(response.id);
+  if (responseId) {
+    const matched = pendingById.get(responseId);
+    if (matched) {
+      matched.closed = true;
+      pendingById.delete(responseId);
+      return matched;
+    }
+  }
+
+  const queue = pendingByName.get(response.functionResponse.name);
+  const matched = queue?.shift();
+  if (!matched) return undefined;
+  matched.closed = true;
+  if (queue && queue.length === 0) pendingByName.delete(response.functionResponse.name);
+  return matched;
+}
+
+function orphanFunctionResponseTextPart(part: FunctionResponsePart): ContentPart {
+  return {
+    text: [
+      '[工具响应上下文兜底]',
+      '原因: 当前 LLM 请求上下文中没有找到这条工具响应对应的工具调用，已转为普通文本，避免 provider 拒绝请求。',
+      `name: ${part.functionResponse.name}`,
+      ...(part.id ? [`callId: ${part.id}`] : []),
+      `response: ${stringifyJson(part.functionResponse.response)}`
+    ].join('\n')
+  };
+}
+
+function fallbackFunctionResponsePart(call: FunctionCallPart): FunctionResponsePart {
+  return {
+    ...(call.id ? { id: call.id } : {}),
+    functionResponse: {
+      name: call.functionCall.name,
+      response: {
+        ok: false,
+        status: 'error',
+        recovered: true,
+        interrupted: true,
+        message: TOOL_RESPONSE_CONTEXT_FALLBACK_MESSAGE,
+        ...(call.id ? { toolCallId: call.id } : {})
+      }
+    }
+  };
+}
+
+function normalizeToolCallId(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
 }
 
 async function prepareLlmContentMultimodal(content: MessageContent, options: LlmProviderOptions, toolResponse: boolean): Promise<MessageContent> {

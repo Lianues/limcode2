@@ -94,6 +94,7 @@ import { createRuntimeEnv, recordsForTools, schemasForTools } from './createRunt
 import { dedupeMcpToolNames } from './mcpRuntimeManager';
 import { createDefaultAgentSpawnRequest, DEFAULT_AGENT_ID } from './defaults';
 import { hydrateClientStateSkeleton, hydrateConversationDetail } from './clientStateHydration';
+import { backfillMissingToolResponsesForStatelessLoad } from './toolResponseBackfill';
 import { ClientStatePersistence } from './ClientStatePersistence';
 import { GlobalSettingsBridge } from './GlobalSettingsBridge';
 import { ConversationSettingsBridge } from './ConversationSettingsBridge';
@@ -431,11 +432,25 @@ export class BackendApplication {
     if (!this.hydrated) await this.waitUntilHydrated();
     if (this.renderLoadedConversationDetails.has(conversationId)) return;
 
-    const detail = await this.env.storage.loadConversationDetail(conversationId, { includeRunHistory: false });
+    const conversation = this.findConversationEntity(conversationId);
+    const statelessLoad = conversation !== undefined && !this.hasConversationMessages(conversation);
+    const storedDetail = await this.env.storage.loadConversationDetail(conversationId, { includeRunHistory: false });
+    const backfilled = storedDetail && statelessLoad
+      ? backfillMissingToolResponsesForStatelessLoad(storedDetail, conversationId)
+      : { state: storedDetail, addedCount: 0 };
+    const detail = backfilled.state;
+    if (backfilled.addedCount > 0) {
+      console.info(`[LimCode] Backfilled ${backfilled.addedCount} missing tool response(s) while loading stateless conversation "${conversationId}".`);
+    }
+
     const hydrated = detail ? await hydrateConversationDetail(this.world, detail, conversationId) : false;
     if (detail && hydrated) this.primeConversationStreamState(conversationId, detail);
-
-    if (hydrated || this.findConversationEntity(conversationId) !== undefined) this.renderLoadedConversationDetails.add(conversationId);
+    const loaded = hydrated || this.findConversationEntity(conversationId) !== undefined;
+    if (loaded) this.renderLoadedConversationDetails.add(conversationId);
+    if (hydrated && backfilled.addedCount > 0) {
+      this.requestSnapshot(conversationId);
+      this.persistence.queuePersist();
+    }
   }
 
   public getCurrentProjectHistoryScope(): ConversationHistoryScope {
@@ -823,6 +838,13 @@ export class BackendApplication {
       if (this.world.get(entity, PartOf)?.parent === conversation) messages.add(entity);
     }
     return messages;
+  }
+
+  private hasConversationMessages(conversation: Entity): boolean {
+    for (const entity of this.world.query(Message, PartOf)) {
+      if (this.world.get(entity, PartOf)?.parent === conversation) return true;
+    }
+    return false;
   }
 
   private collectRevisionsForMessages(messages: ReadonlySet<Entity>): Set<Entity> {

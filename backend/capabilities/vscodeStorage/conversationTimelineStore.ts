@@ -15,6 +15,7 @@ import type {
   ToolCallEventRecord,
   ToolCallRecord
 } from '../../../shared/protocol';
+import { isFunctionResponsePart } from '../../../shared/protocol';
 import { createEmptyClientState } from '../../../shared/clientStateSchema';
 import type { TimelineProjectionContextRecord, TimelineProjectionRefRecord } from '../../../shared/timelineProjection';
 import { INDEX_FILE, STORAGE_VERSION } from './constants';
@@ -297,10 +298,11 @@ function normalizeTimelinePageChunkCount(value: number | undefined): number {
 }
 
 async function normalizeTimelineChunkIndexRecords(root: vscode.Uri, records: ConversationTimelineChunkIndexRecord[]): Promise<ConversationTimelineChunkIndexRecord[]> {
+  const ordered = [...records].sort((left, right) => (left.index ?? 0) - (right.index ?? 0) || left.id.localeCompare(right.id));
   const normalized: ConversationTimelineChunkIndexRecord[] = [];
-  let messageOffset = 0;
-  for (let position = 0; position < records.length; position += 1) {
-    const record = records[position] as ConversationTimelineChunkIndexRecord & Partial<{
+  let visibleMessageOffset = 0;
+  for (let position = 0; position < ordered.length; position += 1) {
+    const record = ordered[position] as ConversationTimelineChunkIndexRecord & Partial<{
       index: number;
       startSeq: number;
       endSeq: number;
@@ -312,17 +314,12 @@ async function normalizeTimelineChunkIndexRecords(root: vscode.Uri, records: Con
       toolCallCount: number;
       toolCallEventCount: number;
     }>;
-    const needsChunkFile = typeof record.startSeq !== 'number'
-      || typeof record.endSeq !== 'number'
-      || typeof record.messageCount !== 'number'
-      || !Array.isArray(record.messageIds);
-    const file = needsChunkFile
-      ? await readJson<ConversationTimelineChunkFile>(vscode.Uri.joinPath(root, ...record.file.split('/')))
-      : undefined;
+    const file = await readJson<ConversationTimelineChunkFile>(vscode.Uri.joinPath(root, ...record.file.split('/')));
     const messages = file?.schemaVersion === STORAGE_VERSION && file.chunkId === record.id ? file.messages : [];
-    const messageCount = typeof record.messageCount === 'number' ? record.messageCount : messages.length;
-    const messageOffsetStart = typeof record.messageOffsetStart === 'number' ? record.messageOffsetStart : messageOffset + 1;
-    const messageOffsetEnd = typeof record.messageOffsetEnd === 'number' ? record.messageOffsetEnd : messageOffset + messageCount;
+    const visibleMessages = messages.filter(isTimelineVisibleMessage);
+    const messageCount = visibleMessages.length;
+    const messageOffsetStart = visibleMessageOffset + 1;
+    const messageOffsetEnd = visibleMessageOffset + messageCount;
     normalized.push({
       ...record,
       index: typeof record.index === 'number' ? record.index : position,
@@ -336,9 +333,9 @@ async function normalizeTimelineChunkIndexRecords(root: vscode.Uri, records: Con
       toolCallCount: typeof record.toolCallCount === 'number' ? record.toolCallCount : Array.isArray(record.toolCallIds) ? record.toolCallIds.length : 0,
       toolCallEventCount: typeof record.toolCallEventCount === 'number' ? record.toolCallEventCount : 0
     });
-    messageOffset += messageCount;
+    visibleMessageOffset += messageCount;
   }
-  return normalized.sort((left, right) => left.index - right.index || left.id.localeCompare(right.id));
+  return normalized;
 }
 
 
@@ -440,9 +437,11 @@ export async function saveConversationTimelineDetail(paths: StoragePaths, conver
   const indexChunks: ConversationTimelineChunkIndexRecord[] = [];
   const projectionStates = createProjectionRuntimeStates(BUILTIN_TIMELINE_PROJECTIONS);
 
+  let visibleMessageOffset = 0;
   for (let index = 0; index < chunks.length; index += 1) {
     const chunkId = index.toString().padStart(6, '0');
     const chunk = chunks[index];
+    const visibleMessages = chunk.messages.filter(isTimelineVisibleMessage);
     const seq = chunkSeqRange(chunk.messages);
     const messageHash = shortHash(stableJson({ messages: chunk.messages }));
     const sourceHash = shortHash(stableJson(chunk));
@@ -477,9 +476,9 @@ export async function saveConversationTimelineDetail(paths: StoragePaths, conver
       index,
       startSeq: seq.startSeq,
       endSeq: seq.endSeq,
-      messageCount: chunk.messages.length,
-      messageOffsetStart: index * CONVERSATION_TIMELINE_CHUNK_SIZE + 1,
-      messageOffsetEnd: index * CONVERSATION_TIMELINE_CHUNK_SIZE + chunk.messages.length,
+      messageCount: visibleMessages.length,
+      messageOffsetStart: visibleMessageOffset + 1,
+      messageOffsetEnd: visibleMessageOffset + visibleMessages.length,
       messageIds: chunk.messages.map((message) => message.id),
       toolCallIds: chunk.toolCalls.map((toolCall) => toolCall.id),
       toolCallCount: chunk.toolCalls.length,
@@ -489,6 +488,7 @@ export async function saveConversationTimelineDetail(paths: StoragePaths, conver
       sidecars,
       projections: projectionRefs
     });
+    visibleMessageOffset += visibleMessages.length;
   }
 
   const nextIndex: ConversationTimelineIndexFile = {
@@ -779,6 +779,10 @@ function chunkSeqRange(messages: readonly MessageRecord[]): { startSeq: number; 
     startSeq: Math.min(...seqs),
     endSeq: Math.max(...seqs)
   };
+}
+
+function isTimelineVisibleMessage(message: MessageRecord): boolean {
+  return !message.content.parts.some(isFunctionResponsePart);
 }
 
 function sortConversationTimelineDetail(state: ClientState): void {

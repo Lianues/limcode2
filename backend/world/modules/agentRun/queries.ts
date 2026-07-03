@@ -1,5 +1,5 @@
 import type { ComponentType, Entity, WorldReader } from '../../../ecs/types';
-import type { ConfigScopeKind, ToolPolicyScopeKind, ToolPolicySourceConfigRecord, ToolPolicyToolConfigRecord } from '../../../../shared/protocol';
+import type { ConfigScopeKind, ToolPolicyPresetKind, ToolPolicyScopeKind, ToolPolicySourceConfigRecord, ToolPolicyToolConfigRecord } from '../../../../shared/protocol';
 import { Agent, AgentConversationLink, AgentKind, ConversationAgentSelection, type ConversationAgentSelectionData } from '../agent/components';
 import {
   ConversationModeSelection,
@@ -374,7 +374,7 @@ function findRecordEntity<T extends { id: string }>(world: WorldReader, componen
 }
 
 function intersectToolPolicies(policies: ToolPolicyData[], id: string): ToolPolicyData {
-  const preset = policies.some((policy) => policy.preset === 'yolo') ? 'yolo' : undefined;
+  const preset = policies.reduce<ToolPolicyPresetKind | undefined>((selected, policy) => policy.preset && policy.preset !== 'inherit' ? policy.preset : selected, undefined);
   let allowed = new Set(policies[0]?.allowedTools ?? []);
   for (const policy of policies.slice(1)) {
     const next = new Set(policy.allowedTools);

@@ -733,7 +733,7 @@ export interface ToolChangeApplyPolicyRecord {
   autoApplyDelaySeconds?: number;
 }
 
-export type ToolPolicyPresetKind = 'custom' | 'yolo';
+export type ToolPolicyPresetKind = 'inherit' | 'custom' | 'yolo';
 
 export interface ToolPolicyToolConfigRecord {
   /** 是否自动批准工具进入执行阶段。关闭时会先等待用户批准执行。 */
@@ -765,7 +765,7 @@ export interface ToolPolicyRecord {
   id: string;
   name: string;
   allowedTools: string[];
-  /** 全局/作用域级策略预设；yolo 会在运行时覆盖允许列表与审批/应用开关，但不改写细项配置。 */
+  /** 工具策略预设；非全局 scope 可用 inherit 只继承全局预设，同时保留本 scope 的逐工具配置。 */
   preset?: ToolPolicyPresetKind;
   toolConfigs?: Record<string, ToolPolicyToolConfigRecord>;
   sourceConfigs?: Record<string, ToolPolicySourceConfigRecord>;

@@ -178,22 +178,27 @@ export const useToolPolicyStore = defineStore('toolPolicy', {
     setPolicyPresetForScope(scopeKind: ToolPolicyScopeKind, scopeId: string | undefined, preset: ToolPolicyPresetKind): void {
       const current = this.effectivePolicyFor(scopeKind, scopeId).policy;
       const clientState = useClientStateStore();
+      const validNames = new Set(clientState.toolDefinitions.map((tool) => tool.name));
       const defaultAllowed = clientState.toolDefinitions
         .filter((tool) => tool.source?.kind !== 'mcp' && tool.metadata?.defaultEnabled !== false)
         .map((tool) => tool.name);
-      const allowedTools = current?.allowedTools ?? defaultAllowed;
+      const allowedTools = [...(current?.allowedTools ?? defaultAllowed)]
+        .map((tool) => tool.trim())
+        .filter((tool, index, list) => !!tool && validNames.has(tool) && list.indexOf(tool) === index);
       const toolConfigs = cloneToolConfigs(current?.toolConfigs) ?? {};
       const sourceConfigs = cloneSourceConfigs(current?.sourceConfigs) ?? {};
+      const name = current?.name?.trim();
       this.applyOptimisticPolicyScopeSet(scopeKind, scopeId, allowedTools, current?.name, toolConfigs, sourceConfigs, preset);
-      bridge.request(BridgeMessageType.ToolPolicyScopeSet, {
+      const payload: ToolPolicyScopeSetPayload = {
         scopeKind,
         ...(scopeIdFor(scopeKind, scopeId) ? { scopeId: scopeIdFor(scopeKind, scopeId) } : {}),
-        ...(current?.name?.trim() ? { name: current.name.trim() } : {}),
+        ...(name ? { name } : {}),
         allowedTools,
         preset,
         toolConfigs,
         sourceConfigs
-      } satisfies ToolPolicyScopeSetPayload);
+      };
+      bridge.request(BridgeMessageType.ToolPolicyScopeSet, payload);
     },
     applyOptimisticPolicyScopeSet(scopeKind: ToolPolicyScopeKind, scopeId: string | undefined, allowedTools: string[], name?: string, toolConfigs?: Record<string, ToolPolicyToolConfigRecord>, sourceConfigs?: Record<string, ToolPolicySourceConfigRecord>, preset?: ToolPolicyPresetKind): void {
       const clientState = useClientStateStore();

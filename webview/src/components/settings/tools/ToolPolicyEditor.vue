@@ -54,8 +54,9 @@ const effectivePolicy = computed(() => effectiveResolution.value.policy);
 const hasLocalOverride = computed(() => props.scopeKind === 'global' || !!localResolution.value.policy);
 const allowedSet = computed(() => new Set(effectivePolicy.value?.allowedTools ?? []));
 const enabledCount = computed(() => tools.value.filter((tool) => isToolEnabled(tool)).length);
-const showGlobalPreset = computed(() => props.scopeKind === 'global');
-const selectedPreset = computed<ToolPolicyPresetKind>(() => effectivePolicy.value?.preset === 'yolo' ? 'yolo' : 'custom');
+const globalPreset = computed<Exclude<ToolPolicyPresetKind, 'inherit'>>(() => store.localPolicyFor('global').policy?.preset === 'yolo' ? 'yolo' : 'custom');
+const selectedPreset = computed<ToolPolicyPresetKind>(() => props.scopeKind === 'global' ? globalPreset.value : localResolution.value.policy?.preset ?? 'inherit');
+const runtimePreset = computed<Exclude<ToolPolicyPresetKind, 'inherit'>>(() => selectedPreset.value === 'inherit' ? globalPreset.value : selectedPreset.value);
 const visibleTools = computed(() => {
   const scope = selectedToolScope.value;
   if (scope === 'all') return tools.value;
@@ -82,25 +83,34 @@ const isUsingToolDefaults = computed(() => {
   return Object.keys(configs).length === 0;
 });
 const sourceLabel = computed(() => {
-  if (props.scopeKind === 'global' && selectedPreset.value === 'yolo') return '全局 YOLO 预设';
+  if (props.scopeKind === 'global' && runtimePreset.value === 'yolo') return '全局 YOLO 预设';
   if (props.scopeKind === 'global') return '全局默认策略';
   if (hasLocalOverride.value) return '当前作用域覆盖';
   const inheritedFrom = effectiveResolution.value.inheritedFrom;
   void inheritedFrom;
   return '继承全局默认策略';
 });
-const globalPresetOptions: Array<{ value: ToolPolicyPresetKind; label: string; description: string }> = [
+const presetOptions = computed<Array<{ value: ToolPolicyPresetKind; label: string; description: string }>>(() => [
+  ...(props.scopeKind === 'global'
+    ? []
+    : [{
+      value: 'inherit' as const,
+      label: '继承全局预设',
+      description: `当前全局为${globalPreset.value === 'yolo' ? ' YOLO 模式' : '自定义策略'}；本作用域仍可保留下方逐工具配置。`
+    }]),
   {
     value: 'custom',
     label: '自定义策略',
-    description: '沿用下方已有启用、审批、自动应用和 MCP 来源配置。'
+    description: props.scopeKind === 'global'
+      ? '沿用下方已有启用、审批、自动应用和 MCP 来源配置。'
+      : '本作用域显式使用自定义策略，不再继承全局 YOLO 预设。'
   },
   {
     value: 'yolo',
     label: 'YOLO 模式',
     description: '所有工具（含 MCP）直接运行；write/edit 生成的修改立即自动应用，不打开审批或差异预览标签页。'
   }
-];
+]);
 const toolScopeOptions = computed<SettingsDropdownOption[]>(() => [
   { value: 'all', label: '全部领域', description: `${tools.value.length} 个工具` },
   ...TOOL_SCOPE_ORDER.map((scope) => {
@@ -130,13 +140,14 @@ function nextAllowed(toolName: string, enabled: boolean): string[] {
   return tools.value.map((tool) => tool.name).filter((name) => names.has(name));
 }
 
-function updateGlobalPreset(value: ToolPolicyPresetKind): void {
-  if (props.readonly || props.scopeKind !== 'global' || selectedPreset.value === value) return;
-  store.setPolicyPresetForScope('global', undefined, value);
+function updatePolicyPreset(value: ToolPolicyPresetKind): void {
+  if (props.readonly || selectedPreset.value === value) return;
+  if (props.scopeKind === 'global' && value === 'inherit') return;
+  store.setPolicyPresetForScope(props.scopeKind, props.scopeId, value);
 }
 
 function isToolEnabled(tool: ToolDefinitionRecord): boolean {
-  if (effectivePolicy.value?.preset === 'yolo') return true;
+  if (runtimePreset.value === 'yolo') return true;
   if (allowedSet.value.has(tool.name)) return true;
   if (tool.source?.kind !== 'mcp') return false;
   const sourceId = tool.source.sourceId;
@@ -147,7 +158,7 @@ function isToolEnabled(tool: ToolDefinitionRecord): boolean {
 }
 
 function isMcpSourceEnabled(sourceId: string): boolean {
-  if (effectivePolicy.value?.preset === 'yolo') return true;
+  if (runtimePreset.value === 'yolo') return true;
   return effectivePolicy.value?.sourceConfigs?.[sourceId]?.enabled === true;
 }
 
@@ -460,14 +471,14 @@ function inputNumber(event: Event): number {
       </div>
     </header>
 
-    <section v-if="showGlobalPreset" class="tool-policy-preset-section" aria-label="全局配置预设">
+    <section class="tool-policy-preset-section" aria-label="工具策略预设">
       <div class="tool-policy-preset-heading">
-        <span>全局配置预设</span>
-        <small>预设只改变运行时解释方式，不会覆盖下方已有的逐工具配置；切回自定义后会恢复使用这些配置。</small>
+        <span>工具策略预设</span>
+        <small>预设只改变运行时解释方式，不会覆盖下方已有的逐工具配置；非全局作用域可选择继承全局预设。</small>
       </div>
-      <div class="tool-policy-preset-options" role="radiogroup" aria-label="选择全局工具策略预设">
+      <div class="tool-policy-preset-options" role="radiogroup" aria-label="选择工具策略预设">
         <button
-          v-for="option in globalPresetOptions"
+          v-for="option in presetOptions"
           :key="option.value"
           type="button"
           role="radio"
@@ -475,7 +486,7 @@ function inputNumber(event: Event): number {
           :class="{ 'is-selected': selectedPreset === option.value }"
           :aria-checked="selectedPreset === option.value"
           :disabled="readonly"
-          @click="updateGlobalPreset(option.value)"
+          @click="updatePolicyPreset(option.value)"
         >
           <span class="preset-card-indicator" aria-hidden="true"></span>
           <span class="preset-card-copy">

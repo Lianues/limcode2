@@ -91,7 +91,7 @@ interface ResolvedToolPolicyScope {
 }
 
 function normalizeToolPolicyPreset(value: unknown): ToolPolicyPresetKind | undefined {
-  return value === 'yolo' || value === 'custom' ? value : undefined;
+  return value === 'inherit' || value === 'yolo' || value === 'custom' ? value : undefined;
 }
 
 function sanitizeSourceConfigs(

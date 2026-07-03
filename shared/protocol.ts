@@ -677,6 +677,7 @@ export interface CompressionBlockLlmInvocationLinkRecord {
 
 
 export type AgentSource = 'builtin' | 'user';
+export type AgentRecordRuntimeRole = 'mirror';
 
 export interface AgentRecord {
   id: string;
@@ -685,6 +686,8 @@ export interface AgentRecord {
   kind: string;
   source: AgentSource;
   status: 'idle' | 'thinking' | 'running' | 'done' | 'error';
+  runtimeRole?: AgentRecordRuntimeRole;
+  typeAgentId?: string;
 }
 
 export type AgentRunKind = 'chat' | 'tool_invoked' | 'delegated' | 'review' | 'notification' | 'scheduled';
@@ -1296,6 +1299,8 @@ export interface TextPart {
   text: string;
   thought?: boolean;
   thoughtSignature?: string;
+  /** 思考块仍在流式输出时，由后端持续回传的已思考耗时。完成后改用 thoughtDurationMs。 */
+  thoughtElapsedMs?: number;
   thoughtDurationMs?: number;
 }
 

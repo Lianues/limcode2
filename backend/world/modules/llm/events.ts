@@ -7,6 +7,7 @@ export const LlmEventType = {
   Started: 'llm:started',
   Delta: 'llm:delta',
   ThoughtDelta: 'llm:thoughtDelta',
+  ThoughtProgress: 'llm:thoughtProgress',
   ThoughtDone: 'llm:thoughtDone',
   ToolCall: 'llm:toolcall',
   Done: 'llm:done',
@@ -44,6 +45,12 @@ export interface LlmDeltaPayload {
 export interface LlmThoughtDeltaPayload {
   requestId: string;
   text: string;
+  thoughtSignature?: string;
+  thoughtElapsedMs?: number;
+}
+export interface LlmThoughtProgressPayload {
+  requestId: string;
+  thoughtElapsedMs: number;
   thoughtSignature?: string;
 }
 export interface LlmThoughtDonePayload {
@@ -101,6 +108,7 @@ declare module '@backend/world/events' {
     'llm:started': LlmStartedPayload;
     'llm:delta': LlmDeltaPayload;
     'llm:thoughtDelta': LlmThoughtDeltaPayload;
+    'llm:thoughtProgress': LlmThoughtProgressPayload;
     'llm:thoughtDone': LlmThoughtDonePayload;
     'llm:toolcall': LlmToolCallPayload;
     'llm:done': LlmDonePayload;

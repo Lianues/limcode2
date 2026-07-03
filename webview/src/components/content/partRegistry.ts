@@ -68,12 +68,19 @@ export function toRenderNodes(parts: readonly ContentPart[]): RichRenderNode[] {
         .filter((duration): duration is number => typeof duration === 'number' && Number.isFinite(duration));
       const durationMs = durations.length > 0 ? durations.reduce((sum, duration) => sum + duration, 0) : undefined;
       const thoughtOpen = buffer.parts.some((part) => part.thoughtDurationMs === undefined);
+      const elapsedMs = thoughtOpen
+        ? buffer.parts
+          .map((part) => part.thoughtElapsedMs)
+          .filter((duration): duration is number => typeof duration === 'number' && Number.isFinite(duration))
+          .reduce((max, duration) => Math.max(max, duration), 0)
+        : undefined;
       nodes.push({
         key: `thought:${buffer.startIndex}:${buffer.endIndex}`,
         kind: 'thought',
         props: {
           text: normalizedText.trimEnd(),
           ...(durationMs !== undefined ? { durationMs } : {}),
+          ...(elapsedMs !== undefined ? { elapsedMs } : {}),
           thoughtOpen
         }
       });

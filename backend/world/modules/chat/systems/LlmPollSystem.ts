@@ -6,6 +6,7 @@ import {
   type LlmErrorPayload,
   type LlmStartedPayload,
   type LlmThoughtDeltaPayload,
+  type LlmThoughtProgressPayload,
   type LlmThoughtDonePayload,
   type LlmToolCallPayload,
   type LlmRetryPayload
@@ -37,6 +38,7 @@ import { ClientSyncFastPatchStateKey, type ClientSyncFastPatchBatch } from '../.
 type PendingOperation =
   | { kind: 'started'; payload: LlmStartedPayload }
   | { kind: 'thoughtDelta'; payload: LlmThoughtDeltaPayload }
+  | { kind: 'thoughtProgress'; payload: LlmThoughtProgressPayload }
   | { kind: 'thoughtDone'; payload: LlmThoughtDonePayload }
   | { kind: 'delta'; payload: LlmDeltaPayload }
   | { kind: 'toolCall'; payload: LlmToolCallPayload }
@@ -94,7 +96,7 @@ export const LlmPollSystem = defineSystem({
     reads: { components: [PartOf, CompressionBlock, ToolCallEvent, ToolCallRunLink] },
     writes: { components: [Streaming, AgentRun, ToolCall, ToolCallEvent, ToolCallRunLink] },
     resources: { read: [ClientSyncFastPatchStateKey], write: [ClientSyncFastPatchStateKey], mutationMode: 'update' },
-    events: { read: [LlmEventType.Started, LlmEventType.ThoughtDelta, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error, LlmEventType.RetryScheduled, LlmEventType.RetryStarted, LlmEventType.RetryCancelled, LlmEventType.RetryRecovered], emit: [CheckpointEventType.Requested, CompressionEventType.Create] },
+    events: { read: [LlmEventType.Started, LlmEventType.ThoughtDelta, LlmEventType.ThoughtProgress, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error, LlmEventType.RetryScheduled, LlmEventType.RetryStarted, LlmEventType.RetryCancelled, LlmEventType.RetryRecovered], emit: [CheckpointEventType.Requested, CompressionEventType.Create] },
     effects: { emit: ['client.transientNotice'] },
     bundles: [ToolCallBundle]
   },
@@ -111,6 +113,9 @@ export const LlmPollSystem = defineSystem({
           break;
         case LlmEventType.ThoughtDelta:
           pushOperation(updates, { kind: 'thoughtDelta', payload: event.payload as LlmThoughtDeltaPayload });
+          break;
+        case LlmEventType.ThoughtProgress:
+          pushOperation(updates, { kind: 'thoughtProgress', payload: event.payload as LlmThoughtProgressPayload });
           break;
         case LlmEventType.ThoughtDone:
           pushOperation(updates, { kind: 'thoughtDone', payload: event.payload as LlmThoughtDonePayload });
@@ -364,6 +369,13 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
       case 'thoughtDelta': {
         const updateResult = appendThoughtDeltaWithPatch(next, operation.payload);
         next = updateResult.message;
+        if (updateResult.patches) fastPatches.push(...updateResult.patches);
+        else if (next !== current) fastPatchSafe = false;
+        break;
+      }
+      case 'thoughtProgress': {
+        const updateResult = updateThoughtProgressWithPatch(next, operation.payload);
+        next = updateResult.message;
         if (updateResult.patch) fastPatches.push(updateResult.patch);
         else if (next !== current) fastPatchSafe = false;
         break;
@@ -578,7 +590,7 @@ function withLlmTiming(message: MessageData, update: LlmDonePayload | LlmErrorPa
   };
 }
 
-function appendThoughtDeltaWithPatch(message: MessageData, thought: LlmThoughtDeltaPayload): { message: MessageData; patch?: ClientPatchOp } {
+function appendThoughtDeltaWithPatch(message: MessageData, thought: LlmThoughtDeltaPayload): { message: MessageData; patches?: ClientPatchOp[] } {
   if (!thought.text) return { message };
   const parts = [...message.content.parts];
   const last = parts[parts.length - 1];
@@ -587,22 +599,43 @@ function appendThoughtDeltaWithPatch(message: MessageData, thought: LlmThoughtDe
     parts[index] = {
       ...last,
       text: last.text + thought.text,
+      ...(thought.thoughtElapsedMs !== undefined ? { thoughtElapsedMs: thought.thoughtElapsedMs } : {}),
       ...(thought.thoughtSignature ? { thoughtSignature: thought.thoughtSignature } : {})
     };
     const next = { ...message, content: { ...message.content, parts } };
     if (thought.thoughtSignature && thought.thoughtSignature !== last.thoughtSignature) return { message: next };
-    return { message: next, patch: { kind: 'message.partText.append', id: message.id, partIndex: index, delta: thought.text } };
+    const patches: ClientPatchOp[] = [{ kind: 'message.partText.append', id: message.id, partIndex: index, delta: thought.text }];
+    if (thought.thoughtElapsedMs !== undefined) patches.push({ kind: 'message.partThoughtElapsed.set', id: message.id, partIndex: index, elapsedMs: thought.thoughtElapsedMs });
+    return { message: next, patches };
   }
 
   const part: ContentPart = {
     text: thought.text,
     thought: true,
+    ...(thought.thoughtElapsedMs !== undefined ? { thoughtElapsedMs: thought.thoughtElapsedMs } : {}),
     ...(thought.thoughtSignature ? { thoughtSignature: thought.thoughtSignature } : {})
   };
   return {
     message: { ...message, content: { ...message.content, parts: [...message.content.parts, part] } },
-    patch: { kind: 'message.part.insert', id: message.id, index: message.content.parts.length, part }
+    patches: [{ kind: 'message.part.insert', id: message.id, index: message.content.parts.length, part }]
   };
+}
+
+function updateThoughtProgressWithPatch(message: MessageData, progress: LlmThoughtProgressPayload): { message: MessageData; patch?: ClientPatchOp } {
+  const parts = [...message.content.parts];
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index];
+    if (!part || !isTextPart(part) || part.thought !== true || part.thoughtDurationMs !== undefined) continue;
+    parts[index] = {
+      ...part,
+      thoughtElapsedMs: progress.thoughtElapsedMs,
+      ...(progress.thoughtSignature ? { thoughtSignature: progress.thoughtSignature } : {})
+    };
+    const next = { ...message, content: { ...message.content, parts } };
+    if (progress.thoughtSignature && progress.thoughtSignature !== part.thoughtSignature) return { message: next };
+    return { message: next, patch: { kind: 'message.partThoughtElapsed.set', id: message.id, partIndex: index, elapsedMs: progress.thoughtElapsedMs } };
+  }
+  return { message };
 }
 
 function finishThoughtPart(message: MessageData, thought: LlmThoughtDonePayload): MessageData {
@@ -610,8 +643,10 @@ function finishThoughtPart(message: MessageData, thought: LlmThoughtDonePayload)
   for (let index = parts.length - 1; index >= 0; index -= 1) {
     const part = parts[index];
     if (!part || !isTextPart(part) || part.thought !== true || part.thoughtDurationMs !== undefined) continue;
+    const { thoughtElapsedMs: _thoughtElapsedMs, ...rest } = part;
+    void _thoughtElapsedMs;
     parts[index] = {
-      ...part,
+      ...rest,
       thoughtDurationMs: thought.thoughtDurationMs,
       ...(thought.thoughtSignature ? { thoughtSignature: thought.thoughtSignature } : {})
     };

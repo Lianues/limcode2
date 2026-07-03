@@ -3,15 +3,18 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { IconVariable } from '@tabler/icons-vue';
 import type { ProjectFolderCandidateRecord } from '@shared/protocol';
 import { displayConversationTitle } from '@shared/conversationTitle';
+import { stripInitialWorkEnvironmentSection } from '@shared/runtimeContextText';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useRuntimeContextStore } from '@webview/stores/useRuntimeContextStore';
+import { useWorkEnvironmentStore } from '@webview/stores/useWorkEnvironmentStore';
 import { bridge, BridgeMessageType } from '@webview/transport';
 
 const clientState = useClientStateStore();
 const conversationTimeline = useConversationTimelineStore();
 const runtimeContext = useRuntimeContextStore();
+const workEnvironment = useWorkEnvironmentStore();
 
 const headerRoot = ref<HTMLElement | null>(null);
 const projectDropdownOpen = ref(false);
@@ -32,7 +35,12 @@ const projectPath = computed(() => currentProject.value ? displayProjectUri(curr
 const compactProjectPath = computed(() => middleEllipsis(projectPath.value, 58));
 const activeProjectUri = computed(() => currentProject.value?.uri ?? '');
 const runtimeSnapshot = computed(() => runtimeContext.activeSnapshotForConversation(clientState.currentConversationId));
-const runtimeSnapshotPreview = computed(() => runtimeSnapshot.value?.text.trim() ?? '');
+const runtimeSnapshotPreview = computed(() => {
+  const text = runtimeSnapshot.value?.text.trim() ?? '';
+  return workEnvironment.workEnvironmentEnabledForConversation(clientState.currentConversationId)
+    ? text
+    : stripInitialWorkEnvironmentSection(text);
+});
 const runtimeSnapshotTitle = computed(() => runtimeSnapshot.value
   ? `运行时快照：${new Date(runtimeSnapshot.value.refreshedAt).toLocaleString()}`
   : '运行时快照尚未生成');

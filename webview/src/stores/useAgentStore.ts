@@ -7,6 +7,10 @@ function agentLabel(agent: AgentRecord): string {
   return agent.name.trim() || agent.id;
 }
 
+function isConfigurableAgent(agent: AgentRecord): boolean {
+  return agent.runtimeRole !== 'mirror';
+}
+
 function upsertById<T extends { id: string }>(items: T[], record: T): void {
   const index = items.findIndex((item) => item.id === record.id);
   if (index >= 0) items[index] = record;
@@ -23,8 +27,11 @@ export const useAgentStore = defineStore('agent', {
         return sourceOrder || agentLabel(left).localeCompare(agentLabel(right), 'zh-CN') || left.id.localeCompare(right.id);
       });
     },
+    configurableAgents(): AgentRecord[] {
+      return this.agents.filter(isConfigurableAgent);
+    },
     userAgents(): AgentRecord[] {
-      return this.agents.filter((agent) => agent.source === 'user');
+      return this.configurableAgents.filter((agent) => agent.source === 'user');
     }
   },
   actions: {
@@ -39,7 +46,7 @@ export const useAgentStore = defineStore('agent', {
     selectAgent(conversationId: string, agentId: string): void {
       if (!conversationId || !agentId) return;
       const clientState = useClientStateStore();
-      if (!clientState.agents.some((agent) => agent.id === agentId)) return;
+      if (!clientState.agents.some((agent) => agent.id === agentId && isConfigurableAgent(agent))) return;
       const now = Date.now();
       const existing = clientState.conversationAgentSelections.find((selection) => selection.conversationId === conversationId && selection.role === 'active');
       const selection: ConversationAgentSelectionRecord = {

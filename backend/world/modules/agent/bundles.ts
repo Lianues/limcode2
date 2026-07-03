@@ -20,7 +20,7 @@ import {
 import { selectGlobalModeForConversation } from '../mode/bundles';
 import { ToolPolicyScopeLink } from '../tools/components';
 import type { BuiltinAgentDefinition, BuiltinModeDefinition } from './blueprints';
-import type { ConfigScopeKind, ToolPolicyScopeKind } from '../../../../shared/protocol';
+import type { AgentSource, ConfigScopeKind, ToolPolicyScopeKind } from '../../../../shared/protocol';
 
 export const AgentFromBlueprintBundle = defineBundle({
   name: 'AgentFromBlueprintBundle',
@@ -51,7 +51,15 @@ export interface SpawnAgentProfileInput {
   definition: BuiltinAgentDefinition;
   agentId?: string;
   agentName?: string;
-  source?: 'builtin' | 'user';
+  source?: AgentSource;
+}
+
+export interface SpawnAgentRuntimeMirrorInput {
+  mirrorAgentId: string;
+  typeAgentId: string;
+  name: string;
+  description?: string;
+  source?: AgentSource;
 }
 
 export interface SpawnAgentWithConversationInput extends SpawnAgentProfileInput {
@@ -105,6 +113,19 @@ export function spawnAgentProfileFromBlueprint(cmd: CommandSink, input: SpawnAge
     linkModelProfileToScope(cmd, { scopeKind: 'agent', scopeId: agentId, agent, modelProfile: profile });
   }
 
+  return agent;
+}
+
+export function spawnAgentRuntimeMirror(cmd: CommandSink, input: SpawnAgentRuntimeMirrorInput): Entity {
+  const agent = cmd.spawn();
+  cmd.add(agent, Agent, {
+    id: input.mirrorAgentId,
+    name: input.name,
+    ...(input.description ? { description: input.description } : {}),
+    source: input.source ?? 'builtin'
+  });
+  cmd.add(agent, AgentKind, { kind: input.typeAgentId });
+  cmd.add(agent, AgentStatus, { status: 'idle' });
   return agent;
 }
 

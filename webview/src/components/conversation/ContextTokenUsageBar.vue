@@ -5,9 +5,12 @@ import {
   type LlmCompressionConfigRecord,
   type MessageRecord
 } from '@shared/protocol';
+import { stripInitialWorkEnvironmentSection } from '@shared/runtimeContextText';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
+import { useWorkEnvironmentStore } from '@webview/stores/useWorkEnvironmentStore';
+import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
 import HoverTooltipPanel from '@webview/components/ui/HoverTooltipPanel.vue';
 import {
   buildTokenUsageMessages,
@@ -43,6 +46,8 @@ interface TokenBarSegment {
 const clientState = useClientStateStore();
 const conversationTimeline = useConversationTimelineStore();
 const globalSettings = useGlobalSettingsStore();
+const workEnvironment = useWorkEnvironmentStore();
+const conversationSettings = useConversationSettingsStore();
 const root = ref<HTMLElement | null>(null);
 const expanded = ref(false);
 const chartScroller = ref<HTMLElement | null>(null);
@@ -65,8 +70,8 @@ const usageItems = computed(() => [...fixedContextUsageItems.value, ...messageUs
 const latestUsage = computed(() => usageItems.value[usageItems.value.length - 1]);
 const hasUsage = computed(() => usageItems.value.length > 0);
 const refreshKey = computed(() => usageItems.value.map((item) => `${item.id}:${item.total}:${item.ratio}`).join('|'));
-const activeProviderConfig = computed(() => globalSettings.activeLlmProviderConfig);
-const activeCompressionTrigger = computed(() => globalSettings.activeCompressionConfig?.trigger);
+const activeProviderConfig = computed(() => activeProviderConfigForCurrentConversation());
+const activeCompressionTrigger = computed(() => compressionConfigForProvider(activeProviderConfig.value?.id)?.trigger);
 const contextWindowTokens = computed(() => normalizeTokenCount(activeProviderConfig.value?.contextWindowTokens) ?? 0);
 const actualContextTokens = computed(() => latestActualModelTotalTokens(conversationTimeline.currentMessages) ?? 0);
 const hasContextUsage = computed(() => contextWindowTokens.value > 0 && actualContextTokens.value > 0);
@@ -156,6 +161,24 @@ function latestActualModelTotalTokens(messages: MessageRecord[]): number | undef
     if (usage.total !== undefined && usage.total > 0) return usage.total;
   }
   return undefined;
+}
+
+function activeProviderConfigForCurrentConversation() {
+  const conversationProviderConfigId = conversationSettings.llm.conversationId === clientState.currentConversationId
+    ? conversationSettings.llm.activeProviderConfigId
+    : '';
+  return globalSettings.llmProviderConfigs.configs.find((config) => config.id === conversationProviderConfigId)
+    ?? globalSettings.llmProviderConfigs.configs.find((config) => config.id === globalSettings.llm.activeProviderConfigId)
+    ?? globalSettings.llmProviderConfigs.configs[0];
+}
+
+function compressionConfigForProvider(providerConfigId: string | undefined) {
+  const binding = providerConfigId
+    ? globalSettings.llmCompression.providerBindings.find((item) => item.providerConfigId === providerConfigId)
+    : undefined;
+  const configId = binding?.compressionConfigId ?? globalSettings.llmCompression.defaultConfigId;
+  return globalSettings.llmCompressionConfigs.configs.find((config) => config.id === configId)
+    ?? globalSettings.llmCompressionConfigs.configs[0];
 }
 
 function contextSummaryTitle(): string {
@@ -401,7 +424,8 @@ function currentSystemPromptText(): string {
 function currentRuntimeContextText(): string {
   const conversationId = clientState.currentConversationId;
   const link = latestByUpdatedAt(clientState.conversationRuntimeContextSnapshotLinks.filter((item) => item.conversationId === conversationId && item.role === 'active'));
-  return clientState.runtimeContextSnapshots.find((snapshot) => snapshot.id === link?.runtimeContextSnapshotId)?.text.trim() ?? '';
+  const text = clientState.runtimeContextSnapshots.find((snapshot) => snapshot.id === link?.runtimeContextSnapshotId)?.text.trim() ?? '';
+  return workEnvironment.workEnvironmentEnabledForConversation(conversationId) ? text : stripInitialWorkEnvironmentSection(text);
 }
 
 function latestSystemPromptForScope(scopeKind: 'global' | 'agent' | 'mode' | 'conversation', scopeId?: string) {

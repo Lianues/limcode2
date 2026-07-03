@@ -77,20 +77,6 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     return loadCommonGlobalSettings();
   }
 
-  async function loadNormalizedLlmGlobalSettings(paths: StoragePaths): Promise<{ section: 'llm'; settings: LlmSettingsRecord; filePath: string }> {
-    await ensureLlmSettingsRoots(paths);
-    const configs = (await loadLlmProviderConfigsSettings(paths)).settings.configs;
-    const stored = await loadGlobalSettingsFile(paths.settingsRootUri, 'llm');
-    const settings = stored.settings as LlmSettingsRecord;
-    const activeConfig = configs.find((config) => config.id === settings.activeProviderConfigId) ?? configs[0];
-    const normalized: LlmSettingsRecord = { activeProviderConfigId: activeConfig?.id ?? '' };
-    if (settings.activeProviderConfigId !== normalized.activeProviderConfigId) {
-      await writeGlobalSettingsFile(paths.settingsRootUri, 'llm', normalized);
-      return loadGlobalSettingsFile(paths.settingsRootUri, 'llm') as Promise<{ section: 'llm'; settings: LlmSettingsRecord; filePath: string }>;
-    }
-    return stored as { section: 'llm'; settings: LlmSettingsRecord; filePath: string };
-  }
-
   async function saveNormalizedLlmGlobalSettings(paths: StoragePaths, settings: GlobalSettingsSectionValue): Promise<{ section: 'llm'; settings: LlmSettingsRecord; filePath: string }> {
     await ensureLlmSettingsRoots(paths);
     const configs = (await loadLlmProviderConfigsSettings(paths)).settings.configs;
@@ -98,10 +84,6 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     const activeConfig = configs.find((config) => config.id === input?.activeProviderConfigId) ?? configs[0];
     await writeGlobalSettingsFile(paths.settingsRootUri, 'llm', { activeProviderConfigId: activeConfig?.id ?? '' });
     return loadNormalizedLlmGlobalSettings(paths);
-  }
-
-  async function ensureLlmSettingsRoots(paths: StoragePaths): Promise<void> {
-    await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
   }
 
   return {
@@ -308,9 +290,13 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       const uri = conversationSettingsUri(paths, conversationId, section);
       if (section === 'llm') {
         const settings = await readJson<ConversationLlmSettingsRecord>(uri);
-        return settings
-          ? { conversationId, section, settings: normalizeConversationLlmSettings(conversationId, settings), filePath: uri.fsPath }
-          : { conversationId, section, settings: normalizeConversationLlmSettings(conversationId), filePath: uri.fsPath };
+        const normalized = normalizeConversationLlmSettings(conversationId, settings);
+        if (normalized.activeProviderConfigId) {
+          return { conversationId, section, settings: normalized, filePath: uri.fsPath };
+        }
+
+        const frozen = await freezeConversationLlmSettingsToCurrentGlobal(paths, conversationId, uri);
+        return { conversationId, section, settings: frozen, filePath: uri.fsPath };
       }
       const settings = await readJson<ConversationSettingsRecord>(uri);
       return settings ? { conversationId, section, settings: normalizeConversationCommonSettings(conversationId, settings), filePath: uri.fsPath } : undefined;
@@ -337,8 +323,41 @@ function safeFileName(input: string): string {
   return input.replace(/[^a-zA-Z0-9_.-]+/g, '_');
 }
 
+async function ensureLlmSettingsRoots(paths: StoragePaths): Promise<void> {
+  await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
+}
+
+async function loadNormalizedLlmGlobalSettings(paths: StoragePaths): Promise<{ section: 'llm'; settings: LlmSettingsRecord; filePath: string }> {
+  await ensureLlmSettingsRoots(paths);
+  const configs = (await loadLlmProviderConfigsSettings(paths)).settings.configs;
+  const stored = await loadGlobalSettingsFile(paths.settingsRootUri, 'llm');
+  const settings = stored.settings as LlmSettingsRecord;
+  const activeConfig = configs.find((config) => config.id === settings.activeProviderConfigId) ?? configs[0];
+  const normalized: LlmSettingsRecord = { activeProviderConfigId: activeConfig?.id ?? '' };
+  if (settings.activeProviderConfigId !== normalized.activeProviderConfigId) {
+    await writeGlobalSettingsFile(paths.settingsRootUri, 'llm', normalized);
+    return loadGlobalSettingsFile(paths.settingsRootUri, 'llm') as Promise<{ section: 'llm'; settings: LlmSettingsRecord; filePath: string }>;
+  }
+  return stored as { section: 'llm'; settings: LlmSettingsRecord; filePath: string };
+}
+
 function normalizeConversationCommonSettings(conversationId: string, settings: Partial<ConversationSettingsRecord> | undefined): ConversationSettingsRecord {
   return { conversationId, name: typeof settings?.name === 'string' ? settings.name : '' };
+}
+
+async function freezeConversationLlmSettingsToCurrentGlobal(
+  paths: StoragePaths,
+  conversationId: string,
+  uri: vscode.Uri
+): Promise<ConversationLlmSettingsRecord> {
+  await ensureLlmSettingsRoots(paths);
+  const configs = (await loadLlmProviderConfigsSettings(paths)).settings.configs;
+  const global = await loadNormalizedLlmGlobalSettings(paths);
+  const activeProviderConfigId = (global.settings as LlmSettingsRecord).activeProviderConfigId;
+  const activeConfig = configs.find((config) => config.id === activeProviderConfigId) ?? configs[0];
+  const frozen = normalizeConversationLlmSettings(conversationId, { activeProviderConfigId: activeConfig?.id ?? '' });
+  await writeJson(uri, frozen);
+  return frozen;
 }
 
 function normalizeConversationLlmSettings(

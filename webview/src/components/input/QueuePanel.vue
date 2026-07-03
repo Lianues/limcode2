@@ -223,7 +223,7 @@ function clearDragState(): void {
           >
             <IconPlayerPause :size="14" stroke="2" />
           </button>
-          <button type="button" class="queue-item-action queue-item-action--promote" aria-label="强制发送排队消息" draggable="false" @click="emit('force-send', item.runId)">
+          <button type="button" class="queue-item-action queue-item-action--promote" aria-label="中断当前请求并发送队列" title="中断当前请求并发送队列" draggable="false" @click="emit('force-send', item.runId)">
             <IconBolt :size="14" stroke="2" />
           </button>
         </div>

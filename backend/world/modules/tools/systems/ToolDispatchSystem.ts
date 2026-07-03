@@ -1,13 +1,14 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
 import { readEvents } from '../../../events';
-import { Agent, AgentConversationLink, AgentKind } from '../../agent/components';
+import { Agent, AgentConversationLink, AgentKind, type AgentData } from '../../agent/components';
+import { agentSelectorSlug, findAgentTypeEntity, isTemporaryAgentEntity } from '../../agent/identity';
 import {
   AgentBlueprintsKey,
   type BuiltinAgentDefinition,
   type BuiltinAgentRegistry,
   type BuiltinModeDefinition
 } from '../../agent/blueprints';
-import { AgentFromBlueprintBundle, linkAgentToConversation, selectAgentForConversation, spawnAgentProfileFromBlueprint } from '../../agent/bundles';
+import { AgentFromBlueprintBundle, linkAgentToConversation, selectAgentForConversation, spawnAgentRuntimeMirror } from '../../agent/bundles';
 import { Conversation, ConversationBranchLink, ConversationOriginLink, ConversationReuseLink, InFlight, Message, MessageRevision, PartOf } from '../../chat/components';
 import {
   cloneMessageToConversation,
@@ -24,8 +25,6 @@ import { conversationMessages } from '../../chat/queries';
 import {
   ConversationModeSelection,
   Mode,
-  ModelProfile,
-  SystemPrompt,
   ToolPolicy,
   type ToolPolicyData
 } from '../../mode/components';
@@ -44,9 +43,6 @@ import {
   RunEditPolicy,
   RunEditPolicyLink,
   RunModeLink,
-  RunModelProfileLink,
-  RunSystemPromptLink,
-  RunToolPolicyLink,
   ToolCallRunLink
 } from '../../agentRun/components';
 import { AgentRunBundle, spawnAgentRun } from '../../agentRun/bundles';
@@ -840,9 +836,12 @@ function resolveRunAgentTarget(
 ): { ok: true; value: ResolvedRunAgentTarget } | { ok: false; reason: string } {
   if (input.requestedAgentId) {
     const existingAgent = findAgentById(world, input.requestedAgentId);
-    if (existingAgent === undefined) return { ok: false, reason: `指定 Agent 不存在: ${input.requestedAgentId}` };
+    if (existingAgent === undefined) return { ok: false, reason: `指定临时 Agent 镜像不存在: ${input.requestedAgentId}` };
     const agentData = world.get(existingAgent, Agent);
-    if (!agentData) return { ok: false, reason: `指定 Agent 数据不完整: ${input.requestedAgentId}` };
+    if (!agentData) return { ok: false, reason: `指定临时 Agent 镜像数据不完整: ${input.requestedAgentId}` };
+    if (!isTemporaryAgentEntity(world, existingAgent)) {
+      return { ok: false, reason: `agent.id 只用于复用 run_agent 已创建的临时 Agent 镜像，不能直接传 Agent 类型配置 id: ${input.requestedAgentId}。新开镜像请传 agent.type。` };
+    }
     const kind = world.get(existingAgent, AgentKind)?.kind || input.requestedKind;
     const definition = resolveAgentDefinition(input.blueprints, kind) ?? definitionFromExistingAgent(agentData, kind);
     return {
@@ -864,10 +863,18 @@ function resolveRunAgentTarget(
     };
   }
 
-  const definition = resolveAgentDefinition(input.blueprints, input.requestedKind);
-  if (!definition) return { ok: false, reason: `未知 Agent 类型: ${input.requestedKind}。可用类型：${availableAgentTypes(input.blueprints).join(', ')}` };
-  const targetAgentId = createRunAgentAgentId(world, definition.kind);
-  const targetAgent = spawnAgentProfileFromBlueprint(cmd, { definition, agentId: targetAgentId });
+  const resolvedType = resolveAgentType(world, input.blueprints, input.requestedKind);
+  if (!resolvedType) return { ok: false, reason: `未知 Agent 类型: ${input.requestedKind}。可用类型：${availableAgentTypes(world, input.blueprints).join(', ')}` };
+  const { definition, typeAgentData, typeId } = resolvedType;
+  const targetAgentId = createRunAgentAgentId(world, typeId);
+  const targetAgent = spawnAgentRuntimeMirror(cmd, {
+    mirrorAgentId: targetAgentId,
+    typeAgentId: typeId,
+    name: typeAgentData?.name ?? definition.name,
+    description: typeAgentData?.description ?? definition.description,
+    source: typeAgentData?.source ?? 'builtin'
+  });
+  const targetKind = typeId;
   return {
     ok: true,
     value: {
@@ -878,7 +885,7 @@ function resolveRunAgentTarget(
         sourceConversation: input.sourceConversation,
         targetAgent,
         targetAgentId,
-        kind: definition.kind,
+        kind: targetKind,
         toolCallEntity: input.toolCallEntity,
         prompt: input.prompt,
         appendToExistingAgent: false
@@ -892,6 +899,37 @@ function resolveAgentDefinition(blueprints: BuiltinAgentRegistry, kind: string):
     ?? Object.values(blueprints.agents).find((candidate) => candidate.kind === kind || candidate.id === kind);
 }
 
+function resolveAgentType(world: WorldReader, blueprints: BuiltinAgentRegistry, selector: string): { definition: BuiltinAgentDefinition; typeId: string; typeAgent?: Entity; typeAgentData?: AgentData } | undefined {
+  const configured = findAgentTypeBySelector(world, selector);
+  if (configured !== undefined) {
+    const agent = world.get(configured, Agent);
+    if (!agent) return undefined;
+    const declaredKind = world.get(configured, AgentKind)?.kind || agent.id;
+    const typeId = agent.id;
+    return {
+      definition: resolveAgentDefinition(blueprints, typeId) ?? resolveAgentDefinition(blueprints, declaredKind) ?? definitionFromExistingAgent(agent, typeId),
+      typeId,
+      typeAgent: configured,
+      typeAgentData: agent
+    };
+  }
+  const definition = resolveAgentDefinition(blueprints, selector);
+  if (!definition) return undefined;
+  const typeAgent = findAgentTypeEntity(world, definition.id) ?? findAgentTypeEntity(world, definition.kind);
+  const typeAgentData = typeAgent !== undefined ? world.get(typeAgent, Agent) : undefined;
+  const typeId = typeAgentData?.id ?? definition.id;
+  return { definition, typeId, ...(typeAgent !== undefined ? { typeAgent } : {}), ...(typeAgentData ? { typeAgentData } : {}) };
+}
+
+function findAgentTypeBySelector(world: WorldReader, selector: string): Entity | undefined {
+  return world.query(Agent).find((entity) => {
+    if (isTemporaryAgentEntity(world, entity)) return false;
+    const agent = world.get(entity, Agent);
+    const kind = world.get(entity, AgentKind)?.kind;
+    return agent?.id === selector || kind === selector;
+  });
+}
+
 function definitionFromExistingAgent(agent: { id: string; name: string; description?: string }, kind: string): BuiltinAgentDefinition {
   return {
     id: agent.id,
@@ -903,16 +941,20 @@ function definitionFromExistingAgent(agent: { id: string; name: string; descript
   };
 }
 
-function availableAgentTypes(blueprints: BuiltinAgentRegistry): string[] {
-  return Object.values(blueprints.agents).map((definition) => definition.kind);
+function availableAgentTypes(world: WorldReader, blueprints: BuiltinAgentRegistry): string[] {
+  const configured = world.query(Agent)
+    .filter((entity) => !isTemporaryAgentEntity(world, entity))
+    .map((entity) => world.get(entity, Agent)?.id)
+    .filter((id): id is string => !!id);
+  return [...new Set([...configured, ...Object.values(blueprints.agents).map((definition) => definition.kind)])];
 }
 
 function createRunAgentAgentId(world: WorldReader, kind: string): string {
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    const id = `agent-${slug(kind)}-${createMessageId()}`;
+    const id = `agent-${agentSelectorSlug(kind)}-${createMessageId()}`;
     if (findAgentById(world, id) === undefined) return id;
   }
-  return `agent-${slug(kind)}-${Date.now().toString(36)}`;
+  return `agent-${agentSelectorSlug(kind)}-${Date.now().toString(36)}`;
 }
 
 function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {

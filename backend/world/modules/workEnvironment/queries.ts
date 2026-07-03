@@ -10,6 +10,7 @@ import {
   workEnvironmentSortKey as buildWorkEnvironmentSortKey
 } from '../../../../shared/workEnvironmentCatalog';
 import { Agent } from '../agent/components';
+import { agentTypeEntityForRuntimeAgent } from '../agent/identity';
 import { AgentRun, AgentRunTargetLink } from '../agentRun/components';
 import { activeModeForRun, activeModeSelectionForConversation, runTarget } from '../agentRun/queries';
 import { Conversation } from '../chat/components';
@@ -93,11 +94,15 @@ export function availableWorkEnvironments(world: WorldReader): ResolvedWorkEnvir
 }
 
 export function allowedWorkEnvironmentsForConversation(world: WorldReader, conversation: Entity): ResolvedWorkEnvironment[] {
-  return allowedWorkEnvironmentsForResolution(world, effectiveWorkEnvironmentPolicyForConversation(world, conversation));
+  const resolution = effectiveWorkEnvironmentPolicyForConversation(world, conversation);
+  if (resolution.policy?.enabled !== true) return [];
+  return allowedWorkEnvironmentsForResolution(world, resolution);
 }
 
 export function allowedWorkEnvironmentsForRun(world: WorldReader, run: Entity): ResolvedWorkEnvironment[] {
-  return allowedWorkEnvironmentsForResolution(world, effectiveWorkEnvironmentPolicyForRun(world, run));
+  const resolution = effectiveWorkEnvironmentPolicyForRun(world, run);
+  if (resolution.policy?.enabled !== true) return [];
+  return allowedWorkEnvironmentsForResolution(world, resolution);
 }
 
 export function defaultWorkEnvironment(world: WorldReader): ResolvedWorkEnvironment | undefined {
@@ -105,7 +110,9 @@ export function defaultWorkEnvironment(world: WorldReader): ResolvedWorkEnvironm
 }
 
 export function activeWorkEnvironmentForConversation(world: WorldReader, conversation: Entity): ResolvedWorkEnvironment | undefined {
-  const allowed = allowedWorkEnvironmentsForConversation(world, conversation);
+  const resolution = effectiveWorkEnvironmentPolicyForConversation(world, conversation);
+  if (resolution.policy?.enabled !== true) return undefined;
+  const allowed = allowedWorkEnvironmentsForResolution(world, resolution);
   const allowedIds = new Set(allowed.map((item) => item.data.id));
   const linked = linkedWorkEnvironmentForConversation(world, conversation);
   if (linked?.data.available && allowedIds.has(linked.data.id)) return linked;
@@ -113,15 +120,17 @@ export function activeWorkEnvironmentForConversation(world: WorldReader, convers
   const project = projectWorkEnvironmentForConversation(world, conversation);
   if (project && allowedIds.has(project.data.id)) return project;
 
-  const policy = effectiveWorkEnvironmentPolicyForConversation(world, conversation).policy;
+  const policy = resolution.policy;
   const defaultByPolicy = policy?.defaultWorkEnvironmentId
     ? allowed.find((item) => item.data.id === policy.defaultWorkEnvironmentId)
     : undefined;
-  return defaultByPolicy ?? allowed[0] ?? defaultWorkEnvironment(world);
+  return defaultByPolicy ?? allowed[0];
 }
 
 export function activeWorkEnvironmentForRun(world: WorldReader, run: Entity): ResolvedWorkEnvironment | undefined {
-  const allowed = allowedWorkEnvironmentsForRun(world, run);
+  const resolution = effectiveWorkEnvironmentPolicyForRun(world, run);
+  if (resolution.policy?.enabled !== true) return undefined;
+  const allowed = allowedWorkEnvironmentsForResolution(world, resolution);
   const allowedIds = new Set(allowed.map((item) => item.data.id));
   const linked = linkedWorkEnvironmentForRun(world, run);
   if (linked?.data.available && allowedIds.has(linked.data.id)) return linked;
@@ -130,11 +139,11 @@ export function activeWorkEnvironmentForRun(world: WorldReader, run: Entity): Re
   const conversationActive = target !== undefined ? activeWorkEnvironmentForConversation(world, target) : undefined;
   if (conversationActive && allowedIds.has(conversationActive.data.id)) return conversationActive;
 
-  const policy = effectiveWorkEnvironmentPolicyForRun(world, run).policy;
+  const policy = resolution.policy;
   const defaultByPolicy = policy?.defaultWorkEnvironmentId
     ? allowed.find((item) => item.data.id === policy.defaultWorkEnvironmentId)
     : undefined;
-  return defaultByPolicy ?? allowed[0] ?? conversationActive ?? defaultWorkEnvironment(world);
+  return defaultByPolicy ?? allowed[0];
 }
 
 export function linkedWorkEnvironmentForConversation(world: WorldReader, conversation: Entity): ResolvedWorkEnvironment | undefined {
@@ -231,7 +240,7 @@ export function effectiveWorkEnvironmentPolicyForRun(world: WorldReader, run: En
   if (target) {
     const conversationPolicy = localPolicyForScopeEntity(world, 'conversation', target.conversation);
     if (conversationPolicy.policy) return { ...conversationPolicy, inheritedFrom: 'conversation' };
-    const agentPolicy = localPolicyForScopeEntity(world, 'agent', target.agent);
+    const agentPolicy = localPolicyForScopeEntity(world, 'agent', agentTypeEntityForRuntimeAgent(world, target.agent));
     if (agentPolicy.policy) return { ...agentPolicy, inheritedFrom: 'agent' };
   }
 

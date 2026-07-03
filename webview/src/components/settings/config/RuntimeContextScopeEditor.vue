@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 import type { ConfigScopeKind } from '@shared/protocol';
+import { stripInitialWorkEnvironmentSection } from '@shared/runtimeContextText';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingInline.vue';
 import { useRuntimeContextStore } from '@webview/stores/useRuntimeContextStore';
+import { useWorkEnvironmentStore } from '@webview/stores/useWorkEnvironmentStore';
 import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
 
 const props = withDefaults(defineProps<{ scopeKind: ConfigScopeKind; scopeId?: string; title?: string; description?: string }>(), {
@@ -12,6 +14,7 @@ const props = withDefaults(defineProps<{ scopeKind: ConfigScopeKind; scopeId?: s
 });
 
 const store = useRuntimeContextStore();
+const workEnvironment = useWorkEnvironmentStore();
 const { loading: runtimeLoading, text: runtimeLoadingText } = useSettingsLoadingText('运行时上下文配置', () => props.scopeKind, () => props.scopeId);
 const scroller = ref<HTMLTextAreaElement | null>(null);
 const snapshotScroller = ref<HTMLElement | null>(null);
@@ -19,6 +22,12 @@ const draft = ref('');
 const local = computed(() => store.localContextFor(props.scopeKind, props.scopeId));
 const placeholders = computed(() => store.runtimePlaceholders);
 const conversationSnapshot = computed(() => props.scopeKind === 'conversation' ? store.activeSnapshotForConversation(props.scopeId) : undefined);
+const conversationSnapshotText = computed(() => {
+  const text = conversationSnapshot.value?.text ?? '';
+  return workEnvironment.workEnvironmentEnabledForConversation(props.scopeId ?? '')
+    ? text
+    : stripInitialWorkEnvironmentSection(text);
+});
 
 watch(() => [props.scopeKind, props.scopeId, local.value.runtimeContext?.id], () => {
   draft.value = local.value.runtimeContext?.template ?? '';
@@ -86,7 +95,7 @@ function insertPlaceholder(token: string): void {
         <span v-else>尚未生成；下次模型请求前会初始化。</span>
       </header>
       <div v-if="conversationSnapshot" class="snapshot-body-shell">
-        <pre ref="snapshotScroller">{{ conversationSnapshot.text }}</pre>
+        <pre ref="snapshotScroller">{{ conversationSnapshotText }}</pre>
         <AdvancedScrollbar :scroller="snapshotScroller" variant="minimal" />
       </div>
     </article>

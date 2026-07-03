@@ -1,6 +1,7 @@
 import type { ComponentType, Entity, WorldReader } from '../../../ecs/types';
 import type { ConfigScopeKind, ToolPolicyPresetKind, ToolPolicyScopeKind, ToolPolicySourceConfigRecord, ToolPolicyToolConfigRecord } from '../../../../shared/protocol';
 import { Agent, AgentConversationLink, AgentKind, ConversationAgentSelection, type ConversationAgentSelectionData } from '../agent/components';
+import { agentTypeEntityForRuntimeAgent } from '../agent/identity';
 import {
   ConversationModeSelection,
   type ConversationModeSelectionData,
@@ -74,7 +75,12 @@ export function findAgentById(world: WorldReader, agentId: string): Entity | und
 }
 
 export function findAgentByKind(world: WorldReader, kind: string): Entity | undefined {
-  return world.query(Agent).find((entity) => world.get(entity, AgentKind)?.kind === kind || world.get(entity, Agent)?.id === kind);
+  return world.query(Agent).find((entity) => {
+    const agent = world.get(entity, Agent);
+    if (!agent) return false;
+    if (agent.id === kind) return true;
+    return agentTypeEntityForRuntimeAgent(world, entity) === entity && world.get(entity, AgentKind)?.kind === kind;
+  });
 }
 
 export function runTarget(world: WorldReader, run: Entity): { agent: Entity; conversation: Entity } | undefined {
@@ -155,7 +161,7 @@ export function systemPromptsForRun(world: WorldReader, run: Entity): SystemProm
   const mode = activeModeForRun(world, run);
   const scopes: ScopeEntity[] = [
     { kind: 'global' },
-    ...(target ? [{ kind: 'agent' as const, entity: target.agent }] : []),
+    ...(target ? [{ kind: 'agent' as const, entity: agentTypeEntityForRuntimeAgent(world, target.agent) }] : []),
     ...(mode !== undefined ? [{ kind: 'mode' as const, entity: mode }] : []),
     ...(target ? [{ kind: 'conversation' as const, entity: target.conversation }] : []),
     { kind: 'run', entity: run }
@@ -201,7 +207,7 @@ export function activeModelProfileForRun(world: WorldReader, run: Entity): Model
     { kind: 'run', entity: run },
     ...(target ? [{ kind: 'conversation' as const, entity: target.conversation }] : []),
     ...(mode !== undefined ? [{ kind: 'mode' as const, entity: mode }] : []),
-    ...(target ? [{ kind: 'agent' as const, entity: target.agent }] : []),
+    ...(target ? [{ kind: 'agent' as const, entity: agentTypeEntityForRuntimeAgent(world, target.agent) }] : []),
     { kind: 'global' }
   ];
   for (const scope of scopes) {
@@ -219,7 +225,7 @@ export function activeToolPolicyForRun(world: WorldReader, run: Entity): ToolPol
   const push = (policy: ToolPolicyData | undefined): void => { if (policy) policies.push(policy); };
 
   push(activeToolPolicyForScopeEntity(world, 'global'));
-  if (target) push(activeToolPolicyForScopeEntity(world, 'agent', target.agent));
+  if (target) push(activeToolPolicyForScopeEntity(world, 'agent', agentTypeEntityForRuntimeAgent(world, target.agent)));
   if (mode !== undefined) push(activeToolPolicyForScopeEntity(world, 'mode', mode));
   if (target) push(activeToolPolicyForScopeEntity(world, 'conversation', target.conversation));
   push(activeToolPolicyForScopeEntity(world, 'run', run));

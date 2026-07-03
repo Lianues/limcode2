@@ -1,5 +1,6 @@
 import type { Entity, WorldReader } from '../../../ecs/types';
 import { Agent } from '../agent/components';
+import { agentTypeEntityForRuntimeAgent } from '../agent/identity';
 import { AgentRun } from '../agentRun/components';
 import { activeAgentForConversation, activeModeForRun, activeModeSelectionForConversation, runTarget } from '../agentRun/queries';
 import { Conversation } from '../chat/components';
@@ -28,7 +29,7 @@ export function runtimeContextsForRun(world: WorldReader, run: Entity, conversat
   const targetConversation = conversation ?? target?.conversation;
   const scopes: ScopeEntity[] = [
     { kind: 'global' },
-    ...(target ? [{ kind: 'agent' as const, entity: target.agent }] : []),
+    ...(target ? [{ kind: 'agent' as const, entity: agentTypeEntityForRuntimeAgent(world, target.agent) }] : []),
     ...(mode !== undefined ? [{ kind: 'mode' as const, entity: mode }] : []),
     ...(targetConversation !== undefined ? [{ kind: 'conversation' as const, entity: targetConversation }] : []),
     { kind: 'run', entity: run }
@@ -50,7 +51,7 @@ export function runtimeContextsForConversation(world: WorldReader, conversation:
   const mode = modeSelection?.scopeKind === 'mode' ? modeSelection.mode : undefined;
   const scopes: ScopeEntity[] = [
     { kind: 'global' },
-    ...(agent !== undefined ? [{ kind: 'agent' as const, entity: agent }] : []),
+    ...(agent !== undefined ? [{ kind: 'agent' as const, entity: agentTypeEntityForRuntimeAgent(world, agent) }] : []),
     ...(mode !== undefined ? [{ kind: 'mode' as const, entity: mode }] : []),
     { kind: 'conversation', entity: conversation }
   ];

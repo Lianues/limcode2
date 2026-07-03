@@ -201,6 +201,11 @@ const messageMutations = [
     path: ['status'],
     valueField: 'status'
   }),
+  mutation<'message.partThoughtElapsed.set', { id: string; partIndex: number; elapsedMs: number }>('message.partThoughtElapsed.set', {
+    op: 'setPath',
+    path: ['content', 'parts', { fromField: 'partIndex' }, 'thoughtElapsedMs'],
+    valueField: 'elapsedMs'
+  }),
   mutation<'message.partText.append', { id: string; partIndex: number; delta: string }>('message.partText.append', {
     op: 'appendStringAtPath',
     path: ['content', 'parts', { fromField: 'partIndex' }, 'text'],

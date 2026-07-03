@@ -16,6 +16,7 @@ import {
 } from './types';
 
 const MAX_ITER = 10_000;
+const EVENT_LOOP_YIELD_INTERVAL_MS = 8;
 
 type TokenKey = symbol | string;
 type WriteModeMap = Map<TokenKey, Set<MutationMode>>;
@@ -135,7 +136,7 @@ export class Scheduler {
       return;
     }
     this.scheduled = true;
-    queueMicrotask(() => {
+    scheduleSchedulerTask(() => {
       this.scheduled = false;
       this.tick();
     });
@@ -150,6 +151,7 @@ export class Scheduler {
   private async runTick(schedule: CompiledSchedule): Promise<void> {
     try {
       let guard = 0;
+      let lastYieldAt = Date.now();
       for (;;) {
         const before = this.world.version();
         const events = this.world.drainQueue();
@@ -170,6 +172,12 @@ export class Scheduler {
         if (guard >= MAX_ITER) {
           console.warn(`[ECS] scheduler hit MAX_ITER(${MAX_ITER}); forcing break.`);
           break;
+        }
+
+        const now = Date.now();
+        if (now - lastYieldAt >= EVENT_LOOP_YIELD_INTERVAL_MS) {
+          await yieldToEventLoop();
+          lastYieldAt = Date.now();
         }
       }
     } finally {
@@ -546,4 +554,17 @@ function snapshotFilter(access: AccessSummary): WorldSnapshotFilter {
     components: [...access.snapshotComponents],
     resources: [...access.snapshotResources]
   };
+}
+
+function scheduleSchedulerTask(callback: () => void): void {
+  if (typeof setImmediate === 'function') {
+    setImmediate(callback);
+    return;
+  }
+
+  setTimeout(callback, 0);
+}
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => scheduleSchedulerTask(resolve));
 }

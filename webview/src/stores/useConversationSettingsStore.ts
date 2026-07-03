@@ -53,11 +53,8 @@ export const useConversationSettingsStore = defineStore('conversationSettings', 
         section: 'llm',
         settings: { conversationId, activeProviderConfigId: configId }
       });
-      // 最新手动选择同步为全局默认，供新对话或未单独设置的对话回退使用。
-      bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
-        section: 'llm',
-        settings: { activeProviderConfigId: configId }
-      });
+      // 后端会在保存当前对话渠道后，把该渠道同步为新对话的 Global 默认值；
+      // 其他已存在对话会先冻结到各自的对话级设置，避免被新的默认值影响。
     },
     applySnapshot(payload: ConversationSettingsSnapshotPayload): void {
       if (payload.section === 'common') {

@@ -2,6 +2,7 @@ import { bridge, BridgeMessageType } from '@webview/transport';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
+import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
 import type { CompressionBlockRecord } from '@shared/protocol';
 
 export interface CreateCompressionOptions {
@@ -14,6 +15,7 @@ export function useCompression() {
   const clientState = useClientStateStore();
   const conversationTimeline = useConversationTimelineStore();
   const globalSettings = useGlobalSettingsStore();
+  const conversationSettings = useConversationSettingsStore();
 
   function createCompression(options: CreateCompressionOptions | string = {}): boolean {
     const input = typeof options === 'string' ? { methodConfigId: options } : options;
@@ -30,7 +32,7 @@ export function useCompression() {
     }
     const minimumMessageCount = input.startMessageId || input.endMessageId ? 1 : 2;
     if (conversationTimeline.currentMessages.length < minimumMessageCount) return false;
-    const methodKind = globalSettings.activeCompressionConfig?.kind;
+    const methodKind = activeCompressionConfigForConversation(conversationId)?.kind;
     bridge.request(BridgeMessageType.CompressionCreate, {
       conversationId,
       ...(input.startMessageId ? { startMessageId: input.startMessageId } : {}),
@@ -51,6 +53,22 @@ export function useCompression() {
 
   function setCompressionEnabled(block: CompressionBlockRecord, enabled: boolean): void {
     bridge.request(enabled ? BridgeMessageType.CompressionEnable : BridgeMessageType.CompressionDisable, { conversationId: block.conversationId, blockId: block.id });
+  }
+
+  function activeCompressionConfigForConversation(conversationId: string) {
+    const providerConfigId = conversationSettings.llm.conversationId === conversationId
+      ? conversationSettings.llm.activeProviderConfigId
+      : '';
+    const activeProvider = globalSettings.llmProviderConfigs.configs.find((config) => config.id === providerConfigId)
+      ?? globalSettings.llmProviderConfigs.configs.find((config) => config.id === globalSettings.llm.activeProviderConfigId)
+      ?? globalSettings.llmProviderConfigs.configs[0];
+    const activeProviderConfigId = activeProvider?.id;
+    const binding = activeProviderConfigId
+      ? globalSettings.llmCompression.providerBindings.find((item) => item.providerConfigId === activeProviderConfigId)
+      : undefined;
+    const configId = binding?.compressionConfigId ?? globalSettings.llmCompression.defaultConfigId;
+    return globalSettings.llmCompressionConfigs.configs.find((config) => config.id === configId)
+      ?? globalSettings.llmCompressionConfigs.configs[0];
   }
 
   return { createCompression, deleteCompression, regenerateCompression, setCompressionEnabled };

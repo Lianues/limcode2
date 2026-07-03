@@ -8,6 +8,7 @@ import {
   AgentStatus,
   ConversationAgentSelection
 } from './components';
+import { isRunAgentTemporaryId, projectedAgentSource } from './identity';
 
 export const agentStateProjectionReads: AccessDeclaration = {
   components: [
@@ -23,13 +24,15 @@ export const agentStateProjectionReads: AccessDeclaration = {
 export function projectAgentState(world: WorldReader): Partial<ClientState> {
   const agents: AgentRecord[] = world.query(Agent).map((entity) => {
     const agent = world.get(entity, Agent)!;
+    const kind = world.get(entity, AgentKind)?.kind ?? 'unknown';
     return {
       id: agent.id,
       name: agent.name,
       ...(agent.description ? { description: agent.description } : {}),
-      kind: world.get(entity, AgentKind)?.kind ?? 'unknown',
-      source: agent.source,
-      status: world.get(entity, AgentStatus)?.status ?? 'idle'
+      kind,
+      source: projectedAgentSource(agent.source),
+      status: world.get(entity, AgentStatus)?.status ?? 'idle',
+      ...(isRunAgentTemporaryId(agent.id, kind) ? { runtimeRole: 'mirror' as const, typeAgentId: kind } : {})
     };
   });
 

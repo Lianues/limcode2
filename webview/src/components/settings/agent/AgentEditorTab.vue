@@ -22,14 +22,15 @@ const activeAgentId = ref('');
 const createOpen = ref(false);
 const renameOpen = ref(false);
 const deleteOpen = ref(false);
-const options = computed<SettingsDropdownOption[]>(() => agentStore.agents.map((agent) => ({ value: agent.id, label: agent.name, description: agent.description || (agent.source === 'builtin' ? `内置 Agent · ${agent.kind}` : `用户 Agent · ${agent.kind}`), icon: IconRobot })));
-const activeAgent = computed<AgentRecord | undefined>(() => agentStore.agents.find((agent) => agent.id === activeAgentId.value));
+const settingsAgents = computed(() => agentStore.configurableAgents);
+const options = computed<SettingsDropdownOption[]>(() => settingsAgents.value.map((agent) => ({ value: agent.id, label: agent.name, description: agent.description || (agent.source === 'builtin' ? `内置 Agent · ${agent.kind}` : `用户 Agent · ${agent.kind}`), icon: IconRobot })));
+const activeAgent = computed<AgentRecord | undefined>(() => settingsAgents.value.find((agent) => agent.id === activeAgentId.value));
 const canDelete = computed(() => activeAgent.value?.source === 'user');
 const deleteActions: ConfirmPanelAction[] = [{ key: 'cancel', label: '取消', variant: 'secondary' }, { key: 'confirm', label: '删除' }];
 
-watch(() => agentStore.agents.map((agent) => agent.id).join('|'), () => {
-  if (activeAgentId.value && agentStore.agents.some((agent) => agent.id === activeAgentId.value)) return;
-  activeAgentId.value = agentStore.agents.find((agent) => agent.id === 'main')?.id ?? agentStore.agents[0]?.id ?? '';
+watch(() => settingsAgents.value.map((agent) => agent.id).join('|'), () => {
+  if (activeAgentId.value && settingsAgents.value.some((agent) => agent.id === activeAgentId.value)) return;
+  activeAgentId.value = settingsAgents.value.find((agent) => agent.id === 'main')?.id ?? settingsAgents.value[0]?.id ?? '';
 }, { immediate: true });
 
 function updateDescription(event: Event): void { if (activeAgent.value) agentStore.updateDescription(activeAgent.value.id, (event.currentTarget as HTMLElement).textContent ?? ''); }

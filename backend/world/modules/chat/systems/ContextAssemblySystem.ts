@@ -1,7 +1,7 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
 import type { LlmModelSettings } from '../../llm/contracts';
 import { LlmEventType, type LlmInvocationResolvedPayload, type LlmInvocationResolveErrorPayload } from '../../llm/events';
-import { AgentRun, AgentRunNeedsModel, AgentRunTargetLink, MessageRunLink, RunModeLink, RunModelProfileLink } from '../../agentRun/components';
+import { AgentRun, AgentRunNeedsModel, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunTargetLink, MessageRunLink, RunModeLink, RunModelProfileLink } from '../../agentRun/components';
 import { spawnMessageRunLink } from '../../agentRun/bundles';
 import { activeModelProfileForRun } from '../../agentRun/queries';
 import { CompressionBlock } from '../../compression/components';
@@ -9,9 +9,10 @@ import { hasActiveBlockingCompression } from '../../compression/queries';
 import { ConversationModeSelection, Mode, ModelProfile, ModelProfileScopeLink } from '../../mode/components';
 import { LlmRequest, Conversation, Message } from '../components';
 import { ModelMessageBundle, LlmRequestBundle, MessageBundle, spawnMessage, spawnModelMessage, spawnLlmRequest } from '../bundles';
+import { materializeUserInputMessage } from '../userInputMaterialization';
 import { CheckpointEventType } from '../../checkpoint/events';
 import { spawnCheckpointBarrier } from '../../checkpoint/barriers';
-import { CheckpointBarrier } from '../../checkpoint/components';
+import { Checkpoint, CheckpointBarrier } from '../../checkpoint/components';
 import { LlmInvocation, MessageLlmInvocationLink, RunLlmInvocationLink } from '../../llm/components';
 import { LlmInvocationBundle, MessageLlmInvocationLinkBundle, spawnLlmInvocation, spawnMessageLlmInvocationLink, spawnRunLlmInvocationLink } from '../../llm/bundles';
 import { createMessageId } from '../../../../../shared/protocol';
@@ -19,9 +20,10 @@ import { createMessageId } from '../../../../../shared/protocol';
 const RunsNeedingModelQuery = defineQuery({
   name: 'RunsNeedingModel',
   all: [AgentRun, AgentRunNeedsModel],
-  read: [AgentRun, AgentRunNeedsModel, AgentRunTargetLink, LlmRequest, Conversation],
-  remove: [AgentRunNeedsModel],
-  mutationMode: 'consume',
+  read: [AgentRun, AgentRunNeedsModel, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunTargetLink, LlmRequest, Conversation, Message, Checkpoint, CheckpointBarrier],
+  write: [AgentRun],
+  remove: [AgentRunNeedsModel, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunQueueHold],
+  mutationMode: 'update',
   role: 'work'
 });
 
@@ -45,7 +47,7 @@ export const ContextAssemblySystem = defineSystem({
   name: 'ContextAssemblySystem',
   access: {
     queries: [RunsNeedingModelQuery, ActiveLlmRequestsQuery, LlmInvocationLookupQuery],
-    reads: { components: [RunModeLink, RunModelProfileLink, ConversationModeSelection, Mode, ModelProfile, ModelProfileScopeLink, CompressionBlock] },
+    reads: { components: [RunModeLink, RunModelProfileLink, ConversationModeSelection, Mode, ModelProfile, ModelProfileScopeLink, CompressionBlock, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, Checkpoint] },
     bundles: [ModelMessageBundle, MessageBundle, LlmRequestBundle, LlmInvocationBundle, MessageLlmInvocationLinkBundle],
     writes: { components: [AgentRun, MessageRunLink, CheckpointBarrier] },
     events: { read: [LlmEventType.InvocationResolved, LlmEventType.InvocationResolveError], emit: [CheckpointEventType.Requested] },
@@ -72,6 +74,8 @@ export const ContextAssemblySystem = defineSystem({
       const target = targetForRun(world, run);
       if (!target) continue;
       if (hasActiveBlockingCompression(world, target.conversation)) continue;
+
+      drainQueuedInputsIntoRun(world, cmd, run, target.conversation);
 
       const invocation = spawnLlmInvocation(cmd);
       const invocationId = spawnedInvocationId(invocation);
@@ -215,6 +219,94 @@ function hasActiveInvocation(world: WorldReader, run: Entity): boolean {
       const invocation = world.get(link.invocation, LlmInvocation);
       return invocation?.status === 'resolving' || invocation?.status === 'ready' || invocation?.status === 'streaming';
     });
+}
+
+function drainQueuedInputsIntoRun(world: WorldReader, cmd: CommandSink, targetRun: Entity, conversation: Entity): void {
+  const queuedRuns = world
+    .query(AgentRun)
+    .filter((run) => {
+      if (run === targetRun) return false;
+      const data = world.get(run, AgentRun);
+      const target = targetForRun(world, run);
+      return data?.status === 'queued'
+        && target?.conversation === conversation
+        && !hasQueueHold(world, run)
+        && !world.has(run, AgentRunNeedsModel)
+        && !hasActiveRequest(world, run);
+    })
+    .sort((left, right) => compareRunsByQueueOrder(world, left, right));
+
+  if (queuedRuns.length === 0) return;
+  const conversationData = world.get(conversation, Conversation);
+  if (!conversationData) return;
+
+  for (const queuedRun of queuedRuns) {
+    const queuedInputEntity = queuedInputEntityForRun(world, queuedRun);
+    if (queuedInputEntity === undefined) continue;
+    const queuedInput = world.get(queuedInputEntity, AgentRunQueuedInput);
+    if (!queuedInput) continue;
+    const message = materializeUserInputMessage(world, cmd, conversation, conversationData.id, queuedInput.content);
+    spawnMessageRunLink(cmd, { message, run: targetRun, role: 'input' });
+    cmd.remove(queuedInputEntity, AgentRunQueuedInput);
+    markQueuedRunMerged(world, cmd, queuedRun, targetRun);
+  }
+}
+
+function markQueuedRunMerged(world: WorldReader, cmd: CommandSink, run: Entity, targetRun: Entity): void {
+  const data = world.get(run, AgentRun);
+  if (!data || data.status !== 'queued') return;
+  const target = world.get(targetRun, AgentRun);
+  const now = Date.now();
+  cmd.add(run, AgentRun, {
+    ...data,
+    status: 'cancelled',
+    updatedAt: now,
+    completedAt: now,
+    endReason: 'cancelled_by_policy',
+    errorType: 'cancelled',
+    error: `排队消息已合并到下一次 LLM 调用：${target?.id ?? targetRun}`
+  });
+  removeQueueArtifactsForRun(world, cmd, run);
+}
+
+function removeQueueArtifactsForRun(world: WorldReader, cmd: CommandSink, run: Entity): void {
+  cmd.remove(run, AgentRunNeedsModel);
+  const input = queuedInputEntityForRun(world, run);
+  if (input !== undefined) cmd.remove(input, AgentRunQueuedInput);
+  const order = queueOrderEntityForRun(world, run);
+  if (order !== undefined) cmd.remove(order, AgentRunQueueOrder);
+  const hold = queueHoldEntityForRun(world, run);
+  if (hold !== undefined) cmd.remove(hold, AgentRunQueueHold);
+}
+
+function queuedInputEntityForRun(world: WorldReader, run: Entity): Entity | undefined {
+  return world.query(AgentRunQueuedInput).find((entity) => world.get(entity, AgentRunQueuedInput)?.run === run);
+}
+
+function queueOrderEntityForRun(world: WorldReader, run: Entity): Entity | undefined {
+  return world.query(AgentRunQueueOrder).find((entity) => world.get(entity, AgentRunQueueOrder)?.run === run);
+}
+
+function queueHoldEntityForRun(world: WorldReader, run: Entity): Entity | undefined {
+  return world.query(AgentRunQueueHold).find((entity) => world.get(entity, AgentRunQueueHold)?.run === run);
+}
+
+function hasQueueHold(world: WorldReader, run: Entity): boolean {
+  return queueHoldEntityForRun(world, run) !== undefined;
+}
+
+function compareRunsByQueueOrder(world: WorldReader, left: Entity, right: Entity): number {
+  const leftKey = queueSortKey(world, left);
+  const rightKey = queueSortKey(world, right);
+  return leftKey.order - rightKey.order || leftKey.createdAt - rightKey.createdAt || left - right;
+}
+
+function queueSortKey(world: WorldReader, run: Entity): { order: number; createdAt: number } {
+  const data = world.get(run, AgentRun);
+  const orderEntity = queueOrderEntityForRun(world, run);
+  const order = orderEntity !== undefined ? world.get(orderEntity, AgentRunQueueOrder)?.order : undefined;
+  const createdAt = data?.createdAt ?? 0;
+  return { order: order ?? createdAt, createdAt };
 }
 
 function targetForRun(world: WorldReader, run: Entity): { conversation: Entity } | undefined {

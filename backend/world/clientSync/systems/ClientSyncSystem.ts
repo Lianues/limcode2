@@ -237,10 +237,10 @@ function applyMessageFastPatches(state: ClientState, patches: readonly ClientPat
   return nextMessages ? { ...state, messages: nextMessages } : state;
 }
 
-type MessageFastPatch = Extract<ClientPatchOp, { kind: 'message.partText.append' | 'message.part.insert' }>;
+type MessageFastPatch = Extract<ClientPatchOp, { kind: 'message.partText.append' | 'message.partThoughtElapsed.set' | 'message.part.insert' }>;
 
 function isMessageFastPatch(patch: ClientPatchOp): patch is MessageFastPatch {
-  return patch.kind === 'message.partText.append' || patch.kind === 'message.part.insert';
+  return patch.kind === 'message.partText.append' || patch.kind === 'message.partThoughtElapsed.set' || patch.kind === 'message.part.insert';
 }
 
 function applyMessageFastPatch(message: MessageRecord, patch: MessageFastPatch): MessageRecord | undefined {
@@ -250,6 +250,14 @@ function applyMessageFastPatch(message: MessageRecord, patch: MessageFastPatch):
     if (!part || !isTextPart(part)) return undefined;
     const nextParts = [...parts];
     nextParts[patch.partIndex] = { ...part, text: part.text + patch.delta };
+    return { ...message, content: { ...message.content, parts: nextParts } };
+  }
+
+  if (patch.kind === 'message.partThoughtElapsed.set') {
+    const part = parts[patch.partIndex];
+    if (!part || !isTextPart(part)) return undefined;
+    const nextParts = [...parts];
+    nextParts[patch.partIndex] = { ...part, thoughtElapsedMs: patch.elapsedMs };
     return { ...message, content: { ...message.content, parts: nextParts } };
   }
 

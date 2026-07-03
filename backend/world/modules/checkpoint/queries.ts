@@ -4,6 +4,7 @@ import type {
   CheckpointPolicyScopeKind
 } from '../../../../shared/protocol';
 import { Agent } from '../agent/components';
+import { agentTypeEntityForRuntimeAgent } from '../agent/identity';
 import { AgentRun, AgentRunTargetLink } from '../agentRun/components';
 import { activeModeForRun, activeModeSelectionForConversation, runTarget } from '../agentRun/queries';
 import { Conversation } from '../chat/components';
@@ -34,7 +35,7 @@ export function effectiveCheckpointPolicyForRequest(
     if (target) {
       const conversationPolicy = localCheckpointPolicyForScopeEntity(world, 'conversation', target.conversation);
       if (conversationPolicy.policy) return { ...conversationPolicy, inheritedFrom: 'conversation' } as CheckpointPolicyResolution;
-      const agentPolicy = localCheckpointPolicyForScopeEntity(world, 'agent', target.agent);
+      const agentPolicy = localCheckpointPolicyForScopeEntity(world, 'agent', agentTypeEntityForRuntimeAgent(world, target.agent));
       if (agentPolicy.policy) return { ...agentPolicy, inheritedFrom: 'agent' } as CheckpointPolicyResolution;
     }
   }

@@ -5,6 +5,7 @@ import { chatStateProjectionReads, projectChatState } from './stateProjection';
 export const projectChatClientState = projectChatState;
 
 type MessagePartTextAppendPatch = Extract<ClientPatchOp, { kind: 'message.partText.append' }>;
+type MessagePartThoughtElapsedPatch = Extract<ClientPatchOp, { kind: 'message.partThoughtElapsed.set' }>;
 type MessagePartInsertPatch = Extract<ClientPatchOp, { kind: 'message.part.insert' }>;
 
 export function diffChatClientState(prev: ClientState, next: ClientState): ClientPatchOp[] {
@@ -86,6 +87,9 @@ function diffMessageContent(prev: MessageRecord, next: MessageRecord): ClientPat
   const appendPatch = partTextAppendPatch(prev, next);
   if (appendPatch) return [appendPatch];
 
+  const thoughtElapsedPatch = partThoughtElapsedPatch(prev, next);
+  if (thoughtElapsedPatch) return [thoughtElapsedPatch];
+
   const insertPatch = partInsertPatch(prev, next);
   if (insertPatch) return [insertPatch];
 
@@ -117,6 +121,31 @@ function partTextAppendPatch(prev: MessageRecord, next: MessageRecord): MessageP
     partIndex: changedIndex,
     delta: after.text.slice(before.text.length)
   };
+}
+
+function partThoughtElapsedPatch(prev: MessageRecord, next: MessageRecord): MessagePartThoughtElapsedPatch | undefined {
+  const prevParts = prev.content.parts;
+  const nextParts = next.content.parts;
+  if (prevParts.length !== nextParts.length) return undefined;
+
+  let changedIndex = -1;
+  for (let index = 0; index < nextParts.length; index += 1) {
+    if (samePart(prevParts[index], nextParts[index])) continue;
+    if (changedIndex >= 0) return undefined;
+    changedIndex = index;
+  }
+  if (changedIndex < 0) return undefined;
+
+  const before = prevParts[changedIndex];
+  const after = nextParts[changedIndex];
+  if (!isTextPart(before) || !isTextPart(after) || before.thought !== true || after.thought !== true) return undefined;
+  if (typeof after.thoughtElapsedMs !== 'number') return undefined;
+  const { thoughtElapsedMs: _beforeElapsed, ...beforeRest } = before;
+  const { thoughtElapsedMs: _afterElapsed, ...afterRest } = after;
+  void _beforeElapsed;
+  void _afterElapsed;
+  if (JSON.stringify(beforeRest) !== JSON.stringify(afterRest)) return undefined;
+  return { kind: 'message.partThoughtElapsed.set', id: next.id, partIndex: changedIndex, elapsedMs: after.thoughtElapsedMs };
 }
 
 function partInsertPatch(prev: MessageRecord, next: MessageRecord): MessagePartInsertPatch | undefined {

@@ -1,6 +1,7 @@
 import type { ComponentType, Entity, WorldReader } from '../../../ecs/types';
 import type { SkillPolicyScopeKind } from '../../../../shared/protocol';
 import { Agent } from '../agent/components';
+import { agentTypeEntityForRuntimeAgent } from '../agent/identity';
 import { AgentRun } from '../agentRun/components';
 import { runTarget, activeModeForRun } from '../agentRun/queries';
 import { Conversation } from '../chat/components';
@@ -18,7 +19,7 @@ export function activeSkillPolicyForRun(world: WorldReader, run: Entity): SkillP
   return activeSkillPolicyForScopeEntity(world, 'run', run)
     ?? (target ? activeSkillPolicyForScopeEntity(world, 'conversation', target.conversation) : undefined)
     ?? (mode !== undefined ? activeSkillPolicyForScopeEntity(world, 'mode', mode) : undefined)
-    ?? (target ? activeSkillPolicyForScopeEntity(world, 'agent', target.agent) : undefined)
+    ?? (target ? activeSkillPolicyForScopeEntity(world, 'agent', agentTypeEntityForRuntimeAgent(world, target.agent)) : undefined)
     ?? activeSkillPolicyForScopeEntity(world, 'global');
 }
 

@@ -38,7 +38,7 @@ export const workEnvironmentToolSchemaContributor: ToolSchemaContributor = {
     ]
   },
   augment(tools, context) {
-    if (effectiveWorkEnvironmentPolicyForRun(context.world, context.run).policy?.enabled === false) {
+    if (effectiveWorkEnvironmentPolicyForRun(context.world, context.run).policy?.enabled !== true) {
       return tools.filter((tool) => tool.name !== SWITCH_WORK_ENVIRONMENT_TOOL_NAME && tool.name !== TRANSFER_TOOL_NAME);
     }
 

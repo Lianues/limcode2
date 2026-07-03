@@ -15,6 +15,7 @@ export interface GlobalSettingsBridgeDeps {
   storage: StorageCapability;
   webview: WebviewCapability;
   beforeDataRootChange?: () => Promise<void>;
+  beforeUpdate?: (payload: GlobalSettingsUpdatePayload) => Promise<void> | void;
   afterUpdate?: (payload: GlobalSettingsUpdatePayload) => Promise<void> | void;
 }
 
@@ -49,6 +50,7 @@ export class GlobalSettingsBridge {
       if (dataRootPathChanged) {
         await this.deps.beforeDataRootChange?.();
       }
+      await this.deps.beforeUpdate?.(payload);
 
       const stored = await this.deps.storage.saveGlobalSettings(payload.section, payload.settings);
       await this.deps.afterUpdate?.(payload);

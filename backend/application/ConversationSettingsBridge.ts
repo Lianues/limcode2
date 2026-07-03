@@ -15,11 +15,19 @@ import {
 } from '../../shared/protocol';
 import { DEFAULT_CONVERSATION_TITLE, displayConversationTitle } from '../../shared/conversationTitle';
 
+type StoredConversationSettings = {
+  conversationId: string;
+  section: ConversationSettingsSection;
+  settings: ConversationSettingsSectionValue;
+  filePath: string;
+};
+
 export interface ConversationSettingsBridgeDeps {
   world: World;
   storage: StorageCapability;
   webview: WebviewCapability;
   requestSnapshot: (conversationId?: string) => void;
+  afterUpdate?: (stored: StoredConversationSettings) => Promise<void> | void;
 }
 
 export class ConversationSettingsBridge {
@@ -40,6 +48,7 @@ export class ConversationSettingsBridge {
     this.deps.webview.broadcastToStream(conversationSettingsStreamId(stored.conversationId, stored.section), this.createSnapshotMessage(stored, correlationId));
     this.deps.requestSnapshot();
     this.deps.requestSnapshot(stored.conversationId);
+    await this.deps.afterUpdate?.(stored);
   }
 
   private async readSettings(conversationId: string, section: ConversationSettingsSection): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }> {

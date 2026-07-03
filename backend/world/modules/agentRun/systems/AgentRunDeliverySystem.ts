@@ -20,7 +20,7 @@ import { conversationMessages } from '../../chat/queries';
 import { ToolCall, ToolState } from '../../tools/components';
 import { spawnToolCallEvent, ToolCallEventBundle } from '../../tools/bundles';
 import { isTerminalToolStatus, transitionToolState } from '../../tools/state';
-import { AgentRunBundle, markRunNeedsModel, spawnAgentRun, spawnMessageRunLink } from '../bundles';
+import { AgentRunBundle, spawnAgentRun, spawnMessageRunLink } from '../bundles';
 import {
   AgentRun,
   AgentRunSourceLink,
@@ -183,40 +183,28 @@ function deliverNotification(world: WorldReader, cmd: CommandSink, runEntity: En
   }
 
   const envelope = buildDeliveryEnvelope(world, runEntity, policy?.includeTranscript ?? 'summary');
-  const message = spawnUserMessage(cmd, sourceConversation, deliveryXml('task-notification', envelope));
-  spawnMessageRunLink(cmd, { message, run: runEntity, role: 'notification' });
-
   const agent = source.sourceAgent ?? defaultAgentForConversation(world, sourceConversation);
-  if (agent !== undefined) {
-    const existingNotificationRun = activeNotificationRunForConversation(world, sourceConversation);
-    if (existingNotificationRun !== undefined) {
-      spawnMessageRunLink(cmd, { message, run: existingNotificationRun, role: 'input' });
-      markRunNeedsModel(cmd, existingNotificationRun);
-      return true;
-    }
+  const notificationText = serializedReadAgentAnswerNotification(envelope);
 
-    spawnAgentRun(cmd, {
-      kind: 'notification',
-      agent,
-      conversation: sourceConversation,
-      sourceKind: 'agentRun',
-      sourceRun: runEntity,
-      sourceConversation,
-      sourceMessage: message,
-      inputMessage: message,
-      deliveryMode: 'direct_reply',
-      includeTranscript: 'full'
-    });
+  if (agent === undefined) {
+    const message = spawnUserMessage(cmd, sourceConversation, notificationText);
+    spawnMessageRunLink(cmd, { message, run: runEntity, role: 'notification' });
+    return true;
   }
-  return true;
-}
 
-function activeNotificationRunForConversation(world: WorldReader, conversation: Entity): Entity | undefined {
-  return world.query(AgentRun).find((run) => {
-    const data = world.get(run, AgentRun);
-    const target = runTarget(world, run);
-    return data?.kind === 'notification' && !isTerminalRunStatus(data.status) && target?.conversation === conversation;
+  spawnAgentRun(cmd, {
+    kind: 'notification',
+    agent,
+    conversation: sourceConversation,
+    sourceKind: 'agentRun',
+    sourceRun: runEntity,
+    sourceConversation,
+    deliveryMode: 'direct_reply',
+    includeTranscript: 'full',
+    needsModel: false,
+    queuedInputContent: { role: 'user', parts: [{ text: notificationText }] }
   });
+  return true;
 }
 
 function buildDeliveryEnvelope(world: WorldReader, runEntity: Entity, includeTranscript: TranscriptInclusion): DeliveryEnvelope {
@@ -327,6 +315,23 @@ function mergeUsageMetadata(items: LlmUsageMetadataRecord[]): LlmUsageMetadataRe
     }
   }
   return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function serializedReadAgentAnswerNotification(envelope: DeliveryEnvelope): string {
+  return [
+    '[Agent answer completed]',
+    '后台 Agent 已完成回答。下面是等同于 read_agent_answer 工具响应的序列化文本，请把它当作该后台 Agent 返回给当前对话的结果：',
+    jsonString({
+      ok: true,
+      answerBridgeId: envelope.answerBridgeId,
+      ...(envelope.answerSubmitted !== undefined ? { answerSubmitted: envelope.answerSubmitted } : {}),
+      ...(envelope.runId ? { runId: envelope.runId } : {}),
+      ...(envelope.agentId ? { agentId: envelope.agentId } : {}),
+      ...(envelope.conversationId ? { conversationId: envelope.conversationId } : {}),
+      ...(envelope.title ? { title: envelope.title } : {}),
+      content: envelope.content
+    })
+  ].join('\n\n');
 }
 
 function deliveryXml(root: 'task-notification' | 'agent-run-delivery', envelope: DeliveryEnvelope): string {

@@ -107,6 +107,8 @@ interface LlmAttemptTimingState {
   streamTimingChunkCount: number;
 }
 
+const THOUGHT_PROGRESS_INTERVAL_MS = 500;
+
 class LlmAttemptFailureError extends Error {
   public constructor(public readonly failure: LlmAttemptFailure) {
     super(failure.message);
@@ -335,8 +337,11 @@ async function runLlmAttempt(
       emitUnifiedChunk(request.id, chunk, emit);
     }
   } catch (error) {
-    if (isAbortError(error) || signal?.aborted) throw createAbortError(`Aborted LLM request: ${request.id}`);
-    if (activeThoughtBlock) finishThoughtBlock(request.id, activeThoughtBlock, Date.now(), emit);
+    const aborted = isAbortError(error) || signal?.aborted;
+    if (activeThoughtBlock) activeThoughtBlock = aborted
+      ? disposeThoughtBlock(activeThoughtBlock)
+      : finishThoughtBlock(request.id, activeThoughtBlock, Date.now(), emit);
+    if (aborted) throw createAbortError(`Aborted LLM request: ${request.id}`);
     throw error;
   }
 
@@ -942,6 +947,7 @@ function fromUnifiedPart(part: UnifiedPart): ContentPart | undefined {
       text: typeof record.text === 'string' ? record.text : '',
       ...(typeof record.thought === 'boolean' ? { thought: record.thought } : {}),
       ...(typeof record.thoughtSignature === 'string' ? { thoughtSignature: record.thoughtSignature } : {}),
+      ...(typeof record.thoughtElapsedMs === 'number' ? { thoughtElapsedMs: record.thoughtElapsedMs } : {}),
       ...(typeof record.thoughtDurationMs === 'number' ? { thoughtDurationMs: record.thoughtDurationMs } : {})
     };
   }
@@ -1239,7 +1245,8 @@ function toUnifiedPart(part: ContentPart): UnifiedPart {
     return {
       text: part.text,
       ...(part.thought !== undefined ? { thought: part.thought } : {}),
-      ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {})
+      ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
+      ...(part.thoughtElapsedMs !== undefined ? { thoughtElapsedMs: part.thoughtElapsedMs } : {})
     };
   }
   if (isFunctionCallPart(part)) {
@@ -1322,7 +1329,7 @@ function emitUnifiedResponse(requestId: string, response: UnifiedLLMResponse, em
   for (const part of thoughtParts) {
     const text = typeof (part as { text?: unknown }).text === 'string' ? (part as { text: string }).text : '';
     const signature = thoughtSignatureFromPart(part);
-    if (text) emit({ type: LlmEventType.ThoughtDelta, payload: { requestId, text, ...(signature ? { thoughtSignature: signature } : {}) } });
+    if (text) emit({ type: LlmEventType.ThoughtDelta, payload: { requestId, text, thoughtElapsedMs: 0, ...(signature ? { thoughtSignature: signature } : {}) } });
     emit({ type: LlmEventType.ThoughtDone, payload: { requestId, thoughtDurationMs: 0, ...(signature ? { thoughtSignature: signature } : {}) } });
   }
 
@@ -1337,8 +1344,6 @@ function emitUnifiedResponse(requestId: string, response: UnifiedLLMResponse, em
   });
   if (calls.length > 0) emit({ type: LlmEventType.ToolCall, payload: { requestId, calls } });
 }
-
-
 
 interface LlmDoneTiming {
   createdAt: number;
@@ -1425,6 +1430,7 @@ function visibleTextFromParts(parts: UnifiedPart[]): string {
 
 interface ActiveThoughtBlock {
   startedAt: number;
+  progressTimer?: ReturnType<typeof setInterval>;
   thoughtSignature?: string;
 }
 
@@ -1434,7 +1440,7 @@ function emitThoughtDeltas(requestId: string, current: ActiveThoughtBlock | unde
     if (!isUnifiedThoughtTextPart(part)) continue;
     const text = part.text ?? '';
     if (!text) continue;
-    block ??= { startedAt: at };
+    block ??= createActiveThoughtBlock(requestId, at, emit);
     const signature = thoughtSignatureFromPart(part);
     if (signature) block.thoughtSignature = signature;
     emit({
@@ -1442,6 +1448,7 @@ function emitThoughtDeltas(requestId: string, current: ActiveThoughtBlock | unde
       payload: {
         requestId,
         text,
+        thoughtElapsedMs: Math.max(0, at - block.startedAt),
         ...(signature ? { thoughtSignature: signature } : {})
       }
     });
@@ -1449,11 +1456,32 @@ function emitThoughtDeltas(requestId: string, current: ActiveThoughtBlock | unde
   return block;
 }
 
+function createActiveThoughtBlock(requestId: string, startedAt: number, emit: Emit): ActiveThoughtBlock {
+  const block: ActiveThoughtBlock = { startedAt };
+  block.progressTimer = setInterval(() => {
+    emit({
+      type: LlmEventType.ThoughtProgress,
+      payload: {
+        requestId,
+        thoughtElapsedMs: Math.max(0, Date.now() - block.startedAt),
+        ...(block.thoughtSignature ? { thoughtSignature: block.thoughtSignature } : {})
+      }
+    });
+  }, THOUGHT_PROGRESS_INTERVAL_MS);
+  return block;
+}
+
+function disposeThoughtBlock(block: ActiveThoughtBlock): undefined {
+  if (block.progressTimer) clearInterval(block.progressTimer);
+  return undefined;
+}
+
 function shouldCloseThoughtBlock(chunk: UnifiedLLMStreamChunk): boolean {
   return !!chunk.finishReason || hasStreamOutput(chunk);
 }
 
 function finishThoughtBlock(requestId: string, block: ActiveThoughtBlock, finishedAt: number, emit: Emit): undefined {
+  disposeThoughtBlock(block);
   emit({
     type: LlmEventType.ThoughtDone,
     payload: {

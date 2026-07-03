@@ -1,6 +1,6 @@
 import { defineQuery, defineSystem } from '../../../../ecs/types';
 import { AgentBlueprintsKey } from '../blueprints';
-import { AgentFromBlueprintBundle, hasAgentId, hasModeId, spawnAgentFromBlueprint, spawnModeFromDefinition } from '../bundles';
+import { AgentFromBlueprintBundle, hasAgentId, hasModeId, spawnAgentFromBlueprint, spawnAgentProfileFromBlueprint, spawnModeFromDefinition } from '../bundles';
 import { AgentSpawnRequest } from '../requests';
 
 const SpawnRequestsQuery = defineQuery({
@@ -15,7 +15,10 @@ const SpawnRequestsQuery = defineQuery({
 export const AgentSpawnSystem = defineSystem({
   name: 'AgentSpawnSystem',
   shouldRun({ world }) {
-    return world.query(AgentSpawnRequest).length > 0;
+    const registry = world.tryGetResource(AgentBlueprintsKey);
+    return world.query(AgentSpawnRequest).length > 0
+      || !!registry && Object.values(registry.modes).some((mode) => !hasModeId(world, mode.id))
+      || !!registry && Object.values(registry.agents).some((agent) => !hasAgentId(world, agent.id));
   },
   access: {
     queries: [SpawnRequestsQuery],
@@ -28,7 +31,8 @@ export const AgentSpawnSystem = defineSystem({
       if (!hasModeId(world, mode.id)) spawnModeFromDefinition(cmd, mode);
     }
 
-    for (const entity of world.query(AgentSpawnRequest)) {
+    const requests = world.query(AgentSpawnRequest);
+    for (const entity of requests) {
       const request = world.get(entity, AgentSpawnRequest);
       if (!request) {
         cmd.despawn(entity);
@@ -56,6 +60,12 @@ export const AgentSpawnSystem = defineSystem({
       }
 
       cmd.despawn(entity);
+    }
+
+    if (requests.length > 0) return;
+
+    for (const definition of Object.values(registry.agents)) {
+      if (!hasAgentId(world, definition.id)) spawnAgentProfileFromBlueprint(cmd, { definition, agentId: definition.id });
     }
   }
 });

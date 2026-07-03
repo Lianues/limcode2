@@ -154,13 +154,15 @@ export class BackendApplication {
       storage: this.env.storage,
       webview: this.env.webview,
       beforeDataRootChange: () => this.persistence.persistImmediately({ force: true, throwOnError: true }),
+      beforeUpdate: (payload) => this.beforeGlobalSettingsUpdate(payload),
       afterUpdate: (payload) => this.afterGlobalSettingsUpdate(payload)
     });
     this.conversationSettingsBridge = new ConversationSettingsBridge({
       world: this.world,
       storage: this.env.storage,
       webview: this.env.webview,
-      requestSnapshot: (conversationId) => this.requestSnapshot(conversationId)
+      requestSnapshot: (conversationId) => this.requestSnapshot(conversationId),
+      afterUpdate: (stored) => this.afterConversationSettingsUpdate(stored)
     });
     this.webviewRouter = new WebviewMessageRouter({
       world: this.world,
@@ -566,6 +568,23 @@ export class BackendApplication {
     this.world.enqueue({ type: ClientSyncEventType.Resync, payload: conversationId ? { conversationId } : {} });
   }
 
+  private async beforeGlobalSettingsUpdate(payload: { section: string; settings?: unknown }): Promise<void> {
+    if (payload.section !== 'llm') return;
+    await this.freezeLoadedConversationsToCurrentGlobalLlmDefault();
+  }
+
+  private async afterConversationSettingsUpdate(stored: { conversationId: string; section: string; settings: unknown }): Promise<void> {
+    if (stored.section !== 'llm') return;
+    const settings = stored.settings as import('../../shared/protocol').ConversationLlmSettingsRecord | undefined;
+    const activeProviderConfigId = settings?.activeProviderConfigId?.trim();
+    if (!activeProviderConfigId) return;
+
+    await this.globalSettingsBridge.update({
+      section: 'llm',
+      settings: { activeProviderConfigId }
+    });
+  }
+
   private async afterGlobalSettingsUpdate(payload: { section: string; refreshMcpTools?: boolean }): Promise<void> {
     if (payload.section === 'mcpServers' || payload.section === 'common') {
       await this.refreshMcpRuntime(payload.refreshMcpTools === true);
@@ -593,6 +612,33 @@ export class BackendApplication {
     this.world.setResource(ToolDefinitionsKey, recordsForTools(mergedTools));
     this.world.setResource(McpToolSourcesKey, this.env.mcp.sourceRecords());
     this.requestSnapshot();
+  }
+
+  private async freezeLoadedConversationsToCurrentGlobalLlmDefault(): Promise<void> {
+    let currentProviderConfigId = '';
+    try {
+      currentProviderConfigId = (await this.env.storage.loadActiveLlmProviderConfig()).id;
+    } catch (error) {
+      console.warn('[LimCode] Failed to resolve current global LLM default before update.', error);
+      return;
+    }
+    if (!currentProviderConfigId) return;
+
+    const conversations = this.world
+      .query(Conversation)
+      .map((entity) => this.world.get(entity, Conversation)?.id)
+      .filter((id): id is string => !!id);
+
+    for (const conversationId of conversations) {
+      try {
+        const stored = await this.env.storage.loadConversationSettings(conversationId, 'llm');
+        const settings = stored?.settings as import('../../shared/protocol').ConversationLlmSettingsRecord | undefined;
+        if (settings?.activeProviderConfigId) continue;
+        await this.env.storage.saveConversationSettings('llm', { conversationId, activeProviderConfigId: currentProviderConfigId });
+      } catch (error) {
+        console.warn(`[LimCode] Failed to freeze LLM default for conversation "${conversationId}".`, error);
+      }
+    }
   }
 
   private async syncSkillCatalogResource(): Promise<void> {

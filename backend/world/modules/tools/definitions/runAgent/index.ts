@@ -17,8 +17,8 @@ export const runAgentTool: ToolDefinition = {
     description: `启动一个 AgentRun，让已有 Agent 继续执行任务，或创建一个新 Agent 执行任务。
 
 使用方式：
-- 传 agent.id：必须是已存在的 Agent；任务会追加到该 Agent 已关联的对话中。找不到该 id 会直接报错。
-- 不传 agent.id：按 agent.type 创建一个新的 Agent 和新的对话；agent.type 不传时默认 general-purpose。
+- agent.type 表示要使用哪种 Agent 类型/配置（例如 main、worker、explore）；不传时默认 general-purpose。
+- agent.id 不是类型配置 id，而是 run_agent 返回的临时 Agent 镜像 id；传入后会向该临时镜像已关联的对话追加任务。找不到会报错。
 - prompt 内应写清楚任务、背景、角色和补充信息，不再提供额外 context / conversation / mode / delivery 参数。
 - timeout 为前台等待时间（毫秒）：0 表示直接转后台；超过 timeout 后 AgentRun 会继续在后台运行，工具立即返回 agentId/runId/conversationId/answerBridgeId。`,
     parameters: {
@@ -33,11 +33,11 @@ export const runAgentTool: ToolDefinition = {
           properties: {
             id: {
               type: 'string',
-              description: '已有 Agent id。传入后会追加到该 Agent 的对话；找不到时直接报错。需要新开对话时不要传 id。'
+              description: 'run_agent 返回的临时 Agent 镜像 id。传入后会向该临时镜像已关联的对话追加任务；找不到会报错。新开同类型独立镜像时不要传 id，只传 agent.type。'
             },
             type: {
               type: 'string',
-              description: '未传 agent.id 时使用的 Agent 蓝图 kind。可用类型会由后端运行时按当前蓝图列表补充到工具说明中；默认 general-purpose。'
+              description: '要使用的 Agent 类型/配置 id（例如 main、worker、explore）。未传 agent.id 时后端会按该类型创建只属于本次子对话的临时镜像；可用类型会由后端运行时补充到工具说明中；默认 general-purpose。'
             }
           }
         },

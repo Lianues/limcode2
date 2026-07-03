@@ -12,6 +12,7 @@ const props = withDefaults(
     streaming?: boolean;
     streamingPhase?: 'waiting' | 'thinking' | 'writing';
     durationMs?: number;
+    elapsedMs?: number;
   }>(),
   { streaming: false, streamingPhase: 'thinking' }
 );
@@ -24,7 +25,7 @@ const { displayedText } = useSmoothStreamingText(
 );
 const preview = computed(() => lastNonEmptyLine(displayedText.value) || '正在思考...');
 const tailText = computed(() => {
-  if (props.streaming) return globalSettings.appearance.streamingTextThinking;
+  if (props.streaming) return `思考了 ${formatThoughtDuration(props.elapsedMs ?? 0)}`;
   return props.durationMs !== undefined ? `已思考 ${formatThoughtDuration(props.durationMs)}` : '思考完成';
 });
 

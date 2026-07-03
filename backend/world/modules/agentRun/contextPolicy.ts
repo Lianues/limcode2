@@ -22,6 +22,8 @@ import {
   type RunContextPolicyData
 } from './components';
 import { runRuntimeContextSnapshots } from '../runtimeContext/queries';
+import { activeWorkEnvironmentForRun } from '../workEnvironment/queries';
+import { stripInitialWorkEnvironmentSection } from '../../../../shared/runtimeContextText';
 
 const DEFAULT_LAST_N = 20;
 const MAX_SYNTHETIC_CONTEXT_CHARS = 12_000;
@@ -62,7 +64,10 @@ function buildRuntimeContextSnapshotContents(world: WorldReader, input: BuildRun
     .map((snapshot) => snapshot.data.text.trim())
     .filter(Boolean)
     .join('\n\n');
-  return text ? [syntheticTextContent(text)] : [];
+  const visibleText = activeWorkEnvironmentForRun(world, input.run)
+    ? text
+    : stripInitialWorkEnvironmentSection(text);
+  return visibleText ? [syntheticTextContent(visibleText)] : [];
 }
 
 export function selectRunContextMessageEntities(world: WorldReader, input: BuildRunContextInput): Entity[] {

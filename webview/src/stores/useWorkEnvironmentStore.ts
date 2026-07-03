@@ -145,9 +145,13 @@ export const useWorkEnvironmentStore = defineStore('workEnvironment', {
       const fallback = fallbackPolicy();
       return fallback ? { policy: fallback, inheritedFrom: 'fallback' } : {};
     },
+    workEnvironmentEnabledForConversation(conversationId: string): boolean {
+      return this.effectivePolicyForConversation(conversationId).policy?.enabled === true;
+    },
     allowedEnvironmentsForConversation(conversationId: string): WorkEnvironmentRecord[] {
       const policy = this.effectivePolicyForConversation(conversationId).policy;
-      const allowedIds = policy?.allowedWorkEnvironmentIds;
+      if (policy?.enabled !== true) return [];
+      const allowedIds = policy.allowedWorkEnvironmentIds;
       if (!allowedIds || allowedIds.length === 0) return this.availableEnvironments;
       const allowed = new Set(allowedIds);
       return this.availableEnvironments.filter((environment) => allowed.has(environment.id));

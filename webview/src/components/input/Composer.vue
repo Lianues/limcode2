@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { IconFolder, IconListDetails, IconPaperclip, IconPencilExclamation, IconPlayerStop, IconRobot, IconSend2, IconTrash, IconWorld } from '@tabler/icons-vue';
 import { workEnvironmentDisplayPath, workEnvironmentSortKey as buildWorkEnvironmentSortKey } from '@shared/workEnvironmentCatalog';
-import type { InlineDataPart, MessageContent, WorkEnvironmentRecord } from '@shared/protocol';
+import type { AgentRecord, InlineDataPart, MessageContent, WorkEnvironmentRecord } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
@@ -17,6 +17,7 @@ import RichContentEditor from '@webview/components/content/RichContentEditor.vue
 import QueuePanel, { type QueueItem } from '@webview/components/input/QueuePanel.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
 import ContextTokenUsageBar from '@webview/components/conversation/ContextTokenUsageBar.vue';
+import AgentRunPanel from '@webview/components/input/AgentRunPanel.vue';
 import BackgroundCommandPanel from '@webview/components/input/BackgroundCommandPanel.vue';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 
@@ -61,7 +62,10 @@ const draft = computed({
   set: (next: string) => ui.setComposerDraft(next)
 });
 const expandTitle = computed(() => (editorExpanded.value ? '恢复输入框高度' : '扩大输入框'));
-const sendTitle = computed(() => (ui.isEditing ? '提交编辑' : '发送'));
+const sendTitle = computed(() => {
+  if (ui.isEditing) return '提交编辑';
+  return runSummary.value.isRunning ? '加入消息队列，下次 LLM 调用时合并发送' : '发送';
+});
 const compacting = computed(() => conversationTimeline.currentCompressionBlocks.some((block) => block.status === 'pending' || block.status === 'running'));
 const compactTitle = computed(() => compacting.value ? '取消上下文压缩' : '压缩当前上下文');
 const runSummary = computed(() => clientState.currentRunSummary);
@@ -96,16 +100,17 @@ const modeOptions = computed<SettingsDropdownOption[]>(() => [
     icon: IconListDetails
   }))
 ]);
-const agentOptions = computed<SettingsDropdownOption[]>(() =>
-  agentStore.agents.map((agent) => ({
-    value: agent.id,
-    label: agent.name,
-    description: agent.description || (agent.source === 'builtin' ? `内置 Agent · ${agent.kind}` : `用户 Agent · ${agent.kind}`),
-    icon: IconRobot
-  }))
-);
+const activeConversationAgent = computed(() => agentStore.activeAgentForConversation(clientState.currentConversationId));
+const agentOptions = computed<SettingsDropdownOption[]>(() => {
+  const options = agentStore.configurableAgents.map((agent) => agentOption(agent));
+  const active = activeConversationAgent.value;
+  if (active?.runtimeRole === 'mirror' && !options.some((option) => option.value === active.id)) {
+    options.unshift(agentOption(active, true));
+  }
+  return options;
+});
 const activeAgentId = computed({
-  get: () => agentStore.activeAgentForConversation(clientState.currentConversationId)?.id ?? agentOptions.value[0]?.value ?? '',
+  get: () => activeConversationAgent.value?.id ?? agentOptions.value[0]?.value ?? '',
   set: (agentId: string) => selectAgent(agentId)
 });
 const activeModeId = computed({
@@ -405,6 +410,22 @@ function workEnvironmentSortKey(environment: WorkEnvironmentRecord): string {
   return buildWorkEnvironmentSortKey(environment);
 }
 
+function agentOption(agent: AgentRecord, disabled = false): SettingsDropdownOption {
+  return {
+    value: agent.id,
+    label: agent.name,
+    description: agent.description || agentSourceDescription(agent),
+    icon: IconRobot,
+    disabled
+  };
+}
+
+function agentSourceDescription(agent: AgentRecord): string {
+  if (agent.runtimeRole === 'mirror') return `临时镜像 · ${agent.typeAgentId ?? agent.kind}`;
+  if (agent.source === 'builtin') return `内置 Agent · ${agent.kind}`;
+  return `用户 Agent · ${agent.kind}`;
+}
+
 function middleEllipsis(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
   const keep = Math.max(4, Math.floor((maxLength - 3) / 2));
@@ -454,6 +475,7 @@ function middleEllipsis(value: string, maxLength: number): string {
         </div>
       </div>
       <div class="composer-top-actions">
+        <AgentRunPanel />
         <BackgroundCommandPanel />
       </div>
     </div>
@@ -693,6 +715,7 @@ function middleEllipsis(value: string, maxLength: number): string {
   display: flex;
   align-items: flex-start;
   justify-content: flex-end;
+  gap: var(--space-1);
   margin-left: auto;
 }
 

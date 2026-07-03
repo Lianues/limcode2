@@ -15,8 +15,8 @@ const QueuedRunsQuery = defineQuery({
   none: [AgentRunNeedsModel],
   read: [AgentRun, AgentRunTargetLink, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunSourceLink, AgentRunNeedsModel, LlmRequest, Conversation, Message, PartOf, Checkpoint, CheckpointBarrier, CompressionBlock],
   add: [AgentRunNeedsModel],
-  write: [AgentRunSourceLink],
-  remove: [AgentRunQueuedInput],
+  write: [AgentRun, AgentRunSourceLink],
+  remove: [AgentRunNeedsModel, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunQueueHold],
   mutationMode: 'update',
   role: 'work'
 });
@@ -41,25 +41,49 @@ export const AgentRunQueueSystem = defineSystem({
       if (!target || activatedConversations.has(target.conversation)) continue;
       if (hasEarlierActiveRunInConversation(world, run, target.conversation)) continue;
       if (hasActiveBlockingCompression(world, target.conversation)) continue;
-      materializeQueuedInputForRun(world, cmd, run);
+      materializeQueuedBatchForRun(world, cmd, run, target.conversation);
+      markRunPreparing(world, cmd, run);
       markRunNeedsModel(cmd, run);
       activatedConversations.add(target.conversation);
     }
   }
 });
 
-function materializeQueuedInputForRun(world: WorldReader, cmd: CommandSink, run: Entity): void {
-  const queuedInputEntity = world.query(AgentRunQueuedInput).find((entity) => world.get(entity, AgentRunQueuedInput)?.run === run);
-  if (queuedInputEntity === undefined) return;
+function materializeQueuedBatchForRun(world: WorldReader, cmd: CommandSink, primaryRun: Entity, conversation: Entity): void {
+  const batch = queuedRunsForConversation(world, conversation);
+  if (batch[0] !== primaryRun) return;
+
+  const materializedMessages: Entity[] = [];
+  for (const run of batch) {
+    const message = materializeQueuedInputForRun(world, cmd, primaryRun, run);
+    if (message !== undefined) materializedMessages.push(message);
+  }
+
+  const firstMessage = materializedMessages[0];
+  if (firstMessage !== undefined) updateRunSourceMessage(world, cmd, primaryRun, conversation, firstMessage);
+
+  for (const run of batch) {
+    if (run === primaryRun) continue;
+    markQueuedRunMerged(world, cmd, run, primaryRun);
+  }
+}
+
+function materializeQueuedInputForRun(world: WorldReader, cmd: CommandSink, targetRun: Entity, queuedRun: Entity): Entity | undefined {
+  const queuedInputEntity = queuedInputEntityForRun(world, queuedRun);
+  if (queuedInputEntity === undefined) return undefined;
   const queuedInput = world.get(queuedInputEntity, AgentRunQueuedInput);
-  if (!queuedInput) return;
+  if (!queuedInput) return undefined;
   const conversation = world.get(queuedInput.conversation, Conversation);
-  if (!conversation) return;
+  if (!conversation) return undefined;
 
   const message = materializeUserInputMessage(world, cmd, queuedInput.conversation, conversation.id, queuedInput.content);
-  spawnMessageRunLink(cmd, { message, run, role: 'input' });
-  updateRunSourceMessage(world, cmd, run, queuedInput.conversation, message);
+  spawnMessageRunLink(cmd, { message, run: targetRun, role: 'input' });
   cmd.remove(queuedInputEntity, AgentRunQueuedInput);
+  return message;
+}
+
+function queuedInputEntityForRun(world: WorldReader, run: Entity): Entity | undefined {
+  return world.query(AgentRunQueuedInput).find((entity) => world.get(entity, AgentRunQueuedInput)?.run === run);
 }
 
 function updateRunSourceMessage(world: WorldReader, cmd: CommandSink, run: Entity, conversation: Entity, message: Entity): void {
@@ -68,6 +92,62 @@ function updateRunSourceMessage(world: WorldReader, cmd: CommandSink, run: Entit
   const source = world.get(sourceEntity, AgentRunSourceLink);
   if (!source) return;
   cmd.add(sourceEntity, AgentRunSourceLink, { ...source, sourceConversation: conversation, sourceMessage: message, updatedAt: Date.now() });
+}
+
+function markRunPreparing(world: WorldReader, cmd: CommandSink, run: Entity): void {
+  const data = world.get(run, AgentRun);
+  if (!data || data.status !== 'queued') return;
+  cmd.add(run, AgentRun, { ...data, status: 'preparing', updatedAt: Date.now() });
+}
+
+function markQueuedRunMerged(world: WorldReader, cmd: CommandSink, run: Entity, primaryRun: Entity): void {
+  const data = world.get(run, AgentRun);
+  if (!data || data.status !== 'queued') return;
+  const primary = world.get(primaryRun, AgentRun);
+  const now = Date.now();
+  cmd.add(run, AgentRun, {
+    ...data,
+    status: 'cancelled',
+    updatedAt: now,
+    completedAt: now,
+    endReason: 'cancelled_by_policy',
+    errorType: 'cancelled',
+    error: `排队消息已合并到同一次 LLM 调用：${primary?.id ?? primaryRun}`
+  });
+  removeQueueArtifactsForRun(world, cmd, run);
+}
+
+function removeQueueArtifactsForRun(world: WorldReader, cmd: CommandSink, run: Entity): void {
+  cmd.remove(run, AgentRunNeedsModel);
+  const input = queuedInputEntityForRun(world, run);
+  if (input !== undefined) cmd.remove(input, AgentRunQueuedInput);
+  const order = queueOrderEntityForRun(world, run);
+  if (order !== undefined) cmd.remove(order, AgentRunQueueOrder);
+  const hold = queueHoldEntityForRun(world, run);
+  if (hold !== undefined) cmd.remove(hold, AgentRunQueueHold);
+}
+
+function queueOrderEntityForRun(world: WorldReader, run: Entity): Entity | undefined {
+  return world.query(AgentRunQueueOrder).find((entity) => world.get(entity, AgentRunQueueOrder)?.run === run);
+}
+
+function queueHoldEntityForRun(world: WorldReader, run: Entity): Entity | undefined {
+  return world.query(AgentRunQueueHold).find((entity) => world.get(entity, AgentRunQueueHold)?.run === run);
+}
+
+function queuedRunsForConversation(world: WorldReader, conversation: Entity): Entity[] {
+  return world
+    .query(AgentRun)
+    .filter((run) => {
+      const data = world.get(run, AgentRun);
+      const target = targetForRun(world, run);
+      return data?.status === 'queued'
+        && target?.conversation === conversation
+        && !hasQueueHold(world, run)
+        && !world.has(run, AgentRunNeedsModel)
+        && !hasActiveRequest(world, run);
+    })
+    .sort((a, b) => compareRunsByQueueOrder(world, a, b));
 }
 
 function hasEarlierActiveRunInConversation(world: WorldReader, run: Entity, conversation: Entity): boolean {

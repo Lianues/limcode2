@@ -287,10 +287,15 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
   }
 
   function applyLlmTransientNotice(payload: LlmTransientNoticePayload): void {
+    const status = statusFromNoticeKind(payload.kind);
+    if (status === 'resolved') {
+      llmErrorBlocks.value = llmErrorBlocks.value.filter((block) => block.requestId !== payload.requestId);
+      return;
+    }
+
     const index = llmErrorBlocks.value.findIndex((block) => block.requestId === payload.requestId);
     const previous = index >= 0 ? llmErrorBlocks.value[index] : undefined;
     const now = payload.createdAt || Date.now();
-    const status = statusFromNoticeKind(payload.kind);
     const next: LlmErrorBlockRecord = {
       id: previous?.id ?? payload.id,
       conversationId: payload.conversationId,
@@ -325,7 +330,10 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
   }
 
   function pruneErrorBlocks(currentMessageIds: ReadonlySet<string>): void {
-    llmErrorBlocks.value = llmErrorBlocks.value.filter((block) => currentMessageIds.has(block.messageId));
+    const next = llmErrorBlocks.value.filter((block) => currentMessageIds.has(block.messageId));
+    if (next.length === llmErrorBlocks.value.length) return;
+
+    llmErrorBlocks.value = next;
   }
 
   function refreshRowPhases(): void {

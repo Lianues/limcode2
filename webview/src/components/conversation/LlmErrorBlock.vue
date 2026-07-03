@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { IconAlertTriangle, IconCheck, IconCopy, IconEye, IconEyeOff, IconX } from '@tabler/icons-vue';
+import { IconAlertTriangle, IconCheck, IconCopy, IconEye, IconEyeOff } from '@tabler/icons-vue';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import type { LlmErrorBlockRecord } from '@webview/stores/useConversationUiStore';
 
@@ -111,7 +111,9 @@ function writeClipboardFallback(text: string): boolean {
         <span class="llm-error-status">{{ statusLabel }}</span>
       </div>
       <button type="button" class="llm-error-close" aria-label="关闭错误提示" @click="close">
-        <IconX stroke="2" aria-hidden="true" />
+        <svg class="llm-error-close-icon" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+          <path d="M18 6 6 18M6 6l12 12" />
+        </svg>
       </button>
     </header>
 
@@ -227,13 +229,17 @@ function writeClipboardFallback(text: string): boolean {
   right: var(--space-2);
   width: 26px;
   height: 26px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  color: var(--vscode-descriptionForeground);
+  color: var(--vscode-foreground);
   background: transparent;
+  opacity: 0.72;
   cursor: pointer;
 }
 
@@ -241,12 +247,27 @@ function writeClipboardFallback(text: string): boolean {
 .llm-error-close:focus-visible {
   color: var(--vscode-foreground);
   background: var(--vscode-list-hoverBackground);
+  opacity: 1;
   outline: none;
 }
 
-.llm-error-close svg {
+.llm-error-close-icon {
+  display: block;
   width: 16px;
   height: 16px;
+  color: currentColor;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 1;
+  pointer-events: none;
+}
+
+.llm-error-close-icon path {
+  stroke: currentColor;
+  vector-effect: non-scaling-stroke;
 }
 
 .llm-error-message {

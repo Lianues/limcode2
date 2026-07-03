@@ -366,23 +366,33 @@ export class WebviewMessageRouter {
         break;
       case BridgeMessageType.CompressionDelete:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: CompressionEventType.Delete, payload: message.payload });
+        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
+          this.deps.world.enqueue({ type: CompressionEventType.Delete, payload: message.payload });
+        });
         break;
       case BridgeMessageType.CompressionUpdate:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: CompressionEventType.Update, payload: message.payload });
+        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
+          this.deps.world.enqueue({ type: CompressionEventType.Update, payload: message.payload });
+        });
         break;
       case BridgeMessageType.CompressionRegenerate:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: CompressionEventType.Regenerate, payload: message.payload });
+        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
+          this.deps.world.enqueue({ type: CompressionEventType.Regenerate, payload: message.payload });
+        });
         break;
       case BridgeMessageType.CompressionDisable:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: CompressionEventType.Disable, payload: message.payload });
+        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
+          this.deps.world.enqueue({ type: CompressionEventType.Disable, payload: message.payload });
+        });
         break;
       case BridgeMessageType.CompressionEnable:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: CompressionEventType.Enable, payload: message.payload });
+        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
+          this.deps.world.enqueue({ type: CompressionEventType.Enable, payload: message.payload });
+        });
         break;
       case BridgeMessageType.GlobalSettingsGet:
         if (!message.payload) return;

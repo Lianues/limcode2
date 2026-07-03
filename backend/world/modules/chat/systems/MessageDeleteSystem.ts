@@ -11,7 +11,14 @@ import {
 } from '../../agentRun/components';
 import { cleanupRunLlmRequests } from '../../agentRun/llmRequestCleanup';
 import { Checkpoint, CheckpointTimelineAnchor } from '../../checkpoint/components';
-import { CompressionBlock, CompressionBlockSourceLink } from '../../compression/components';
+import {
+  CompressionBlock,
+  CompressionBlockLlmInvocationLink,
+  CompressionBlockSourceLink,
+  CompressionContextVariant,
+  RunCompressionBlockLink
+} from '../../compression/components';
+import { LlmInvocation } from '../../llm/components';
 import { ToolCall, ToolCallEvent, ToolResultConsumed, ToolState } from '../../tools/components';
 import { ChatEventType } from '../events';
 import { conversationMessages } from '../queries';
@@ -49,7 +56,11 @@ const DELETE_READ_COMPONENTS = [
   Checkpoint,
   CheckpointTimelineAnchor,
   CompressionBlock,
-  CompressionBlockSourceLink
+  CompressionBlockSourceLink,
+  CompressionContextVariant,
+  RunCompressionBlockLink,
+  CompressionBlockLlmInvocationLink,
+  LlmInvocation
 ] as const;
 
 /** 删除指定消息及其后的所有消息，并清理消息关联的修订、工具调用和运行链接。 */
@@ -91,7 +102,7 @@ function deleteMessages(world: WorldReader, cmd: CommandSink, deletedMessages: S
   const affectedCompressionBlocks = compressionBlocksAffectedByDeletion(world, deletedMessages);
 
   for (const run of affectedRuns) markRunStale(world, cmd, run);
-  for (const block of affectedCompressionBlocks) markCompressionBlockStale(world, cmd, block);
+  deleteCompressionBlocksCascade(world, cmd, affectedCompressionBlocks);
 
   const entitiesToDespawn = new Set<Entity>();
   for (const entity of deletedMessages) entitiesToDespawn.add(entity);
@@ -137,18 +148,56 @@ function deleteMessages(world: WorldReader, cmd: CommandSink, deletedMessages: S
 
 function compressionBlocksAffectedByDeletion(world: WorldReader, deletedMessages: ReadonlySet<Entity>): Set<Entity> {
   const directBlocks = new Set<Entity>();
+  const deletedMessageIds = new Set(
+    [...deletedMessages]
+      .map((entity) => world.get(entity, Message)?.id)
+      .filter((id): id is string => !!id)
+  );
   for (const entity of world.query(CompressionBlockSourceLink)) {
     const link = world.get(entity, CompressionBlockSourceLink);
-    if (!link || link.sourceKind !== 'message' || link.source === undefined || !deletedMessages.has(link.source)) continue;
+    if (!link || link.sourceKind !== 'message') continue;
+    const sourceDeleted = (link.source !== undefined && deletedMessages.has(link.source)) || deletedMessageIds.has(link.sourceId);
+    if (!sourceDeleted) continue;
     directBlocks.add(link.block);
   }
   return collectDependentCompressionBlocks(world, directBlocks);
 }
 
-function markCompressionBlockStale(world: WorldReader, cmd: CommandSink, block: Entity): void {
-  const data = world.get(block, CompressionBlock);
-  if (!data || data.status === 'stale') return;
-  cmd.add(block, CompressionBlock, { ...data, status: 'stale', staleReason: '源消息已删除。', updatedAt: Date.now() });
+function deleteCompressionBlocksCascade(world: WorldReader, cmd: CommandSink, initial: ReadonlySet<Entity>): void {
+  if (initial.size === 0) return;
+  const blocks = collectDependentCompressionBlocks(world, initial);
+  const entitiesToDespawn = new Set<Entity>(blocks);
+
+  for (const block of blocks) {
+    const data = world.get(block, CompressionBlock);
+    if (data?.status === 'pending' || data?.status === 'running') {
+      cmd.effect({ kind: 'llm.abort', requestId: `compact-${data.id}` });
+    }
+  }
+
+  for (const entity of world.query(CompressionBlockSourceLink)) {
+    const link = world.get(entity, CompressionBlockSourceLink);
+    if (link && blocks.has(link.block)) entitiesToDespawn.add(entity);
+  }
+
+  for (const entity of world.query(CompressionContextVariant)) {
+    const variant = world.get(entity, CompressionContextVariant);
+    if (variant && blocks.has(variant.block)) entitiesToDespawn.add(entity);
+  }
+
+  for (const entity of world.query(RunCompressionBlockLink)) {
+    const link = world.get(entity, RunCompressionBlockLink);
+    if (link && blocks.has(link.block)) entitiesToDespawn.add(entity);
+  }
+
+  for (const entity of world.query(CompressionBlockLlmInvocationLink)) {
+    const link = world.get(entity, CompressionBlockLlmInvocationLink);
+    if (!link || !blocks.has(link.block)) continue;
+    entitiesToDespawn.add(link.invocation);
+    entitiesToDespawn.add(entity);
+  }
+
+  for (const entity of entitiesToDespawn) cmd.despawn(entity);
 }
 
 function collectDependentCompressionBlocks(world: WorldReader, initial: ReadonlySet<Entity>): Set<Entity> {
@@ -156,9 +205,11 @@ function collectDependentCompressionBlocks(world: WorldReader, initial: Readonly
   const queue = [...initial];
   while (queue.length > 0) {
     const current = queue.shift()!;
+    const currentId = world.get(current, CompressionBlock)?.id;
     for (const entity of world.query(CompressionBlockSourceLink)) {
       const link = world.get(entity, CompressionBlockSourceLink);
-      if (!link || link.sourceKind !== 'compressionBlock' || link.source !== current || all.has(link.block)) continue;
+      if (!link || link.sourceKind !== 'compressionBlock' || all.has(link.block)) continue;
+      if (link.source !== current && link.sourceId !== currentId) continue;
       all.add(link.block);
       queue.push(link.block);
     }

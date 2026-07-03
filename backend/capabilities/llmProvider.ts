@@ -96,6 +96,11 @@ interface LlmAttemptFailure {
   streamOutputDurationMs?: number;
 }
 
+interface LlmAttemptRetryRecoveryNotice {
+  retryAttempt: number;
+  retryMaxAttempts: number;
+}
+
 interface LlmAttemptTimingState {
   firstStreamChunkAt?: number;
   firstStreamChunkMark?: number;
@@ -211,10 +216,7 @@ export async function startLlmProvider(
 
     while (true) {
       try {
-        await runLlmAttempt(request, emit, settings, provider, options, signal);
-        if (sawRetry) {
-          emitLlmRetryRecovered(emit, request.id, '自动重试成功。', retryCount, maxRetries);
-        }
+        await runLlmAttempt(request, emit, settings, provider, options, signal, sawRetry ? { retryAttempt: retryCount, retryMaxAttempts: maxRetries } : undefined);
         return;
       } catch (error) {
         if (isAbortError(error) || signal?.aborted) return;
@@ -274,7 +276,8 @@ async function runLlmAttempt(
     chatStream<T>(request: unknown, options: { inputFormat: 'unified'; outputFormat: 'unified'; signal?: AbortSignal }): AsyncIterable<T>;
   },
   options: LlmProviderOptions,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  retryRecoveryNotice?: LlmAttemptRetryRecoveryNotice
 ): Promise<void> {
   const preparedRequest = await prepareLlmStartRequestMultimodal(request, options);
   if (settings.stream === false) {
@@ -287,6 +290,7 @@ async function runLlmAttempt(
     if (hasUnifiedError(response)) {
       throw new LlmAttemptFailureError(failureFromProviderError(response.error, { rawResponse: response.rawResponse }));
     }
+    emitRetryRecovered(request.id, emit, retryRecoveryNotice);
     emitUnifiedResponse(request.id, response, emit);
     emit({
       type: LlmEventType.Done,
@@ -298,6 +302,7 @@ async function runLlmAttempt(
   let latestUsageMetadata: LlmUsageMetadataRecord | undefined;
   const timing: LlmAttemptTimingState = { streamTimingChunkCount: 0 };
   let activeThoughtBlock: ActiveThoughtBlock | undefined;
+  let retryRecoveryPending = retryRecoveryNotice !== undefined;
   try {
     for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(toUnifiedRequest(preparedRequest, settings.generationConfig), {
       inputFormat: 'unified',
@@ -314,6 +319,10 @@ async function runLlmAttempt(
       }
       const chunkAt = Date.now();
       const chunkMark = nowMonotonicMs();
+      if (retryRecoveryPending && hasStreamTimingChunk(chunk)) {
+        emitRetryRecovered(request.id, emit, retryRecoveryNotice);
+        retryRecoveryPending = false;
+      }
       activeThoughtBlock = emitThoughtDeltas(request.id, activeThoughtBlock, chunk, chunkAt, emit);
       if (activeThoughtBlock && shouldCloseThoughtBlock(chunk)) activeThoughtBlock = finishThoughtBlock(request.id, activeThoughtBlock, chunkAt, emit);
       const chunkUsageMetadata = usageMetadataFromChunk(chunk);
@@ -335,10 +344,16 @@ async function runLlmAttempt(
   const finishedAt = Date.now();
   const finishedMark = nowMonotonicMs();
   if (activeThoughtBlock) finishThoughtBlock(request.id, activeThoughtBlock, finishedAt, emit);
+  if (retryRecoveryPending) emitRetryRecovered(request.id, emit, retryRecoveryNotice);
   emit({
     type: LlmEventType.Done,
     payload: { requestId: request.id, ...createDoneTiming(timing.firstStreamChunkAt, finishedAt, timing.firstStreamChunkMark, finishedMark, timing.streamTimingChunkCount), ...(latestUsageMetadata ? { usageMetadata: latestUsageMetadata } : {}) }
   });
+}
+
+function emitRetryRecovered(requestId: string, emit: Emit, notice: LlmAttemptRetryRecoveryNotice | undefined): void {
+  if (!notice) return;
+  emitLlmRetryRecovered(emit, requestId, '自动重试成功。', notice.retryAttempt, notice.retryMaxAttempts);
 }
 
 function hasUnifiedError(value: unknown): value is { error: unknown; rawResponse?: unknown; rawChunk?: unknown } {

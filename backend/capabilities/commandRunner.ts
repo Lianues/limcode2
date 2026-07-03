@@ -208,7 +208,7 @@ function detectCommandProfile(): CommandProfile {
       commandPrefix: PS_UTF8_PREFIX,
       description: `在项目目录下通过 PowerShell 执行非交互命令(mode=execute)。返回 stdout、stderr 和退出码。
 超时行为：命令在 timeout(必填,毫秒)内未结束时不会被终止，而是转入后台继续运行并返回 processId(timeout=0 表示直接转后台)；随后可用 mode=output 查看当前全部输出、mode=kill 终止。后台进程结束后日志会一直保留，直到你用 mode=output 读取一次(读取即清理)。
-安全拦截：① 代码内置危险命令黑名单(如格式化磁盘/关机/rm -rf 根目录，不可绕过)；② 用户在工具策略里配置的命令黑名单。
+安全拦截：内置仅拦截格式化磁盘/文件系统和直接删除根目录；其他命令可通过工具策略中的命令黑名单控制。
 命令规范：多条命令用分号 ; 分隔；路径含空格时用双引号；长输出建议加 | Select-Object -First N。
 编码规范：工具默认把 PowerShell 输入/输出设为 UTF-8；如读取非 UTF-8 文件，请在命令中显式指定 -Encoding。`
     };
@@ -220,7 +220,7 @@ function detectCommandProfile(): CommandProfile {
     executable: process.env.SHELL || '/bin/bash',
     description: `在项目目录下通过 Bash/Shell 执行非交互命令(mode=execute)。返回 stdout、stderr 和退出码。
 超时行为：命令在 timeout(必填,毫秒)内未结束时不会被终止，而是转入后台继续运行并返回 processId(timeout=0 表示直接转后台)；随后可用 mode=output 查看当前全部输出、mode=kill 终止。后台进程结束后日志会一直保留，直到你用 mode=output 读取一次(读取即清理)。
-安全拦截：① 代码内置危险命令黑名单(如 rm -rf /、mkfs、shutdown 等，不可绕过)；② 用户在工具策略里配置的命令黑名单。
+安全拦截：内置仅拦截格式化磁盘/文件系统和直接删除根目录；其他命令可通过工具策略中的命令黑名单控制。
 命令规范：多条命令建议用 && 连接；路径含空格时用双引号；长输出建议加 | head -n N。`
   };
 }
@@ -250,7 +250,7 @@ async function runCommand(profile: CommandProfile, registry: Map<string, Backgro
   const safetyKind: ShellKind = remoteEnvironment ? 'bash' : profile.kind;
   const safety = classifyCommand(safetyKind, command);
   if (safety === 'deny') {
-    return failedResult(command, `安全拒绝: ${getDenyReason(safetyKind, command) ?? '命令被安全策略拒绝'}\n该操作在黑名单中，无法绕过。`);
+    return failedResult(command, `安全拒绝: ${getDenyReason(safetyKind, command) ?? '命令被安全策略拒绝'}\n该操作命中内置格式化/根目录删除保护，无法绕过。`);
   }
 
   if (remoteEnvironment) {
@@ -809,28 +809,15 @@ function failedResult(command: string, stderr: string): CommandRunResult {
 }
 
 
-const POWERSHELL_DENY: Array<{ pattern: RegExp; reason: string }> = [
-  { pattern: /\bformat\b.*\b[a-zA-Z]:/i, reason: '禁止格式化磁盘' },
-  { pattern: /\b(shutdown|restart-computer|stop-computer)\b/i, reason: '禁止系统关机/重启' },
-  { pattern: /\bInvoke-Expression\b|\biex\b/i, reason: '禁止动态代码执行' },
-  { pattern: /\bcurl\b.*\|\s*(ba)?sh\b/i, reason: '禁止 curl | bash 远程代码执行' },
-  { pattern: /\bwget\b.*\|\s*(ba)?sh\b/i, reason: '禁止 wget | bash 远程代码执行' },
-  { pattern: /Invoke-WebRequest\b.*\|.*Invoke-Expression\b/i, reason: '禁止 iwr | iex 远程代码执行' },
-  { pattern: /Start-Process\b.*-Verb\s+RunAs/i, reason: '禁止 UAC 提权' },
-  { pattern: /\bRemove-Item\b.*-Recurse.*-Force.*[\\\/](\s|$)/i, reason: '禁止递归强制删除根路径' }
+const POWERSHELL_HARD_GUARDS: Array<{ pattern: RegExp; reason: string }> = [
+  { pattern: /\bformat(?:\.com)?\b.*\b[a-zA-Z]:/i, reason: '禁止格式化磁盘' },
+  { pattern: /\bFormat-Volume\b/i, reason: '禁止格式化文件系统/卷' },
+  { pattern: /\b(?:Remove-Item|rm|del|erase|rmdir|rd)\b(?=[^;\r\n]*(?:-(?:Recurse|r)\b|-[a-z]*r[a-z]*\b|\/s\b))(?=[^;\r\n]*(?:-(?:Force|f)\b|-[a-z]*f[a-z]*\b|\/q\b))[^;\r\n]*(?:^|\s)(?:--\s+)?["']?(?:[a-zA-Z]:[\\\/]|[\\\/])(?:\*|\.{1,2})?["']?(?=\s|$)/i, reason: '禁止递归强制删除根路径' }
 ];
 
-const BASH_DENY: Array<{ pattern: RegExp; reason: string }> = [
-  { pattern: /\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+)?\/(\s|$)/, reason: '禁止删除根目录' },
-  { pattern: /\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+)?~\/?(\s|$)/, reason: '禁止删除用户主目录' },
-  { pattern: /\bdd\b.*\bof=\/dev\/[sh]d/i, reason: '禁止直接写入磁盘设备' },
-  { pattern: /\bmkfs\b/i, reason: '禁止格式化文件系统' },
-  { pattern: /\b(shutdown|reboot|poweroff|halt)\b/i, reason: '禁止系统关机/重启' },
-  { pattern: /\bcurl\b.*\|\s*(ba)?sh\b/i, reason: '禁止 curl | bash 远程代码执行' },
-  { pattern: /\bwget\b.*\|\s*(ba)?sh\b/i, reason: '禁止 wget | bash 远程代码执行' },
-  { pattern: /\beval\b/, reason: '禁止 eval 动态代码执行' },
-  { pattern: /\bsudo\b/, reason: '禁止 sudo 提权' },
-  { pattern: /:\(\)\s*\{[^}]*:\|:/, reason: '禁止 fork 炸弹' }
+const BASH_HARD_GUARDS: Array<{ pattern: RegExp; reason: string }> = [
+  { pattern: /\bmkfs(?:\.[a-z0-9_+-]+)?\b/i, reason: '禁止格式化文件系统' },
+  { pattern: /\brm\b(?=[^;&|\r\n]*\s-[^\s;&|\r\n]*r)(?=[^;&|\r\n]*\s-[^\s;&|\r\n]*f)[^;&|\r\n]*(?:^|\s)(?:--\s+)?["']?\/(?:\*|\.{1,2})?["']?(?=\s|$)/i, reason: '禁止递归强制删除根目录' }
 ];
 
 const COMMON_SAFE: Record<string, CommandSafetyConfig> = {
@@ -921,8 +908,8 @@ const BASH_SAFE: Record<string, CommandSafetyConfig> = {
 function classifyCommand(kind: ShellKind, command: string): StaticClassification {
   const trimmed = command.trim();
   if (!trimmed) return 'deny';
-  const deny = kind === 'powershell' ? POWERSHELL_DENY : BASH_DENY;
-  for (const { pattern } of deny) if (pattern.test(trimmed)) return 'deny';
+  const hardGuards = kind === 'powershell' ? POWERSHELL_HARD_GUARDS : BASH_HARD_GUARDS;
+  for (const { pattern } of hardGuards) if (pattern.test(trimmed)) return 'deny';
 
   const statements = splitStatements(trimmed);
   let allAllow = true;
@@ -964,7 +951,7 @@ function splitStatements(command: string): string[] {
 }
 
 function getDenyReason(kind: ShellKind, command: string): string | null {
-  const deny = kind === 'powershell' ? POWERSHELL_DENY : BASH_DENY;
-  for (const { pattern, reason } of deny) if (pattern.test(command.trim())) return reason;
+  const hardGuards = kind === 'powershell' ? POWERSHELL_HARD_GUARDS : BASH_HARD_GUARDS;
+  for (const { pattern, reason } of hardGuards) if (pattern.test(command.trim())) return reason;
   return null;
 }

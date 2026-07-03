@@ -17,6 +17,7 @@ export interface ConversationData {
   visibility?: 'visible' | 'hidden' | 'collapsed';
 }
 export const Conversation = defineComponent<ConversationData>('Conversation');
+export const ConversationFullContextPending = defineComponent<{ startedAt: number }>('ConversationFullContextPending');
 
 export interface ConversationReuseLinkData {
   id: string;

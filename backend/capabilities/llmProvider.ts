@@ -696,7 +696,7 @@ async function compactWithOpenAIResponses(
 
   const compacted = await provider.compact(
     { contents: request.contents.map(toUnifiedContent) },
-    { inputFormat: 'unified', outputFormat: 'unified', signal }
+    { inputFormat: 'unified', outputFormat: 'unified', signal, requestBody: { store: false } }
   );
 
   return {

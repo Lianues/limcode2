@@ -7,7 +7,7 @@ import { activeModelProfileForRun } from '../../agentRun/queries';
 import { CompressionBlock } from '../../compression/components';
 import { hasActiveBlockingCompression } from '../../compression/queries';
 import { ConversationModeSelection, Mode, ModelProfile, ModelProfileScopeLink } from '../../mode/components';
-import { LlmRequest, Conversation, Message } from '../components';
+import { LlmRequest, Conversation, ConversationFullContextPending, Message } from '../components';
 import { ModelMessageBundle, LlmRequestBundle, MessageBundle, spawnMessage, spawnModelMessage, spawnLlmRequest } from '../bundles';
 import { materializeUserInputMessage } from '../userInputMaterialization';
 import { CheckpointEventType } from '../../checkpoint/events';
@@ -20,7 +20,7 @@ import { createMessageId } from '../../../../../shared/protocol';
 const RunsNeedingModelQuery = defineQuery({
   name: 'RunsNeedingModel',
   all: [AgentRun, AgentRunNeedsModel],
-  read: [AgentRun, AgentRunNeedsModel, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunTargetLink, LlmRequest, Conversation, Message, Checkpoint, CheckpointBarrier],
+  read: [AgentRun, AgentRunNeedsModel, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunTargetLink, LlmRequest, Conversation, ConversationFullContextPending, Message, Checkpoint, CheckpointBarrier],
   write: [AgentRun],
   remove: [AgentRunNeedsModel, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunQueueHold],
   mutationMode: 'update',
@@ -47,7 +47,7 @@ export const ContextAssemblySystem = defineSystem({
   name: 'ContextAssemblySystem',
   access: {
     queries: [RunsNeedingModelQuery, ActiveLlmRequestsQuery, LlmInvocationLookupQuery],
-    reads: { components: [RunModeLink, RunModelProfileLink, ConversationModeSelection, Mode, ModelProfile, ModelProfileScopeLink, CompressionBlock, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, Checkpoint] },
+    reads: { components: [RunModeLink, RunModelProfileLink, ConversationModeSelection, Mode, ModelProfile, ModelProfileScopeLink, CompressionBlock, ConversationFullContextPending, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, Checkpoint] },
     bundles: [ModelMessageBundle, MessageBundle, LlmRequestBundle, LlmInvocationBundle, MessageLlmInvocationLinkBundle],
     writes: { components: [AgentRun, MessageRunLink, CheckpointBarrier] },
     events: { read: [LlmEventType.InvocationResolved, LlmEventType.InvocationResolveError], emit: [CheckpointEventType.Requested] },
@@ -73,6 +73,7 @@ export const ContextAssemblySystem = defineSystem({
       }
       const target = targetForRun(world, run);
       if (!target) continue;
+      if (world.has(target.conversation, ConversationFullContextPending)) continue;
       if (hasActiveBlockingCompression(world, target.conversation)) continue;
 
       drainQueuedInputsIntoRun(world, cmd, run, target.conversation);

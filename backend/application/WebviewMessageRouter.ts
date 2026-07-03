@@ -4,7 +4,7 @@ import type { CommandCapability, FsCapability, LlmCapability, StorageCapability,
 import { ChatEventType } from '../world/modules/chat/events';
 import { AgentRunEventType } from '../world/modules/agentRun/events';
 import { AgentRun } from '../world/modules/agentRun/components';
-import { Conversation, Message } from '../world/modules/chat/components';
+import { Conversation, ConversationFullContextPending, Message } from '../world/modules/chat/components';
 import { LlmInvocation, MessageLlmInvocationLink, RunLlmInvocationLink } from '../world/modules/llm/components';
 import { buildLlmStartRequestForRun } from '../world/modules/chat/systems/LlmDispatchSystem';
 import { CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSourceLink } from '../world/modules/compression/components';
@@ -95,9 +95,13 @@ export class WebviewMessageRouter {
     switch (message.type) {
       case BridgeMessageType.ChatSend:
         if (!this.deps.isHydrated() || !message.payload) return;
-        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
-          this.deps.world.enqueue({ type: ChatEventType.Send, payload: message.payload });
-        });
+        {
+          const payload = message.payload;
+          void this.enqueueAfterConversationTailLoaded(payload.conversationId, () => {
+            this.blockLlmUntilConversationLoaded(payload.conversationId);
+            this.deps.world.enqueue({ type: ChatEventType.Send, payload });
+          });
+        }
         break;
       case BridgeMessageType.ChatAbort:
         if (!this.deps.isHydrated() || !message.payload) return;
@@ -109,21 +113,32 @@ export class WebviewMessageRouter {
         break;
       case BridgeMessageType.MessageEdit:
         if (!this.deps.isHydrated() || !message.payload) return;
-        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
-          this.deps.world.enqueue({ type: ChatEventType.Edit, payload: message.payload });
-        });
+        {
+          const payload = message.payload;
+          void this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'suffix', anchorMessageId: payload.messageId }, () => {
+            if (payload.runAfterEdit) this.blockLlmUntilConversationLoaded(payload.conversationId);
+            this.deps.world.enqueue({ type: ChatEventType.Edit, payload });
+          });
+        }
         break;
       case BridgeMessageType.MessageDeleteFrom:
         if (!this.deps.isHydrated() || !message.payload) return;
-        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
-          this.deps.world.enqueue({ type: ChatEventType.DeleteFrom, payload: message.payload });
-        });
+        {
+          const payload = message.payload;
+          void this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'suffix', anchorMessageId: payload.messageId }, () => {
+            this.deps.world.enqueue({ type: ChatEventType.DeleteFrom, payload });
+          });
+        }
         break;
       case BridgeMessageType.MessageRetryFrom:
         if (!this.deps.isHydrated() || !message.payload) return;
-        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
-          this.deps.world.enqueue({ type: ChatEventType.RetryFrom, payload: message.payload });
-        });
+        {
+          const payload = message.payload;
+          void this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'suffix', anchorMessageId: payload.messageId }, () => {
+            this.blockLlmUntilConversationLoaded(payload.conversationId);
+            this.deps.world.enqueue({ type: ChatEventType.RetryFrom, payload });
+          });
+        }
         break;
       case BridgeMessageType.ToolPolicyScopeSet:
         if (!this.deps.isHydrated() || !message.payload) return;
@@ -586,6 +601,42 @@ export class WebviewMessageRouter {
     } catch (error) {
       console.warn('[LimCode] Failed to hydrate conversation before command.', error);
     }
+  }
+
+  private async enqueueAfterConversationTailLoaded(conversationId: string, action: () => void): Promise<void> {
+    try {
+      const page = await this.deps.storage.loadConversationTimelinePage({
+        conversationId,
+        direction: 'initial',
+        chunkCount: 1
+      });
+      if (page.state.messages.length > 0) await hydrateConversationDetail(this.deps.world, page.state, conversationId);
+      action();
+    } catch (error) {
+      console.warn('[LimCode] Failed to hydrate conversation tail before command.', error);
+      await this.enqueueAfterConversationLoaded(conversationId, action);
+    }
+  }
+
+  private blockLlmUntilConversationLoaded(conversationId: string): void {
+    const conversation = this.findConversationEntity(conversationId);
+    if (conversation === undefined) return;
+    if (!this.deps.world.has(conversation, ConversationFullContextPending)) {
+      this.deps.world.add(conversation, ConversationFullContextPending, { startedAt: Date.now() });
+    }
+    void this.deps.ensureConversationDetailLoaded(conversationId)
+      .catch((error) => {
+        console.warn('[LimCode] Failed to hydrate full conversation context before LLM.', error);
+      })
+      .finally(() => {
+        const current = this.findConversationEntity(conversationId);
+        if (current !== undefined) this.deps.world.remove(current, ConversationFullContextPending);
+        this.deps.requestSnapshot(conversationId);
+      });
+  }
+
+  private findConversationEntity(conversationId: string): number | undefined {
+    return this.deps.world.query(Conversation).find((entity) => this.deps.world.get(entity, Conversation)?.id === conversationId);
   }
 
   private async enqueueAfterTimelineRangeLoaded(

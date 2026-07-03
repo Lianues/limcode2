@@ -77,7 +77,6 @@ interface TimelineSyncSnapshot {
 const MESSAGE_ANIMATION_SETTLE_MS = 100;
 const MESSAGE_ENTER_MS = MESSAGE_ANIMATION_SETTLE_MS;
 const MESSAGE_EXIT_MS = MESSAGE_ANIMATION_SETTLE_MS;
-const EXIT_CLEAR_MS = 2000;
 const MESSAGE_EXIT_ACTION_DELAY_MS = MESSAGE_EXIT_MS;
 
 /**
@@ -112,7 +111,6 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
   let initializedMessages = false;
   let exitingFromId: string | undefined;
   let exitActionTimer: number | undefined;
-  let exitClearTimer: number | undefined;
 
   const isEditing = computed(() => composerMode.value === 'edit');
   const activeComposerSnapshot = computed(() => composerSnapshots.value[composerMode.value]);
@@ -221,7 +219,6 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     exitActionTimer = window.setTimeout(() => {
       action();
       exitActionTimer = undefined;
-      exitClearTimer = window.setTimeout(clearExitState, EXIT_CLEAR_MS);
     }, delay);
   }
 
@@ -368,10 +365,6 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     if (exitActionTimer !== undefined) {
       window.clearTimeout(exitActionTimer);
       exitActionTimer = undefined;
-    }
-    if (exitClearTimer !== undefined) {
-      window.clearTimeout(exitClearTimer);
-      exitClearTimer = undefined;
     }
   }
 

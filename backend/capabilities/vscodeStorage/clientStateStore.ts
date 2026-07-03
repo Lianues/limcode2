@@ -347,6 +347,12 @@ export async function loadConversationTimelineRangeFromStores(paths: StoragePath
   if (!state) return undefined;
   const compression = await loadConversationCompressionDetail(paths, request.conversationId);
   if (compression) copyCompressionTables(state, compression);
+  const runHistory = await loadConversationRunHistoryForMessagesFromStores(
+    paths,
+    request.conversationId,
+    new Set(state.messages.map((message) => message.id))
+  );
+  if (runHistory) copyRunHistoryTables(state, runHistory);
   return state;
 }
 
@@ -412,6 +418,21 @@ async function loadConversationRunHistoryFromStores(paths: StoragePaths, convers
   if (!index || index.runs.length === 0) return undefined;
   const state = createEmptyClientState();
   const details = await Promise.all(index.runs.map((run) => loadRunDetail(paths, conversationId, run.id)));
+  for (const detail of details) {
+    if (detail) mergeClientStateTables(state, detail.state);
+  }
+  return state;
+}
+
+async function loadConversationRunHistoryForMessagesFromStores(paths: StoragePaths, conversationId: string, messageIds: ReadonlySet<string>): Promise<ClientState | undefined> {
+  if (messageIds.size === 0) return undefined;
+  const index = await loadRunHistoryIndex(paths, conversationId);
+  if (!index || index.runs.length === 0) return undefined;
+  const ids = [...messageIds];
+  const referencedRuns = index.runs.filter((run) => ids.some((messageId) => summaryReferencesMessage(run, messageId)));
+  if (referencedRuns.length === 0) return undefined;
+  const state = createEmptyClientState();
+  const details = await Promise.all(referencedRuns.map((run) => loadRunDetail(paths, conversationId, run.id)));
   for (const detail of details) {
     if (detail) mergeClientStateTables(state, detail.state);
   }

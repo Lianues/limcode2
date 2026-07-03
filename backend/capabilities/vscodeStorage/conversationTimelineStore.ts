@@ -314,21 +314,22 @@ async function normalizeTimelineChunkIndexRecords(root: vscode.Uri, records: Con
       toolCallCount: number;
       toolCallEventCount: number;
     }>;
-    const file = await readJson<ConversationTimelineChunkFile>(vscode.Uri.joinPath(root, ...record.file.split('/')));
-    const messages = file?.schemaVersion === STORAGE_VERSION && file.chunkId === record.id ? file.messages : [];
-    const visibleMessages = messages.filter(isTimelineVisibleMessage);
-    const messageCount = visibleMessages.length;
+    const hasIndexMetadata = hasTimelineChunkIndexMetadata(record);
+    const messages = hasIndexMetadata
+      ? undefined
+      : await readChunkMessagesForIndexNormalization(root, record);
+    const messageCount = hasIndexMetadata ? Math.max(0, Math.floor(record.messageCount)) : (messages ?? []).filter(isTimelineVisibleMessage).length;
     const messageOffsetStart = visibleMessageOffset + 1;
     const messageOffsetEnd = visibleMessageOffset + messageCount;
     normalized.push({
       ...record,
       index: typeof record.index === 'number' ? record.index : position,
-      startSeq: typeof record.startSeq === 'number' ? record.startSeq : messages[0]?.seq ?? 0,
-      endSeq: typeof record.endSeq === 'number' ? record.endSeq : messages[messages.length - 1]?.seq ?? 0,
+      startSeq: typeof record.startSeq === 'number' ? record.startSeq : messages?.[0]?.seq ?? 0,
+      endSeq: typeof record.endSeq === 'number' ? record.endSeq : messages?.[messages.length - 1]?.seq ?? 0,
       messageCount,
       messageOffsetStart,
       messageOffsetEnd,
-      messageIds: Array.isArray(record.messageIds) ? record.messageIds : messages.map((message) => message.id),
+      messageIds: Array.isArray(record.messageIds) ? record.messageIds : (messages ?? []).map((message) => message.id),
       toolCallIds: Array.isArray(record.toolCallIds) ? record.toolCallIds : [],
       toolCallCount: typeof record.toolCallCount === 'number' ? record.toolCallCount : Array.isArray(record.toolCallIds) ? record.toolCallIds.length : 0,
       toolCallEventCount: typeof record.toolCallEventCount === 'number' ? record.toolCallEventCount : 0
@@ -336,6 +337,22 @@ async function normalizeTimelineChunkIndexRecords(root: vscode.Uri, records: Con
     visibleMessageOffset += messageCount;
   }
   return normalized;
+}
+
+function hasTimelineChunkIndexMetadata(record: Partial<ConversationTimelineChunkIndexRecord>): record is ConversationTimelineChunkIndexRecord {
+  return typeof record.index === 'number'
+    && typeof record.startSeq === 'number'
+    && typeof record.endSeq === 'number'
+    && typeof record.messageCount === 'number'
+    && Array.isArray(record.messageIds)
+    && Array.isArray(record.toolCallIds)
+    && typeof record.toolCallCount === 'number'
+    && typeof record.toolCallEventCount === 'number';
+}
+
+async function readChunkMessagesForIndexNormalization(root: vscode.Uri, record: ConversationTimelineChunkIndexRecord): Promise<ConversationTimelineChunkFile['messages']> {
+  const file = await readJson<ConversationTimelineChunkFile>(vscode.Uri.joinPath(root, ...record.file.split('/')));
+  return file?.schemaVersion === STORAGE_VERSION && file.chunkId === record.id ? file.messages : [];
 }
 
 

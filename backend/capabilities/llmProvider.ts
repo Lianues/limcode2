@@ -656,9 +656,10 @@ async function compactWithOpenAIResponses(
 ): Promise<LlmCompactResult> {
   const modelOverride = methodConfig.openaiResponsesCompact?.model?.trim();
   const providerConfigId = methodConfig.openaiResponsesCompact?.providerConfigId?.trim();
+  const normalizedContext = normalizeToolCallResponseContext(request.contents);
   const settings = await resolveRuntimeSettings({
     id: request.id,
-    contents: request.contents,
+    contents: normalizedContext.contents,
     tools: [],
     conversationId: request.conversationId,
     model: {
@@ -695,7 +696,7 @@ async function compactWithOpenAIResponses(
   }
 
   const compacted = await provider.compact(
-    { contents: request.contents.map(toUnifiedContent) },
+    { contents: normalizedContext.contents.map(toUnifiedContent) },
     { inputFormat: 'unified', outputFormat: 'unified', signal }
   );
 

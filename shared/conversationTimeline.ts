@@ -39,16 +39,17 @@ export function buildConversationTimelineRows(input: BuildConversationTimelineRo
   const anchoredCheckpointIds = new Set(input.checkpointAnchors.map((anchor) => anchor.checkpointId));
   const messages = [...input.messages].sort(compareMessages);
   const anchorsByMessage = groupAnchorsByFloorMessage(input.checkpointAnchors, checkpointsById);
-  const compressionByMessage = groupCompressionByDisplayAnchor(input.compressionBlocks ?? [], messages);
+  const compressionRows = groupCompressionByDisplayAnchor(input.compressionBlocks ?? [], messages);
   const rows: ConversationTimelineRow[] = [];
   appendInitialCheckpointRows(rows, input.checkpoints, anchoredCheckpointIds);
+  appendInitialCompressionRows(rows, compressionRows.initial);
 
   messages.forEach((message, index) => {
     const messageFloorNumber = index + 1;
     const anchors = anchorsByMessage.get(message.id);
     appendCheckpointRows(rows, anchors?.before ?? [], checkpointsById, messageFloorNumber);
     rows.push({ kind: 'message', id: message.id, message, messageFloorNumber });
-    appendCompressionRows(rows, compressionByMessage.get(message.id) ?? [], messageFloorNumber, message.id);
+    appendCompressionRows(rows, compressionRows.byMessage.get(message.id) ?? [], messageFloorNumber, message.id);
     appendCheckpointRows(rows, anchors?.after ?? [], checkpointsById, messageFloorNumber);
   });
 
@@ -58,20 +59,26 @@ export function buildConversationTimelineRows(input: BuildConversationTimelineRo
 function groupCompressionByDisplayAnchor(
   blocks: readonly CompressionBlockRecord[],
   messages: readonly MessageRecord[]
-): Map<string, CompressionBlockRecord[]> {
-  const grouped = new Map<string, CompressionBlockRecord[]>();
+): { byMessage: Map<string, CompressionBlockRecord[]>; initial: CompressionBlockRecord[] } {
+  const byMessage = new Map<string, CompressionBlockRecord[]>();
+  const initial: CompressionBlockRecord[] = [];
   const messageById = new Map(messages.map((message) => [message.id, message]));
   const firstSeq = messages[0]?.seq;
   const lastSeq = messages[messages.length - 1]?.seq;
   for (const block of blocks) {
+    if (isBeforeLoadedRange(block, firstSeq)) {
+      initial.push(block);
+      continue;
+    }
     const anchorId = displayAnchorMessageId(block, messages, messageById, firstSeq, lastSeq);
     if (!anchorId) continue;
-    const list = grouped.get(anchorId) ?? [];
+    const list = byMessage.get(anchorId) ?? [];
     list.push(block);
-    grouped.set(anchorId, list);
+    byMessage.set(anchorId, list);
   }
-  for (const list of grouped.values()) list.sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
-  return grouped;
+  initial.sort(compareCompressionBlocks);
+  for (const list of byMessage.values()) list.sort(compareCompressionBlocks);
+  return { byMessage, initial };
 }
 
 function displayAnchorMessageId(
@@ -91,6 +98,17 @@ function displayAnchorMessageId(
     fallback = message;
   }
   return fallback?.id;
+}
+
+function isBeforeLoadedRange(block: CompressionBlockRecord, firstSeq: number | undefined): boolean {
+  const anchorSeq = block.anchorSeq ?? block.endSeq;
+  return anchorSeq !== undefined && firstSeq !== undefined && anchorSeq < firstSeq;
+}
+
+function appendInitialCompressionRows(rows: ConversationTimelineRow[], blocks: readonly CompressionBlockRecord[]): void {
+  for (const block of blocks) {
+    rows.push({ kind: 'compression', id: `compression:initial:${block.id}`, block });
+  }
 }
 
 function appendCompressionRows(rows: ConversationTimelineRow[], blocks: readonly CompressionBlockRecord[], messageFloorNumber: number, floorMessageId: string): void {
@@ -159,6 +177,10 @@ function appendCheckpointRows(
 
 function compareMessages(left: MessageRecord, right: MessageRecord): number {
   return left.seq - right.seq || left.createdAt - right.createdAt || left.id.localeCompare(right.id);
+}
+
+function compareCompressionBlocks(left: CompressionBlockRecord, right: CompressionBlockRecord): number {
+  return (left.anchorSeq ?? left.endSeq ?? 0) - (right.anchorSeq ?? right.endSeq ?? 0) || left.createdAt - right.createdAt || left.id.localeCompare(right.id);
 }
 
 function compareAnchors(left: CheckpointTimelineAnchorRecord, right: CheckpointTimelineAnchorRecord): number {

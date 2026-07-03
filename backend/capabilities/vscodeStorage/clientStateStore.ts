@@ -495,8 +495,12 @@ export async function saveConversationRenderDetailToStores(paths: StoragePaths, 
   const detail = conversationRenderDetailSlice(state, conversationId);
   const compression = createEmptyClientState();
   copyCompressionTables(compression, detail);
+  const existingTimeline = await loadConversationTimelineDetail(paths, conversationId);
+  if (existingTimeline) mergeRenderDetailTables(existingTimeline, detail);
+  const existingCompression = await loadConversationCompressionDetail(paths, conversationId);
+  if (existingCompression) preserveKnownCompressionSourceLinks(compression, existingCompression);
   await Promise.all([
-    saveConversationTimelineDetail(paths, conversationId, detail),
+    saveConversationTimelineDetail(paths, conversationId, existingTimeline ?? detail),
     saveConversationCompressionDetail(paths, conversationId, compression)
   ]);
 }
@@ -664,6 +668,12 @@ function mergeCompressionTables(target: ClientState, source: ClientState): void 
     'llmInvocations'
   ] as const;
   mergeClientStateTables(target, source, keys);
+}
+
+function preserveKnownCompressionSourceLinks(target: ClientState, existing: ClientState): void {
+  const blockIds = new Set(target.compressionBlocks.map((block) => block.id));
+  const sourceLinks = existing.compressionBlockSourceLinks.filter((link) => blockIds.has(link.blockId));
+  target.compressionBlockSourceLinks = upsertManyById(sourceLinks, target.compressionBlockSourceLinks);
 }
 
 

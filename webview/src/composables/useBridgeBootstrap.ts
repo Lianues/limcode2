@@ -8,6 +8,7 @@ import { useConversationSettingsStore } from '@webview/stores/useConversationSet
 import { useRunHistoryStore } from '@webview/stores/useRunHistoryStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
+import { useSystemPromptStore } from '@webview/stores/useSystemPromptStore';
 
 /**
  * 在 App 根组件挂载时调用一次：集中注册所有入站桥接监听并接入对应 store，
@@ -30,6 +31,7 @@ export function useBridgeBootstrap(): void {
   const runHistory = useRunHistoryStore();
   const conversationTimeline = useConversationTimelineStore();
   const conversationUi = useConversationUiStore();
+  const systemPromptStore = useSystemPromptStore();
 
   const disposers: Array<() => void> = [];
   const requestedConversationStreams = new Set<string>();
@@ -83,6 +85,7 @@ export function useBridgeBootstrap(): void {
       if (!message.payload) return;
       clientState.applyClientSnapshot(message.payload.streamId, message.payload.streamSeq, message.payload.state);
       conversationTimeline.applyClientStateSnapshot(message.payload.streamId, message.payload.streamSeq, message.payload.state);
+      systemPromptStore.reconcilePendingSave();
     })
   );
 
@@ -96,6 +99,7 @@ export function useBridgeBootstrap(): void {
       );
       if (applied) {
         conversationTimeline.applyClientStatePatch(message.payload.streamId, message.payload.streamSeq, message.payload.patches);
+        systemPromptStore.reconcilePendingSave();
       }
       if (!applied) resync();
     })

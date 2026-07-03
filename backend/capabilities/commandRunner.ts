@@ -816,14 +816,14 @@ function failedResult(command: string, stderr: string): CommandRunResult {
 
 
 const POWERSHELL_HARD_GUARDS: Array<{ pattern: RegExp; reason: string }> = [
-  { pattern: /\bformat(?:\.com)?\b.*\b[a-zA-Z]:/i, reason: '禁止格式化磁盘' },
-  { pattern: /\bFormat-Volume\b/i, reason: '禁止格式化文件系统/卷' },
-  { pattern: /\b(?:Remove-Item|rm|del|erase|rmdir|rd)\b(?=[^;\r\n]*(?:-(?:Recurse|r)\b|-[a-z]*r[a-z]*\b|\/s\b))(?=[^;\r\n]*(?:-(?:Force|f)\b|-[a-z]*f[a-z]*\b|\/q\b))[^;\r\n]*(?:^|\s)(?:--\s+)?["']?(?:[a-zA-Z]:[\\\/]|[\\\/])(?:\*|\.{1,2})?["']?(?=\s|$)/i, reason: '禁止递归强制删除根路径' }
+  { pattern: /^(?:&\s*)?format(?:\.com)?(?:\s+|$).*\b[a-zA-Z]:/i, reason: '禁止格式化磁盘' },
+  { pattern: /^(?:&\s*)?Format-Volume(?:\s|$)/i, reason: '禁止格式化文件系统/卷' },
+  { pattern: /^(?:&\s*)?(?:Remove-Item|rm|del|erase|rmdir|rd)\b(?=.*(?:-(?:Recurse|r)\b|-[a-z]*r[a-z]*\b|\/s\b))(?=.*(?:-(?:Force|f)\b|-[a-z]*f[a-z]*\b|\/q\b)).*(?:^|\s)(?:--\s+)?["']?(?:[a-zA-Z]:[\\\/]|[\\\/])(?:\*|\.{1,2})?["']?(?=\s|$)/i, reason: '禁止递归强制删除根路径' }
 ];
 
 const BASH_HARD_GUARDS: Array<{ pattern: RegExp; reason: string }> = [
-  { pattern: /\bmkfs(?:\.[a-z0-9_+-]+)?\b/i, reason: '禁止格式化文件系统' },
-  { pattern: /\brm\b(?=[^;&|\r\n]*\s-[^\s;&|\r\n]*r)(?=[^;&|\r\n]*\s-[^\s;&|\r\n]*f)[^;&|\r\n]*(?:^|\s)(?:--\s+)?["']?\/(?:\*|\.{1,2})?["']?(?=\s|$)/i, reason: '禁止递归强制删除根目录' }
+  { pattern: /^(?:(?:sudo(?:\s+-\S+)*|command|builtin|nohup)\s+|env(?:\s+\S+=\S+|\s+-\S+)*\s+)*mkfs(?:\.[a-z0-9_+-]+)?(?:\s|$)/i, reason: '禁止格式化文件系统' },
+  { pattern: /^(?:(?:sudo(?:\s+-\S+)*|command|builtin|nohup)\s+|env(?:\s+\S+=\S+|\s+-\S+)*\s+)*rm\b(?=.*\s-[^\s]*r)(?=.*\s-[^\s]*f).*(?:^|\s)(?:--\s+)?["']?\/(?:\*|\.{1,2})?["']?(?=\s|$)/i, reason: '禁止递归强制删除根目录' }
 ];
 
 const COMMON_SAFE: Record<string, CommandSafetyConfig> = {
@@ -914,8 +914,7 @@ const BASH_SAFE: Record<string, CommandSafetyConfig> = {
 function classifyCommand(kind: ShellKind, command: string): StaticClassification {
   const trimmed = command.trim();
   if (!trimmed) return 'deny';
-  const hardGuards = kind === 'powershell' ? POWERSHELL_HARD_GUARDS : BASH_HARD_GUARDS;
-  for (const { pattern } of hardGuards) if (pattern.test(trimmed)) return 'deny';
+  if (getHardGuardReason(kind, trimmed)) return 'deny';
 
   const statements = splitStatements(trimmed);
   let allAllow = true;
@@ -953,11 +952,72 @@ function classifySingleStatement(kind: ShellKind, stmt: string): StaticClassific
 }
 
 function splitStatements(command: string): string[] {
-  return command.split(/\s*(?:;|&&|\|\||\||\r?\n)\s*/).map((item) => item.trim()).filter(Boolean);
+  const result: string[] = [];
+  let current = '';
+  let quote: 'single' | 'double' | undefined;
+  let escaped = false;
+
+  const pushCurrent = (): void => {
+    const text = current.trim();
+    if (text) result.push(text);
+    current = '';
+  };
+
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\' && quote !== 'single') {
+      current += char;
+      escaped = true;
+      continue;
+    }
+
+    if (char === '`' && quote !== 'single') {
+      current += char;
+      escaped = true;
+      continue;
+    }
+
+    if (quote) {
+      current += char;
+      if ((quote === 'single' && char === "'") || (quote === 'double' && char === '"')) quote = undefined;
+      continue;
+    }
+
+    if (char === "'" || char === '"') {
+      quote = char === "'" ? 'single' : 'double';
+      current += char;
+      continue;
+    }
+
+    if (char === ';' || char === '|' || char === '&' || char === '\n' || char === '\r') {
+      pushCurrent();
+      if ((char === '|' || char === '&') && command[index + 1] === char) index += 1;
+      if (char === '\r' && command[index + 1] === '\n') index += 1;
+      continue;
+    }
+
+    current += char;
+  }
+
+  pushCurrent();
+  return result;
 }
 
 function getDenyReason(kind: ShellKind, command: string): string | null {
+  return getHardGuardReason(kind, command);
+}
+
+function getHardGuardReason(kind: ShellKind, command: string): string | null {
   const hardGuards = kind === 'powershell' ? POWERSHELL_HARD_GUARDS : BASH_HARD_GUARDS;
-  for (const { pattern, reason } of hardGuards) if (pattern.test(command.trim())) return reason;
+  for (const statement of splitStatements(command.trim())) {
+    for (const { pattern, reason } of hardGuards) if (pattern.test(statement)) return reason;
+  }
   return null;
 }

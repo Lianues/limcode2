@@ -130,12 +130,19 @@ const commandAccessLabel = computed(() => {
   const args = parseShellArgs(props.part.functionCall.args);
   return args.readonly?.trim().toLowerCase() === 'true' ? '只读' : '读写';
 });
-const commandAccessPrefix = computed(() => {
-  const label = commandAccessLabel.value;
-  if (!label) return undefined;
-  return summaryDisplay.value ? `${label} ·` : label;
+const commandTimeoutLabel = computed(() => {
+  if (!isCommandTool(props.part.functionCall.name)) return undefined;
+  const args = parseShellArgs(props.part.functionCall.args);
+  return formatShellTimeoutLabel(args.timeout);
 });
-const summaryTitle = computed(() => [commandAccessLabel.value, summaryLabel.value].filter(Boolean).join(' · ') || undefined);
+const commandSummaryPrefix = computed(() => {
+  const labels = [commandAccessLabel.value, commandTimeoutLabel.value].filter((label): label is string => Boolean(label));
+  if (labels.length === 0) return undefined;
+  const prefix = labels.join(' · ');
+  return summaryDisplay.value ? `${prefix} ·` : prefix;
+});
+const hasCommandSummaryMeta = computed(() => Boolean(commandAccessLabel.value || commandTimeoutLabel.value));
+const summaryTitle = computed(() => [commandAccessLabel.value, commandTimeoutLabel.value, summaryLabel.value].filter(Boolean).join(' · ') || undefined);
 const hasBatchMeta = computed(() => props.batchIndex !== undefined && props.batchMode !== undefined && props.batchState !== undefined);
 const batchModeLabel = computed(() => props.batchMode === 'parallel' ? '并行批次' : '串行批次');
 const batchStateLabel = computed(() => {
@@ -191,6 +198,18 @@ onBeforeUnmount(() => {
 
 function isCommandTool(toolName: string): boolean {
   return toolName === 'shell' || toolName === 'bash';
+}
+
+function formatShellTimeoutLabel(timeout: number | undefined): string | undefined {
+  if (typeof timeout !== 'number' || !Number.isFinite(timeout)) return undefined;
+  if (timeout <= 0) return '后台';
+  return `超时 ${formatSeconds(timeout / 1000)}秒`;
+}
+
+function formatSeconds(seconds: number): string {
+  if (Number.isInteger(seconds)) return String(seconds);
+  const fractionDigits = seconds < 10 ? 2 : 1;
+  return seconds.toFixed(fractionDigits).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
 }
 
 function stringifyValue(value: unknown): string {
@@ -358,7 +377,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
       <component :is="toolIcon" :stroke="2" aria-hidden="true" />
     </template>
     <template #summary>
-      <span class="part-card-name" :class="{ 'has-summary': summaryLabel || commandAccessLabel }">{{ part.functionCall.name }}</span>
+      <span class="part-card-name" :class="{ 'has-summary': summaryLabel || hasCommandSummaryMeta }">{{ part.functionCall.name }}</span>
       <span v-if="headerPreview" class="part-card-summary is-preview" :title="headerPreview.filePath">
         <span class="part-card-summary-main">{{ headerPreview.fileName }}</span>
         <span
@@ -369,8 +388,8 @@ function isInternalApprovalProgress(progress: unknown): boolean {
           <span v-if="(headerPreview.removed ?? 0) > 0" class="diff-stat-del">-{{ headerPreview.removed }}</span>
         </span>
       </span>
-      <span v-else-if="summaryDisplay || commandAccessLabel" class="part-card-summary" :title="summaryTitle">
-        <span v-if="commandAccessPrefix" class="part-card-summary-prefix">{{ commandAccessPrefix }}</span>
+      <span v-else-if="summaryDisplay || hasCommandSummaryMeta" class="part-card-summary" :title="summaryTitle">
+        <span v-if="commandSummaryPrefix" class="part-card-summary-prefix">{{ commandSummaryPrefix }}</span>
         <span v-if="summaryDisplay" class="part-card-summary-main">{{ summaryDisplay.main }}</span>
         <span v-if="summaryDisplay?.suffix" class="part-card-summary-suffix">{{ summaryDisplay.suffix }}</span>
       </span>

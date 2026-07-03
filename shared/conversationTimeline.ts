@@ -39,7 +39,7 @@ export function buildConversationTimelineRows(input: BuildConversationTimelineRo
   const anchoredCheckpointIds = new Set(input.checkpointAnchors.map((anchor) => anchor.checkpointId));
   const messages = [...input.messages].sort(compareMessages);
   const anchorsByMessage = groupAnchorsByFloorMessage(input.checkpointAnchors, checkpointsById);
-  const compressionByMessage = groupCompressionByAnchor(input.compressionBlocks ?? []);
+  const compressionByMessage = groupCompressionByDisplayAnchor(input.compressionBlocks ?? [], messages);
   const rows: ConversationTimelineRow[] = [];
   appendInitialCheckpointRows(rows, input.checkpoints, anchoredCheckpointIds);
 
@@ -48,28 +48,54 @@ export function buildConversationTimelineRows(input: BuildConversationTimelineRo
     const anchors = anchorsByMessage.get(message.id);
     appendCheckpointRows(rows, anchors?.before ?? [], checkpointsById, messageFloorNumber);
     rows.push({ kind: 'message', id: message.id, message, messageFloorNumber });
-    appendCompressionRows(rows, compressionByMessage.get(message.id) ?? [], messageFloorNumber);
+    appendCompressionRows(rows, compressionByMessage.get(message.id) ?? [], messageFloorNumber, message.id);
     appendCheckpointRows(rows, anchors?.after ?? [], checkpointsById, messageFloorNumber);
   });
 
   return rows;
 }
 
-function groupCompressionByAnchor(blocks: readonly CompressionBlockRecord[]): Map<string, CompressionBlockRecord[]> {
+function groupCompressionByDisplayAnchor(
+  blocks: readonly CompressionBlockRecord[],
+  messages: readonly MessageRecord[]
+): Map<string, CompressionBlockRecord[]> {
   const grouped = new Map<string, CompressionBlockRecord[]>();
+  const messageById = new Map(messages.map((message) => [message.id, message]));
+  const firstSeq = messages[0]?.seq;
+  const lastSeq = messages[messages.length - 1]?.seq;
   for (const block of blocks) {
-    if (!block.anchorMessageId) continue;
-    const list = grouped.get(block.anchorMessageId) ?? [];
+    const anchorId = displayAnchorMessageId(block, messages, messageById, firstSeq, lastSeq);
+    if (!anchorId) continue;
+    const list = grouped.get(anchorId) ?? [];
     list.push(block);
-    grouped.set(block.anchorMessageId, list);
+    grouped.set(anchorId, list);
   }
   for (const list of grouped.values()) list.sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
   return grouped;
 }
 
-function appendCompressionRows(rows: ConversationTimelineRow[], blocks: readonly CompressionBlockRecord[], messageFloorNumber: number): void {
+function displayAnchorMessageId(
+  block: CompressionBlockRecord,
+  messages: readonly MessageRecord[],
+  messageById: ReadonlyMap<string, MessageRecord>,
+  firstSeq: number | undefined,
+  lastSeq: number | undefined
+): string | undefined {
+  if (block.anchorMessageId && messageById.has(block.anchorMessageId)) return block.anchorMessageId;
+  const anchorSeq = block.anchorSeq ?? block.endSeq;
+  if (anchorSeq === undefined || firstSeq === undefined || lastSeq === undefined) return undefined;
+  if (anchorSeq < firstSeq || anchorSeq > lastSeq) return undefined;
+  let fallback: MessageRecord | undefined;
+  for (const message of messages) {
+    if (message.seq > anchorSeq) break;
+    fallback = message;
+  }
+  return fallback?.id;
+}
+
+function appendCompressionRows(rows: ConversationTimelineRow[], blocks: readonly CompressionBlockRecord[], messageFloorNumber: number, floorMessageId: string): void {
   for (const block of blocks) {
-    rows.push({ kind: 'compression', id: `compression:${block.id}`, block, floorMessageId: block.anchorMessageId, messageFloorNumber });
+    rows.push({ kind: 'compression', id: `compression:${block.id}`, block, floorMessageId, messageFloorNumber });
   }
 }
 

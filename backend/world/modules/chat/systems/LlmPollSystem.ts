@@ -22,6 +22,7 @@ import {
   conversationClientStateStreamId,
   createMessageId,
   isFunctionCallPart,
+  isFunctionResponsePart,
   isProviderContextPart,
   isTextPart,
   isVisibleTextPart,
@@ -223,9 +224,13 @@ function previousCompressibleMessageBefore(world: WorldReader, conversation: Ent
     .query(Message, PartOf)
     .filter((entity) => entity !== modelMessage && world.get(entity, PartOf)?.parent === conversation)
     .map((entity) => world.get(entity, Message))
-    .filter((message): message is MessageData => !!message && message.seq < current.seq && !containsOnlyProviderContext(message))
+    .filter((message): message is MessageData => !!message && message.seq < current.seq && isCompressionFloorAnchor(message))
     .sort((left, right) => right.seq - left.seq)
     [0];
+}
+
+function isCompressionFloorAnchor(message: MessageData): boolean {
+  return !containsOnlyProviderContext(message) && !message.content.parts.some(isFunctionResponsePart);
 }
 
 function containsOnlyProviderContext(message: MessageData): boolean {

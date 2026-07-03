@@ -7,6 +7,7 @@ import type {
   LlmProviderKind,
   ModeIconKey,
   ModeSource,
+  ToolPolicyPresetKind,
   ToolPolicySourceConfigRecord,
   ToolPolicyToolConfigRecord
 } from '../../../../shared/protocol';
@@ -26,6 +27,7 @@ export interface ToolPolicyData {
   id: string;
   name: string;
   allowedTools: string[];
+  preset?: ToolPolicyPresetKind;
   toolConfigs?: Record<string, ToolPolicyToolConfigRecord>;
   sourceConfigs?: Record<string, ToolPolicySourceConfigRecord>;
 }

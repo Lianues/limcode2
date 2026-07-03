@@ -14,6 +14,7 @@ import { ConversationModeSelection, Mode, ToolPolicy } from '../mode/components'
 import { McpToolSourcesKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey } from './resources';
 import { toolSchedulingDecision } from './scheduling';
 import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolPolicyScopeLinkData } from './components';
+import { isYoloToolPolicy } from './policy';
 
 export const toolsRuntimeStateProjectionReads: AccessDeclaration = {
   components: [
@@ -149,14 +150,17 @@ function stripFileChangeProposal(value: unknown): unknown {
 function resolveToolCallDisplay(world: WorldReader, entity: number, call: ToolCallData): ToolDisplayPolicyRecord | undefined {
   const run = runForToolCall(world, entity);
   if (run === undefined) return undefined;
-  const display = activeToolPolicyForRun(world, run)?.toolConfigs?.[call.name]?.display;
+  const policy = activeToolPolicyForRun(world, run);
+  const display = policy?.toolConfigs?.[call.name]?.display;
   const definitions = world.tryGetResource(ToolRuntimeDefinitionsKey) ?? [];
   const definition = definitions.find((tool) => tool.declaration.name === call.name);
   const metadata = definition?.declaration.metadata;
   const resolved: ToolDisplayPolicyRecord = {};
   if (display?.autoExpand !== undefined) resolved.autoExpand = display.autoExpand;
   else if (metadata?.defaultAutoExpand === true) resolved.autoExpand = true;
+  if (isYoloToolPolicy(policy) && metadata?.supportsDiffPreview === true) resolved.autoOpenDiffPreview = false;
   if (metadata?.supportsDiffPreview === true) {
+    if (resolved.autoOpenDiffPreview !== undefined) return resolved;
     if (display?.autoOpenDiffPreview !== undefined) resolved.autoOpenDiffPreview = display.autoOpenDiffPreview;
     else if (metadata.defaultAutoOpenDiffPreview === true) resolved.autoOpenDiffPreview = true;
   }
@@ -170,11 +174,12 @@ function resolveToolCallChangeApply(world: WorldReader, entity: number, call: To
   if (metadata?.supportsChangeApply !== true) return undefined;
 
   const run = runForToolCall(world, entity);
-  const config = run === undefined ? undefined : activeToolPolicyForRun(world, run)?.toolConfigs?.[call.name];
+  const policy = run === undefined ? undefined : activeToolPolicyForRun(world, run);
+  const config = policy?.toolConfigs?.[call.name];
   const delay = normalizeAutoApplyDelay(config?.autoApplyChangeDelaySeconds ?? metadata.defaultAutoApplyChangeDelaySeconds ?? 3);
   return {
-    autoApply: config?.autoApplyChange ?? metadata.defaultAutoApplyChange ?? true,
-    autoApplyDelaySeconds: delay
+    autoApply: isYoloToolPolicy(policy) ? true : config?.autoApplyChange ?? metadata.defaultAutoApplyChange ?? true,
+    autoApplyDelaySeconds: isYoloToolPolicy(policy) ? 0 : delay
   };
 }
 

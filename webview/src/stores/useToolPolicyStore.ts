@@ -5,6 +5,7 @@ import type {
   ToolDefinitionRecord,
   ToolPolicyRecord,
   ToolPolicySourceConfigRecord,
+  ToolPolicyPresetKind,
   ToolPolicyScopeKind,
   ToolPolicyScopeLinkRecord,
   ToolPolicyScopeSetPayload,
@@ -143,7 +144,7 @@ export const useToolPolicyStore = defineStore('toolPolicy', {
       const fallback = clientState.toolPolicies[0];
       return fallback ? { policy: fallback, inheritedFrom: 'global' } : {};
     },
-    setPolicyForScope(scopeKind: ToolPolicyScopeKind, scopeId: string | undefined, allowedTools: string[], name?: string, toolConfigs?: Record<string, ToolPolicyToolConfigRecord>, sourceConfigs?: Record<string, ToolPolicySourceConfigRecord>): void {
+    setPolicyForScope(scopeKind: ToolPolicyScopeKind, scopeId: string | undefined, allowedTools: string[], name?: string, toolConfigs?: Record<string, ToolPolicyToolConfigRecord>, sourceConfigs?: Record<string, ToolPolicySourceConfigRecord>, preset?: ToolPolicyPresetKind): void {
       const clientState = useClientStateStore();
       const validNames = new Set(clientState.toolDefinitions.map((tool) => tool.name));
       const sanitized = allowedTools
@@ -152,13 +153,14 @@ export const useToolPolicyStore = defineStore('toolPolicy', {
 
       const plainToolConfigs = cloneToolConfigs(toolConfigs);
       const plainSourceConfigs = cloneSourceConfigs(sourceConfigs);
-      this.applyOptimisticPolicyScopeSet(scopeKind, scopeId, sanitized, name, plainToolConfigs, plainSourceConfigs);
+      this.applyOptimisticPolicyScopeSet(scopeKind, scopeId, sanitized, name, plainToolConfigs, plainSourceConfigs, preset);
 
       const payload: ToolPolicyScopeSetPayload = {
         scopeKind,
         ...(scopeIdFor(scopeKind, scopeId) ? { scopeId: scopeIdFor(scopeKind, scopeId) } : {}),
         ...(name?.trim() ? { name: name.trim() } : {}),
         allowedTools: sanitized,
+        ...(preset !== undefined ? { preset } : {}),
         ...(plainToolConfigs !== undefined ? { toolConfigs: plainToolConfigs } : {}),
         ...(plainSourceConfigs !== undefined ? { sourceConfigs: plainSourceConfigs } : {})
       };
@@ -173,7 +175,27 @@ export const useToolPolicyStore = defineStore('toolPolicy', {
         ...(scopeIdFor(scopeKind, scopeId) ? { scopeId: scopeIdFor(scopeKind, scopeId) } : {})
       });
     },
-    applyOptimisticPolicyScopeSet(scopeKind: ToolPolicyScopeKind, scopeId: string | undefined, allowedTools: string[], name?: string, toolConfigs?: Record<string, ToolPolicyToolConfigRecord>, sourceConfigs?: Record<string, ToolPolicySourceConfigRecord>): void {
+    setPolicyPresetForScope(scopeKind: ToolPolicyScopeKind, scopeId: string | undefined, preset: ToolPolicyPresetKind): void {
+      const current = this.effectivePolicyFor(scopeKind, scopeId).policy;
+      const clientState = useClientStateStore();
+      const defaultAllowed = clientState.toolDefinitions
+        .filter((tool) => tool.source?.kind !== 'mcp' && tool.metadata?.defaultEnabled !== false)
+        .map((tool) => tool.name);
+      const allowedTools = current?.allowedTools ?? defaultAllowed;
+      const toolConfigs = cloneToolConfigs(current?.toolConfigs) ?? {};
+      const sourceConfigs = cloneSourceConfigs(current?.sourceConfigs) ?? {};
+      this.applyOptimisticPolicyScopeSet(scopeKind, scopeId, allowedTools, current?.name, toolConfigs, sourceConfigs, preset);
+      bridge.request(BridgeMessageType.ToolPolicyScopeSet, {
+        scopeKind,
+        ...(scopeIdFor(scopeKind, scopeId) ? { scopeId: scopeIdFor(scopeKind, scopeId) } : {}),
+        ...(current?.name?.trim() ? { name: current.name.trim() } : {}),
+        allowedTools,
+        preset,
+        toolConfigs,
+        sourceConfigs
+      } satisfies ToolPolicyScopeSetPayload);
+    },
+    applyOptimisticPolicyScopeSet(scopeKind: ToolPolicyScopeKind, scopeId: string | undefined, allowedTools: string[], name?: string, toolConfigs?: Record<string, ToolPolicyToolConfigRecord>, sourceConfigs?: Record<string, ToolPolicySourceConfigRecord>, preset?: ToolPolicyPresetKind): void {
       const clientState = useClientStateStore();
       const normalizedScopeId = scopeIdFor(scopeKind, scopeId);
       const existingLink = latestLink(clientState.toolPolicyScopeLinks.filter((candidate) => scopeLinkMatches(candidate, scopeKind, normalizedScopeId)));
@@ -184,6 +206,7 @@ export const useToolPolicyStore = defineStore('toolPolicy', {
         id: policyId,
         name: name?.trim() || existingPolicy?.name || defaultPolicyName(scopeKind),
         allowedTools,
+        ...(preset !== undefined || existingPolicy?.preset !== undefined ? { preset: preset ?? existingPolicy?.preset } : {}),
         ...(toolConfigs !== undefined
           ? { toolConfigs: cloneToolConfigs(toolConfigs) ?? {} }
           : existingPolicy?.toolConfigs

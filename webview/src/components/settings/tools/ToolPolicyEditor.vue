@@ -7,6 +7,7 @@ import type {
   ToolDefinitionRecord,
   ToolDomainScope,
   ToolPolicySourceConfigRecord,
+  ToolPolicyPresetKind,
   ToolPolicyScopeKind,
   ToolPolicyToolConfigRecord
 } from '@shared/protocol';
@@ -53,6 +54,8 @@ const effectivePolicy = computed(() => effectiveResolution.value.policy);
 const hasLocalOverride = computed(() => props.scopeKind === 'global' || !!localResolution.value.policy);
 const allowedSet = computed(() => new Set(effectivePolicy.value?.allowedTools ?? []));
 const enabledCount = computed(() => tools.value.filter((tool) => isToolEnabled(tool)).length);
+const showGlobalPreset = computed(() => props.scopeKind === 'global');
+const selectedPreset = computed<ToolPolicyPresetKind>(() => effectivePolicy.value?.preset === 'yolo' ? 'yolo' : 'custom');
 const visibleTools = computed(() => {
   const scope = selectedToolScope.value;
   if (scope === 'all') return tools.value;
@@ -79,11 +82,25 @@ const isUsingToolDefaults = computed(() => {
   return Object.keys(configs).length === 0;
 });
 const sourceLabel = computed(() => {
+  if (props.scopeKind === 'global' && selectedPreset.value === 'yolo') return '全局 YOLO 预设';
   if (props.scopeKind === 'global') return '全局默认策略';
   if (hasLocalOverride.value) return '当前作用域覆盖';
   const inheritedFrom = effectiveResolution.value.inheritedFrom;
+  void inheritedFrom;
   return '继承全局默认策略';
 });
+const globalPresetOptions: Array<{ value: ToolPolicyPresetKind; label: string; description: string }> = [
+  {
+    value: 'custom',
+    label: '自定义策略',
+    description: '沿用下方已有启用、审批、自动应用和 MCP 来源配置。'
+  },
+  {
+    value: 'yolo',
+    label: 'YOLO 模式',
+    description: '所有工具（含 MCP）直接运行；write/edit 生成的修改立即自动应用，不打开审批或差异预览标签页。'
+  }
+];
 const toolScopeOptions = computed<SettingsDropdownOption[]>(() => [
   { value: 'all', label: '全部领域', description: `${tools.value.length} 个工具` },
   ...TOOL_SCOPE_ORDER.map((scope) => {
@@ -113,7 +130,13 @@ function nextAllowed(toolName: string, enabled: boolean): string[] {
   return tools.value.map((tool) => tool.name).filter((name) => names.has(name));
 }
 
+function updateGlobalPreset(value: ToolPolicyPresetKind): void {
+  if (props.readonly || props.scopeKind !== 'global' || selectedPreset.value === value) return;
+  store.setPolicyPresetForScope('global', undefined, value);
+}
+
 function isToolEnabled(tool: ToolDefinitionRecord): boolean {
+  if (effectivePolicy.value?.preset === 'yolo') return true;
   if (allowedSet.value.has(tool.name)) return true;
   if (tool.source?.kind !== 'mcp') return false;
   const sourceId = tool.source.sourceId;
@@ -124,6 +147,7 @@ function isToolEnabled(tool: ToolDefinitionRecord): boolean {
 }
 
 function isMcpSourceEnabled(sourceId: string): boolean {
+  if (effectivePolicy.value?.preset === 'yolo') return true;
   return effectivePolicy.value?.sourceConfigs?.[sourceId]?.enabled === true;
 }
 
@@ -436,6 +460,32 @@ function inputNumber(event: Event): number {
       </div>
     </header>
 
+    <section v-if="showGlobalPreset" class="tool-policy-preset-section" aria-label="全局配置预设">
+      <div class="tool-policy-preset-heading">
+        <span>全局配置预设</span>
+        <small>预设只改变运行时解释方式，不会覆盖下方已有的逐工具配置；切回自定义后会恢复使用这些配置。</small>
+      </div>
+      <div class="tool-policy-preset-options" role="radiogroup" aria-label="选择全局工具策略预设">
+        <button
+          v-for="option in globalPresetOptions"
+          :key="option.value"
+          type="button"
+          role="radio"
+          class="tool-policy-preset-card"
+          :class="{ 'is-selected': selectedPreset === option.value }"
+          :aria-checked="selectedPreset === option.value"
+          :disabled="readonly"
+          @click="updateGlobalPreset(option.value)"
+        >
+          <span class="preset-card-indicator" aria-hidden="true"></span>
+          <span class="preset-card-copy">
+            <strong>{{ option.label }}</strong>
+            <small>{{ option.description }}</small>
+          </span>
+        </button>
+      </div>
+    </section>
+
     <div class="tool-policy-actions">
       <div class="tool-policy-filter">
         <span>工具领域</span>
@@ -738,6 +788,90 @@ function inputNumber(event: Event): number {
   border-radius: var(--radius-sm);
   padding: 2px var(--space-2);
   background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground) 6%);
+}
+
+.tool-policy-preset-section {
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: color-mix(in srgb, var(--vscode-editor-background) 96%, var(--vscode-foreground) 4%);
+}
+
+.tool-policy-preset-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tool-policy-preset-heading span {
+  font-weight: 650;
+}
+
+.tool-policy-preset-heading small {
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+}
+
+.tool-policy-preset-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.tool-policy-preset-card {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 88%, transparent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: flex-start;
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  font: inherit;
+  text-align: left;
+}
+
+.tool-policy-preset-card:hover:not(:disabled),
+.tool-policy-preset-card:focus-visible {
+  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%));
+  outline: none;
+}
+
+.tool-policy-preset-card.is-selected {
+  border-color: color-mix(in srgb, var(--vscode-panel-border) 60%, var(--vscode-foreground) 40%);
+  background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-foreground) 10%);
+}
+
+.preset-card-indicator {
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border: 1px solid var(--vscode-descriptionForeground);
+  border-radius: 50%;
+}
+
+.tool-policy-preset-card.is-selected .preset-card-indicator {
+  border-color: var(--vscode-foreground);
+  background: var(--vscode-foreground);
+}
+
+.preset-card-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.preset-card-copy small {
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
 }
 
 .tool-policy-actions {
@@ -1331,6 +1465,10 @@ function inputNumber(event: Event): number {
 }
 
 @media (max-width: 720px) {
+  .tool-policy-preset-options {
+    grid-template-columns: 1fr;
+  }
+
   .tool-permission-options,
   .tool-config-fields {
     grid-template-columns: 1fr;

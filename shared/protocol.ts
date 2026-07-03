@@ -733,6 +733,8 @@ export interface ToolChangeApplyPolicyRecord {
   autoApplyDelaySeconds?: number;
 }
 
+export type ToolPolicyPresetKind = 'custom' | 'yolo';
+
 export interface ToolPolicyToolConfigRecord {
   /** 是否自动批准工具进入执行阶段。关闭时会先等待用户批准执行。 */
   autoApproveExecution?: boolean;
@@ -763,6 +765,8 @@ export interface ToolPolicyRecord {
   id: string;
   name: string;
   allowedTools: string[];
+  /** 全局/作用域级策略预设；yolo 会在运行时覆盖允许列表与审批/应用开关，但不改写细项配置。 */
+  preset?: ToolPolicyPresetKind;
   toolConfigs?: Record<string, ToolPolicyToolConfigRecord>;
   sourceConfigs?: Record<string, ToolPolicySourceConfigRecord>;
 }
@@ -1955,6 +1959,7 @@ export interface ToolPolicyScopeSetPayload {
   scopeId?: string;
   name?: string;
   allowedTools: string[];
+  preset?: ToolPolicyPresetKind;
   toolConfigs?: Record<string, ToolPolicyToolConfigRecord>;
   sourceConfigs?: Record<string, ToolPolicySourceConfigRecord>;
 }

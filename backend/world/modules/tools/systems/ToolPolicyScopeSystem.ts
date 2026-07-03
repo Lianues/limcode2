@@ -7,7 +7,7 @@ import { Mode, ToolPolicy } from '../../mode/components';
 import { ToolPolicyScopeLink, type ToolPolicyScopeLinkData } from '../components';
 import { ToolEventType } from '../events';
 import { ToolDefinitionsKey } from '../resources';
-import type { ToolConfigRecord, ToolConfigValue, ToolPolicyScopeKind, ToolPolicySourceConfigRecord, ToolPolicyToolConfigRecord } from '../../../../../shared/protocol';
+import type { ToolConfigRecord, ToolConfigValue, ToolPolicyPresetKind, ToolPolicyScopeKind, ToolPolicySourceConfigRecord, ToolPolicyToolConfigRecord } from '../../../../../shared/protocol';
 
 export const ToolPolicyScopeSystem = defineSystem({
   name: 'ToolPolicyScopeSystem',
@@ -32,6 +32,7 @@ export const ToolPolicyScopeSystem = defineSystem({
       const policyName = payload.name?.trim() || defaultPolicyName(payload.scopeKind);
       const nextToolConfigs = payload.toolConfigs !== undefined ? sanitizeToolConfigs(world, payload.toolConfigs) : undefined;
       const nextSourceConfigs = payload.sourceConfigs !== undefined ? sanitizeSourceConfigs(world, payload.sourceConfigs) : undefined;
+      const nextPreset = payload.preset !== undefined ? normalizeToolPolicyPreset(payload.preset) : undefined;
 
       if (existing) {
         const currentPolicy = world.get(existing.link.toolPolicy, ToolPolicy);
@@ -40,6 +41,7 @@ export const ToolPolicyScopeSystem = defineSystem({
             ...currentPolicy,
             name: policyName,
             allowedTools,
+            ...(nextPreset !== undefined ? { preset: nextPreset } : {}),
             ...(nextToolConfigs !== undefined ? { toolConfigs: nextToolConfigs } : {}),
             ...(nextSourceConfigs !== undefined ? { sourceConfigs: nextSourceConfigs } : {})
           });
@@ -53,6 +55,7 @@ export const ToolPolicyScopeSystem = defineSystem({
         id: policyIdForScope(payload.scopeKind, scope.scopeId),
         name: policyName,
         allowedTools,
+        ...(nextPreset !== undefined ? { preset: nextPreset } : {}),
         ...(nextToolConfigs !== undefined && Object.keys(nextToolConfigs).length > 0 ? { toolConfigs: nextToolConfigs } : {}),
         ...(nextSourceConfigs !== undefined && Object.keys(nextSourceConfigs).length > 0 ? { sourceConfigs: nextSourceConfigs } : {})
       });
@@ -85,6 +88,10 @@ interface ResolvedToolPolicyScope {
   ok: true;
   scopeId?: string;
   data: Partial<{ conversation: Entity; agent: Entity; mode: Entity; run: Entity; agentSystemId: string }>;
+}
+
+function normalizeToolPolicyPreset(value: unknown): ToolPolicyPresetKind | undefined {
+  return value === 'yolo' || value === 'custom' ? value : undefined;
 }
 
 function sanitizeSourceConfigs(

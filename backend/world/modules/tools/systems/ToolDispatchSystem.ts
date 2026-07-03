@@ -83,7 +83,7 @@ import {
   WorkEnvironmentBundle
 } from '../../workEnvironment/bundles';
 import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey, ToolSchemasKey } from '../resources';
-import { isToolAllowedByPolicy } from '../policy';
+import { isToolAllowedByPolicy, isYoloToolPolicy } from '../policy';
 import { spawnCheckpointBarrier, consumeReleasedCheckpointBarrier, newestBarrierForTarget } from '../../checkpoint/barriers';
 import { effectiveCheckpointPolicyForRequest } from '../../checkpoint/queries';
 import { effectiveCheckpointToolTriggerConfig } from '../../checkpoint/policy';
@@ -245,6 +245,7 @@ export const ToolDispatchSystem = defineSystem({
     }
 
     dispatchApprovedAwaitingCalls(world, cmd, handled);
+    autoApplyYoloAwaitingChanges(world, cmd, handled);
 
     const calls = world
       .query(ToolCall, ToolState)
@@ -392,6 +393,7 @@ function toolExecutionBarrierMatches(barrier: CheckpointBarrierData, entity: Ent
 }
 
 function toolExecutionBeforeCheckpointEnabled(world: WorldReader, authorization: Extract<AuthorizationResult, { ok: true }>, call: ToolCallData): boolean {
+  if (isYoloToolPolicy(authorization.policy)) return false;
   const target = runTarget(world, authorization.run);
   if (!target) return false;
   const resolution = effectiveCheckpointPolicyForRequest(world, { conversation: target.conversation, run: authorization.run });
@@ -1222,6 +1224,35 @@ function dispatchApprovedAwaitingCalls(world: WorldReader, cmd: CommandSink, han
   }
 }
 
+function autoApplyYoloAwaitingChanges(world: WorldReader, cmd: CommandSink, handled: Set<Entity>): void {
+  const awaitingChanges = world
+    .query(ToolCall, ToolState)
+    .filter((entity) => {
+      const state = world.get(entity, ToolState);
+      return !handled.has(entity)
+        && !world.has(entity, InFlight)
+        && state?.status === 'awaiting_change_apply';
+    })
+    .sort((left, right) => compareToolCallOrder(world, left, right));
+
+  for (const entity of awaitingChanges) {
+    const call = world.get(entity, ToolCall);
+    const state = world.get(entity, ToolState);
+    if (!call || !state) continue;
+    const authorization = authorizeRunToolExecution(world, entity, call);
+    if (!authorization.ok) {
+      rejectToolCall(cmd, entity, call, state, authorization.reason);
+      handled.add(entity);
+      continue;
+    }
+    if (!isYoloToolPolicy(authorization.policy)) continue;
+    const proposal = pendingFileChangeProposal(state.result);
+    if (!proposal) continue;
+    applyPendingToolChange(world, cmd, entity, call, state, authorization, proposal);
+    handled.add(entity);
+  }
+}
+
 function markExecutionApproved(
   cmd: CommandSink,
   entity: Entity,
@@ -1274,6 +1305,7 @@ function effectiveToolConfig(world: WorldReader, policy: ToolPolicyData, toolNam
 }
 
 function toolGateSettings(world: WorldReader, policy: ToolPolicyData, toolName: string): { autoApproveExecution: boolean; autoApplyChange: boolean; autoSubmitResult: boolean } {
+  if (isYoloToolPolicy(policy)) return { autoApproveExecution: true, autoApplyChange: true, autoSubmitResult: true };
   const config = policy.toolConfigs?.[toolName];
   const definitions = world.tryGetResource(ToolRuntimeDefinitionsKey) ?? [];
   const meta = definitions.find((tool) => tool.declaration.name === toolName)?.declaration.metadata;

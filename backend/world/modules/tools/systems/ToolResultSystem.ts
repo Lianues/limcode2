@@ -22,6 +22,7 @@ import { simplifyToolResponseForModel } from '../responseSimplifier';
 import { readEvents } from '../../../events';
 import type { InlineDataPart, ToolCallStatus } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
+import { isYoloToolPolicy } from '../policy';
 
 const SettledToolCallsQuery = defineQuery({
   name: 'SettledToolCalls',
@@ -177,6 +178,7 @@ export const ToolResultSystem = defineSystem({
 function requiresResultSubmitApproval(world: WorldReader, run: Entity, toolName: string, state: ToolStateData): boolean {
   if (hasResultSubmitDecision(state)) return false;
   const policy = activeToolPolicyForRun(world, run);
+  if (isYoloToolPolicy(policy)) return false;
   return policy?.toolConfigs?.[toolName]?.autoSubmitResult === false;
 }
 

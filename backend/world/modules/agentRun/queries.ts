@@ -374,6 +374,7 @@ function findRecordEntity<T extends { id: string }>(world: WorldReader, componen
 }
 
 function intersectToolPolicies(policies: ToolPolicyData[], id: string): ToolPolicyData {
+  const preset = policies.some((policy) => policy.preset === 'yolo') ? 'yolo' : undefined;
   let allowed = new Set(policies[0]?.allowedTools ?? []);
   for (const policy of policies.slice(1)) {
     const next = new Set(policy.allowedTools);
@@ -403,7 +404,7 @@ function intersectToolPolicies(policies: ToolPolicyData[], id: string): ToolPoli
     }
   }
 
-  for (const toolName of Object.keys(toolConfigs)) {
+  for (const toolName of preset === 'yolo' ? [] : Object.keys(toolConfigs)) {
     if (!allowed.has(toolName)) delete toolConfigs[toolName];
   }
 
@@ -411,6 +412,7 @@ function intersectToolPolicies(policies: ToolPolicyData[], id: string): ToolPoli
     id,
     name: 'Effective Tool Policy',
     allowedTools: [...allowed],
+    ...(preset ? { preset } : {}),
     ...(Object.keys(toolConfigs).length > 0 ? { toolConfigs } : {}),
     ...(Object.keys(sourceConfigs).length > 0 ? { sourceConfigs } : {})
   };

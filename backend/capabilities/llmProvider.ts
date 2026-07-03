@@ -942,11 +942,12 @@ function fromUnifiedContent(content: UnifiedContent): MessageContent {
 function fromUnifiedPart(part: UnifiedPart): ContentPart | undefined {
   const record = part as Record<string, unknown>;
   if (isRecord(record.providerContext)) return { providerContext: record.providerContext as never };
-  if (typeof record.text === 'string' || typeof record.thought === 'boolean' || typeof record.thoughtSignature === 'string') {
+  const thoughtSignature = thoughtSignatureFromPart(part);
+  if (typeof record.text === 'string' || typeof record.thought === 'boolean' || thoughtSignature) {
     return {
       text: typeof record.text === 'string' ? record.text : '',
-      ...(typeof record.thought === 'boolean' ? { thought: record.thought } : {}),
-      ...(typeof record.thoughtSignature === 'string' ? { thoughtSignature: record.thoughtSignature } : {}),
+      ...(typeof record.thought === 'boolean' ? { thought: record.thought } : thoughtSignature && typeof record.text !== 'string' ? { thought: true } : {}),
+      ...(thoughtSignature ? { thoughtSignature } : {}),
       ...(typeof record.thoughtElapsedMs === 'number' ? { thoughtElapsedMs: record.thoughtElapsedMs } : {}),
       ...(typeof record.thoughtDurationMs === 'number' ? { thoughtDurationMs: record.thoughtDurationMs } : {})
     };
@@ -1325,12 +1326,12 @@ function emitUnifiedResponse(requestId: string, response: UnifiedLLMResponse, em
   const visibleText = visibleTextFromParts(parts);
   if (visibleText) emit({ type: LlmEventType.Delta, payload: { requestId, text: visibleText } });
 
-  const thoughtParts = parts.filter((part) => 'text' in part && (part as { thought?: unknown }).thought === true);
+  const thoughtParts = parts.filter(isUnifiedThoughtTextPart);
   for (const part of thoughtParts) {
     const text = typeof (part as { text?: unknown }).text === 'string' ? (part as { text: string }).text : '';
     const signature = thoughtSignatureFromPart(part);
     if (text) emit({ type: LlmEventType.ThoughtDelta, payload: { requestId, text, thoughtElapsedMs: 0, ...(signature ? { thoughtSignature: signature } : {}) } });
-    emit({ type: LlmEventType.ThoughtDone, payload: { requestId, thoughtDurationMs: 0, ...(signature ? { thoughtSignature: signature } : {}) } });
+    if (text || signature) emit({ type: LlmEventType.ThoughtDone, payload: { requestId, thoughtDurationMs: 0, ...(signature ? { thoughtSignature: signature } : {}) } });
   }
 
   const calls = parts.filter(isUnifiedFunctionCallPart).map((part, index) => {
@@ -1415,7 +1416,7 @@ function hasStreamTimingChunk(chunk: UnifiedLLMStreamChunk): boolean {
 }
 
 function hasThoughtOutput(chunk: UnifiedLLMStreamChunk): boolean {
-  return (chunk.partsDelta ?? []).some((part) => isUnifiedThoughtTextPart(part) && !!part.text);
+  return !!thoughtSignatureFromChunk(chunk) || (chunk.partsDelta ?? []).some((part) => isUnifiedThoughtTextPart(part) && (!!part.text || !!thoughtSignatureFromPart(part)));
 }
 
 function hasStreamOutput(chunk: UnifiedLLMStreamChunk): boolean {
@@ -1436,13 +1437,18 @@ interface ActiveThoughtBlock {
 
 function emitThoughtDeltas(requestId: string, current: ActiveThoughtBlock | undefined, chunk: UnifiedLLMStreamChunk, at: number, emit: Emit): ActiveThoughtBlock | undefined {
   let block = current;
+  const chunkSignature = thoughtSignatureFromChunk(chunk);
+  if (chunkSignature) {
+    block ??= createActiveThoughtBlock(requestId, at, emit);
+    block.thoughtSignature = chunkSignature;
+  }
   for (const part of chunk.partsDelta ?? []) {
     if (!isUnifiedThoughtTextPart(part)) continue;
     const text = part.text ?? '';
-    if (!text) continue;
     block ??= createActiveThoughtBlock(requestId, at, emit);
     const signature = thoughtSignatureFromPart(part);
     if (signature) block.thoughtSignature = signature;
+    if (!text) continue;
     emit({
       type: LlmEventType.ThoughtDelta,
       payload: {
@@ -1477,7 +1483,7 @@ function disposeThoughtBlock(block: ActiveThoughtBlock): undefined {
 }
 
 function shouldCloseThoughtBlock(chunk: UnifiedLLMStreamChunk): boolean {
-  return !!chunk.finishReason || hasStreamOutput(chunk);
+  return !!chunk.finishReason || hasStreamOutput(chunk) || hasThoughtSignatureOnlyOutput(chunk);
 }
 
 function finishThoughtBlock(requestId: string, block: ActiveThoughtBlock, finishedAt: number, emit: Emit): undefined {
@@ -1494,7 +1500,7 @@ function finishThoughtBlock(requestId: string, block: ActiveThoughtBlock, finish
 }
 
 function isUnifiedThoughtTextPart(part: UnifiedPart): part is UnifiedPart & { text?: string; thought?: unknown } {
-  return 'text' in part && (part as { thought?: unknown }).thought === true;
+  return (part as { thought?: unknown }).thought === true;
 }
 
 function isUnifiedFunctionCallPart(part: UnifiedPart): part is Extract<UnifiedPart, { functionCall: unknown }> {
@@ -1502,8 +1508,24 @@ function isUnifiedFunctionCallPart(part: UnifiedPart): part is Extract<UnifiedPa
 }
 
 function thoughtSignatureFromPart(part: UnifiedPart): string | undefined {
-  const value = (part as { thoughtSignature?: unknown }).thoughtSignature;
-  return typeof value === 'string' ? value : undefined;
+  return normalizedSignatureString((part as { thoughtSignature?: unknown }).thoughtSignature);
+}
+
+function thoughtSignatureFromChunk(chunk: UnifiedLLMStreamChunk): string | undefined {
+  return normalizedSignatureString((chunk as { thoughtSignature?: unknown }).thoughtSignature);
+}
+
+function hasThoughtSignatureOnlyOutput(chunk: UnifiedLLMStreamChunk): boolean {
+  const parts = chunk.partsDelta ?? [];
+  const hasSignature = !!thoughtSignatureFromChunk(chunk) || parts.some((part) => isUnifiedThoughtTextPart(part) && !!thoughtSignatureFromPart(part));
+  if (!hasSignature) return false;
+  return !parts.some((part) => isUnifiedThoughtTextPart(part) && !!part.text);
+}
+
+function normalizedSignatureString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

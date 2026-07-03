@@ -652,6 +652,23 @@ function finishThoughtPart(message: MessageData, thought: LlmThoughtDonePayload)
     };
     return { ...message, content: { ...message.content, parts } };
   }
+  if (thought.thoughtSignature) {
+    return {
+      ...message,
+      content: {
+        ...message.content,
+        parts: [
+          ...message.content.parts,
+          {
+            text: '',
+            thought: true,
+            thoughtDurationMs: thought.thoughtDurationMs,
+            thoughtSignature: thought.thoughtSignature
+          }
+        ]
+      }
+    };
+  }
   return message;
 }
 

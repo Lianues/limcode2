@@ -47,7 +47,6 @@ interface DeliveryEnvelope {
   answerSubmitted?: boolean;
   title?: string;
   content: string;
-  message?: string;
 }
 
 const DeliveringRunsQuery = defineQuery({
@@ -178,6 +177,11 @@ function deliverNotification(world: WorldReader, cmd: CommandSink, runEntity: En
   const sourceConversation = policy?.targetConversation ?? source.sourceConversation;
   if (sourceConversation === undefined) return false;
 
+  const sourceToolCall = policy?.targetToolCall ?? source.sourceToolCall;
+  if (sourceToolCall !== undefined && toolResultAlreadyContainsRunAgentAnswer(world, sourceToolCall)) {
+    return true;
+  }
+
   const envelope = buildDeliveryEnvelope(world, runEntity, policy?.includeTranscript ?? 'summary');
   const message = spawnUserMessage(cmd, sourceConversation, deliveryXml('task-notification', envelope));
   spawnMessageRunLink(cmd, { message, run: runEntity, role: 'notification' });
@@ -243,8 +247,7 @@ function buildDeliveryEnvelope(world: WorldReader, runEntity: Entity, includeTra
     status: 'completed',
     ...targetIds,
     ...(answerBridgeId ? { answerBridgeId, answerSubmitted: false } : {}),
-    content: fallback,
-    ...(answerBridgeId ? { message: '子 Agent 未通过 submit_agent_answer 提交内容，已返回最终自然语言回复。' } : {})
+    content: fallback
   };
 }
 
@@ -334,9 +337,30 @@ function deliveryXml(root: 'task-notification' | 'agent-run-delivery', envelope:
     ...(envelope.answerSubmitted !== undefined ? [`<answer-submitted>${String(envelope.answerSubmitted)}</answer-submitted>`] : []),
     ...(envelope.title ? [`<title>${escapeXml(envelope.title)}</title>`] : []),
     `<content>${escapeXml(envelope.content)}</content>`,
-    ...(envelope.message ? [`<message>${escapeXml(envelope.message)}</message>`] : []),
     `</${root}>`
   ].join('\n');
+}
+
+function toolResultAlreadyContainsRunAgentAnswer(world: WorldReader, toolCallEntity: Entity): boolean {
+  return containsRunAgentAnswer(world.get(toolCallEntity, ToolState)?.result);
+}
+
+function containsRunAgentAnswer(value: unknown): boolean {
+  const record = asRecord(value);
+  if (!record) return false;
+  if (hasText(record.content) || hasText(record.title)) return true;
+  const answer = asRecord(record.answer);
+  return !!answer && (hasText(answer.content) || hasText(answer.title));
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function hasText(value: unknown): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
 

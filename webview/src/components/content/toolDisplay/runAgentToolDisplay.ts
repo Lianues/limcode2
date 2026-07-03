@@ -38,8 +38,7 @@ function runAgentMetadataSections(context: ToolDisplayContext): ToolDisplaySecti
     ...row('ok', record.ok),
     ...row('status', record.status),
     ...row('answerBridgeId', record.answerBridgeId ?? answer?.answerBridgeId),
-    ...row('answerSubmitted', record.answerSubmitted),
-    ...row('message', record.message)
+    ...row('answerSubmitted', record.answerSubmitted)
   ];
   return rows.length > 0
     ? [{ kind: 'output', title: '运行结果', rows, rowStyle: 'keyValue' }]

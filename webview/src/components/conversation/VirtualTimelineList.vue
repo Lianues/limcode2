@@ -23,13 +23,25 @@ const scrollTop = ref(0);
 const viewportHeight = ref(0);
 const measuredHeights = ref<Record<string, number>>({});
 
+interface ScrollAnchorSnapshot {
+  mode: 'row' | 'bottom';
+  rowKey?: string;
+  offsetWithinRow?: number;
+  distanceFromBottom?: number;
+}
+
+const BOTTOM_ANCHOR_THRESHOLD_PX = 4;
+
 let attachedScroller: HTMLElement | null = null;
 let scrollerResizeObserver: ResizeObserver | undefined;
 let rowResizeObserver: ResizeObserver | undefined;
 const observedRowElements = new Map<string, HTMLElement>();
 const observedElementKeys = new WeakMap<HTMLElement, string>();
+let pendingAnchor: ScrollAnchorSnapshot | undefined;
+let restoreScheduled = false;
 
 const rowKeys = computed(() => props.rows.map((row, index) => keyFor(row, index)));
+const rowKeySignature = computed(() => rowKeys.value.join('\u0001'));
 const rowHeights = computed(() => rowKeys.value.map((key) => measuredHeights.value[key] ?? props.estimatedHeight));
 const offsets = computed(() => {
   const result: number[] = [];
@@ -60,7 +72,11 @@ const renderedHeight = computed(() => {
 const bottomSpacerHeight = computed(() => Math.max(0, totalHeight.value - topSpacerHeight.value - renderedHeight.value));
 
 watch(() => props.scroller, attachScroller, { immediate: true, flush: 'post' });
-watch(() => props.rows.length, () => void nextTick(syncScroller), { flush: 'post' });
+watch(rowKeySignature, () => {
+  scheduleAnchorRestore();
+  pruneRemovedRows();
+  void nextTick(syncScroller);
+}, { flush: 'pre' });
 onBeforeUnmount(detachScroller);
 
 function keyFor(row: ConversationTimelineViewRow, index: number): string {
@@ -97,6 +113,8 @@ function detachScroller(): void {
   rowResizeObserver?.disconnect();
   rowResizeObserver = undefined;
   attachedScroller = null;
+  pendingAnchor = undefined;
+  restoreScheduled = false;
 }
 
 function syncScroller(): void {
@@ -105,12 +123,82 @@ function syncScroller(): void {
   viewportHeight.value = element?.clientHeight ?? 0;
 }
 
+function scheduleAnchorRestore(): void {
+  const anchor = snapshotScrollAnchor();
+  if (!anchor) return;
+  pendingAnchor = anchor;
+  if (restoreScheduled) return;
+  restoreScheduled = true;
+  void nextTick(() => {
+    restoreScheduled = false;
+    restorePendingAnchor();
+  });
+}
+
+function snapshotScrollAnchor(): ScrollAnchorSnapshot | undefined {
+  const element = attachedScroller;
+  if (!element || rowKeys.value.length === 0) return undefined;
+
+  const distanceFromBottom = Math.max(0, element.scrollHeight - element.scrollTop - element.clientHeight);
+  if (distanceFromBottom <= BOTTOM_ANCHOR_THRESHOLD_PX) {
+    return { mode: 'bottom', distanceFromBottom };
+  }
+
+  const scrollerRect = element.getBoundingClientRect();
+  const anchorEntry = [...observedRowElements.entries()]
+    .map(([key, rowElement]) => ({ key, rowElement, rect: rowElement.getBoundingClientRect() }))
+    .filter((item) => item.rect.bottom > scrollerRect.top + 1)
+    .sort((left, right) => left.rect.top - right.rect.top)[0];
+  if (!anchorEntry) return undefined;
+  const rowTop = anchorEntry.rect.top - scrollerRect.top + element.scrollTop;
+  return {
+    mode: 'row',
+    rowKey: anchorEntry.key,
+    offsetWithinRow: Math.max(0, element.scrollTop - rowTop)
+  };
+}
+
+function restorePendingAnchor(): void {
+  const anchor = pendingAnchor;
+  pendingAnchor = undefined;
+  const element = attachedScroller;
+  if (!anchor || !element) return;
+
+  const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+  if (anchor.mode === 'bottom') {
+    element.scrollTop = clamp(maxScrollTop - Math.max(0, anchor.distanceFromBottom ?? 0), 0, maxScrollTop);
+    syncScroller();
+    return;
+  }
+
+  const index = anchor.rowKey ? rowKeys.value.indexOf(anchor.rowKey) : -1;
+  if (index < 0) return;
+  const nextScrollTop = (offsets.value[index] ?? 0) + Math.max(0, anchor.offsetWithinRow ?? 0);
+  element.scrollTop = clamp(nextScrollTop, 0, maxScrollTop);
+  syncScroller();
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function pruneRemovedRows(): void {
+  const validKeys = new Set(rowKeys.value);
+  for (const [key, element] of [...observedRowElements.entries()]) {
+    if (validKeys.has(key)) continue;
+    rowResizeObserver?.unobserve(element);
+    observedRowElements.delete(key);
+    observedElementKeys.delete(element);
+  }
+}
+
 function setRowElement(row: ConversationTimelineViewRow, absoluteIndex: number, element: Element | null): void {
   const key = keyFor(row, absoluteIndex);
   const previousElement = observedRowElements.get(key);
   if (previousElement && previousElement !== element) {
     rowResizeObserver?.unobserve(previousElement);
     observedRowElements.delete(key);
+    observedElementKeys.delete(previousElement);
   }
 
   if (!(element instanceof HTMLElement)) return;
@@ -130,6 +218,7 @@ function setRowElement(row: ConversationTimelineViewRow, absoluteIndex: number, 
 function measureRowElement(key: string, element: HTMLElement): void {
   const height = Math.max(1, Math.ceil(element.getBoundingClientRect().height));
   if (measuredHeights.value[key] === height) return;
+  scheduleAnchorRestore();
   measuredHeights.value = { ...measuredHeights.value, [key]: height };
 }
 </script>

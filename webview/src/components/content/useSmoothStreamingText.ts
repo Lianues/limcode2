@@ -5,6 +5,7 @@ export interface SmoothStreamingTextOptions {
   replaceOutMs?: number;
   catchupFrames?: number;
   maxCharsPerFrame?: number;
+  flushLagChars?: number;
 }
 
 // 正文替换是“淡出旧内容 + 淡入新内容”的两段式动画。
@@ -56,6 +57,13 @@ export function useSmoothStreamingText(
       return;
     }
 
+    const flushLagChars = options.flushLagChars;
+    if (flushLagChars !== undefined && target.length - current.length >= flushLagChars) {
+      displayedText.value = target;
+      clearStreamFrame();
+      return;
+    }
+
     scheduleStreamFrame();
   }
 
@@ -83,6 +91,12 @@ export function useSmoothStreamingText(
 
     const remaining = target.length - current.length;
     if (remaining <= 0) return;
+
+    const flushLagChars = options.flushLagChars;
+    if (flushLagChars !== undefined && remaining >= flushLagChars) {
+      displayedText.value = target;
+      return;
+    }
 
     const elapsed = Math.max(16, now - lastStreamFrameTime);
     lastStreamFrameTime = now;

@@ -66,11 +66,13 @@ import { ToolCall, ToolCallEvent } from '../world/modules/tools/components';
 import { WorkEnvironmentEventType, workEnvironmentIdFromUri } from '../world/modules/workEnvironment';
 import type { LocalWorkEnvironmentCandidate } from '../world/modules/workEnvironment';
 import { clientSyncPlugin, registerClientSyncSystems } from '../world/clientSync';
+import { ClientSyncStateKey } from '../world/clientSync/resources';
 import { storageProjectionPlugin } from '../world/storageProjection';
+import { CLIENT_STATE_TABLE_KEYS } from '../../shared/clientStateSchema';
 import { EffectHandlerRegistry, registerApplicationEffectHandlers } from './effectHandlers';
 import { flushEffects, flushEffectsWhere } from './executeEffects';
 import type { RuntimeEnv } from './RuntimeEnv';
-import { GLOBAL_SETTINGS_SECTIONS, createMessageId } from '../../shared/protocol';
+import { GLOBAL_SETTINGS_SECTIONS, conversationClientStateStreamId, createMessageId } from '../../shared/protocol';
 import type {
   AgentRunSourceKind,
   AgentRunStatus,
@@ -78,6 +80,7 @@ import type {
   BridgeClientId,
   ConversationHistoryPageRecord,
   ConversationHistoryScope,
+  ClientState,
   MessageContent,
   ProjectFolderCandidateRecord,
   ConversationOriginKind,
@@ -427,8 +430,11 @@ export class BackendApplication {
     if (this.renderLoadedConversationDetails.has(conversationId)) {
       return;
     }
+
     const detail = await this.env.storage.loadConversationDetail(conversationId, { includeRunHistory: false });
     const hydrated = detail ? await hydrateConversationDetail(this.world, detail, conversationId) : false;
+    if (detail && hydrated) this.primeConversationStreamState(conversationId, detail);
+
     if (hydrated || this.findConversationEntity(conversationId) !== undefined) this.renderLoadedConversationDetails.add(conversationId);
   }
 
@@ -622,6 +628,24 @@ export class BackendApplication {
   private flushPendingHydrationMessages(): void {
     const pending = this.pendingHydrationMessages.splice(0);
     for (const item of pending) this.webviewRouter.handle(item.clientId, item.message);
+  }
+
+  private primeConversationStreamState(conversationId: string, detail: ClientState): void {
+    const syncState = this.world.tryGetResource(ClientSyncStateKey);
+    if (!syncState) return;
+    const streamId = conversationClientStateStreamId(conversationId);
+    const stream = syncState.streams[streamId];
+    if (!stream?.lastState) return;
+
+    const nextStreamState = cloneClientState(stream.lastState);
+    mergeClientStateRecords(nextStreamState, detail);
+    this.world.setResource(ClientSyncStateKey, {
+      ...syncState,
+      streams: {
+        ...syncState.streams,
+        [streamId]: { ...stream, lastState: nextStreamState }
+      }
+    });
   }
 
   private syncWorkEnvironmentsFromWorkspaceFolders(): void {
@@ -1144,4 +1168,27 @@ function shouldDeferUntilHydrated(message: WebviewToExtensionMessage): boolean {
     default:
       return false;
   }
+}
+
+
+function cloneClientState(state: ClientState): ClientState {
+  if (typeof structuredClone === 'function') return structuredClone(state);
+  return JSON.parse(JSON.stringify(state)) as ClientState;
+}
+
+function mergeClientStateRecords(target: ClientState, source: ClientState): void {
+  for (const tableKey of CLIENT_STATE_TABLE_KEYS) {
+    const targetRecords = target[tableKey] as Array<{ id: string }>;
+    const sourceRecords = source[tableKey] as Array<{ id: string }>;
+    for (const record of sourceRecords) upsertClientStateRecord(targetRecords, record);
+  }
+}
+
+function upsertClientStateRecord(list: Array<{ id: string }>, record: { id: string }): void {
+  const index = list.findIndex((candidate) => candidate.id === record.id);
+  const next = typeof structuredClone === 'function'
+    ? structuredClone(record)
+    : JSON.parse(JSON.stringify(record));
+  if (index >= 0) list[index] = next;
+  else list.push(next);
 }

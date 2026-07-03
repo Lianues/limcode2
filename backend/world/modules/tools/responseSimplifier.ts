@@ -167,8 +167,7 @@ function simplifyRunAgentResponse(value: unknown): JsonRecord {
   return withOkFallback(pickDefined({
     answerBridgeId: stringValue(record.answerBridgeId),
     title: stringValue(record.title),
-    content: stringValue(record.content),
-    message: stringValue(record.message)
+    content: stringValue(record.content)
   }), 'success');
 }
 

@@ -573,7 +573,6 @@ export class WebviewMessageRouter {
     try {
       await this.deps.ensureConversationDetailLoaded(conversationId);
       action();
-      this.deps.requestSnapshot(conversationId);
     } catch (error) {
       console.warn('[LimCode] Failed to hydrate conversation before command.', error);
     }
@@ -594,7 +593,6 @@ export class WebviewMessageRouter {
       const detail = await this.deps.storage.loadConversationTimelineRange(request);
       if (detail) await hydrateConversationDetail(this.deps.world, detail, request.conversationId);
       action();
-      this.deps.requestSnapshot(request.conversationId);
     } catch (error) {
       console.warn('[LimCode] Failed to hydrate conversation timeline range before command.', error);
     }

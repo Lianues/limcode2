@@ -119,19 +119,39 @@ export const MessageEditSystem = defineSystem({
         spawnEditedMessageRun(world, cmd, conversation, message);
       }
     }
+  }
+});
+
+
 function markCompressionBlocksForEditedMessage(world: WorldReader, cmd: CommandSink, message: Entity): void {
+  const affectedBlocks = new Set<Entity>();
   for (const entity of world.query(CompressionBlockSourceLink)) {
     const link = world.get(entity, CompressionBlockSourceLink);
-    if (link?.source !== message) continue;
-    const block = world.get(link.block, CompressionBlock);
-    if (!block || block.status === 'stale') continue;
-    cmd.add(link.block, CompressionBlock, { ...block, status: 'stale', staleReason: '源消息已编辑。', updatedAt: Date.now() });
+    if (!link || link.sourceKind !== 'message' || link.source !== message) continue;
+    affectedBlocks.add(link.block);
+  }
+  for (const block of collectDependentCompressionBlocks(world, affectedBlocks)) {
+    const data = world.get(block, CompressionBlock);
+    if (!data || data.status === 'stale') continue;
+    cmd.add(block, CompressionBlock, { ...data, status: 'stale', staleReason: '源消息已编辑。', updatedAt: Date.now() });
   }
 }
 
-
+function collectDependentCompressionBlocks(world: WorldReader, initial: ReadonlySet<Entity>): Set<Entity> {
+  const all = new Set(initial);
+  const queue = [...initial];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const entity of world.query(CompressionBlockSourceLink)) {
+      const link = world.get(entity, CompressionBlockSourceLink);
+      if (!link || link.sourceKind !== 'compressionBlock' || link.source !== current || all.has(link.block)) continue;
+      all.add(link.block);
+      queue.push(link.block);
+    }
   }
-});
+  return all;
+}
+
 
 function replaceMessageAfterCheckpoints(world: WorldReader, cmd: CommandSink, conversation: Entity, message: Entity): void {
   const deletedAnchors = new Set<Entity>();

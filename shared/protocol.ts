@@ -1684,6 +1684,7 @@ export interface CompressionBlockRecord {
   conversationId: string;
   title: string;
   status: CompressionBlockStatus;
+  trigger?: 'manual' | 'auto';
   methodKind: LlmCompressionMethodKind;
   methodConfigId?: string;
   anchorMessageId?: string;

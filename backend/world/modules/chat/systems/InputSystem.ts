@@ -11,13 +11,15 @@ import { defaultAgentForConversation, effectiveEditPolicyForRun, findAgentById, 
 import type { ChatSendPayload, MessageContent } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
 import { Checkpoint, CheckpointBarrier } from '../../checkpoint/components';
+import { CompressionBlock } from '../../compression/components';
+import { hasActiveBlockingCompression } from '../../compression/queries';
 import { conversationMessages } from '../queries';
 import { materializeUserInputMessage } from '../userInputMaterialization';
 
 const ConversationsByIdQuery = defineQuery({
   name: 'ConversationsById',
   all: [Conversation],
-  read: [Conversation, Agent, AgentConversationLink, ConversationAgentSelection, AgentRun, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink, LlmRequest, Message, Checkpoint, CheckpointBarrier],
+  read: [Conversation, Agent, AgentConversationLink, ConversationAgentSelection, AgentRun, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink, LlmRequest, Message, Checkpoint, CheckpointBarrier, CompressionBlock],
   write: [AgentRun, Message],
   remove: [AgentRunNeedsModel, Streaming, LlmRequest],
   role: 'work'
@@ -47,6 +49,10 @@ function handleSend(world: WorldReader, cmd: CommandSink, conversation: Entity, 
   const content = normalizeInputContent(payload);
   if (content.parts.length === 0) return;
 
+  if (hasActiveBlockingCompression(world, conversation)) {
+    spawnQueuedChatRun(cmd, { agent, conversation, content });
+    return;
+  }
   const activeRuns = activeRunsForConversation(world, conversation);
   if (activeRuns.length === 0) {
     const message = materializeUserInputMessage(world, cmd, conversation, payload.conversationId, content);

@@ -4,6 +4,8 @@ import { LlmEventType, type LlmInvocationResolvedPayload, type LlmInvocationReso
 import { AgentRun, AgentRunNeedsModel, AgentRunTargetLink, MessageRunLink, RunModeLink, RunModelProfileLink } from '../../agentRun/components';
 import { spawnMessageRunLink } from '../../agentRun/bundles';
 import { activeModelProfileForRun } from '../../agentRun/queries';
+import { CompressionBlock } from '../../compression/components';
+import { hasActiveBlockingCompression } from '../../compression/queries';
 import { ConversationModeSelection, Mode, ModelProfile, ModelProfileScopeLink } from '../../mode/components';
 import { LlmRequest, Conversation, Message } from '../components';
 import { ModelMessageBundle, LlmRequestBundle, MessageBundle, spawnMessage, spawnModelMessage, spawnLlmRequest } from '../bundles';
@@ -43,7 +45,7 @@ export const ContextAssemblySystem = defineSystem({
   name: 'ContextAssemblySystem',
   access: {
     queries: [RunsNeedingModelQuery, ActiveLlmRequestsQuery, LlmInvocationLookupQuery],
-    reads: { components: [RunModeLink, RunModelProfileLink, ConversationModeSelection, Mode, ModelProfile, ModelProfileScopeLink] },
+    reads: { components: [RunModeLink, RunModelProfileLink, ConversationModeSelection, Mode, ModelProfile, ModelProfileScopeLink, CompressionBlock] },
     bundles: [ModelMessageBundle, MessageBundle, LlmRequestBundle, LlmInvocationBundle, MessageLlmInvocationLinkBundle],
     writes: { components: [AgentRun, MessageRunLink, CheckpointBarrier] },
     events: { read: [LlmEventType.InvocationResolved, LlmEventType.InvocationResolveError], emit: [CheckpointEventType.Requested] },
@@ -69,6 +71,7 @@ export const ContextAssemblySystem = defineSystem({
       }
       const target = targetForRun(world, run);
       if (!target) continue;
+      if (hasActiveBlockingCompression(world, target.conversation)) continue;
 
       const invocation = spawnLlmInvocation(cmd);
       const invocationId = spawnedInvocationId(invocation);

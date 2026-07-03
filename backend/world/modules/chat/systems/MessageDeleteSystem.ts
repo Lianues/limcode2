@@ -136,18 +136,34 @@ function deleteMessages(world: WorldReader, cmd: CommandSink, deletedMessages: S
 }
 
 function compressionBlocksAffectedByDeletion(world: WorldReader, deletedMessages: ReadonlySet<Entity>): Set<Entity> {
-  const blocks = new Set<Entity>();
+  const directBlocks = new Set<Entity>();
   for (const entity of world.query(CompressionBlockSourceLink)) {
     const link = world.get(entity, CompressionBlockSourceLink);
-    if (link?.source !== undefined && deletedMessages.has(link.source)) blocks.add(link.block);
+    if (!link || link.sourceKind !== 'message' || link.source === undefined || !deletedMessages.has(link.source)) continue;
+    directBlocks.add(link.block);
   }
-  return blocks;
+  return collectDependentCompressionBlocks(world, directBlocks);
 }
 
 function markCompressionBlockStale(world: WorldReader, cmd: CommandSink, block: Entity): void {
   const data = world.get(block, CompressionBlock);
   if (!data || data.status === 'stale') return;
   cmd.add(block, CompressionBlock, { ...data, status: 'stale', staleReason: '源消息已删除。', updatedAt: Date.now() });
+}
+
+function collectDependentCompressionBlocks(world: WorldReader, initial: ReadonlySet<Entity>): Set<Entity> {
+  const all = new Set(initial);
+  const queue = [...initial];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const entity of world.query(CompressionBlockSourceLink)) {
+      const link = world.get(entity, CompressionBlockSourceLink);
+      if (!link || link.sourceKind !== 'compressionBlock' || link.source !== current || all.has(link.block)) continue;
+      all.add(link.block);
+      queue.push(link.block);
+    }
+  }
+  return all;
 }
 
 function checkpointAnchorsForMessages(world: WorldReader, deletedMessages: ReadonlySet<Entity>): Set<Entity> {

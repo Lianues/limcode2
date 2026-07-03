@@ -3,6 +3,8 @@ import { AgentRun, AgentRunNeedsModel, AgentRunQueueHold, AgentRunQueuedInput, A
 import { AgentRunBundle, markRunNeedsModel, spawnMessageRunLink } from '../bundles';
 import { Checkpoint, CheckpointBarrier } from '../../checkpoint/components';
 import { CheckpointEventType } from '../../checkpoint/events';
+import { CompressionBlock } from '../../compression/components';
+import { hasActiveBlockingCompression } from '../../compression/queries';
 import { Conversation, LlmRequest, Message, PartOf } from '../../chat/components';
 import { UserMessageBundle } from '../../chat/bundles';
 import { materializeUserInputMessage } from '../../chat/userInputMaterialization';
@@ -11,7 +13,7 @@ const QueuedRunsQuery = defineQuery({
   name: 'QueuedAgentRunsWithoutModelRequest',
   all: [AgentRun, AgentRunTargetLink],
   none: [AgentRunNeedsModel],
-  read: [AgentRun, AgentRunTargetLink, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunSourceLink, AgentRunNeedsModel, LlmRequest, Conversation, Message, PartOf, Checkpoint, CheckpointBarrier],
+  read: [AgentRun, AgentRunTargetLink, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunSourceLink, AgentRunNeedsModel, LlmRequest, Conversation, Message, PartOf, Checkpoint, CheckpointBarrier, CompressionBlock],
   add: [AgentRunNeedsModel],
   write: [AgentRunSourceLink],
   remove: [AgentRunQueuedInput],
@@ -38,6 +40,7 @@ export const AgentRunQueueSystem = defineSystem({
       const target = targetForRun(world, run);
       if (!target || activatedConversations.has(target.conversation)) continue;
       if (hasEarlierActiveRunInConversation(world, run, target.conversation)) continue;
+      if (hasActiveBlockingCompression(world, target.conversation)) continue;
       materializeQueuedInputForRun(world, cmd, run);
       markRunNeedsModel(cmd, run);
       activatedConversations.add(target.conversation);

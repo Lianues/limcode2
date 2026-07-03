@@ -22,6 +22,7 @@ import {
   RunToolPolicyLink
 } from '../../agentRun/components';
 import { CompressionBlock, CompressionContextVariant, RunCompressionBlockLink } from '../../compression/components';
+import { hasActiveBlockingCompression } from '../../compression/queries';
 import { ToolCall, ToolPolicyScopeLink, ToolState } from '../../tools/components';
 import { ToolDefinitionsKey, ToolSchemasKey } from '../../tools/resources';
 import { isToolAllowedByPolicy } from '../../tools/policy';
@@ -126,6 +127,7 @@ export const LlmDispatchSystem = defineSystem({
     for (const request of requests) {
       const data = world.get(request, LlmRequest);
       if (!data) continue;
+      if (hasActiveBlockingCompression(world, data.conversation)) continue;
       const barriers = checkpointBarriersForLlmRequest(world, request, data);
       if (barriers.some((item) => item.barrier.status !== 'released')) continue;
       for (const barrier of barriers) consumeReleasedCheckpointBarrier(cmd, barrier.entity);

@@ -65,11 +65,13 @@ export const CompressionSystem = defineSystem({
 
 interface CompressionSelection {
   selected: Entity[];
-  contents: MessageContent[];
+  requestContents: MessageContent[];
   startSeq: number;
+  sourceMessageCount: number;
   anchor: { id: string; seq: number };
   segments?: MessageContent[][];
   priorSummaryContents?: MessageContent[];
+  retainedBlock?: Entity;
 }
 
 function createCompressionBlock(
@@ -95,11 +97,49 @@ function prepareFullSelection(
   payload: { startMessageId?: string; endMessageId?: string }
 ): CompressionSelection | undefined {
   const selected = selectMessagesForCompression(world, conversation, payload.startMessageId, payload.endMessageId);
+  const direct = directCompressionSelection(world, selected);
+  if (!direct) return undefined;
+  if (payload.startMessageId) return direct;
+
+  const predecessor = latestCompleteBlockBelow(world, conversation, direct.anchor.seq);
+  if (predecessor === undefined) return direct;
+  const predecessorBlock = world.get(predecessor, CompressionBlock);
+  const retainedContents = summaryVariantContents(world, predecessor);
+  if (!predecessorBlock || !retainedContents?.length) return direct;
+
+  const predecessorBoundary = predecessorBlock.endSeq ?? predecessorBlock.anchorSeq ?? 0;
+  const increment = selected.filter((entity) => (world.get(entity, Message)?.seq ?? 0) > predecessorBoundary);
+  if (increment.length === 0) return undefined;
+  if (hasUnresolvedFunctionCallsInEntities(world, increment)) return undefined;
+
+  const first = world.get(increment[0], Message)!;
+  const last = world.get(increment[increment.length - 1], Message)!;
+  const incrementContents = messageContentsForEntities(world, increment);
+  if (incrementContents.length === 0) return undefined;
+
+  return {
+    selected: increment,
+    requestContents: [...retainedContents, ...incrementContents],
+    startSeq: predecessorBlock.startSeq ?? first.seq,
+    sourceMessageCount: Math.max(0, predecessorBlock.sourceMessageCount ?? 0) + increment.length,
+    anchor: { id: last.id, seq: last.seq },
+    retainedBlock: predecessor
+  };
+}
+
+function directCompressionSelection(world: WorldReader, selected: Entity[]): CompressionSelection | undefined {
   if (selected.length === 0) return undefined;
+  if (hasUnresolvedFunctionCallsInEntities(world, selected)) return undefined;
   const first = world.get(selected[0], Message)!;
   const last = world.get(selected[selected.length - 1], Message)!;
-  const contents = selected.map((entity) => world.get(entity, Message)?.content).filter((content): content is MessageContent => !!content);
-  return { selected, contents, startSeq: first.seq, anchor: { id: last.id, seq: last.seq } };
+  const requestContents = messageContentsForEntities(world, selected);
+  return {
+    selected,
+    requestContents,
+    startSeq: first.seq,
+    sourceMessageCount: selected.length,
+    anchor: { id: last.id, seq: last.seq }
+  };
 }
 
 function spawnCompressionBlock(
@@ -110,10 +150,10 @@ function spawnCompressionBlock(
   payload: { conversationId: string; methodConfigId?: string; trigger?: 'manual' | 'auto' },
   selection: CompressionSelection
 ): void {
-  const { selected, contents, anchor } = selection;
+  const { selected, requestContents, anchor } = selection;
   const now = Date.now();
-  const sourceHash = hashText(JSON.stringify(contents));
-  const tokenCountBefore = estimateContentsTokens(contents);
+  const sourceHash = hashText(JSON.stringify(requestContents));
+  const tokenCountBefore = estimateContentsTokens(requestContents);
 
   const block = cmd.spawn();
   const blockId = `compression-block-${block}`;
@@ -123,18 +163,39 @@ function spawnCompressionBlock(
     conversation,
     title: payload.trigger === 'auto' ? '自动上下文压缩' : '上下文压缩',
     status: 'running',
+    ...(payload.trigger ? { trigger: payload.trigger } : {}),
     methodKind,
     ...(payload.methodConfigId ? { methodConfigId: payload.methodConfigId } : {}),
     anchorMessageId: anchor.id,
     anchorSeq: anchor.seq,
     startSeq: selection.startSeq,
     endSeq: anchor.seq,
-    sourceMessageCount: selected.length,
+    sourceMessageCount: selection.sourceMessageCount,
     tokenCountBefore,
     sourceHash,
     createdAt: now,
     updatedAt: now
   });
+
+  let orderOffset = 0;
+  if (selection.retainedBlock !== undefined) {
+    const retained = world.get(selection.retainedBlock, CompressionBlock);
+    if (retained) {
+      const retainedLink = cmd.spawn();
+      cmd.add(retainedLink, CompressionBlockSourceLink, {
+        id: `compression-source-${retainedLink}`,
+        block,
+        source: selection.retainedBlock,
+        sourceKind: 'compressionBlock',
+        sourceId: retained.id,
+        role: 'retained',
+        order: 0,
+        createdAt: now,
+        updatedAt: now
+      });
+      orderOffset = 1;
+    }
+  }
 
   selected.forEach((messageEntity, index) => {
     const message = world.get(messageEntity, Message)!;
@@ -148,7 +209,7 @@ function spawnCompressionBlock(
       sourceId: message.id,
       ...(revision ? { revisionId: revision.id } : {}),
       role: index === selected.length - 1 ? 'anchor' : 'source',
-      order: index,
+      order: index + orderOffset,
       createdAt: now,
       updatedAt: now
     });
@@ -182,7 +243,7 @@ function spawnCompressionBlock(
       invocationId,
       ...(payload.methodConfigId ? { methodConfigId: payload.methodConfigId } : {}),
       methodKind,
-      contents,
+      contents: requestContents,
       ...(selection.segments ? { segments: selection.segments } : {}),
       ...(selection.priorSummaryContents ? { priorSummaryContents: selection.priorSummaryContents } : {}),
       sourceHash
@@ -401,7 +462,11 @@ function prepareSegmentedSelection(
   if (closedRounds.length === 0) return undefined;
 
   const selected = closedRounds.flat();
-  const contents = selected.map((entity) => world.get(entity, Message)?.content).filter((content): content is MessageContent => !!content);
+  if (hasUnresolvedFunctionCallsInEntities(world, selected)) return undefined;
+
+  const requestContents = predecessor !== undefined && predecessorBlock
+    ? [...(summaryVariantContents(world, predecessor) ?? []), ...messageContentsForEntities(world, selected)]
+    : messageContentsForEntities(world, selected);
   const segments = closedRounds.map((round) => round.map((entity) => world.get(entity, Message)?.content).filter((content): content is MessageContent => !!content));
   const firstSeq = world.get(selected[0], Message)!.seq;
   const lastMessage = world.get(selected[selected.length - 1], Message)!;
@@ -409,11 +474,13 @@ function prepareSegmentedSelection(
 
   return {
     selected,
-    contents,
-    startSeq: firstSeq,
+    requestContents,
+    startSeq: predecessorBlock?.startSeq ?? firstSeq,
+    sourceMessageCount: Math.max(0, predecessorBlock?.sourceMessageCount ?? 0) + selected.length,
     anchor: { id: lastMessage.id, seq: lastMessage.seq },
     segments,
-    ...(priorSummaryContents ? { priorSummaryContents } : {})
+    ...(priorSummaryContents ? { priorSummaryContents } : {}),
+    ...(predecessor !== undefined ? { retainedBlock: predecessor } : {})
   };
 }
 
@@ -484,13 +551,31 @@ function currentRevisionForMessage(world: WorldReader, message: Entity): { id: s
   return link ? world.get(link.revision, MessageRevision) : undefined;
 }
 
-function sourceContentsForBlock(world: WorldReader, block: Entity): MessageContent[] {
-  return world.query(CompressionBlockSourceLink)
+function sourceContentsForBlock(world: WorldReader, block: Entity, visited = new Set<Entity>()): MessageContent[] {
+  if (visited.has(block)) return [];
+  visited.add(block);
+  const contents: MessageContent[] = [];
+  const links = world.query(CompressionBlockSourceLink)
     .map((entity) => world.get(entity, CompressionBlockSourceLink))
-    .filter((link): link is NonNullable<typeof link> => !!link && link.block === block && link.source !== undefined)
-    .sort((left, right) => left.order - right.order)
-    .map((link) => link.source !== undefined ? world.get(link.source, Message)?.content : undefined)
-    .filter((content): content is MessageContent => !!content);
+    .filter((link): link is NonNullable<typeof link> => !!link && link.block === block)
+    .sort((left, right) => left.order - right.order);
+  for (const link of links) {
+    if (link.sourceKind === 'message') {
+      const content = link.source !== undefined ? world.get(link.source, Message)?.content : undefined;
+      if (content) contents.push(content);
+      continue;
+    }
+    const retainedBlock = link.source;
+    if (retainedBlock === undefined || retainedBlock === block) continue;
+    const retainedSummary = summaryVariantContents(world, retainedBlock);
+    if (retainedSummary?.length) {
+      contents.push(...retainedSummary);
+      continue;
+    }
+    contents.push(...sourceContentsForBlock(world, retainedBlock, visited));
+  }
+  visited.delete(block);
+  return contents;
 }
 
 function hasSummaryVariant(world: WorldReader, block: Entity): boolean {
@@ -599,6 +684,42 @@ function findConversation(world: WorldReader, conversationId: string): Entity | 
 
 function findBlock(world: WorldReader, blockId: string): Entity | undefined {
   return world.query(CompressionBlock).find((entity) => world.get(entity, CompressionBlock)?.id === blockId);
+}
+
+function messageContentsForEntities(world: WorldReader, entities: Entity[]): MessageContent[] {
+  return entities
+    .map((entity) => world.get(entity, Message)?.content)
+    .filter((content): content is MessageContent => !!content);
+}
+
+function hasUnresolvedFunctionCallsInEntities(world: WorldReader, entities: Entity[]): boolean {
+  const pendingCallIds = new Set<string>();
+  const pendingCallNames = new Map<string, number>();
+  for (const entity of entities) {
+    const content = world.get(entity, Message)?.content;
+    if (!content) continue;
+    for (const part of content.parts) {
+      if (isFunctionCallPart(part)) {
+        const callId = part.id?.trim();
+        if (callId) {
+          pendingCallIds.add(callId);
+        } else {
+          pendingCallNames.set(part.functionCall.name, (pendingCallNames.get(part.functionCall.name) ?? 0) + 1);
+        }
+        continue;
+      }
+      if (!isFunctionResponsePart(part)) continue;
+      const callId = part.id?.trim();
+      if (callId) {
+        pendingCallIds.delete(callId);
+      } else {
+        const nextCount = (pendingCallNames.get(part.functionResponse.name) ?? 0) - 1;
+        if (nextCount > 0) pendingCallNames.set(part.functionResponse.name, nextCount);
+        else pendingCallNames.delete(part.functionResponse.name);
+      }
+    }
+  }
+  return pendingCallIds.size > 0 || pendingCallNames.size > 0;
 }
 
 function estimateContentsTokens(contents: MessageContent[]): number {

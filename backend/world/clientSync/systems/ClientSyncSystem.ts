@@ -57,7 +57,7 @@ export const ClientSyncSystem = defineSystem({
       if (emitFastPatches(cmd, syncState, fastPatchState)) return;
     }
 
-    if (shouldDeferFullSync && !fastPatchState.requireFullSync && !hasResyncRequests && fastPatchState.patches.length === 0 && canDeferFullSyncForActiveStream(world, contributors, syncState)) return;
+    if (shouldDeferFullSync && !fastPatchState.requireFullSync && !hasResyncRequests && fastPatchState.patches.length === 0 && canSkipFullSyncForActiveStream(world, contributors, syncState)) return;
 
     const projection = projectClientStateWithCache(world, contributors, syncState);
     const sourceChanged = syncState.lastState === null || projection.changed || fastPatchState.requireFullSync;
@@ -128,18 +128,16 @@ export const ClientSyncSystem = defineSystem({
   }
 });
 
-const DEFERRABLE_ACTIVE_STREAM_CONTRIBUTORS = new Set(['chat']);
-
 function emptyReads(): AccessDeclaration {
   return { components: [], resources: [], events: [], effects: [] };
 }
 
-function canDeferFullSyncForActiveStream(world: WorldReader, contributors: readonly ClientStateContributor[], syncState: ClientSyncState): boolean {
+function canSkipFullSyncForActiveStream(world: WorldReader, contributors: readonly ClientStateContributor[], syncState: ClientSyncState): boolean {
   if (!syncState.lastState) return false;
   return contributors.every((contributor) => {
     const previousClock = syncState.contributorStates[contributor.key]?.clock;
     const nextClock = contributorClock(world, contributor);
-    return previousClock === nextClock || DEFERRABLE_ACTIVE_STREAM_CONTRIBUTORS.has(contributor.key);
+    return previousClock === nextClock;
   });
 }
 

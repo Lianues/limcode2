@@ -1180,9 +1180,6 @@ async function prepareLlmStartRequestMultimodal(request: LlmStartRequest, option
     request.systemInstruction ? prepareLlmContentMultimodal(request.systemInstruction, options, false) : Promise.resolve(undefined)
   ]);
   const normalized = normalizeToolCallResponseContext(contents);
-  if (normalized.orphanResponseCount > 0 || normalized.fallbackResponseCount > 0) {
-    console.info(`[LimCode] Normalized tool call context for LLM request "${request.id}": orphanResponses=${normalized.orphanResponseCount}, fallbackResponses=${normalized.fallbackResponseCount}.`);
-  }
   return {
     ...request,
     contents: normalized.contents,

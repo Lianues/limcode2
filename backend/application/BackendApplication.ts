@@ -439,9 +439,6 @@ export class BackendApplication {
       ? backfillMissingToolResponsesForStatelessLoad(storedDetail, conversationId)
       : { state: storedDetail, addedCount: 0 };
     const detail = backfilled.state;
-    if (backfilled.addedCount > 0) {
-      console.info(`[LimCode] Backfilled ${backfilled.addedCount} missing tool response(s) while loading stateless conversation "${conversationId}".`);
-    }
 
     const hydrated = detail ? await hydrateConversationDetail(this.world, detail, conversationId) : false;
     if (detail && hydrated) this.primeConversationStreamState(conversationId, detail);

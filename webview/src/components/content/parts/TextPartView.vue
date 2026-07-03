@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, shallowRef, watch } from 'vue';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
+import CodeBlockViewer from '../CodeBlockViewer.vue';
 import StreamingIndicatorTail from '../StreamingIndicatorTail.vue';
 import { useSmoothStreamingText } from '../useSmoothStreamingText';
-import { renderMarkdown } from '../markdown/markdownRenderer';
+import { renderMarkdownParts, type MarkdownRenderedPart } from '../markdown/markdownRenderer';
 
 const props = withDefaults(
   defineProps<{
@@ -30,7 +31,7 @@ const { displayedText, replacing: replaceAnimating } = useSmoothStreamingText(
   () => props.streaming,
   { animateReplace: true }
 );
-const renderedHtml = shallowRef('');
+const renderedParts = shallowRef<MarkdownRenderedPart[]>([]);
 const markdownReady = computed(() => props.markdown);
 
 let renderVersion = 0;
@@ -54,7 +55,7 @@ function scheduleMarkdownRender(): void {
 
   if (!markdownReady.value) {
     clearScheduledRender();
-    renderedHtml.value = '';
+    renderedParts.value = [];
     return;
   }
 
@@ -73,19 +74,24 @@ async function renderCurrentMarkdown(version: number): Promise<void> {
   const streaming = props.streaming;
 
   try {
-    const html = await renderMarkdown(source, { streaming });
+    const parts = await renderMarkdownParts(source, { streaming });
     if (disposed) return;
 
     if (version === renderVersion) {
-      renderedHtml.value = html;
+      renderedParts.value = parts;
       return;
     }
 
     scheduleMarkdownRender();
   } catch (error) {
     console.warn('[LimCode] Failed to render markdown.', error);
-    if (version === renderVersion) renderedHtml.value = '';
+    if (version === renderVersion) renderedParts.value = [];
   }
+}
+
+function markdownPartKey(part: MarkdownRenderedPart, index: number): string {
+  const content = part.kind === 'html' ? part.html : `${part.language}\n${part.code}`;
+  return `${part.kind}-${index}-${content.length}`;
 }
 
 function clearScheduledRender(): void {
@@ -100,7 +106,12 @@ function clearScheduledRender(): void {
 
 <template>
   <div v-if="markdownReady" class="rc-markdown-shell" :class="{ streaming, replacing: replaceAnimating }">
-    <div v-if="renderedHtml" class="rc-markdown" v-html="renderedHtml"></div>
+    <template v-if="renderedParts.length">
+      <template v-for="(part, index) in renderedParts" :key="markdownPartKey(part, index)">
+        <div v-if="part.kind === 'html'" class="rc-markdown" v-html="part.html"></div>
+        <CodeBlockViewer v-else class="rc-code-block" :code="part.code" :language="part.language" :info="part.info" />
+      </template>
+    </template>
     <pre v-else class="rc-text">{{ displayedText }}</pre>
     <StreamingIndicatorTail v-if="streaming" :text="tailText" :variant="streamingPhase" />
   </div>
@@ -116,13 +127,15 @@ function clearScheduledRender(): void {
 }
 
 .rc-text,
-.rc-markdown {
+.rc-markdown,
+.rc-code-block {
   transition: opacity var(--lc-content-replace-duration) ease-out, transform var(--lc-content-replace-duration) ease-out;
 }
 
 .rc-text.replacing,
 .rc-markdown-shell.replacing .rc-text,
-.rc-markdown-shell.replacing .rc-markdown {
+.rc-markdown-shell.replacing .rc-markdown,
+.rc-markdown-shell.replacing .rc-code-block {
   opacity: 0;
   transform: translateY(-3px);
 }
@@ -135,6 +148,14 @@ function clearScheduledRender(): void {
 
 .rc-markdown {
   min-width: 0;
+}
+
+.rc-markdown:not(:last-child) {
+  margin-bottom: var(--space-2);
+}
+
+.rc-code-block:last-child {
+  margin-bottom: 0;
 }
 
 .rc-markdown :deep(p),

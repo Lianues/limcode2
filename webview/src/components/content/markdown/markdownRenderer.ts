@@ -1,10 +1,14 @@
 type MarkdownToken = {
   attrs: Array<[string, string]> | null;
+  type: string;
+  content: string;
+  info: string;
   attrIndex(name: string): number;
   attrPush(attrData: [string, string]): void;
 };
 
 type MarkdownRenderer = {
+  render(tokens: MarkdownToken[], options: MarkdownOptions, env: unknown): string;
   renderToken(tokens: MarkdownToken[], index: number, options: MarkdownOptions): string;
 };
 
@@ -18,18 +22,25 @@ type MarkdownRenderRule = (
 ) => string;
 
 type MarkdownParser = {
+  options: MarkdownOptions;
   render(text: string): string;
-  renderer: {
+  parse(text: string, env: unknown): MarkdownToken[];
+  renderer: MarkdownRenderer & {
     rules: Record<string, MarkdownRenderRule | undefined>;
   };
 };
 
 type MarkdownItConstructor = new (options?: MarkdownOptions) => MarkdownParser;
 
+export type MarkdownRenderedPart =
+  | { kind: 'html'; html: string }
+  | { kind: 'code'; code: string; language: string; info: string };
+
 const FINAL_CACHE_LIMIT = 80;
 
 let parserPromise: Promise<MarkdownParser> | undefined;
 const finalRenderCache = new Map<string, string>();
+const finalPartCache = new Map<string, MarkdownRenderedPart[]>();
 
 /** 渲染 Markdown。streaming=true 时不写入最终缓存，避免流式增量产生大量一次性 key。 */
 export async function renderMarkdown(text: string, options: { streaming?: boolean } = {}): Promise<string> {
@@ -52,12 +63,83 @@ export async function renderMarkdown(text: string, options: { streaming?: boolea
   return html;
 }
 
+/**
+ * 渲染 Markdown 为可由 Vue 组合展示的片段。
+ * fenced / indented code block 会拆成 code 片段，交给专门的代码块显示器处理。
+ */
+export async function renderMarkdownParts(text: string, options: { streaming?: boolean } = {}): Promise<MarkdownRenderedPart[]> {
+  const normalized = text.trimStart();
+  if (!normalized) return [];
+
+  if (!options.streaming) {
+    const cached = finalPartCache.get(normalized);
+    if (cached !== undefined) {
+      finalPartCache.delete(normalized);
+      finalPartCache.set(normalized, cached);
+      return cached;
+    }
+  }
+
+  const parser = await getParser();
+  const tokens = parser.parse(normalized, {});
+  const parts = tokensToRenderedParts(parser, tokens);
+
+  if (!options.streaming) rememberFinalParts(normalized, parts);
+  return parts;
+}
+
+function tokensToRenderedParts(parser: MarkdownParser, tokens: MarkdownToken[]): MarkdownRenderedPart[] {
+  const parts: MarkdownRenderedPart[] = [];
+  let htmlTokens: MarkdownToken[] = [];
+
+  const flushHtml = (): void => {
+    if (htmlTokens.length === 0) return;
+    const html = parser.renderer.render(htmlTokens, parser.options, {}).trim();
+    if (html) parts.push({ kind: 'html', html });
+    htmlTokens = [];
+  };
+
+  for (const token of tokens) {
+    if (token.type === 'fence' || token.type === 'code_block') {
+      flushHtml();
+      parts.push({
+        kind: 'code',
+        code: token.content,
+        language: languageFromInfo(token.info),
+        info: token.info?.trim() ?? ''
+      });
+      continue;
+    }
+
+    htmlTokens.push(token);
+  }
+
+  flushHtml();
+  return parts;
+}
+
+function languageFromInfo(info: string | undefined): string {
+  const trimmed = info?.trim() ?? '';
+  if (!trimmed) return '';
+  const classMatch = trimmed.match(/^\{\.?([\w+#.-]+)/);
+  return classMatch?.[1] ?? trimmed.split(/\s+/)[0] ?? '';
+}
+
 function rememberFinalRender(text: string, html: string): void {
   finalRenderCache.set(text, html);
-  if (finalRenderCache.size <= FINAL_CACHE_LIMIT) return;
+  trimFinalCache(finalRenderCache);
+}
 
-  const oldestKey = finalRenderCache.keys().next().value as string | undefined;
-  if (oldestKey !== undefined) finalRenderCache.delete(oldestKey);
+function rememberFinalParts(text: string, parts: MarkdownRenderedPart[]): void {
+  finalPartCache.set(text, parts);
+  trimFinalCache(finalPartCache);
+}
+
+function trimFinalCache(cache: Map<string, unknown>): void {
+  if (cache.size <= FINAL_CACHE_LIMIT) return;
+
+  const oldestKey = cache.keys().next().value as string | undefined;
+  if (oldestKey !== undefined) cache.delete(oldestKey);
 }
 
 function getParser(): Promise<MarkdownParser> {

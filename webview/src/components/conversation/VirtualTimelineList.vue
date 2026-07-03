@@ -54,13 +54,20 @@ const offsets = computed(() => {
 });
 const totalHeight = computed(() => rowHeights.value.reduce((sum, height) => sum + height, 0));
 const visibleRange = computed(() => {
-  const startY = Math.max(0, scrollTop.value - props.overscan * props.estimatedHeight);
-  const endY = scrollTop.value + viewportHeight.value + props.overscan * props.estimatedHeight;
+  const rowCount = props.rows.length;
+  if (rowCount === 0) return { start: 0, end: 0 };
+
+  const maxScrollTop = Math.max(0, totalHeight.value - viewportHeight.value);
+  const effectiveScrollTop = clamp(scrollTop.value, 0, maxScrollTop);
+  const startY = Math.max(0, effectiveScrollTop - props.overscan * props.estimatedHeight);
+  const endY = effectiveScrollTop + viewportHeight.value + props.overscan * props.estimatedHeight;
   let start = 0;
   while (start < offsets.value.length && offsets.value[start] + rowHeights.value[start] < startY) start += 1;
+  start = clampStartIndex(start, rowCount);
   let end = start;
   while (end < offsets.value.length && offsets.value[end] < endY) end += 1;
-  return { start, end: Math.max(end, start + 1) };
+  end = clampEndIndex(Math.max(end, start + 1), rowCount);
+  return { start, end };
 });
 const visibleItems = computed(() => props.rows.slice(visibleRange.value.start, visibleRange.value.end));
 const topSpacerHeight = computed(() => offsets.value[visibleRange.value.start] ?? 0);
@@ -119,8 +126,12 @@ function detachScroller(): void {
 
 function syncScroller(): void {
   const element = attachedScroller;
-  scrollTop.value = element?.scrollTop ?? 0;
-  viewportHeight.value = element?.clientHeight ?? 0;
+  const nextViewportHeight = element?.clientHeight ?? 0;
+  viewportHeight.value = nextViewportHeight;
+  const maxScrollTop = Math.max(0, totalHeight.value - nextViewportHeight);
+  const nextScrollTop = clamp(element?.scrollTop ?? 0, 0, maxScrollTop);
+  if (element && element.scrollTop !== nextScrollTop) element.scrollTop = nextScrollTop;
+  scrollTop.value = nextScrollTop;
 }
 
 function scheduleAnchorRestore(): void {
@@ -180,6 +191,16 @@ function restorePendingAnchor(): void {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function clampStartIndex(value: number, rowCount: number): number {
+  if (rowCount <= 0) return 0;
+  return Math.min(rowCount - 1, Math.max(0, value));
+}
+
+function clampEndIndex(value: number, rowCount: number): number {
+  if (rowCount <= 0) return 0;
+  return Math.min(rowCount, Math.max(0, value));
 }
 
 function pruneRemovedRows(): void {

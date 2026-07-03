@@ -1,6 +1,6 @@
 import type { WorldPlugin } from '../plugin';
 import { ClientStateContributorRegistry } from './contributors';
-import { ClientStateContributorsKey, ClientSyncStateKey } from './resources';
+import { ClientStateContributorsKey, ClientSyncFastPatchStateKey, ClientSyncStateKey } from './resources';
 
 export function clientSyncPlugin(): WorldPlugin {
   return {
@@ -12,6 +12,11 @@ export function clientSyncPlugin(): WorldPlugin {
         projectionClock: '',
         contributorStates: {},
         streams: {}
+      });
+      ctx.world.setResource(ClientSyncFastPatchStateKey, {
+        patches: [],
+        deferFullSync: false,
+        requireFullSync: false
       });
     }
   };

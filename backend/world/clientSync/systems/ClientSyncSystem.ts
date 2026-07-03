@@ -2,18 +2,21 @@ import {
   GLOBAL_CLIENT_STATE_STREAM_ID,
   conversationClientStateStreamId,
   conversationIdFromClientStateStreamId,
+  isTextPart,
   type ClientPatchOp,
   type ClientState,
-  type ClientStateTableKey
+  type ClientStateTableKey,
+  type MessageRecord
 } from '../../../../shared/protocol';
 import { clientStateWithTables, createEmptyClientState, GLOBAL_CLIENT_STATE_TABLE_KEYS } from '../../../../shared/clientStateSchema';
 import { collectChangedClientStateConversationIds } from '../../../../shared/clientStateConversationScope';
 import { defineSystem, type AccessDeclaration } from '../../../ecs/types';
 import { readEvents } from '../../events';
+import { LlmRequest } from '../../modules/chat/components';
 import type { ClientStateContributor } from '../contributors';
 import { diffClientStateTables } from '../diff';
 import { ClientSyncEventType } from '../events';
-import { ClientStateContributorsKey, ClientSyncStateKey, type ClientStreamState } from '../resources';
+import { ClientStateContributorsKey, ClientSyncFastPatchStateKey, ClientSyncStateKey, type ClientStreamState, type ClientSyncFastPatchState } from '../resources';
 import { projectClientStateWithCache } from '../projection';
 
 export const ClientSyncSystem = defineSystem({
@@ -21,10 +24,13 @@ export const ClientSyncSystem = defineSystem({
   access(world) {
     const projectionReads = world.tryGetResource(ClientStateContributorsKey)?.reads() ?? emptyReads();
     return {
-      reads: projectionReads,
+      reads: {
+        ...projectionReads,
+        components: [...(projectionReads.components ?? []), LlmRequest]
+      },
       resources: {
-        read: [ClientStateContributorsKey, ClientSyncStateKey],
-        write: [ClientSyncStateKey],
+        read: [ClientStateContributorsKey, ClientSyncStateKey, ClientSyncFastPatchStateKey],
+        write: [ClientSyncStateKey, ClientSyncFastPatchStateKey],
         mutationMode: 'update'
       },
       events: { read: [ClientSyncEventType.Resync] },
@@ -35,14 +41,28 @@ export const ClientSyncSystem = defineSystem({
     const { world, cmd } = ctx;
     const registry = world.getResource(ClientStateContributorsKey);
     const syncState = world.getResource(ClientSyncStateKey);
+    const fastPatchState = world.getResource(ClientSyncFastPatchStateKey);
     const contributors = registry.list();
+    const resyncRequests = readEvents(ctx, ClientSyncEventType.Resync);
+    const hasResyncRequests = resyncRequests.length > 0;
+    const hasActiveLlmRequests = world.query(LlmRequest).length > 0;
+    const shouldDeferFullSync = fastPatchState.deferFullSync && hasActiveLlmRequests;
+    const canUseFastPath = fastPatchState.patches.length > 0
+      && shouldDeferFullSync
+      && !fastPatchState.requireFullSync
+      && syncState.lastState !== null
+      && !hasResyncRequests;
+    if (canUseFastPath) {
+      if (emitFastPatches(cmd, syncState, fastPatchState)) return;
+    }
+
+    if (shouldDeferFullSync && !fastPatchState.requireFullSync && !hasResyncRequests && fastPatchState.patches.length === 0) return;
+
     const projection = projectClientStateWithCache(world, contributors, syncState);
-    const sourceChanged = syncState.lastState === null || projection.changed;
+    const sourceChanged = syncState.lastState === null || projection.changed || fastPatchState.requireFullSync;
     const changedTableKeys = sourceChanged ? changedClientStateTableKeys(contributors, projection.changedContributorKeys) : [];
     const nextFull = projection.state;
     const prevFull = syncState.lastState;
-    const resyncRequests = readEvents(ctx, ClientSyncEventType.Resync);
-    const hasResyncRequests = resyncRequests.length > 0;
     const requestedConversationIds = new Set<string>();
     let wantsGlobalSnapshot = prevFull === null;
 
@@ -56,7 +76,10 @@ export const ClientSyncSystem = defineSystem({
       if (!streamId || streamId === GLOBAL_CLIENT_STATE_STREAM_ID) wantsGlobalSnapshot = true;
     }
 
-    if (!sourceChanged && !hasResyncRequests) return;
+    if (!sourceChanged && !hasResyncRequests) {
+      clearFastPatchStateIfNeeded(cmd, fastPatchState);
+      return;
+    }
 
     const streams: Record<string, ClientStreamState> = { ...syncState.streams };
     let didUpdateStreams = false;
@@ -100,6 +123,7 @@ export const ClientSyncSystem = defineSystem({
         streams
       });
     }
+    clearFastPatchStateIfNeeded(cmd, fastPatchState);
   }
 });
 
@@ -126,6 +150,111 @@ function emitPatchIfChanged(
   const stream: ClientStreamState = { streamSeq: current.streamSeq + 1, lastState: next };
   cmd.effect({ kind: 'client.patch', streamId, streamSeq: stream.streamSeq, patches });
   return stream;
+}
+
+function emitFastPatches(
+  cmd: { effect(effect: unknown): void; setResource<T>(key: { readonly id: symbol; readonly name: string; readonly __t?: T }, value: T): void },
+  syncState: { lastState: ClientState | null; projectionClock: string; contributorStates: Record<string, unknown>; streams: Record<string, ClientStreamState> },
+  fastPatchState: ClientSyncFastPatchState
+): boolean {
+  if (!syncState.lastState) return false;
+  const batches = mergeFastPatchBatches(fastPatchState.patches);
+  const allPatches = batches.flatMap((batch) => batch.patches);
+  const nextFull = applyMessageFastPatches(syncState.lastState, allPatches);
+  if (!nextFull) return false;
+
+  const streams: Record<string, ClientStreamState> = { ...syncState.streams };
+  const emitted: Array<{ streamId: string; streamSeq: number; patches: readonly ClientPatchOp[] }> = [];
+
+  for (const batch of batches) {
+    const existing = streams[batch.streamId];
+    if (!existing) continue;
+    if (!existing.lastState) return false;
+    const nextStreamState = applyMessageFastPatches(existing.lastState, batch.patches);
+    if (!nextStreamState) return false;
+    const stream: ClientStreamState = { streamSeq: existing.streamSeq + 1, lastState: nextStreamState };
+    streams[batch.streamId] = stream;
+    emitted.push({ streamId: batch.streamId, streamSeq: stream.streamSeq, patches: batch.patches });
+  }
+
+  cmd.setResource(ClientSyncStateKey, {
+    lastState: nextFull,
+    projectionClock: syncState.projectionClock,
+    contributorStates: syncState.contributorStates as never,
+    streams
+  });
+  cmd.setResource(ClientSyncFastPatchStateKey, {
+    patches: [],
+    deferFullSync: fastPatchState.deferFullSync,
+    requireFullSync: false
+  });
+
+  for (const item of emitted) {
+    cmd.effect({ kind: 'client.patch', streamId: item.streamId, streamSeq: item.streamSeq, patches: item.patches });
+  }
+  return true;
+}
+
+function mergeFastPatchBatches(batches: ClientSyncFastPatchState['patches']): Array<{ streamId: string; patches: readonly ClientPatchOp[] }> {
+  const byStreamId = new Map<string, ClientPatchOp[]>();
+  for (const batch of batches) {
+    const patches = byStreamId.get(batch.streamId) ?? [];
+    patches.push(...batch.patches);
+    byStreamId.set(batch.streamId, patches);
+  }
+  return [...byStreamId.entries()].map(([streamId, patches]) => ({ streamId, patches }));
+}
+
+function applyMessageFastPatches(state: ClientState, patches: readonly ClientPatchOp[]): ClientState | undefined {
+  let nextMessages: MessageRecord[] | undefined;
+  const indexById = new Map(state.messages.map((message, index) => [message.id, index]));
+
+  for (const patch of patches) {
+    if (!isMessageFastPatch(patch)) return undefined;
+    const index = indexById.get(patch.id);
+    if (index === undefined) return undefined;
+    const messages = nextMessages ?? state.messages;
+    const message = messages[index];
+    if (!message) return undefined;
+    const nextMessage = applyMessageFastPatch(message, patch);
+    if (!nextMessage) return undefined;
+    nextMessages ??= [...state.messages];
+    nextMessages[index] = nextMessage;
+  }
+
+  return nextMessages ? { ...state, messages: nextMessages } : state;
+}
+
+type MessageFastPatch = Extract<ClientPatchOp, { kind: 'message.partText.append' | 'message.part.insert' }>;
+
+function isMessageFastPatch(patch: ClientPatchOp): patch is MessageFastPatch {
+  return patch.kind === 'message.partText.append' || patch.kind === 'message.part.insert';
+}
+
+function applyMessageFastPatch(message: MessageRecord, patch: MessageFastPatch): MessageRecord | undefined {
+  const parts = message.content.parts;
+  if (patch.kind === 'message.partText.append') {
+    const part = parts[patch.partIndex];
+    if (!part || !isTextPart(part)) return undefined;
+    const nextParts = [...parts];
+    nextParts[patch.partIndex] = { ...part, text: part.text + patch.delta };
+    return { ...message, content: { ...message.content, parts: nextParts } };
+  }
+
+  if (patch.index < 0 || patch.index > parts.length) return undefined;
+  const nextParts = [...parts];
+  nextParts.splice(patch.index, 0, clonePatchValue(patch.part));
+  return { ...message, content: { ...message.content, parts: nextParts } };
+}
+
+function clonePatchValue<T>(value: T): T {
+  if (typeof structuredClone === 'function') return structuredClone(value);
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function clearFastPatchStateIfNeeded(cmd: { setResource<T>(key: { readonly id: symbol; readonly name: string; readonly __t?: T }, value: T): void }, state: ClientSyncFastPatchState): void {
+  if (state.patches.length === 0 && !state.deferFullSync && !state.requireFullSync) return;
+  cmd.setResource(ClientSyncFastPatchStateKey, { patches: [], deferFullSync: false, requireFullSync: false });
 }
 
 function diffClientState(contributors: ClientStateContributor[], prev: ClientState, next: ClientState): ClientPatchOp[] {

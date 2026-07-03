@@ -26,11 +26,13 @@ import {
   isProviderContextPart,
   isTextPart,
   isVisibleTextPart,
+  type ClientPatchOp,
   type ContentPart,
   type LlmTransientNoticeKind,
   type LlmUsageMetadataRecord
 } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
+import { ClientSyncFastPatchStateKey, type ClientSyncFastPatchBatch } from '../../../clientSync/resources';
 
 type PendingOperation =
   | { kind: 'started'; payload: LlmStartedPayload }
@@ -89,6 +91,7 @@ export const LlmPollSystem = defineSystem({
     queries: [LlmInvocationsByIdQuery, LlmRequestsByIdQuery, ModelMessagesQuery, ToolCallLookupQuery],
     reads: { components: [PartOf, CompressionBlock, ToolCallEvent, ToolCallRunLink] },
     writes: { components: [Streaming, AgentRun, ToolCall, ToolCallEvent, ToolCallRunLink] },
+    resources: { read: [ClientSyncFastPatchStateKey], write: [ClientSyncFastPatchStateKey], mutationMode: 'update' },
     events: { read: [LlmEventType.Started, LlmEventType.ThoughtDelta, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error, LlmEventType.RetryScheduled, LlmEventType.RetryStarted, LlmEventType.RetryCancelled, LlmEventType.RetryRecovered], emit: [CheckpointEventType.Requested, CompressionEventType.Create] },
     effects: { emit: ['client.transientNotice'] },
     bundles: [ToolCallBundle]
@@ -96,6 +99,8 @@ export const LlmPollSystem = defineSystem({
   run(ctx) {
     const { world, cmd } = ctx;
     const updates = new Map<string, PendingRequestUpdate>();
+    const fastPatchBatches: ClientSyncFastPatchBatch[] = [];
+    let requireFullSync = false;
 
     for (const event of ctx.events) {
       switch (event.type) {
@@ -136,7 +141,21 @@ export const LlmPollSystem = defineSystem({
     }
 
     for (const [requestId, update] of updates) {
-      applyRequestUpdate(world, cmd, requestId, update);
+      const result = applyRequestUpdate(world, cmd, requestId, update);
+      fastPatchBatches.push(...result.fastPatchBatches);
+      requireFullSync = result.requireFullSync || requireFullSync;
+    }
+
+    const hasActiveLlmRequests = world.query(LlmRequest).length > 0;
+    const current = world.getResource(ClientSyncFastPatchStateKey);
+    const nextRequireFullSync = current.requireFullSync || requireFullSync;
+    const nextDeferFullSync = hasActiveLlmRequests && (current.deferFullSync || fastPatchBatches.length > 0 || nextRequireFullSync);
+    if (fastPatchBatches.length > 0 || current.deferFullSync !== nextDeferFullSync || current.requireFullSync !== nextRequireFullSync) {
+      cmd.setResource(ClientSyncFastPatchStateKey, {
+        patches: [...current.patches, ...fastPatchBatches],
+        deferFullSync: nextDeferFullSync,
+        requireFullSync: nextRequireFullSync
+      });
     }
   }
 });
@@ -247,20 +266,25 @@ function hasCompressionBlockForAnchor(world: WorldReader, conversation: Entity, 
 }
 
 
-function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: string, update: PendingRequestUpdate): void {
+interface ApplyRequestUpdateResult {
+  fastPatchBatches: ClientSyncFastPatchBatch[];
+  requireFullSync: boolean;
+}
+
+function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: string, update: PendingRequestUpdate): ApplyRequestUpdateResult {
   const request = requestOf(world, requestId);
-  if (request === undefined) return;
+  if (request === undefined) return emptyApplyResult();
 
   const requestData = world.get(request, LlmRequest);
-  if (!requestData) return;
+  if (!requestData) return emptyApplyResult();
 
   const modelMessage = requestData.modelMessage;
   const current = world.get(modelMessage, Message);
-  if (!current) return;
+  if (!current) return emptyApplyResult();
 
   if (isRunCancelledOrStale(world, requestData.run)) {
     if (hasTerminalOperation(update)) cleanupCancelledRequest(world, cmd, request, modelMessage, current, requestData.invocation);
-    return;
+    return { fastPatchBatches: [], requireFullSync: hasTerminalOperation(update) };
   }
 
   let next = current;
@@ -276,11 +300,14 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
   let sawToolCall = false;
   let errorMessage: string | undefined;
   let usageMetadata: MessageData['usageMetadata'] | undefined;
+  const fastPatches: ClientPatchOp[] = [];
+  let fastPatchSafe = true;
 
   for (const operation of update.operations) {
     switch (operation.kind) {
       case 'started':
         nextInvocation = markInvocationStreaming(nextInvocation, operation.payload.startedAt);
+        fastPatchSafe = false;
         break;
       case 'retryScheduled':
         emitTransientNotice(world, cmd, requestId, requestData, current, 'retryScheduled', operation.payload);
@@ -290,6 +317,7 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
         next = resetMessageForRetry(next);
         existingFunctionCallIds.clear();
         cleanupToolCallsForMessage(world, cmd, modelMessage);
+        fastPatchSafe = false;
         break;
       case 'retryCancelled':
         emitTransientNotice(world, cmd, requestId, requestData, current, 'retryCancelled', operation.payload);
@@ -297,15 +325,24 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
       case 'retryRecovered':
         emitTransientNotice(world, cmd, requestId, requestData, current, 'retryRecovered', operation.payload);
         break;
-      case 'thoughtDelta':
-        next = appendThoughtDelta(next, operation.payload);
+      case 'thoughtDelta': {
+        const updateResult = appendThoughtDeltaWithPatch(next, operation.payload);
+        next = updateResult.message;
+        if (updateResult.patch) fastPatches.push(updateResult.patch);
+        else if (next !== current) fastPatchSafe = false;
         break;
+      }
       case 'thoughtDone':
         next = finishThoughtPart(next, operation.payload);
+        fastPatchSafe = false;
         break;
-      case 'delta':
-        next = appendTextToMessage(next, operation.payload.text);
+      case 'delta': {
+        const updateResult = appendTextToMessageWithPatch(next, operation.payload.text);
+        next = updateResult.message;
+        if (updateResult.patch) fastPatches.push(updateResult.patch);
+        else if (next !== current) fastPatchSafe = false;
         break;
+      }
       case 'toolCall':
         sawToolCall = true;
         for (const rawCall of operation.payload.calls) {
@@ -316,6 +353,7 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
           if (!existingFunctionCallIds.has(toolCallId)) {
             next = appendFunctionCallPart(next, { id: toolCallId, name: rawCall.name, argsJson: rawCall.argsJson, thoughtSignature: rawCall.thoughtSignature });
             existingFunctionCallIds.add(toolCallId);
+            fastPatchSafe = false;
           }
 
           if (!toolCallExists(world, toolCallId)) {
@@ -330,12 +368,14 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
         next = withLlmTiming({ ...next, status: 'error' }, operation.payload, nextInvocation?.startedAt);
         nextInvocation = markInvocationError(nextInvocation, operation.payload.message, operation.payload);
         shouldFinish = true;
+        fastPatchSafe = false;
         break;
       case 'done':
         usageMetadata = operation.payload.usageMetadata;
         next = withLlmTiming({ ...next, status: 'complete' }, operation.payload, nextInvocation?.startedAt);
         nextInvocation = markInvocationComplete(nextInvocation, operation.payload);
         shouldFinish = true;
+        fastPatchSafe = false;
         break;
     }
   }
@@ -348,6 +388,11 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
     cmd.add(requestData.invocation, LlmInvocation, nextInvocation);
   }
 
+  const conversation = world.get(requestData.conversation, Conversation);
+  const fastPatchBatches = fastPatchSafe && fastPatches.length > 0 && conversation
+    ? [{ streamId: conversationClientStateStreamId(conversation.id), patches: fastPatches }]
+    : [];
+
   if (shouldFinish) {
     cmd.remove(modelMessage, Streaming);
     cmd.despawn(request);
@@ -356,7 +401,6 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
       const now = Date.now();
       const waitsForTool = sawToolCall || next.content.parts.some(isFunctionCallPart);
       const nextStatus = errorMessage ? 'failed' : waitsForTool ? 'waiting_tool' : 'delivering';
-      const conversation = world.get(requestData.conversation, Conversation);
       if (!errorMessage && conversation) {
         cmd.enqueue({
           type: CheckpointEventType.Requested,
@@ -373,6 +417,15 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
       });
     }
   }
+
+  return {
+    fastPatchBatches,
+    requireFullSync: !fastPatchSafe || shouldFinish
+  };
+}
+
+function emptyApplyResult(): ApplyRequestUpdateResult {
+  return { fastPatchBatches: [], requireFullSync: false };
 }
 
 function emitTransientNotice(
@@ -482,16 +535,20 @@ function withLlmTiming(message: MessageData, update: LlmDonePayload | LlmErrorPa
   };
 }
 
-function appendThoughtDelta(message: MessageData, thought: LlmThoughtDeltaPayload): MessageData {
+function appendThoughtDeltaWithPatch(message: MessageData, thought: LlmThoughtDeltaPayload): { message: MessageData; patch?: ClientPatchOp } {
+  if (!thought.text) return { message };
   const parts = [...message.content.parts];
   const last = parts[parts.length - 1];
   if (last && isTextPart(last) && last.thought === true && last.thoughtDurationMs === undefined) {
-    parts[parts.length - 1] = {
+    const index = parts.length - 1;
+    parts[index] = {
       ...last,
       text: last.text + thought.text,
       ...(thought.thoughtSignature ? { thoughtSignature: thought.thoughtSignature } : {})
     };
-    return { ...message, content: { ...message.content, parts } };
+    const next = { ...message, content: { ...message.content, parts } };
+    if (thought.thoughtSignature && thought.thoughtSignature !== last.thoughtSignature) return { message: next };
+    return { message: next, patch: { kind: 'message.partText.append', id: message.id, partIndex: index, delta: thought.text } };
   }
 
   const part: ContentPart = {
@@ -499,7 +556,10 @@ function appendThoughtDelta(message: MessageData, thought: LlmThoughtDeltaPayloa
     thought: true,
     ...(thought.thoughtSignature ? { thoughtSignature: thought.thoughtSignature } : {})
   };
-  return { ...message, content: { ...message.content, parts: [...message.content.parts, part] } };
+  return {
+    message: { ...message, content: { ...message.content, parts: [...message.content.parts, part] } },
+    patch: { kind: 'message.part.insert', id: message.id, index: message.content.parts.length, part }
+  };
 }
 
 function finishThoughtPart(message: MessageData, thought: LlmThoughtDonePayload): MessageData {
@@ -536,16 +596,24 @@ function appendFunctionCallPart(
   return { ...message, content: { ...message.content, parts: [...message.content.parts, part] } };
 }
 
-function appendTextToMessage(message: MessageData, delta: string): MessageData {
-  if (!delta) return message;
+function appendTextToMessageWithPatch(message: MessageData, delta: string): { message: MessageData; patch?: ClientPatchOp } {
+  if (!delta) return { message };
   const parts = [...message.content.parts];
   const last = parts[parts.length - 1];
   if (last && isVisibleTextPart(last)) {
-    parts[parts.length - 1] = { ...last, text: last.text + delta };
-  } else {
-    parts.push({ text: delta });
+    const index = parts.length - 1;
+    parts[index] = { ...last, text: last.text + delta };
+    return {
+      message: { ...message, content: { ...message.content, parts } },
+      patch: { kind: 'message.partText.append', id: message.id, partIndex: index, delta }
+    };
   }
-  return { ...message, content: { ...message.content, parts } };
+
+  const part: ContentPart = { text: delta };
+  return {
+    message: { ...message, content: { ...message.content, parts: [...message.content.parts, part] } },
+    patch: { kind: 'message.part.insert', id: message.id, index: message.content.parts.length, part }
+  };
 }
 
 function normalizeToolCallId(

@@ -41,6 +41,11 @@ export interface ClientStatePersistenceOptions {
   renderLoadedConversationIds?: () => Iterable<string>;
   isConversationRunHistoryLoaded?: (conversationId: string) => boolean;
   runHistoryLoadedConversationIds?: () => Iterable<string>;
+  /**
+   * 流式消息尚未结束时，非强制持久化没有意义，且会和 stream 消费争抢 extension host。
+   * 返回 true 时 queue/persistImmediately 会延后保存；force 保存仍然照常执行。
+   */
+  shouldDeferPersist?: () => boolean;
 }
 
 interface PendingRunHistoryState {
@@ -64,6 +69,7 @@ export class ClientStatePersistence {
   private persistTimer: ReturnType<typeof setTimeout> | undefined;
   private persistInFlight = false;
   private persistPendingAfterInFlight = false;
+  private persistPendingAfterDeferred = false;
   private readonly persistIdleWaiters: Array<() => void> = [];
 
   private projectionClock = '';
@@ -90,13 +96,21 @@ export class ClientStatePersistence {
 
   public queuePersist(): void {
     if (!this.enabled) return;
+    if (this.shouldDeferPersist()) {
+      this.persistPendingAfterDeferred = true;
+      this.clearPersistTimer();
+      return;
+    }
+    this.persistPendingAfterDeferred = false;
     this.schedulePersistCheck();
   }
 
   public async persistImmediately(options: { force?: boolean; throwOnError?: boolean } = {}): Promise<void> {
-    if (this.persistTimer) {
-      clearTimeout(this.persistTimer);
-      this.persistTimer = undefined;
+    this.clearPersistTimer();
+
+    if (!options.force && this.shouldDeferPersist()) {
+      this.persistPendingAfterDeferred = true;
+      return;
     }
 
     if (this.persistInFlight) {
@@ -232,6 +246,12 @@ export class ClientStatePersistence {
   }
 
   private schedulePersistCheck(): void {
+    if (this.shouldDeferPersist()) {
+      this.persistPendingAfterDeferred = true;
+      this.clearPersistTimer();
+      return;
+    }
+    this.persistPendingAfterDeferred = false;
     if (this.persistTimer) return;
     if (this.persistInFlight) {
       this.persistPendingAfterInFlight = true;
@@ -241,6 +261,16 @@ export class ClientStatePersistence {
       this.persistTimer = undefined;
       void this.persistImmediately();
     }, this.debounceMs);
+  }
+
+  private clearPersistTimer(): void {
+    if (!this.persistTimer) return;
+    clearTimeout(this.persistTimer);
+    this.persistTimer = undefined;
+  }
+
+  private shouldDeferPersist(): boolean {
+    return this.options.shouldDeferPersist?.() === true;
   }
 
   private waitForPersistIdle(): Promise<void> {

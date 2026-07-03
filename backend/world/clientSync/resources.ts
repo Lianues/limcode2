@@ -1,5 +1,5 @@
 import { defineResource } from '../../ecs/types';
-import type { ClientState } from '../../../shared/protocol';
+import type { ClientPatchOp, ClientState } from '../../../shared/protocol';
 import type { ClientStateContributorRegistry } from './contributors';
 import type { ClientContributorProjectionState } from './projection';
 
@@ -23,5 +23,20 @@ export interface ClientSyncState {
   streams: Record<string, ClientStreamState>;
 }
 
+export interface ClientSyncFastPatchBatch {
+  readonly streamId: string;
+  readonly patches: readonly ClientPatchOp[];
+}
+
+export interface ClientSyncFastPatchState {
+  /** 已由领域 system 精确计算好的轻量 patch，ClientSyncSystem 只负责校验、编号和投递。 */
+  readonly patches: readonly ClientSyncFastPatchBatch[];
+  /** true 时表示流式消息仍在进行，普通 full projection 可以延后到终态或强制 resync。 */
+  readonly deferFullSync: boolean;
+  /** true 时表示本轮出现了快路径无法表达的变更，必须跑一次 full projection 追平。 */
+  readonly requireFullSync: boolean;
+}
+
 export const ClientStateContributorsKey = defineResource<ClientStateContributorRegistry>('ClientStateContributors');
 export const ClientSyncStateKey = defineResource<ClientSyncState>('ClientSyncState');
+export const ClientSyncFastPatchStateKey = defineResource<ClientSyncFastPatchState>('ClientSyncFastPatchState');

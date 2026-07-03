@@ -148,7 +148,8 @@ export class BackendApplication {
     this.env.mcp.setStateChangeListener(() => this.syncMcpRuntimeResources());
     this.persistence = new ClientStatePersistence(this.world, this.env.storage, {
       renderLoadedConversationIds: () => this.renderLoadedConversationDetails,
-      runHistoryLoadedConversationIds: () => this.runHistoryLoadedConversationDetails
+      runHistoryLoadedConversationIds: () => this.runHistoryLoadedConversationDetails,
+      shouldDeferPersist: () => this.hasActiveLlmRequests()
     });
     this.globalSettingsBridge = new GlobalSettingsBridge({
       storage: this.env.storage,
@@ -212,6 +213,10 @@ export class BackendApplication {
     registerClientSyncSystems(this.scheduler);
 
     void this.initializeClientState();
+  }
+
+  private hasActiveLlmRequests(): boolean {
+    return this.world.query(LlmRequest).length > 0;
   }
 
   /** 由外部显式请求生成 agent；基础对话会在初始化时创建 main/default。 */
@@ -427,9 +432,7 @@ export class BackendApplication {
   public async ensureConversationDetailLoaded(conversationId: string): Promise<void> {
     if (!conversationId) return;
     if (!this.hydrated) await this.waitUntilHydrated();
-    if (this.renderLoadedConversationDetails.has(conversationId)) {
-      return;
-    }
+    if (this.renderLoadedConversationDetails.has(conversationId)) return;
 
     const detail = await this.env.storage.loadConversationDetail(conversationId, { includeRunHistory: false });
     const hydrated = detail ? await hydrateConversationDetail(this.world, detail, conversationId) : false;

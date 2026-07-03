@@ -18,6 +18,7 @@ export interface ConversationData {
 }
 export const Conversation = defineComponent<ConversationData>('Conversation');
 export const ConversationFullContextPending = defineComponent<{ startedAt: number }>('ConversationFullContextPending');
+export const ConversationFullContextLoaded = defineComponent<{ loadedAt: number }>('ConversationFullContextLoaded');
 
 export interface ConversationReuseLinkData {
   id: string;

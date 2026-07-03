@@ -253,10 +253,11 @@ function hasClientStateRecords(state: ClientState): boolean {
   return (Object.values(state) as unknown[]).some((value) => Array.isArray(value) && value.length > 0);
 }
 
-export function hydrateConversationDetail(world: World, state: ClientState, conversationId: string): boolean {
+export async function hydrateConversationDetail(world: World, state: ClientState, conversationId: string): Promise<boolean> {
   const conversationEntities = existingRecords(world, Conversation);
   const conversation = conversationEntities.get(conversationId);
   if (conversation === undefined) return false;
+  const yieldHydration = createHydrationYield();
 
   const agentEntities = existingRecords(world, Agent);
   const modeEntities = existingRecords(world, Mode);
@@ -276,6 +277,7 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
     if (messageEntities.has(record.id)) continue;
     const entity = spawnHydratedMessage(world, conversation, record);
     messageEntities.set(record.id, entity);
+    await yieldHydration();
   }
 
   const revisionEntities = existingRecords(world, MessageRevision);
@@ -286,6 +288,7 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
     revisionEntities.set(record.id, entity);
     world.add(entity, MessageRevision, { id: record.id, content: record.content, createdAt: record.createdAt, reason: record.reason });
     world.add(entity, PartOf, { parent: message });
+    await yieldHydration();
   }
 
   const currentRevisionLinkIds = existingIds(world, MessageCurrentRevisionLink);
@@ -297,6 +300,7 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
     const entity = world.spawn();
     currentRevisionLinkIds.add(record.id);
     world.add(entity, MessageCurrentRevisionLink, { id: record.id, message, revision });
+    await yieldHydration();
   }
 
   const toolCallEntities = existingRecords(world, ToolCall);
@@ -304,6 +308,7 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
     if (toolCallEntities.has(record.id)) continue;
     const entity = spawnHydratedToolCall(world, messageEntities, record);
     if (entity !== undefined) toolCallEntities.set(record.id, entity);
+    await yieldHydration();
   }
 
   const toolCallEventIds = existingIds(world, ToolCallEvent);
@@ -311,6 +316,7 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
     if (toolCallEventIds.has(record.id)) continue;
     spawnHydratedToolCallEvent(world, toolCallEntities, record);
     toolCallEventIds.add(record.id);
+    await yieldHydration();
   }
 
   const existingRunIdsBeforeHydration = existingIds(world, AgentRun);
@@ -355,6 +361,7 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
       createdAt: now,
       updatedAt: now
     });
+    await yieldHydration();
   }
 
   const targetLinkIds = existingIds(world, AgentRunTargetLink);
@@ -368,6 +375,7 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
     const now = Date.now();
     targetLinkIds.add(link.id);
     world.add(entity, AgentRunTargetLink, { id: link.id, run, agent, conversation: targetConversation, role: link.role, createdAt: now, updatedAt: now });
+    await yieldHydration();
   }
 
   hydrateQueueOrderRecords(world, state, runEntities, conversationEntities);
@@ -423,9 +431,29 @@ export function hydrateConversationDetail(world: World, state: ClientState, conv
     const entity = world.spawn();
     inputRevisionIds.add(record.id);
     world.add(entity, AgentRunInputRevision, { id: record.id, run, conversation: inputConversation, revision });
+    await yieldHydration();
   }
 
   return true;
+}
+
+function createHydrationYield(batchSize = 250): () => Promise<void> {
+  let count = 0;
+  return async () => {
+    count += 1;
+    if (count % batchSize !== 0) return;
+    await yieldToExtensionHost();
+  };
+}
+
+function yieldToExtensionHost(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof setImmediate === 'function') {
+      setImmediate(resolve);
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
 }
 function hydrateQueueOrderRecords(world: World, state: ClientState, runs: Map<string, Entity>, conversations: Map<string, Entity>): void {
   const existing = existingIds(world, AgentRunQueueOrder);

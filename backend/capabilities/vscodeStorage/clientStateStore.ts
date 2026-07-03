@@ -59,7 +59,8 @@ import {
   loadConversationTimelinePage,
   loadConversationTimelineRange,
   loadConversationTimelineDetail,
-  saveConversationTimelineDetail
+  saveConversationTimelineDetail,
+  truncateConversationTimeline
 } from './conversationTimelineStore';
 import { loadConversationCompressionDetail, saveConversationCompressionDetail } from './compressionStore';
 
@@ -354,6 +355,14 @@ export async function loadConversationTimelineRangeFromStores(paths: StoragePath
   );
   if (runHistory) copyRunHistoryTables(state, runHistory);
   return state;
+}
+
+export async function truncateConversationTimelineFromStores(paths: StoragePaths, request: {
+  conversationId: string;
+  anchorMessageId: string;
+  keepAnchor: boolean;
+}): Promise<{ conversationId: string; removedMessageIds: string[] }> {
+  return truncateConversationTimeline(paths, request);
 }
 
 

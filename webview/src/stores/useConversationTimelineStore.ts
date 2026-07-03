@@ -214,10 +214,9 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       const conversationId = conversationIdFromClientStateStreamId(streamId);
       if (!conversationId) return;
       const timeline = this.ensureTimeline(conversationId);
-      if (state.messages.some((message) => message.conversationId === conversationId)) {
+      // Page snapshots own chunk cursors and global floor offsets; stream snapshots only overlay live ECS state.
+      if (state.messages.some((message) => message.conversationId === conversationId) && timeline.loadedChunkIds.length === 0) {
         timeline.state = createEmptyClientState();
-        timeline.loadedChunkIds = [];
-        timeline.chunkById = {};
       }
       mergeClientState(timeline.state, state);
       timeline.streamSeq = streamSeq;

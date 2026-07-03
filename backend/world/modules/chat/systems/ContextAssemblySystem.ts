@@ -7,7 +7,7 @@ import { activeModelProfileForRun } from '../../agentRun/queries';
 import { CompressionBlock } from '../../compression/components';
 import { hasActiveBlockingCompression } from '../../compression/queries';
 import { ConversationModeSelection, Mode, ModelProfile, ModelProfileScopeLink } from '../../mode/components';
-import { LlmRequest, Conversation, ConversationFullContextPending, Message } from '../components';
+import { LlmRequest, Conversation, ConversationFullContextLoaded, ConversationFullContextPending, Message } from '../components';
 import { ModelMessageBundle, LlmRequestBundle, MessageBundle, spawnMessage, spawnModelMessage, spawnLlmRequest } from '../bundles';
 import { materializeUserInputMessage } from '../userInputMaterialization';
 import { CheckpointEventType } from '../../checkpoint/events';
@@ -20,8 +20,8 @@ import { createMessageId } from '../../../../../shared/protocol';
 const RunsNeedingModelQuery = defineQuery({
   name: 'RunsNeedingModel',
   all: [AgentRun, AgentRunNeedsModel],
-  read: [AgentRun, AgentRunNeedsModel, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunTargetLink, LlmRequest, Conversation, ConversationFullContextPending, Message, Checkpoint, CheckpointBarrier],
-  write: [AgentRun],
+  read: [AgentRun, AgentRunNeedsModel, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunTargetLink, LlmRequest, Conversation, ConversationFullContextLoaded, ConversationFullContextPending, Message, Checkpoint, CheckpointBarrier],
+  write: [AgentRun, ConversationFullContextPending],
   remove: [AgentRunNeedsModel, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunQueueHold],
   mutationMode: 'update',
   role: 'work'
@@ -47,11 +47,11 @@ export const ContextAssemblySystem = defineSystem({
   name: 'ContextAssemblySystem',
   access: {
     queries: [RunsNeedingModelQuery, ActiveLlmRequestsQuery, LlmInvocationLookupQuery],
-    reads: { components: [RunModeLink, RunModelProfileLink, ConversationModeSelection, Mode, ModelProfile, ModelProfileScopeLink, CompressionBlock, ConversationFullContextPending, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, Checkpoint] },
+    reads: { components: [RunModeLink, RunModelProfileLink, ConversationModeSelection, Mode, ModelProfile, ModelProfileScopeLink, CompressionBlock, ConversationFullContextLoaded, ConversationFullContextPending, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, Checkpoint] },
     bundles: [ModelMessageBundle, MessageBundle, LlmRequestBundle, LlmInvocationBundle, MessageLlmInvocationLinkBundle],
-    writes: { components: [AgentRun, MessageRunLink, CheckpointBarrier] },
+    writes: { components: [AgentRun, MessageRunLink, ConversationFullContextPending, CheckpointBarrier] },
     events: { read: [LlmEventType.InvocationResolved, LlmEventType.InvocationResolveError], emit: [CheckpointEventType.Requested] },
-    effects: { emit: ['llm.resolveInvocation'] }
+    effects: { emit: ['conversation.context.load', 'llm.resolveInvocation'] }
   },
   run(ctx) {
     const { world, cmd } = ctx;
@@ -73,7 +73,10 @@ export const ContextAssemblySystem = defineSystem({
       }
       const target = targetForRun(world, run);
       if (!target) continue;
-      if (world.has(target.conversation, ConversationFullContextPending)) continue;
+      if (!world.has(target.conversation, ConversationFullContextLoaded)) {
+        requestFullContextLoad(world, cmd, run, target.conversation);
+        continue;
+      }
       if (hasActiveBlockingCompression(world, target.conversation)) continue;
 
       drainQueuedInputsIntoRun(world, cmd, run, target.conversation);
@@ -95,6 +98,21 @@ export const ContextAssemblySystem = defineSystem({
     }
   }
 });
+
+function requestFullContextLoad(world: WorldReader, cmd: CommandSink, run: Entity, conversation: Entity): void {
+  markRunPreparing(world, cmd, run);
+  if (world.has(conversation, ConversationFullContextPending)) return;
+  const data = world.get(conversation, Conversation);
+  if (!data?.id) return;
+  cmd.add(conversation, ConversationFullContextPending, { startedAt: Date.now() });
+  cmd.effect({ kind: 'conversation.context.load', conversationId: data.id });
+}
+
+function markRunPreparing(world: WorldReader, cmd: CommandSink, run: Entity): void {
+  const data = world.get(run, AgentRun);
+  if (!data || data.status !== 'queued') return;
+  cmd.add(run, AgentRun, { ...data, status: 'preparing', updatedAt: Date.now() });
+}
 
 function materializeResolvedInvocation(world: WorldReader, cmd: CommandSink, payload: LlmInvocationResolvedPayload): void {
   const invocation = invocationEntityById(world, payload.invocationId);

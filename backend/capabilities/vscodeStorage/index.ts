@@ -39,7 +39,8 @@ import {
   saveConversationRenderDetailToStores,
   saveConversationRunHistoryToStores,
   saveMessageRecord,
-  saveToolCallRecord
+  saveToolCallRecord,
+  truncateConversationTimelineFromStores
 } from './clientStateStore';
 import { loadTimelineProjectionContext } from './conversationTimelineStore';
 import {
@@ -111,6 +112,10 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     async loadConversationTimelineRange(request) {
       const paths = getPaths();
       return loadConversationTimelineRangeFromStores(paths, request);
+    },
+    async truncateConversationTimeline(request) {
+      const paths = getPaths();
+      return truncateConversationTimelineFromStores(paths, request);
     },
     async saveClientStateSkeleton(state) {
       const paths = getPaths();
@@ -366,4 +371,3 @@ function normalizeConversationLlmSettings(
 ): ConversationLlmSettingsRecord {
   return { conversationId, activeProviderConfigId: typeof settings?.activeProviderConfigId === 'string' ? settings.activeProviderConfigId.trim() : '' };
 }
-

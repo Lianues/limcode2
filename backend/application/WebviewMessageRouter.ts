@@ -4,7 +4,7 @@ import type { CommandCapability, FsCapability, LlmCapability, StorageCapability,
 import { ChatEventType } from '../world/modules/chat/events';
 import { AgentRunEventType } from '../world/modules/agentRun/events';
 import { AgentRun } from '../world/modules/agentRun/components';
-import { Conversation, ConversationFullContextPending, Message } from '../world/modules/chat/components';
+import { Conversation, Message } from '../world/modules/chat/components';
 import { LlmInvocation, MessageLlmInvocationLink, RunLlmInvocationLink } from '../world/modules/llm/components';
 import { buildLlmStartRequestForRun } from '../world/modules/chat/systems/LlmDispatchSystem';
 import { CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSourceLink } from '../world/modules/compression/components';
@@ -50,6 +50,9 @@ import {
   type ConversationTimelinePageRequest,
   type LlmInvocationSettingsSnapshotRecord,
   type MessageContent,
+  type MessageDeleteFromPayload,
+  type MessageEditPayload,
+  type MessageRetryFromPayload,
   type LlmProviderModelsGetPayload,
   type ProjectFolderCandidateRecord,
   type RuleScope,
@@ -94,11 +97,10 @@ export class WebviewMessageRouter {
   public handle(clientId: BridgeClientId, message: WebviewToExtensionMessage): void {
     switch (message.type) {
       case BridgeMessageType.ChatSend:
-        if (!this.deps.isHydrated() || !message.payload) return;
+        if (!message.payload) return;
         {
           const payload = message.payload;
           void this.enqueueAfterConversationTailLoaded(payload.conversationId, () => {
-            this.blockLlmUntilConversationLoaded(payload.conversationId);
             this.deps.world.enqueue({ type: ChatEventType.Send, payload });
           });
         }
@@ -115,29 +117,21 @@ export class WebviewMessageRouter {
         if (!this.deps.isHydrated() || !message.payload) return;
         {
           const payload = message.payload;
-          void this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'suffix', anchorMessageId: payload.messageId }, () => {
-            if (payload.runAfterEdit) this.blockLlmUntilConversationLoaded(payload.conversationId);
-            this.deps.world.enqueue({ type: ChatEventType.Edit, payload });
-          });
+          void this.handleMessageEdit(payload);
         }
         break;
       case BridgeMessageType.MessageDeleteFrom:
         if (!this.deps.isHydrated() || !message.payload) return;
         {
           const payload = message.payload;
-          void this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'suffix', anchorMessageId: payload.messageId }, () => {
-            this.deps.world.enqueue({ type: ChatEventType.DeleteFrom, payload });
-          });
+          void this.handleMessageDeleteFrom(payload);
         }
         break;
       case BridgeMessageType.MessageRetryFrom:
         if (!this.deps.isHydrated() || !message.payload) return;
         {
           const payload = message.payload;
-          void this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'suffix', anchorMessageId: payload.messageId }, () => {
-            this.blockLlmUntilConversationLoaded(payload.conversationId);
-            this.deps.world.enqueue({ type: ChatEventType.RetryFrom, payload });
-          });
+          void this.handleMessageRetryFrom(payload);
         }
         break;
       case BridgeMessageType.ToolPolicyScopeSet:
@@ -614,29 +608,40 @@ export class WebviewMessageRouter {
       action();
     } catch (error) {
       console.warn('[LimCode] Failed to hydrate conversation tail before command.', error);
-      await this.enqueueAfterConversationLoaded(conversationId, action);
+      action();
     }
   }
 
-  private blockLlmUntilConversationLoaded(conversationId: string): void {
-    const conversation = this.findConversationEntity(conversationId);
-    if (conversation === undefined) return;
-    if (!this.deps.world.has(conversation, ConversationFullContextPending)) {
-      this.deps.world.add(conversation, ConversationFullContextPending, { startedAt: Date.now() });
+  private async handleMessageDeleteFrom(payload: MessageDeleteFromPayload): Promise<void> {
+    try {
+      await this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'between', startMessageId: payload.messageId, endMessageId: payload.messageId }, () => undefined);
+      await this.deps.storage.truncateConversationTimeline({ conversationId: payload.conversationId, anchorMessageId: payload.messageId, keepAnchor: false });
+      this.deps.world.enqueue({ type: ChatEventType.DeleteFrom, payload });
+    } catch (error) {
+      console.warn('[LimCode] Failed to truncate conversation before deleting messages.', error);
     }
-    void this.deps.ensureConversationDetailLoaded(conversationId)
-      .catch((error) => {
-        console.warn('[LimCode] Failed to hydrate full conversation context before LLM.', error);
-      })
-      .finally(() => {
-        const current = this.findConversationEntity(conversationId);
-        if (current !== undefined) this.deps.world.remove(current, ConversationFullContextPending);
-        this.deps.requestSnapshot(conversationId);
-      });
   }
 
-  private findConversationEntity(conversationId: string): number | undefined {
-    return this.deps.world.query(Conversation).find((entity) => this.deps.world.get(entity, Conversation)?.id === conversationId);
+  private async handleMessageEdit(payload: MessageEditPayload): Promise<void> {
+    try {
+      await this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'between', startMessageId: payload.messageId, endMessageId: payload.messageId, contextBeforeChunks: 1 }, () => undefined);
+      if (payload.deleteFollowing) {
+        await this.deps.storage.truncateConversationTimeline({ conversationId: payload.conversationId, anchorMessageId: payload.messageId, keepAnchor: true });
+      }
+      this.deps.world.enqueue({ type: ChatEventType.Edit, payload });
+    } catch (error) {
+      console.warn('[LimCode] Failed to prepare conversation before editing message.', error);
+    }
+  }
+
+  private async handleMessageRetryFrom(payload: MessageRetryFromPayload): Promise<void> {
+    try {
+      await this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'between', startMessageId: payload.messageId, endMessageId: payload.messageId, contextBeforeChunks: 1 }, () => undefined);
+      await this.deps.storage.truncateConversationTimeline({ conversationId: payload.conversationId, anchorMessageId: payload.messageId, keepAnchor: false });
+      this.deps.world.enqueue({ type: ChatEventType.RetryFrom, payload });
+    } catch (error) {
+      console.warn('[LimCode] Failed to truncate conversation before retrying message.', error);
+    }
   }
 
   private async enqueueAfterTimelineRangeLoaded(

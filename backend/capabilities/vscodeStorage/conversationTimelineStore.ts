@@ -241,6 +241,165 @@ export async function loadConversationTimelineRange(paths: StoragePaths, request
   return state;
 }
 
+export async function truncateConversationTimeline(paths: StoragePaths, request: {
+  conversationId: string;
+  anchorMessageId: string;
+  keepAnchor: boolean;
+}): Promise<{ conversationId: string; removedMessageIds: string[] }> {
+  const root = conversationTimelineRoot(paths, request.conversationId);
+  const indexUri = vscode.Uri.joinPath(root, INDEX_FILE);
+  const index = await readJson<ConversationTimelineIndexFile>(indexUri);
+  if (!isConversationTimelineIndex(index, request.conversationId) || index.chunks.length === 0) {
+    return { conversationId: request.conversationId, removedMessageIds: [] };
+  }
+
+  const chunks = await normalizeTimelineChunkIndexRecords(root, index.chunks);
+  const anchorChunkIndex = chunks.findIndex((chunk) => chunk.messageIds.includes(request.anchorMessageId));
+  if (anchorChunkIndex < 0) return { conversationId: request.conversationId, removedMessageIds: [] };
+
+  const anchorRecord = chunks[anchorChunkIndex];
+  const anchorChunk = await readConversationTimelineChunk(root, anchorRecord);
+  if (!anchorChunk) return { conversationId: request.conversationId, removedMessageIds: [] };
+
+  const anchorMessageIndex = anchorChunk.messages.findIndex((message) => message.id === request.anchorMessageId);
+  if (anchorMessageIndex < 0) return { conversationId: request.conversationId, removedMessageIds: [] };
+
+  const keepCount = request.keepAnchor ? anchorMessageIndex + 1 : anchorMessageIndex;
+  const removedMessageIds = [
+    ...anchorChunk.messages.slice(keepCount).map((message) => message.id),
+    ...chunks.slice(anchorChunkIndex + 1).flatMap((chunk) => chunk.messageIds)
+  ];
+  if (removedMessageIds.length === 0) return { conversationId: request.conversationId, removedMessageIds: [] };
+
+  const savedAt = new Date().toISOString();
+  const nextChunks: ConversationTimelineChunkIndexRecord[] = chunks.slice(0, anchorChunkIndex);
+  const keptAnchorChunk = filterTimelineChunkByMessageIds(
+    anchorChunk,
+    new Set(anchorChunk.messages.slice(0, keepCount).map((message) => message.id))
+  );
+  if (keptAnchorChunk.messages.length > 0) {
+    nextChunks.push(await rewriteTimelineChunk(root, {
+      savedAt,
+      conversationId: request.conversationId,
+      record: anchorRecord,
+      chunk: keptAnchorChunk
+    }));
+  }
+
+  const normalizedNextChunks = normalizeTimelineChunkOffsets(nextChunks);
+  await writeJson(indexUri, {
+    schemaVersion: STORAGE_VERSION,
+    savedAt,
+    conversationId: request.conversationId,
+    chunkSize: index.chunkSize,
+    chunks: normalizedNextChunks
+  } satisfies ConversationTimelineIndexFile);
+  await removeStaleTimelineFiles(root, filesReferencedByIndex(index), filesReferencedByIndex({
+    schemaVersion: STORAGE_VERSION,
+    savedAt,
+    conversationId: request.conversationId,
+    chunkSize: index.chunkSize,
+    chunks: normalizedNextChunks
+  }));
+  return { conversationId: request.conversationId, removedMessageIds };
+}
+
+function filterTimelineChunkByMessageIds(chunk: ConversationTimelineChunkData, messageIds: ReadonlySet<string>): ConversationTimelineChunkData {
+  const messages = chunk.messages.filter((message) => messageIds.has(message.id));
+  const keptMessageIds = new Set(messages.map((message) => message.id));
+  const messageRevisions = chunk.messageRevisions.filter((revision) => keptMessageIds.has(revision.messageId));
+  const revisionIds = new Set(messageRevisions.map((revision) => revision.id));
+  const messageCurrentRevisionLinks = chunk.messageCurrentRevisionLinks.filter((link) => keptMessageIds.has(link.messageId) || revisionIds.has(link.revisionId));
+  const toolCalls = chunk.toolCalls.filter((toolCall) => keptMessageIds.has(toolCall.messageId));
+  const toolCallIds = new Set(toolCalls.map((toolCall) => toolCall.id));
+  const toolCallEvents = chunk.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId));
+  const checkpointTimelineAnchors = chunk.checkpointTimelineAnchors.filter((anchor) => keptMessageIds.has(anchor.floorMessageId));
+  const checkpointIds = new Set(checkpointTimelineAnchors.map((anchor) => anchor.checkpointId));
+  const checkpoints = chunk.checkpoints.filter((checkpoint) => checkpointIds.has(checkpoint.id) || (messages.length > 0 && checkpoint.trigger === 'conversation_initial'));
+  const shadowRepositoryIds = new Set(checkpoints.map((checkpoint) => checkpoint.shadowRepositoryId));
+  const projectContextIds = new Set(checkpoints.map((checkpoint) => checkpoint.projectContextId));
+  const conversationCheckpointRepositoryLinks = chunk.conversationCheckpointRepositoryLinks.filter((link) => {
+    const matches = shadowRepositoryIds.has(link.shadowRepositoryId) || projectContextIds.has(link.projectContextId);
+    if (matches) {
+      shadowRepositoryIds.add(link.shadowRepositoryId);
+      projectContextIds.add(link.projectContextId);
+    }
+    return matches;
+  });
+  const projectContexts = chunk.projectContexts.filter((projectContext) => projectContextIds.has(projectContext.id));
+  const shadowRepositories = chunk.shadowRepositories.filter((repository) => shadowRepositoryIds.has(repository.id));
+  return {
+    messages,
+    messageRevisions,
+    messageCurrentRevisionLinks,
+    toolCalls,
+    toolCallEvents,
+    projectContexts,
+    shadowRepositories,
+    conversationCheckpointRepositoryLinks,
+    checkpoints,
+    checkpointTimelineAnchors
+  };
+}
+
+async function rewriteTimelineChunk(root: vscode.Uri, input: {
+  savedAt: string;
+  conversationId: string;
+  record: ConversationTimelineChunkIndexRecord;
+  chunk: ConversationTimelineChunkData;
+}): Promise<ConversationTimelineChunkIndexRecord> {
+  const visibleMessages = input.chunk.messages.filter(isTimelineVisibleMessage);
+  const seq = chunkSeqRange(input.chunk.messages);
+  const messageHash = shortHash(stableJson({ messages: input.chunk.messages }));
+  const sourceHash = shortHash(stableJson(input.chunk));
+  const sidecars = await writeTimelineSidecars({
+    root,
+    savedAt: input.savedAt,
+    conversationId: input.conversationId,
+    chunkId: input.record.id,
+    chunk: input.chunk
+  });
+  await writeJson(vscode.Uri.joinPath(root, ...input.record.file.split('/')), {
+    schemaVersion: STORAGE_VERSION,
+    savedAt: input.savedAt,
+    conversationId: input.conversationId,
+    chunkId: input.record.id,
+    startSeq: seq.startSeq,
+    endSeq: seq.endSeq,
+    messageHash,
+    messages: input.chunk.messages
+  } satisfies ConversationTimelineChunkFile);
+  return {
+    ...input.record,
+    startSeq: seq.startSeq,
+    endSeq: seq.endSeq,
+    messageCount: visibleMessages.length,
+    messageIds: input.chunk.messages.map((message) => message.id),
+    toolCallIds: input.chunk.toolCalls.map((toolCall) => toolCall.id),
+    toolCallCount: input.chunk.toolCalls.length,
+    toolCallEventCount: input.chunk.toolCallEvents.length,
+    messageHash,
+    sourceHash,
+    sidecars,
+    projections: {}
+  };
+}
+
+function normalizeTimelineChunkOffsets(records: ConversationTimelineChunkIndexRecord[]): ConversationTimelineChunkIndexRecord[] {
+  let visibleMessageOffset = 0;
+  return records.map((record, index) => {
+    const messageOffsetStart = visibleMessageOffset + 1;
+    const messageOffsetEnd = visibleMessageOffset + record.messageCount;
+    visibleMessageOffset += record.messageCount;
+    return {
+      ...record,
+      index,
+      messageOffsetStart,
+      messageOffsetEnd
+    };
+  });
+}
+
 function selectTimelineRangeChunks(
   chunks: ConversationTimelineChunkIndexRecord[],
   request: { mode: 'suffix' | 'prefix' | 'between'; anchorMessageId?: string; startMessageId?: string; endMessageId?: string; contextBeforeChunks?: number }

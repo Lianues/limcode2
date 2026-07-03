@@ -615,6 +615,11 @@ export interface StorageCapability {
     endMessageId?: string;
     contextBeforeChunks?: number;
   }): Promise<ClientState | undefined>;
+  truncateConversationTimeline(request: {
+    conversationId: string;
+    anchorMessageId: string;
+    keepAnchor: boolean;
+  }): Promise<{ conversationId: string; removedMessageIds: string[] }>;
   saveClientStateSkeleton(state: ClientState): Promise<void>;
   saveConversationRenderDetail(conversationId: string, state: ClientState): Promise<void>;
   saveConversationRunHistory(conversationId: string, state: ClientState, options: { mode: ConversationRunHistorySaveMode }): Promise<void>;

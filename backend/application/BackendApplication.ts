@@ -24,10 +24,12 @@ import {
   workEnvironmentPlugin
 } from '../world/modules';
 import type { AgentSpawnRequestData } from '../world/modules/agent/requests';
-import { Agent, AgentConversationLink, ConversationAgentSelection } from '../world/modules/agent/components';
+import { Agent, AgentConversationLink, AgentKind, AgentStatus as AgentStatusComponent, ConversationAgentSelection } from '../world/modules/agent/components';
 import {
   Conversation,
   ConversationBranchLink,
+  ConversationFullContextLoaded,
+  ConversationFullContextPending,
   ConversationOriginLink,
   ConversationReuseLink,
   LlmRequest,
@@ -72,7 +74,7 @@ import { CLIENT_STATE_TABLE_KEYS } from '../../shared/clientStateSchema';
 import { EffectHandlerRegistry, registerApplicationEffectHandlers } from './effectHandlers';
 import { flushEffects, flushEffectsWhere } from './executeEffects';
 import type { RuntimeEnv } from './RuntimeEnv';
-import { GLOBAL_SETTINGS_SECTIONS, conversationClientStateStreamId, createMessageId } from '../../shared/protocol';
+import { BridgeMessageType, GLOBAL_SETTINGS_SECTIONS, conversationClientStateStreamId, createMessageId } from '../../shared/protocol';
 import type {
   AgentRunSourceKind,
   AgentRunStatus,
@@ -92,7 +94,7 @@ import type {
 } from '../../shared/protocol';
 import { createRuntimeEnv, recordsForTools, schemasForTools } from './createRuntimeEnv';
 import { dedupeMcpToolNames } from './mcpRuntimeManager';
-import { createDefaultAgentSpawnRequest, DEFAULT_AGENT_ID } from './defaults';
+import { createDefaultAgentRecord, createDefaultAgentSpawnRequest, DEFAULT_AGENT_ID } from './defaults';
 import { hydrateClientStateSkeleton, hydrateConversationDetail } from './clientStateHydration';
 import { backfillMissingToolResponsesForStatelessLoad } from './toolResponseBackfill';
 import { ClientStatePersistence } from './ClientStatePersistence';
@@ -139,6 +141,7 @@ export class BackendApplication {
   private readonly pendingHydrationMessages: Array<{ clientId: BridgeClientId; message: WebviewToExtensionMessage }> = [];
   private readonly renderLoadedConversationDetails = new Set<string>();
   private readonly runHistoryLoadedConversationDetails = new Set<string>();
+  private readonly conversationContextLoadInFlight = new Set<string>();
   private readonly conversationHistoryChangedEmitter = new vscode.EventEmitter<void>();
   private readonly disposables: vscode.Disposable[] = [];
   public readonly onDidChangeConversationHistory = this.conversationHistoryChangedEmitter.event;
@@ -187,6 +190,7 @@ export class BackendApplication {
     });
 
     registerApplicationEffectHandlers(this.effectHandlers);
+    this.registerConversationContextEffectHandler();
     this.disposables.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
       this.syncWorkEnvironmentsFromWorkspaceFolders();
       void this.syncSkillCatalogResource();
@@ -235,6 +239,7 @@ export class BackendApplication {
 
     const conversation = this.world.spawn();
     this.world.add(conversation, Conversation, { id: conversationId, title, visibility: 'visible' });
+    this.world.add(conversation, ConversationFullContextLoaded, { loadedAt: Date.now() });
 
     const now = Date.now();
     const origin = this.world.spawn();
@@ -430,10 +435,13 @@ export class BackendApplication {
   public async ensureConversationDetailLoaded(conversationId: string): Promise<void> {
     if (!conversationId) return;
     if (!this.hydrated) await this.waitUntilHydrated();
-    if (this.renderLoadedConversationDetails.has(conversationId)) return;
+    if (this.renderLoadedConversationDetails.has(conversationId)) {
+      this.markConversationFullContextLoaded(conversationId);
+      return;
+    }
 
     const conversation = this.findConversationEntity(conversationId);
-    const statelessLoad = conversation !== undefined && !this.hasConversationMessages(conversation);
+    const statelessLoad = conversation !== undefined;
     const storedDetail = await this.env.storage.loadConversationDetail(conversationId, { includeRunHistory: false });
     const backfilled = storedDetail && statelessLoad
       ? backfillMissingToolResponsesForStatelessLoad(storedDetail, conversationId)
@@ -443,7 +451,10 @@ export class BackendApplication {
     const hydrated = detail ? await hydrateConversationDetail(this.world, detail, conversationId) : false;
     if (detail && hydrated) this.primeConversationStreamState(conversationId, detail);
     const loaded = hydrated || this.findConversationEntity(conversationId) !== undefined;
-    if (loaded) this.renderLoadedConversationDetails.add(conversationId);
+    if (loaded) {
+      this.renderLoadedConversationDetails.add(conversationId);
+      this.markConversationFullContextLoaded(conversationId);
+    }
     if (hydrated && backfilled.addedCount > 0) {
       this.requestSnapshot(conversationId);
       this.persistence.queuePersist();
@@ -484,17 +495,134 @@ export class BackendApplication {
     return this.hydrated ? Promise.resolve() : this.hydratedReady;
   }
 
+  private registerConversationContextEffectHandler(): void {
+    this.effectHandlers.register('conversation.context.load', (effect) => {
+      this.scheduleConversationContextLoad(effect.conversationId);
+    });
+  }
+
+  private scheduleConversationContextLoad(conversationId: string): void {
+    if (!conversationId || this.conversationContextLoadInFlight.has(conversationId)) return;
+    this.conversationContextLoadInFlight.add(conversationId);
+    setTimeout(() => {
+      void this.ensureConversationDetailLoaded(conversationId)
+        .catch((error) => {
+          console.warn('[LimCode] Failed to hydrate conversation context for LLM.', error);
+        })
+        .finally(() => {
+          this.conversationContextLoadInFlight.delete(conversationId);
+          this.clearConversationFullContextPending(conversationId);
+          this.requestSnapshot(conversationId);
+        });
+    }, 0);
+  }
+
+  private markConversationFullContextLoaded(conversationId: string): void {
+    const conversation = this.findConversationEntity(conversationId);
+    if (conversation === undefined) return;
+    this.world.add(conversation, ConversationFullContextLoaded, { loadedAt: Date.now() });
+    this.world.remove(conversation, ConversationFullContextPending);
+  }
+
+  private clearConversationFullContextPending(conversationId: string): void {
+    const conversation = this.findConversationEntity(conversationId);
+    if (conversation === undefined) return;
+    this.world.remove(conversation, ConversationFullContextPending);
+  }
+
   public detachWebview(clientId: BridgeClientId): void {
     this.env.webview.detach(clientId);
     this.webviewClients.unregister(clientId);
   }
 
   public handleWebviewMessage(clientId: BridgeClientId, message: WebviewToExtensionMessage): void {
+    if (!this.hydrated && this.handlePreHydrationChatSend(clientId, message)) return;
     if (!this.hydrated && shouldDeferUntilHydrated(message)) {
       this.pendingHydrationMessages.push({ clientId, message });
       return;
     }
     this.webviewRouter.handle(clientId, message);
+  }
+
+  private handlePreHydrationChatSend(clientId: BridgeClientId, message: WebviewToExtensionMessage): boolean {
+    if (message.type !== BridgeMessageType.ChatSend || !message.payload) return false;
+    this.ensurePreHydrationChatTarget(message.payload.conversationId, message.payload.agentId);
+    this.webviewRouter.handle(clientId, message);
+    return true;
+  }
+
+  private ensurePreHydrationChatTarget(conversationId: string, agentId: string | undefined): void {
+    const normalizedConversationId = conversationId.trim();
+    if (!normalizedConversationId) return;
+    const now = Date.now();
+
+    const conversation = this.findConversationEntity(normalizedConversationId) ?? this.spawnPreHydrationConversation(normalizedConversationId);
+    const existingSelection = this.activeSelectionForConversation(conversation);
+    const selectedAgent = agentId?.trim()
+      ? this.ensurePreHydrationAgent(agentId.trim())
+      : existingSelection?.agent ?? this.findDefaultAgent() ?? this.ensurePreHydrationAgent(DEFAULT_AGENT_ID);
+
+    this.ensurePreHydrationAgentConversationLink(conversation, normalizedConversationId, selectedAgent, now);
+    if (existingSelection) {
+      const current = this.world.get(existingSelection.entity, ConversationAgentSelection);
+      if (current && current.agent !== selectedAgent) {
+        this.world.add(existingSelection.entity, ConversationAgentSelection, { ...current, agent: selectedAgent, updatedAt: now });
+      }
+    } else {
+      const agent = this.world.get(selectedAgent, Agent);
+      const selection = this.world.spawn();
+      this.world.add(selection, ConversationAgentSelection, {
+        id: `conversation-agent:${normalizedConversationId}:${agent?.id ?? DEFAULT_AGENT_ID}`,
+        conversation,
+        agent: selectedAgent,
+        role: 'active',
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+  }
+
+  private spawnPreHydrationConversation(conversationId: string): Entity {
+    const conversation = this.world.spawn();
+    this.world.add(conversation, Conversation, { id: conversationId, visibility: 'visible' });
+    upsertGlobalModeSelection(this.world, conversation, conversationId);
+    return conversation;
+  }
+
+  private ensurePreHydrationAgent(agentId: string): Entity {
+    const existing = this.findAgentEntity(agentId);
+    if (existing !== undefined) return existing;
+
+    const defaultAgent = createDefaultAgentRecord();
+    const isDefault = agentId === DEFAULT_AGENT_ID;
+    const agent = this.world.spawn();
+    this.world.add(agent, Agent, {
+      id: agentId,
+      name: isDefault ? defaultAgent.name : agentId,
+      source: isDefault ? defaultAgent.source : 'user'
+    });
+    this.world.add(agent, AgentKind, { kind: isDefault ? defaultAgent.kind : agentId });
+    this.world.add(agent, AgentStatusComponent, { status: 'idle' });
+    return agent;
+  }
+
+  private ensurePreHydrationAgentConversationLink(conversation: Entity, conversationId: string, agent: Entity, now: number): void {
+    const agentRecord = this.world.get(agent, Agent);
+    const exists = this.world.query(AgentConversationLink).some((entity) => {
+      const link = this.world.get(entity, AgentConversationLink);
+      return link?.conversation === conversation && link.agent === agent;
+    });
+    if (exists) return;
+
+    const link = this.world.spawn();
+    this.world.add(link, AgentConversationLink, {
+      id: `acl:early:${conversationId}:${agentRecord?.id ?? DEFAULT_AGENT_ID}`,
+      conversation,
+      agent,
+      role: 'default',
+      createdAt: now,
+      updatedAt: now
+    });
   }
 
   public dispose(): void {
@@ -511,8 +639,11 @@ export class BackendApplication {
     try {
       await this.env.storage.ensureReady();
       const restored = await this.env.storage.loadClientStateSkeleton({ profile: 'startup' });
-      if (restored && await hydrateClientStateSkeleton(this.world, restored)) {
+      const hasPreHydrationMessages = this.world.query(Message).length > 0;
+      if (restored && await hydrateClientStateSkeleton(this.world, restored, { resetMessageSeq: !hasPreHydrationMessages })) {
         this.persistence.rememberPersistedState(restored);
+      } else if (this.world.query(Agent).length > 0 || this.world.query(Conversation).length > 0) {
+        // Early chat.send may have created the minimal ECS target before startup skeleton finished.
       } else {
         requestSpawnAgent(this.world, createDefaultAgentSpawnRequest());
       }
@@ -742,6 +873,22 @@ export class BackendApplication {
       ?? this.world.query(Agent)[0];
   }
 
+  private findAgentEntity(agentId: string): Entity | undefined {
+    return this.world.query(Agent).find((entity) => this.world.get(entity, Agent)?.id === agentId);
+  }
+
+  private activeSelectionForConversation(conversation: Entity): { entity: Entity; agent: Entity } | undefined {
+    let selected: { entity: Entity; data: { agent: Entity; updatedAt: number } } | undefined;
+    for (const entity of this.world.query(ConversationAgentSelection)) {
+      const data = this.world.get(entity, ConversationAgentSelection);
+      if (!data || data.role !== 'active' || data.conversation !== conversation) continue;
+      if (!selected || data.updatedAt > selected.data.updatedAt || (data.updatedAt === selected.data.updatedAt && entity > selected.entity)) {
+        selected = { entity, data };
+      }
+    }
+    return selected ? { entity: selected.entity, agent: selected.data.agent } : undefined;
+  }
+
   private resolveProjectFolderForNewConversation(projectFolderUri: string | undefined): ProjectFolderCandidateRecord | undefined {
     if (projectFolderUri) {
       const normalizedUri = projectFolderUri.trim();
@@ -835,13 +982,6 @@ export class BackendApplication {
       if (this.world.get(entity, PartOf)?.parent === conversation) messages.add(entity);
     }
     return messages;
-  }
-
-  private hasConversationMessages(conversation: Entity): boolean {
-    for (const entity of this.world.query(Message, PartOf)) {
-      if (this.world.get(entity, PartOf)?.parent === conversation) return true;
-    }
-    return false;
   }
 
   private collectRevisionsForMessages(messages: ReadonlySet<Entity>): Set<Entity> {
@@ -1204,7 +1344,6 @@ function isPassFlushEffect(effect: WorldEffect): boolean {
 
 function shouldDeferUntilHydrated(message: WebviewToExtensionMessage): boolean {
   switch (message.type) {
-    case 'chat.send':
     case 'chat.abort':
     case 'llm.retry.cancel':
     case 'message.edit':

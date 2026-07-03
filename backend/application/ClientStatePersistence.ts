@@ -207,8 +207,6 @@ export class ClientStatePersistence {
     const explicit = this.options.renderLoadedConversationIds?.();
     if (explicit) {
       const ids = new Set(uniqueIds(explicit).filter((id) => this.options.isConversationRenderDetailLoaded?.(id) ?? true));
-      // 当前 world 中已经有消息的对话一定是本轮运行创建或已加载的详情，允许保存渲染时间线；避免 run_agent 后台新会话重启后只剩 history 无正文。
-      for (const message of state.messages) ids.add(message.conversationId);
       return [...ids];
     }
 

@@ -461,6 +461,7 @@ export async function closePendingWorkspaceFileChangeDiff(toolCallId?: string, c
   const documents = liveDiffDocumentsForToolCall(toolCallId, conversationId);
   const uriKeys = new Set(documents.map((item) => item.uri.toString()));
   const tabsToClose: vscode.Tab[] = [];
+  const shouldRevealConversation = activeTabMatchesLiveDiff(uriKeys);
 
   for (const group of vscode.window.tabGroups.all) {
     for (const tab of group.tabs) {
@@ -474,9 +475,11 @@ export async function closePendingWorkspaceFileChangeDiff(toolCallId?: string, c
     await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
   }
 
-  await vscode.commands.executeCommand('limcode.openPanel', {
-    ...(conversationId ? { conversationId, reuse: true } : {})
-  });
+  if (shouldRevealConversation) {
+    await vscode.commands.executeCommand('limcode.openPanel', {
+      ...(conversationId ? { conversationId, reuse: true } : {})
+    });
+  }
 }
 
 function liveDiffDocumentsForToolCall(toolCallId?: string, conversationId?: string): Array<{ uri: vscode.Uri; document: LiveDiffDocument }> {
@@ -499,6 +502,13 @@ function tabMatchesLiveDiff(tab: vscode.Tab, uriKeys: Set<string>): boolean {
     return uriKeys.has(input.uri.toString());
   }
   return false;
+}
+
+function activeTabMatchesLiveDiff(uriKeys: Set<string>): boolean {
+  const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
+  if (activeTab && tabMatchesLiveDiff(activeTab, uriKeys)) return true;
+  const activeUri = vscode.window.activeTextEditor?.document.uri;
+  return !!activeUri && uriKeys.has(activeUri.toString());
 }
 
 export async function deleteWorkspacePath(relPath: string, options: WorkEnvironmentCapabilityOptions = {}): Promise<FsDeletePathResult> {

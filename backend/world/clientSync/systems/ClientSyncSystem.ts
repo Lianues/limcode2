@@ -3,9 +3,11 @@ import {
   conversationClientStateStreamId,
   conversationIdFromClientStateStreamId,
   type ClientPatchOp,
-  type ClientState
+  type ClientState,
+  type ClientStateTableKey
 } from '../../../../shared/protocol';
 import { clientStateWithTables, createEmptyClientState, GLOBAL_CLIENT_STATE_TABLE_KEYS } from '../../../../shared/clientStateSchema';
+import { collectChangedClientStateConversationIds } from '../../../../shared/clientStateConversationScope';
 import { defineSystem, type AccessDeclaration } from '../../../ecs/types';
 import { readEvents } from '../../events';
 import type { ClientStateContributor } from '../contributors';
@@ -36,6 +38,7 @@ export const ClientSyncSystem = defineSystem({
     const contributors = registry.list();
     const projection = projectClientStateWithCache(world, contributors, syncState);
     const sourceChanged = syncState.lastState === null || projection.changed;
+    const changedTableKeys = sourceChanged ? changedClientStateTableKeys(contributors, projection.changedContributorKeys) : [];
     const nextFull = projection.state;
     const prevFull = syncState.lastState;
     const resyncRequests = readEvents(ctx, ClientSyncEventType.Resync);
@@ -71,7 +74,7 @@ export const ClientSyncSystem = defineSystem({
       }
     }
 
-    for (const conversationId of collectConversationIds(prevFull, nextFull, streams, requestedConversationIds)) {
+    for (const conversationId of collectConversationIds(prevFull, nextFull, streams, requestedConversationIds, sourceChanged, changedTableKeys)) {
       const streamId = conversationClientStateStreamId(conversationId);
       const existing = streams[streamId];
       const requested = requestedConversationIds.has(conversationId);
@@ -283,18 +286,40 @@ function collectConversationIds(
   prev: ClientState | null,
   next: ClientState,
   streams: Record<string, ClientStreamState>,
-  requested: ReadonlySet<string>
+  requested: ReadonlySet<string>,
+  sourceChanged: boolean,
+  changedTableKeys: readonly ClientStateTableKey[] | undefined
 ): string[] {
   const ids = new Set<string>(requested);
-  for (const conversation of prev?.conversations ?? []) ids.add(conversation.id);
-  for (const conversation of next.conversations) ids.add(conversation.id);
-  for (const message of prev?.messages ?? []) ids.add(message.conversationId);
-  for (const message of next.messages) ids.add(message.conversationId);
-  for (const block of prev?.compressionBlocks ?? []) ids.add(block.conversationId);
-  for (const block of next.compressionBlocks) ids.add(block.conversationId);
+  if (prev === null) {
+    for (const conversation of next.conversations) ids.add(conversation.id);
+    for (const streamId of Object.keys(streams)) {
+      const conversationId = conversationIdFromClientStateStreamId(streamId);
+      if (conversationId) ids.add(conversationId);
+    }
+    return [...ids];
+  }
+
+  if (sourceChanged) {
+    for (const conversationId of collectChangedClientStateConversationIds(prev, next, changedTableKeys)) ids.add(conversationId);
+  }
+
+  const subscribedConversationIds = new Set<string>();
   for (const streamId of Object.keys(streams)) {
     const conversationId = conversationIdFromClientStateStreamId(streamId);
-    if (conversationId) ids.add(conversationId);
+    if (conversationId) subscribedConversationIds.add(conversationId);
   }
-  return [...ids];
+  return [...ids].filter((conversationId) => requested.has(conversationId) || subscribedConversationIds.has(conversationId));
+}
+
+function changedClientStateTableKeys(contributors: readonly ClientStateContributor[], changedContributorKeys: readonly string[]): readonly ClientStateTableKey[] | undefined {
+  if (changedContributorKeys.length === 0) return undefined;
+  const byKey = new Map(contributors.map((contributor) => [contributor.key, contributor]));
+  const tableKeys = new Set<ClientStateTableKey>();
+  for (const key of changedContributorKeys) {
+    const tables = byKey.get(key)?.tables;
+    if (!tables || tables.length === 0) return undefined;
+    for (const tableKey of tables) tableKeys.add(tableKey);
+  }
+  return [...tableKeys];
 }

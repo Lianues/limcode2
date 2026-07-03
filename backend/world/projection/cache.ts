@@ -19,6 +19,7 @@ export interface ProjectionCache<TSlice extends object> {
 export interface ProjectionResult<TState extends object, TSlice extends object> extends ProjectionCache<TSlice> {
   readonly state: TState;
   readonly changed: boolean;
+  readonly changedContributorKeys: readonly string[];
 }
 
 export function projectStateWithCache<TState extends object, TSlice extends object>(
@@ -30,6 +31,7 @@ export function projectStateWithCache<TState extends object, TSlice extends obje
 ): ProjectionResult<TState, TSlice> {
   const state = emptyState();
   const contributorStates: Record<string, ProjectionContributorState<TSlice>> = {};
+  const changedContributorKeys: string[] = [];
   let changed = false;
 
   for (const contributor of contributors) {
@@ -43,6 +45,7 @@ export function projectStateWithCache<TState extends object, TSlice extends obje
       if (!contributor.project) throw new Error(`${label} contributor "${contributor.key}" does not provide a projector.`);
       slice = contributor.project(world);
       changed = true;
+      changedContributorKeys.push(contributor.key);
     }
 
     contributorStates[contributor.key] = { clock, slice };
@@ -55,7 +58,7 @@ export function projectStateWithCache<TState extends object, TSlice extends obje
 
   if (projectionClock !== previous.projectionClock) changed = true;
 
-  return { state, projectionClock, contributorStates, changed };
+  return { state, projectionClock, contributorStates, changed, changedContributorKeys };
 }
 
 export function contributorClock<TSlice extends object>(world: WorldReader, contributor: VersionedProjectionContributor<TSlice>): string {

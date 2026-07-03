@@ -2,12 +2,12 @@ import type { WorldReader } from '../ecs/types';
 import type { ConversationRunHistorySaveMode, StorageCapability } from '../capabilities/types';
 import { StorageStateContributorsKey } from '../world/storageProjection/resources';
 import { projectStorageStateWithCache, type StorageContributorProjectionState } from '../world/storageProjection/projection';
-import type { AgentRunStatus, ClientState, MessageContent, MessageRecord, SidebarConversationHistoryEntry } from '../../shared/protocol';
+import type { AgentRunStatus, ClientState, ClientStateTableKey, MessageContent, MessageRecord, SidebarConversationHistoryEntry } from '../../shared/protocol';
 import { conversationCreatedAtFromId, displayConversationTitle } from '../../shared/conversationTitle';
+import { collectChangedClientStateConversationIds } from '../../shared/clientStateConversationScope';
 import { conversationRenderDetailSlice, conversationRunHistorySlice } from '../capabilities/vscodeStorage/clientStateStore';
 
 const DEFAULT_PERSIST_DEBOUNCE_MS = 500;
-const DEFAULT_HISTORY_PERSIST_DEBOUNCE_MS = 80;
 
 const RUN_HISTORY_TABLE_KEYS = [
   'agentRuns',
@@ -62,8 +62,9 @@ export class ClientStatePersistence {
   private readonly pendingRunHistoryStates = new Map<string, PendingRunHistoryState>();
   private readonly pendingHistoryStates = new Map<string, ClientState>();
   private persistTimer: ReturnType<typeof setTimeout> | undefined;
-  private historyPersistTimer: ReturnType<typeof setTimeout> | undefined;
-  private historyPersistInFlight = false;
+  private persistInFlight = false;
+  private persistPendingAfterInFlight = false;
+  private readonly persistIdleWaiters: Array<() => void> = [];
 
   private projectionClock = '';
   private contributorStates: Record<string, StorageContributorProjectionState> = {};
@@ -89,11 +90,7 @@ export class ClientStatePersistence {
 
   public queuePersist(): void {
     if (!this.enabled) return;
-    const projection = this.projectLatestState();
-    if (!projection || !projection.changed) return;
-    this.collectPendingStates(projection.state, false);
-    this.scheduleHistoryIfPending();
-    this.scheduleIfPending();
+    this.schedulePersistCheck();
   }
 
   public async persistImmediately(options: { force?: boolean; throwOnError?: boolean } = {}): Promise<void> {
@@ -101,15 +98,25 @@ export class ClientStatePersistence {
       clearTimeout(this.persistTimer);
       this.persistTimer = undefined;
     }
-    if (this.historyPersistTimer) {
-      clearTimeout(this.historyPersistTimer);
-      this.historyPersistTimer = undefined;
+
+    if (this.persistInFlight) {
+      this.persistPendingAfterInFlight = true;
+      await this.waitForPersistIdle();
+      return this.persistImmediately(options);
     }
 
-    const latestState = this.projectLatestState()?.state ?? this.lastProjectedState;
+    const latest = this.projectLatestState();
+    if (!options.force && latest && !latest.changed) return;
+
+    const latestState = latest?.state ?? this.lastProjectedState;
     if (!this.enabled || !latestState) return;
 
-    this.collectPendingStates(latestState, !!options.force);
+    const targetConversationIds = options.force
+      ? undefined
+      : latest?.previousState
+        ? collectChangedClientStateConversationIds(latest.previousState, latestState, latest.changedTableKeys)
+        : undefined;
+    this.collectPendingStates(latestState, !!options.force, targetConversationIds);
     if (!this.pendingSkeletonState && this.pendingRenderDetailStates.size === 0 && this.pendingRunHistoryStates.size === 0 && this.pendingHistoryStates.size === 0) return;
 
     const skeletonState = this.pendingSkeletonState;
@@ -121,6 +128,7 @@ export class ClientStatePersistence {
     this.pendingRunHistoryStates.clear();
     this.pendingHistoryStates.clear();
 
+    this.persistInFlight = true;
     try {
       if (skeletonState) {
         await this.storage.saveClientStateSkeleton(skeletonState);
@@ -141,16 +149,24 @@ export class ClientStatePersistence {
     } catch (error) {
       console.warn('[LimCode] Failed to persist client state:', error);
       if (options.throwOnError) throw error;
+    } finally {
+      this.persistInFlight = false;
+      this.resolvePersistIdleWaiters();
+      if (this.persistPendingAfterInFlight) {
+        this.persistPendingAfterInFlight = false;
+        this.schedulePersistCheck();
+      }
     }
   }
 
-  private collectPendingStates(state: ClientState, force: boolean): void {
+  private collectPendingStates(state: ClientState, force: boolean, targetConversationIds?: ReadonlySet<string>): void {
     const skeletonJson = JSON.stringify(skeletonPersistenceSlice(state));
     if (force || skeletonJson !== this.lastPersistedSkeletonJson) {
       this.pendingSkeletonState = state;
     }
 
     for (const conversationId of this.renderLoadedConversationIds(state)) {
+      if (targetConversationIds && !targetConversationIds.has(conversationId)) continue;
       const detail = conversationRenderDetailSlice(state, conversationId);
       const detailJson = JSON.stringify(detail);
       if (!force && detailJson === this.lastPersistedRenderDetailJson.get(conversationId)) continue;
@@ -160,10 +176,12 @@ export class ClientStatePersistence {
 
     const replaceRunHistoryIds = new Set(this.runHistoryLoadedConversationIds(state));
     for (const conversationId of replaceRunHistoryIds) {
+      if (targetConversationIds && !targetConversationIds.has(conversationId)) continue;
       this.collectPendingRunHistoryState(state, conversationId, 'replace', force, true);
     }
 
     for (const conversationId of knownRunHistoryConversationIds(state)) {
+      if (targetConversationIds && !targetConversationIds.has(conversationId)) continue;
       if (replaceRunHistoryIds.has(conversationId)) continue;
       this.collectPendingRunHistoryState(state, conversationId, 'merge', force, false);
     }
@@ -213,39 +231,28 @@ export class ClientStatePersistence {
       .filter((id) => this.options.isConversationRunHistoryLoaded?.(id) ?? false);
   }
 
-  private scheduleIfPending(): void {
-    if (!this.pendingSkeletonState && this.pendingRenderDetailStates.size === 0 && this.pendingRunHistoryStates.size === 0) return;
-    if (this.persistTimer) clearTimeout(this.persistTimer);
-    this.persistTimer = setTimeout(() => { void this.persistImmediately(); }, this.debounceMs);
+  private schedulePersistCheck(): void {
+    if (this.persistTimer) return;
+    if (this.persistInFlight) {
+      this.persistPendingAfterInFlight = true;
+      return;
+    }
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = undefined;
+      void this.persistImmediately();
+    }, this.debounceMs);
   }
 
-  private scheduleHistoryIfPending(): void {
-    if (this.pendingHistoryStates.size === 0) return;
-    if (this.historyPersistTimer || this.historyPersistInFlight) return;
-    this.historyPersistTimer = setTimeout(() => {
-      void this.persistHistoryImmediately();
-    }, DEFAULT_HISTORY_PERSIST_DEBOUNCE_MS);
+  private waitForPersistIdle(): Promise<void> {
+    if (!this.persistInFlight) return Promise.resolve();
+    return new Promise((resolve) => {
+      this.persistIdleWaiters.push(resolve);
+    });
   }
 
-  private async persistHistoryImmediately(): Promise<void> {
-    if (this.historyPersistTimer) {
-      clearTimeout(this.historyPersistTimer);
-      this.historyPersistTimer = undefined;
-    }
-    if (this.historyPersistInFlight || this.pendingHistoryStates.size === 0) return;
-
-    const historyStates = [...this.pendingHistoryStates.entries()];
-    this.pendingHistoryStates.clear();
-    this.historyPersistInFlight = true;
-
-    try {
-      await this.persistHistoryEntries(historyStates);
-    } catch (error) {
-      console.warn('[LimCode] Failed to persist conversation history projection:', error);
-    } finally {
-      this.historyPersistInFlight = false;
-      this.scheduleHistoryIfPending();
-    }
+  private resolvePersistIdleWaiters(): void {
+    const waiters = this.persistIdleWaiters.splice(0);
+    for (const resolve of waiters) resolve();
   }
 
   private async persistHistoryEntries(historyStates: Array<[string, ClientState]>): Promise<void> {
@@ -255,9 +262,10 @@ export class ClientStatePersistence {
     }
   }
 
-  private projectLatestState(): { state: ClientState; changed: boolean } | undefined {
+  private projectLatestState(): { state: ClientState; changed: boolean; previousState?: ClientState; changedTableKeys?: readonly ClientStateTableKey[] } | undefined {
+    const previousState = this.lastProjectedState;
     const registry = this.world.tryGetResource(StorageStateContributorsKey);
-    if (!registry) return this.lastProjectedState ? { state: this.lastProjectedState, changed: false } : undefined;
+    if (!registry) return previousState ? { state: previousState, changed: false, previousState } : undefined;
 
     const projection = projectStorageStateWithCache(this.world, registry.list(), {
       projectionClock: this.projectionClock,
@@ -266,8 +274,28 @@ export class ClientStatePersistence {
     this.projectionClock = projection.projectionClock;
     this.contributorStates = projection.contributorStates;
     this.lastProjectedState = projection.state;
-    return { state: projection.state, changed: projection.changed };
+    return {
+      state: projection.state,
+      changed: projection.changed,
+      previousState,
+      changedTableKeys: changedStorageTableKeys(projection.changedContributorKeys, projection.contributorStates)
+    };
   }
+}
+
+function changedStorageTableKeys(
+  changedContributorKeys: readonly string[],
+  contributorStates: Record<string, StorageContributorProjectionState>
+): readonly ClientStateTableKey[] | undefined {
+  if (changedContributorKeys.length === 0) return undefined;
+  const tableKeys = new Set<ClientStateTableKey>();
+  for (const key of changedContributorKeys) {
+    const slice = contributorStates[key]?.slice;
+    const keys = slice ? Object.keys(slice) as ClientStateTableKey[] : [];
+    if (keys.length === 0) return undefined;
+    for (const tableKey of keys) tableKeys.add(tableKey);
+  }
+  return [...tableKeys];
 }
 
 function skeletonPersistenceSlice(state: ClientState): ClientState {

@@ -119,11 +119,10 @@ function simplifyEditResponse(value: unknown, status: ToolCallStatus): JsonRecor
   if (!record) return status === 'error' ? errorResponse(value) : simplifyGenericSuccess(value);
   const failed = numberValue(record.failed);
   const hasProblem = status !== 'success' || (failed !== undefined && failed > 0);
+  if (!hasProblem) return { ok: true };
   const result = pickDefined({
     path: stringValue(record.path),
-    ...(hasProblem ? {
-      summary: editProblemSummary(record)
-    } : {})
+    summary: editProblemSummary(record)
   });
   return withOkFallback(result, status);
 }

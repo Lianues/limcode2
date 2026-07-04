@@ -65,6 +65,8 @@ interface GlobalSettingsState {
   filePaths: Partial<Record<GlobalSettingsSection, string>>;
   /** 等待 llmProviderConfigs 保存完成后再持久化的 active provider id，避免 active id 先于新配置到达后端。 */
   pendingActiveProviderConfigIdAfterConfigsSave: string;
+  /** 克隆压缩配置后待 llmCompressionConfigs 保存确认再持久化压缩绑定，避免绑定先于新配置到达后端被丢弃。 */
+  flushCompressionBindingAfterConfigsSave: boolean;
   /** 已收到后端 snapshot 的全局设置 section。 */
   loadedSections: Partial<Record<GlobalSettingsSection, boolean>>;
   /** 已发起读取，正在等待后端 snapshot 的全局设置 section。 */
@@ -418,6 +420,19 @@ function normalizeCompressionConfigForUi(
   };
 }
 
+/** 写时复制：从共享压缩配置克隆出一份归单个渠道独占的新配置（新 id、新名称、深拷贝嵌套字段避免引用共享）。 */
+function cloneCompressionConfigFrom(source: LlmCompressionConfigRecord, name: string): LlmCompressionConfigRecord {
+  const now = Date.now();
+  const cloned = JSON.parse(JSON.stringify(source)) as LlmCompressionConfigRecord;
+  return {
+    ...cloned,
+    id: `llm-compression-config-${createMessageId()}`,
+    name,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
 function thresholdAfterContextWindowChange(
   trigger: LlmCompressionConfigRecord['trigger'],
   previousWindowTokens: number | undefined,
@@ -626,6 +641,7 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
     mcpServers: emptyMcpServers(),
     filePaths: {},
     pendingActiveProviderConfigIdAfterConfigsSave: '',
+    flushCompressionBindingAfterConfigsSave: false,
     loadedSections: {},
     loadingSettingsSections: {},
     fetchedModelsDialog: emptyFetchedModelsDialog(),
@@ -885,7 +901,7 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
         this.status = `设置保存失败：${message}`;
       }
     },
-    selectCompressionConfigForActiveProvider(configId: string): void {
+    selectCompressionConfigForActiveProvider(configId: string, deferPersist = false): void {
       if (!this.llmCompressionConfigs.configs.some((config) => config.id === configId)) return;
       const providerConfigId = this.llm.activeProviderConfigId || this.activeLlmProviderConfig?.id || '';
       if (!providerConfigId) {
@@ -902,6 +918,11 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
           this.llmCompression.providerBindings.push({ id: `llm-compression-binding-${providerConfigId}`, providerConfigId, compressionConfigId: configId, role: 'default', createdAt: now, updatedAt: now });
         }
       }
+      // 新配置刚被克隆/新建时，绑定必须等 llmCompressionConfigs 保存确认后再持久化，否则后端会以“配置不存在”丢弃绑定。
+      if (deferPersist) {
+        this.flushCompressionBindingAfterConfigsSave = true;
+        return;
+      }
       this.saveLlmCompression();
     },
     createCompressionConfig(name = '新压缩方法'): void {
@@ -911,6 +932,50 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       this.saveLlmCompressionConfigs();
       this.saveLlmCompression();
     },
+    /** 判断某压缩配置是否已被指定渠道独占（未共享给默认或其他渠道），独占才可原地编辑，否则需写时复制。 */
+    isCompressionConfigOwnedByActiveProvider(providerConfigId: string, configId: string): boolean {
+      if (!providerConfigId || !configId) return false;
+      if (this.llmCompression.defaultConfigId === configId) return false;
+      const refs = this.llmCompression.providerBindings.filter((binding) => binding.compressionConfigId === configId);
+      return refs.length === 1 && refs[0].providerConfigId === providerConfigId;
+    },
+    /** 所有压缩编辑动作的统一入口：确保当前活动渠道拥有一份可独占编辑的压缩配置，共享时写时复制。 */
+    ensureCompressionConfigForActiveProvider(): LlmCompressionConfigRecord | undefined {
+      const providerConfigId = this.llm.activeProviderConfigId || this.activeLlmProviderConfig?.id || '';
+      const current = this.activeCompressionConfig;
+
+      // A｜无活动渠道：保持原有“编辑默认配置”行为。新建默认配置时同样延迟持久化 defaultConfigId。
+      if (!providerConfigId) {
+        if (current) return current;
+        const created = createDefaultLlmCompressionConfig('默认压缩方法');
+        this.llmCompressionConfigs.configs.push(created);
+        this.llmCompression.defaultConfigId = created.id;
+        this.saveLlmCompressionConfigs();
+        this.flushCompressionBindingAfterConfigsSave = true;
+        return created;
+      }
+
+      const providerName = this.llmProviderConfigs.configs.find((config) => config.id === providerConfigId)?.name?.trim();
+
+      // B｜有活动渠道但解析不到配置：为该渠道新建独立配置，不动 defaultConfigId。
+      if (!current) {
+        const created = createDefaultLlmCompressionConfig(providerName ? `${providerName} 压缩` : '压缩方法');
+        this.llmCompressionConfigs.configs.push(created);
+        this.saveLlmCompressionConfigs();
+        this.selectCompressionConfigForActiveProvider(created.id, true);
+        return created;
+      }
+
+      // C｜已被该渠道独占：直接原地编辑。
+      if (this.isCompressionConfigOwnedByActiveProvider(providerConfigId, current.id)) return current;
+
+      // D｜共享（默认 / configs[0] / 被别的渠道引用）：写时复制出一份归本渠道独占。
+      const clone = cloneCompressionConfigFrom(current, providerName ? `${providerName} 压缩` : current.name);
+      this.llmCompressionConfigs.configs.push(clone);
+      this.saveLlmCompressionConfigs();
+      this.selectCompressionConfigForActiveProvider(clone.id, true);
+      return clone;
+    },
     updateCompressionConfig(configId: string, patch: Partial<LlmCompressionConfigRecord>): void {
       const config = this.llmCompressionConfigs.configs.find((item) => item.id === configId);
       if (!config) return;
@@ -918,12 +983,8 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       this.queueLlmCompressionConfigsAutoSave();
     },
     updateActiveCompressionTrigger(patch: Partial<LlmCompressionConfigRecord['trigger']>): void {
-      let config = this.activeCompressionConfig;
-      if (!config) {
-        config = createDefaultLlmCompressionConfig('默认压缩方法');
-        this.llmCompressionConfigs.configs.push(config);
-        this.llmCompression.defaultConfigId = config.id;
-      }
+      const config = this.ensureCompressionConfigForActiveProvider();
+      if (!config) return;
       const nextTrigger = normalizeCompressionTriggerForUi(
         { ...config.trigger, ...patch },
         this.activeLlmProviderConfig?.contextWindowTokens
@@ -938,12 +999,8 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       this.selectCompressionConfigForActiveProvider(config.id);
     },
     setActiveCompressionMethodKind(kind: SelectableCompressionMethodKind): void {
-      let config = this.activeCompressionConfig;
-      if (!config) {
-        config = createDefaultLlmCompressionConfig('默认压缩方法');
-        this.llmCompressionConfigs.configs.push(config);
-        this.llmCompression.defaultConfigId = config.id;
-      }
+      const config = this.ensureCompressionConfigForActiveProvider();
+      if (!config) return;
       config.kind = kind;
       if (kind === 'openai_responses_compact') {
         config.openaiResponsesCompact = { ...(config.openaiResponsesCompact ?? {}), createSummaryFallback: false };
@@ -956,12 +1013,8 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       this.selectCompressionConfigForActiveProvider(config.id);
     },
     setActiveCompressionProviderConfig(providerConfigId: string): void {
-      let config = this.activeCompressionConfig;
-      if (!config) {
-        config = createDefaultLlmCompressionConfig('默认压缩方法');
-        this.llmCompressionConfigs.configs.push(config);
-        this.llmCompression.defaultConfigId = config.id;
-      }
+      const config = this.ensureCompressionConfigForActiveProvider();
+      if (!config) return;
       const id = providerConfigId.trim();
       const applyProvider = <T extends { providerConfigId?: string }>(target: T): T => {
         if (id) target.providerConfigId = id;
@@ -1012,8 +1065,10 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       config.updatedAt = Date.now();
       this.queueLlmProviderConfigsAutoSave();
 
-      const compressionConfig = this.activeCompressionConfig;
-      if (!compressionConfig || nextWindowTokens === undefined) return;
+      // 清空窗口不应触发写时复制，故在 ensure 之前早退。
+      if (nextWindowTokens === undefined) return;
+      const compressionConfig = this.ensureCompressionConfigForActiveProvider();
+      if (!compressionConfig) return;
       compressionConfig.trigger = thresholdAfterContextWindowChange(
         compressionConfig.trigger,
         previousWindowTokens,
@@ -1129,7 +1184,27 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
         this.llm.activeProviderConfigId = nextConfigs[0]?.id ?? '';
         this.pendingActiveProviderConfigIdAfterConfigsSave = this.llm.activeProviderConfigId;
       }
+      this.cleanupCompressionForDeletedProvider(configId);
       this.saveLlmProviderConfigs();
+    },
+    /** 删除渠道时清理其压缩绑定，并回收仅被该绑定引用的孤儿压缩配置（默认配置除外）。 */
+    cleanupCompressionForDeletedProvider(providerConfigId: string): void {
+      const removedBinding = this.llmCompression.providerBindings.find((binding) => binding.providerConfigId === providerConfigId);
+      if (!removedBinding) return;
+      const orphanConfigId = removedBinding.compressionConfigId;
+      this.llmCompression.providerBindings = this.llmCompression.providerBindings.filter((binding) => binding.providerConfigId !== providerConfigId);
+
+      const stillReferenced = this.llmCompression.providerBindings.some((binding) => binding.compressionConfigId === orphanConfigId);
+      if (orphanConfigId !== this.llmCompression.defaultConfigId && !stillReferenced) {
+        this.llmCompressionConfigs.configs = this.llmCompressionConfigs.configs.filter((config) => config.id !== orphanConfigId);
+        if (this.llmCompressionConfigs.configs.length === 0) {
+          const created = createDefaultLlmCompressionConfig('默认压缩方法');
+          this.llmCompressionConfigs.configs.push(created);
+          this.llmCompression.defaultConfigId = created.id;
+        }
+        this.saveLlmCompressionConfigs();
+      }
+      this.saveLlmCompression();
     },
     applySnapshot(payload: GlobalSettingsSnapshotPayload, correlationId?: string): void {
       const isLlmProviderConfigsSnapshot = payload.section === 'llmProviderConfigs';
@@ -1189,6 +1264,11 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       } else if (payload.section === 'llmCompressionConfigs') {
         const settings = payload.settings as LlmCompressionConfigsRecord;
         this.llmCompressionConfigs = { configs: settings.configs.map((config) => normalizeCompressionConfigForUi(config)) };
+        // 克隆/新建的压缩配置已确认落盘，此时再持久化压缩绑定，后端归一化不会因“配置不存在”丢弃绑定。
+        if (this.flushCompressionBindingAfterConfigsSave) {
+          this.flushCompressionBindingAfterConfigsSave = false;
+          this.saveLlmCompression();
+        }
       } else if (payload.section === 'checkpointMaintenance') {
         this.checkpointMaintenance = { ...emptyCheckpointMaintenance(), ...(payload.settings as CheckpointMaintenanceSettingsRecord) };
       } else if (payload.section === 'appearance') {

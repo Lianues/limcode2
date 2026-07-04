@@ -574,7 +574,7 @@ function cancelDelete(): void {
         </header>
         <div class="global-settings-grid compression-settings-grid">
           <label class="global-settings-field">
-            <span>压缩渠道</span>
+            <span>压缩使用的模型渠道</span>
             <SettingsDropdown
               v-model="compressionProviderConfigId"
               :options="compressionProviderOptions"

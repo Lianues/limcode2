@@ -274,6 +274,7 @@ function measureRowElement(key: string, element: HTMLElement): void {
 .virtual-timeline-list {
   position: relative;
   min-width: 0;
+  overflow-anchor: none;
 }
 
 .virtual-timeline-spacer {

@@ -23,7 +23,7 @@ const conversationUi = useConversationUiStore();
 const checkpointStore = useCheckpointPolicyStore();
 const settings = useGlobalSettingsStore();
 const { currentConversationId } = storeToRefs(clientState);
-const { currentTimeline, currentMessages, currentCheckpoints, currentCheckpointTimelineAnchors, currentCompressionBlocks, currentMessageFloorById, currentTotalMessages } = storeToRefs(conversationTimeline);
+const { currentTimeline, currentMessages, currentAnchorMessages, currentCheckpoints, currentCheckpointTimelineAnchors, currentCompressionBlocks, currentMessageFloorById, currentTotalMessages } = storeToRefs(conversationTimeline);
 const { sendMessage, editMessage, updateQueueInput } = useChat();
 
 const scroller = ref<HTMLElement | null>(null);
@@ -90,8 +90,8 @@ const scrollMarkers = computed(() =>
 );
 
 watch(
-  [currentMessages, currentCheckpoints, currentCheckpointTimelineAnchors, currentCompressionBlocks, currentMessageFloorById, currentTotalMessages],
-  ([messages, checkpoints, checkpointAnchors, compressionBlocks, floorByMessageId, totalMessages]) => conversationUi.syncTimeline(messages, checkpoints, checkpointAnchors, compressionBlocks, floorByMessageId, totalMessages),
+  [currentMessages, currentAnchorMessages, currentCheckpoints, currentCheckpointTimelineAnchors, currentCompressionBlocks, currentMessageFloorById, currentTotalMessages],
+  ([messages, anchorMessages, checkpoints, checkpointAnchors, compressionBlocks, floorByMessageId, totalMessages]) => conversationUi.syncTimeline(messages, anchorMessages, checkpoints, checkpointAnchors, compressionBlocks, floorByMessageId, totalMessages),
   { immediate: true }
 );
 

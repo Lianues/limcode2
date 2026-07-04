@@ -677,7 +677,10 @@ export class WebviewMessageRouter {
       this.deps.requestSnapshot();
       return;
     }
-    this.deps.requestSnapshot(requestedConversationId);
+
+    void this.deps.ensureConversationDetailLoaded(requestedConversationId)
+      .catch((error) => console.warn('[LimCode] Failed to hydrate conversation before client resync.', error))
+      .finally(() => this.deps.requestSnapshot(requestedConversationId));
   }
 
   private async postConversationTimelinePage(

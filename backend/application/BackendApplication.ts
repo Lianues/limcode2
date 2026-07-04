@@ -350,6 +350,63 @@ export class BackendApplication {
     return displayConversationTitle({ id: conversation.id, title: conversation.title, messages });
   }
 
+  public ensureConversationPlaceholder(conversationId: string, title?: string): boolean {
+    const normalizedConversationId = conversationId.trim();
+    if (!normalizedConversationId) return false;
+    const existing = this.findConversationEntity(normalizedConversationId);
+    if (existing !== undefined) {
+      const current = this.world.get(existing, Conversation);
+      const nextTitle = title?.trim() ? normalizeConversationTitle(title) : undefined;
+      if (current && nextTitle && !current.title) {
+        this.world.add(existing, Conversation, { ...current, title: nextTitle });
+        this.requestSnapshot();
+        this.requestSnapshot(normalizedConversationId);
+        this.persistence.queuePersist();
+        return true;
+      }
+      return false;
+    }
+
+    const now = Date.now();
+    const conversation = this.world.spawn();
+    this.world.add(conversation, Conversation, {
+      id: normalizedConversationId,
+      title: normalizeConversationTitle(title ?? ''),
+      visibility: 'visible'
+    });
+
+    const origin = this.world.spawn();
+    this.world.add(origin, ConversationOriginLink, {
+      id: `col${origin}`,
+      conversation,
+      originKind: 'user',
+      sourceKind: 'user',
+      createdAt: now,
+      updatedAt: now
+    });
+
+    const agent = this.findDefaultAgent() ?? this.ensurePreHydrationAgent(DEFAULT_AGENT_ID);
+    this.ensurePreHydrationAgentConversationLink(conversation, normalizedConversationId, agent, now);
+
+    const agentRecord = this.world.get(agent, Agent);
+    const selection = this.world.spawn();
+    this.world.add(selection, ConversationAgentSelection, {
+      id: `conversation-agent:${normalizedConversationId}:${agentRecord?.id ?? DEFAULT_AGENT_ID}`,
+      conversation,
+      agent,
+      role: 'active',
+      createdAt: now,
+      updatedAt: now
+    });
+
+    upsertGlobalModeSelection(this.world, conversation, normalizedConversationId);
+    void this.upsertConversationHistoryEntry(normalizedConversationId);
+    this.requestSnapshot();
+    this.requestSnapshot(normalizedConversationId);
+    this.persistence.queuePersist();
+    return true;
+  }
+
   public renameConversationTitle(conversationId: string, title: string): boolean {
     const entity = this.findConversationEntity(conversationId);
     if (entity === undefined) return false;
@@ -443,13 +500,17 @@ export class BackendApplication {
       return;
     }
 
-    const conversation = this.findConversationEntity(conversationId);
-    const statelessLoad = conversation !== undefined;
+    const existingBefore = this.findConversationEntity(conversationId);
+    const statelessLoad = existingBefore !== undefined;
     const storedDetail = await this.env.storage.loadConversationDetail(conversationId, { includeRunHistory: false });
     const backfilled = storedDetail && statelessLoad
       ? backfillMissingToolResponsesForStatelessLoad(storedDetail, conversationId)
       : { state: storedDetail, addedCount: 0 };
     const detail = backfilled.state;
+
+    if (detail && this.findConversationEntity(conversationId) === undefined) {
+      this.spawnPreHydrationConversation(conversationId);
+    }
 
     const hydrated = detail ? await hydrateConversationDetail(this.world, detail, conversationId) : false;
     if (detail && hydrated) this.primeConversationStreamState(conversationId, detail);

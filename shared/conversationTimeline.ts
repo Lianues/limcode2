@@ -29,6 +29,7 @@ export type ConversationTimelineRow = ConversationMessageTimelineRow | Conversat
 
 export interface BuildConversationTimelineRowsInput {
   messages: readonly MessageRecord[];
+  anchorMessages?: readonly MessageRecord[];
   checkpoints: readonly CheckpointRecord[];
   checkpointAnchors: readonly CheckpointTimelineAnchorRecord[];
   compressionBlocks?: readonly CompressionBlockRecord[];
@@ -38,8 +39,9 @@ export function buildConversationTimelineRows(input: BuildConversationTimelineRo
   const checkpointsById = new Map(input.checkpoints.map((checkpoint) => [checkpoint.id, checkpoint]));
   const anchoredCheckpointIds = new Set(input.checkpointAnchors.map((anchor) => anchor.checkpointId));
   const messages = [...input.messages].sort(compareMessages);
+  const anchorMessages = [...(input.anchorMessages ?? input.messages)].sort(compareMessages);
   const anchorsByMessage = groupAnchorsByFloorMessage(input.checkpointAnchors, checkpointsById);
-  const compressionRows = groupCompressionByDisplayAnchor(input.compressionBlocks ?? [], messages);
+  const compressionRows = groupCompressionByDisplayAnchor(input.compressionBlocks ?? [], messages, anchorMessages);
   const rows: ConversationTimelineRow[] = [];
   appendInitialCheckpointRows(rows, input.checkpoints, anchoredCheckpointIds);
   appendInitialCompressionRows(rows, compressionRows.initial);
@@ -58,13 +60,14 @@ export function buildConversationTimelineRows(input: BuildConversationTimelineRo
 
 function groupCompressionByDisplayAnchor(
   blocks: readonly CompressionBlockRecord[],
-  messages: readonly MessageRecord[]
+  messages: readonly MessageRecord[],
+  anchorMessages: readonly MessageRecord[]
 ): { byMessage: Map<string, CompressionBlockRecord[]>; initial: CompressionBlockRecord[] } {
   const byMessage = new Map<string, CompressionBlockRecord[]>();
   const initial: CompressionBlockRecord[] = [];
   const messageById = new Map(messages.map((message) => [message.id, message]));
-  const firstSeq = messages[0]?.seq;
-  const lastSeq = messages[messages.length - 1]?.seq;
+  const firstSeq = anchorMessages[0]?.seq ?? messages[0]?.seq;
+  const lastSeq = anchorMessages[anchorMessages.length - 1]?.seq ?? messages[messages.length - 1]?.seq;
   for (const block of blocks) {
     if (isBeforeLoadedRange(block, firstSeq)) {
       initial.push(block);

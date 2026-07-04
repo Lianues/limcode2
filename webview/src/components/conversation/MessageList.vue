@@ -192,6 +192,7 @@ function maybeLoadOlder(): void {
   display: flex;
   flex-direction: column;
   gap: 0; /* 楼层之间无缝级联拼接 */
+  overflow-anchor: none;
 }
 
 .message-empty-container {

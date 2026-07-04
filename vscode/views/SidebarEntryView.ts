@@ -90,6 +90,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.onDidReceiveMessage((message: SidebarWebviewMessage) => {
       if (message.type === OPEN_CONVERSATION_MESSAGE && message.conversationId) {
+        this.backendApp.ensureConversationPlaceholder(message.conversationId, message.title);
         MainPanel.createOrShow(this.extensionUri, this.backendApp, {
           conversationId: message.conversationId,
           title: message.title,

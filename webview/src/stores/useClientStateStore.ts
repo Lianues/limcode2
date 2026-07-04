@@ -202,15 +202,21 @@ export const useClientStateStore = defineStore('clientState', {
     },
     /** Hello 未提供 conversationId（"加载默认"入口）时，待快照到达后回落 default / 首个对话。 */
     ensureCurrentConversation(): void {
-      const hasCurrent =
-        !!this.currentConversationId &&
-        this.conversations.some((conversation) => conversation.id === this.currentConversationId);
-      if (!hasCurrent) {
-        this.currentConversationId =
-          this.conversations.find((conversation) => conversation.id === 'default')?.id ??
-          this.conversations[0]?.id ??
-          '';
+      if (this.currentConversationId) {
+        const hasCurrent = this.conversations.some((conversation) => conversation.id === this.currentConversationId);
+        if (hasCurrent) return;
+
+        // 历史列表打开的对话通常不在 global stream 里，必须等待该 conversation stream
+        // 完成加载后再判断是否失效；否则 global snapshot 会把显式目标回退成首个对话。
+        const currentStreamId = conversationClientStateStreamId(this.currentConversationId);
+        const currentStreamLoaded = (this.streamSeqs[currentStreamId] ?? 0) > 0;
+        if (!currentStreamLoaded) return;
       }
+
+      this.currentConversationId =
+        this.conversations.find((conversation) => conversation.id === 'default')?.id ??
+        this.conversations[0]?.id ??
+        '';
     }
   }
 });

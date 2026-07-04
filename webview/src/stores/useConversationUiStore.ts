@@ -66,6 +66,7 @@ export interface LlmErrorBlockRecord {
 
 interface TimelineSyncSnapshot {
   messages: MessageRecord[];
+  anchorMessages: MessageRecord[];
   checkpoints: CheckpointRecord[];
   checkpointAnchors: CheckpointTimelineAnchorRecord[];
   compressionBlocks: CompressionBlockRecord[];
@@ -117,11 +118,12 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
   const composerDraft = computed(() => activeComposerSnapshot.value.draft);
 
   function syncMessages(messages: readonly MessageRecord[]): void {
-    syncTimeline(messages, [], [], []);
+    syncTimeline(messages, messages, [], [], []);
   }
 
   function syncTimeline(
     messages: readonly MessageRecord[],
+    anchorMessages: readonly MessageRecord[],
     checkpoints: readonly CheckpointRecord[],
     checkpointAnchors: readonly CheckpointTimelineAnchorRecord[],
     compressionBlocks: readonly CompressionBlockRecord[] = [],
@@ -130,6 +132,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
   ): void {
     lastTimelineSnapshot = {
       messages: [...messages],
+      anchorMessages: [...anchorMessages],
       checkpoints: [...checkpoints],
       checkpointAnchors: [...checkpointAnchors],
       compressionBlocks: [...compressionBlocks],
@@ -162,9 +165,9 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
   }
 
   function rebuildTimelineRows(): void {
-    const { messages, checkpoints, checkpointAnchors, compressionBlocks, floorByMessageId, totalMessageCount } = lastTimelineSnapshot;
+    const { messages, anchorMessages, checkpoints, checkpointAnchors, compressionBlocks, floorByMessageId, totalMessageCount } = lastTimelineSnapshot;
     const messageIndexById = new Map(messages.map((message, index) => [message.id, index]));
-    const allRows = buildConversationTimelineRows({ messages, checkpoints, checkpointAnchors, compressionBlocks });
+    const allRows = buildConversationTimelineRows({ messages, anchorMessages, checkpoints, checkpointAnchors, compressionBlocks });
     pruneExpandedCheckpointRows(allRows);
 
     checkpointMarkers.value = allRows
@@ -420,6 +423,7 @@ function createComposerSnapshot(draft = ''): ComposerSnapshot {
 function createEmptyTimelineSyncSnapshot(): TimelineSyncSnapshot {
   return {
     messages: [],
+    anchorMessages: [],
     checkpoints: [],
     checkpointAnchors: [],
     compressionBlocks: [],

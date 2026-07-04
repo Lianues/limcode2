@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { dispatchUserScrollIntent, type UserScrollIntentDirection } from '@webview/composables/scrollIntent';
 
 interface AdvancedScrollMarker {
   id: string;
@@ -131,20 +132,34 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function setScrollTop(value: number, behavior: ScrollBehavior = 'auto'): void {
+function directionForScrollTarget(currentValue: number, nextValue: number): UserScrollIntentDirection {
+  if (Math.abs(nextValue - currentValue) <= 1) return 'none';
+  if (nextValue <= 1) return 'jump-start';
+  if (nextValue >= maxScroll.value - 1) return 'jump-end';
+  return nextValue < currentValue ? 'toward-start' : 'toward-end';
+}
+
+function setScrollTop(value: number, behavior: ScrollBehavior = 'auto', userInitiated = false): void {
   const element = props.scroller;
   if (!element) return;
+  const currentValue = isHorizontal.value ? element.scrollLeft : element.scrollTop;
   const nextValue = clamp(value, 0, maxScroll.value);
+  if (userInitiated) {
+    dispatchUserScrollIntent(element, {
+      direction: directionForScrollTarget(currentValue, nextValue),
+      source: 'advanced-scrollbar'
+    });
+  }
   if (isHorizontal.value) element.scrollTo({ left: nextValue, behavior });
   else element.scrollTo({ top: nextValue, behavior });
 }
 
 function scrollToTop(): void {
-  setScrollTop(0, 'smooth');
+  setScrollTop(0, 'smooth', true);
 }
 
 function scrollToBottom(): void {
-  setScrollTop(maxScroll.value, 'smooth');
+  setScrollTop(maxScroll.value, 'smooth', true);
 }
 
 function findMarkerElement(markerId: string): HTMLElement | undefined {
@@ -166,7 +181,7 @@ function targetTopForMarker(markerId: string): number | undefined {
 
 function scrollToMarker(marker: MarkerView): void {
   activeMarkerId.value = marker.id;
-  setScrollTop(marker.targetTop, 'smooth');
+  setScrollTop(marker.targetTop, 'smooth', true);
 }
 
 function rebuildMarkers(): void {
@@ -291,7 +306,7 @@ function onTrackPointerDown(event: PointerEvent): void {
 
   const pointerPosition = hoverTrackY.value - thumbHeight.value / 2;
   const nextScrollTop = (clamp(pointerPosition, 0, trackTravel.value) / trackTravel.value) * maxScroll.value;
-  setScrollTop(nextScrollTop, 'smooth');
+  setScrollTop(nextScrollTop, 'smooth', true);
 }
 
 function onThumbPointerDown(event: PointerEvent): void {
@@ -312,7 +327,7 @@ function onDragPointerMove(event: PointerEvent): void {
   updateHoverFromPointer(event);
   const deltaY = (isHorizontal.value ? event.clientX : event.clientY) - dragStartY;
   const nextScrollTop = dragStartScrollTop + (deltaY / trackTravel.value) * maxScroll.value;
-  setScrollTop(nextScrollTop);
+  setScrollTop(nextScrollTop, 'auto', true);
 }
 
 function stopDrag(event?: PointerEvent): void {

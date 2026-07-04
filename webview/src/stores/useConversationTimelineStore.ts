@@ -69,6 +69,11 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
         .filter((message) => !message.content.parts.some((part) => 'functionResponse' in part))
         .sort(compareMessages);
     },
+    currentAnchorMessages(): MessageRecord[] {
+      return this.currentTimeline.state.messages
+        .filter((message) => message.conversationId === this.currentConversationId)
+        .sort(compareMessages);
+    },
     currentCheckpoints(): CheckpointRecord[] {
       return this.currentTimeline.state.checkpoints
         .filter((checkpoint) => checkpoint.conversationId === this.currentConversationId)

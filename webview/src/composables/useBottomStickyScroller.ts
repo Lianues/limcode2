@@ -1,4 +1,5 @@
 import { nextTick, onBeforeUnmount, watch, type Ref } from 'vue';
+import { USER_SCROLL_INTENT_EVENT, userScrollIntentDetail } from './scrollIntent';
 
 export interface BottomStickyScrollerOptions {
   /** 距离底部多少像素内视为“贴底”。 */
@@ -7,6 +8,10 @@ export interface BottomStickyScrollerOptions {
   settleMs?: number;
   /** 折叠/展开等显式内容高度交互前，允许稍大的预吸附误差。 */
   interactionThresholdPx?: number;
+  /** 用户主动离开底部后，需要回到底部多少像素内才恢复自动吸附。 */
+  reattachThresholdPx?: number;
+  /** 用户主动上滚后，多少毫秒内禁止“仍在近底”状态自动恢复吸附。 */
+  reattachDelayMs?: number;
 }
 
 export interface BottomStickyScroller {
@@ -22,9 +27,11 @@ interface ScrollMetrics {
   clientHeight: number;
 }
 
-const DEFAULT_THRESHOLD_PX = 1;
-const DEFAULT_INTERACTION_THRESHOLD_PX = 5;
-const DEFAULT_SETTLE_MS = 260;
+const DEFAULT_THRESHOLD_PX = 24;
+const DEFAULT_INTERACTION_THRESHOLD_PX = 96;
+const DEFAULT_REATTACH_THRESHOLD_PX = 1;
+const DEFAULT_REATTACH_DELAY_MS = 800;
+const DEFAULT_SETTLE_MS = 500;
 
 /**
  * 统一管理滚动容器的底部粘滞行为。
@@ -47,6 +54,8 @@ export function useBottomStickyScroller(
     thresholdPx,
     options.interactionThresholdPx ?? DEFAULT_INTERACTION_THRESHOLD_PX
   );
+  const reattachThresholdPx = Math.max(0, options.reattachThresholdPx ?? DEFAULT_REATTACH_THRESHOLD_PX);
+  const reattachDelayMs = Math.max(0, options.reattachDelayMs ?? DEFAULT_REATTACH_DELAY_MS);
 
   let observedScroller: HTMLElement | null = null;
   let observedContent: HTMLElement | null = null;
@@ -57,6 +66,7 @@ export function useBottomStickyScroller(
   let contentCheckFrame: number | undefined;
   let stickyUntil = 0;
   let userDetachedFromBottom = false;
+  let reattachLockedUntil = 0;
   let lastMetrics: ScrollMetrics | undefined;
 
   function distanceFromBottom(metrics: ScrollMetrics): number {
@@ -103,16 +113,23 @@ export function useBottomStickyScroller(
     stickyFrame = undefined;
   }
 
+  function canAutoReattach(): boolean {
+    return performance.now() >= reattachLockedUntil;
+  }
+
   function releaseStickyFromUserIntent(): void {
     stickyToBottom = false;
     userDetachedFromBottom = true;
     stickyUntil = 0;
+    reattachLockedUntil = performance.now() + reattachDelayMs;
     cancelStickyFrame();
+    rememberScrollMetrics();
   }
 
   function scrollToBottomNow(): void {
     stickyToBottom = true;
     userDetachedFromBottom = false;
+    reattachLockedUntil = 0;
 
     const element = scroller.value;
     if (element) {
@@ -134,6 +151,18 @@ export function useBottomStickyScroller(
     }
 
     const currentMetrics = metricsForElement(element);
+    if (userDetachedFromBottom) {
+      if (canAutoReattach() && isNearBottomMetrics(currentMetrics, reattachThresholdPx)) {
+        stickyToBottom = true;
+        userDetachedFromBottom = false;
+        reattachLockedUntil = 0;
+      } else {
+        stickyToBottom = false;
+        lastMetrics = currentMetrics;
+        return;
+      }
+    }
+
     const nearBottom = isNearBottomMetrics(currentMetrics);
     if (nearBottom) {
       stickyToBottom = true;
@@ -145,21 +174,13 @@ export function useBottomStickyScroller(
     const grewFromPreviousBottom = lastMetrics !== undefined
       && isNearBottomMetrics(lastMetrics, interactionThresholdPx)
       && currentMetrics.scrollHeight > lastMetrics.scrollHeight + 1
-      && Math.abs(currentMetrics.scrollTop - lastMetrics.scrollTop) <= 1;
-    if (grewFromPreviousBottom && !userDetachedFromBottom) {
+      && Math.abs(currentMetrics.scrollTop - lastMetrics.scrollTop) <= 2;
+    if (stickyToBottom || grewFromPreviousBottom || wasNearBottomBeforeCurrentLayout()) {
       stickyToBottom = true;
       keepStickyDuringContentSettle();
       return;
     }
 
-    if (stickyToBottom && performance.now() < stickyUntil) {
-      lastMetrics = currentMetrics;
-      return;
-    }
-
-    if (lastMetrics !== undefined && currentMetrics.scrollTop < lastMetrics.scrollTop - 1) {
-      userDetachedFromBottom = true;
-    }
     stickyToBottom = false;
     lastMetrics = currentMetrics;
   }
@@ -168,12 +189,29 @@ export function useBottomStickyScroller(
     if (event.deltaY < 0) releaseStickyFromUserIntent();
   }
 
+  function handleUserScrollIntent(event: Event): void {
+    const detail = userScrollIntentDetail(event);
+    if (!detail) return;
+
+    if (detail.direction === 'toward-start' || detail.direction === 'jump-start') {
+      releaseStickyFromUserIntent();
+      return;
+    }
+
+    if (detail.direction !== 'jump-end') return;
+    stickyToBottom = true;
+    userDetachedFromBottom = false;
+    reattachLockedUntil = 0;
+    keepStickyDuringContentSettle();
+  }
+
   function primeStickyFromBottomInteraction(event: Event): void {
     const target = event.target;
     if (!(target instanceof Element) || !target.closest('[aria-expanded]')) return;
 
     const element = scroller.value;
     if (!element || !isNearBottomElement(element, interactionThresholdPx)) return;
+    if (userDetachedFromBottom && !isNearBottomElement(element, reattachThresholdPx)) return;
 
     stickyToBottom = true;
     userDetachedFromBottom = false;
@@ -184,6 +222,14 @@ export function useBottomStickyScroller(
   function handleKeyboardInteraction(event: KeyboardEvent): void {
     if (event.key === 'ArrowUp' || event.key === 'PageUp' || event.key === 'Home') {
       releaseStickyFromUserIntent();
+      return;
+    }
+
+    if (event.key === 'End') {
+      stickyToBottom = true;
+      userDetachedFromBottom = false;
+      reattachLockedUntil = 0;
+      keepStickyDuringContentSettle();
       return;
     }
 
@@ -221,8 +267,14 @@ export function useBottomStickyScroller(
     if (!element) return;
 
     if (userDetachedFromBottom) {
-      rememberScrollMetrics(element);
-      return;
+      if (canAutoReattach() && isNearBottomElement(element, reattachThresholdPx)) {
+        stickyToBottom = true;
+        userDetachedFromBottom = false;
+        reattachLockedUntil = 0;
+      } else {
+        rememberScrollMetrics(element);
+        return;
+      }
     }
 
     const wasSticky = stickyToBottom;
@@ -271,9 +323,11 @@ export function useBottomStickyScroller(
     observedScroller = element;
     stickyToBottom = isNearBottomElement(element);
     userDetachedFromBottom = false;
+    reattachLockedUntil = 0;
     rememberScrollMetrics(element);
     element.addEventListener('scroll', updateStickyFromUserScroll, { passive: true });
     element.addEventListener('wheel', releaseStickyFromWheel, { passive: true });
+    element.addEventListener(USER_SCROLL_INTENT_EVENT, handleUserScrollIntent);
     element.addEventListener('pointerdown', primeStickyFromBottomInteraction, { capture: true });
     element.addEventListener('keydown', handleKeyboardInteraction, { capture: true });
 
@@ -299,6 +353,7 @@ export function useBottomStickyScroller(
     if (observedScroller) {
       observedScroller.removeEventListener('scroll', updateStickyFromUserScroll);
       observedScroller.removeEventListener('wheel', releaseStickyFromWheel);
+      observedScroller.removeEventListener(USER_SCROLL_INTENT_EVENT, handleUserScrollIntent);
       observedScroller.removeEventListener('pointerdown', primeStickyFromBottomInteraction, { capture: true });
       observedScroller.removeEventListener('keydown', handleKeyboardInteraction, { capture: true });
     }

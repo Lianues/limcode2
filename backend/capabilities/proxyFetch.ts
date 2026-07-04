@@ -6,13 +6,11 @@
  * 返回的 Response 拥有流式 ReadableStream body，支持 SSE 流式输出。
  */
 
-import * as https from 'https';
 import * as http from 'http';
 import * as tls from 'tls';
 import { URL } from 'url';
 
 const USER_AGENT = 'LimCode';
-const DEFAULT_TIMEOUT = 120_000;
 
 /**
  * 创建一个支持代理的 fetch 函数。
@@ -111,8 +109,7 @@ function connectThroughProxy(
       hostname: proxyParsed.hostname,
       port: proxyParsed.port || 80,
       method: 'CONNECT',
-      path: `${targetHost}:${targetPort}`,
-      timeout: DEFAULT_TIMEOUT
+      path: `${targetHost}:${targetPort}`
     });
 
     proxyReq.on('connect', (res: http.IncomingMessage, socket: import('net').Socket) => {
@@ -134,7 +131,6 @@ function connectThroughProxy(
     });
 
     proxyReq.on('error', (error: Error) => finishReject(new Error(`Proxy request failed: ${error.message}`)));
-    proxyReq.on('timeout', () => { proxyReq?.destroy(); finishReject(new Error('Proxy request timeout')); });
     proxyReq.end();
   });
 }

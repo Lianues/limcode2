@@ -23,6 +23,20 @@ function globalSettingsSectionFromScope(scope: BridgeScope | undefined): GlobalS
     : undefined;
 }
 
+function logCompressionClientDebug(stage: string, payload: Record<string, unknown>): void {
+  void stage; void payload;
+}
+
+function compressionSnapshotDebug(state: { compressionBlocks?: Array<{ id: string; status: string; error?: string; sourceHash?: string }>; compressionBlockLlmInvocationLinks?: Array<{ blockId: string; invocationId: string }>; llmInvocations?: Array<{ id: string; status: string; error?: string }> }): Record<string, unknown> | undefined {
+  void state;
+  return undefined;
+}
+
+function compressionPatchDebug(patches: readonly { kind: string; [key: string]: unknown }[]): Record<string, unknown> | undefined {
+  void patches;
+  return undefined;
+}
+
 export function useBridgeBootstrap(): void {
   const session = useSessionStore();
   const clientState = useClientStateStore();
@@ -83,25 +97,34 @@ export function useBridgeBootstrap(): void {
   disposers.push(
     bridge.on(BridgeMessageType.ClientSnapshot, (message) => {
       if (!message.payload) return;
+      const debug = compressionSnapshotDebug(message.payload.state);
+      if (debug) logCompressionClientDebug('clientSnapshot.received', { streamId: message.payload.streamId, streamSeq: message.payload.streamSeq, ...debug });
       clientState.applyClientSnapshot(message.payload.streamId, message.payload.streamSeq, message.payload.state);
       conversationTimeline.applyClientStateSnapshot(message.payload.streamId, message.payload.streamSeq, message.payload.state);
       systemPromptStore.reconcilePendingSave();
+      if (debug) logCompressionClientDebug('clientSnapshot.applied', { streamId: message.payload.streamId, streamSeq: message.payload.streamSeq });
     })
   );
 
   disposers.push(
     bridge.on(BridgeMessageType.ClientPatch, (message) => {
       if (!message.payload) return;
+      const debug = compressionPatchDebug(message.payload.patches);
+      if (debug) logCompressionClientDebug('clientPatch.received', { streamId: message.payload.streamId, streamSeq: message.payload.streamSeq, ...debug });
       const applied = clientState.applyClientPatch(
         message.payload.streamId,
         message.payload.streamSeq,
         message.payload.patches
       );
+      if (debug) logCompressionClientDebug('clientPatch.applyResult', { streamId: message.payload.streamId, streamSeq: message.payload.streamSeq, applied });
       if (applied) {
         conversationTimeline.applyClientStatePatch(message.payload.streamId, message.payload.streamSeq, message.payload.patches);
         systemPromptStore.reconcilePendingSave();
       }
-      if (!applied) resync();
+      if (!applied) {
+        if (debug) logCompressionClientDebug('clientPatch.resync', { streamId: message.payload.streamId, streamSeq: message.payload.streamSeq });
+        resync();
+      }
     })
   );
 

@@ -277,7 +277,8 @@ function hasCompressionBlockForAnchor(world: WorldReader, conversation: Entity, 
 }
 
 function debugAutoCompression(stage: string, payload: Record<string, unknown>): void {
-  console.log(AUTO_COMPRESSION_DEBUG_PREFIX, stage, payload);
+  void stage;
+  void payload;
 }
 
 function describeMessageEntity(world: WorldReader, entity: Entity): Record<string, unknown> | undefined {

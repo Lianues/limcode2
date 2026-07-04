@@ -164,6 +164,7 @@ function readResponse(
 
     let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
     let streamClosed = false;
+    let responseResolved = false;
 
     const closeStream = () => {
       if (streamClosed) return;
@@ -177,9 +178,19 @@ function readResponse(
       try { controller?.error(error); } catch { /* already closed */ }
     };
 
+    const rejectBeforeHeaders = (error: Error) => {
+      if (responseResolved) return;
+      responseResolved = true;
+      try { socket.destroy(); } catch { /* already closed */ }
+      if (signal) signal.removeEventListener('abort', onAbort);
+      reject(error);
+    };
+
     const onAbort = () => {
       socket.destroy();
-      errorStream(new Error('Request cancelled'));
+      const error = new Error('Request cancelled');
+      if (!headersParsed) rejectBeforeHeaders(error);
+      else errorStream(error);
     };
 
     if (signal) {
@@ -280,6 +291,7 @@ function readResponse(
 
         // 检查是否是错误状态码
         bodyStarted = true;
+        responseResolved = true;
         resolve(new Response(stream, { ...responseInit, headers: responseHeadersInit }));
 
         // 如果剩余数据已经包含完整响应（如错误响应），可能已关闭
@@ -298,7 +310,7 @@ function readResponse(
       if (signal?.aborted) return;
       if (streamClosed) return;
       if (!headersParsed) {
-        reject(new Error('Connection closed before headers received'));
+        rejectBeforeHeaders(new Error('Connection closed before headers received'));
         return;
       }
       closeStream();
@@ -306,13 +318,17 @@ function readResponse(
 
     const onClose = () => {
       if (signal?.aborted) return;
+      if (!headersParsed) {
+        rejectBeforeHeaders(new Error('Connection closed before headers received'));
+        return;
+      }
       if (!streamClosed) closeStream();
     };
 
     const onError = (err: Error) => {
       if (signal?.aborted) return;
       if (!headersParsed) {
-        reject(err);
+        rejectBeforeHeaders(err);
       } else {
         errorStream(err);
       }

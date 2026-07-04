@@ -44,6 +44,7 @@ import type {
 } from '../../shared/protocol';
 
 export const DEFAULT_LLM_BASE_URL = 'https://api.openai.com/v1';
+const COMPRESSION_DEBUG_PREFIX = '[LimCode][CompressionDebug]';
 
 type MaybeProvider<T, TArg = void> = T | undefined | ((arg: TArg) => T | undefined | Promise<T | undefined>);
 type LlmSettingsRequest = LlmStartRequest | LlmResolveInvocationRequest | undefined;
@@ -152,12 +153,24 @@ export function createLlmProviderCapability(options: LlmProviderOptions): LlmCap
         });
     },
     compact(request, emit) {
-      controllers.get(request.id)?.abort(createAbortError(`Superseded LLM compact request: ${request.id}`));
+      const previous = controllers.get(request.id);
+      if (previous) {
+        logCompressionDebug('capability.compact.supersede', compactRequestDebugInfo(request));
+        previous.abort(createAbortError(`Superseded LLM compact request: ${request.id}`));
+      }
       const controller = new AbortController();
       controllers.set(request.id, controller);
+      logCompressionDebug('capability.compact.start', compactRequestDebugInfo(request));
       void compactLlmProvider(request, emit, options, controller.signal)
         .finally(() => {
-          if (controllers.get(request.id) === controller) controllers.delete(request.id);
+          const stillActive = controllers.get(request.id) === controller;
+          logCompressionDebug('capability.compact.finally', {
+            ...compactRequestDebugInfo(request),
+            stillActive,
+            signalAborted: controller.signal.aborted,
+            abortReason: abortReasonText(controller.signal.reason)
+          });
+          if (stillActive) controllers.delete(request.id);
         });
     },
     dryRun(request, dryRunOptions) {
@@ -612,9 +625,16 @@ function ensureDefaultCompressionMethodsRegistered(): void {
 }
 
 export async function compactLlmProvider(request: LlmCompactRequest, emit: Emit, options: LlmProviderOptions, signal?: AbortSignal): Promise<void> {
+  logCompressionDebug('provider.compact.begin', { ...compactRequestDebugInfo(request), signalAborted: signal?.aborted === true });
   try {
     ensureDefaultCompressionMethodsRegistered();
     const methodConfig = normalizeCompressionConfig(await options.compressionSettings?.(request), request.methodKind);
+    logCompressionDebug('provider.compact.methodResolved', {
+      ...compactRequestDebugInfo(request),
+      methodConfigId: methodConfig.id,
+      methodConfigKind: methodConfig.kind,
+      signalAborted: signal?.aborted === true
+    });
     if (methodConfig.kind === 'disabled') {
       throw new Error('当前压缩方法已关闭。');
     }
@@ -622,7 +642,16 @@ export async function compactLlmProvider(request: LlmCompactRequest, emit: Emit,
     const handler = compressionMethodHandlers.get(methodConfig.kind);
     if (!handler) throw new Error(`未注册的压缩方法：${methodConfig.kind}`);
     const result = await handler(request, methodConfig, options, signal);
+    logCompressionDebug('provider.compact.done', {
+      ...compactRequestDebugInfo(request),
+      resultId: result.id,
+      resultContentCount: result.contents.length,
+      resultMethodKind: result.methodConfig?.kind,
+      signalAborted: signal?.aborted === true
+    });
 
+    const completedAt = Date.now();
+    logCompressionDebug('provider.compact.emitDone', { ...compactRequestDebugInfo(request), completedAt });
     emit({
       type: LlmEventType.CompactDone,
       payload: {
@@ -630,12 +659,28 @@ export async function compactLlmProvider(request: LlmCompactRequest, emit: Emit,
         blockId: request.blockId,
         conversationId: request.conversationId,
         result,
-        completedAt: Date.now()
+        completedAt
       }
     });
   } catch (error) {
-    if (isRequestAbort(signal)) return;
+    if (isRequestAbort(signal)) {
+      logCompressionDebug('provider.compact.cancelledByRequestAbort', {
+        ...compactRequestDebugInfo(request),
+        error: errorDebugInfo(error),
+        abortReason: abortReasonText(signal?.reason)
+      });
+      return;
+    }
     const failure = failureFromCaughtError(error);
+    const completedAt = Date.now();
+    logCompressionDebug('provider.compact.emitError', {
+      ...compactRequestDebugInfo(request),
+      message: failure.message,
+      rawError: failure.rawError,
+      error: errorDebugInfo(error),
+      completedAt,
+      signalAborted: signal?.aborted === true
+    });
     emit({
       type: LlmEventType.CompactError,
       payload: {
@@ -643,7 +688,7 @@ export async function compactLlmProvider(request: LlmCompactRequest, emit: Emit,
         blockId: request.blockId,
         conversationId: request.conversationId,
         message: failure.message,
-        completedAt: Date.now()
+        completedAt
       }
     });
   }
@@ -681,6 +726,19 @@ async function compactWithOpenAIResponses(
   const proxy = normalizeOptionalString(await resolveMaybe(options.proxy));
   const proxyFetch = proxy ? createProxyFetch(proxy) : undefined;
   const headers = mergeHeaders(await resolveMaybe(options.headers), settings.headers);
+  logCompressionDebug('provider.compact.openaiResponses.settings', {
+    ...compactRequestDebugInfo(request),
+    providerConfigId: settings.id,
+    providerConfigName: settings.name,
+    provider: settings.provider,
+    baseUrl: settings.baseUrl,
+    model: settings.model,
+    methodConfigId: methodConfig.id,
+    methodConfigKind: methodConfig.kind,
+    hasProxy: !!proxy,
+    headerKeys: headers ? Object.keys(headers) : [],
+    hasRequestBody: !!settings.requestBody
+  });
   const provider = unified.createLLMFromConfig({
     provider: settings.provider,
     model: settings.model,
@@ -696,10 +754,28 @@ async function compactWithOpenAIResponses(
     throw new Error('当前 unified-llm-provider 不支持 provider.compact。');
   }
 
-  const compacted = await provider.compact(
-    { contents: normalizedContext.contents.map(toUnifiedContent) },
-    { inputFormat: 'unified', outputFormat: 'unified', signal }
-  );
+  let compacted: UnifiedLLMCompactResponse;
+  try {
+    logCompressionDebug('provider.compact.openaiResponses.request', {
+      ...compactRequestDebugInfo(request),
+      normalizedContentCount: normalizedContext.contents.length,
+      signalAborted: signal?.aborted === true
+    });
+    compacted = await provider.compact(
+      { contents: normalizedContext.contents.map(toUnifiedContent) },
+      { inputFormat: 'unified', outputFormat: 'unified', signal }
+    );
+    logCompressionDebug('provider.compact.openaiResponses.response', {
+      ...compactRequestDebugInfo(request),
+      responseId: compacted.id,
+      object: compacted.object,
+      contentCount: compacted.contents?.length ?? 0,
+      hasUsage: compacted.usageMetadata !== undefined
+    });
+  } catch (error) {
+    logCompressionDebug('provider.compact.openaiResponses.throw', { ...compactRequestDebugInfo(request), error: errorDebugInfo(error), signalAborted: signal?.aborted === true });
+    throw error;
+  }
 
   return {
     id: compacted.id,
@@ -1763,6 +1839,36 @@ function isRequestAbort(signal?: AbortSignal): boolean {
   // 如果不校验 signal.aborted，这类真实失败会被误判为用户取消，导致压缩块一直停在 running。
   return signal?.aborted === true;
 }
+
+function compactRequestDebugInfo(request: LlmCompactRequest): Record<string, unknown> {
+  return {
+    requestId: request.id,
+    blockId: request.blockId,
+    conversationId: request.conversationId,
+    invocationId: request.invocationId,
+    methodKind: request.methodKind,
+    methodConfigId: request.methodConfigId,
+    sourceHash: request.sourceHash,
+    contentCount: request.contents.length,
+    segmentCount: request.segments?.length ?? 0,
+    priorSummaryCount: request.priorSummaryContents?.length ?? 0
+  };
+}
+
+function errorDebugInfo(error: unknown): unknown {
+  return toPlainJsonLike(error);
+}
+
+function abortReasonText(reason: unknown): string | undefined {
+  if (reason === undefined || reason === null) return undefined;
+  if (reason instanceof Error) return `${reason.name}: ${reason.message}`;
+  return String(reason);
+}
+
+function logCompressionDebug(stage: string, payload: Record<string, unknown>): void {
+  void stage; void payload;
+}
+
 function emitLlmStarted(emit: Emit, requestId: string, invocationId: string | undefined, model: string | undefined): void {
   emit({ type: LlmEventType.Started, payload: { requestId, ...(invocationId ? { invocationId } : {}), ...(model ? { model } : {}), startedAt: Date.now() } });
 }

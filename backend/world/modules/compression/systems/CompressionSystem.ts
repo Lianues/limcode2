@@ -297,8 +297,20 @@ function spawnCompressionBlock(
 function completeCompressionBlock(world: WorldReader, cmd: CommandSink, payload: LlmCompactDonePayload): void {
   const blockEntity = findBlock(world, payload.blockId);
   const block = blockEntity !== undefined ? world.get(blockEntity, CompressionBlock) : undefined;
+  debugAutoCompression('compression.complete.event', {
+    requestId: payload.requestId,
+    blockId: payload.blockId,
+    conversationId: payload.conversationId,
+    found: blockEntity !== undefined && !!block,
+    currentStatus: block?.status,
+    resultContentCount: payload.result.contents.length,
+    resultMethodKind: payload.result.methodConfig?.kind
+  });
   if (blockEntity === undefined || !block) return;
-  if (block.sourceHash && payload.result.methodConfig && payload.result.methodConfig.id === 'stale') return;
+  if (block.sourceHash && payload.result.methodConfig && payload.result.methodConfig.id === 'stale') {
+    debugAutoCompression('compression.complete.skipStaleResult', { requestId: payload.requestId, blockId: payload.blockId });
+    return;
+  }
   const now = payload.completedAt;
   const methodKind = payload.result.methodConfig?.kind ?? block.methodKind;
   const taskListSnapshotText = taskListSnapshotTextForBoundary(world, block.conversation, block.endSeq ?? block.anchorSeq);
@@ -331,14 +343,37 @@ function completeCompressionBlock(world: WorldReader, cmd: CommandSink, payload:
     updatedAt: now
   });
 
+  debugAutoCompression('compression.complete.apply', {
+    requestId: payload.requestId,
+    blockId: payload.blockId,
+    previousStatus: block.status,
+    nextStatus: 'complete',
+    tokenCountAfter,
+    tokenSaved: block.tokenCountBefore !== undefined ? Math.max(0, block.tokenCountBefore - tokenCountAfter) : undefined
+  });
 }
 
 function failCompressionBlock(world: WorldReader, cmd: CommandSink, payload: LlmCompactErrorPayload): void {
   const blockEntity = findBlock(world, payload.blockId);
   const block = blockEntity !== undefined ? world.get(blockEntity, CompressionBlock) : undefined;
+  debugAutoCompression('compression.fail.event', {
+    requestId: payload.requestId,
+    blockId: payload.blockId,
+    conversationId: payload.conversationId,
+    found: blockEntity !== undefined && !!block,
+    currentStatus: block?.status,
+    message: payload.message
+  });
   if (blockEntity === undefined || !block) return;
   cmd.add(blockEntity, CompressionBlock, { ...block, status: 'error', error: payload.message, updatedAt: payload.completedAt, completedAt: payload.completedAt });
   failCompressionInvocation(world, cmd, blockEntity, payload);
+  debugAutoCompression('compression.fail.apply', {
+    requestId: payload.requestId,
+    blockId: payload.blockId,
+    previousStatus: block.status,
+    nextStatus: 'error',
+    message: payload.message
+  });
 }
 
 function completeCompressionInvocation(world: WorldReader, cmd: CommandSink, block: Entity, payload: LlmCompactDonePayload): void {
@@ -771,7 +806,8 @@ function safeJson(value: unknown): string {
 }
 
 function debugAutoCompression(stage: string, payload: Record<string, unknown>): void {
-  console.log(AUTO_COMPRESSION_DEBUG_PREFIX, stage, payload);
+  void stage;
+  void payload;
 }
 
 function describeConversation(world: WorldReader, conversation: Entity): Record<string, unknown> | undefined {

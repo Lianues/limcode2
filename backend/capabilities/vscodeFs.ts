@@ -634,12 +634,10 @@ function resolveWorkspacePath(
 function projectRootUri(options: WorkEnvironmentCapabilityOptions): vscode.Uri | undefined {
   const workEnvironment = options.workEnvironment;
   if (workEnvironment && workEnvironmentSupportsCapability(workEnvironment, WORK_ENVIRONMENT_CAPABILITY.LocalFileRead)) {
-    const rootPath = normalizePathArg(workEnvironment.rootPath);
-    if (rootPath) return vscode.Uri.file(rootPath);
-    const uri = uriFromWorkEnvironmentUri(workEnvironment.uri);
-    if (uri) return uri;
+    const root = currentLocalRootUriFromWorkEnvironment(workEnvironment);
+    if (root) return root;
   }
-  return vscode.workspace.workspaceFolders?.[0]?.uri;
+  return currentWorkspaceFolderRootUris()[0];
 }
 
 function allowedLocalRootUris(options: WorkEnvironmentCapabilityOptions): vscode.Uri[] {
@@ -650,13 +648,45 @@ function allowedLocalRootUris(options: WorkEnvironmentCapabilityOptions): vscode
     roots.push(uri);
   };
 
+  const workspaceRoots = currentWorkspaceFolderRootUris();
   add(projectRootUri(options));
+  for (const root of workspaceRoots) add(root);
   for (const environment of options.accessibleWorkEnvironments ?? []) {
     if (!environment.available || !isLocalFolderWorkEnvironment(environment)) continue;
-    add(localRootUriFromWorkEnvironment(environment));
+    add(currentLocalRootUriFromWorkEnvironment(environment, workspaceRoots));
   }
 
   return roots;
+}
+
+function currentWorkspaceFolderRootUris(): vscode.Uri[] {
+  const roots: vscode.Uri[] = [];
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    const uri = folder.uri;
+    if (!uri?.fsPath) continue;
+    if (roots.some((existing) => sameLocalPath(existing.fsPath, uri.fsPath))) continue;
+    roots.push(uri);
+  }
+  return roots;
+}
+
+function currentLocalRootUriFromWorkEnvironment(
+  environment: WorkEnvironmentCapabilityOptions['workEnvironment'],
+  workspaceRoots: readonly vscode.Uri[] = currentWorkspaceFolderRootUris()
+): vscode.Uri | undefined {
+  const uri = localRootUriFromWorkEnvironment(environment);
+  if (!uri) return undefined;
+  // localFolder 环境由 VS Code workspace folder 自动同步。这里在真正解析/校验路径时
+  // 再读取当前 workspaceFolders，避免新增 root 依赖 ECS 同步时序，也避免已移除 root
+  // 因旧的 workEnvironment 快照仍被当作可访问根目录。
+  if (
+    environment
+    && isLocalFolderWorkEnvironment(environment)
+    && !workspaceRoots.some((root) => sameLocalPath(root.fsPath, uri.fsPath))
+  ) {
+    return undefined;
+  }
+  return uri;
 }
 
 function localRootUriFromWorkEnvironment(environment: WorkEnvironmentCapabilityOptions['workEnvironment']): vscode.Uri | undefined {

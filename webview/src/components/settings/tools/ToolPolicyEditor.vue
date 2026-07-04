@@ -186,11 +186,10 @@ function toggleMcpSourceTool(tool: ToolDefinitionRecord, enabled: boolean): void
   store.setPolicyForScope(props.scopeKind, props.scopeId, nextAllowed, effectivePolicy.value?.name, cloneToolConfigs(), nextConfigs);
 }
 
-function toggleTool(tool: ToolDefinitionRecord): void {
-  if (props.readonly) return;
-  const nextEnabled = !isToolEnabled(tool);
-  if (!nextEnabled) collapseToolConfig(tool.name);
-  store.setPolicyForScope(props.scopeKind, props.scopeId, nextAllowed(tool.name, nextEnabled), effectivePolicy.value?.name, cloneToolConfigs(), cloneSourceConfigs());
+function setToolEnabled(tool: ToolDefinitionRecord, enabled: boolean): void {
+  if (props.readonly || enabled === isToolEnabled(tool)) return;
+  if (!enabled) collapseToolConfig(tool.name);
+  store.setPolicyForScope(props.scopeKind, props.scopeId, nextAllowed(tool.name, enabled), effectivePolicy.value?.name, cloneToolConfigs(), cloneSourceConfigs());
 }
 
 function isToolConfigExpanded(toolName: string): boolean { return expandedToolNames.value.includes(toolName); }
@@ -557,8 +556,24 @@ function inputNumber(event: Event): number {
         <template v-else>
           <article v-for="tool in visibleTools" :key="tool.name" class="tool-item" :class="{ 'is-enabled': isToolEnabled(tool) }">
             <div class="tool-item-header">
-              <button type="button" class="tool-item-main" :disabled="readonly" @click="toggleTool(tool)">
-                <span class="tool-toggle" aria-hidden="true"></span>
+              <div class="tool-enable-cell">
+                <LcCheckbox
+                  class="tool-enable-toggle"
+                  size="sm"
+                  :model-value="isToolEnabled(tool)"
+                  :disabled="readonly"
+                  :aria-label="`${isToolEnabled(tool) ? '禁用' : '启用'}工具 ${tool.name}`"
+                  @update:model-value="setToolEnabled(tool, $event)"
+                />
+              </div>
+
+              <button
+                type="button"
+                class="tool-config-header"
+                :aria-expanded="isToolConfigExpanded(tool.name)"
+                :aria-controls="`tool-config-${tool.name}`"
+                @click="toggleToolConfig(tool.name)"
+              >
                 <span class="tool-icon" aria-hidden="true">
                   <component :is="toolIcon(tool)" :stroke="2" />
                 </span>
@@ -570,17 +585,10 @@ function inputNumber(event: Event): number {
                     <span class="tool-pill">{{ riskLabel(tool) }}</span>
                   </span>
                 </span>
-              </button>
-
-              <button
-                type="button"
-                class="tool-config-toggle"
-                :aria-expanded="isToolConfigExpanded(tool.name)"
-                :aria-controls="`tool-config-${tool.name}`"
-                @click="toggleToolConfig(tool.name)"
-              >
-                <span>{{ isToolConfigExpanded(tool.name) ? '收起' : '配置' }}</span>
-                <span class="tool-config-toggle-caret" :class="{ 'is-expanded': isToolConfigExpanded(tool.name) }" aria-hidden="true"></span>
+                <span class="tool-config-toggle">
+                  <span>{{ isToolConfigExpanded(tool.name) ? '收起' : '配置' }}</span>
+                  <span class="tool-config-toggle-caret" :class="{ 'is-expanded': isToolConfigExpanded(tool.name) }" aria-hidden="true"></span>
+                </span>
               </button>
             </div>
 
@@ -1060,39 +1068,91 @@ function inputNumber(event: Event): number {
 
 .tool-item-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 56px minmax(0, 1fr);
   align-items: stretch;
+  min-height: 56px;
 }
 
-.tool-item-main {
+.tool-enable-cell {
+  min-height: 56px;
+  border-right: 1px solid var(--vscode-panel-border);
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+}
+
+.tool-enable-cell :deep(.tool-enable-toggle.lc-checkbox-control) {
   width: 100%;
-  min-height: 64px;
-  border: 0;
-  padding: var(--space-2) var(--space-3);
-  display: grid;
-  grid-template-columns: 16px 24px minmax(0, 1fr);
-  gap: var(--space-2);
-  align-items: center;
-  color: var(--vscode-foreground);
+  min-height: 56px;
   border-radius: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+}
+
+.tool-enable-cell :deep(.tool-enable-toggle.lc-checkbox-control:not(:disabled):not(.is-readonly):hover),
+.tool-enable-cell :deep(.tool-enable-toggle.lc-checkbox-control:focus-visible) {
+  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%);
+  outline: none;
+}
+
+.tool-enable-cell :deep(.tool-enable-toggle.lc-checkbox-control:focus-visible) {
+  box-shadow: inset 0 0 0 1px var(--vscode-focusBorder, var(--vscode-descriptionForeground));
+}
+
+.tool-enable-toggle :deep(.lc-checkbox-box) {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border-color: var(--vscode-descriptionForeground);
+  background: transparent;
+}
+
+.tool-enable-toggle :deep(.lc-checkbox-icon) {
+  display: none;
+}
+
+.tool-enable-toggle.is-checked :deep(.lc-checkbox-box) {
+  border-color: var(--vscode-foreground);
+  background: var(--vscode-foreground);
+}
+
+.tool-config-header {
+  width: 100%;
+  min-width: 0;
+  min-height: 56px;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: stretch;
+  color: var(--vscode-foreground);
   background: transparent;
   text-align: left;
-  min-width: 0;
+  font: inherit;
   appearance: none;
   -webkit-appearance: none;
 }
 
-.tool-item-main:hover:not(:disabled),
-.tool-item-main:focus-visible {
+.tool-config-header:hover,
+.tool-config-header:focus-visible,
+.tool-config-header:active {
   background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%));
   outline: none;
+}
+
+.tool-config-header:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--vscode-focusBorder, var(--vscode-descriptionForeground));
 }
 
 .tool-config-toggle {
   min-width: 72px;
   min-height: 0;
-  border: 0;
-  border-radius: 0;
   border-left: 1px solid var(--vscode-panel-border);
   padding: 0 var(--space-3);
   display: inline-flex;
@@ -1100,18 +1160,13 @@ function inputNumber(event: Event): number {
   justify-content: center;
   gap: var(--space-1);
   color: var(--vscode-descriptionForeground);
-  background: transparent;
   font: inherit;
-  appearance: none;
-  -webkit-appearance: none;
 }
 
-.tool-config-toggle:hover,
-.tool-config-toggle:focus-visible,
-.tool-config-toggle:active {
+.tool-config-header:hover .tool-config-toggle,
+.tool-config-header:focus-visible .tool-config-toggle,
+.tool-config-header:active .tool-config-toggle {
   color: var(--vscode-foreground);
-  background: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%);
-  outline: none;
 }
 
 .tool-config-toggle-caret {
@@ -1161,25 +1216,14 @@ function inputNumber(event: Event): number {
   z-index: 3;
 }
 
-.tool-toggle {
-  width: 10px;
-  height: 10px;
-  border: 1px solid var(--vscode-descriptionForeground);
-  border-radius: 50%;
-  justify-self: center;
-}
-
-.tool-item.is-enabled .tool-toggle {
-  border-color: var(--vscode-foreground);
-  background: var(--vscode-foreground);
-}
-
 .tool-icon {
   width: 24px;
   height: 24px;
+  margin-left: var(--space-3);
   border-radius: var(--radius-sm);
   display: inline-flex;
   align-items: center;
+  align-self: center;
   justify-content: center;
   color: var(--vscode-descriptionForeground);
 }
@@ -1195,8 +1239,10 @@ function inputNumber(event: Event): number {
 
 .tool-main {
   min-width: 0;
+  padding: var(--space-2) 0;
   display: flex;
   flex-direction: column;
+  align-self: center;
   gap: 4px;
 }
 

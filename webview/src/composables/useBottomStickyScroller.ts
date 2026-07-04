@@ -111,9 +111,11 @@ export function useBottomStickyScroller(
   }
 
   function scrollToBottomNow(): void {
+    stickyToBottom = true;
+    userDetachedFromBottom = false;
+
     const element = scroller.value;
     if (element) {
-      userDetachedFromBottom = false;
       element.scrollTop = element.scrollHeight;
       rememberScrollMetrics(element);
     }

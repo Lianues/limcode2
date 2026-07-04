@@ -7,6 +7,8 @@ import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.
 export interface SettingsDropdownOption {
   value: string;
   label: string;
+  /** 仅用于折叠按钮上的紧凑展示；下拉列表仍使用 label / description。 */
+  buttonLabel?: string;
   description?: string;
   icon?: Component;
   disabled?: boolean;
@@ -54,7 +56,7 @@ const filterText = ref('');
 
 const selectedOption = computed(() => props.options.find((option) => option.value === props.modelValue));
 const selectedIcon = computed(() => selectedOption.value?.icon);
-const displayLabel = computed(() => selectedOption.value?.label ?? props.placeholder);
+const displayLabel = computed(() => selectedOption.value?.buttonLabel ?? selectedOption.value?.label ?? props.placeholder);
 const filteredOptions = computed(() => {
   if (!props.searchable) return props.options;
   const keyword = filterText.value.trim().toLowerCase();
@@ -165,27 +167,34 @@ function cssLength(value: number | string): string {
           </label>
           <div v-if="!options.length" class="project-dropdown-empty">{{ emptyText }}</div>
           <div v-else-if="!filteredOptions.length" class="project-dropdown-empty">{{ noMatchText }}</div>
-          <button
+          <div
             v-for="option in filteredOptions"
             :key="option.value"
-            type="button"
-            class="project-option"
-            :class="{ 'is-active': option.value === modelValue, 'has-icon': !!option.icon }"
-            :disabled="option.disabled"
-            role="option"
-            :aria-selected="option.value === modelValue"
-            @click="select(option)"
+            class="settings-dropdown-option-row"
+            :class="{ 'has-option-action': !!$slots.optionAction }"
           >
-            <component v-if="option.icon" :is="option.icon" class="settings-dropdown-option-icon" stroke="2" aria-hidden="true" />
-            <span class="project-option-copy">
-              <span class="project-option-name">{{ compactLabel(option.label) }}</span>
-              <span v-if="option.description" class="project-option-path">{{ option.description }}</span>
-            </span>
-          </button>
+            <button
+              type="button"
+              class="project-option"
+              :class="{ 'is-active': option.value === modelValue, 'has-icon': !!option.icon }"
+              :disabled="option.disabled"
+              role="option"
+              :aria-selected="option.value === modelValue"
+              @click="select(option)"
+            >
+              <component v-if="option.icon" :is="option.icon" class="settings-dropdown-option-icon" stroke="2" aria-hidden="true" />
+              <span class="project-option-copy">
+                <span class="project-option-name">{{ compactLabel(option.label) }}</span>
+                <span v-if="option.description" class="project-option-path">{{ option.description }}</span>
+              </span>
+            </button>
+            <slot name="optionAction" :option="option" :selected="option.value === modelValue" />
+          </div>
         </div>
         <AdvancedScrollbar :scroller="scroller" variant="minimal" />
       </section>
     </Transition>
+    <slot name="panelOverlay" :open="open" />
   </div>
 </template>
 
@@ -324,6 +333,18 @@ button.settings-dropdown-button:active {
   padding: var(--space-2) 0;
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-sm);
+}
+
+.settings-dropdown-option-row {
+  min-width: 0;
+  display: block;
+}
+
+.settings-dropdown-option-row.has-option-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-1);
+  align-items: stretch;
 }
 
 .settings-dropdown-panel .project-option {

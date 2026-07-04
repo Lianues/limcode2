@@ -27,6 +27,7 @@ export interface ConversationSettingsBridgeDeps {
   storage: StorageCapability;
   webview: WebviewCapability;
   requestSnapshot: (conversationId?: string) => void;
+  afterRead?: (stored: StoredConversationSettings) => Promise<void> | void;
   afterUpdate?: (stored: StoredConversationSettings) => Promise<void> | void;
 }
 
@@ -36,7 +37,9 @@ export class ConversationSettingsBridge {
   public async postSnapshot(clientId: BridgeClientId, conversationId: string, section: ConversationSettingsSection, correlationId?: string): Promise<void> {
     const streamId = conversationSettingsStreamId(conversationId, section);
     this.deps.webview.subscribe(clientId, streamId);
-    this.deps.webview.post(clientId, this.createSnapshotMessage(await this.readSettings(conversationId, section), correlationId));
+    const stored = await this.readSettings(conversationId, section);
+    await this.deps.afterRead?.(stored);
+    this.deps.webview.post(clientId, this.createSnapshotMessage(stored, correlationId));
   }
 
   public async update(payload: ConversationSettingsUpdatePayload | undefined, correlationId?: string): Promise<void> {
@@ -107,5 +110,21 @@ function normalizeConversationCommonSettings(conversationId: string, settings: P
 }
 
 function normalizeConversationLlmSettings(conversationId: string, settings: Partial<ConversationLlmSettingsRecord> | undefined): ConversationLlmSettingsRecord {
-  return { conversationId, activeProviderConfigId: settings?.activeProviderConfigId?.trim() ?? '' };
+  const modelOverrides = normalizeModelOverrides(settings?.modelOverrides);
+  return {
+    conversationId,
+    activeProviderConfigId: settings?.activeProviderConfigId?.trim() ?? '',
+    ...(modelOverrides ? { modelOverrides } : {})
+  };
+}
+
+function normalizeModelOverrides(value: ConversationLlmSettingsRecord['modelOverrides'] | undefined): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const result: Record<string, string> = {};
+  for (const [rawConfigId, rawModelId] of Object.entries(value)) {
+    const configId = rawConfigId.trim();
+    const modelId = rawModelId.trim();
+    if (configId && modelId) result[configId] = modelId;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }

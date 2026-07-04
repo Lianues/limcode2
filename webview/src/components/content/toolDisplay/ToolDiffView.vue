@@ -116,7 +116,7 @@ function parseUnifiedDiffLines(diffText: string): ParsedDiffLine[] {
         >
           <span class="tool-diff-line-number">{{ line.oldLine ?? '' }}</span>
           <span class="tool-diff-line-number">{{ line.newLine ?? '' }}</span>
-          <code class="tool-diff-line-code">{{ line.raw }}</code>
+          <code class="tool-diff-line-code"><span v-if="line.kind === 'add' || line.kind === 'delete'" class="tool-diff-line-marker">{{ line.kind === 'add' ? '+' : '-' }}</span>{{ line.kind === 'add' || line.kind === 'delete' ? line.text : line.raw }}</code>
         </div>
       </div>
 
@@ -139,6 +139,9 @@ function parseUnifiedDiffLines(diffText: string): ParsedDiffLine[] {
 
 <style scoped>
 .tool-diff-view {
+  --tool-diff-add-foreground: var(--vscode-gitDecoration-addedResourceForeground, #73c991);
+  --tool-diff-delete-foreground: var(--vscode-gitDecoration-deletedResourceForeground, #f14c4c);
+  --tool-diff-hunk-foreground: var(--vscode-textLink-foreground, #3794ff);
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -279,8 +282,14 @@ function parseUnifiedDiffLines(diffText: string): ParsedDiffLine[] {
 
 .tool-diff-line.is-hunk,
 .tool-diff-split-full.is-hunk {
-  color: var(--vscode-descriptionForeground);
-  background: color-mix(in srgb, var(--vscode-editor-background) 84%, var(--vscode-foreground) 16%);
+  color: var(--tool-diff-hunk-foreground);
+  background: color-mix(in srgb, var(--tool-diff-hunk-foreground) 14%, transparent);
+}
+
+.tool-diff-line.is-hunk .tool-diff-line-number,
+.tool-diff-line.is-hunk .tool-diff-line-code,
+.tool-diff-split-full.is-hunk code {
+  color: var(--tool-diff-hunk-foreground);
 }
 
 .tool-diff-line.is-meta,
@@ -291,14 +300,33 @@ function parseUnifiedDiffLines(diffText: string): ParsedDiffLine[] {
 
 .tool-diff-line.is-add,
 .tool-diff-split-row.is-add .tool-diff-split-cell.is-right {
-  background: color-mix(in srgb, var(--vscode-gitDecoration-addedResourceForeground, #73c991) 18%, transparent);
-  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--tool-diff-add-foreground) 18%, transparent);
+}
+
+.tool-diff-line.is-add .tool-diff-line-number,
+.tool-diff-line.is-add .tool-diff-line-code,
+.tool-diff-line.is-add .tool-diff-line-marker,
+.tool-diff-split-row.is-add .tool-diff-line-number,
+.tool-diff-split-row.is-add .tool-diff-split-cell.is-right {
+  color: var(--tool-diff-add-foreground);
 }
 
 .tool-diff-line.is-delete,
 .tool-diff-split-row.is-delete .tool-diff-split-cell.is-left {
-  background: color-mix(in srgb, var(--vscode-gitDecoration-deletedResourceForeground, #f14c4c) 18%, transparent);
-  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--tool-diff-delete-foreground) 18%, transparent);
+}
+
+.tool-diff-line.is-delete .tool-diff-line-number,
+.tool-diff-line.is-delete .tool-diff-line-code,
+.tool-diff-line.is-delete .tool-diff-line-marker,
+.tool-diff-split-row.is-delete .tool-diff-line-number,
+.tool-diff-split-row.is-delete .tool-diff-split-cell.is-left {
+  color: var(--tool-diff-delete-foreground);
+}
+
+.tool-diff-line-marker {
+  font-weight: 700;
+  user-select: none;
 }
 
 .tool-diff-split-full {

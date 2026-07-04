@@ -63,7 +63,7 @@ import { AgentRunEventType } from '../world/modules/agentRun/events';
 import { setConversationProject } from '../world/modules/project/bundles';
 import { ConversationProjectLink, ProjectContext } from '../world/modules/project/components';
 import { upsertGlobalModeSelection } from '../world/modules/mode/bundles';
-import { ConversationModeSelection } from '../world/modules/mode/components';
+import { ConversationModeSelection, ModelProfile, ModelProfileScopeLink, type ModelProfileScopeLinkData } from '../world/modules/mode/components';
 import { ToolCall, ToolCallEvent } from '../world/modules/tools/components';
 import { WorkEnvironmentEventType, workEnvironmentIdFromUri } from '../world/modules/workEnvironment';
 import type { LocalWorkEnvironmentCandidate } from '../world/modules/workEnvironment';
@@ -83,6 +83,8 @@ import type {
   ConversationHistoryPageRecord,
   ConversationHistoryScope,
   ClientState,
+  ConversationLlmSettingsRecord,
+  LlmProviderKind,
   MessageContent,
   ProjectFolderCandidateRecord,
   ConversationOriginKind,
@@ -166,6 +168,7 @@ export class BackendApplication {
       storage: this.env.storage,
       webview: this.env.webview,
       requestSnapshot: (conversationId) => this.requestSnapshot(conversationId),
+      afterRead: (stored) => this.afterConversationSettingsRead(stored),
       afterUpdate: (stored) => this.afterConversationSettingsUpdate(stored)
     });
     this.webviewRouter = new WebviewMessageRouter({
@@ -712,19 +715,45 @@ export class BackendApplication {
   }
 
   private async beforeGlobalSettingsUpdate(payload: { section: string; settings?: unknown }): Promise<void> {
-    if (payload.section !== 'llm') return;
-    await this.freezeLoadedConversationsToCurrentGlobalLlmDefault();
+    if (payload.section === 'llm') {
+      await this.freezeLoadedConversationsToCurrentGlobalLlmDefault();
+      return;
+    }
+    if (payload.section === 'llmProviderConfigs') {
+      await this.freezeLoadedConversationsToCurrentProviderModels();
+    }
+  }
+
+  private async afterConversationSettingsRead(stored: { conversationId: string; section: string; settings: unknown }): Promise<void> {
+    if (stored.section !== 'llm') return;
+    await this.applyConversationModelSettingsToWorld(stored.settings as ConversationLlmSettingsRecord | undefined);
   }
 
   private async afterConversationSettingsUpdate(stored: { conversationId: string; section: string; settings: unknown }): Promise<void> {
     if (stored.section !== 'llm') return;
-    const settings = stored.settings as import('../../shared/protocol').ConversationLlmSettingsRecord | undefined;
+    const settings = stored.settings as ConversationLlmSettingsRecord | undefined;
+    await this.applyConversationModelSettingsToWorld(settings);
     const activeProviderConfigId = settings?.activeProviderConfigId?.trim();
     if (!activeProviderConfigId) return;
 
     await this.globalSettingsBridge.update({
       section: 'llm',
       settings: { activeProviderConfigId }
+    });
+  }
+
+  private async applyConversationModelSettingsToWorld(settings: ConversationLlmSettingsRecord | undefined): Promise<void> {
+    const conversationId = settings?.conversationId?.trim();
+    const providerConfigId = settings?.activeProviderConfigId?.trim();
+    if (!conversationId || !providerConfigId) return;
+    const model = settings?.modelOverrides?.[providerConfigId]?.trim();
+    if (!model) return;
+    const provider = await this.env.storage.loadLlmProviderConfigById(providerConfigId);
+    if (!provider || !modelExistsInProviderConfig(provider, model)) return;
+    this.upsertConversationModelProfile(conversationId, {
+      providerConfigId,
+      provider: provider.provider,
+      model
     });
   }
 
@@ -767,21 +796,51 @@ export class BackendApplication {
     }
     if (!currentProviderConfigId) return;
 
-    const conversations = this.world
-      .query(Conversation)
-      .map((entity) => this.world.get(entity, Conversation)?.id)
-      .filter((id): id is string => !!id);
-
-    for (const conversationId of conversations) {
+    for (const conversationId of this.loadedConversationIds()) {
       try {
         const stored = await this.env.storage.loadConversationSettings(conversationId, 'llm');
         const settings = stored?.settings as import('../../shared/protocol').ConversationLlmSettingsRecord | undefined;
         if (settings?.activeProviderConfigId) continue;
-        await this.env.storage.saveConversationSettings('llm', { conversationId, activeProviderConfigId: currentProviderConfigId });
+        await this.env.storage.saveConversationSettings('llm', {
+          conversationId,
+          activeProviderConfigId: currentProviderConfigId,
+          ...(settings?.modelOverrides ? { modelOverrides: settings.modelOverrides } : {})
+        });
       } catch (error) {
         console.warn(`[LimCode] Failed to freeze LLM default for conversation "${conversationId}".`, error);
       }
     }
+  }
+
+  private async freezeLoadedConversationsToCurrentProviderModels(): Promise<void> {
+    for (const conversationId of this.loadedConversationIds()) {
+      try {
+        const stored = await this.env.storage.loadConversationSettings(conversationId, 'llm');
+        const settings = stored?.settings as import('../../shared/protocol').ConversationLlmSettingsRecord | undefined;
+        if (!settings?.activeProviderConfigId) continue;
+        if (settings.modelOverrides?.[settings.activeProviderConfigId]) continue;
+        const provider = await this.env.storage.loadActiveLlmProviderConfig(conversationId);
+        const model = provider.model?.trim();
+        if (!model) continue;
+        await this.env.storage.saveConversationSettings('llm', {
+          conversationId,
+          activeProviderConfigId: settings.activeProviderConfigId,
+          modelOverrides: {
+            ...(settings.modelOverrides ?? {}),
+            [settings.activeProviderConfigId]: model
+          }
+        });
+      } catch (error) {
+        console.warn(`[LimCode] Failed to freeze LLM model for conversation "${conversationId}".`, error);
+      }
+    }
+  }
+
+  private loadedConversationIds(): string[] {
+    return this.world
+      .query(Conversation)
+      .map((entity) => this.world.get(entity, Conversation)?.id)
+      .filter((id): id is string => !!id);
   }
 
   private async syncSkillCatalogResource(): Promise<void> {
@@ -908,6 +967,51 @@ export class BackendApplication {
 
   private findConversationEntity(conversationId: string): Entity | undefined {
     return this.world.query(Conversation).find((entity) => this.world.get(entity, Conversation)?.id === conversationId);
+  }
+
+  private upsertConversationModelProfile(
+    conversationId: string,
+    input: { providerConfigId?: string; provider?: LlmProviderKind; model: string }
+  ): void {
+    const scopeId = conversationId.trim();
+    const model = input.model.trim();
+    if (!scopeId || !model) return;
+    const conversation = this.findConversationEntity(scopeId);
+    if (conversation === undefined) return;
+    const now = Date.now();
+    const existing = this.latestConversationModelProfileLink(conversation, scopeId);
+    const profile = existing?.link.modelProfile ?? this.world.spawn();
+    const profileId = existing ? this.world.get(profile, ModelProfile)?.id ?? modelProfileIdForConversation(scopeId) : modelProfileIdForConversation(scopeId);
+    this.world.add(profile, ModelProfile, {
+      id: profileId,
+      name: '对话临时模型',
+      ...(input.providerConfigId?.trim() ? { providerConfigId: input.providerConfigId.trim() } : {}),
+      ...(input.provider ? { provider: input.provider } : {}),
+      model
+    });
+    if (existing) {
+      this.world.add(existing.entity, ModelProfileScopeLink, { ...existing.link, conversation, scopeId, modelProfile: profile, updatedAt: now });
+      return;
+    }
+    const link = this.world.spawn();
+    this.world.add(link, ModelProfileScopeLink, {
+      id: modelProfileScopeLinkIdForConversation(scopeId),
+      scopeKind: 'conversation',
+      scopeId,
+      conversation,
+      modelProfile: profile,
+      role: 'active',
+      createdAt: now,
+      updatedAt: now
+    });
+  }
+
+  private latestConversationModelProfileLink(conversation: Entity, scopeId: string): { entity: Entity; link: ModelProfileScopeLinkData } | undefined {
+    return this.world
+      .query(ModelProfileScopeLink)
+      .map((entity) => ({ entity, link: this.world.get(entity, ModelProfileScopeLink) }))
+      .filter((item): item is { entity: Entity; link: ModelProfileScopeLinkData } => !!item.link && item.link.role === 'active' && item.link.scopeKind === 'conversation' && (item.link.conversation === conversation || item.link.scopeId === scopeId))
+      .sort((left, right) => (right.link.updatedAt || right.link.createdAt) - (left.link.updatedAt || left.link.createdAt) || right.entity - left.entity)[0];
   }
 
   private collectConversationCascadeEntities(conversation: Entity, conversationId: string): Set<Entity> {
@@ -1340,6 +1444,14 @@ function isPassFlushEffect(effect: WorldEffect): boolean {
     || kind === 'tool.run'
     || kind === 'tool.change.apply'
     || kind === 'checkpoint.create';
+}
+
+function modelProfileIdForConversation(conversationId: string): string { return `model-profile:conversation:${conversationId}`; }
+function modelProfileScopeLinkIdForConversation(conversationId: string): string { return `model-profile-scope:conversation:${conversationId}`; }
+function modelExistsInProviderConfig(config: { model?: string; models: Array<{ id: string }> }, model: string): boolean {
+  const id = model.trim();
+  if (!id) return false;
+  return config.model?.trim() === id || config.models.some((candidate) => candidate.id.trim() === id);
 }
 
 function shouldDeferUntilHydrated(message: WebviewToExtensionMessage): boolean {

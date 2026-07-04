@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { IconFolder, IconListDetails, IconPaperclip, IconPencilExclamation, IconPlayerStop, IconRobot, IconSend2, IconTrash, IconWorld } from '@tabler/icons-vue';
 import { workEnvironmentDisplayPath, workEnvironmentSortKey as buildWorkEnvironmentSortKey } from '@shared/workEnvironmentCatalog';
-import type { AgentRecord, InlineDataPart, MessageContent, WorkEnvironmentRecord } from '@shared/protocol';
+import type { AgentRecord, InlineDataPart, LlmProviderConfigRecord, LlmProviderModelRecord, MessageContent, WorkEnvironmentRecord } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
@@ -11,11 +11,13 @@ import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
 import { GLOBAL_MODE_OPTION_ID, useModeStore } from '@webview/stores/useModeStore';
 import { useWorkEnvironmentStore } from '@webview/stores/useWorkEnvironmentStore';
 import { useAgentStore } from '@webview/stores/useAgentStore';
+import { useModelProfileStore } from '@webview/stores/useModelProfileStore';
 import { useCompression } from '@webview/composables/useCompression';
 import { useChat } from '@webview/composables/useChat';
 import RichContentEditor from '@webview/components/content/RichContentEditor.vue';
 import QueuePanel, { type QueueItem } from '@webview/components/input/QueuePanel.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
+import SettingsSelectableList, { type SettingsSelectableListItem } from '@webview/components/settings/global/SettingsSelectableList.vue';
 import ContextTokenUsageBar from '@webview/components/conversation/ContextTokenUsageBar.vue';
 import AgentRunPanel from '@webview/components/input/AgentRunPanel.vue';
 import BackgroundCommandPanel from '@webview/components/input/BackgroundCommandPanel.vue';
@@ -40,6 +42,7 @@ const globalSettings = useGlobalSettingsStore();
 const conversationSettings = useConversationSettingsStore();
 const modeStore = useModeStore();
 const agentStore = useAgentStore();
+const modelProfileStore = useModelProfileStore();
 const workEnvironmentStore = useWorkEnvironmentStore();
 const compression = useCompression();
 const ui = useConversationUiStore();
@@ -56,6 +59,7 @@ const channelDropdownCloseSignal = ref(0);
 const workEnvironmentDropdownCloseSignal = ref(0);
 const fileInput = ref<HTMLInputElement | null>(null);
 const attachmentScroller = ref<HTMLElement | null>(null);
+const channelModelPanel = ref<{ configId: string; style: Record<string, string> } | null>(null);
 
 const draft = computed({
   get: () => ui.composerDraft,
@@ -70,12 +74,23 @@ const compacting = computed(() => conversationTimeline.currentCompressionBlocks.
 const compactTitle = computed(() => compacting.value ? '取消上下文压缩' : '压缩当前上下文');
 const runSummary = computed(() => clientState.currentRunSummary);
 const channelOptions = computed<SettingsDropdownOption[]>(() =>
-  globalSettings.llmProviderConfigs.configs.map((config) => ({
-    value: config.id,
-    label: config.name,
-    description: config.model ? `${providerLabel(config.provider)} · ${config.model}` : providerLabel(config.provider)
-  }))
+  globalSettings.llmProviderConfigs.configs.map((config) => {
+    const model = selectedModelForConfig(config);
+    return {
+      value: config.id,
+      label: config.name,
+      buttonLabel: model ? `${config.name} · ${model}` : config.name,
+      description: model ? `${providerLabel(config.provider)} · ${model}` : providerLabel(config.provider)
+    };
+  })
 );
+const channelModelPanelConfig = computed(() => channelModelPanel.value ? globalSettings.llmProviderConfigs.configs.find((config) => config.id === channelModelPanel.value?.configId) : undefined);
+const channelModelPanelModels = computed(() => channelModelPanelConfig.value?.models ?? []);
+const channelModelPanelItems = computed<SettingsSelectableListItem[]>(() => channelModelPanelModels.value.map((model) => ({
+  id: model.id,
+  title: model.name || model.id,
+  description: modelDescription(model)
+})));
 const workEnvironmentOptions = computed<SettingsDropdownOption[]>(() =>
   workEnvironmentStore.allowedEnvironmentsForConversation(clientState.currentConversationId)
     .sort((left, right) => workEnvironmentSortKey(left).localeCompare(workEnvironmentSortKey(right), 'zh-CN') || left.id.localeCompare(right.id))
@@ -118,7 +133,12 @@ const activeModeId = computed({
   set: (modeId: string) => selectMode(modeId)
 });
 const activeChannelId = computed({
-  get: () => conversationSettings.llm.activeProviderConfigId || globalSettings.llm.activeProviderConfigId || globalSettings.activeLlmProviderConfig?.id || '',
+  get: () => {
+    const conversationId = clientState.currentConversationId;
+    const llm = conversationSettings.llm.conversationId === conversationId ? conversationSettings.llm : undefined;
+    const profileConfigId = conversationId ? modelProfileStore.localProfileFor('conversation', conversationId).profile?.providerConfigId?.trim() : '';
+    return llm?.activeProviderConfigId || profileConfigId || globalSettings.llm.activeProviderConfigId || globalSettings.activeLlmProviderConfig?.id || '';
+  },
   set: (configId: string) => selectChannel(configId)
 });
 const activeWorkEnvironmentId = computed({
@@ -166,6 +186,7 @@ function onWindowKeydown(event: KeyboardEvent): void {
 }
 
 function onWindowResize(): void {
+  channelModelPanel.value = null;
   if (!editorExpanded.value) return;
   updateExpandedEditorHeight();
 }
@@ -354,14 +375,91 @@ function providerLabel(provider: string): string {
   }
 }
 
+function selectedModelForConfig(config: LlmProviderConfigRecord): string {
+  const conversationId = clientState.currentConversationId;
+  const override = conversationId && conversationSettings.llm.conversationId === conversationId
+    ? conversationSettings.llm.modelOverrides?.[config.id]?.trim()
+    : undefined;
+  if (override && modelExistsInConfig(config, override)) return override;
+  const profile = conversationId ? modelProfileStore.localProfileFor('conversation', conversationId).profile : undefined;
+  const profileModel = profile?.providerConfigId?.trim() === config.id ? profile.model.trim() : '';
+  return profileModel && modelExistsInConfig(config, profileModel) ? profileModel : config.model;
+}
+
+function modelExistsInConfig(config: LlmProviderConfigRecord, modelId: string): boolean {
+  const id = modelId.trim();
+  if (!id) return false;
+  return config.model?.trim() === id || config.models.some((model) => model.id === id);
+}
+
+function modelDescription(model: LlmProviderModelRecord): string {
+  return model.createdAt ? `ID: ${model.id} · ${model.createdAt}` : `ID: ${model.id}`;
+}
+
+function openChannelModelPanel(configId: string, event: MouseEvent): void {
+  if (channelModelPanel.value?.configId === configId) {
+    channelModelPanel.value = null;
+    return;
+  }
+  const target = event.currentTarget instanceof HTMLElement ? event.currentTarget : undefined;
+  if (!target) return;
+  channelModelPanel.value = { configId, style: channelModelPanelStyleFor(target) };
+}
+
+function channelModelPanelStyleFor(anchor: HTMLElement): Record<string, string> {
+  const rect = anchor.getBoundingClientRect();
+  const margin = 8;
+  const gap = 6;
+  const width = Math.min(170, Math.max(150, window.innerWidth - margin * 2));
+  const height = 220;
+  let left = rect.right + gap;
+  if (left + width > window.innerWidth - margin) left = rect.left - width - gap;
+  if (left < margin) left = Math.min(Math.max(margin, rect.left), Math.max(margin, window.innerWidth - width - margin));
+  let top = rect.top;
+  if (top + height > window.innerHeight - margin) top = window.innerHeight - height - margin;
+  if (top < margin) top = margin;
+  return {
+    left: `${Math.round(left)}px`,
+    top: `${Math.round(top)}px`,
+    width: `${Math.round(width)}px`,
+    height: `${height}px`
+  };
+}
+
+function selectChannelModel(config: LlmProviderConfigRecord, item: SettingsSelectableListItem): void {
+  const modelId = item.id;
+  if (!config.models.some((model) => model.id === modelId)) return;
+  const conversationId = clientState.currentConversationId;
+  if (conversationId) {
+    conversationSettings.selectLlmModelForConversation(conversationId, config.id, modelId);
+    setConversationModelProfile(conversationId, config, modelId);
+  } else {
+    globalSettings.selectLlmProviderConfigModel(config.id, modelId);
+  }
+  channelModelPanel.value = null;
+}
+
 function selectChannel(configId: string): void {
   if (!configId) return;
   const conversationId = clientState.currentConversationId;
   if (conversationId) {
     conversationSettings.selectLlmProviderConfigForConversation(conversationId, configId);
+    const config = globalSettings.llmProviderConfigs.configs.find((candidate) => candidate.id === configId);
+    if (config) setConversationModelProfile(conversationId, config, selectedModelForConfig(config));
     return;
   }
   globalSettings.selectLlmProviderConfig(configId);
+}
+
+function setConversationModelProfile(conversationId: string, config: LlmProviderConfigRecord, modelId: string): void {
+  const model = modelId.trim();
+  if (!conversationId || !config.id || !model) return;
+  modelProfileStore.setProfileForScope('conversation', conversationId, {
+    name: '对话临时模型',
+    providerConfigId: config.id,
+    provider: config.provider,
+    model
+  });
 }
 
 function selectAgent(agentId: string): void {
@@ -387,20 +485,33 @@ function selectWorkEnvironment(workEnvironmentId: string): void {
   workEnvironmentStore.selectConversationEnvironment(conversationId, workEnvironmentId);
 }
 
-function onAgentDropdownOpen(): void { modeDropdownCloseSignal.value += 1; channelDropdownCloseSignal.value += 1; workEnvironmentDropdownCloseSignal.value += 1; }
+function closeChannelModelPanel(): void {
+  channelModelPanel.value = null;
+}
+
+function onAgentDropdownOpen(): void {
+  closeChannelModelPanel();
+  modeDropdownCloseSignal.value += 1;
+  channelDropdownCloseSignal.value += 1;
+  workEnvironmentDropdownCloseSignal.value += 1;
+}
+
 function onModeDropdownOpen(): void {
+  closeChannelModelPanel();
   agentDropdownCloseSignal.value += 1;
   channelDropdownCloseSignal.value += 1;
   workEnvironmentDropdownCloseSignal.value += 1;
 }
 
 function onChannelDropdownOpen(): void {
+  closeChannelModelPanel();
   agentDropdownCloseSignal.value += 1;
   modeDropdownCloseSignal.value += 1;
   workEnvironmentDropdownCloseSignal.value += 1;
 }
 
 function onWorkEnvironmentDropdownOpen(): void {
+  closeChannelModelPanel();
   agentDropdownCloseSignal.value += 1;
   modeDropdownCloseSignal.value += 1;
   channelDropdownCloseSignal.value += 1;
@@ -611,7 +722,44 @@ function middleEllipsis(value: string, maxLength: number): string {
             :close-signal="channelDropdownCloseSignal"
             :max-height="220"
             @open="onChannelDropdownOpen"
-          />
+          >
+            <template #optionAction="{ option }">
+              <button
+                type="button"
+                class="channel-model-toggle"
+                :class="{ 'is-open': channelModelPanel?.configId === option.value }"
+                :disabled="!globalSettings.llmProviderConfigs.configs.find((config) => config.id === option.value)?.models.length"
+                aria-label="切换该渠道的模型"
+                @click.stop="openChannelModelPanel(option.value, $event)"
+              >
+                <span class="channel-model-toggle-caret" aria-hidden="true"></span>
+              </button>
+            </template>
+            <template #panelOverlay="{ open }">
+              <section
+                v-if="open && channelModelPanel && channelModelPanelConfig"
+                class="channel-model-panel lc-dropdown-panel"
+                :style="channelModelPanel.style"
+                aria-label="切换模型"
+                @click.stop
+              >
+                <div class="channel-model-panel-title">
+                  <span>{{ channelModelPanelConfig.name }}</span>
+                  <small>{{ providerLabel(channelModelPanelConfig.provider) }}</small>
+                </div>
+                <SettingsSelectableList
+                  class="channel-model-list"
+                  :items="channelModelPanelItems"
+                  :selected-id="selectedModelForConfig(channelModelPanelConfig)"
+                  search-placeholder="筛选模型..."
+                  empty-text="该渠道暂无模型列表。"
+                  no-match-text="没有匹配的模型。"
+                  :max-height="124"
+                  @select="selectChannelModel(channelModelPanelConfig, $event)"
+                />
+              </section>
+            </template>
+          </SettingsDropdown>
         </template>
         <template v-if="workEnvironmentOptions.length">
           <SettingsDropdown
@@ -943,18 +1091,18 @@ function middleEllipsis(value: string, maxLength: number): string {
 }
 
 .composer-mode-dropdown {
-  width: min(180px, 28vw);
-  min-width: 118px;
+  width: min(120px, 18vw);
+  min-width: 100px;
 }
 
 .composer-agent-dropdown {
-  width: min(180px, 28vw);
-  min-width: 118px;
+  width: min(120px, 19vw);
+  min-width: 80px;
 }
 
 .composer-channel-dropdown {
-  width: min(180px, 28vw);
-  min-width: 118px;
+  width: min(174px, 25vw);
+  min-width: 132px;
 }
 
 .composer-work-environment-dropdown {
@@ -984,6 +1132,136 @@ function middleEllipsis(value: string, maxLength: number): string {
   top: auto;
   bottom: calc(100% + 4px);
   width: 100%;
+}
+
+.composer-channel-dropdown {
+  width: min(174px, 25vw);
+  min-width: 132px;
+}
+
+.composer-channel-dropdown :deep(.settings-dropdown-panel) {
+  width: 100%;
+  min-width: 100%;
+}
+
+.composer-channel-dropdown :deep(.settings-dropdown-option-row.has-option-action .project-option) {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.channel-model-toggle {
+  width: 30px;
+  min-width: 30px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-xs);
+}
+
+.channel-model-toggle:hover:not(:disabled),
+.channel-model-toggle:focus-visible,
+.channel-model-toggle.is-open {
+  color: var(--vscode-foreground);
+  border-color: var(--vscode-panel-border, transparent);
+  background: var(--vscode-list-hoverBackground, transparent);
+  outline: none;
+}
+
+.channel-model-toggle:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.channel-model-toggle-caret {
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.16s ease;
+}
+
+.channel-model-toggle.is-open .channel-model-toggle-caret {
+  transform: rotate(135deg);
+}
+
+.channel-model-panel {
+  position: fixed;
+  z-index: 60;
+  overflow: hidden;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: var(--radius-sm);
+  background: var(--vscode-editor-background);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
+}
+
+.channel-model-panel-title {
+  min-height: 42px;
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--vscode-panel-border);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.channel-model-panel-title span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--vscode-foreground);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.channel-model-panel-title small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.channel-model-list {
+  height: calc(100% - 42px);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.channel-model-list :deep(.settings-selectable-filter) {
+  min-height: 28px;
+}
+
+.channel-model-list :deep(.settings-selectable-filter input) {
+  min-height: 26px;
+}
+
+.channel-model-list :deep(.settings-selectable-shell) {
+  min-height: 0;
+}
+
+.channel-model-list :deep(.settings-selectable-scroll) {
+  min-height: 0;
+}
+
+.channel-model-list :deep(.settings-selectable-items) {
+  padding: var(--space-1);
+}
+
+.channel-model-list :deep(.settings-selectable-item) {
+  min-height: 42px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .composer-meta-dropdown :deep(.settings-dropdown-caret) {

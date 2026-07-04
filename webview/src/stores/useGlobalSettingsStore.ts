@@ -1151,8 +1151,14 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
     },
     selectActiveConfigModel(modelId: string): void {
       const config = this.activeLlmProviderConfig;
-      if (!config || !config.models.some((model) => model.id === modelId)) return;
-      config.model = modelId;
+      if (!config) return;
+      this.selectLlmProviderConfigModel(config.id, modelId);
+    },
+    selectLlmProviderConfigModel(configId: string, modelId: string): void {
+      const config = this.llmProviderConfigs.configs.find((candidate) => candidate.id === configId);
+      const id = modelId.trim();
+      if (!config || !config.models.some((model) => model.id === id)) return;
+      config.model = id;
       config.updatedAt = Date.now();
       this.saveLlmProviderConfigs();
     },

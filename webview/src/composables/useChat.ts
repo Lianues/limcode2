@@ -1,19 +1,26 @@
 import { bridge, BridgeMessageType } from '@webview/transport';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useAgentStore } from '@webview/stores/useAgentStore';
-import type { MessageContent } from '@shared/protocol';
+import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
+import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
+import { useModelProfileStore } from '@webview/stores/useModelProfileStore';
+import type { ChatModelOverrideRecord, MessageContent } from '@shared/protocol';
 
 /** 对话相关的出站动作收口，组件通过它发送消息而不直接接触 bridge。 */
 export function useChat() {
   const clientState = useClientStateStore();
   const agentStore = useAgentStore();
+  const conversationSettings = useConversationSettingsStore();
+  const globalSettings = useGlobalSettingsStore();
+  const modelProfileStore = useModelProfileStore();
 
   function sendMessage(text: string, content?: MessageContent): boolean {
     const conversationId = clientState.currentConversationId;
     const trimmed = text.trim();
     if ((!trimmed && !content?.parts?.length) || !conversationId) return false;
     const agentId = agentStore.activeAgentForConversation(conversationId)?.id;
-    const payload = { conversationId, text: trimmed, ...(content?.parts?.length ? { content } : {}), ...(agentId ? { agentId } : {}) };
+    const model = currentConversationModelOverride(conversationId);
+    const payload = { conversationId, text: trimmed, ...(content?.parts?.length ? { content } : {}), ...(agentId ? { agentId } : {}), ...(model ? { model } : {}) };
     bridge.request(BridgeMessageType.ChatSend, payload);
     return true;
   }
@@ -21,14 +28,16 @@ export function useChat() {
   function editMessage(conversationId: string, messageId: string, text: string, options: { runAfterEdit?: boolean; deleteFollowing?: boolean } = {}): boolean {
     const trimmed = text.trim();
     if (!conversationId || !messageId || !trimmed) return false;
-    const payload = { conversationId, messageId, text: trimmed, ...options };
+    const model = currentConversationModelOverride(conversationId);
+    const payload = { conversationId, messageId, text: trimmed, ...options, ...(model ? { model } : {}) };
     bridge.request(BridgeMessageType.MessageEdit, payload);
     return true;
   }
 
   function retryMessageFrom(conversationId: string, messageId: string): boolean {
     if (!conversationId || !messageId) return false;
-    const payload = { conversationId, messageId };
+    const model = currentConversationModelOverride(conversationId);
+    const payload = { conversationId, messageId, ...(model ? { model } : {}) };
     bridge.request(BridgeMessageType.MessageRetryFrom, payload);
     return true;
   }
@@ -102,6 +111,29 @@ export function useChat() {
     if (!conversationId || !runId || (!trimmed && !content?.parts?.length)) return false;
     bridge.request(BridgeMessageType.QueueInputUpdate, { conversationId, runId, text: trimmed, ...(content?.parts?.length ? { content } : {}) });
     return true;
+  }
+
+  function currentConversationModelOverride(conversationId: string): ChatModelOverrideRecord | undefined {
+    const llm = conversationSettings.llm.conversationId === conversationId ? conversationSettings.llm : undefined;
+    const profile = modelProfileStore.localProfileFor('conversation', conversationId).profile;
+    const configId = llm?.activeProviderConfigId || profile?.providerConfigId?.trim() || globalSettings.llm.activeProviderConfigId || globalSettings.activeLlmProviderConfig?.id || '';
+    const config = globalSettings.llmProviderConfigs.configs.find((candidate) => candidate.id === configId) ?? globalSettings.activeLlmProviderConfig;
+    if (!config) return undefined;
+    const override = llm?.modelOverrides?.[config.id]?.trim();
+    const profileModel = profile?.providerConfigId?.trim() === config.id ? profile.model.trim() : '';
+    const model = override && modelExistsInConfig(config, override)
+      ? override
+      : profileModel && modelExistsInConfig(config, profileModel)
+        ? profileModel
+        : config.model?.trim();
+    if (!model) return undefined;
+    return { providerConfigId: config.id, provider: config.provider, model };
+  }
+
+  function modelExistsInConfig(config: { model?: string; models: Array<{ id: string }> }, modelId: string): boolean {
+    const id = modelId.trim();
+    if (!id) return false;
+    return config.model?.trim() === id || config.models.some((model) => model.id === id);
   }
 
   return { sendMessage, editMessage, retryMessageFrom, deleteMessagesFrom, cancelLlmAutoRetry, abortCurrentConversation, removeQueueRun, promoteQueueRun, reorderQueue, pauseQueueRun, resumeQueueRun, resumeAllQueueRuns, updateQueueInput };

@@ -1881,11 +1881,18 @@ type MutationPatchForTable<TKey extends ClientStateTableKey> = ClientStateTableR
 
 export type ClientPatchOp = ClientStateTablePatchOp;
 
+export interface ChatModelOverrideRecord {
+  providerConfigId?: string;
+  provider?: LlmProviderKind;
+  model: string;
+}
+
 export interface ChatSendPayload {
   conversationId: string;
   text?: string;
   content?: MessageContent;
   agentId?: string;
+  model?: ChatModelOverrideRecord;
 }
 export interface ChatAbortPayload {
   conversationId: string;
@@ -1904,6 +1911,7 @@ export interface MessageEditPayload {
   content?: MessageContent;
   runAfterEdit?: boolean;
   deleteFollowing?: boolean;
+  model?: ChatModelOverrideRecord;
 }
 export interface ConversationOpenPayload { conversationId: string; title?: string }
 export interface AgentCreatePayload { name: string; description?: string; kind?: string }
@@ -1916,6 +1924,7 @@ export interface MessageDeleteFromPayload {
 export interface MessageRetryFromPayload {
   conversationId: string;
   messageId: string;
+  model?: ChatModelOverrideRecord;
 }
 export interface AgentRunControlPayload {
   runId: string;
@@ -2343,6 +2352,8 @@ export interface ConversationSettingsRecord {
 export interface ConversationLlmSettingsRecord {
   conversationId: string;
   activeProviderConfigId: string;
+  /** 当前对话对各渠道配置的模型选择覆盖；key 为 providerConfigId，value 为 model id。 */
+  modelOverrides?: Record<string, string>;
 }
 export type ConversationSettingsSectionValue = ConversationSettingsRecord | ConversationLlmSettingsRecord;
 export interface ConversationSettingsGetPayload {

@@ -19,12 +19,14 @@ const props = withDefaults(
     emptyText?: string;
     noMatchText?: string;
     maxHeight?: number;
+    selectedId?: string;
   }>(),
   {
     searchPlaceholder: '筛选...',
     emptyText: '暂无可选项。',
     noMatchText: '没有匹配项。',
-    maxHeight: 240
+    maxHeight: 240,
+    selectedId: ''
   }
 );
 
@@ -76,6 +78,7 @@ function select(item: SettingsSelectableListItem): void {
             :key="item.id"
             type="button"
             class="settings-selectable-item"
+            :class="{ 'is-active': item.id === selectedId }"
             :disabled="item.disabled"
             @click="select(item)"
           >
@@ -176,7 +179,8 @@ function select(item: SettingsSelectableListItem): void {
 }
 
 .settings-selectable-item:hover:not(:disabled),
-.settings-selectable-item:focus-visible {
+.settings-selectable-item:focus-visible,
+.settings-selectable-item.is-active {
   border-color: var(--vscode-panel-border, transparent);
   background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%));
   outline: none;

@@ -6,6 +6,7 @@ import type {
   GlobalSettingsSectionValue,
   LlmCompressionConfigsRecord,
   LlmCompressionSettingsRecord,
+  LlmProviderConfigRecord,
   LlmProviderConfigsRecord,
   LlmSettingsRecord,
   McpServersSettingsRecord
@@ -257,9 +258,10 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       const configs = (await loadLlmProviderConfigsSettings(paths)).settings.configs;
       if (conversationId) {
         const conversationSettings = await this.loadConversationSettings(conversationId, 'llm');
-        const activeProviderConfigId = (conversationSettings?.settings as ConversationLlmSettingsRecord | undefined)?.activeProviderConfigId;
+        const llmSettings = conversationSettings?.settings as ConversationLlmSettingsRecord | undefined;
+        const activeProviderConfigId = llmSettings?.activeProviderConfigId;
         const conversationConfig = activeProviderConfigId ? configs.find((config) => config.id === activeProviderConfigId) : undefined;
-        if (conversationConfig) return conversationConfig;
+        if (conversationConfig) return applyConversationModelOverride(conversationConfig, llmSettings);
       }
       const stored = await loadNormalizedLlmGlobalSettings(paths);
       const activeConfigId = (stored.settings as LlmSettingsRecord).activeProviderConfigId;
@@ -369,5 +371,33 @@ function normalizeConversationLlmSettings(
   conversationId: string,
   settings: Partial<ConversationLlmSettingsRecord> | undefined = undefined
 ): ConversationLlmSettingsRecord {
-  return { conversationId, activeProviderConfigId: typeof settings?.activeProviderConfigId === 'string' ? settings.activeProviderConfigId.trim() : '' };
+  const modelOverrides = normalizeModelOverrides(settings?.modelOverrides);
+  return {
+    conversationId,
+    activeProviderConfigId: typeof settings?.activeProviderConfigId === 'string' ? settings.activeProviderConfigId.trim() : '',
+    ...(modelOverrides ? { modelOverrides } : {})
+  };
+}
+
+function normalizeModelOverrides(value: ConversationLlmSettingsRecord['modelOverrides'] | undefined): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const result: Record<string, string> = {};
+  for (const [rawConfigId, rawModelId] of Object.entries(value)) {
+    const configId = rawConfigId.trim();
+    const modelId = rawModelId.trim();
+    if (configId && modelId) result[configId] = modelId;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function applyConversationModelOverride(config: LlmProviderConfigRecord, settings: ConversationLlmSettingsRecord | undefined): LlmProviderConfigRecord {
+  const model = settings?.modelOverrides?.[config.id]?.trim();
+  if (!model || model === config.model || !modelExistsInConfig(config, model)) return config;
+  return { ...config, model };
+}
+
+function modelExistsInConfig(config: LlmProviderConfigRecord, model: string): boolean {
+  const id = model.trim();
+  if (!id) return false;
+  return config.model?.trim() === id || config.models.some((candidate) => candidate.id.trim() === id);
 }

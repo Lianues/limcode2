@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { World } from '../ecs/types';
+import type { Entity, World } from '../ecs/types';
 import type { CommandCapability, FsCapability, LlmCapability, StorageCapability, WebviewCapability, FsPendingFileChangeProposal } from '../capabilities/types';
 import { ChatEventType } from '../world/modules/chat/events';
 import { AgentRunEventType } from '../world/modules/agentRun/events';
@@ -21,6 +21,7 @@ import { AgentEventType } from '../world/modules/agent/events';
 import { CompressionEventType } from '../world/modules/compression/events';
 import { RuntimeContextEventType } from '../world/modules/runtimeContext/events';
 import { Checkpoint, ShadowRepository } from '../world/modules/checkpoint/components';
+import { ModelProfile, ModelProfileScopeLink, type ModelProfileScopeLinkData } from '../world/modules/mode/components';
 import {
   BridgeMessageType,
   GLOBAL_CLIENT_STATE_STREAM_ID,
@@ -38,6 +39,7 @@ import {
   isProviderContextPart,
   isTextPart,
   type BackgroundCommandOutputGetPayload,
+  type ChatModelOverrideRecord,
   type BridgeClientId,
   type CheckpointDiffOpenPayload,
   type CheckpointRestorePayload,
@@ -100,6 +102,7 @@ export class WebviewMessageRouter {
         if (!message.payload) return;
         {
           const payload = message.payload;
+          this.upsertConversationModelOverride(payload.conversationId, payload.model);
           void this.enqueueAfterConversationTailLoaded(payload.conversationId, () => {
             this.deps.world.enqueue({ type: ChatEventType.Send, payload });
           });
@@ -117,6 +120,7 @@ export class WebviewMessageRouter {
         if (!this.deps.isHydrated() || !message.payload) return;
         {
           const payload = message.payload;
+          this.upsertConversationModelOverride(payload.conversationId, payload.model);
           void this.handleMessageEdit(payload);
         }
         break;
@@ -131,6 +135,7 @@ export class WebviewMessageRouter {
         if (!this.deps.isHydrated() || !message.payload) return;
         {
           const payload = message.payload;
+          this.upsertConversationModelOverride(payload.conversationId, payload.model);
           void this.handleMessageRetryFrom(payload);
         }
         break;
@@ -1170,6 +1175,47 @@ export class WebviewMessageRouter {
       .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id))[0]?.invocation;
   }
 
+  private upsertConversationModelOverride(conversationId: string, input: ChatModelOverrideRecord | undefined): void {
+    const model = input?.model?.trim();
+    const scopeId = conversationId.trim();
+    if (!scopeId || !model) return;
+    const conversation = this.deps.world.query(Conversation).find((entity) => this.deps.world.get(entity, Conversation)?.id === scopeId);
+    if (conversation === undefined) return;
+    const now = Date.now();
+    const existing = this.latestConversationModelProfileLink(conversation, scopeId);
+    const profile = existing?.link.modelProfile ?? this.deps.world.spawn();
+    const profileId = existing ? this.deps.world.get(profile, ModelProfile)?.id ?? modelProfileIdForConversation(scopeId) : modelProfileIdForConversation(scopeId);
+    this.deps.world.add(profile, ModelProfile, {
+      id: profileId,
+      name: '对话临时模型',
+      ...(input?.providerConfigId?.trim() ? { providerConfigId: input.providerConfigId.trim() } : {}),
+      ...(input?.provider ? { provider: input.provider } : {}),
+      model
+    });
+    if (existing) {
+      this.deps.world.add(existing.entity, ModelProfileScopeLink, { ...existing.link, conversation, scopeId, modelProfile: profile, updatedAt: now });
+      return;
+    }
+    const link = this.deps.world.spawn();
+    this.deps.world.add(link, ModelProfileScopeLink, {
+      id: modelProfileScopeLinkIdForConversation(scopeId),
+      scopeKind: 'conversation',
+      scopeId,
+      conversation,
+      modelProfile: profile,
+      role: 'active',
+      createdAt: now,
+      updatedAt: now
+    });
+  }
+
+  private latestConversationModelProfileLink(conversation: Entity, scopeId: string): { entity: Entity; link: ModelProfileScopeLinkData } | undefined {
+    return this.deps.world
+      .query(ModelProfileScopeLink)
+      .map((entity) => ({ entity, link: this.deps.world.get(entity, ModelProfileScopeLink) }))
+      .filter((item): item is { entity: Entity; link: ModelProfileScopeLinkData } => !!item.link && item.link.role === 'active' && item.link.scopeKind === 'conversation' && (item.link.conversation === conversation || item.link.scopeId === scopeId))
+      .sort((left, right) => (right.link.updatedAt || right.link.createdAt) - (left.link.updatedAt || left.link.createdAt) || right.entity - left.entity)[0];
+  }
 
   private postRequestError(clientId: BridgeClientId, requestType: string, message: string, correlationId?: string): void {
     this.deps.webview.post(clientId, {
@@ -1181,6 +1227,9 @@ export class WebviewMessageRouter {
     });
   }
 }
+
+function modelProfileIdForConversation(conversationId: string): string { return `model-profile:conversation:${conversationId}`; }
+function modelProfileScopeLinkIdForConversation(conversationId: string): string { return `model-profile-scope:conversation:${conversationId}`; }
 
 function renderContentsForSummary(contents: MessageContent[]): string {
   return contents.map((content, index) => `${index + 1}. ${content.role}: ${content.parts.map(renderSummaryPart).filter(Boolean).join('\n') || '[empty]'}`).join('\n\n');

@@ -26,6 +26,7 @@ const { createCompression, deleteCompression, regenerateCompression, setCompress
 const runHistory = useRunHistoryStore();
 
 const AUTO_LOAD_TOP_THRESHOLD_PX = 480;
+const AUTO_LOAD_BOTTOM_GUARD_PX = 16;
 const AUTO_LOAD_UNDERFILLED_THRESHOLD_PX = 240;
 let attachedScroller: HTMLElement | null = null;
 let autoLoadFrame: number | undefined;
@@ -136,7 +137,8 @@ function maybeLoadOlder(): void {
   if (!scroller || !timeline.currentHasOlder) return;
   const status = timeline.currentTimeline.status;
   if (status === 'loadingInitial' || status === 'loadingOlder') return;
-  const nearTop = scroller.scrollTop <= AUTO_LOAD_TOP_THRESHOLD_PX;
+  const distanceFromBottom = Math.max(0, scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight);
+  const nearTop = scroller.scrollTop <= AUTO_LOAD_TOP_THRESHOLD_PX && distanceFromBottom > AUTO_LOAD_BOTTOM_GUARD_PX;
   const underfilled = scroller.scrollHeight <= scroller.clientHeight + AUTO_LOAD_UNDERFILLED_THRESHOLD_PX;
   if (nearTop || underfilled) timeline.requestOlder();
 }

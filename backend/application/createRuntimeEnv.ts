@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { GlobalSettingsRecord, LlmInvocationSettingsSnapshotRecord, LlmProviderConfigRecord, ToolDefinitionRecord } from '../../shared/protocol';
+import type { ConversationLlmSettingsRecord, GlobalSettingsRecord, LlmInvocationSettingsSnapshotRecord, LlmProviderConfigRecord, ToolDefinitionRecord } from '../../shared/protocol';
 import {
   createLlmProviderCapability,
   createCommandCapability,
@@ -38,14 +38,16 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
     settings: async (request) => {
       if (request && 'settingsSnapshot' in request && request.settingsSnapshot) return resolveSnapshotLlmProviderConfig(storage, request.settingsSnapshot, request.conversationId);
       const override = request?.model;
-      const base = override?.providerConfigId
-        ? await storage.loadLlmProviderConfigById(override.providerConfigId) ?? await storage.loadActiveLlmProviderConfig(request?.conversationId)
-        : await storage.loadActiveLlmProviderConfig(request?.conversationId);
-      return {
+      const overrideConfig = override?.providerConfigId ? await storage.loadLlmProviderConfigById(override.providerConfigId) : undefined;
+      const base = overrideConfig ?? await storage.loadActiveLlmProviderConfig(request?.conversationId);
+      const overrideModel = override?.model?.trim();
+      const canUseOverrideModel = !!overrideModel && (!override?.providerConfigId || !!overrideConfig) && modelExistsInConfig(base, overrideModel);
+      const resolved = {
         ...base,
-        ...(override?.provider ? { provider: override.provider } : {}),
-        ...(override?.model ? { model: override.model } : {})
+        ...(canUseOverrideModel && override?.provider ? { provider: override.provider } : {}),
+        ...(canUseOverrideModel ? { model: overrideModel } : {})
       };
+      return applyConversationModelOverride(storage, request?.conversationId, resolved);
     },
     compressionSettings: async (request) => {
       const activeProvider = await storage.loadActiveLlmProviderConfig(request.conversationId);
@@ -102,6 +104,25 @@ export function schemasForTools(tools: readonly ToolDefinition[]): ToolSchema[] 
 
 export function recordsForTools(tools: readonly ToolDefinition[]): ToolDefinitionRecord[] {
   return tools.map((tool) => toolDefinitionRecord(tool));
+}
+
+async function applyConversationModelOverride(
+  storage: ReturnType<typeof createVsCodeStorageCapability>,
+  conversationId: string | undefined,
+  config: LlmProviderConfigRecord
+): Promise<LlmProviderConfigRecord> {
+  if (!conversationId) return config;
+  const stored = await storage.loadConversationSettings(conversationId, 'llm');
+  const settings = stored?.settings as ConversationLlmSettingsRecord | undefined;
+  const model = settings?.modelOverrides?.[config.id]?.trim();
+  if (!model || model === config.model || !modelExistsInConfig(config, model)) return config;
+  return { ...config, model };
+}
+
+function modelExistsInConfig(config: LlmProviderConfigRecord, model: string): boolean {
+  const id = model.trim();
+  if (!id) return false;
+  return config.model?.trim() === id || config.models.some((candidate) => candidate.id.trim() === id);
 }
 
 async function resolveSnapshotLlmProviderConfig(

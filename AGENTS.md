@@ -159,6 +159,55 @@ interface SessionRecord {
 
 不要为了更新 link 而重发 agent 或 session。
 
+### 3.1 Bridge / postMessage payload 必须是可结构化克隆的纯数据
+
+Webview 与 Extension Host 之间通过 `postMessage` 传递数据，payload 必须满足浏览器 structured clone 规则。**不要把 Vue / Pinia 的响应式对象、Proxy、ref、computed、DOM Event、函数、class 实例、Map / Set 等直接放进 bridge payload**，否则容易触发：
+
+```text
+DataCloneError: Failed to execute 'postMessage' on 'MessagePort': [object Object] could not be cloned.
+```
+
+强制要求：
+
+```text
+1. 调用 bridge.request / bridge.post / vscode.postMessage 前，必须把 payload 转成普通 Object / Array / string / number / boolean / null。
+2. 不要直接传 Pinia state，例如 settings: this.llm、payload: store.xxx、items: reactiveArray。
+3. 对嵌套对象也要递归转成纯对象；数组用 map 重新生成，record 用 Object.fromEntries / 显式 for 循环重新生成。
+4. 优先使用已有 normalize / sanitize / toPlainXxx 函数；没有就新增一个专用转换函数，不要偷懒直接传响应式对象。
+5. 发送前的协议对象应只包含 shared/protocol.ts 里定义的字段，不要把 UI 临时字段、组件对象、事件对象混进去。
+```
+
+推荐：
+
+```ts
+const settings = normalizeLlmSettings(this.llm);
+bridge.request(BridgeMessageType.ConversationSettingsUpdate, {
+  section: 'llm',
+  settings
+});
+```
+
+避免：
+
+```ts
+bridge.request(BridgeMessageType.ConversationSettingsUpdate, {
+  section: 'llm',
+  settings: this.llm // Pinia state / Proxy，禁止直接发送
+});
+```
+
+如果 payload 来自 store，最低限度也要显式构造：
+
+```ts
+const payload = {
+  conversationId: this.llm.conversationId,
+  activeProviderConfigId: this.llm.activeProviderConfigId,
+  ...(plainModelOverrides ? { modelOverrides: plainModelOverrides } : {})
+};
+```
+
+排查准则：只要遇到 `DataCloneError`，第一时间检查最近一次 `bridge.request(...)` 是否传入了 Pinia/Vue Proxy 或不可 clone 对象。
+
 ## 4. Effect 层准则
 
 ### 4.1 Effect payload 不应长期携带领域耦合结构

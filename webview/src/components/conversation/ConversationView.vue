@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { isVisibleTextPart, type CheckpointRecord, type MessageContent } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
@@ -29,8 +29,9 @@ const { sendMessage, editMessage, updateQueueInput } = useChat();
 const scroller = ref<HTMLElement | null>(null);
 const conversationBody = ref<HTMLElement | null>(null);
 const autoDismissTimers = new Map<string, number>();
-
-useBottomStickyScroller(scroller);
+const bottomStickyScroller = useBottomStickyScroller(scroller);
+let pendingInitialBottomConversationId = '';
+let initialBottomScrollFrame: number | undefined;
 
 const loadingDetail = computed(() => !!currentConversationId.value && currentTimeline.value.status === 'loadingInitial' && currentMessages.value.length === 0);
 const ready = computed(() => !!currentConversationId.value && !loadingDetail.value);
@@ -94,6 +95,23 @@ watch(
   { immediate: true }
 );
 
+// 初次进入/切换历史对话时，初始分页是最新 chunk；需要等数据落 DOM 后主动贴底，避免首帧停在顶部触发 older chunk 加载。
+watch(
+  () => currentConversationId.value,
+  (conversationId) => {
+    pendingInitialBottomConversationId = conversationId;
+    bottomStickyScroller.scrollToBottomNow();
+    scheduleInitialConversationBottomScroll();
+  },
+  { immediate: true, flush: 'post' }
+);
+
+watch(
+  () => `${currentConversationId.value}:${currentTimeline.value.status}:${conversationUi.timelineRows.length}:${currentTimeline.value.loadedChunkIds.join('\u0001')}:${currentTimeline.value.pageInfo?.loadedAt ?? 0}`,
+  () => scheduleInitialConversationBottomScroll(),
+  { flush: 'post' }
+);
+
 watch(
   [
     currentCheckpoints,
@@ -105,7 +123,41 @@ watch(
   { immediate: true }
 );
 
-onBeforeUnmount(() => clearCheckpointAutoDismissTimers());
+onBeforeUnmount(() => {
+  clearCheckpointAutoDismissTimers();
+  cancelInitialBottomScrollFrame();
+});
+
+function scheduleInitialConversationBottomScroll(): void {
+  const conversationId = currentConversationId.value;
+  if (!conversationId || pendingInitialBottomConversationId !== conversationId) return;
+
+  const timeline = currentTimeline.value;
+  const rowCount = conversationUi.timelineRows.length;
+  const hasTimelinePage = timeline.loadedChunkIds.length > 0 || timeline.pageInfo !== undefined;
+  if (timeline.status === 'loadingInitial' && rowCount === 0) return;
+  if (!hasTimelinePage && rowCount === 0) return;
+
+  void nextTick(() => {
+    if (pendingInitialBottomConversationId !== conversationId || currentConversationId.value !== conversationId) return;
+
+    bottomStickyScroller.scrollToBottomNow();
+    cancelInitialBottomScrollFrame();
+    initialBottomScrollFrame = window.requestAnimationFrame(() => {
+      initialBottomScrollFrame = undefined;
+      if (pendingInitialBottomConversationId !== conversationId || currentConversationId.value !== conversationId) return;
+
+      bottomStickyScroller.scrollToBottomNow();
+      pendingInitialBottomConversationId = '';
+    });
+  });
+}
+
+function cancelInitialBottomScrollFrame(): void {
+  if (initialBottomScrollFrame === undefined) return;
+  window.cancelAnimationFrame(initialBottomScrollFrame);
+  initialBottomScrollFrame = undefined;
+}
 
 function onSubmit(text: string, content?: MessageContent): void {
   if (conversationUi.editingQueueRunId) {

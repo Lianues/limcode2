@@ -22,8 +22,9 @@ export async function loadConversationCompressionDetail(
 ): Promise<ClientState | undefined> {
   const includeSourceLinks = options.includeSourceLinks ?? true;
   const state = createEmptyClientState();
+  const now = Date.now();
   const blocks = await loadRecordStore<CompressionBlockRecord, 'block'>(conversationScopedRoot(paths.compressionBlocksRootUri, conversationId), conversationScopedIndex(paths.compressionBlocksRootUri, conversationId), 'block') ?? [];
-  state.compressionBlocks = blocks.filter((block) => block.conversationId === conversationId);
+  state.compressionBlocks = blocks.filter((block) => block.conversationId === conversationId).map((block) => normalizeLoadedCompressionBlock(block, now));
   const blockIds = new Set(state.compressionBlocks.map((block) => block.id));
 
   if (includeSourceLinks) {
@@ -39,7 +40,7 @@ export async function loadConversationCompressionDetail(
 
   const invocationIds = new Set(state.compressionBlockLlmInvocationLinks.map((link) => link.invocationId));
   const invocations = await loadRecordStore<LlmInvocationRecord, 'invocation'>(conversationScopedRoot(paths.compressionLlmInvocationsRootUri, conversationId), conversationScopedIndex(paths.compressionLlmInvocationsRootUri, conversationId), 'invocation') ?? [];
-  state.llmInvocations = invocations.filter((invocation) => invocationIds.has(invocation.id));
+  state.llmInvocations = invocations.filter((invocation) => invocationIds.has(invocation.id)).map((invocation) => normalizeLoadedLlmInvocation(invocation, now));
 
   const hasCompression = state.compressionBlocks.length || state.compressionBlockSourceLinks.length || state.compressionContextVariants.length || state.compressionBlockLlmInvocationLinks.length || state.llmInvocations.length;
   return hasCompression ? state : undefined;
@@ -60,6 +61,27 @@ export async function saveConversationCompressionDetail(paths: StoragePaths, con
     saveRecordStore(conversationScopedRoot(paths.compressionBlockLlmInvocationLinksRootUri, conversationId), conversationScopedIndex(paths.compressionBlockLlmInvocationLinksRootUri, conversationId), invocationLinks, 'link'),
     saveRecordStore(conversationScopedRoot(paths.compressionLlmInvocationsRootUri, conversationId), conversationScopedIndex(paths.compressionLlmInvocationsRootUri, conversationId), invocations, 'invocation')
   ]);
+}
+
+function normalizeLoadedCompressionBlock(record: CompressionBlockRecord, now: number): CompressionBlockRecord {
+  if (record.status !== 'pending' && record.status !== 'running') return record;
+  return {
+    ...record,
+    status: 'error',
+    error: record.error ?? '压缩请求已中断，未收到完成事件；请重新生成。',
+    updatedAt: Math.max(record.updatedAt, now),
+    completedAt: record.completedAt ?? now
+  };
+}
+
+function normalizeLoadedLlmInvocation(record: LlmInvocationRecord, now: number): LlmInvocationRecord {
+  if (record.status !== 'resolving' && record.status !== 'ready' && record.status !== 'streaming') return record;
+  return {
+    ...record,
+    status: 'error',
+    error: record.error ?? 'LLM 调用已中断，未收到完成事件。',
+    completedAt: record.completedAt ?? now
+  };
 }
 
 function conversationScopedRoot(root: vscode.Uri, conversationId: string): vscode.Uri {

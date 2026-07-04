@@ -223,7 +223,7 @@ export async function startLlmProvider(
         await runLlmAttempt(request, emit, settings, provider, options, signal, sawRetry ? { retryAttempt: retryCount, retryMaxAttempts: maxRetries } : undefined);
         return;
       } catch (error) {
-        if (isAbortError(error) || signal?.aborted) return;
+        if (isRequestAbort(signal)) return;
         const failure = failureFromCaughtError(error);
         const nextRetryCount = retryCount + 1;
         const canRetry = retryEnabled
@@ -262,7 +262,7 @@ export async function startLlmProvider(
       }
     }
   } catch (error) {
-    if (isAbortError(error) || signal?.aborted) return;
+    if (isRequestAbort(signal)) return;
     const failure = failureFromCaughtError(error);
     emitLlmError(emit, request.id, failure.message, failure.rawError, {
       createdAt: failure.createdAt,
@@ -339,7 +339,7 @@ async function runLlmAttempt(
       emitUnifiedChunk(request.id, chunk, emit);
     }
   } catch (error) {
-    const aborted = isAbortError(error) || signal?.aborted;
+    const aborted = isRequestAbort(signal);
     if (activeThoughtBlock) activeThoughtBlock = aborted
       ? disposeThoughtBlock(activeThoughtBlock)
       : finishThoughtBlock(request.id, activeThoughtBlock, Date.now(), emit);
@@ -634,14 +634,15 @@ export async function compactLlmProvider(request: LlmCompactRequest, emit: Emit,
       }
     });
   } catch (error) {
-    if (isAbortError(error)) return;
+    if (isRequestAbort(signal)) return;
+    const failure = failureFromCaughtError(error);
     emit({
       type: LlmEventType.CompactError,
       payload: {
         requestId: request.id,
         blockId: request.blockId,
         conversationId: request.conversationId,
-        message: error instanceof Error ? error.message : String(error),
+        message: failure.message,
         completedAt: Date.now()
       }
     });
@@ -1756,8 +1757,11 @@ function createAbortError(message: string): Error {
   return error;
 }
 
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError';
+function isRequestAbort(signal?: AbortSignal): boolean {
+  // 只在本请求自己的 AbortController 被触发时静默取消。
+  // 某些网络层会把 ECONNRESET / socket hang up / 超时包装成 AbortError；
+  // 如果不校验 signal.aborted，这类真实失败会被误判为用户取消，导致压缩块一直停在 running。
+  return signal?.aborted === true;
 }
 function emitLlmStarted(emit: Emit, requestId: string, invocationId: string | undefined, model: string | undefined): void {
   emit({ type: LlmEventType.Started, payload: { requestId, ...(invocationId ? { invocationId } : {}), ...(model ? { model } : {}), startedAt: Date.now() } });

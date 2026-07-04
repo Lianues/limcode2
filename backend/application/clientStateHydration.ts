@@ -322,7 +322,7 @@ export async function hydrateConversationDetail(world: World, state: ClientState
   const existingRunIdsBeforeHydration = existingIds(world, AgentRun);
   const runEntities = hydrateRecordsUnique(world, state.agentRuns ?? [], AgentRun);
   const agentAnswerEntities = hydrateRecordsUnique(world, state.agentAnswers ?? [], AgentAnswer);
-  const llmInvocationEntities = hydrateRecordsUnique(world, state.llmInvocations ?? [], LlmInvocation);
+  const llmInvocationEntities = hydrateLlmInvocationRecords(world, state.llmInvocations ?? []);
   const conversationPolicyEntities = hydrateRecordsUnique(world, state.runConversationPolicies, RunConversationPolicy);
   const contextPolicyEntities = hydrateRecordsUnique(world, state.runContextPolicies, RunContextPolicy);
   const deliveryPolicyEntities = existingRecords(world, RunDeliveryPolicy);
@@ -565,7 +565,8 @@ function hydrateCompressionRecords(
     if (conversation === undefined) continue;
     const entity = world.spawn();
     blockEntities.set(record.id, entity);
-    const { conversationId: _conversationId, ...rest } = record;
+    const hydratedRecord = normalizeHydratedCompressionBlock(record);
+    const { conversationId: _conversationId, ...rest } = hydratedRecord;
     world.add(entity, CompressionBlock, { ...rest, conversation });
   }
 
@@ -688,6 +689,40 @@ function hydrateRecordsUnique<T extends { id: string }>(world: World, records: T
     world.add(entity, component as never, record as never);
   }
   return entities;
+}
+
+function hydrateLlmInvocationRecords(world: World, records: ClientState['llmInvocations'] | undefined): Map<string, Entity> {
+  const entities = existingRecords<ClientState['llmInvocations'][number]>(world, LlmInvocation);
+  for (const record of records ?? []) {
+    if (entities.has(record.id)) continue;
+    const entity = world.spawn();
+    entities.set(record.id, entity);
+    world.add(entity, LlmInvocation, normalizeHydratedLlmInvocation(record));
+  }
+  return entities;
+}
+
+function normalizeHydratedLlmInvocation(record: ClientState['llmInvocations'][number]): ClientState['llmInvocations'][number] {
+  if (record.status !== 'resolving' && record.status !== 'ready' && record.status !== 'streaming') return record;
+  const now = Date.now();
+  return {
+    ...record,
+    status: 'error',
+    error: record.error ?? 'LLM 调用已中断，未收到完成事件。',
+    completedAt: record.completedAt ?? now
+  };
+}
+
+function normalizeHydratedCompressionBlock(record: ClientState['compressionBlocks'][number]): ClientState['compressionBlocks'][number] {
+  if (record.status !== 'pending' && record.status !== 'running') return record;
+  const now = Date.now();
+  return {
+    ...record,
+    status: 'error',
+    error: record.error ?? '压缩请求已中断，未收到完成事件；请重新生成。',
+    updatedAt: Math.max(record.updatedAt, now),
+    completedAt: record.completedAt ?? now
+  };
 }
 
 function existingRecords<T extends { id: string }>(world: World, component: { id: symbol }): Map<string, Entity> {

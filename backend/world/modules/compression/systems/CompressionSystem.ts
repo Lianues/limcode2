@@ -7,7 +7,7 @@ import { conversationMessages } from '../../chat/queries';
 import { LlmEventType } from '../../llm/events';
 import type { LlmCompactDonePayload, LlmCompactErrorPayload } from '../../llm/events';
 import { LlmInvocation } from '../../llm/components';
-import { CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSourceLink, CompressionContextVariant, RunCompressionBlockLink } from '../components';
+import { CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSourceLink, CompressionContextVariant, RunCompressionBlockLink, type CompressionBlockData } from '../components';
 import { CompressionEventType } from '../events';
 import { ToolCall, ToolState } from '../../tools/components';
 import type { CompressionBlockRecord, ContentPart, MessageContent, MessageRecord, ToolCallRecord } from '../../../../../shared/protocol';
@@ -76,6 +76,12 @@ interface CompressionSelection {
   retainedBlock?: Entity;
 }
 
+interface ReusableCompressionPredecessor {
+  entity: Entity;
+  block: CompressionBlockData;
+  contents: MessageContent[];
+}
+
 function createCompressionBlock(
   world: WorldReader,
   cmd: CommandSink,
@@ -94,7 +100,7 @@ function createCompressionBlock(
 
   const selection = methodKind === 'segmented_summary'
     ? prepareSegmentedSelection(world, conversation, payload)
-    : prepareFullSelection(world, conversation, payload);
+    : prepareFullSelection(world, conversation, payload, methodKind);
   if (!selection) {
     debugAutoCompression('compression.create.skipNoSelection', {
       payload,
@@ -124,18 +130,18 @@ function createCompressionBlock(
 function prepareFullSelection(
   world: WorldReader,
   conversation: Entity,
-  payload: { startMessageId?: string; endMessageId?: string }
+  payload: { startMessageId?: string; endMessageId?: string },
+  methodKind: CompressionBlockRecord['methodKind']
 ): CompressionSelection | undefined {
   const selected = selectMessagesForCompression(world, conversation, payload.startMessageId, payload.endMessageId);
   const direct = directCompressionSelection(world, selected);
   if (!direct) return undefined;
   if (payload.startMessageId) return direct;
 
-  const predecessor = latestCompleteBlockBelow(world, conversation, direct.anchor.seq);
+  const predecessor = latestReusableBlockBelow(world, conversation, direct.anchor.seq, methodKind);
   if (predecessor === undefined) return direct;
-  const predecessorBlock = world.get(predecessor, CompressionBlock);
-  const retainedContents = summaryVariantContents(world, predecessor);
-  if (!predecessorBlock || !retainedContents?.length) return direct;
+  const predecessorBlock = predecessor.block;
+  const retainedContents = predecessor.contents;
 
   const predecessorBoundary = predecessorBlock.endSeq ?? predecessorBlock.anchorSeq ?? 0;
   const increment = selected.filter((entity) => (world.get(entity, Message)?.seq ?? 0) > predecessorBoundary);
@@ -153,7 +159,7 @@ function prepareFullSelection(
     startSeq: predecessorBlock.startSeq ?? first.seq,
     sourceMessageCount: Math.max(0, predecessorBlock.sourceMessageCount ?? 0) + increment.length,
     anchor: { id: last.id, seq: last.seq },
-    retainedBlock: predecessor
+    retainedBlock: predecessor.entity
   };
 }
 
@@ -525,8 +531,8 @@ function prepareSegmentedSelection(
     ? world.get(endEntity, Message)!.seq
     : world.get(messages[messages.length - 1], Message)!.seq;
 
-  const predecessor = latestCompleteBlockBelow(world, conversation, endBoundarySeq);
-  const predecessorBlock = predecessor !== undefined ? world.get(predecessor, CompressionBlock) : undefined;
+  const predecessor = latestReusableBlockBelow(world, conversation, endBoundarySeq, 'segmented_summary');
+  const predecessorBlock = predecessor?.block;
   const startBoundarySeq = predecessorBlock ? (predecessorBlock.endSeq ?? predecessorBlock.anchorSeq ?? 0) : -1;
 
   const increment = messages.filter((entity) => {
@@ -549,13 +555,13 @@ function prepareSegmentedSelection(
   const selected = closedRounds.flat();
   if (hasUnresolvedFunctionCallsInEntities(world, selected)) return undefined;
 
-  const requestContents = predecessor !== undefined && predecessorBlock
-    ? [...(summaryVariantContents(world, predecessor) ?? []), ...messageContentsForEntities(world, selected)]
+  const requestContents = predecessor !== undefined
+    ? [...predecessor.contents, ...messageContentsForEntities(world, selected)]
     : messageContentsForEntities(world, selected);
   const segments = closedRounds.map((round) => round.map((entity) => world.get(entity, Message)?.content).filter((content): content is MessageContent => !!content));
   const firstSeq = world.get(selected[0], Message)!.seq;
   const lastMessage = world.get(selected[selected.length - 1], Message)!;
-  const priorSummaryContents = predecessor !== undefined ? summaryVariantContents(world, predecessor) : undefined;
+  const priorSummaryContents = predecessor?.contents;
 
   return {
     selected,
@@ -565,7 +571,7 @@ function prepareSegmentedSelection(
     anchor: { id: lastMessage.id, seq: lastMessage.seq },
     segments,
     ...(priorSummaryContents ? { priorSummaryContents } : {}),
-    ...(predecessor !== undefined ? { retainedBlock: predecessor } : {})
+    ...(predecessor !== undefined ? { retainedBlock: predecessor.entity } : {})
   };
 }
 
@@ -613,8 +619,8 @@ function isToolResponseMessage(content: MessageContent | undefined): boolean {
   return !!content && content.role === 'user' && content.parts.some(isFunctionResponsePart);
 }
 
-/** 该会话中 anchorSeq 严格小于 upperSeq 的最新完成块（用于增量起点与前情来源；regenerate 时天然排除自身/更新块）。 */
-function latestCompleteBlockBelow(world: WorldReader, conversation: Entity, upperSeq: number): Entity | undefined {
+/** 该会话中 anchorSeq 严格小于 upperSeq 的完成块，按新到旧排序（用于增量起点与前情来源；regenerate 时天然排除自身/更新块）。 */
+function completeBlocksBelow(world: WorldReader, conversation: Entity, upperSeq: number): Entity[] {
   return world.query(CompressionBlock)
     .filter((entity) => {
       const block = world.get(entity, CompressionBlock);
@@ -627,15 +633,46 @@ function latestCompleteBlockBelow(world: WorldReader, conversation: Entity, uppe
       return (rightBlock.anchorSeq ?? rightBlock.endSeq ?? 0) - (leftBlock.anchorSeq ?? leftBlock.endSeq ?? 0)
         || rightBlock.createdAt - leftBlock.createdAt
         || rightBlock.id.localeCompare(leftBlock.id);
-    })[0];
+    });
 }
 
-function summaryVariantContents(world: WorldReader, block: Entity): MessageContent[] | undefined {
-  const variant = world.query(CompressionContextVariant)
+function latestReusableBlockBelow(
+  world: WorldReader,
+  conversation: Entity,
+  upperSeq: number,
+  methodKind: CompressionBlockRecord['methodKind']
+): ReusableCompressionPredecessor | undefined {
+  for (const entity of completeBlocksBelow(world, conversation, upperSeq)) {
+    const block = world.get(entity, CompressionBlock);
+    if (!block) continue;
+    const compatibility = compressionBlockReuseCompatibility(block, methodKind);
+    if (!compatibility) continue;
+    const contents = reusableVariantContents(world, entity, methodKind);
+    if (contents?.length) return { entity, block, contents };
+  }
+  return undefined;
+}
+
+function reusableVariantContents(world: WorldReader, block: Entity, methodKind: CompressionBlockRecord['methodKind']): MessageContent[] | undefined {
+  const variants = world.query(CompressionContextVariant)
     .map((entity) => world.get(entity, CompressionContextVariant))
-    .filter((candidate): candidate is NonNullable<typeof candidate> => !!candidate && candidate.block === block && candidate.kind === 'provider_neutral_summary')
-    .sort((left, right) => right.createdAt - left.createdAt)[0];
+    .filter((candidate): candidate is NonNullable<typeof candidate> => !!candidate && candidate.block === block);
+  const sorted = variants.sort((left, right) => right.createdAt - left.createdAt);
+  const nativeVariant = methodKind === 'openai_responses_compact'
+    ? sorted.find((candidate) => candidate.kind === 'provider_native')
+    : undefined;
+  const summaryVariant = sorted
+    .filter((candidate) => candidate.kind === 'provider_neutral_summary')
+    [0];
+  const variant = nativeVariant ?? summaryVariant;
   return variant?.contents;
+}
+
+function compressionBlockReuseCompatibility(
+  block: CompressionBlockData,
+  currentMethodKind: CompressionBlockRecord['methodKind']
+): boolean {
+  return block.methodKind !== 'openai_responses_compact' || currentMethodKind === 'openai_responses_compact';
 }
 
 function currentRevisionForMessage(world: WorldReader, message: Entity): { id: string } | undefined {

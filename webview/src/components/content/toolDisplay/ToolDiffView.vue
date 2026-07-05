@@ -15,6 +15,7 @@ interface ParsedDiffLine {
 
 interface ParsedDiffFile extends ToolDisplayDiffFile {
   lines: ParsedDiffLine[];
+  lineNumberWidth: string;
 }
 
 const props = defineProps<{
@@ -25,11 +26,30 @@ const viewMode = ref<DiffViewMode>('unified');
 const files = computed<ParsedDiffFile[]>(() =>
   props.diff.files
     .filter((file) => file.text.trim().length > 0)
-    .map((file) => ({ ...file, lines: parseUnifiedDiffLines(file.text) }))
+    .map((file) => {
+      const lines = parseUnifiedDiffLines(file.text);
+      const lineNumberDigits = getLineNumberDigits(lines);
+      return { ...file, lines, lineNumberWidth: `calc(${lineNumberDigits}ch + 12px)` };
+    })
 );
 
 function setViewMode(mode: DiffViewMode): void {
   viewMode.value = mode;
+}
+
+function displayLineNumber(line: ParsedDiffLine): number | '' {
+  if (line.kind === 'add') return line.newLine ?? '';
+  if (line.kind === 'delete') return line.oldLine ?? '';
+  return line.newLine ?? line.oldLine ?? '';
+}
+
+function getLineNumberDigits(lines: ParsedDiffLine[]): number {
+  const maxLineNumber = lines.reduce((max, line) => Math.max(max, line.oldLine ?? 0, line.newLine ?? 0), 0);
+  return Math.max(2, String(maxLineNumber).length);
+}
+
+function isUnifiedDiffFileHeaderLine(raw: string): boolean {
+  return raw.startsWith('--- ') || raw.startsWith('+++ ');
 }
 
 function parseUnifiedDiffLines(diffText: string): ParsedDiffLine[] {
@@ -37,16 +57,21 @@ function parseUnifiedDiffLines(diffText: string): ParsedDiffLine[] {
   const parsed: ParsedDiffLine[] = [];
   let oldLine = 0;
   let newLine = 0;
+  let inHunk = false;
 
   for (const raw of lines) {
     const hunk = /^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/.exec(raw);
     if (hunk) {
+      inHunk = true;
       oldLine = Number.parseInt(hunk[1], 10);
       newLine = Number.parseInt(hunk[2], 10);
       parsed.push({ kind: 'hunk', raw, text: raw });
       continue;
     }
-    if (raw.startsWith('---') || raw.startsWith('+++') || raw.startsWith('diff ') || raw.startsWith('index ') || raw.startsWith('\\')) {
+    if (!inHunk && isUnifiedDiffFileHeaderLine(raw)) {
+      continue;
+    }
+    if (!inHunk && (raw.startsWith('diff ') || raw.startsWith('index '))) {
       parsed.push({ kind: 'meta', raw, text: raw });
       continue;
     }
@@ -64,6 +89,10 @@ function parseUnifiedDiffLines(diffText: string): ParsedDiffLine[] {
       parsed.push({ kind: 'context', raw, text: raw.slice(1), oldLine, newLine });
       oldLine += 1;
       newLine += 1;
+      continue;
+    }
+    if (raw.startsWith('\\')) {
+      parsed.push({ kind: 'meta', raw, text: raw });
       continue;
     }
     parsed.push({ kind: 'meta', raw, text: raw });
@@ -98,7 +127,12 @@ function parseUnifiedDiffLines(diffText: string): ParsedDiffLine[] {
       </button>
     </div>
 
-    <div v-for="file in files" :key="file.path" class="tool-diff-file">
+    <div
+      v-for="file in files"
+      :key="file.path"
+      class="tool-diff-file"
+      :style="{ '--tool-diff-line-number-width': file.lineNumberWidth }"
+    >
       <div class="tool-diff-file-header">
         <span class="tool-diff-file-path">{{ file.path }}</span>
         <span v-if="file.action" class="tool-diff-file-action">{{ file.action }}</span>
@@ -114,8 +148,7 @@ function parseUnifiedDiffLines(diffText: string): ParsedDiffLine[] {
           class="tool-diff-line"
           :class="`is-${line.kind}`"
         >
-          <span class="tool-diff-line-number">{{ line.oldLine ?? '' }}</span>
-          <span class="tool-diff-line-number">{{ line.newLine ?? '' }}</span>
+          <span class="tool-diff-line-number">{{ displayLineNumber(line) }}</span>
           <code class="tool-diff-line-code"><span v-if="line.kind === 'add' || line.kind === 'delete'" class="tool-diff-line-marker">{{ line.kind === 'add' ? '+' : '-' }}</span>{{ line.kind === 'add' || line.kind === 'delete' ? line.text : line.raw }}</code>
         </div>
       </div>
@@ -126,9 +159,8 @@ function parseUnifiedDiffLines(diffText: string): ParsedDiffLine[] {
             <code>{{ line.raw }}</code>
           </div>
           <div v-else class="tool-diff-split-row" :class="`is-${line.kind}`">
-            <span class="tool-diff-line-number">{{ line.oldLine ?? '' }}</span>
+            <span class="tool-diff-line-number">{{ displayLineNumber(line) }}</span>
             <code class="tool-diff-split-cell is-left">{{ line.kind === 'add' ? '' : line.text }}</code>
-            <span class="tool-diff-line-number">{{ line.newLine ?? '' }}</span>
             <code class="tool-diff-split-cell is-right">{{ line.kind === 'delete' ? '' : line.text }}</code>
           </div>
         </template>
@@ -239,7 +271,8 @@ function parseUnifiedDiffLines(diffText: string): ParsedDiffLine[] {
 }
 
 .tool-diff-lines {
-  min-width: max-content;
+  width: 100%;
+  min-width: 0;
   font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Consolas, monospace);
   line-height: 1.45;
 }
@@ -251,16 +284,18 @@ function parseUnifiedDiffLines(diffText: string): ParsedDiffLine[] {
 }
 
 .tool-diff-line {
-  grid-template-columns: 4.5ch 4.5ch minmax(32ch, 1fr);
+  grid-template-columns: var(--tool-diff-line-number-width, 4.5ch) minmax(0, 1fr);
 }
 
 .tool-diff-split-row {
-  grid-template-columns: 4.5ch minmax(24ch, 1fr) 4.5ch minmax(24ch, 1fr);
+  grid-template-columns: var(--tool-diff-line-number-width, 4.5ch) minmax(0, 1fr) minmax(0, 1fr);
 }
 
 .tool-diff-line-number {
   padding: 0 6px;
+  box-sizing: border-box;
   color: color-mix(in srgb, var(--vscode-descriptionForeground) 70%, transparent);
+  font-variant-numeric: tabular-nums;
   text-align: right;
   user-select: none;
 }
@@ -268,9 +303,12 @@ function parseUnifiedDiffLines(diffText: string): ParsedDiffLine[] {
 .tool-diff-line-code,
 .tool-diff-split-cell,
 .tool-diff-split-full code {
+  display: block;
   min-width: 0;
   padding: 0 8px;
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   font: inherit;
 }
 

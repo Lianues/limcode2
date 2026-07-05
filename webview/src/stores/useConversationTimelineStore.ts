@@ -18,6 +18,7 @@ import {
   type ConversationTimelinePageInfo,
   type ConversationTimelinePageRecord,
   type ConversationTimelinePatchPayload,
+  type LlmInvocationRecord,
   type MessageRecord
 } from '@shared/protocol';
 import type { TimelineProjectionContextRecord } from '@shared/timelineProjection';
@@ -64,14 +65,18 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       return this.currentTimeline.state;
     },
     currentMessages(): MessageRecord[] {
+      const state = this.currentTimeline.state;
       return this.currentTimeline.state.messages
         .filter((message) => message.conversationId === this.currentConversationId)
         .filter((message) => !message.content.parts.some((part) => 'functionResponse' in part))
+        .filter((message) => !isPreStartEmptyModelMessage(message, state))
         .sort(compareMessages);
     },
     currentAnchorMessages(): MessageRecord[] {
+      const state = this.currentTimeline.state;
       return this.currentTimeline.state.messages
         .filter((message) => message.conversationId === this.currentConversationId)
+        .filter((message) => !isPreStartEmptyModelMessage(message, state))
         .sort(compareMessages);
     },
     currentCheckpoints(): CheckpointRecord[] {
@@ -360,4 +365,16 @@ function newestLoadedChunk(timeline: ConversationTimelineState): ConversationTim
 
 function compareMessages(left: MessageRecord, right: MessageRecord): number {
   return left.seq - right.seq || left.createdAt - right.createdAt || left.id.localeCompare(right.id);
+}
+
+function isPreStartEmptyModelMessage(message: MessageRecord, state: ClientState): boolean {
+  if (message.role !== 'model' || message.status !== 'streaming' || message.content.parts.length > 0) return false;
+  const invocation = invocationForMessage(message.id, state);
+  return !!invocation && invocation.status !== 'streaming';
+}
+
+function invocationForMessage(messageId: string, state: ClientState): LlmInvocationRecord | undefined {
+  const link = state.messageLlmInvocationLinks.find((candidate) => candidate.messageId === messageId);
+  if (!link) return undefined;
+  return state.llmInvocations.find((invocation) => invocation.id === link.invocationId);
 }

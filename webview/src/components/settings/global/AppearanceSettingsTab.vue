@@ -31,6 +31,16 @@ onMounted(() => {
       <h3 class="appearance-group-title">自定义 AI 响应文字</h3>
 
       <label class="global-settings-field">
+        <span>整理上下文时</span>
+        <input
+          v-model="settings.appearance.streamingTextPreparing"
+          type="text"
+          placeholder="...少女整理中"
+        />
+        <small class="appearance-field-hint">应用内部正在整理上下文、调度下一轮响应时显示</small>
+      </label>
+
+      <label class="global-settings-field">
         <span>等待响应时</span>
         <input
           v-model="settings.appearance.streamingTextWaiting"
@@ -73,6 +83,10 @@ onMounted(() => {
 
     <div class="appearance-preview">
       <h3 class="appearance-group-title">预览</h3>
+      <div class="appearance-preview-item">
+        <span class="appearance-preview-label">整理上下文</span>
+        <StreamingIndicatorTail :text="settings.appearance.streamingTextPreparing" variant="preparing" />
+      </div>
       <div class="appearance-preview-item">
         <span class="appearance-preview-label">等待响应</span>
         <StreamingIndicatorTail :text="settings.appearance.streamingTextWaiting" variant="waiting" />

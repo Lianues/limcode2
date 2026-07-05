@@ -2326,6 +2326,8 @@ export interface McpToolSourceRecord {
   updatedAt: number;
 }
 export interface AppearanceSettingsRecord {
+  /** 应用内部正在整理上下文、调度下一轮模型响应时显示的文字。 */
+  streamingTextPreparing: string;
   /** AI 等待响应时显示的文字（流式中但还没有任何内容块时）。 */
   streamingTextWaiting: string;
   /** AI 思考中显示的文字（思考内容正在流式输出时）。 */

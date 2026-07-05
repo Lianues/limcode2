@@ -86,12 +86,14 @@ export function normalizeCheckpointMaintenanceSettings(input: Partial<Checkpoint
 }
 
 export const DEFAULT_APPEARANCE_STREAMING_TEXT_WAITING = '...少女等待中';
+export const DEFAULT_APPEARANCE_STREAMING_TEXT_PREPARING = '...少女整理中';
 export const DEFAULT_APPEARANCE_STREAMING_TEXT_THINKING = '...少女思考中';
 export const DEFAULT_APPEARANCE_STREAMING_TEXT_WRITING = '...少女编写中';
 export const DEFAULT_APPEARANCE_STREAMING_TEXT_TOOL_EXECUTING = '...少女执行中';
 
 export function createDefaultAppearanceSettings(): AppearanceSettingsRecord {
   return {
+    streamingTextPreparing: DEFAULT_APPEARANCE_STREAMING_TEXT_PREPARING,
     streamingTextWaiting: DEFAULT_APPEARANCE_STREAMING_TEXT_WAITING,
     streamingTextThinking: DEFAULT_APPEARANCE_STREAMING_TEXT_THINKING,
     streamingTextWriting: DEFAULT_APPEARANCE_STREAMING_TEXT_WRITING,
@@ -103,6 +105,7 @@ export function normalizeAppearanceSettings(input: Partial<AppearanceSettingsRec
   const sanitize = (value: unknown, fallback: string): string =>
     typeof value === 'string' && value.trim() ? value.trim() : fallback;
   return {
+    streamingTextPreparing: sanitize(input?.streamingTextPreparing, DEFAULT_APPEARANCE_STREAMING_TEXT_PREPARING),
     streamingTextWaiting: sanitize(input?.streamingTextWaiting, DEFAULT_APPEARANCE_STREAMING_TEXT_WAITING),
     streamingTextThinking: sanitize(input?.streamingTextThinking, DEFAULT_APPEARANCE_STREAMING_TEXT_THINKING),
     streamingTextWriting: sanitize(input?.streamingTextWriting, DEFAULT_APPEARANCE_STREAMING_TEXT_WRITING),

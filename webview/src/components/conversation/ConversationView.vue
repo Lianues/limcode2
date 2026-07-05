@@ -1,10 +1,18 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
-import { isVisibleTextPart, type CheckpointRecord, type MessageContent } from '@shared/protocol';
+import {
+  TERMINAL_TOOL_CALL_STATUSES,
+  isVisibleTextPart,
+  type CheckpointRecord,
+  type ClientState,
+  type LlmInvocationRecord,
+  type MessageContent,
+  type MessageRecord
+} from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
-import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
+import { useConversationUiStore, type ActivityTimelineRowInput } from '@webview/stores/useConversationUiStore';
 import { useChat } from '@webview/composables/useChat';
 import { useBottomStickyScroller } from '@webview/composables/useBottomStickyScroller';
 import { useCheckpointPolicyStore } from '@webview/stores/useCheckpointPolicyStore';
@@ -46,6 +54,9 @@ const emptyHint = computed(() =>
 const editFollowupCount = computed(() => Math.max(0, (conversationUi.editingMessage?.deleteCount ?? 1) - 1));
 const editConfirmDescriptionHtml = computed(
   () => `是否编辑此消息？将同时删除后续 ${editFollowupCount.value} 条消息，此操作<strong>不可撤销</strong>`
+);
+const timelineActivityRows = computed<ActivityTimelineRowInput[]>(() =>
+  buildPreparingActivityRows(currentTimeline.value.state, currentConversationId.value)
 );
 const editRollbackPending = ref(false);
 const editRollbackCheckpoint = computed(() => {
@@ -90,8 +101,8 @@ const scrollMarkers = computed(() =>
 );
 
 watch(
-  [currentMessages, currentAnchorMessages, currentCheckpoints, currentCheckpointTimelineAnchors, currentCompressionBlocks, currentMessageFloorById, currentTotalMessages],
-  ([messages, anchorMessages, checkpoints, checkpointAnchors, compressionBlocks, floorByMessageId, totalMessages]) => conversationUi.syncTimeline(messages, anchorMessages, checkpoints, checkpointAnchors, compressionBlocks, floorByMessageId, totalMessages),
+  [currentMessages, currentAnchorMessages, currentCheckpoints, currentCheckpointTimelineAnchors, currentCompressionBlocks, timelineActivityRows, currentMessageFloorById, currentTotalMessages],
+  ([messages, anchorMessages, checkpoints, checkpointAnchors, compressionBlocks, activityRows, floorByMessageId, totalMessages]) => conversationUi.syncTimeline(messages, anchorMessages, checkpoints, checkpointAnchors, compressionBlocks, activityRows, floorByMessageId, totalMessages),
   { immediate: true }
 );
 
@@ -227,6 +238,77 @@ function nextMessageAfter(messageId: string) {
 
 function truncatePreview(text: string): string {
   return text.length > 180 ? `${text.slice(0, 180)}...` : text;
+}
+
+function buildPreparingActivityRows(state: ClientState, conversationId: string): ActivityTimelineRowInput[] {
+  if (!conversationId) return [];
+  const rows = new Map<string, ActivityTimelineRowInput>();
+
+  for (const message of state.messages) {
+    if (message.conversationId !== conversationId || !isPreStartEmptyModelMessage(message, state)) continue;
+    const runId = runIdForModelMessage(message.id, state);
+    const key = runId ?? message.id;
+    rows.set(key, {
+      id: message.id,
+      conversationId,
+      ...(runId ? { runId } : {}),
+      hiddenMessageId: message.id,
+      activityKind: 'preparing'
+    });
+  }
+
+  const runIds = new Set(state.agentRunTargetLinks
+    .filter((link) => link.conversationId === conversationId)
+    .map((link) => link.runId));
+  const activeRuns = state.agentRuns
+    .filter((run) => runIds.has(run.id))
+    .filter((run) => run.status === 'preparing' || run.status === 'running')
+    .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+
+  for (const run of activeRuns) {
+    if (rows.has(run.id)) continue;
+    if (hasActiveToolWork(run.id, state)) continue;
+    if (hasVisibleStreamingModelMessage(run.id, state)) continue;
+    rows.set(run.id, {
+      id: `activity:preparing:${run.id}`,
+      conversationId,
+      runId: run.id,
+      activityKind: 'preparing'
+    });
+  }
+
+  return [...rows.values()];
+}
+
+function hasActiveToolWork(runId: string, state: ClientState): boolean {
+  const toolCallIds = new Set(state.toolCallRunLinks
+    .filter((link) => link.runId === runId)
+    .map((link) => link.toolCallId));
+  return state.toolCalls.some((call) => toolCallIds.has(call.id) && !TERMINAL_TOOL_CALL_STATUSES.has(call.status));
+}
+
+function hasVisibleStreamingModelMessage(runId: string, state: ClientState): boolean {
+  const messageIds = new Set(state.messageRunLinks
+    .filter((link) => link.runId === runId && link.role === 'model')
+    .map((link) => link.messageId));
+  return state.messages.some((message) => messageIds.has(message.id) && message.status === 'streaming' && !isPreStartEmptyModelMessage(message, state));
+}
+
+function runIdForModelMessage(messageId: string, state: ClientState): string | undefined {
+  return state.messageRunLinks.find((link) => link.messageId === messageId && link.role === 'model')?.runId
+    ?? state.messageRunLinks.find((link) => link.messageId === messageId)?.runId;
+}
+
+function isPreStartEmptyModelMessage(message: MessageRecord, state: ClientState): boolean {
+  if (message.role !== 'model' || message.status !== 'streaming' || message.content.parts.length > 0) return false;
+  const invocation = invocationForMessage(message.id, state);
+  return !!invocation && invocation.status !== 'streaming';
+}
+
+function invocationForMessage(messageId: string, state: ClientState): LlmInvocationRecord | undefined {
+  const link = state.messageLlmInvocationLinks.find((candidate) => candidate.messageId === messageId);
+  if (!link) return undefined;
+  return state.llmInvocations.find((invocation) => invocation.id === link.invocationId);
 }
 
 function syncCheckpointAutoDismiss(): void {

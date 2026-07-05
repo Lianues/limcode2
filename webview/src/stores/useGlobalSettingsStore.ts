@@ -120,6 +120,7 @@ function emptyCheckpointMaintenance(): CheckpointMaintenanceSettingsRecord {
 
 function emptyAppearance(): AppearanceSettingsRecord {
   return {
+    streamingTextPreparing: '...少女整理中',
     streamingTextWaiting: '...少女等待中',
     streamingTextThinking: '...少女思考中',
     streamingTextWriting: '...少女编写中',
@@ -762,6 +763,7 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
         section: 'appearance',
         settings: {
+          streamingTextPreparing: this.appearance.streamingTextPreparing,
           streamingTextWaiting: this.appearance.streamingTextWaiting,
           streamingTextThinking: this.appearance.streamingTextThinking,
           streamingTextWriting: this.appearance.streamingTextWriting,

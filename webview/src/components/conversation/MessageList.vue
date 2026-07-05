@@ -9,6 +9,7 @@ import { useCompression } from '@webview/composables/useCompression';
 import { checkpointBeforeMessageFloor } from './checkpointRollback';
 import CompressionTimelineCard from './CompressionTimelineCard.vue';
 import MessageItem from './MessageItem.vue';
+import TimelineActivityRow from './TimelineActivityRow.vue';
 import VirtualTimelineList from './VirtualTimelineList.vue';
 
 const props = withDefaults(
@@ -177,6 +178,10 @@ function maybeLoadOlder(): void {
         @regenerate="regenerateCompression"
         @toggle-enabled="setCompressionEnabled"
         @view-detail="onViewCompressionDetail"
+      />
+      <TimelineActivityRow
+        v-else-if="row.kind === 'activity'"
+        :activity-kind="row.activityKind"
       />
       </template>
     </VirtualTimelineList>

@@ -31,7 +31,20 @@ export interface CompressionViewRow extends ConversationCompressionTimelineRow {
   phase: MessageViewPhase;
 }
 
-export type ConversationTimelineViewRow = MessageViewRow | CompressionViewRow;
+export interface ActivityTimelineRowInput {
+  id: string;
+  conversationId: string;
+  runId?: string;
+  hiddenMessageId?: string;
+  activityKind: 'preparing';
+}
+
+export interface ActivityViewRow extends ActivityTimelineRowInput {
+  kind: 'activity';
+  phase: MessageViewPhase;
+}
+
+export type ConversationTimelineViewRow = MessageViewRow | CompressionViewRow | ActivityViewRow;
 
 export interface ComposerSnapshot {
   draft: string;
@@ -70,6 +83,7 @@ interface TimelineSyncSnapshot {
   checkpoints: CheckpointRecord[];
   checkpointAnchors: CheckpointTimelineAnchorRecord[];
   compressionBlocks: CompressionBlockRecord[];
+  activityRows: ActivityTimelineRowInput[];
   floorByMessageId: Record<string, number>;
   totalMessageCount: number;
 }
@@ -127,6 +141,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     checkpoints: readonly CheckpointRecord[],
     checkpointAnchors: readonly CheckpointTimelineAnchorRecord[],
     compressionBlocks: readonly CompressionBlockRecord[] = [],
+    activityRows: readonly ActivityTimelineRowInput[] = [],
     floorByMessageId: Readonly<Record<string, number>> = {},
     totalMessageCount = messages.length
   ): void {
@@ -136,20 +151,25 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
       checkpoints: [...checkpoints],
       checkpointAnchors: [...checkpointAnchors],
       compressionBlocks: [...compressionBlocks],
+      activityRows: [...activityRows],
       floorByMessageId: { ...floorByMessageId },
       totalMessageCount
     };
 
+    const hiddenMessageIds = new Set(activityRows.map((row) => row.hiddenMessageId).filter((id): id is string => !!id));
     const currentIds = new Set(messages.map((message) => message.id));
+    const activeIds = new Set([...currentIds, ...hiddenMessageIds]);
     pruneErrorBlocks(currentIds);
     for (const id of [...enterTimers.keys()]) {
-      if (!currentIds.has(id)) clearEntering(id);
+      if (!activeIds.has(id)) clearEntering(id);
     }
 
     if (!initializedMessages) {
       for (const message of messages) seenMessageIds.add(message.id);
+      for (const id of hiddenMessageIds) seenMessageIds.add(id);
       initializedMessages = true;
     } else {
+      for (const id of hiddenMessageIds) seenMessageIds.add(id);
       for (const message of messages) {
         if (seenMessageIds.has(message.id)) continue;
         // 新消息一出现就标记进入态。AI/model 消息通常会先以「streaming + 空内容」占位创建，
@@ -165,7 +185,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
   }
 
   function rebuildTimelineRows(): void {
-    const { messages, anchorMessages, checkpoints, checkpointAnchors, compressionBlocks, floorByMessageId, totalMessageCount } = lastTimelineSnapshot;
+    const { messages, anchorMessages, checkpoints, checkpointAnchors, compressionBlocks, activityRows, floorByMessageId, totalMessageCount } = lastTimelineSnapshot;
     const messageIndexById = new Map(messages.map((message, index) => [message.id, index]));
     const allRows = buildConversationTimelineRows({ messages, anchorMessages, checkpoints, checkpointAnchors, compressionBlocks });
     pruneExpandedCheckpointRows(allRows);
@@ -198,7 +218,12 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
       }
       return [];
     });
-    timelineRows.value = rows;
+    const activityViewRows: ActivityViewRow[] = activityRows.map((row) => ({
+      ...row,
+      kind: 'activity',
+      phase: 'stable'
+    }));
+    timelineRows.value = [...rows, ...activityViewRows];
     messageRows.value = rows.filter((row): row is MessageViewRow => row.kind === 'message');
   }
 
@@ -427,6 +452,7 @@ function createEmptyTimelineSyncSnapshot(): TimelineSyncSnapshot {
     checkpoints: [],
     checkpointAnchors: [],
     compressionBlocks: [],
+    activityRows: [],
     floorByMessageId: {},
     totalMessageCount: 0
   };

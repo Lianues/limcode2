@@ -3,7 +3,8 @@
  * 流式状态尾巴组件。
  *
  * 在流式输出时追加到文本末尾，显示自定义状态文字 + 波浪渐变动画 + 闪烁光标。
- * 四种状态使用不同颜色区分：
+ * 五种状态使用不同颜色区分：
+ *   - preparing：应用内部整理/调度中
  *   - waiting：等待 AI 响应
  *   - thinking：AI 思考中
  *   - writing：AI 输出正文中
@@ -14,7 +15,7 @@ const props = withDefaults(
     /** 状态文字内容。 */
     text: string;
     /** 流式阶段。 */
-    variant?: 'waiting' | 'thinking' | 'writing' | 'executing';
+    variant?: 'preparing' | 'waiting' | 'thinking' | 'writing' | 'executing';
   }>(),
   { variant: 'writing' }
 );
@@ -62,6 +63,10 @@ const props = withDefaults(
   background: var(--lc-wave-color, var(--vscode-descriptionForeground));
   vertical-align: text-bottom;
   animation: lc-streaming-cursor-blink var(--lc-content-cursor-blink-duration) ease-in-out infinite;
+}
+
+.streaming-tail.is-preparing {
+  --lc-wave-color: var(--lc-streaming-wave-color-preparing);
 }
 
 .streaming-tail.is-waiting {

@@ -98,6 +98,48 @@ export function runSource(world: WorldReader, run: Entity): AgentRunSourceLinkDa
     .find((candidate) => candidate?.run === run);
 }
 
+/** Find the AgentRun that was launched with the given answerBridgeId (via its source link). */
+export function runByAnswerBridgeId(world: WorldReader, answerBridgeId: string): Entity | undefined {
+  const normalized = answerBridgeId.trim();
+  if (!normalized) return undefined;
+  return world
+    .query(AgentRunSourceLink)
+    .map((entity) => world.get(entity, AgentRunSourceLink))
+    .find((candidate): candidate is AgentRunSourceLinkData =>
+      !!candidate && candidate.answerBridgeId?.trim() === normalized && world.has(candidate.run, AgentRun))
+    ?.run;
+}
+
+/**
+ * Resolve the child conversation/agent behind an answerBridgeId, and whether that conversation
+ * still has an active (non-terminal) run. Retry spawns a new run in the SAME conversation without
+ * copying the answerBridgeId, so liveness must be judged per-conversation, not per-original-run.
+ */
+export function conversationForAnswerBridgeId(
+  world: WorldReader,
+  answerBridgeId: string
+): { conversation: Entity; agent?: Entity; hasActiveRun: boolean } | undefined {
+  const run = runByAnswerBridgeId(world, answerBridgeId);
+  if (run === undefined) return undefined;
+  const target = runTarget(world, run);
+  if (!target) return undefined;
+  return {
+    conversation: target.conversation,
+    agent: target.agent,
+    hasActiveRun: conversationHasActiveRun(world, target.conversation)
+  };
+}
+
+/** True when the conversation has any run that is not in a terminal state (queued/preparing/running/… ). */
+export function conversationHasActiveRun(world: WorldReader, conversation: Entity): boolean {
+  return world.query(AgentRunTargetLink).some((entity) => {
+    const link = world.get(entity, AgentRunTargetLink);
+    if (!link || link.conversation !== conversation) return false;
+    const status = world.get(link.run, AgentRun)?.status;
+    return status !== undefined && !isTerminalRunStatus(status);
+  });
+}
+
 export function runForToolCall(world: WorldReader, toolCall: Entity): Entity | undefined {
   const link = world
     .query(ToolCallRunLink)
@@ -426,6 +468,10 @@ function intersectToolPolicies(policies: ToolPolicyData[], id: string): ToolPoli
 
 export function hasRun(world: WorldReader, run: Entity): boolean {
   return world.has(run, AgentRun);
+}
+
+export function isTerminalRunStatus(status: string): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'stale';
 }
 
 export interface AgentRunTreeNode {

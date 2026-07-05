@@ -46,7 +46,7 @@ import {
   ToolCallRunLink
 } from '../../agentRun/components';
 import { AgentRunBundle, spawnAgentRun } from '../../agentRun/bundles';
-import { activeToolPolicyForRun, runForToolCall, runSource, runTarget, toolCallEntityById } from '../../agentRun/queries';
+import { activeToolPolicyForRun, conversationForAnswerBridgeId, runForToolCall, runSource, runTarget, toolCallEntityById } from '../../agentRun/queries';
 import { AgentAnswerBundle, spawnAgentAnswer } from '../../agentAnswer/bundles';
 import { AgentAnswer, AgentAnswerSubmissionLink, AgentAnswerTargetLink } from '../../agentAnswer/components';
 import { agentAnswerById } from '../../agentAnswer/queries';
@@ -556,7 +556,39 @@ function executeReadAgentAnswerTool(world: WorldReader, cmd: CommandSink, entity
   const answerEntity = agentAnswerById(world, answerBridgeId);
   const answer = answerEntity !== undefined ? world.get(answerEntity, AgentAnswer) : undefined;
   if (answerEntity === undefined || !answer) {
-    completeInlineToolCallSuccess(cmd, entity, call, state, { ok: false, answerBridgeId, error: `AgentAnswer not found: ${answerBridgeId}` });
+    // 尚无 answer 时，用 answerBridgeId 串起来的子对话状态来区分三种情况，避免上游 Agent 误判为失败：
+    //   running     —— 子对话仍有活跃 run（首轮或手动重试都算）；等待或稍后重试即可。
+    //   interrupted —— 子对话存在但没有活跃 run，也没提交 answer（子 Agent 报错/中断）；可向同 agentId 发消息触发继续。
+    //   not_found   —— 该 answerBridgeId 完全没有对应子对话。
+    const child = conversationForAnswerBridgeId(world, answerBridgeId);
+    if (child?.hasActiveRun) {
+      completeInlineToolCallSuccess(cmd, entity, call, state, {
+        ok: false,
+        answerBridgeId,
+        status: 'running',
+        error: '对应的子对话仍在运行，尚未通过 submit_agent_answer 提交内容。请稍后重试 read_agent_answer，或等待其完成通知。'
+      });
+      return;
+    }
+    if (child) {
+      const agentId = child.agent !== undefined ? world.get(child.agent, Agent)?.id : undefined;
+      completeInlineToolCallSuccess(cmd, entity, call, state, {
+        ok: false,
+        answerBridgeId,
+        status: 'interrupted',
+        ...(agentId ? { agentId } : {}),
+        error: agentId
+          ? `对应的子对话已中断（没有在运行、也没有提交 answer）。可调用 run_agent({ agent: { id: "${agentId}" }, prompt })，向同一个 Agent 追加消息以触发它继续。`
+          : '对应的子对话已中断（没有在运行、也没有提交 answer）。可向同一个 Agent 追加消息以触发它继续。'
+      });
+      return;
+    }
+    completeInlineToolCallSuccess(cmd, entity, call, state, {
+      ok: false,
+      answerBridgeId,
+      status: 'not_found',
+      error: `未找到 answerBridgeId：${answerBridgeId}（既没有已提交的 answer，也没有对应的子对话）。请确认该 answerBridgeId 是否正确。`
+    });
     return;
   }
 

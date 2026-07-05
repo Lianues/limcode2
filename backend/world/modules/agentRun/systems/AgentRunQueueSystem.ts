@@ -1,6 +1,7 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
 import { AgentRun, AgentRunNeedsModel, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunSourceLink, AgentRunTargetLink } from '../components';
 import { AgentRunBundle, markRunNeedsModel, spawnMessageRunLink } from '../bundles';
+import { isTerminalRunStatus } from '../queries';
 import { Checkpoint, CheckpointBarrier } from '../../checkpoint/components';
 import { CheckpointEventType } from '../../checkpoint/events';
 import { CompressionBlock } from '../../compression/components';
@@ -194,8 +195,4 @@ function targetForRun(world: WorldReader, run: Entity): { conversation: Entity }
     .map((entity) => world.get(entity, AgentRunTargetLink))
     .find((candidate) => candidate?.run === run && candidate.role === 'executor');
   return link ? { conversation: link.conversation } : undefined;
-}
-
-function isTerminalRunStatus(status: string): boolean {
-  return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'stale';
 }

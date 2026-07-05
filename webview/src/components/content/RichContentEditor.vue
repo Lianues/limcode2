@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import { bridge, BridgeMessageType } from '@webview/transport';
 import type { FsStatResultPayload } from '@shared/protocol';
@@ -26,6 +26,10 @@ const textarea = ref<HTMLTextAreaElement | null>(null);
 const scrollbarRefreshKey = ref(0);
 const pathDragActive = ref(false);
 
+const focusRecoveryDelays = [0, 40, 120, 240] as const;
+let lastTextareaPointerDownAt = 0;
+let focusRecoveryTimers: number[] = [];
+
 const value = computed({
   get: () => props.modelValue,
   set: (next: string) => emit('update:modelValue', next)
@@ -36,6 +40,61 @@ watch(
   () => queueScrollbarRefresh(),
   { flush: 'post' }
 );
+
+onMounted(() => {
+  document.addEventListener('pointerdown', onDocumentPointerDown, true);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', onDocumentPointerDown, true);
+  clearFocusRecoveryTimers();
+});
+
+function onDocumentPointerDown(event: PointerEvent): void {
+  const control = textarea.value;
+  if (!control) return;
+  if (event.target instanceof Node && control.contains(event.target)) return;
+
+  // 用户在焦点恢复窗口内再次点击输入框外时，说明明确想退出输入模式，必须取消补 focus。
+  lastTextareaPointerDownAt = 0;
+  clearFocusRecoveryTimers();
+}
+
+function onTextareaPointerDown(): void {
+  if (props.disabled) return;
+  lastTextareaPointerDownAt = performance.now();
+  scheduleTextareaFocusRecovery();
+}
+
+function onTextareaFocus(): void {
+  if (props.disabled || performance.now() - lastTextareaPointerDownAt > 800) return;
+  scheduleTextareaFocusRecovery();
+}
+
+function scheduleTextareaFocusRecovery(): void {
+  clearFocusRecoveryTimers();
+  for (const delay of focusRecoveryDelays) {
+    const timer = window.setTimeout(recoverTextareaFocus, delay);
+    focusRecoveryTimers.push(timer);
+  }
+}
+
+function recoverTextareaFocus(): void {
+  if (props.disabled || performance.now() - lastTextareaPointerDownAt > 800) return;
+  const control = textarea.value;
+  if (!control || document.activeElement === control) return;
+
+  // VS Code 窗口从失焦状态被首次点击激活时，Webview 里的 textarea 可能会先 focus 再被宿主抢回焦点。
+  // 只在焦点掉回 body/html 时补一次 focus，避免用户随后点击其它按钮时被输入框反抢焦点。
+  const activeElement = document.activeElement;
+  if (activeElement && activeElement !== document.body && activeElement !== document.documentElement) return;
+  control.focus({ preventScroll: true });
+}
+
+function clearFocusRecoveryTimers(): void {
+  for (const timer of focusRecoveryTimers) window.clearTimeout(timer);
+  focusRecoveryTimers = [];
+}
 
 function onKeydown(event: KeyboardEvent): void {
   if (props.submitOnEnter && event.key === 'Enter' && !event.shiftKey) {
@@ -185,6 +244,8 @@ defineExpose({ focus });
       :rows="rows"
       :placeholder="placeholder"
       :disabled="disabled"
+      @pointerdown.capture="onTextareaPointerDown"
+      @focus="onTextareaFocus"
       @keydown="onKeydown"
       @input="queueScrollbarRefresh"
       @paste="onPaste"

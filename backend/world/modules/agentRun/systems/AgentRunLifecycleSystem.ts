@@ -27,7 +27,7 @@ import {
   type AgentRunData
 } from '../components';
 import { AgentRunEventType } from '../events';
-import { runSource, runTarget } from '../queries';
+import { isTerminalRunStatus, runSource, runTarget } from '../queries';
 
 const LifecycleRunsQuery = defineQuery({
   name: 'AgentRunLifecycle',
@@ -529,8 +529,4 @@ function activeRunsForConversation(world: WorldReader, conversationId: string): 
     const conversation = target ? world.get(target.conversation, Conversation) : undefined;
     return !!data && !!conversation && conversation.id === conversationId && !isTerminalRunStatus(data.status);
   });
-}
-
-function isTerminalRunStatus(status: AgentRunData['status']): boolean {
-  return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'stale';
 }

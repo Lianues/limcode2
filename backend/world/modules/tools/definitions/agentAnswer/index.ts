@@ -50,7 +50,7 @@ export const submitAgentAnswerTool: ToolDefinition = {
 export const readAgentAnswerTool: ToolDefinition = {
   declaration: {
     name: READ_AGENT_ANSWER_TOOL_NAME,
-    description: 'Read a saved AgentAnswer body by the answerBridgeId returned in a run_agent or submit_agent_answer response. Does not read the regular conversation transcript.',
+    description: 'Read a saved AgentAnswer body by the answerBridgeId returned in a run_agent or submit_agent_answer response. Does not read the regular conversation transcript. When no answer is available yet, the response distinguishes three cases via a "status" field: "running" — the child conversation is still active (including after a manual retry) and has not submitted yet, so retry later or wait for its completion notification (this is NOT a failure); "interrupted" — the child conversation exists but is neither running nor has submitted (the sub-agent errored or stopped); the response includes the child "agentId" so you can call run_agent({ agent: { id }, prompt }) to resume that same agent; "not_found" — the answerBridgeId does not match any answer or child conversation.',
     parameters: {
       type: 'object',
       properties: {

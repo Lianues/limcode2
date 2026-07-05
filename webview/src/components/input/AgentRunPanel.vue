@@ -312,10 +312,29 @@ function answerPreview(answer: AgentAnswerRecord | undefined): string {
 }
 
 function readAnswerPayload(entry: AgentPanelEntry): string {
+  if (entry.answer) {
+    return JSON.stringify({
+      ok: true,
+      answerBridgeId: entry.answerBridgeId,
+      title: entry.answer.title,
+      content: entry.answer.content
+    }, null, 2);
+  }
+  if (!entry.answerBridgeId) {
+    return JSON.stringify({ ok: false, status: 'not_found', error: 'answerBridgeId missing' }, null, 2);
+  }
+  // 区分“子对话还在运行、尚未提交”和“已中断可续”，避免误读成失败。
+  const running = !TERMINAL_RUN_STATUSES.has(entry.status as AgentRunStatus) && !TERMINAL_TOOL_STATUSES.has(entry.status as ToolCallStatus);
   return JSON.stringify({
-    ok: !!entry.answer,
+    ok: false,
     answerBridgeId: entry.answerBridgeId,
-    ...(entry.answer ? { title: entry.answer.title, content: entry.answer.content } : { error: entry.answerBridgeId ? `AgentAnswer not found: ${entry.answerBridgeId}` : 'answerBridgeId missing' })
+    status: running ? 'running' : 'interrupted',
+    ...(running ? {} : entry.agentId ? { agentId: entry.agentId } : {}),
+    error: running
+      ? '对应的子对话仍在运行，尚未提交内容。请稍后重试或等待完成通知。'
+      : entry.agentId
+        ? `对应的子对话已中断。可调用 run_agent({ agent: { id: "${entry.agentId}" }, prompt }) 触发同一 Agent 继续。`
+        : '对应的子对话已中断。可向同一个 Agent 追加消息以触发继续。'
   }, null, 2);
 }
 </script>

@@ -174,6 +174,17 @@ function simplifyRunAgentResponse(value: unknown): JsonRecord {
 function simplifyReadAgentAnswerResponse(value: unknown): JsonRecord {
   const record = asRecord(value);
   if (!record) return simplifyGenericSuccess(value);
+  // read_agent_answer 用内联 ok:false 表达 running / interrupted / not_found；这里保留 ok/status/agentId/error，
+  // 否则模型只会看到空的 { ok: true }，无法区分“子对话还在跑”“已中断可续”“answerBridgeId 不存在”。
+  if (record.ok === false) {
+    return pickDefined({
+      ok: false,
+      status: stringValue(record.status),
+      answerBridgeId: stringValue(record.answerBridgeId),
+      agentId: stringValue(record.agentId),
+      error: stringValue(record.error)
+    });
+  }
   return withOkFallback(pickDefined({
     title: stringValue(record.title),
     content: stringValue(record.content)

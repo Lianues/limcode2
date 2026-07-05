@@ -37,6 +37,13 @@ export interface ConversationTimelineState {
   chunkById: Record<string, ConversationTimelineChunkSummaryRecord>;
   pageInfo?: ConversationTimelinePageInfo;
   streamSeq: number;
+  /**
+   * 已订阅 conversation client stream 的最新快照/patch 状态。
+   *
+   * timeline page 来自持久化分页，打开正在运行的 AgentRun 对话时可能比 live stream 更旧；
+   * 因此需要单独保留 stream overlay，并在 page replace 后重新覆盖回展示 state。
+   */
+  streamState: ClientState;
   state: ClientState;
   projections: Record<string, TimelineProjectionContextRecord>;
 }
@@ -204,6 +211,9 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
         timeline.projections = {};
       }
       mergeClientState(timeline.state, page.state);
+      // 持久化分页可能晚于 live conversation stream 到达。重新叠加 streamState，避免
+      // AgentRun 新对话里已经显示的实时消息被空/陈旧的 replace page 快照清掉。
+      mergeClientState(timeline.state, timeline.streamState);
       for (const chunk of page.chunks) timeline.chunkById[chunk.id] = chunk;
       timeline.loadedChunkIds = Object.values(timeline.chunkById)
         .sort((left, right) => left.index - right.index || left.id.localeCompare(right.id))
@@ -224,6 +234,8 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       const conversationId = conversationIdFromClientStateStreamId(streamId);
       if (!conversationId) return;
       const timeline = this.ensureTimeline(conversationId);
+      timeline.streamState = createEmptyClientState();
+      mergeClientState(timeline.streamState, state);
       // Page snapshots own chunk cursors and global floor offsets; stream snapshots only overlay live ECS state.
       if (state.messages.some((message) => message.conversationId === conversationId) && timeline.loadedChunkIds.length === 0) {
         timeline.state = createEmptyClientState();
@@ -234,7 +246,11 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
     applyClientStatePatch(streamId: string, streamSeq: number, patches: ClientPatchOp[]): void {
       const conversationId = conversationIdFromClientStateStreamId(streamId);
       if (!conversationId) return;
-      this.applyTimelinePatch({ conversationId, streamSeq, patches });
+      const timeline = this.ensureTimeline(conversationId);
+      if (streamSeq > 0 && streamSeq <= timeline.streamSeq) return;
+      createClientStateDb(timeline.streamState).applyPatches(patches);
+      createClientStateDb(timeline.state).applyPatches(patches);
+      timeline.streamSeq = streamSeq;
     },
     setError(conversationId: string | undefined, message: string): void {
       const target = conversationId ? this.ensureTimeline(conversationId) : this.currentTimeline;
@@ -258,6 +274,7 @@ function createTimelineState(conversationId: string): ConversationTimelineState 
     loadedChunkIds: [],
     chunkById: {},
     streamSeq: 0,
+    streamState: createEmptyClientState(),
     state: createEmptyClientState(),
     projections: {}
   };

@@ -29,7 +29,7 @@ import {
   RunDeliveryPolicy,
   type RunDeliveryPolicyData
 } from '../components';
-import { activeDeliveryPolicyForRun, defaultAgentForConversation, runSource, runTarget } from '../queries';
+import { activeDeliveryPolicyForRun, defaultAgentForConversation, isTerminalRunStatus, runSource, runTarget } from '../queries';
 import { CheckpointEventType } from '../../checkpoint/events';
 import { AgentAnswer } from '../../agentAnswer/components';
 import { agentAnswerById } from '../../agentAnswer/queries';
@@ -401,8 +401,4 @@ function escapeXmlAttribute(text: string): string {
 
 function isDefined<T>(value: T | undefined): value is T {
   return value !== undefined;
-}
-
-function isTerminalRunStatus(status: string): boolean {
-  return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'stale';
 }

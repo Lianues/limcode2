@@ -21,7 +21,7 @@ export interface WebviewClientMeta {
 
 export const GLOBAL_CLIENT_STATE_STREAM_ID = 'global:state';
 export const GLOBAL_SETTINGS_STREAM_PREFIX = 'settings:global:';
-export const GLOBAL_SETTINGS_SECTIONS = ['common', 'llm', 'llmProviderConfigs', 'llmCompression', 'llmCompressionConfigs', 'checkpointMaintenance', 'appearance', 'attachments', 'mcpServers'] as const;
+export const GLOBAL_SETTINGS_SECTIONS = ['common', 'llm', 'llmProviderConfigs', 'llmCompression', 'llmCompressionConfigs', 'checkpointMaintenance', 'appearance', 'attachments', 'runHistory', 'mcpServers'] as const;
 export type GlobalSettingsSection = typeof GLOBAL_SETTINGS_SECTIONS[number];
 
 export function globalSettingsStreamId(section: GlobalSettingsSection): string {
@@ -118,6 +118,7 @@ export enum BridgeMessageType {
   RulesCatalogRefresh = 'rules.catalog.refresh',
   ToolExecutionApprove = 'tool.execution.approve',
   ToolExecutionReject = 'tool.execution.reject',
+  ToolExecutionCancel = 'tool.execution.cancel',
   ToolDiffOpen = 'tool.diff.open',
   ToolChangeApply = 'tool.change.apply',
   ToolChangeReject = 'tool.change.reject',
@@ -2300,6 +2301,10 @@ export interface AttachmentSettingsRecord {
   /** base64 附件超过该大小时不复制进 dataRoot/attachments，默认 20MB。 */
   maxStoredInlineFileMb: number;
 }
+export interface RunHistorySettingsRecord {
+  /** 是否持久化每次 run 的详情快照；默认关闭，避免超长对话产生巨型 run-history/runs JSON。 */
+  detailPersistenceEnabled: boolean;
+}
 export type McpServerTransportRecord =
   | { kind: 'stdio'; command: string; args?: string[]; env?: Record<string, string>; cwd?: string }
   | { kind: 'http'; url: string; headers?: Record<string, string> };
@@ -2337,7 +2342,7 @@ export interface AppearanceSettingsRecord {
   /** AI 已输出工具调用、工具正在排队或执行时显示的文字。 */
   streamingTextToolExecuting: string;
 }
-export type GlobalSettingsSectionValue = GlobalSettingsRecord | LlmSettingsRecord | LlmProviderConfigsRecord | LlmCompressionSettingsRecord | LlmCompressionConfigsRecord | CheckpointMaintenanceSettingsRecord | AppearanceSettingsRecord | AttachmentSettingsRecord | McpServersSettingsRecord;
+export type GlobalSettingsSectionValue = GlobalSettingsRecord | LlmSettingsRecord | LlmProviderConfigsRecord | LlmCompressionSettingsRecord | LlmCompressionConfigsRecord | CheckpointMaintenanceSettingsRecord | AppearanceSettingsRecord | AttachmentSettingsRecord | RunHistorySettingsRecord | McpServersSettingsRecord;
 export interface GlobalSettingsGetPayload {
   section: GlobalSettingsSection;
 }
@@ -2522,6 +2527,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.CheckpointPolicyScopeClear, CheckpointPolicyScopeClearPayload>
   | BridgeEnvelope<BridgeMessageType.ToolExecutionApprove, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ToolExecutionReject, ToolDecisionPayload>
+  | BridgeEnvelope<BridgeMessageType.ToolExecutionCancel, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ToolDiffOpen, ToolDiffOpenPayload>
   | BridgeEnvelope<BridgeMessageType.ToolChangeApply, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ToolChangeReject, ToolDecisionPayload>

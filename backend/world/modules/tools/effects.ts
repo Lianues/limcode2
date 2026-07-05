@@ -25,9 +25,16 @@ export interface ToolChangeApplyEffect {
   allowOutsideProjectPaths?: boolean;
 }
 
+/** 请求中断某个在途的运行时工具调用（尽力而为：触发 AbortController，MCP 侧传 signal）。 */
+export interface ToolAbortEffect {
+  kind: 'tool.abort';
+  toolCallId: string;
+}
+
 declare module '@backend/world/effects' {
   interface WorldEffectMap {
     'tool.run': ToolRunEffect;
     'tool.change.apply': ToolChangeApplyEffect;
+    'tool.abort': ToolAbortEffect;
   }
 }

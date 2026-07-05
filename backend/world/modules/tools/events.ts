@@ -6,6 +6,7 @@ export const ToolEventType = {
   PolicyScopeClearRequested: 'tool:policyScopeClearRequested',
   ExecutionApproveRequested: 'tool:executionApproveRequested',
   ExecutionRejectRequested: 'tool:executionRejectRequested',
+  ExecutionCancelRequested: 'tool:executionCancelRequested',
   ChangeApplyRequested: 'tool:changeApplyRequested',
   ChangeRejectRequested: 'tool:changeRejectRequested',
   ResultSubmitRequested: 'tool:resultSubmitRequested',
@@ -30,6 +31,7 @@ declare module '@backend/world/events' {
     'tool:policyScopeClearRequested': ToolPolicyScopeClearPayload;
     'tool:executionApproveRequested': ToolDecisionPayload;
     'tool:executionRejectRequested': ToolDecisionPayload;
+    'tool:executionCancelRequested': ToolDecisionPayload;
     'tool:changeApplyRequested': ToolDecisionPayload;
     'tool:changeRejectRequested': ToolDecisionPayload;
     'tool:resultSubmitRequested': ToolDecisionPayload;

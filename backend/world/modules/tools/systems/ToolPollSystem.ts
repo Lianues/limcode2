@@ -38,6 +38,10 @@ export const ToolPollSystem = defineSystem({
       const call = world.get(entity, ToolCall);
       const current = pendingStates.get(entity) ?? world.get(entity, ToolState);
       if (!call || !current) continue;
+      // 工具已终态（如被用户中断置为 error）或已进入“等待提交结果”后，
+      // 忽略在途执行迟到 resolve 发来的 tool:state；后者代表结果已定稿等待用户确认，
+      // 不能再被不响应 AbortSignal 的运行时工具迟到 success 覆盖。
+      if (isTerminalToolStatus(current.status) || current.status === 'awaiting_result_submit') continue;
 
       try {
         const now = Date.now();

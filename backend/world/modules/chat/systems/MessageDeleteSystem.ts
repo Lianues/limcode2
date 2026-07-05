@@ -5,6 +5,8 @@ import {
   AgentRunInputRevision,
   AgentRunNeedsModel,
   AgentRunQueueHold,
+  AgentRunQueueOrder,
+  AgentRunQueuedInput,
   AgentRunSourceLink,
   MessageRunLink,
   ToolCallRunLink
@@ -19,7 +21,10 @@ import {
   RunCompressionBlockLink
 } from '../../compression/components';
 import { LlmInvocation } from '../../llm/components';
+import { ToolCallEventBundle } from '../../tools/bundles';
 import { ToolCall, ToolCallEvent, ToolResultConsumed, ToolState } from '../../tools/components';
+import { interruptToolCall } from '../../tools/interrupt';
+import { isTerminalToolStatus } from '../../tools/state';
 import { ChatEventType } from '../events';
 import { conversationMessages } from '../queries';
 import {
@@ -45,6 +50,8 @@ const DELETE_READ_COMPONENTS = [
   AgentRun,
   AgentRunNeedsModel,
   AgentRunQueueHold,
+  AgentRunQueueOrder,
+  AgentRunQueuedInput,
   AgentRunSourceLink,
   AgentRunInputRevision,
   MessageRunLink,
@@ -70,7 +77,8 @@ export const MessageDeleteSystem = defineSystem({
     reads: { components: DELETE_READ_COMPONENTS },
     writes: { components: DELETE_READ_COMPONENTS, mutationMode: 'delete' },
     events: { read: [ChatEventType.DeleteFrom] },
-    effects: { emit: ['llm.abort'] }
+    bundles: [ToolCallEventBundle],
+    effects: { emit: ['llm.abort', 'tool.abort'] }
   },
   run(ctx) {
     const { world, cmd } = ctx;
@@ -101,7 +109,10 @@ function deleteMessages(world: WorldReader, cmd: CommandSink, deletedMessages: S
   const affectedRuns = runsAffectedByDeletion(world, deletedMessages, deletedRevisions, deletedToolCalls);
   const affectedCompressionBlocks = compressionBlocksAffectedByDeletion(world, deletedMessages);
 
-  for (const run of affectedRuns) markRunStale(world, cmd, run);
+  // 被删除消息下的 ToolCall 会在本次删除中 despawn，因此只需要尽力中断外部运行时，
+  // 不再补 ToolCallEvent，避免新事件的 PartOf 指向随后被删除的 ToolCall。
+  abortDeletedOpenToolCalls(world, cmd, deletedToolCalls);
+  for (const run of affectedRuns) markRunStale(world, cmd, run, deletedToolCalls);
   deleteCompressionBlocksCascade(world, cmd, affectedCompressionBlocks);
 
   const entitiesToDespawn = new Set<Entity>();
@@ -138,9 +149,18 @@ function deleteMessages(world: WorldReader, cmd: CommandSink, deletedMessages: S
     if (request && deletedMessages.has(request.modelMessage)) entitiesToDespawn.add(entity);
   }
 
+  const affectedRunSet = new Set(affectedRuns);
   for (const entity of world.query(AgentRunQueueHold)) {
     const hold = world.get(entity, AgentRunQueueHold);
-    if (hold && affectedRuns.includes(hold.run)) entitiesToDespawn.add(entity);
+    if (hold && affectedRunSet.has(hold.run)) entitiesToDespawn.add(entity);
+  }
+  for (const entity of world.query(AgentRunQueueOrder)) {
+    const order = world.get(entity, AgentRunQueueOrder);
+    if (order && affectedRunSet.has(order.run)) entitiesToDespawn.add(entity);
+  }
+  for (const entity of world.query(AgentRunQueuedInput)) {
+    const input = world.get(entity, AgentRunQueuedInput);
+    if (input && affectedRunSet.has(input.run)) entitiesToDespawn.add(entity);
   }
 
   for (const entity of entitiesToDespawn) cmd.despawn(entity);
@@ -284,7 +304,7 @@ function runsAffectedByDeletion(
   return [...runs].sort((left, right) => left - right);
 }
 
-function markRunStale(world: WorldReader, cmd: CommandSink, run: Entity): void {
+function markRunStale(world: WorldReader, cmd: CommandSink, run: Entity, excludedToolCalls: ReadonlySet<Entity>): void {
   const data = world.get(run, AgentRun);
   if (!data || isTerminalRunStatus(data.status)) return;
 
@@ -299,6 +319,38 @@ function markRunStale(world: WorldReader, cmd: CommandSink, run: Entity): void {
   });
   cmd.remove(run, AgentRunNeedsModel);
   cleanupRunLlmRequests(world, cmd, run, { kind: 'stale' });
+  failOpenToolCallsForRun(world, cmd, run, excludedToolCalls);
+}
+
+function abortDeletedOpenToolCalls(world: WorldReader, cmd: CommandSink, deletedToolCalls: ReadonlySet<Entity>): void {
+  for (const entity of deletedToolCalls) {
+    const call = world.get(entity, ToolCall);
+    const state = world.get(entity, ToolState);
+    if (!call || !state || isTerminalToolStatus(state.status)) continue;
+    cmd.effect({ kind: 'tool.abort', toolCallId: call.id });
+  }
+}
+
+function failOpenToolCallsForRun(
+  world: WorldReader,
+  cmd: CommandSink,
+  run: Entity,
+  excludedToolCalls: ReadonlySet<Entity>
+): void {
+  const toolCallEntitiesInRun = new Set(
+    world
+      .query(ToolCallRunLink)
+      .filter((entity) => world.get(entity, ToolCallRunLink)?.run === run)
+      .map((entity) => world.get(entity, ToolCallRunLink)?.toolCall)
+      .filter((entity): entity is Entity => entity !== undefined)
+  );
+  for (const entity of world.query(ToolCall, ToolState)) {
+    if (excludedToolCalls.has(entity) || !toolCallEntitiesInRun.has(entity)) continue;
+    const call = world.get(entity, ToolCall);
+    const state = world.get(entity, ToolState);
+    if (!call || !state) continue;
+    interruptToolCall(cmd, entity, call, state, { emitAbort: true });
+  }
 }
 
 function entitiesWithParent(

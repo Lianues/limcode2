@@ -20,6 +20,8 @@ import { ClientStateContributorsKey, ClientSyncFastPatchStateKey, ClientSyncStat
 import { projectClientStateWithCache } from '../projection';
 import { contributorClock } from '../../projection/cache';
 
+const CONVERSATION_STREAM_RECENT_MESSAGE_LIMIT = 240;
+
 export const ClientSyncSystem = defineSystem({
   name: 'ClientSyncSystem',
   access(world) {
@@ -289,7 +291,7 @@ function globalClientState(state: ClientState): ClientState {
 }
 
 function conversationClientState(state: ClientState, conversationId: string): ClientState {
-  const messages = state.messages.filter((message) => message.conversationId === conversationId);
+  const messages = recentConversationStreamMessages(state.messages.filter((message) => message.conversationId === conversationId));
   const messageIds = new Set(messages.map((message) => message.id));
   const toolCalls = state.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId));
   const toolCallIds = new Set(toolCalls.map((toolCall) => toolCall.id));
@@ -298,7 +300,7 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
   const conversationProjectLinks = state.conversationProjectLinks.filter((link) => link.conversationId === conversationId);
   const projectContextIds = new Set(conversationProjectLinks.map((link) => link.projectContextId));
   const conversationModeSelections = state.conversationModeSelections.filter((selection) => selection.conversationId === conversationId);
-  const checkpointTimelineAnchors = state.checkpointTimelineAnchors.filter((anchor) => anchor.conversationId === conversationId);
+  const checkpointTimelineAnchors = state.checkpointTimelineAnchors.filter((anchor) => anchor.conversationId === conversationId && messageIds.has(anchor.floorMessageId));
   const checkpointIds = new Set(checkpointTimelineAnchors.map((anchor) => anchor.checkpointId));
   const checkpoints = state.checkpoints.filter((checkpoint) => checkpoint.conversationId === conversationId || checkpointIds.has(checkpoint.id));
   for (const checkpoint of checkpoints) {
@@ -314,7 +316,7 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
     }
     return matches;
   });
-  const compressionBlocks = state.compressionBlocks.filter((block) => block.conversationId === conversationId);
+  const compressionBlocks = state.compressionBlocks.filter((block) => block.conversationId === conversationId && compressionBlockInMessageWindow(block, messages));
   const compressionBlockIds = new Set(compressionBlocks.map((block) => block.id));
   const compressionVariantIds = new Set(state.runCompressionBlockLinks.filter((link) => compressionBlockIds.has(link.blockId)).map((link) => link.variantId).filter((id): id is string => !!id));
   const compressionBlockLlmInvocationLinks = state.compressionBlockLlmInvocationLinks.filter((link) => compressionBlockIds.has(link.blockId));
@@ -382,6 +384,21 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
     conversationWorkEnvironmentLinks,
     runWorkEnvironmentLinks
   };
+}
+
+function recentConversationStreamMessages(messages: MessageRecord[]): MessageRecord[] {
+  const ordered = [...messages].sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
+  return ordered.length <= CONVERSATION_STREAM_RECENT_MESSAGE_LIMIT
+    ? ordered
+    : ordered.slice(-CONVERSATION_STREAM_RECENT_MESSAGE_LIMIT);
+}
+
+function compressionBlockInMessageWindow(block: { anchorSeq?: number; endSeq?: number }, messages: readonly MessageRecord[]): boolean {
+  const seq = block.anchorSeq ?? block.endSeq;
+  if (seq === undefined) return false;
+  const firstSeq = messages[0]?.seq;
+  const lastSeq = messages[messages.length - 1]?.seq;
+  return firstSeq !== undefined && lastSeq !== undefined && seq >= firstSeq && seq <= lastSeq;
 }
 
 function collectConversationRunIds(state: ClientState, conversationId: string, messageIds: ReadonlySet<string>, toolCallIds: ReadonlySet<string>): Set<string> {

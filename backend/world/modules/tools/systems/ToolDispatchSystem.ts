@@ -55,6 +55,7 @@ import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
 import { ToolCall, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolStateData } from '../components';
 import { ToolEventType } from '../events';
 import { transitionToolState } from '../state';
+import { interruptToolCall } from '../interrupt';
 import {
   WorkEnvironment,
   WorkEnvironmentPolicy,
@@ -168,14 +169,27 @@ export const ToolDispatchSystem = defineSystem({
     writes: { components: [CheckpointBarrier] },
     resources: { read: [AgentBlueprintsKey, ToolSchemasKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey] },
     bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentAnswerBundle, AgentFromBlueprintBundle, ModeBundle, ConversationProjectLinkBundle, WorkEnvironmentBundle],
-    events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested, ToolEventType.ChangeApplyRequested, ToolEventType.ChangeRejectRequested], emit: [CheckpointEventType.Requested] },
-    effects: { emit: ['tool.run', 'tool.change.apply'] }
+    events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested, ToolEventType.ExecutionCancelRequested, ToolEventType.ChangeApplyRequested, ToolEventType.ChangeRejectRequested], emit: [CheckpointEventType.Requested] },
+    effects: { emit: ['tool.run', 'tool.change.apply', 'tool.abort'] }
   },
   run(ctx) {
     const { world, cmd } = ctx;
     backgroundTimedOutRunAgentTools(world, cmd);
 
     const handled = new Set<Entity>();
+
+    // 用户对单个工具调用点“中断”：非终态即标记为“被用户中断执行”，并对在途运行时工具尽力 emit tool.abort。
+    // run 仍存活，ToolResultSystem 会把该结果正常回传模型，同批其它工具不受影响。
+    for (const request of readEvents(ctx, ToolEventType.ExecutionCancelRequested)) {
+      const entity = toolCallEntityById(world, request.toolCallId);
+      if (entity === undefined || handled.has(entity)) continue;
+      const call = world.get(entity, ToolCall);
+      const state = world.get(entity, ToolState);
+      if (!call || !state) continue;
+      if (interruptToolCall(cmd, entity, call, state, { reason: request.reason?.trim() || undefined, emitAbort: true })) {
+        handled.add(entity);
+      }
+    }
 
     for (const request of readEvents(ctx, ToolEventType.ChangeRejectRequested)) {
       const entity = toolCallEntityById(world, request.toolCallId);

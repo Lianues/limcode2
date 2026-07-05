@@ -3,7 +3,7 @@ import type { LlmModelSettings } from '../../llm/contracts';
 import { LlmEventType, type LlmInvocationResolvedPayload, type LlmInvocationResolveErrorPayload } from '../../llm/events';
 import { AgentRun, AgentRunNeedsModel, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunTargetLink, MessageRunLink, RunModeLink, RunModelProfileLink } from '../../agentRun/components';
 import { spawnMessageRunLink } from '../../agentRun/bundles';
-import { activeModelProfileForRun } from '../../agentRun/queries';
+import { activeModelProfileForRun, isTerminalRunStatus } from '../../agentRun/queries';
 import { CompressionBlock } from '../../compression/components';
 import { hasActiveBlockingCompression } from '../../compression/queries';
 import { ConversationModeSelection, Mode, ModelProfile, ModelProfileScopeLink } from '../../mode/components';
@@ -125,6 +125,14 @@ function materializeResolvedInvocation(world: WorldReader, cmd: CommandSink, pay
   const target = targetForRun(world, run);
   if (!target) return;
 
+  // run 已被取消/终止（例如用户在“整理中”这段发起中断）时，别再落地 invocation、也别创建空的
+  // pre-start model 消息——否则那条 streaming/空 model 消息会让“少女整理中”指示器一直挂到下次真正调用 LLM。
+  const runData = world.get(run, AgentRun);
+  if (runData && isTerminalRunStatus(runData.status)) {
+    cmd.add(invocation, LlmInvocation, { ...current, status: 'cancelled', resolvedAt: payload.resolvedAt, completedAt: payload.resolvedAt });
+    return;
+  }
+
   cmd.add(invocation, LlmInvocation, {
     ...current,
     status: 'ready',
@@ -159,6 +167,10 @@ function materializeInvocationResolveError(world: WorldReader, cmd: CommandSink,
   if (run === undefined) return;
   const target = targetForRun(world, run);
   if (!target) return;
+
+  // run 已被取消/终止时不再落地错误消息、也不覆盖其终态。
+  const runDataBefore = world.get(run, AgentRun);
+  if (runDataBefore && isTerminalRunStatus(runDataBefore.status)) return;
 
   const modelMessage = spawnMessage(cmd, { parent: target.conversation, role: 'model', parts: [{ text: `\n[error] ${payload.message}` }], status: 'error' });
   spawnMessageRunLink(cmd, { message: modelMessage, run, role: 'model' });

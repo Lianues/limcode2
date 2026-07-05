@@ -110,6 +110,37 @@ export function buildTaskListTimeline(input: {
   return { entries, snapshot };
 }
 
+export function applyTaskListOperationsAfterMessageSeq(input: {
+  snapshot: TaskListSnapshotView;
+  messages: readonly MessageRecord[];
+  toolCalls: readonly ToolCallRecord[];
+  conversationId: string;
+  minSeqExclusive: number;
+  operationStartIndex?: number;
+}): TaskListSnapshotView {
+  const messageById = new Map(input.messages.map((message) => [message.id, message]));
+  const calls = sortedTaskListToolCalls(input.messages, input.toolCalls, input.conversationId)
+    .filter(isAppliedTaskListToolCall)
+    .filter((toolCall) => {
+      const seq = messageById.get(toolCall.messageId)?.seq;
+      return typeof seq === 'number' && seq > input.minSeqExclusive;
+    });
+  if (calls.length === 0) return cloneSnapshot(input.snapshot);
+
+  let snapshot = cloneSnapshot(input.snapshot);
+  let operationIndex = input.operationStartIndex ?? nextOperationIndex(snapshot);
+  for (const toolCall of calls) {
+    const operation = taskListOperationFromToolCall(toolCall, { allowArgsFallback: true });
+    if (!operation) continue;
+    snapshot = applyTaskListOperation(snapshot, operation, {
+      operationIndex,
+      toolCallId: toolCall.id
+    });
+    operationIndex += 1;
+  }
+  return snapshot;
+}
+
 export function taskListTimelineEntryForToolCall(input: {
   messages: readonly MessageRecord[];
   toolCalls: readonly ToolCallRecord[];
@@ -448,6 +479,12 @@ function maxCreatedOrder(items: ReadonlyMap<string, TaskListItemView>): number {
   let max = -1;
   for (const item of items.values()) max = Math.max(max, item.createdOrder);
   return max;
+}
+
+function nextOperationIndex(snapshot: TaskListSnapshotView): number {
+  let maxUpdatedOrder = -1;
+  for (const item of snapshot.items) maxUpdatedOrder = Math.max(maxUpdatedOrder, item.updatedOrder);
+  return Math.max(0, Math.floor(maxUpdatedOrder / 10_000) + 1);
 }
 
 function titleKey(title: string): string {

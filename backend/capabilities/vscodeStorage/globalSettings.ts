@@ -6,10 +6,11 @@ import type {
   GlobalSettingsSection,
   GlobalSettingsSectionValue,
   LlmCompressionSettingsRecord,
-  LlmSettingsRecord
+  LlmSettingsRecord,
+  RunHistorySettingsRecord
 } from '../../../shared/protocol';
 import { createDefaultLlmCompressionSettings } from '../../../shared/protocol';
-import { ATTACHMENT_SETTINGS_FILE, CHECKPOINT_MAINTENANCE_SETTINGS_FILE, LLM_COMPRESSION_SETTINGS_FILE, LLM_SETTINGS_FILE, STORAGE_VERSION } from './constants';
+import { ATTACHMENT_SETTINGS_FILE, CHECKPOINT_MAINTENANCE_SETTINGS_FILE, LLM_COMPRESSION_SETTINGS_FILE, LLM_SETTINGS_FILE, RUN_HISTORY_SETTINGS_FILE, STORAGE_VERSION } from './constants';
 import { APPEARANCE_SETTINGS_FILE } from './constants';
 import { readJson, writeJson } from './json';
 import { createDefaultLlmSettings, normalizeLlmSettings } from './llmSettings';
@@ -52,6 +53,11 @@ const GLOBAL_SETTINGS_SECTION_SPECS: Record<FileBackedGlobalSettingsSection, {
     fileName: ATTACHMENT_SETTINGS_FILE,
     createDefault: createDefaultAttachmentSettings,
     normalize: (input) => normalizeAttachmentSettings(input as Partial<AttachmentSettingsRecord> | undefined)
+  },
+  runHistory: {
+    fileName: RUN_HISTORY_SETTINGS_FILE,
+    createDefault: createDefaultRunHistorySettings,
+    normalize: (input) => normalizeRunHistorySettings(input as Partial<RunHistorySettingsRecord> | undefined)
   }
 };
 
@@ -125,6 +131,14 @@ export function normalizeAttachmentSettings(input: Partial<AttachmentSettingsRec
   return {
     maxStoredInlineFileMb: Math.min(200, Math.max(1, normalized))
   };
+}
+
+export function createDefaultRunHistorySettings(): RunHistorySettingsRecord {
+  return { detailPersistenceEnabled: false };
+}
+
+export function normalizeRunHistorySettings(input: Partial<RunHistorySettingsRecord> | undefined): RunHistorySettingsRecord {
+  return { detailPersistenceEnabled: input?.detailPersistenceEnabled === true };
 }
 
 export async function ensureGlobalSettingsFile(root: vscode.Uri, section: GlobalSettingsSection): Promise<void> {

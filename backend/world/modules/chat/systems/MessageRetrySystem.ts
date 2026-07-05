@@ -5,6 +5,9 @@ import {
   AgentRun,
   AgentRunInputRevision,
   AgentRunNeedsModel,
+  AgentRunQueueHold,
+  AgentRunQueueOrder,
+  AgentRunQueuedInput,
   AgentRunSourceLink,
   AgentRunTargetLink,
   MessageRunLink,
@@ -12,6 +15,7 @@ import {
 } from '../../agentRun/components';
 import { AgentRunBundle, spawnAgentRun } from '../../agentRun/bundles';
 import { defaultAgentForConversation, runSource, runTarget } from '../../agentRun/queries';
+import { ToolCallEventBundle } from '../../tools/bundles';
 import { ToolCall, ToolCallEvent, ToolResultConsumed, ToolState } from '../../tools/components';
 import { ChatEventType } from '../events';
 import { conversationMessages } from '../queries';
@@ -40,6 +44,9 @@ const RETRY_READ_COMPONENTS = [
   InFlight,
   AgentRun,
   AgentRunNeedsModel,
+  AgentRunQueueHold,
+  AgentRunQueueOrder,
+  AgentRunQueuedInput,
   AgentRunSourceLink,
   AgentRunTargetLink,
   AgentRunInputRevision,
@@ -58,8 +65,8 @@ export const MessageRetrySystem = defineSystem({
     reads: { components: RETRY_READ_COMPONENTS },
     writes: { components: RETRY_READ_COMPONENTS, mutationMode: 'delete' },
     events: { read: [ChatEventType.RetryFrom] },
-    bundles: [AgentRunBundle],
-    effects: { emit: ['llm.abort'] }
+    bundles: [AgentRunBundle, ToolCallEventBundle],
+    effects: { emit: ['llm.abort', 'tool.abort'] }
   },
   run(ctx) {
     const { world, cmd } = ctx;

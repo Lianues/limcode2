@@ -172,10 +172,10 @@ export function useBottomStickyScroller(
     }
 
     const grewFromPreviousBottom = lastMetrics !== undefined
-      && isNearBottomMetrics(lastMetrics, interactionThresholdPx)
+      && isNearBottomMetrics(lastMetrics, thresholdPx)
       && currentMetrics.scrollHeight > lastMetrics.scrollHeight + 1
       && Math.abs(currentMetrics.scrollTop - lastMetrics.scrollTop) <= 2;
-    if (stickyToBottom || grewFromPreviousBottom || wasNearBottomBeforeCurrentLayout()) {
+    if (stickyToBottom || grewFromPreviousBottom || wasNearBottomBeforeCurrentLayout(thresholdPx)) {
       stickyToBottom = true;
       keepStickyDuringContentSettle();
       return;
@@ -185,7 +185,7 @@ export function useBottomStickyScroller(
     lastMetrics = currentMetrics;
   }
 
-  function releaseStickyFromWheel(event: WheelEvent): void {
+  function handleWheel(event: WheelEvent): void {
     if (event.deltaY < 0) releaseStickyFromUserIntent();
   }
 
@@ -278,7 +278,7 @@ export function useBottomStickyScroller(
     }
 
     const wasSticky = stickyToBottom;
-    const wasNearBottom = wasNearBottomBeforeCurrentLayout();
+    const wasNearBottom = wasNearBottomBeforeCurrentLayout(thresholdPx);
     const nowNearBottom = isNearBottomElement(element);
     stickyToBottom = wasSticky || wasNearBottom || nowNearBottom;
 
@@ -326,7 +326,7 @@ export function useBottomStickyScroller(
     reattachLockedUntil = 0;
     rememberScrollMetrics(element);
     element.addEventListener('scroll', updateStickyFromUserScroll, { passive: true });
-    element.addEventListener('wheel', releaseStickyFromWheel, { passive: true });
+    element.addEventListener('wheel', handleWheel, { passive: true });
     element.addEventListener(USER_SCROLL_INTENT_EVENT, handleUserScrollIntent);
     element.addEventListener('pointerdown', primeStickyFromBottomInteraction, { capture: true });
     element.addEventListener('keydown', handleKeyboardInteraction, { capture: true });
@@ -352,7 +352,7 @@ export function useBottomStickyScroller(
   function detachScroller(): void {
     if (observedScroller) {
       observedScroller.removeEventListener('scroll', updateStickyFromUserScroll);
-      observedScroller.removeEventListener('wheel', releaseStickyFromWheel);
+      observedScroller.removeEventListener('wheel', handleWheel);
       observedScroller.removeEventListener(USER_SCROLL_INTENT_EVENT, handleUserScrollIntent);
       observedScroller.removeEventListener('pointerdown', primeStickyFromBottomInteraction, { capture: true });
       observedScroller.removeEventListener('keydown', handleKeyboardInteraction, { capture: true });

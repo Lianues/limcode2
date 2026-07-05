@@ -4,6 +4,9 @@ import type { ToolResultOut, ToolRuntimeEvent } from '../../../world/modules/too
 import type { EffectHandlerRegistry } from '../registry';
 
 export function registerToolEffectHandlers(registry: EffectHandlerRegistry): void {
+  // 每个在途运行时工具调用一个 AbortController，供 tool.abort 尽力真中断（镜像 llm.abort 的做法）。
+  const controllers = new Map<string, AbortController>();
+
   registry.register('tool.run', (effect, env, emit) => {
     const tool = env.tools.registry.find((candidate) => candidate.declaration.name === effect.name);
     if (!tool || tool.execution !== 'runtime') {
@@ -31,13 +34,24 @@ export function registerToolEffectHandlers(registry: EffectHandlerRegistry): voi
       emitToolState(emit, toRunningToolStatePayload(effect.toolCallId, event));
     };
 
+    const controller = new AbortController();
+    controllers.set(effect.toolCallId, controller);
+
     tool
-      .execute(args, { fs: env.fs, command: env.command, workEnvironment: env.workEnvironment, storage: env.storage, skills: env.skills }, { toolCallId: effect.toolCallId, runId: effect.runId, conversationId: effect.conversationId, config: effect.config, settingsSnapshot: effect.settingsSnapshot, workEnvironment: effect.workEnvironment, workEnvironments: effect.workEnvironments, accessibleWorkEnvironments: effect.accessibleWorkEnvironments, emit: emitRuntimeEvent })
+      .execute(args, { fs: env.fs, command: env.command, workEnvironment: env.workEnvironment, storage: env.storage, skills: env.skills }, { toolCallId: effect.toolCallId, runId: effect.runId, conversationId: effect.conversationId, config: effect.config, settingsSnapshot: effect.settingsSnapshot, workEnvironment: effect.workEnvironment, workEnvironments: effect.workEnvironments, accessibleWorkEnvironments: effect.accessibleWorkEnvironments, signal: controller.signal, emit: emitRuntimeEvent })
       .then((result) => emitToolState(emit, toToolStatePayload(effect.toolCallId, result, Date.now() - startedAt)))
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         emitToolState(emit, { toolCallId: effect.toolCallId, status: 'error', error: message, result: { error: message }, durationMs: Date.now() - startedAt });
-      });
+      })
+      .finally(() => controllers.delete(effect.toolCallId));
+  });
+
+  registry.register('tool.abort', (effect) => {
+    const controller = controllers.get(effect.toolCallId);
+    if (!controller) return;
+    controllers.delete(effect.toolCallId);
+    controller.abort();
   });
 
   registry.register('tool.change.apply', (effect, env, emit) => {

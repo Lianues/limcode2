@@ -61,6 +61,17 @@
   font-weight: 600;
 }
 
+.global-settings-field > .global-settings-field-hint {
+  color: var(--vscode-descriptionForeground);
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.global-settings-checkbox-label {
+  color: var(--vscode-foreground);
+  font-weight: 600;
+}
+
 .global-settings-field-wide {
   grid-column: 1 / -1;
 }
@@ -84,6 +95,17 @@
 .global-settings-field input[readonly] {
   color: var(--vscode-descriptionForeground);
   cursor: default;
+}
+
+.global-settings-field input[type="number"]::-webkit-outer-spin-button,
+.global-settings-field input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.global-settings-field input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
 }
 
 .global-settings-api-key-field input {

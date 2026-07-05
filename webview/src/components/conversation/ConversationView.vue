@@ -413,6 +413,7 @@ function clearCheckpointAutoDismissTimers(): void {
   overflow-y: auto;
   padding: 0;
   scrollbar-width: none;
+  overflow-anchor: none;
 }
 
 .conversation-scroll::-webkit-scrollbar {

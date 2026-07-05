@@ -11,7 +11,7 @@ import {
 } from '../../agentRun/components';
 import { markRunNeedsModel, spawnMessageRunLink } from '../../agentRun/bundles';
 import { activeToolPolicyForRun, runForToolCall, runTarget } from '../../agentRun/queries';
-import { Conversation } from '../../chat/components';
+import { Conversation, Message, PartOf } from '../../chat/components';
 import { spawnToolResponseMessage, ToolResultMessageBundle } from '../../chat/bundles';
 import { ConversationModeSelection, Mode, ToolPolicy } from '../../mode/components';
 import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
@@ -68,7 +68,7 @@ export const ToolResultSystem = defineSystem({
   access: {
     queries: [SettledToolCallsQuery, ActiveToolWorkLookupQuery],
     bundles: [ToolResultMessageBundle, ToolCallEventBundle],
-    reads: { components: [LlmInvocation, RunLlmInvocationLink, ToolCallEvent, CompressionBlock] },
+    reads: { components: [LlmInvocation, RunLlmInvocationLink, ToolCallEvent, CompressionBlock, Message, PartOf, MessageRunLink] },
     writes: { components: [AgentRun, AgentRunNeedsModel, MessageRunLink, ToolState] },
     events: { read: [ToolEventType.ResultSubmitRequested, ToolEventType.ResultRejectRequested], emit: [CheckpointEventType.Requested, CompressionEventType.Create] }
   },
@@ -192,16 +192,66 @@ export const ToolResultSystem = defineSystem({
     }
 
     for (const run of touchedRuns) {
-      if (!hasPendingToolWork(world, run, consumedThisPass)) {
-        const runData = world.get(run, AgentRun);
-        if (runData) {
-          cmd.add(run, AgentRun, { ...runData, status: 'running', updatedAt: Date.now() });
-        }
-        markRunNeedsModel(cmd, run);
+      if (hasPendingToolWork(world, run, consumedThisPass)) continue;
+      const runData = world.get(run, AgentRun);
+      if (!runData) continue;
+
+      // 本回合 AI 输出的工具若被用户全部手动中断，则不再自动发起下一次 LLM，直接把 run 收尾（等同全部中断）。
+      if (allCurrentTurnToolCallsUserInterrupted(world, run)) {
+        const now = Date.now();
+        cmd.add(run, AgentRun, {
+          ...runData,
+          status: 'cancelled',
+          updatedAt: now,
+          completedAt: now,
+          endReason: 'cancelled_by_user',
+          errorType: 'cancelled'
+        });
+        cmd.remove(run, AgentRunNeedsModel);
+        continue;
       }
+
+      cmd.add(run, AgentRun, { ...runData, status: 'running', updatedAt: Date.now() });
+      markRunNeedsModel(cmd, run);
     }
   }
 });
+
+/**
+ * 本回合（run 最新一条 model 消息下）的工具调用是否全部被用户手动中断。
+ * “被用户中断”= 结果里带 interrupted 标记（interruptToolCall 写入的 { interrupted: true }）。
+ * 用于：AI 一次输出的多个工具若被逐个中断完，就不再自动进入下一轮 LLM。
+ */
+function allCurrentTurnToolCallsUserInterrupted(world: WorldReader, run: Entity): boolean {
+  const latestModelMessage = latestModelMessageForRun(world, run);
+  if (latestModelMessage === undefined) return false;
+
+  let sawToolCall = false;
+  for (const entity of world.query(ToolCall, ToolState)) {
+    if (world.get(entity, PartOf)?.parent !== latestModelMessage) continue;
+    sawToolCall = true;
+    if (!isUserInterruptedToolState(world.get(entity, ToolState))) return false;
+  }
+  return sawToolCall;
+}
+
+function isUserInterruptedToolState(state: ToolStateData | undefined): boolean {
+  if (!state) return false;
+  const result = state.result;
+  return !!result && typeof result === 'object' && !Array.isArray(result) && (result as { interrupted?: unknown }).interrupted === true;
+}
+
+function latestModelMessageForRun(world: WorldReader, run: Entity): Entity | undefined {
+  let latest: { entity: Entity; seq: number } | undefined;
+  for (const linkEntity of world.query(MessageRunLink)) {
+    const link = world.get(linkEntity, MessageRunLink);
+    if (!link || link.run !== run || link.role !== 'model') continue;
+    const seq = world.get(link.message, Message)?.seq;
+    if (seq === undefined) continue;
+    if (!latest || seq > latest.seq) latest = { entity: link.message, seq };
+  }
+  return latest?.entity;
+}
 
 function maybeEnqueueAutoCompressionAfterToolResponses(
   world: WorldReader,

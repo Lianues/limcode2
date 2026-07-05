@@ -179,6 +179,10 @@ export class WebviewMessageRouter {
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ToolEventType.ExecutionRejectRequested, payload: message.payload });
         break;
+      case BridgeMessageType.ToolExecutionCancel:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: ToolEventType.ExecutionCancelRequested, payload: message.payload });
+        break;
       case BridgeMessageType.ToolDiffOpen:
         if (!this.deps.isHydrated() || !message.payload) return;
         void this.handleToolDiffOpen(message.payload).catch((error) => {
@@ -678,9 +682,7 @@ export class WebviewMessageRouter {
       return;
     }
 
-    void this.deps.ensureConversationDetailLoaded(requestedConversationId)
-      .catch((error) => console.warn('[LimCode] Failed to hydrate conversation before client resync.', error))
-      .finally(() => this.deps.requestSnapshot(requestedConversationId));
+    void this.enqueueAfterConversationTailLoaded(requestedConversationId, () => this.deps.requestSnapshot(requestedConversationId));
   }
 
   private async postConversationTimelinePage(

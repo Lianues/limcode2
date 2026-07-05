@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, watch } from 'vue';
 import type { CheckpointRecord, CompressionBlockRecord, MessageRecord } from '@shared/protocol';
 import { useConversationUiStore, type ConversationTimelineViewRow, type LlmErrorBlockRecord, type MessageViewRow } from '@webview/stores/useConversationUiStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
@@ -10,7 +10,6 @@ import { checkpointBeforeMessageFloor } from './checkpointRollback';
 import CompressionTimelineCard from './CompressionTimelineCard.vue';
 import MessageItem from './MessageItem.vue';
 import TimelineActivityRow from './TimelineActivityRow.vue';
-import VirtualTimelineList from './VirtualTimelineList.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -31,10 +30,16 @@ const AUTO_LOAD_BOTTOM_GUARD_PX = 16;
 const AUTO_LOAD_UNDERFILLED_THRESHOLD_PX = 240;
 let attachedScroller: HTMLElement | null = null;
 let autoLoadFrame: number | undefined;
+let pendingTimelineAnchor: TimelineRowAnchor | undefined;
+
+interface TimelineRowAnchor {
+  key: string;
+  top: number;
+}
 
 watch(() => props.scroller, attachScroller, { immediate: true, flush: 'post' });
 watch(
-  () => `${timeline.currentTimeline.status}:${timeline.currentHasOlder}:${ui.timelineRows.length}`,
+  () => `${timeline.currentTimeline.status}:${timeline.currentHasOlder}:${timeline.currentTimeline.loadedChunkIds.join('\u0001')}:${ui.timelineRows.length}`,
   () => void nextTick(scheduleAutoLoadOlder),
   { flush: 'post' }
 );
@@ -110,6 +115,44 @@ function rowKey(row: ConversationTimelineViewRow): string {
   return row.id;
 }
 
+const rowKeySignature = computed(() => ui.timelineRows.map(rowKey).join('\u0001'));
+const isLoadingOlder = computed(() => timeline.currentTimeline.status === 'loadingOlder');
+
+watch(rowKeySignature, () => {
+  pendingTimelineAnchor = captureTimelineAnchor();
+  if (!pendingTimelineAnchor) return;
+  void nextTick(restoreTimelineAnchor);
+}, { flush: 'pre' });
+
+function captureTimelineAnchor(): TimelineRowAnchor | undefined {
+  const scroller = props.scroller;
+  if (!scroller) return undefined;
+
+  const scrollerTop = scroller.getBoundingClientRect().top;
+  const rows = Array.from(scroller.querySelectorAll<HTMLElement>('[data-timeline-row-key]'));
+  const anchorElement = rows.find((element) => element.getBoundingClientRect().bottom > scrollerTop + 1);
+  const key = anchorElement?.dataset.timelineRowKey;
+  if (!anchorElement || !key) return undefined;
+
+  return { key, top: anchorElement.getBoundingClientRect().top };
+}
+
+function restoreTimelineAnchor(): void {
+  const anchor = pendingTimelineAnchor;
+  pendingTimelineAnchor = undefined;
+  const scroller = props.scroller;
+  if (!anchor || !scroller) return;
+
+  const anchorElement = Array.from(scroller.querySelectorAll<HTMLElement>('[data-timeline-row-key]')).find(
+    (element) => element.dataset.timelineRowKey === anchor.key
+  );
+  if (!anchorElement) return;
+
+  const delta = anchorElement.getBoundingClientRect().top - anchor.top;
+  if (Math.abs(delta) <= 0.5) return;
+  scroller.scrollTop += delta;
+}
+
 function attachScroller(element: HTMLElement | null | undefined): void {
   detachScroller();
   if (!element) return;
@@ -135,20 +178,41 @@ function scheduleAutoLoadOlder(): void {
 
 function maybeLoadOlder(): void {
   const scroller = attachedScroller;
-  if (!scroller || !timeline.currentHasOlder) return;
-  const status = timeline.currentTimeline.status;
-  if (status === 'loadingInitial' || status === 'loadingOlder') return;
+  if (!scroller) return;
+  const current = timeline.currentTimeline;
+  const status = current.status;
+  const hasLoadedPage = current.loadedChunkIds.length > 0 && current.pageInfo !== undefined;
+  if (status === 'loadingOlder' || (status === 'loadingInitial' && !hasLoadedPage)) return;
+
+  if (!hasLoadedPage) {
+    timeline.requestInitial(timeline.currentConversationId);
+    return;
+  }
+
+  if (!timeline.currentHasOlder) return;
   const distanceFromBottom = Math.max(0, scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight);
   const nearTop = scroller.scrollTop <= AUTO_LOAD_TOP_THRESHOLD_PX && distanceFromBottom > AUTO_LOAD_BOTTOM_GUARD_PX;
   const underfilled = scroller.scrollHeight <= scroller.clientHeight + AUTO_LOAD_UNDERFILLED_THRESHOLD_PX;
-  if (nearTop || underfilled) timeline.requestOlder();
+  if (nearTop || underfilled) {
+    timeline.requestOlder();
+  }
 }
 </script>
 
 <template>
   <div class="message-list">
-    <VirtualTimelineList :rows="ui.timelineRows" :scroller="props.scroller" :item-key="rowKey" :estimated-height="220">
-      <template #default="{ row }">
+    <div v-if="isLoadingOlder" class="message-list-loading-layer" role="status" aria-live="polite">
+      <div class="message-list-loading-pill">
+        <span class="message-list-loading-spinner" aria-hidden="true"></span>
+        <span>正在加载更早消息…</span>
+      </div>
+    </div>
+    <div
+      v-for="row in ui.timelineRows"
+      :key="rowKey(row)"
+      class="message-list-row"
+      :data-timeline-row-key="rowKey(row)"
+    >
       <MessageItem
         v-if="row.kind === 'message'"
         :message="row.message"
@@ -183,8 +247,7 @@ function maybeLoadOlder(): void {
         v-else-if="row.kind === 'activity'"
         :activity-kind="row.activityKind"
       />
-      </template>
-    </VirtualTimelineList>
+    </div>
     <div v-if="!ui.timelineRows.length" class="message-empty-container">
       <p class="message-empty">{{ emptyHint }}</p>
     </div>
@@ -198,6 +261,45 @@ function maybeLoadOlder(): void {
   flex-direction: column;
   gap: 0; /* 楼层之间无缝级联拼接 */
   overflow-anchor: none;
+}
+
+.message-list-row {
+  display: block;
+}
+
+.message-list-loading-layer {
+  position: sticky;
+  top: 8px;
+  z-index: 6;
+  height: 0;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.message-list-loading-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 5px 10px;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
+.message-list-loading-spinner {
+  width: 10px;
+  height: 10px;
+  border: 1px solid color-mix(in srgb, var(--vscode-foreground) 28%, transparent);
+  border-top-color: color-mix(in srgb, var(--vscode-foreground) 68%, transparent);
+  border-radius: 50%;
+  animation: message-list-loading-spin 0.8s linear infinite;
+}
+
+@keyframes message-list-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .message-empty-container {

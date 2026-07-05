@@ -2,8 +2,8 @@ import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldRea
 import { readEvents } from '../../../events';
 import { Conversation, InFlight, LlmRequest, Message, Streaming } from '../../chat/components';
 import { ToolCall, ToolState } from '../../tools/components';
-import { spawnToolCallEvent, ToolCallEventBundle } from '../../tools/bundles';
-import { isTerminalToolStatus, transitionToolState } from '../../tools/state';
+import { ToolCallEventBundle } from '../../tools/bundles';
+import { interruptToolCall } from '../../tools/interrupt';
 import type { AgentRunEndReason, AgentRunErrorType, AgentRunKind, AgentRunQueueHoldReason, MessageContent, QueueInputUpdatePayload } from '../../../../../shared/protocol';
 import { AgentRunBundle, markRunNeedsModel, spawnAgentRun } from '../bundles';
 import { cleanupRunLlmRequests, type RunLlmCleanupReason } from '../llmRequestCleanup';
@@ -27,7 +27,7 @@ import {
   type AgentRunData
 } from '../components';
 import { AgentRunEventType } from '../events';
-import { isTerminalRunStatus, runSource, runTarget } from '../queries';
+import { childRunsForRun, isTerminalRunStatus, runSource, runTarget } from '../queries';
 
 const LifecycleRunsQuery = defineQuery({
   name: 'AgentRunLifecycle',
@@ -86,7 +86,7 @@ export const AgentRunLifecycleSystem = defineSystem({
         AgentRunEventType.UpdateQueuedInput
       ]
     },
-    effects: { emit: ['llm.abort'] },
+    effects: { emit: ['llm.abort', 'tool.abort'] },
     bundles: [AgentRunBundle, ToolCallEventBundle]
   },
   run(ctx) {
@@ -94,12 +94,13 @@ export const AgentRunLifecycleSystem = defineSystem({
 
     for (const payload of readEvents(ctx, AgentRunEventType.Cancel)) {
       const run = findRunById(world, payload.runId);
-      if (run !== undefined) terminateRun(world, cmd, run, 'cancelled', 'cancelled_by_user', 'cancelled', payload.reason ?? 'Run cancelled by user.');
+      if (run !== undefined) cancelRunCascade(world, cmd, run, 'cancelled_by_user', payload.reason ?? 'Run cancelled by user.');
     }
 
     for (const payload of readEvents(ctx, AgentRunEventType.CancelConversation)) {
+      const seen = new Set<Entity>();
       for (const run of activeRunsForConversation(world, payload.conversationId)) {
-        terminateRun(world, cmd, run, 'cancelled', 'cancelled_by_user', 'cancelled', payload.reason ?? 'Conversation active run cancelled.');
+        cancelRunCascade(world, cmd, run, 'cancelled_by_user', payload.reason ?? 'Conversation active run cancelled.', seen);
       }
     }
 
@@ -225,7 +226,30 @@ function terminateRun(
   });
   removeQueueArtifactsForRun(world, cmd, run);
   cleanupLlmRequests(world, cmd, run, cleanupReasonForEndReason(endReason));
-  failOpenToolCalls(world, cmd, run, message);
+  failOpenToolCalls(world, cmd, run);
+}
+
+/**
+ * 取消一个 run，并递归取消它通过 run_agent 派生的整棵子 run 树——无视子 run 所在对话。
+ * 这样中断父对话时，跑在别的对话里的子 agent（含 run_agent 后台子任务）也会一起停下，
+ * 上层 read_agent_answer 才能读到 interrupted 而非 running。
+ */
+function cancelRunCascade(
+  world: WorldReader,
+  cmd: CommandSink,
+  run: Entity,
+  endReason: AgentRunEndReason,
+  message: string,
+  seen: Set<Entity> = new Set()
+): void {
+  if (seen.has(run)) return;
+  seen.add(run);
+  // 先取子 run（terminateRun 不改结构关系，但先取更稳妥），再递归。
+  const children = childRunsForRun(world, run);
+  terminateRun(world, cmd, run, 'cancelled', endReason, 'cancelled', message);
+  for (const child of children) {
+    cancelRunCascade(world, cmd, child, endReason, message, seen);
+  }
 }
 
 function promoteRun(world: WorldReader, cmd: CommandSink, runId: string, conversationId: string): void {
@@ -441,26 +465,23 @@ function cleanupReasonForEndReason(endReason: AgentRunEndReason): RunLlmCleanupR
   }
 }
 
-function failOpenToolCalls(world: WorldReader, cmd: CommandSink, run: Entity, reason: string): void {
-  const now = Date.now();
-  for (const entity of world.query(ToolCall, ToolState, ToolCallRunLink)) {
-    if (world.get(entity, ToolCallRunLink)?.run !== run) continue;
+function failOpenToolCalls(world: WorldReader, cmd: CommandSink, run: Entity): void {
+  // ToolCallRunLink 是独立实体（toolCall/run 是其字段），不与 ToolCall/ToolState 同实体，
+  // 因此必须先按 run 收集 toolCall 实体集合，再遍历工具调用——不能三组件同实体 query（永远为空）。
+  const toolCallEntitiesInRun = new Set(
+    world
+      .query(ToolCallRunLink)
+      .filter((entity) => world.get(entity, ToolCallRunLink)?.run === run)
+      .map((entity) => world.get(entity, ToolCallRunLink)?.toolCall)
+      .filter((entity): entity is Entity => entity !== undefined)
+  );
+  for (const entity of world.query(ToolCall, ToolState)) {
+    if (!toolCallEntitiesInRun.has(entity)) continue;
     const call = world.get(entity, ToolCall);
     const state = world.get(entity, ToolState);
-    if (!call || !state || isTerminalToolStatus(state.status)) continue;
-    cmd.add(entity, ToolState, transitionToolState(state, 'error', { error: reason, result: { error: reason }, durationMs: Math.max(0, now - call.createdAt) }, now));
-    cmd.remove(entity, InFlight);
-    spawnToolCallEvent(cmd, {
-      toolCall: entity,
-      toolCallId: call.id,
-      kind: 'failed',
-      status: 'error',
-      at: now,
-      elapsedMs: Math.max(0, now - call.createdAt),
-      durationMs: Math.max(0, now - call.createdAt),
-      error: reason,
-      payload: { reason }
-    });
+    if (!call || !state) continue;
+    // 统一标记为“被用户中断执行”，并对仍在途的运行时工具尽力 emit tool.abort 真中断。
+    interruptToolCall(cmd, entity, call, state, { emitAbort: true });
   }
 }
 

@@ -708,6 +708,11 @@ export async function loadTimelineProjectionContext(
   return {
     conversationId,
     chunkId: currentRecord.id,
+    currentChunkStartSeq: currentRecord.startSeq,
+    currentChunkEndSeq: currentRecord.endSeq,
+    latestChunkId: latestRecord.id,
+    latestChunkStartSeq: latestRecord.startSeq,
+    latestChunkEndSeq: latestRecord.endSeq,
     projectionKey,
     snapshotBeforeChunk: previousCheckpoint?.snapshotAfterChunk ?? spec.emptySnapshot(),
     snapshotAfterChunk: currentCheckpoint.snapshotAfterChunk,

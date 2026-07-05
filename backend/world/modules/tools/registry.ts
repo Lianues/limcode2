@@ -44,6 +44,8 @@ export interface ToolExecutionContext {
   workEnvironment?: WorkEnvironmentRecord;
   workEnvironments?: WorkEnvironmentRecord[];
   accessibleWorkEnvironments?: WorkEnvironmentRecord[];
+  /** 用户中断时触发；工具可将其透传给底层调用（如 MCP callTool、fetch）以尽力真中断。 */
+  signal?: AbortSignal;
   emit(event: ToolRuntimeEvent): void;
 }
 

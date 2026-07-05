@@ -6,17 +6,23 @@ import {
   AgentRun,
   AgentRunInputRevision,
   AgentRunNeedsModel,
+  AgentRunQueueHold,
+  AgentRunQueueOrder,
+  AgentRunQueuedInput,
   AgentRunSourceLink,
   AgentRunTargetLink,
   MessageRunLink,
   RunDeliveryPolicy,
   RunDeliveryPolicyLink,
   RunEditPolicy,
-  RunEditPolicyLink
+  RunEditPolicyLink,
+  ToolCallRunLink
 } from '../../agentRun/components';
 import { AgentRunBundle, markRunNeedsModel, spawnAgentRun, spawnMessageRunLink } from '../../agentRun/bundles';
 import { cleanupRunLlmRequests } from '../../agentRun/llmRequestCleanup';
 import { activeDeliveryPolicyForRun, defaultAgentForConversation, effectiveEditPolicyForRun, runSource, runTarget } from '../../agentRun/queries';
+import { ToolCallEventBundle } from '../../tools/bundles';
+import { ToolCall, ToolCallEvent, ToolResultConsumed, ToolState } from '../../tools/components';
 import type { MessageContent } from '../../../../../shared/protocol';
 import { Checkpoint, CheckpointTimelineAnchor } from '../../checkpoint/components';
 import { CompressionBlock, CompressionBlockSourceLink } from '../../compression/components';
@@ -36,7 +42,7 @@ import {
 import { ChatEventType } from '../events';
 import { conversationMessages } from '../queries';
 import { deleteMessagesFromIndex } from './MessageDeleteSystem';
-import { Conversation, LlmRequest, Message, MessageCurrentRevisionLink, MessageRevision, PartOf, Streaming } from '../components';
+import { Conversation, InFlight, LlmRequest, Message, MessageCurrentRevisionLink, MessageRevision, PartOf, Streaming } from '../components';
 
 const MessageEditQuery = defineQuery({
   name: 'MessageEditLookup',
@@ -51,9 +57,17 @@ const MessageEditQuery = defineQuery({
     MessageCurrentRevisionLink,
     AgentRun,
     AgentRunInputRevision,
+    AgentRunQueueHold,
+    AgentRunQueueOrder,
+    AgentRunQueuedInput,
     AgentRunSourceLink,
     AgentRunTargetLink,
     MessageRunLink,
+    ToolCallRunLink,
+    ToolCall,
+    ToolState,
+    ToolCallEvent,
+    ToolResultConsumed,
     RunEditPolicy,
     RunEditPolicyLink,
     RunDeliveryPolicy,
@@ -64,8 +78,8 @@ const MessageEditQuery = defineQuery({
     CompressionBlock,
     CompressionBlockSourceLink
   ],
-  write: [Message, AgentRun, CompressionBlock],
-  remove: [MessageCurrentRevisionLink, AgentRunNeedsModel, Streaming, LlmRequest, CheckpointTimelineAnchor, Checkpoint],
+  write: [Message, AgentRun, CompressionBlock, ToolState],
+  remove: [MessageCurrentRevisionLink, AgentRunNeedsModel, Streaming, LlmRequest, InFlight, CheckpointTimelineAnchor, Checkpoint],
   mutationMode: 'update',
   role: 'work'
 });
@@ -74,9 +88,9 @@ export const MessageEditSystem = defineSystem({
   name: 'MessageEditSystem',
   access: {
     queries: [MessageEditQuery],
-    effects: { emit: ['llm.abort'] },
+    effects: { emit: ['llm.abort', 'tool.abort'] },
     events: { read: [ChatEventType.Edit], emit: [CheckpointEventType.Requested] },
-    bundles: [MessageBundle, UserMessageBundle, ConversationBundle, ConversationLinkBundle, AgentRunBundle, AgentFromBlueprintBundle]
+    bundles: [MessageBundle, UserMessageBundle, ConversationBundle, ConversationLinkBundle, AgentRunBundle, AgentFromBlueprintBundle, ToolCallEventBundle]
   },
   run(ctx) {
     const { world, cmd } = ctx;

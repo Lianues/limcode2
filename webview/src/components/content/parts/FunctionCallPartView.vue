@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import { IconTool } from '@tabler/icons-vue';
+import { IconTool, IconPlayerStop } from '@tabler/icons-vue';
 import type {
   FunctionCallPart,
   ToolCallEventRecord,
@@ -105,6 +105,22 @@ const autoApplyHint = computed(() => {
 });
 const commandRuntimeStatus = computed(() => toolCall.value ? shellRuntimeStatusLabel(toolCall.value) : undefined);
 const statusLabel = computed(() => commandRuntimeStatus.value?.label ?? (toolCall.value ? labelForToolCall(toolCall.value) : '工具请求已生成'));
+// 可中断：正在推进（排队/执行/应用更改）或已批准待执行；等待用户决策的状态各有专用按钮，不重复给中断入口。
+// 注意：命令工具转后台后是终态 success（已把“成功”返回给 AI），不再算可中断——后台命令的终止在后台命令面板里做。
+const canCancel = computed(() => {
+  const call = toolCall.value;
+  if (!call) return false;
+  switch (call.status) {
+    case 'queued':
+    case 'executing':
+    case 'applying_change':
+      return true;
+    case 'awaiting_approval':
+      return isExecutionApprovedProgress(call.progress);
+    default:
+      return false;
+  }
+});
 const statusTitle = computed(() => {
   if (!toolCall.value) return '等待后端创建工具调用记录';
   const runtimeStatus = commandRuntimeStatus.value?.status;
@@ -228,6 +244,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function sendToolDecision(type:
   | BridgeMessageType.ToolExecutionApprove
   | BridgeMessageType.ToolExecutionReject
+  | BridgeMessageType.ToolExecutionCancel
   | BridgeMessageType.ToolChangeApply
   | BridgeMessageType.ToolChangeReject
   | BridgeMessageType.ToolResultSubmit
@@ -289,6 +306,9 @@ function labelForToolCall(call: ToolCallRecord): string {
   if (call.status === 'awaiting_approval' && isExecutionApprovedProgress(call.progress)) {
     return isWaitingForPreviousProgress(call.progress) ? '已批准，等待前序批次' : '已批准，等待执行';
   }
+  if (call.status === 'error' && isInterruptedResult(call.result)) {
+    return '已被用户中断';
+  }
   if (call.status === 'error' && isDeniedResult(call.result)) {
     return deniedStatusLabel(call.result, call.error);
   }
@@ -317,6 +337,11 @@ function labelForStatus(status: ToolCallStatus): string {
 
 function isDeniedResult(result: unknown): boolean {
   return isRecord(result) && result.denied === true;
+}
+
+function isInterruptedResult(result: unknown): boolean {
+  const output = toolOutput(result);
+  return (isRecord(result) && result.interrupted === true) || (isRecord(output) && output.interrupted === true);
 }
 
 function deniedStatusLabel(result: unknown, error: string | undefined): string {
@@ -398,7 +423,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
       <span class="part-card-status" :title="statusTitle">{{ statusLabel }}</span>
       <span v-if="durationLabel" class="part-card-meta">{{ durationLabel }}</span>
     </template>
-    <template v-if="headerActions.length > 0" #actions>
+    <template v-if="headerActions.length > 0 || canCancel" #actions>
       <button
         v-for="action in headerActions"
         :key="action.id"
@@ -411,6 +436,17 @@ function isInternalApprovalProgress(progress: unknown): boolean {
       >
         <component :is="action.icon" v-if="action.icon" class="tool-header-action-icon" :stroke="2" aria-hidden="true" />
         <span class="tool-header-action-label">{{ action.label }}</span>
+      </button>
+      <button
+        v-if="canCancel"
+        type="button"
+        class="tool-header-action tool-header-action-cancel"
+        title="中断此工具调用"
+        aria-label="中断此工具调用"
+        @click.stop="sendToolDecision(BridgeMessageType.ToolExecutionCancel)"
+      >
+        <IconPlayerStop class="tool-header-action-icon" stroke="2" aria-hidden="true" />
+        <span class="tool-header-action-label">中断</span>
       </button>
     </template>
 
@@ -682,6 +718,17 @@ function isInternalApprovalProgress(progress: unknown): boolean {
 .tool-header-action:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.tool-header-action-cancel {
+  color: var(--vscode-errorForeground, #f14c4c);
+}
+
+.tool-header-action-cancel:hover,
+.tool-header-action-cancel:focus-visible {
+  color: var(--vscode-errorForeground, #f14c4c);
+  border-color: color-mix(in srgb, var(--vscode-errorForeground, #f14c4c) 45%, transparent);
+  background: color-mix(in srgb, var(--vscode-errorForeground, #f14c4c) 12%, transparent);
 }
 
 .tool-header-action-icon {

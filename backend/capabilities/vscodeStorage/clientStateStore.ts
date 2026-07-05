@@ -36,6 +36,7 @@ import type {
   RuntimeContextScopeLinkRecord,
   RuntimeContextSnapshotRecord,
   ConversationRuntimeContextSnapshotLinkRecord,
+  RunHistorySettingsRecord,
   RunRuntimeContextSnapshotLinkRecord,
   ToolCallEventRecord,
   ToolCallRecord,
@@ -55,6 +56,7 @@ import { INDEX_FILE, STORAGE_VERSION } from './constants';
 import { createVscodeStoragePaths } from './paths';
 import { loadRecordStore, saveRecordStore } from './recordStore';
 import { readJson, writeJson } from './json';
+import { loadGlobalSettingsFile } from './globalSettings';
 import {
   loadConversationTimelinePage,
   loadConversationTimelineRange,
@@ -332,7 +334,10 @@ export async function loadConversationDetailFromStores(
 export async function loadConversationTimelinePageFromStores(paths: StoragePaths, request: ConversationTimelinePageRequest): Promise<ConversationTimelinePageRecord> {
   const page = await loadConversationTimelinePage(paths, request);
   const compression = await loadConversationCompressionDetail(paths, request.conversationId, { includeSourceLinks: false });
-  if (compression) copyCompressionTables(page.state, compression);
+  if (compression) {
+    copyCompressionTables(page.state, compression);
+    pruneCompressionTablesToTimelinePage(page.state, page.pageInfo.startSeq, page.pageInfo.endSeq);
+  }
   return page;
 }
 
@@ -511,6 +516,9 @@ export async function saveConversationRunHistoryToStores(
   state: ClientState,
   options: SaveConversationRunHistoryOptions
 ): Promise<void> {
+  const settings = (await loadGlobalSettingsFile(paths.settingsRootUri, 'runHistory')).settings as RunHistorySettingsRecord;
+  if (!settings.detailPersistenceEnabled) return;
+
   const detail = conversationRunHistorySlice(state, conversationId);
   if (options.mode === 'merge' && !hasRunHistoryRecords(detail)) return;
 
@@ -710,6 +718,25 @@ function copyCompressionTables(target: ClientState, source: ClientState): void {
   target.compressionContextVariants = source.compressionContextVariants;
   target.compressionBlockLlmInvocationLinks = source.compressionBlockLlmInvocationLinks;
   target.llmInvocations = mergeUniqueById(target.llmInvocations, source.llmInvocations);
+}
+
+function pruneCompressionTablesToTimelinePage(state: ClientState, startSeq: number | undefined, endSeq: number | undefined): void {
+  if (startSeq === undefined || endSeq === undefined) {
+    state.compressionBlocks = [];
+    state.compressionBlockSourceLinks = [];
+    state.compressionContextVariants = [];
+    state.compressionBlockLlmInvocationLinks = [];
+    return;
+  }
+
+  state.compressionBlocks = state.compressionBlocks.filter((block) => {
+    const seq = block.anchorSeq ?? block.endSeq;
+    return seq !== undefined && seq >= startSeq && seq <= endSeq;
+  });
+  const blockIds = new Set(state.compressionBlocks.map((block) => block.id));
+  state.compressionBlockSourceLinks = state.compressionBlockSourceLinks.filter((link) => blockIds.has(link.blockId));
+  state.compressionContextVariants = state.compressionContextVariants.filter((variant) => blockIds.has(variant.blockId));
+  state.compressionBlockLlmInvocationLinks = state.compressionBlockLlmInvocationLinks.filter((link) => blockIds.has(link.blockId));
 }
 
 function conversationRunDetailRecord(state: ClientState, conversationId: string, runId: string): ConversationRunDetailRecord | undefined {

@@ -5,7 +5,14 @@ import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import TaskListDisplay from './TaskListDisplay.vue';
-import { buildTaskListTimeline, emptyTaskListSnapshot, formatTaskListProgress, type TaskListSnapshotView } from './taskListModel';
+import {
+  applyTaskListOperationsAfterMessageSeq,
+  buildTaskListTimeline,
+  emptyTaskListSnapshot,
+  formatTaskListProgress,
+  type TaskListSnapshotView
+} from './taskListModel';
+import type { TimelineProjectionContextRecord } from '@shared/timelineProjection';
 
 const clientState = useClientStateStore();
 const conversationTimeline = useConversationTimelineStore();
@@ -18,8 +25,23 @@ const timeline = computed(() => buildTaskListTimeline({
   conversationId: clientState.currentConversationId
 }));
 const snapshot = computed<TaskListSnapshotView>(() => {
-  const latest = conversationTimeline.currentTaskListProjection?.latestSnapshot as TaskListSnapshotView | undefined;
-  return latest ?? timeline.value.snapshot ?? emptyTaskListSnapshot();
+  const projection = conversationTimeline.currentTaskListProjection as TimelineProjectionContextRecord<TaskListSnapshotView> | undefined;
+  if (!projection?.latestSnapshot) return timeline.value.snapshot ?? emptyTaskListSnapshot();
+
+  if (conversationTimeline.currentTimeline.hasStreamSnapshot) {
+    const liveTimeline = timeline.value;
+    if (liveTimeline.entries.length > 0 || projection.latestSnapshot.stats.total === 0) {
+      return liveTimeline.snapshot ?? emptyTaskListSnapshot();
+    }
+  }
+
+  return applyTaskListOperationsAfterMessageSeq({
+    snapshot: projection.latestSnapshot,
+    messages: conversationTimeline.currentTimeline.state.messages,
+    toolCalls: conversationTimeline.currentTimeline.state.toolCalls,
+    conversationId: clientState.currentConversationId,
+    minSeqExclusive: projection.latestChunkEndSeq
+  });
 });
 const visible = computed(() => snapshot.value.items.length > 0);
 const progressLabel = computed(() => formatTaskListProgress(snapshot.value));

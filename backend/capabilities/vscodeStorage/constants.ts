@@ -107,3 +107,4 @@ export const LLM_COMPRESSION_SETTINGS_FILE = 'llm-compression.json';
 export const CHECKPOINT_MAINTENANCE_SETTINGS_FILE = 'checkpoint-maintenance.json';
 export const APPEARANCE_SETTINGS_FILE = 'appearance.json';
 export const ATTACHMENT_SETTINGS_FILE = 'attachments.json';
+export const RUN_HISTORY_SETTINGS_FILE = 'run-history.json';

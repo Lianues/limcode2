@@ -1504,6 +1504,7 @@ function isPassFlushEffect(effect: WorldEffect): boolean {
     || kind === 'llm.abort'
     || kind === 'tool.run'
     || kind === 'tool.change.apply'
+    || kind === 'tool.abort'
     || kind === 'checkpoint.create';
 }
 

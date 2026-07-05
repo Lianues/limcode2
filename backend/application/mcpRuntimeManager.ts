@@ -178,8 +178,12 @@ function mcpToolDefinition(source: McpServerConfigRecord, client: Client, tool: 
         defaultAutoApplyChange: false
       }
     },
-    async execute(args): Promise<ToolResultOut> {
-      const result = await client.callTool({ name: tool.name, arguments: isPlainRecord(args) ? args : {} });
+    async execute(args, _deps, ctx): Promise<ToolResultOut> {
+      const result = await client.callTool(
+        { name: tool.name, arguments: isPlainRecord(args) ? args : {} },
+        undefined,
+        ctx?.signal ? { signal: ctx.signal } : undefined
+      );
       return convertMcpToolResult(result);
     }
   };

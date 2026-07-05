@@ -110,11 +110,12 @@ function buildTargetConversationContents(
     const block = world.get(compression.block, CompressionBlock);
     const boundarySeq = block?.endSeq ?? block?.anchorSeq ?? 0;
     const afterCompressedHistory = extraHistoryMessages.filter((entity) => (world.get(entity, Message)?.seq ?? 0) > boundarySeq);
+    const afterCompressedRunScoped = runScopedMessages.filter((entity) => (world.get(entity, Message)?.seq ?? 0) > boundarySeq);
     const variant = world.get(compression.variant, CompressionContextVariant);
     return [
       ...(variant?.contents ?? []),
       ...messageContents(world, afterCompressedHistory),
-      ...messageContents(world, runScopedMessages)
+      ...messageContents(world, afterCompressedRunScoped)
     ];
   }
 

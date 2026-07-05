@@ -26,8 +26,10 @@ const textarea = ref<HTMLTextAreaElement | null>(null);
 const scrollbarRefreshKey = ref(0);
 const pathDragActive = ref(false);
 
-const focusRecoveryDelays = [0, 40, 120, 240] as const;
+const focusRecoveryDelays = [80, 180] as const;
+const focusVerificationDelays = [140] as const;
 let lastTextareaPointerDownAt = 0;
+let lastTextareaPointerDownFromBlurredWindow = false;
 let focusRecoveryTimers: number[] = [];
 
 const value = computed({
@@ -57,23 +59,29 @@ function onDocumentPointerDown(event: PointerEvent): void {
 
   // 用户在焦点恢复窗口内再次点击输入框外时，说明明确想退出输入模式，必须取消补 focus。
   lastTextareaPointerDownAt = 0;
+  lastTextareaPointerDownFromBlurredWindow = false;
   clearFocusRecoveryTimers();
 }
 
 function onTextareaPointerDown(): void {
   if (props.disabled) return;
+  lastTextareaPointerDownFromBlurredWindow = !document.hasFocus();
   lastTextareaPointerDownAt = performance.now();
-  scheduleTextareaFocusRecovery();
+  if (lastTextareaPointerDownFromBlurredWindow) scheduleTextareaFocusRecovery(focusRecoveryDelays);
 }
 
 function onTextareaFocus(): void {
   if (props.disabled || performance.now() - lastTextareaPointerDownAt > 800) return;
-  scheduleTextareaFocusRecovery();
+  if (!lastTextareaPointerDownFromBlurredWindow) {
+    clearFocusRecoveryTimers();
+    return;
+  }
+  scheduleTextareaFocusRecovery(focusVerificationDelays);
 }
 
-function scheduleTextareaFocusRecovery(): void {
+function scheduleTextareaFocusRecovery(delays: readonly number[]): void {
   clearFocusRecoveryTimers();
-  for (const delay of focusRecoveryDelays) {
+  for (const delay of delays) {
     const timer = window.setTimeout(recoverTextareaFocus, delay);
     focusRecoveryTimers.push(timer);
   }
@@ -81,6 +89,7 @@ function scheduleTextareaFocusRecovery(): void {
 
 function recoverTextareaFocus(): void {
   if (props.disabled || performance.now() - lastTextareaPointerDownAt > 800) return;
+  if (!lastTextareaPointerDownFromBlurredWindow || !document.hasFocus()) return;
   const control = textarea.value;
   if (!control || document.activeElement === control) return;
 

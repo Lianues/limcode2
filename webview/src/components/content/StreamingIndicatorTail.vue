@@ -3,17 +3,18 @@
  * 流式状态尾巴组件。
  *
  * 在流式输出时追加到文本末尾，显示自定义状态文字 + 波浪渐变动画 + 闪烁光标。
- * 三种状态使用不同颜色区分：
- *   - waiting：等待 AI 响应（灰色调）
- *   - thinking：AI 思考中（黄色调）
- *   - writing：AI 输出正文中（绿色调）
+ * 四种状态使用不同颜色区分：
+ *   - waiting：等待 AI 响应
+ *   - thinking：AI 思考中
+ *   - writing：AI 输出正文中
+ *   - executing：工具排队/执行中
  */
 const props = withDefaults(
   defineProps<{
     /** 状态文字内容。 */
     text: string;
     /** 流式阶段。 */
-    variant?: 'waiting' | 'thinking' | 'writing';
+    variant?: 'waiting' | 'thinking' | 'writing' | 'executing';
   }>(),
   { variant: 'writing' }
 );
@@ -73,5 +74,9 @@ const props = withDefaults(
 
 .streaming-tail.is-writing {
   --lc-wave-color: var(--lc-streaming-wave-color-writing);
+}
+
+.streaming-tail.is-executing {
+  --lc-wave-color: var(--lc-streaming-wave-color-executing);
 }
 </style>

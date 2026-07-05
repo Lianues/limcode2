@@ -81,6 +81,7 @@ export enum BridgeMessageType {
   ChatSend = 'chat.send',
   ChatAbort = 'chat.abort',
   ConversationOpen = 'conversation.open',
+  ConversationCreate = 'conversation.create',
   AgentCreate = 'agent.create',
   AgentUpdate = 'agent.update',
   AgentDelete = 'agent.delete',
@@ -1914,6 +1915,7 @@ export interface MessageEditPayload {
   model?: ChatModelOverrideRecord;
 }
 export interface ConversationOpenPayload { conversationId: string; title?: string }
+export interface ConversationCreatePayload { projectFolderUri?: string }
 export interface AgentCreatePayload { name: string; description?: string; kind?: string }
 export interface AgentUpdatePayload { agentId: string; name?: string; description?: string; kind?: string }
 export interface AgentDeletePayload { agentId: string }
@@ -2330,6 +2332,8 @@ export interface AppearanceSettingsRecord {
   streamingTextThinking: string;
   /** AI 输出正文时显示的文字（正文正在流式输出时）。 */
   streamingTextWriting: string;
+  /** AI 已输出工具调用、工具正在排队或执行时显示的文字。 */
+  streamingTextToolExecuting: string;
 }
 export type GlobalSettingsSectionValue = GlobalSettingsRecord | LlmSettingsRecord | LlmProviderConfigsRecord | LlmCompressionSettingsRecord | LlmCompressionConfigsRecord | CheckpointMaintenanceSettingsRecord | AppearanceSettingsRecord | AttachmentSettingsRecord | McpServersSettingsRecord;
 export interface GlobalSettingsGetPayload {
@@ -2476,6 +2480,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ChatAbort, ChatAbortPayload>
   | BridgeEnvelope<BridgeMessageType.LlmRetryCancel, LlmRetryCancelPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationOpen, ConversationOpenPayload>
+  | BridgeEnvelope<BridgeMessageType.ConversationCreate, ConversationCreatePayload>
   | BridgeEnvelope<BridgeMessageType.AgentCreate, AgentCreatePayload>
   | BridgeEnvelope<BridgeMessageType.AgentUpdate, AgentUpdatePayload>
   | BridgeEnvelope<BridgeMessageType.AgentDelete, AgentDeletePayload>

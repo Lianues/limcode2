@@ -133,6 +133,10 @@ export class MainPanel {
           });
           return;
         }
+        if (message.type === BridgeMessageType.ConversationCreate) {
+          this.createConversationFromPanel(message.payload?.projectFolderUri);
+          return;
+        }
         this.backendApp.handleWebviewMessage(this.clientId, message);
         this.refreshTitleFromOutgoingMessage(message);
       },
@@ -150,6 +154,16 @@ export class MainPanel {
       const disposable = this.disposables.pop();
       disposable?.dispose();
     }
+  }
+
+  private createConversationFromPanel(projectFolderUri?: string): void {
+    const options = projectFolderUri?.trim() ? { projectFolderUri: projectFolderUri.trim() } : {};
+    void this.backendApp
+      .createConversation(options)
+      .then((conversationId) => {
+        MainPanel.createOrShow(this.extensionUri, this.backendApp, { conversationId });
+      })
+      .catch((error) => console.warn('[LimCode] Failed to create panel conversation.', error));
   }
 
   private matches(options: MainPanelOptions): boolean {

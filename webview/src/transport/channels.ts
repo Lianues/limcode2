@@ -6,6 +6,7 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
     case BridgeMessageType.ChatSend:
     case BridgeMessageType.ChatAbort:
     case BridgeMessageType.LlmRetryCancel:
+    case BridgeMessageType.ConversationCreate:
     case BridgeMessageType.MessageEdit:
     case BridgeMessageType.MessageDeleteFrom:
     case BridgeMessageType.MessageRetryFrom:

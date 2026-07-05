@@ -1,3 +1,57 @@
+<script lang="ts">
+import { ref as moduleRef } from 'vue';
+
+const VIEWED_TERMINAL_OUTPUTS_STORAGE_KEY = 'limcode.backgroundCommand.viewedTerminalOutputs';
+const MAX_VIEWED_TERMINAL_OUTPUTS = 800;
+const viewedTerminalOutputs = moduleRef<Record<string, true>>(loadViewedTerminalOutputs());
+
+function loadViewedTerminalOutputs(): Record<string, true> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(VIEWED_TERMINAL_OUTPUTS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return {};
+    const result: Record<string, true> = {};
+    for (const item of parsed) {
+      const processId = typeof item === 'string' ? item.trim() : '';
+      if (processId) result[processId] = true;
+    }
+    return pruneViewedTerminalOutputs(result);
+  } catch {
+    return {};
+  }
+}
+
+function markViewedTerminalOutputs(processIds: readonly string[]): void {
+  const next: Record<string, true> = { ...viewedTerminalOutputs.value };
+  let changed = false;
+  for (const rawProcessId of processIds) {
+    const processId = rawProcessId.trim();
+    if (!processId || next[processId]) continue;
+    next[processId] = true;
+    changed = true;
+  }
+  if (!changed) return;
+  viewedTerminalOutputs.value = pruneViewedTerminalOutputs(next);
+  persistViewedTerminalOutputs(viewedTerminalOutputs.value);
+}
+
+function persistViewedTerminalOutputs(value: Record<string, true>): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(VIEWED_TERMINAL_OUTPUTS_STORAGE_KEY, JSON.stringify(Object.keys(value).sort().slice(-MAX_VIEWED_TERMINAL_OUTPUTS)));
+  } catch {
+    // 忽略持久化失败，内存态仍然生效。
+  }
+}
+
+function pruneViewedTerminalOutputs(value: Record<string, true>): Record<string, true> {
+  const processIds = Object.keys(value).sort().slice(-MAX_VIEWED_TERMINAL_OUTPUTS);
+  return Object.fromEntries(processIds.map((processId) => [processId, true as const]));
+}
+</script>
+
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { IconTerminal2, IconX } from '@tabler/icons-vue';
@@ -68,7 +122,6 @@ const rootRef = ref<HTMLElement | null>(null);
 const listScroller = ref<HTMLElement | null>(null);
 const detailScroller = ref<HTMLElement | null>(null);
 const runtimeOutputs = ref<Record<string, BackgroundCommandOutputResultPayload>>({});
-const viewedTerminalOutputs = ref<Record<string, true>>({});
 const pendingOutputRequests = new Set<string>();
 let pollTimer: number | undefined;
 let stopOutputListener: (() => void) | undefined;
@@ -95,7 +148,7 @@ watch(entries, (nextEntries) => {
 watch(open, (isOpen) => {
   if (!isOpen) {
     stopPolling();
-    if (selectedProcessId.value && viewedTerminalOutputs.value[selectedProcessId.value]) selectedProcessId.value = undefined;
+    markVisibleTerminalEntriesViewed();
     return;
   }
   refreshRunningOutputs();
@@ -120,7 +173,7 @@ onMounted(() => {
     pendingOutputRequests.delete(payload.processId + ':peek');
     pendingOutputRequests.delete(payload.processId + ':consume');
     if (payload.consumed === true) {
-      viewedTerminalOutputs.value = { ...viewedTerminalOutputs.value, [payload.processId]: true };
+      markViewedTerminalOutputs([payload.processId]);
     }
   });
 });
@@ -137,6 +190,15 @@ function toggleOpen(): void {
 
 function closePanel(): void {
   open.value = false;
+}
+
+function markVisibleTerminalEntriesViewed(): void {
+  const terminalEntries = entries.value.filter((entry) => entry.statusTone !== 'running');
+  if (terminalEntries.length === 0) return;
+  const terminalProcessIds = terminalEntries.map((entry) => entry.processId);
+  markViewedTerminalOutputs(terminalProcessIds);
+  for (const processId of terminalProcessIds) requestOutput(processId, true);
+  if (selectedProcessId.value && viewedTerminalOutputs.value[selectedProcessId.value]) selectedProcessId.value = undefined;
 }
 
 function selectEntry(entry: CommandEntry): void {

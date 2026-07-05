@@ -59,6 +59,16 @@ onMounted(() => {
         />
         <small class="appearance-field-hint">AI 正在输出正文回复时显示</small>
       </label>
+
+      <label class="global-settings-field">
+        <span>执行工具中</span>
+        <input
+          v-model="settings.appearance.streamingTextToolExecuting"
+          type="text"
+          placeholder="...少女执行中"
+        />
+        <small class="appearance-field-hint">AI 已输出工具调用、工具正在排队或执行时显示</small>
+      </label>
     </div>
 
     <div class="appearance-preview">
@@ -74,6 +84,10 @@ onMounted(() => {
       <div class="appearance-preview-item">
         <span class="appearance-preview-label">输出正文</span>
         <StreamingIndicatorTail :text="settings.appearance.streamingTextWriting" variant="writing" />
+      </div>
+      <div class="appearance-preview-item">
+        <span class="appearance-preview-label">执行工具</span>
+        <StreamingIndicatorTail :text="settings.appearance.streamingTextToolExecuting" variant="executing" />
       </div>
     </div>
 

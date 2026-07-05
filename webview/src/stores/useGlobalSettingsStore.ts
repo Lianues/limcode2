@@ -119,7 +119,12 @@ function emptyCheckpointMaintenance(): CheckpointMaintenanceSettingsRecord {
 }
 
 function emptyAppearance(): AppearanceSettingsRecord {
-  return { streamingTextWaiting: '...少女等待中', streamingTextThinking: '...少女思考中', streamingTextWriting: '...少女编写中' };
+  return {
+    streamingTextWaiting: '...少女等待中',
+    streamingTextThinking: '...少女思考中',
+    streamingTextWriting: '...少女编写中',
+    streamingTextToolExecuting: '...少女执行中'
+  };
 }
 
 function emptyAttachments(): AttachmentSettingsRecord {
@@ -759,7 +764,8 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
         settings: {
           streamingTextWaiting: this.appearance.streamingTextWaiting,
           streamingTextThinking: this.appearance.streamingTextThinking,
-          streamingTextWriting: this.appearance.streamingTextWriting
+          streamingTextWriting: this.appearance.streamingTextWriting,
+          streamingTextToolExecuting: this.appearance.streamingTextToolExecuting
         }
       });
     },

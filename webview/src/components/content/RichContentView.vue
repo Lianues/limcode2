@@ -5,6 +5,7 @@ import {
   type ContentPart,
   type FunctionCallPart,
   type ToolCallRecord,
+  type ToolCallStatus,
   type ToolSchedulingMode
 } from '@shared/protocol';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
@@ -39,6 +40,14 @@ interface ToolCallNodeInfo {
 const conversationTimeline = useConversationTimelineStore();
 const globalSettings = useGlobalSettingsStore();
 const nodes = computed(() => withToolBatchMeta(toRenderNodes(props.parts)));
+const showToolExecutingTail = computed(() => {
+  if (props.streaming || !props.messageId) return false;
+  return nodes.value.some((node) => {
+    if (node.kind !== 'functionCall') return false;
+    const call = toolCallForNode(node);
+    return call ? isToolExecutingStatus(call.status, call.progress) : false;
+  });
+});
 const showStandaloneStreamingTail = computed(() => {
   if (!props.streaming || nodes.value.length === 0) return false;
   const lastIndex = nodes.value.length - 1;
@@ -197,6 +206,18 @@ function isBlockingToolCall(call: ToolCallRecord): boolean {
     || call.status === 'change_rejected'
     || call.status === 'awaiting_result_submit';
 }
+
+function isToolExecutingStatus(status: ToolCallStatus, progress: unknown): boolean {
+  if (status === 'queued' || status === 'executing' || status === 'applying_change') return true;
+  return status === 'awaiting_approval' && isExecutionApprovedProgress(progress);
+}
+
+function isExecutionApprovedProgress(progress: unknown): boolean {
+  return !!progress
+    && typeof progress === 'object'
+    && !Array.isArray(progress)
+    && (progress as Record<string, unknown>).executionApproved === true;
+}
 </script>
 
 <template>
@@ -210,6 +231,9 @@ function isBlockingToolCall(call: ToolCallRecord): boolean {
       />
       <div v-if="showStandaloneStreamingTail" class="rich-streaming-tail-row">
         <StreamingIndicatorTail :text="globalSettings.appearance.streamingTextWriting" variant="writing" />
+      </div>
+      <div v-if="showToolExecutingTail" class="rich-streaming-tail-row">
+        <StreamingIndicatorTail :text="globalSettings.appearance.streamingTextToolExecuting" variant="executing" />
       </div>
     </template>
     <!-- 流式中但还没有任何内容块：渲染一个仅含光标的空文本节点。 -->

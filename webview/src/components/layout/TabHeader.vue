@@ -70,6 +70,13 @@ function clearRuntimeContextSnapshot(): void {
   runtimeContext.clearConversationSnapshot(clientState.currentConversationId);
 }
 
+function createNewConversation(): void {
+  projectDropdownOpen.value = false;
+  runtimeContextOpen.value = false;
+  const projectFolderUri = activeProjectUri.value.trim();
+  bridge.request(BridgeMessageType.ConversationCreate, projectFolderUri ? { projectFolderUri } : {});
+}
+
 function requestProjectFolders(): void {
   bridge.request(BridgeMessageType.ProjectFoldersGet, undefined, { channel: 'state' });
 }
@@ -195,6 +202,18 @@ function middleEllipsis(value: string, maxLength: number): string {
           <span class="run-status-dot" aria-hidden="true"></span>
           <span>{{ runSummary.isRunning ? runSummary.label : '空闲' }}</span>
         </span>
+        <button
+          type="button"
+          class="new-conversation-button"
+          title="新建对话"
+          aria-label="新建对话"
+          @click.stop="createNewConversation"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" aria-hidden="true">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+        </button>
       </div>
     </div>
   </header>
@@ -491,6 +510,41 @@ function middleEllipsis(value: string, maxLength: number): string {
 .run-status-paused .run-status-dot {
   background: var(--vscode-testing-iconSkipped);
   animation: none;
+}
+
+.new-conversation-button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tab-header-row-height);
+  height: var(--tab-header-row-height);
+  min-width: var(--tab-header-row-height);
+  min-height: var(--tab-header-row-height);
+  padding: 0;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: var(--radius-sm);
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  line-height: 1;
+}
+
+.new-conversation-button:hover,
+.new-conversation-button:focus-visible {
+  color: var(--vscode-foreground);
+  background: var(--vscode-list-hoverBackground, transparent);
+  border-color: var(--vscode-panel-border, transparent);
+  outline: none;
+}
+
+.new-conversation-button:active {
+  background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-foreground) 10%);
+}
+
+.new-conversation-button svg {
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
 }
 
 .run-status-waiting_tool .run-status-dot,

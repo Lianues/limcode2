@@ -13,6 +13,7 @@
   --lc-streaming-wave-color-waiting: var(--vscode-editorWarning-foreground, #cca700);
   --lc-streaming-wave-color-thinking: #58a6ff;
   --lc-streaming-wave-color-writing: var(--vscode-testing-iconPassedColor, #4caf50);
+  --lc-streaming-wave-color-executing: var(--vscode-testing-iconQueued, #c5863a);
 }
 
 @keyframes lc-content-cursor-blink {

@@ -88,12 +88,14 @@ export function normalizeCheckpointMaintenanceSettings(input: Partial<Checkpoint
 export const DEFAULT_APPEARANCE_STREAMING_TEXT_WAITING = '...少女等待中';
 export const DEFAULT_APPEARANCE_STREAMING_TEXT_THINKING = '...少女思考中';
 export const DEFAULT_APPEARANCE_STREAMING_TEXT_WRITING = '...少女编写中';
+export const DEFAULT_APPEARANCE_STREAMING_TEXT_TOOL_EXECUTING = '...少女执行中';
 
 export function createDefaultAppearanceSettings(): AppearanceSettingsRecord {
   return {
     streamingTextWaiting: DEFAULT_APPEARANCE_STREAMING_TEXT_WAITING,
     streamingTextThinking: DEFAULT_APPEARANCE_STREAMING_TEXT_THINKING,
-    streamingTextWriting: DEFAULT_APPEARANCE_STREAMING_TEXT_WRITING
+    streamingTextWriting: DEFAULT_APPEARANCE_STREAMING_TEXT_WRITING,
+    streamingTextToolExecuting: DEFAULT_APPEARANCE_STREAMING_TEXT_TOOL_EXECUTING
   };
 }
 
@@ -103,7 +105,8 @@ export function normalizeAppearanceSettings(input: Partial<AppearanceSettingsRec
   return {
     streamingTextWaiting: sanitize(input?.streamingTextWaiting, DEFAULT_APPEARANCE_STREAMING_TEXT_WAITING),
     streamingTextThinking: sanitize(input?.streamingTextThinking, DEFAULT_APPEARANCE_STREAMING_TEXT_THINKING),
-    streamingTextWriting: sanitize(input?.streamingTextWriting, DEFAULT_APPEARANCE_STREAMING_TEXT_WRITING)
+    streamingTextWriting: sanitize(input?.streamingTextWriting, DEFAULT_APPEARANCE_STREAMING_TEXT_WRITING),
+    streamingTextToolExecuting: sanitize(input?.streamingTextToolExecuting, DEFAULT_APPEARANCE_STREAMING_TEXT_TOOL_EXECUTING)
   };
 }
 

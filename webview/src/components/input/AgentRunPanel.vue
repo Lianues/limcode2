@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { IconRobot, IconX } from '@tabler/icons-vue';
+import { IconMessage2, IconRobot, IconX } from '@tabler/icons-vue';
 import type {
   AgentAnswerRecord,
   AgentRunRecord,
@@ -13,6 +13,7 @@ import type {
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
+import { bridge, BridgeMessageType } from '@webview/transport';
 
 interface RunAgentPayloadLike {
   runId?: string;
@@ -106,6 +107,18 @@ function closePanel(): void {
 function selectEntry(entry: AgentPanelEntry): void {
   selectedKey.value = entryKey(entry);
   void nextTick(() => detailScroller.value?.scrollTo({ top: 0 }));
+}
+
+function openConversationForEntry(entry: AgentPanelEntry | undefined): void {
+  const conversationId = entry?.conversationId?.trim();
+  if (!conversationId) return;
+  const conversation = clientState.conversations.find((candidate) => candidate.id === conversationId);
+  const title = conversation?.title?.trim();
+  void bridge.request(BridgeMessageType.ConversationOpen, {
+    conversationId,
+    ...(title ? { title } : {})
+  });
+  closePanel();
 }
 
 function onDocumentPointerDown(event: PointerEvent): void {
@@ -357,8 +370,20 @@ function readAnswerPayload(entry: AgentPanelEntry): string {
 
         <article v-if="selectedEntry" class="agent-run-detail">
           <header class="agent-run-detail-header">
-            <span class="agent-run-status" :class="`is-${selectedEntry.statusTone}`">{{ selectedEntry.statusLabel }}</span>
-            <span class="agent-run-detail-id">{{ selectedEntry.runId || selectedEntry.toolCallId }}</span>
+            <span class="agent-run-detail-main">
+              <span class="agent-run-status" :class="`is-${selectedEntry.statusTone}`">{{ selectedEntry.statusLabel }}</span>
+              <span class="agent-run-detail-id">{{ selectedEntry.runId || selectedEntry.toolCallId }}</span>
+            </span>
+            <button
+              v-if="selectedEntry.conversationId"
+              type="button"
+              class="agent-run-open-conversation"
+              :aria-label="`打开对话 ${selectedEntry.conversationId}`"
+              @click="openConversationForEntry(selectedEntry)"
+            >
+              <IconMessage2 stroke="2" aria-hidden="true" />
+              <span>打开对话</span>
+            </button>
           </header>
           <div class="agent-run-detail-scroll-shell">
             <div ref="detailScroller" class="agent-run-detail-scroll">
@@ -657,6 +682,14 @@ function readAnswerPayload(entry: AgentPanelEntry): string {
   border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.18));
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.agent-run-detail-main {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
 }
 
@@ -668,6 +701,34 @@ function readAnswerPayload(entry: AgentPanelEntry): string {
   white-space: nowrap;
   font-size: var(--font-size-xs);
   font-family: var(--font-family-mono);
+}
+
+.agent-run-open-conversation {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.32));
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  font-size: var(--font-size-xs);
+  line-height: 1.2;
+}
+
+.agent-run-open-conversation:hover,
+.agent-run-open-conversation:focus-visible {
+  color: var(--vscode-foreground);
+  border-color: color-mix(in srgb, var(--vscode-foreground) 28%, transparent);
+  background: var(--vscode-list-hoverBackground, transparent);
+  outline: none;
+}
+
+.agent-run-open-conversation :deep(svg) {
+  width: 14px;
+  height: 14px;
 }
 
 .agent-run-detail-scroll-shell {

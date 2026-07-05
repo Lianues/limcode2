@@ -181,10 +181,10 @@ function maybeLoadOlder(): void {
   if (!scroller) return;
   const current = timeline.currentTimeline;
   const status = current.status;
-  const hasLoadedPage = current.loadedChunkIds.length > 0 && current.pageInfo !== undefined;
-  if (status === 'loadingOlder' || (status === 'loadingInitial' && !hasLoadedPage)) return;
+  const hasTimelinePage = current.pageInfo !== undefined;
+  if (status === 'loadingOlder' || (status === 'loadingInitial' && !hasTimelinePage)) return;
 
-  if (!hasLoadedPage) {
+  if (!hasTimelinePage) {
     timeline.requestInitial(timeline.currentConversationId);
     return;
   }

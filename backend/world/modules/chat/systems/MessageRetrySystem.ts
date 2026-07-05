@@ -14,7 +14,7 @@ import {
   ToolCallRunLink
 } from '../../agentRun/components';
 import { AgentRunBundle, spawnAgentRun } from '../../agentRun/bundles';
-import { defaultAgentForConversation, runSource, runTarget } from '../../agentRun/queries';
+import { answerBridgeIdForConversation, defaultAgentForConversation, runSource, runTarget } from '../../agentRun/queries';
 import { ToolCallEventBundle } from '../../tools/bundles';
 import { ToolCall, ToolCallEvent, ToolResultConsumed, ToolState } from '../../tools/components';
 import { ChatEventType } from '../events';
@@ -106,17 +106,20 @@ function buildRetryInput(
   const agent = target?.agent ?? defaultAgentForConversation(world, conversation);
   if (agent === undefined) return undefined;
 
+  const targetConversation = target?.conversation ?? conversation;
   const sourceMessage = source?.sourceMessage ?? previousUserMessage(world, messages, startIndex);
+  const answerBridgeId = source?.answerBridgeId?.trim() || answerBridgeIdForConversation(world, targetConversation);
 
   return {
     kind: runData?.kind ?? 'chat',
     agent,
-    conversation: target?.conversation ?? conversation,
+    conversation: targetConversation,
     sourceKind: source?.sourceKind ?? 'user',
     ...(source?.sourceAgent !== undefined ? { sourceAgent: source.sourceAgent } : {}),
     sourceConversation: source?.sourceConversation ?? conversation,
     ...(sourceMessage !== undefined ? { sourceMessage, inputMessage: sourceMessage } : {}),
     ...(source?.sourceToolCall !== undefined ? { sourceToolCall: source.sourceToolCall } : {}),
+    ...(answerBridgeId ? { answerBridgeId } : {}),
     ...(run !== undefined ? { sourceRun: run } : {}),
     ...(runData ? { retryOfRunId: runData.id, attempt: (runData.attempt ?? 1) + 1 } : {}),
     deliveryMode: 'direct_reply',

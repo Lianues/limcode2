@@ -4,6 +4,7 @@ import { Conversation, InFlight, LlmRequest, Message, Streaming } from '../../ch
 import { ToolCall, ToolState } from '../../tools/components';
 import { ToolCallEventBundle } from '../../tools/bundles';
 import { interruptToolCall } from '../../tools/interrupt';
+import { isTerminalToolStatus } from '../../tools/state';
 import type { AgentRunEndReason, AgentRunErrorType, AgentRunKind, AgentRunQueueHoldReason, MessageContent, QueueInputUpdatePayload } from '../../../../../shared/protocol';
 import { AgentRunBundle, markRunNeedsModel, spawnAgentRun } from '../bundles';
 import { cleanupRunLlmRequests, type RunLlmCleanupReason } from '../llmRequestCleanup';
@@ -27,7 +28,7 @@ import {
   type AgentRunData
 } from '../components';
 import { AgentRunEventType } from '../events';
-import { childRunsForRun, isTerminalRunStatus, runSource, runTarget } from '../queries';
+import { answerBridgeIdForConversation, childRunsForRun, isTerminalRunStatus, runSource, runTarget } from '../queries';
 
 const LifecycleRunsQuery = defineQuery({
   name: 'AgentRunLifecycle',
@@ -185,6 +186,7 @@ function retryRun(world: WorldReader, cmd: CommandSink, run: Entity, reason: Ext
     cmd.add(run, AgentRun, { ...data, endReason: reason, updatedAt: Date.now(), completedAt: data.completedAt ?? Date.now() });
   }
 
+  const answerBridgeId = source?.answerBridgeId?.trim() || answerBridgeIdForConversation(world, target.conversation);
   const nextRun = spawnAgentRun(cmd, {
     kind: data.kind as AgentRunKind,
     agent: target.agent,
@@ -194,6 +196,7 @@ function retryRun(world: WorldReader, cmd: CommandSink, run: Entity, reason: Ext
     ...(source?.sourceConversation !== undefined ? { sourceConversation: source.sourceConversation } : {}),
     ...(source?.sourceMessage !== undefined ? { sourceMessage: source.sourceMessage, inputMessage: source.sourceMessage } : {}),
     ...(source?.sourceToolCall !== undefined ? { sourceToolCall: source.sourceToolCall } : {}),
+    ...(answerBridgeId ? { answerBridgeId } : {}),
     sourceRun: run,
     retryOfRunId: data.id,
     attempt: (data.attempt ?? 1) + 1,
@@ -230,9 +233,11 @@ function terminateRun(
 }
 
 /**
- * 取消一个 run，并递归取消它通过 run_agent 派生的整棵子 run 树——无视子 run 所在对话。
- * 这样中断父对话时，跑在别的对话里的子 agent（含 run_agent 后台子任务）也会一起停下，
- * 上层 read_agent_answer 才能读到 interrupted 而非 running。
+ * 取消一个 run，并只取消仍与当前执行链路强绑定的子 run。
+ *
+ * run_agent / shell 等工具一旦已经向父 run 返回“已后台执行/已完成工具响应”，工具状态就是终态；
+ * 此后对应后台 Agent / 后台进程已经脱离当前对话的中断按钮，不应再被全局中断牵连。
+ * 只有用户手速足够快、在 run_agent 工具调用尚未返回前点击中断时，sourceToolCall 仍是非终态，才级联取消子 Agent。
  */
 function cancelRunCascade(
   world: WorldReader,
@@ -245,11 +250,18 @@ function cancelRunCascade(
   if (seen.has(run)) return;
   seen.add(run);
   // 先取子 run（terminateRun 不改结构关系，但先取更稳妥），再递归。
-  const children = childRunsForRun(world, run);
+  const children = childRunsForRun(world, run).filter((child) => shouldCascadeCancellationToChildRun(world, child));
   terminateRun(world, cmd, run, 'cancelled', endReason, 'cancelled', message);
   for (const child of children) {
     cancelRunCascade(world, cmd, child, endReason, message, seen);
   }
+}
+
+function shouldCascadeCancellationToChildRun(world: WorldReader, childRun: Entity): boolean {
+  const source = runSource(world, childRun);
+  if (source?.sourceToolCall === undefined) return true;
+  const state = world.get(source.sourceToolCall, ToolState);
+  return !!state && !isTerminalToolStatus(state.status);
 }
 
 function promoteRun(world: WorldReader, cmd: CommandSink, runId: string, conversationId: string): void {

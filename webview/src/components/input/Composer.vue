@@ -673,8 +673,8 @@ function middleEllipsis(value: string, maxLength: number): string {
           v-if="runSummary.isRunning"
           type="button"
           class="composer-side-action composer-side-abort"
-          aria-label="终止当前对话的后台任务"
-          title="终止当前对话的后台任务"
+          aria-label="终止当前对话正在执行的任务"
+          title="终止当前对话正在执行的任务"
           @click="abortConversation"
         >
           <IconPlayerStop class="composer-side-action-icon" stroke="2" aria-hidden="true" />

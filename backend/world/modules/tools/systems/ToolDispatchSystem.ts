@@ -32,6 +32,7 @@ import { ModeBundle, selectGlobalModeForConversation } from '../../mode/bundles'
 import {
   AgentRun,
   AgentRunSourceLink,
+  type AgentRunSourceLinkData,
   AgentRunTargetLink,
   RunContextPolicy,
   RunContextPolicyLink,
@@ -45,8 +46,19 @@ import {
   RunModeLink,
   ToolCallRunLink
 } from '../../agentRun/components';
-import { AgentRunBundle, spawnAgentRun } from '../../agentRun/bundles';
-import { activeToolPolicyForRun, conversationForAnswerBridgeId, runForToolCall, runSource, runTarget, toolCallEntityById } from '../../agentRun/queries';
+import { AgentRunEventType } from '../../agentRun/events';
+import { AgentRunBundle, spawnAgentRun, spawnMessageRunLink } from '../../agentRun/bundles';
+import {
+  activeToolPolicyForRun,
+  answerBridgeIdForConversation,
+  conversationForAnswerBridgeId,
+  defaultAgentForConversation,
+  latestAnswerBridgeSourceById,
+  runForToolCall,
+  runSource,
+  runTarget,
+  toolCallEntityById
+} from '../../agentRun/queries';
 import { AgentAnswerBundle, spawnAgentAnswer } from '../../agentAnswer/bundles';
 import { AgentAnswer, AgentAnswerSubmissionLink, AgentAnswerTargetLink } from '../../agentAnswer/components';
 import { agentAnswerById } from '../../agentAnswer/queries';
@@ -54,7 +66,7 @@ import { LlmInvocation, RunLlmInvocationLink } from '../../llm/components';
 import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
 import { ToolCall, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolStateData } from '../components';
 import { ToolEventType } from '../events';
-import { transitionToolState } from '../state';
+import { isTerminalToolStatus, transitionToolState } from '../state';
 import { interruptToolCall } from '../interrupt';
 import {
   WorkEnvironment,
@@ -169,7 +181,7 @@ export const ToolDispatchSystem = defineSystem({
     writes: { components: [CheckpointBarrier] },
     resources: { read: [AgentBlueprintsKey, ToolSchemasKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey] },
     bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentAnswerBundle, AgentFromBlueprintBundle, ModeBundle, ConversationProjectLinkBundle, WorkEnvironmentBundle],
-    events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested, ToolEventType.ExecutionCancelRequested, ToolEventType.ChangeApplyRequested, ToolEventType.ChangeRejectRequested], emit: [CheckpointEventType.Requested] },
+    events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested, ToolEventType.ExecutionCancelRequested, ToolEventType.ChangeApplyRequested, ToolEventType.ChangeRejectRequested], emit: [CheckpointEventType.Requested, AgentRunEventType.Cancel] },
     effects: { emit: ['tool.run', 'tool.change.apply', 'tool.abort'] }
   },
   run(ctx) {
@@ -186,7 +198,9 @@ export const ToolDispatchSystem = defineSystem({
       const call = world.get(entity, ToolCall);
       const state = world.get(entity, ToolState);
       if (!call || !state) continue;
-      if (interruptToolCall(cmd, entity, call, state, { reason: request.reason?.trim() || undefined, emitAbort: true })) {
+      const reason = request.reason?.trim() || undefined;
+      if (interruptToolCall(cmd, entity, call, state, { reason, emitAbort: true })) {
+        cancelSynchronousRunAgentChild(cmd, call, state, reason);
         handled.add(entity);
       }
     }
@@ -499,28 +513,34 @@ function executeSubmitAgentAnswerTool(world: WorldReader, cmd: CommandSink, enti
     return;
   }
 
-  const explicitAnswerBridgeId = args.answerBridgeId?.trim();
-  const source = runSource(world, authorization.run);
-  const answerBridgeId = explicitAnswerBridgeId || source?.answerBridgeId?.trim();
-  if (!answerBridgeId) {
+  const resolvedBridge = resolveSubmitAgentAnswerBridge(world, authorization.run, args.answerBridgeId?.trim());
+  if (!resolvedBridge) {
     rejectToolCall(cmd, entity, call, state, 'submit_agent_answer 缺少 answerBridgeId，且当前 AgentRun 没有默认 answerBridgeId。');
     return;
   }
 
+  const { answerBridgeId, source } = resolvedBridge;
   const submitterTarget = runTarget(world, authorization.run);
   const parentTarget = source?.sourceRun !== undefined ? runTarget(world, source.sourceRun) : undefined;
   const targetAgent = source?.sourceAgent ?? parentTarget?.agent;
   const targetConversation = source?.sourceConversation ?? parentTarget?.conversation;
 
-  if (answerBridgeId) {
-    const existingAnswer = agentAnswerById(world, answerBridgeId);
-    const existingAnswerData = existingAnswer !== undefined ? world.get(existingAnswer, AgentAnswer) : undefined;
-    if (existingAnswer !== undefined && existingAnswerData) {
-      const now = Date.now();
-      cmd.add(existingAnswer, AgentAnswer, { ...existingAnswerData, title, content, updatedAt: now });
-      completeInlineToolCallSuccess(cmd, entity, call, state, { ok: true, answerBridgeId, updated: true });
-      return;
-    }
+  const existingAnswer = agentAnswerById(world, answerBridgeId);
+  const existingAnswerData = existingAnswer !== undefined ? world.get(existingAnswer, AgentAnswer) : undefined;
+  if (existingAnswer !== undefined && existingAnswerData) {
+    const now = Date.now();
+    cmd.add(existingAnswer, AgentAnswer, { ...existingAnswerData, title, content, updatedAt: now });
+    notifyAgentAnswerSubmitted(world, cmd, {
+      answerBridgeId,
+      title,
+      content,
+      source,
+      submitterRun: authorization.run,
+      submitterRunId: authorization.runId,
+      submitterTarget
+    });
+    completeInlineToolCallSuccess(cmd, entity, call, state, { ok: true, answerBridgeId, updated: true });
+    return;
   }
 
   const spawned = spawnAgentAnswer(cmd, {
@@ -549,8 +569,190 @@ function executeSubmitAgentAnswerTool(world: WorldReader, cmd: CommandSink, enti
     }
   });
 
+  notifyAgentAnswerSubmitted(world, cmd, {
+    answerBridgeId: spawned.id,
+    title,
+    content,
+    source,
+    submitterRun: authorization.run,
+    submitterRunId: authorization.runId,
+    submitterTarget
+  });
   completeInlineToolCallSuccess(cmd, entity, call, state, { ok: true, answerBridgeId: spawned.id });
 }
+
+interface ResolvedSubmitAnswerBridge {
+  answerBridgeId: string;
+  source?: AgentRunSourceLinkData;
+}
+
+function resolveSubmitAgentAnswerBridge(world: WorldReader, run: Entity, explicitAnswerBridgeId: string | undefined): ResolvedSubmitAnswerBridge | undefined {
+  const explicit = explicitAnswerBridgeId?.trim();
+  if (explicit) {
+    const source = answerBridgeSourceForNotification(world, explicit);
+    return { answerBridgeId: explicit, ...(source ? { source } : {}) };
+  }
+
+  const currentSource = runSource(world, run);
+  const currentSourceId = currentSource?.answerBridgeId?.trim();
+  const fallbackId = currentSourceId || answerBridgeIdForRunConversation(world, run);
+  if (!fallbackId) return undefined;
+  const source = answerBridgeSourceForNotification(world, fallbackId) ?? currentSource;
+  return { answerBridgeId: fallbackId, ...(source ? { source } : {}) };
+}
+
+function answerBridgeIdForRunConversation(world: WorldReader, run: Entity): string | undefined {
+  const target = runTarget(world, run);
+  return target ? answerBridgeIdForConversation(world, target.conversation) : undefined;
+}
+
+function answerBridgeSourceForNotification(world: WorldReader, answerBridgeId: string): AgentRunSourceLinkData | undefined {
+  const normalized = answerBridgeId.trim();
+  if (!normalized) return undefined;
+  return world
+    .query(AgentRunSourceLink)
+    .map((entity) => world.get(entity, AgentRunSourceLink))
+    .filter((candidate): candidate is AgentRunSourceLinkData => !!candidate && candidate.answerBridgeId?.trim() === normalized)
+    .sort((left, right) => compareAnswerBridgeNotificationSource(world, left, right))[0]
+    ?? latestAnswerBridgeSourceById(world, normalized);
+}
+
+function compareAnswerBridgeNotificationSource(world: WorldReader, left: AgentRunSourceLinkData, right: AgentRunSourceLinkData): number {
+  return answerBridgeNotificationSourcePriority(world, right) - answerBridgeNotificationSourcePriority(world, left)
+    || (right.updatedAt || right.createdAt) - (left.updatedAt || left.createdAt)
+    || right.createdAt - left.createdAt
+    || right.id.localeCompare(left.id);
+}
+
+function answerBridgeNotificationSourcePriority(world: WorldReader, source: AgentRunSourceLinkData): number {
+  if (source.sourceToolCall !== undefined) return 50;
+  if (source.sourceRun !== undefined && source.sourceConversation !== undefined && source.sourceAgent !== undefined) return 40;
+  if (source.sourceRun !== undefined && source.sourceConversation !== undefined) return 35;
+  if (source.sourceAgent !== undefined && source.sourceConversation !== undefined) return 30;
+  const target = runTarget(world, source.run);
+  return target?.conversation !== source.sourceConversation ? 20 : 10;
+}
+
+function notifyAgentAnswerSubmitted(
+  world: WorldReader,
+  cmd: CommandSink,
+  input: {
+    answerBridgeId: string;
+    title: string;
+    content: string;
+    source?: AgentRunSourceLinkData;
+    submitterRun: Entity;
+    submitterRunId: string;
+    submitterTarget?: { agent: Entity; conversation: Entity };
+  }
+): void {
+  const sourceConversation = answerNotificationTargetConversation(world, input.source);
+  if (sourceConversation === undefined) return;
+  if (input.submitterTarget?.conversation === sourceConversation && input.source?.sourceToolCall === undefined && input.source?.sourceRun === undefined) {
+    return;
+  }
+
+  if (input.source?.sourceToolCall !== undefined && completeSourceRunAgentToolWithSubmittedAnswer(world, cmd, input.source.sourceToolCall, input)) {
+    return;
+  }
+
+  const parentTarget = input.source?.sourceRun !== undefined ? runTarget(world, input.source.sourceRun) : undefined;
+  const agent = input.source?.sourceAgent ?? parentTarget?.agent ?? defaultAgentForConversation(world, sourceConversation);
+  const text = serializedSubmittedAgentAnswerNotification(world, input);
+  if (agent === undefined) {
+    const message = spawnUserMessage(cmd, sourceConversation, text);
+    spawnMessageRunLink(cmd, { message, run: input.submitterRun, role: 'notification' });
+    return;
+  }
+
+  spawnAgentRun(cmd, {
+    kind: 'notification',
+    agent,
+    conversation: sourceConversation,
+    sourceKind: 'agentRun',
+    sourceRun: input.submitterRun,
+    sourceConversation,
+    deliveryMode: 'direct_reply',
+    includeTranscript: 'full',
+    needsModel: false,
+    queuedInputContent: { role: 'user', parts: [{ text }] }
+  });
+}
+
+function completeSourceRunAgentToolWithSubmittedAnswer(
+  world: WorldReader,
+  cmd: CommandSink,
+  toolCallEntity: Entity,
+  input: { answerBridgeId: string; title: string; content: string; submitterRun: Entity; submitterRunId: string; submitterTarget?: { agent: Entity; conversation: Entity } }
+): boolean {
+  const call = world.get(toolCallEntity, ToolCall);
+  const state = world.get(toolCallEntity, ToolState);
+  if (!call || !state || isTerminalToolStatus(state.status)) return false;
+
+  const now = Date.now();
+  const durationMs = Math.max(0, now - call.createdAt);
+  const result = submittedAgentAnswerResult(world, input);
+  cmd.add(toolCallEntity, ToolState, transitionToolState(state, 'success', { result, durationMs }, now));
+  cmd.remove(toolCallEntity, InFlight);
+  spawnToolCallEvent(cmd, {
+    toolCall: toolCallEntity,
+    toolCallId: call.id,
+    kind: 'completed',
+    status: 'success',
+    at: now,
+    elapsedMs: Math.max(0, now - call.createdAt),
+    durationMs,
+    payload: result
+  });
+  return true;
+}
+
+function answerNotificationTargetConversation(world: WorldReader, source: AgentRunSourceLinkData | undefined): Entity | undefined {
+  if (!source) return undefined;
+  if (source.sourceConversation !== undefined) return source.sourceConversation;
+  return source.sourceRun !== undefined ? runTarget(world, source.sourceRun)?.conversation : undefined;
+}
+
+function serializedSubmittedAgentAnswerNotification(
+  world: WorldReader,
+  input: { answerBridgeId: string; title: string; content: string; submitterRun: Entity; submitterRunId: string; submitterTarget?: { agent: Entity; conversation: Entity } }
+): string {
+  return [
+    '[Agent answer submitted]',
+    '子 Agent 已通过 submit_agent_answer 提交/更新回答。下面是等同于 read_agent_answer 工具成功响应的序列化文本，请把它当作该后台 Agent 主动返回给当前对话的结果：',
+    JSON.stringify(submittedAgentAnswerResult(world, input), null, 2)
+  ].join('\n\n');
+}
+
+function submittedAgentAnswerResult(
+  world: WorldReader,
+  input: { answerBridgeId: string; title: string; content: string; submitterRun: Entity; submitterRunId: string; submitterTarget?: { agent: Entity; conversation: Entity } }
+): {
+  ok: true;
+  status: 'completed';
+  answerSubmitted: true;
+  answerBridgeId: string;
+  runId: string;
+  agentId?: string;
+  conversationId?: string;
+  title: string;
+  content: string;
+} {
+  const agentId = input.submitterTarget?.agent !== undefined ? world.get(input.submitterTarget.agent, Agent)?.id : undefined;
+  const conversationId = input.submitterTarget?.conversation !== undefined ? world.get(input.submitterTarget.conversation, Conversation)?.id : undefined;
+  return {
+    ok: true,
+    status: 'completed',
+    answerSubmitted: true,
+    answerBridgeId: input.answerBridgeId,
+    runId: input.submitterRunId,
+    ...(agentId ? { agentId } : {}),
+    ...(conversationId ? { conversationId } : {}),
+    title: input.title,
+    content: input.content
+  };
+}
+
 
 function executeReadAgentAnswerTool(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, _authorization: Extract<AuthorizationResult, { ok: true }>): void {
   let args: ReadAgentAnswerArgs = {};
@@ -572,15 +774,17 @@ function executeReadAgentAnswerTool(world: WorldReader, cmd: CommandSink, entity
   if (answerEntity === undefined || !answer) {
     // 尚无 answer 时，用 answerBridgeId 串起来的子对话状态来区分三种情况，避免上游 Agent 误判为失败：
     //   running     —— 子对话仍有活跃 run（首轮或手动重试都算）；等待或稍后重试即可。
-    //   interrupted —— 子对话存在但没有活跃 run，也没提交 answer（子 Agent 报错/中断）；可向同 agentId 发消息触发继续。
+    //   interrupted —— 子对话存在但没有活跃 run，也没提交 answer（子 Agent 报错/中断）；可用同 answerBridgeId 继续/追加。
     //   not_found   —— 该 answerBridgeId 完全没有对应子对话。
     const child = conversationForAnswerBridgeId(world, answerBridgeId);
     if (child?.hasActiveRun) {
+      const agentId = child.agent !== undefined ? world.get(child.agent, Agent)?.id : undefined;
       completeInlineToolCallSuccess(cmd, entity, call, state, {
         ok: false,
         answerBridgeId,
         status: 'running',
-        error: '对应的子对话仍在运行，尚未通过 submit_agent_answer 提交内容。请稍后重试 read_agent_answer，或等待其完成通知。'
+        ...(agentId ? { agentId } : {}),
+        error: '对应 answerBridgeId 绑定的子 Agent 正在运行，尚未通过 submit_agent_answer 提交内容。请稍后重试 read_agent_answer，或等待其主动提交后的通知。'
       });
       return;
     }
@@ -592,8 +796,8 @@ function executeReadAgentAnswerTool(world: WorldReader, cmd: CommandSink, entity
         status: 'interrupted',
         ...(agentId ? { agentId } : {}),
         error: agentId
-          ? `对应的子对话已中断（没有在运行、也没有提交 answer）。可调用 run_agent({ agent: { id: "${agentId}" }, prompt })，向同一个 Agent 追加消息以触发它继续。`
-          : '对应的子对话已中断（没有在运行、也没有提交 answer）。可向同一个 Agent 追加消息以触发它继续。'
+          ? `对应 answerBridgeId 绑定的子 Agent 已中断（没有在运行、也没有提交 answer）。请调用 run_agent({ answerBridgeId: "${answerBridgeId}", prompt, timeout }) 继续/追加同一个子对话；默认 submit_agent_answer 通道会继续沿用该 answerBridgeId。`
+          : `对应 answerBridgeId 绑定的子 Agent 已中断（没有在运行、也没有提交 answer）。请调用 run_agent({ answerBridgeId: "${answerBridgeId}", prompt, timeout }) 继续/追加同一个子对话。`
       });
       return;
     }
@@ -628,9 +832,24 @@ function backgroundTimedOutRunAgentTools(world: WorldReader, cmd: CommandSink): 
 
     const run = progress.runId ? findAgentRunById(world, progress.runId) : undefined;
     if (run !== undefined) setRunDeliveryPolicyMode(world, cmd, run, 'notification');
+
     completeRunAgentToolAsBackground(cmd, entity, call, state, progress, 'timeout');
   }
 }
+
+function cancelSynchronousRunAgentChild(cmd: CommandSink, call: ToolCallData, state: ToolStateData, reason: string | undefined): void {
+  if (call.name !== RUN_AGENT_TOOL_NAME) return;
+  const progress = runAgentToolProgress(state.progress);
+  if (!progress.runId) return;
+  cmd.enqueue({
+    type: AgentRunEventType.Cancel,
+    payload: {
+      runId: progress.runId,
+      reason: reason ?? 'run_agent tool call cancelled before it returned.'
+    }
+  });
+}
+
 
 function runAgentToolProgress(value: unknown): RunAgentToolProgress {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -670,11 +889,73 @@ function completeRunAgentToolAsBackground(
     message: reason === 'timeout_zero'
       ? 'AgentRun 已直接转入后台执行；稍后可用 answerBridgeId 读取提交内容。'
       : 'AgentRun 超过 timeout，已转入后台继续执行；稍后可用 answerBridgeId 读取提交内容。'
+
+
   };
   cmd.add(entity, ToolState, transitionToolState(started.state, 'success', { result, durationMs }, now));
   cmd.remove(entity, InFlight);
   spawnToolCallEvent(cmd, { toolCall: entity, toolCallId: call.id, kind: 'completed', status: 'success', at: now, elapsedMs: Math.max(0, now - call.createdAt), durationMs, payload: result });
 }
+
+function resolveRunAgentTargetByAnswerBridge(
+  world: WorldReader,
+  cmd: CommandSink,
+  input: {
+    blueprints: BuiltinAgentRegistry;
+    answerBridgeId: string;
+  }
+): { ok: true; value: ResolvedRunAgentTarget } | { ok: false; reason: string } {
+  const answerBridgeId = input.answerBridgeId.trim();
+  if (!answerBridgeId) return { ok: false, reason: 'run_agent.answerBridgeId 不能为空。' };
+
+  const bridgeSource = latestAnswerBridgeSourceById(world, answerBridgeId);
+  if (!bridgeSource) {
+    return { ok: false, reason: `未找到 answerBridgeId 绑定的子 Agent 对话：${answerBridgeId}` };
+  }
+
+  const target = runTarget(world, bridgeSource.run);
+  if (!target) {
+    return { ok: false, reason: `answerBridgeId 绑定的 AgentRun 没有目标 Agent/Conversation：${answerBridgeId}` };
+  }
+
+  const agentData = world.get(target.agent, Agent);
+  const conversationData = world.get(target.conversation, Conversation);
+  if (!agentData || !conversationData) {
+    return { ok: false, reason: `answerBridgeId 绑定的子 Agent 对话数据不完整：${answerBridgeId}` };
+  }
+
+  ensureAgentConversationLink(world, cmd, target.agent, target.conversation, 'default');
+  selectAgentForConversation(cmd, {
+    agent: target.agent,
+    conversation: target.conversation,
+    conversationId: conversationData.id,
+    agentId: agentData.id
+  });
+
+  const kind = world.get(target.agent, AgentKind)?.kind || agentData.id;
+  const definition = resolveAgentDefinition(input.blueprints, kind)
+    ?? resolveAgentDefinition(input.blueprints, agentData.id)
+    ?? definitionFromExistingAgent(agentData, kind);
+
+  return {
+    ok: true,
+    value: {
+      targetAgent: target.agent,
+      targetAgentId: agentData.id,
+      definition,
+      resolved: {
+        ok: true,
+        value: {
+          conversation: target.conversation,
+          conversationId: conversationData.id,
+          policyMode: 'reuse_conversation',
+          visibility: conversationData.visibility ?? 'collapsed'
+        }
+      }
+    }
+  };
+}
+
 
 function setRunDeliveryPolicyMode(world: WorldReader, cmd: CommandSink, run: Entity, mode: DeliveryMode): void {
   const link = world.query(RunDeliveryPolicyLink)
@@ -778,13 +1059,16 @@ function executeSwitchWorkEnvironmentTool(world: WorldReader, cmd: CommandSink, 
 
 interface RunAgentArgs {
   prompt?: string;
-  agent?: {
-    id?: string;
-    type?: string;
-  };
+  answerBridgeId?: string;
+  agent?: RunAgentAgentSelector;
   timeout?: number;
   wait?: string;
   scheduling?: string;
+}
+
+interface RunAgentAgentSelector {
+  id?: string;
+  type?: string;
 }
 
 interface RunAgentToolProgress {
@@ -1032,17 +1316,23 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     return;
   }
 
+  const requestedAnswerBridgeId = args.answerBridgeId?.trim();
   const requestedAgentId = args.agent?.id?.trim();
   const requestedKind = args.agent?.type?.trim() || 'general-purpose';
   const blueprints = world.getResource(AgentBlueprintsKey);
-  const resolvedTarget = resolveRunAgentTarget(world, cmd, {
-    blueprints,
-    requestedAgentId,
-    requestedKind,
-    sourceConversation: parentTarget.conversation,
-    toolCallEntity: entity,
-    prompt
-  });
+  const resolvedTarget = requestedAnswerBridgeId
+    ? resolveRunAgentTargetByAnswerBridge(world, cmd, {
+      blueprints,
+      answerBridgeId: requestedAnswerBridgeId
+    })
+    : resolveRunAgentTarget(world, cmd, {
+      blueprints,
+      requestedAgentId,
+      requestedKind,
+      sourceConversation: parentTarget.conversation,
+      toolCallEntity: entity,
+      prompt
+    });
   if (!resolvedTarget.ok) {
     rejectToolCall(cmd, entity, call, state, resolvedTarget.reason);
     return;
@@ -1073,8 +1363,9 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     });
   }
 
-  const answerBridgeId = `agent-answer:${createMessageId()}`;
-  const promptWithAnswerBridge = `${prompt}\n\n[Agent answer bridge]\n本次任务已分配默认 answerBridgeId：${answerBridgeId}。当你需要把阶段性结论或最终正文提交给来源 Agent 时，请调用 submit_agent_answer({ title, content })，未传 answerBridgeId 时会自动使用这个 answerBridgeId；如果用户要求提交到其它 answerBridgeId，可显式传 submit_agent_answer({ answerBridgeId, title, content })。最终自然语言回复可以保持简短。`;
+  const reusedAnswerBridgeId = requestedAnswerBridgeId || answerBridgeIdForConversation(world, resolved.value.conversation);
+  const answerBridgeId = reusedAnswerBridgeId ?? `agent-answer:${createMessageId()}`;
+  const promptWithAnswerBridge = `${prompt}\n\n[Agent answer bridge]\n本次任务已${reusedAnswerBridgeId ? '沿用' : '分配'}默认 answerBridgeId：${answerBridgeId}。当你需要把阶段性结论或最终正文提交给来源 Agent 时，请调用 submit_agent_answer({ title, content })，未传 answerBridgeId 时会自动使用这个 answerBridgeId；即使本次 AgentRun 中断、重试或用户补充条件，只要继续在同一子对话中执行，默认值也应保持为这个 answerBridgeId；如果用户要求提交到其它 answerBridgeId，可显式传 submit_agent_answer({ answerBridgeId, title, content })。同一个 answerBridgeId 可以重复提交，每次提交都会通知来源 Agent。最终自然语言回复可以保持简短。`;
   const inputMessage = spawnUserMessage(cmd, resolved.value.conversation, promptWithAnswerBridge);
   const background = timeout.value === 0;
   const baseDeliveryPolicy: RunDeliveryPolicyBlueprint = {

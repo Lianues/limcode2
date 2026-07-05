@@ -18,7 +18,8 @@ export const runAgentTool: ToolDefinition = {
 
 使用方式：
 - agent.type 表示要使用哪种 Agent 类型/配置（例如 main、worker、explore）；不传时默认 general-purpose。
-- agent.id 不是类型配置 id，而是 run_agent 返回的临时 Agent 镜像 id；传入后会向该临时镜像已关联的对话追加任务。找不到会报错。
+- answerBridgeId 是继续/追加某个 run_agent 子对话的首选方式；传入后会自动找到它绑定的子 Agent 与子对话，并沿用同一个默认 submit_agent_answer 通道。
+- agent.id 仅用于兼容直接复用 run_agent 返回的临时 Agent 镜像；首选传 answerBridgeId。agent.id 不是类型配置 id，找不到会报错。
 - prompt 内应写清楚任务、背景、角色和补充信息，不再提供额外 context / conversation / mode / delivery 参数。
 - timeout 为前台等待时间（毫秒）：0 表示直接转后台；超过 timeout 后 AgentRun 会继续在后台运行，工具立即返回 agentId/runId/conversationId/answerBridgeId。`,
     parameters: {
@@ -28,16 +29,20 @@ export const runAgentTool: ToolDefinition = {
           type: 'string',
           description: '交给目标 AgentRun 执行的任务描述。请在这里写清楚任务、背景、角色和所有补充信息。'
         },
+        answerBridgeId: {
+          type: 'string',
+          description: '可选。继续/追加某个已有 run_agent 子任务时传 answerBridgeId；后端会自动找到它绑定的子 Agent/子对话，并保持 submit_agent_answer 默认值为同一个 answerBridgeId。'
+        },
         agent: {
           type: 'object',
           properties: {
             id: {
               type: 'string',
-              description: 'run_agent 返回的临时 Agent 镜像 id。传入后会向该临时镜像已关联的对话追加任务；找不到会报错。新开同类型独立镜像时不要传 id，只传 agent.type。'
+              description: '兼容入口：run_agent 返回的临时 Agent 镜像 id。首选传 answerBridgeId；仅在没有 answerBridgeId 时使用。新开同类型独立镜像时不要传 id，只传 agent.type。'
             },
             type: {
               type: 'string',
-              description: '要使用的 Agent 类型/配置 id（例如 main、worker、explore）。未传 agent.id 时后端会按该类型创建只属于本次子对话的临时镜像；可用类型会由后端运行时补充到工具说明中；默认 general-purpose。'
+              description: '要使用的 Agent 类型/配置 id（例如 main、worker、explore）。未传 answerBridgeId/agent.id 时后端会按该类型创建只属于本次子对话的临时镜像；可用类型会由后端运行时补充到工具说明中；默认 general-purpose。'
             }
           }
         },
@@ -77,13 +82,15 @@ interface RunAgentSchedulingArgs {
 }
 
 function summarizeRunAgentToolCall(rawArgs: unknown): string | undefined {
-  const args = (rawArgs ?? {}) as RunAgentSchedulingArgs & { prompt?: unknown; agent?: { type?: unknown; id?: unknown } };
+  const args = (rawArgs ?? {}) as RunAgentSchedulingArgs & { prompt?: unknown; answerBridgeId?: unknown; agent?: { type?: unknown; id?: unknown } };
   const prompt = typeof args.prompt === 'string' ? normalizeSummaryText(args.prompt) : '';
-  const target = typeof args.agent?.id === 'string' && args.agent.id.trim()
-    ? args.agent.id.trim()
-    : typeof args.agent?.type === 'string' && args.agent.type.trim()
-      ? args.agent.type.trim()
-      : 'general-purpose';
+  const target = typeof args.answerBridgeId === 'string' && args.answerBridgeId.trim()
+    ? args.answerBridgeId.trim()
+    : typeof args.agent?.id === 'string' && args.agent.id.trim()
+      ? args.agent.id.trim()
+      : typeof args.agent?.type === 'string' && args.agent.type.trim()
+        ? args.agent.type.trim()
+        : 'general-purpose';
   return prompt ? `运行 ${target} · ${truncateSummary(prompt, 96)}` : `运行 ${target}`;
 }
 

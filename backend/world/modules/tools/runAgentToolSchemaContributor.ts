@@ -27,7 +27,7 @@ function withAgentTypeList(tool: ToolSchema, world: WorldReader, blueprints: Bui
   const typeProperty = cloneRecord(agentProperties.type);
 
   typeProperty.description = [
-    '要使用的 Agent 类型/配置 id。默认 general-purpose；未传 agent.id 时后端会创建只属于本次子对话的临时镜像。agent.id 仅用于复用 run_agent 返回的临时镜像并追加任务。',
+    '要使用的 Agent 类型/配置 id。默认 general-purpose；未传 answerBridgeId/agent.id 时后端会创建只属于本次子对话的临时镜像。继续已有子对话时首选传 answerBridgeId；agent.id 仅作为兼容入口。',
     '当前可用 Agent 类型：',
     typeList
   ].join('\n');
@@ -38,7 +38,7 @@ function withAgentTypeList(tool: ToolSchema, world: WorldReader, blueprints: Bui
 
   return {
     ...tool,
-    description: `${tool.description}\n\n当前可用 Agent 类型：\n${typeList}`,
+    description: `${tool.description}\n\n继续已有子对话时首选传 answerBridgeId；新开子 Agent 时可选以下 Agent 类型：\n${typeList}`,
     parameters
   };
 }

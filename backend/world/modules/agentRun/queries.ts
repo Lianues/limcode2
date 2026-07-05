@@ -100,14 +100,7 @@ export function runSource(world: WorldReader, run: Entity): AgentRunSourceLinkDa
 
 /** Find the AgentRun that was launched with the given answerBridgeId (via its source link). */
 export function runByAnswerBridgeId(world: WorldReader, answerBridgeId: string): Entity | undefined {
-  const normalized = answerBridgeId.trim();
-  if (!normalized) return undefined;
-  return world
-    .query(AgentRunSourceLink)
-    .map((entity) => world.get(entity, AgentRunSourceLink))
-    .find((candidate): candidate is AgentRunSourceLinkData =>
-      !!candidate && candidate.answerBridgeId?.trim() === normalized && world.has(candidate.run, AgentRun))
-    ?.run;
+  return latestAnswerBridgeSourceById(world, answerBridgeId)?.run;
 }
 
 /**
@@ -119,15 +112,59 @@ export function conversationForAnswerBridgeId(
   world: WorldReader,
   answerBridgeId: string
 ): { conversation: Entity; agent?: Entity; hasActiveRun: boolean } | undefined {
-  const run = runByAnswerBridgeId(world, answerBridgeId);
-  if (run === undefined) return undefined;
-  const target = runTarget(world, run);
+  const source = latestAnswerBridgeSourceById(world, answerBridgeId);
+  if (!source) return undefined;
+  const target = runTarget(world, source.run);
   if (!target) return undefined;
   return {
     conversation: target.conversation,
     agent: target.agent,
     hasActiveRun: conversationHasActiveRun(world, target.conversation)
   };
+}
+
+/**
+ * 当前 conversation 已绑定的默认 answerBridgeId。
+ *
+ * answerBridgeId 是 run_agent 这条“回答通道”的身份，而不是某一次 AgentRun 的身份。
+ * 子对话中断后，用户重试/继续/补充消息会创建新的 run；这些 run 应继续复用同一个
+ * bridge，直到调用方显式创建新的子 Agent 会话。因此这里按 target conversation 反查
+ * 最近一次带 bridge 的 source link，而不是只看当前 run 的 source link。
+ */
+export function answerBridgeIdForConversation(world: WorldReader, conversation: Entity): string | undefined {
+  return latestAnswerBridgeSourceForConversation(world, conversation)?.answerBridgeId?.trim() || undefined;
+}
+
+export function latestAnswerBridgeSourceForConversation(world: WorldReader, conversation: Entity): AgentRunSourceLinkData | undefined {
+  return answerBridgeSourcesForConversation(world, conversation)[0];
+}
+
+export function answerBridgeSourcesForConversation(world: WorldReader, conversation: Entity): AgentRunSourceLinkData[] {
+  const sources: AgentRunSourceLinkData[] = [];
+  for (const entity of world.query(AgentRunSourceLink)) {
+    const source = world.get(entity, AgentRunSourceLink);
+    if (!source?.answerBridgeId?.trim()) continue;
+    const target = runTarget(world, source.run);
+    if (target?.conversation !== conversation) continue;
+    sources.push(source);
+  }
+  return sources.sort(compareAnswerBridgeSourcesByNewest);
+}
+
+export function latestAnswerBridgeSourceById(world: WorldReader, answerBridgeId: string): AgentRunSourceLinkData | undefined {
+  const normalized = answerBridgeId.trim();
+  if (!normalized) return undefined;
+  return world
+    .query(AgentRunSourceLink)
+    .map((entity) => world.get(entity, AgentRunSourceLink))
+    .filter((candidate): candidate is AgentRunSourceLinkData => !!candidate && candidate.answerBridgeId?.trim() === normalized && world.has(candidate.run, AgentRun))
+    .sort(compareAnswerBridgeSourcesByNewest)[0];
+}
+
+function compareAnswerBridgeSourcesByNewest(left: AgentRunSourceLinkData, right: AgentRunSourceLinkData): number {
+  return (right.updatedAt || right.createdAt) - (left.updatedAt || left.createdAt)
+    || right.createdAt - left.createdAt
+    || right.id.localeCompare(left.id);
 }
 
 /** True when the conversation has any run that is not in a terminal state (queued/preparing/running/… ). */

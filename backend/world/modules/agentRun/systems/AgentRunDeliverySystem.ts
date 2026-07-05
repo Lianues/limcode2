@@ -136,6 +136,10 @@ function deliverToolResponse(world: WorldReader, cmd: CommandSink, runEntity: En
   const call = world.get(toolCallEntity, ToolCall);
   const state = world.get(toolCallEntity, ToolState);
   if (!call || !state) return false;
+  if (shouldSuppressAnswerBridgeCompletionDelivery(source)) return true;
+  if (isTerminalToolStatus(state.status) && toolResultAlreadyContainsRunAgentAnswer(world, toolCallEntity)) {
+    return true;
+  }
 
   const envelope = buildDeliveryEnvelope(world, runEntity, policy?.includeTranscript ?? 'summary');
   const now = Date.now();
@@ -160,6 +164,7 @@ function deliverAppendToSourceConversation(world: WorldReader, cmd: CommandSink,
   const source = runSource(world, runEntity);
   const targetConversation = policy?.targetConversation ?? source?.sourceConversation;
   if (targetConversation === undefined) return false;
+  if (shouldSuppressAnswerBridgeCompletionDelivery(source)) return true;
   const envelope = buildDeliveryEnvelope(world, runEntity, policy?.includeTranscript ?? 'summary');
   const message = spawnMessage(cmd, {
     parent: targetConversation,
@@ -176,6 +181,8 @@ function deliverNotification(world: WorldReader, cmd: CommandSink, runEntity: En
   if (!source) return false;
   const sourceConversation = policy?.targetConversation ?? source.sourceConversation;
   if (sourceConversation === undefined) return false;
+
+  if (shouldSuppressAnswerBridgeCompletionDelivery(source)) return true;
 
   const sourceToolCall = policy?.targetToolCall ?? source.sourceToolCall;
   if (sourceToolCall !== undefined && toolResultAlreadyContainsRunAgentAnswer(world, sourceToolCall)) {
@@ -205,6 +212,12 @@ function deliverNotification(world: WorldReader, cmd: CommandSink, runEntity: En
     queuedInputContent: { role: 'user', parts: [{ text: notificationText }] }
   });
   return true;
+}
+
+function shouldSuppressAnswerBridgeCompletionDelivery(source: ReturnType<typeof runSource>): boolean {
+  // 带 answerBridgeId 的子任务只允许 submit_agent_answer 主动回流到来源 Agent。
+  // 普通完成文本可能只是用户与子 Agent 的中间对话，不能作为 answer 兜底误传给主 Agent。
+  return !!source?.answerBridgeId?.trim();
 }
 
 function buildDeliveryEnvelope(world: WorldReader, runEntity: Entity, includeTranscript: TranscriptInclusion): DeliveryEnvelope {

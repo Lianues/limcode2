@@ -4,10 +4,10 @@ import { readEvents } from '../../../events';
 import { Conversation, LlmRequest, Message, Streaming } from '../components';
 import { UserMessageBundle } from '../bundles';
 import { Agent, AgentConversationLink, ConversationAgentSelection } from '../../agent/components';
-import { AgentRun, AgentRunNeedsModel, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink } from '../../agentRun/components';
+import { AgentRun, AgentRunNeedsModel, AgentRunSourceLink, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink } from '../../agentRun/components';
 import { AgentRunBundle, spawnAgentRun, spawnMessageRunLink } from '../../agentRun/bundles';
 import { cleanupRunLlmRequests } from '../../agentRun/llmRequestCleanup';
-import { defaultAgentForConversation, effectiveEditPolicyForRun, findAgentById, runTarget } from '../../agentRun/queries';
+import { answerBridgeIdForConversation, defaultAgentForConversation, effectiveEditPolicyForRun, findAgentById, runTarget } from '../../agentRun/queries';
 import type { ChatSendPayload, MessageContent } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
 import { Checkpoint, CheckpointBarrier } from '../../checkpoint/components';
@@ -19,7 +19,7 @@ import { materializeUserInputMessage } from '../userInputMaterialization';
 const ConversationsByIdQuery = defineQuery({
   name: 'ConversationsById',
   all: [Conversation],
-  read: [Conversation, Agent, AgentConversationLink, ConversationAgentSelection, AgentRun, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink, LlmRequest, Message, Checkpoint, CheckpointBarrier, CompressionBlock],
+  read: [Conversation, Agent, AgentConversationLink, ConversationAgentSelection, AgentRun, AgentRunSourceLink, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink, LlmRequest, Message, Checkpoint, CheckpointBarrier, CompressionBlock],
   write: [AgentRun, Message],
   remove: [AgentRunNeedsModel, Streaming, LlmRequest],
   role: 'work'
@@ -50,13 +50,13 @@ function handleSend(world: WorldReader, cmd: CommandSink, conversation: Entity, 
   if (content.parts.length === 0) return;
 
   if (hasActiveBlockingCompression(world, conversation)) {
-    spawnQueuedChatRun(cmd, { agent, conversation, content });
+    spawnQueuedChatRun(world, cmd, { agent, conversation, content });
     return;
   }
   const activeRuns = activeRunsForConversation(world, conversation);
   if (activeRuns.length === 0) {
     const message = materializeUserInputMessage(world, cmd, conversation, payload.conversationId, content);
-    spawnChatRun(cmd, { agent, conversation, message });
+    spawnChatRun(world, cmd, { agent, conversation, message });
     return;
   }
 
@@ -75,12 +75,12 @@ function handleSend(world: WorldReader, cmd: CommandSink, conversation: Entity, 
     case 'interrupt_current': {
       cancelRuns(world, cmd, activeRuns);
       const message = materializeUserInputMessage(world, cmd, conversation, payload.conversationId, content);
-      spawnChatRun(cmd, { agent, conversation, message });
+      spawnChatRun(world, cmd, { agent, conversation, message });
       return;
     }
     case 'queue_next_run':
     default: {
-      spawnQueuedChatRun(cmd, { agent, conversation, content });
+      spawnQueuedChatRun(world, cmd, { agent, conversation, content });
       return;
     }
   }
@@ -95,9 +95,11 @@ function normalizeInputContent(payload: ChatSendPayload): MessageContent {
 }
 
 function spawnChatRun(
+  world: WorldReader,
   cmd: CommandSink,
   input: { agent: Entity; conversation: Entity; message: Entity; needsModel?: boolean }
 ): Entity {
+  const answerBridgeId = answerBridgeIdForConversation(world, input.conversation);
   return spawnAgentRun(cmd, {
     kind: 'chat',
     agent: input.agent,
@@ -106,6 +108,7 @@ function spawnChatRun(
     sourceConversation: input.conversation,
     sourceMessage: input.message,
     inputMessage: input.message,
+    ...(answerBridgeId ? { answerBridgeId } : {}),
     deliveryMode: 'direct_reply',
     includeTranscript: 'full',
     needsModel: input.needsModel
@@ -113,15 +116,18 @@ function spawnChatRun(
 }
 
 function spawnQueuedChatRun(
+  world: WorldReader,
   cmd: CommandSink,
   input: { agent: Entity; conversation: Entity; content: MessageContent }
 ): Entity {
+  const answerBridgeId = answerBridgeIdForConversation(world, input.conversation);
   return spawnAgentRun(cmd, {
     kind: 'chat',
     agent: input.agent,
     conversation: input.conversation,
     sourceKind: 'user',
     sourceConversation: input.conversation,
+    ...(answerBridgeId ? { answerBridgeId } : {}),
     deliveryMode: 'direct_reply',
     includeTranscript: 'full',
     needsModel: false,

@@ -209,7 +209,7 @@ export function useBridgeBootstrap(): void {
         if (session.viewKind !== 'chat' || !conversationId) return;
         conversationTimeline.setCurrentConversation(conversationId);
         ensureConversationStream(conversationId);
-        if (conversationTimeline.ensureTimeline(conversationId).loadedChunkIds.length === 0) {
+        if (conversationTimeline.ensureTimeline(conversationId).pageInfo === undefined) {
           conversationTimeline.requestInitial(conversationId);
         }
         conversationSettings.request(conversationId);

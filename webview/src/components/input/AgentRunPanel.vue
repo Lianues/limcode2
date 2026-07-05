@@ -139,10 +139,27 @@ function buildEntries(): AgentPanelEntry[] {
   const sourceLinks = [...clientState.agentRunSourceLinks, ...timelineState.agentRunSourceLinks];
   const answersById = recordMap<AgentAnswerRecord>([...clientState.agentAnswers, ...timelineState.agentAnswers]);
 
-  return calls
+  const built = calls
     .map((call) => buildEntry(call, runsById, targetsByRunId, sourceLinks, answersById))
-    .filter((entry): entry is AgentPanelEntry => !!entry)
+    .filter((entry): entry is AgentPanelEntry => !!entry);
+  return dedupeEntriesByKey(built)
     .sort((left, right) => statusPriority(left) - statusPriority(right) || right.updatedAt - left.updatedAt || right.startedAt - left.startedAt || entryKey(left).localeCompare(entryKey(right)));
+}
+
+function dedupeEntriesByKey(entries: AgentPanelEntry[]): AgentPanelEntry[] {
+  const map = new Map<string, AgentPanelEntry>();
+  for (const entry of entries) {
+    const key = entryKey(entry);
+    const current = map.get(key);
+    if (!current || shouldReplaceEntry(current, entry)) map.set(key, entry);
+  }
+  return [...map.values()];
+}
+
+function shouldReplaceEntry(current: AgentPanelEntry, next: AgentPanelEntry): boolean {
+  return statusPriority(next) < statusPriority(current)
+    || (statusPriority(next) === statusPriority(current) && next.updatedAt > current.updatedAt)
+    || (statusPriority(next) === statusPriority(current) && next.updatedAt === current.updatedAt && next.startedAt > current.startedAt);
 }
 
 function buildEntry(
@@ -157,13 +174,17 @@ function buildEntry(
   const source = sourceLinks
     .filter((link) => link.sourceToolCallId === call.id || (toolData.runId && link.runId === toolData.runId) || (toolData.childRunId && link.runId === toolData.childRunId))
     .sort((left, right) => right.id.localeCompare(left.id))[0];
-  const runId = toolData.runId || toolData.childRunId || source?.runId;
-  const run = runId ? runsById.get(runId) : undefined;
-  const target = runId ? targetsByRunId.get(runId) : undefined;
+  const initialRunId = toolData.runId || toolData.childRunId || source?.runId;
   const answerBridgeId = toolData.answerBridgeId || source?.answerBridgeId;
+  const bridgedRunIds = answerBridgeId
+    ? sourceLinks.filter((link) => link.answerBridgeId === answerBridgeId).map((link) => link.runId)
+    : [];
+  const run = selectDisplayRun([initialRunId, ...bridgedRunIds], runsById);
+  const runId = run?.id ?? initialRunId;
+  const target = runId ? targetsByRunId.get(runId) : undefined;
   const answer = answerBridgeId ? answersById.get(answerBridgeId) : undefined;
   const status = run?.status ?? call.status;
-  const statusLabel = run ? runStatusLabel(run.status) : toolStatusLabel(call.status, toolData.status);
+  const statusLabel = answer ? '已提交' : run ? runStatusLabel(run.status) : toolStatusLabel(call.status, toolData.status);
   const statusTone = run ? runStatusTone(run.status, !!answer) : toolStatusTone(call.status, !!answer);
   const agentId = toolData.agentId || target?.agentId;
   const conversationId = toolData.conversationId || target?.conversationId;
@@ -202,6 +223,27 @@ function readRunAgentPayload(value: unknown): RunAgentPayloadLike | undefined {
   };
 }
 
+function selectDisplayRun(runIds: Array<string | undefined>, runsById: Map<string, AgentRunRecord>): AgentRunRecord | undefined {
+  const seen = new Set<string>();
+  const runs = runIds
+    .filter((id): id is string => {
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    })
+    .map((id) => runsById.get(id))
+    .filter((run): run is AgentRunRecord => !!run);
+  if (runs.length === 0) return undefined;
+  const active = runs
+    .filter((run) => !TERMINAL_RUN_STATUSES.has(run.status))
+    .sort(compareRunsByNewest)[0];
+  return active ?? runs.sort(compareRunsByNewest)[0];
+}
+
+function compareRunsByNewest(left: AgentRunRecord, right: AgentRunRecord): number {
+  return right.updatedAt - left.updatedAt || right.createdAt - left.createdAt || right.id.localeCompare(left.id);
+}
+
 function recordMap<T extends { id: string }>(records: T[]): Map<string, T> {
   const map = new Map<string, T>();
   for (const record of records) map.set(record.id, record);
@@ -237,7 +279,7 @@ function stringField(record: Record<string, unknown>, key: string): string | und
 
 function entryKey(entry: AgentPanelEntry | undefined): string {
   if (!entry) return 'none';
-  return entry.runId || entry.toolCallId;
+  return entry.answerBridgeId || entry.runId || entry.toolCallId;
 }
 
 function statusPriority(entry: AgentPanelEntry): number {
@@ -331,9 +373,9 @@ function readAnswerPayload(entry: AgentPanelEntry): string {
     status: running ? 'running' : 'interrupted',
     ...(running ? {} : entry.agentId ? { agentId: entry.agentId } : {}),
     error: running
-      ? '对应的子对话仍在运行，尚未提交内容。请稍后重试或等待完成通知。'
-      : entry.agentId
-        ? `对应的子对话已中断。可调用 run_agent({ agent: { id: "${entry.agentId}" }, prompt }) 触发同一 Agent 继续。`
+      ? '对应 answerBridgeId 绑定的子对话仍在运行，尚未提交内容。请稍后重试或等待 submit_agent_answer 通知。'
+      : entry.answerBridgeId
+        ? `对应的子对话已中断。可调用 run_agent({ answerBridgeId: "${entry.answerBridgeId}", prompt, timeout }) 继续/追加同一子对话。`
         : '对应的子对话已中断。可向同一个 Agent 追加消息以触发继续。'
   }, null, 2);
 }

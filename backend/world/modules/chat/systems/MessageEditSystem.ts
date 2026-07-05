@@ -20,7 +20,7 @@ import {
 } from '../../agentRun/components';
 import { AgentRunBundle, markRunNeedsModel, spawnAgentRun, spawnMessageRunLink } from '../../agentRun/bundles';
 import { cleanupRunLlmRequests } from '../../agentRun/llmRequestCleanup';
-import { activeDeliveryPolicyForRun, defaultAgentForConversation, effectiveEditPolicyForRun, runSource, runTarget } from '../../agentRun/queries';
+import { activeDeliveryPolicyForRun, answerBridgeIdForConversation, defaultAgentForConversation, effectiveEditPolicyForRun, runSource, runTarget } from '../../agentRun/queries';
 import { ToolCallEventBundle } from '../../tools/bundles';
 import { ToolCall, ToolCallEvent, ToolResultConsumed, ToolState } from '../../tools/components';
 import type { MessageContent } from '../../../../../shared/protocol';
@@ -220,6 +220,7 @@ function requestCheckpointAfterEdit(cmd: CommandSink, conversationId: string, fl
 function spawnEditedMessageRun(world: WorldReader, cmd: CommandSink, conversation: Entity, message: Entity): void {
   const agent = defaultAgentForConversation(world, conversation);
   if (agent === undefined) return;
+  const answerBridgeId = answerBridgeIdForConversation(world, conversation);
   spawnAgentRun(cmd, {
     kind: 'chat',
     agent,
@@ -228,6 +229,7 @@ function spawnEditedMessageRun(world: WorldReader, cmd: CommandSink, conversatio
     sourceConversation: conversation,
     sourceMessage: message,
     inputMessage: message,
+    ...(answerBridgeId ? { answerBridgeId } : {}),
     deliveryMode: 'direct_reply',
     includeTranscript: 'full'
   });
@@ -299,6 +301,7 @@ function restartRun(world: WorldReader, cmd: CommandSink, run: Entity, editedMes
   const source = runSource(world, run);
   const data = world.get(run, AgentRun);
   const delivery = activeDeliveryPolicyForRun(world, run);
+  const answerBridgeId = source?.answerBridgeId?.trim() || answerBridgeIdForConversation(world, target.conversation);
   spawnAgentRun(cmd, {
     kind: data?.kind ?? 'chat',
     agent: target.agent,
@@ -308,6 +311,7 @@ function restartRun(world: WorldReader, cmd: CommandSink, run: Entity, editedMes
     ...(source?.sourceConversation !== undefined ? { sourceConversation: source.sourceConversation } : { sourceConversation: target.conversation }),
     sourceMessage: source?.sourceMessage ?? editedMessage,
     ...(source?.sourceToolCall !== undefined ? { sourceToolCall: source.sourceToolCall } : {}),
+    ...(answerBridgeId ? { answerBridgeId } : {}),
     sourceRun: run,
     inputMessage: source?.sourceMessage === editedMessage ? editedMessage : undefined,
     deliveryMode: delivery?.mode ?? 'direct_reply',
@@ -355,6 +359,7 @@ function branchNewRun(
 
   spawnConversationBranchLink(cmd, { sourceConversation: input.conversation, targetConversation: branch, sourceRevision: input.newRevision, kind: 'branch_from_revision' });
   const delivery = activeDeliveryPolicyForRun(world, run);
+  const answerBridgeId = answerBridgeIdForConversation(world, target.conversation);
   spawnAgentRun(cmd, {
     kind: 'chat',
     agent: target.agent,
@@ -362,6 +367,7 @@ function branchNewRun(
     sourceKind: 'user',
     sourceConversation: branch,
     ...(clonedEditedMessage !== undefined ? { sourceMessage: clonedEditedMessage, inputMessage: clonedEditedMessage } : {}),
+    ...(answerBridgeId ? { answerBridgeId } : {}),
     deliveryMode: delivery?.mode ?? 'direct_reply',
     includeTranscript: delivery?.includeTranscript ?? 'full'
   });

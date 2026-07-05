@@ -156,7 +156,7 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
     requestInitial(conversationId: string, chunkCount = DEFAULT_INITIAL_CHUNK_COUNT): void {
       if (!conversationId) return;
       const timeline = this.ensureTimeline(conversationId);
-      if (timeline.loadedChunkIds.length > 0 && timeline.pageInfo !== undefined) {
+      if (timeline.pageInfo !== undefined) {
         timeline.status = 'idle';
         timeline.error = undefined;
         return;
@@ -274,7 +274,7 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       mergeClientState(timeline.state, timeline.streamState);
       pruneClientStateToTimelineWindow(timeline, timeline.state);
       timeline.streamSeq = streamSeq;
-      if (timeline.loadedChunkIds.length === 0 && timeline.status !== 'loadingInitial') {
+      if (timeline.pageInfo === undefined && timeline.status !== 'loadingInitial') {
         this.requestInitial(conversationId);
       }
     },

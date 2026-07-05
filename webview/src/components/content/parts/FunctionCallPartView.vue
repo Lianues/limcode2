@@ -720,16 +720,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
   cursor: default;
 }
 
-.tool-header-action-cancel {
-  color: var(--vscode-errorForeground, #f14c4c);
-}
 
-.tool-header-action-cancel:hover,
-.tool-header-action-cancel:focus-visible {
-  color: var(--vscode-errorForeground, #f14c4c);
-  border-color: color-mix(in srgb, var(--vscode-errorForeground, #f14c4c) 45%, transparent);
-  background: color-mix(in srgb, var(--vscode-errorForeground, #f14c4c) 12%, transparent);
-}
 
 .tool-header-action-icon {
   width: 13px;

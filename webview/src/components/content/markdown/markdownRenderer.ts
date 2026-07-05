@@ -25,6 +25,9 @@ type MarkdownParser = {
   options: MarkdownOptions;
   render(text: string): string;
   parse(text: string, env: unknown): MarkdownToken[];
+  linkify?: {
+    set(options: { fuzzyLink?: boolean; fuzzyIP?: boolean }): void;
+  };
   renderer: MarkdownRenderer & {
     rules: Record<string, MarkdownRenderRule | undefined>;
   };
@@ -164,6 +167,12 @@ function createParser(MarkdownItCtor: MarkdownItConstructor): MarkdownParser {
     typographer: false,
     breaks: false
   });
+
+  // markdown-it 的 linkify 默认会把裸域名自动转为链接。
+  // 许多常见文件名后缀同时也是合法 TLD，例如 libil2cpp.so、archive.zip、script.sh。
+  // 聊天内容里这些更常表示文件名，不应被误渲染成网页；只自动识别带协议的 URL / 邮箱，
+  // 显式 Markdown 链接（[text](url)）仍由 markdown-it 正常处理。
+  parser.linkify?.set({ fuzzyLink: false, fuzzyIP: false });
 
   const defaultLinkOpen = parser.renderer.rules.link_open;
   parser.renderer.rules.link_open = (tokens, index, options, env, self) => {

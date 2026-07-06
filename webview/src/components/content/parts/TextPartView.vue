@@ -32,6 +32,8 @@ const { displayedText, replacing: replaceAnimating } = useSmoothStreamingText(
   { animateReplace: true }
 );
 const renderedParts = shallowRef<MarkdownRenderedPart[]>([]);
+// 保留流式 Markdown 实时渲染体验。当前 Trace 的主瓶颈在 postMessage 后的响应式扇出、timeline 重建和思考折叠内容 DOM 更新，
+// 不是 markdown-it 本身；若后续长代码块仍掉帧，再单独对 Markdown 做节流/增量优化。
 const markdownReady = computed(() => props.markdown);
 
 let renderVersion = 0;

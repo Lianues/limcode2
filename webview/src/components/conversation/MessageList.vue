@@ -6,7 +6,6 @@ import { useConversationTimelineStore } from '@webview/stores/useConversationTim
 import { useChat } from '@webview/composables/useChat';
 import { useRunHistoryStore } from '@webview/stores/useRunHistoryStore';
 import { useCompression } from '@webview/composables/useCompression';
-import { checkpointBeforeMessageFloor } from './checkpointRollback';
 import CompressionTimelineCard from './CompressionTimelineCard.vue';
 import MessageItem from './MessageItem.vue';
 import TimelineActivityRow from './TimelineActivityRow.vue';
@@ -71,22 +70,60 @@ function onCancelErrorRetry(block: LlmErrorBlockRecord): void {
   cancelLlmAutoRetry({ requestId: block.requestId, conversationId: block.conversationId, messageId: block.messageId, runId: block.runId });
 }
 
+const runIdByMessageId = computed<Record<string, string>>(() => {
+  const result: Record<string, string> = {};
+  for (const link of timeline.currentTimeline.state.messageRunLinks) {
+    if (link.role === 'model' || result[link.messageId] === undefined) result[link.messageId] = link.runId;
+  }
+  return result;
+});
+
+const compactCountByMessageId = computed<Record<string, number>>(() => {
+  const result: Record<string, number> = {};
+  const messages = [...timeline.currentMessages].sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
+  const blocks = timeline.currentCompressionBlocks
+    .map((block) => block.anchorSeq ?? block.endSeq)
+    .filter((seq): seq is number => seq !== undefined)
+    .sort((left, right) => left - right);
+  let blockIndex = 0;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index]!;
+    while (blockIndex < blocks.length && blocks[blockIndex]! < message.seq) blockIndex += 1;
+    const messageCount = timeline.currentMessageFloorById[message.id] ?? index + 1;
+    result[message.id] = messageCount + blockIndex;
+  }
+  return result;
+});
+
+const errorBlocksByMessageId = computed<Record<string, LlmErrorBlockRecord[]>>(() => {
+  const result: Record<string, LlmErrorBlockRecord[]> = {};
+  for (const block of ui.llmErrorBlocks) {
+    (result[block.messageId] ??= []).push(block);
+  }
+  return result;
+});
+
+const rollbackCheckpointByMessageId = computed<Record<string, CheckpointRecord>>(() => {
+  const result: Record<string, CheckpointRecord> = {};
+  const checkpointsById = new Map(timeline.currentCheckpoints.map((checkpoint) => [checkpoint.id, checkpoint]));
+  const anchors = [...timeline.currentCheckpointTimelineAnchors]
+    .filter((anchor) => anchor.position === 'before')
+    .sort((left, right) => right.order - left.order || right.id.localeCompare(left.id));
+  for (const anchor of anchors) {
+    if (result[anchor.floorMessageId]) continue;
+    const checkpoint = checkpointsById.get(anchor.checkpointId);
+    if (checkpoint?.status === 'created' && checkpoint.commitSha) result[anchor.floorMessageId] = checkpoint;
+  }
+  return result;
+});
+
 function compactCountForMessage(message: MessageRecord): number {
-  const floor = timeline.currentMessageFloorById[message.id];
-  const messageCount = floor ?? timeline.currentMessages.filter((candidate) => candidate.seq <= message.seq).length;
-  const previousCompressionCount = timeline.currentCompressionBlocks.filter((block) => {
-    const anchorSeq = block.anchorSeq ?? block.endSeq;
-    return anchorSeq !== undefined && anchorSeq < message.seq;
-  }).length;
-  return messageCount + previousCompressionCount;
+  return compactCountByMessageId.value[message.id] ?? 1;
 }
 
 function runIdForMessage(message: MessageRecord): string | undefined {
   if (message.role === 'user') return undefined;
-  const links = timeline.currentTimeline.state.messageRunLinks;
-  const link = links.find((candidate) => candidate.messageId === message.id && candidate.role === 'model')
-    ?? links.find((candidate) => candidate.messageId === message.id);
-  return link?.runId;
+  return runIdByMessageId.value[message.id];
 }
 
 function isRunDetailLoading(message: MessageRecord): boolean {
@@ -108,7 +145,7 @@ function isEditingTarget(row: MessageViewRow): boolean {
 }
 
 function rollbackCheckpointForMessage(message: MessageRecord): CheckpointRecord | undefined {
-  return checkpointBeforeMessageFloor(timeline.currentCheckpoints, timeline.currentCheckpointTimelineAnchors, message.id);
+  return rollbackCheckpointByMessageId.value[message.id];
 }
 
 function rowKey(row: ConversationTimelineViewRow): string {
@@ -225,7 +262,7 @@ function maybeLoadOlder(): void {
         :editing-highlighted="isEditingTarget(row)"
         :rollback-checkpoint="rollbackCheckpointForMessage(row.message)"
         :compact-count="compactCountForMessage(row.message)"
-        :error-blocks="ui.llmErrorBlocksForMessage(row.message.id)"
+        :error-blocks="errorBlocksByMessageId[row.message.id] ?? []"
         @edit-message="onEditMessage(row)"
         @retry-from="onRetryFrom"
         @delete-from="onDeleteFrom"

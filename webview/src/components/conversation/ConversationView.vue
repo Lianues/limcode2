@@ -40,6 +40,8 @@ const autoDismissTimers = new Map<string, number>();
 const bottomStickyScroller = useBottomStickyScroller(scroller);
 let pendingInitialBottomConversationId = '';
 let initialBottomScrollFrame: number | undefined;
+let timelineSyncFrame: number | undefined;
+let pendingTimelineSync: Parameters<typeof conversationUi.syncTimeline> | undefined;
 
 const loadingDetail = computed(() => !!currentConversationId.value && currentTimeline.value.status === 'loadingInitial' && currentMessages.value.length === 0);
 const ready = computed(() => !!currentConversationId.value && !loadingDetail.value);
@@ -102,8 +104,10 @@ const scrollMarkers = computed(() =>
 
 watch(
   [currentMessages, currentAnchorMessages, currentCheckpoints, currentCheckpointTimelineAnchors, currentCompressionBlocks, timelineActivityRows, currentMessageFloorById, currentTotalMessages],
-  ([messages, anchorMessages, checkpoints, checkpointAnchors, compressionBlocks, activityRows, floorByMessageId, totalMessages]) => conversationUi.syncTimeline(messages, anchorMessages, checkpoints, checkpointAnchors, compressionBlocks, activityRows, floorByMessageId, totalMessages),
-  { immediate: true }
+  ([messages, anchorMessages, checkpoints, checkpointAnchors, compressionBlocks, activityRows, floorByMessageId, totalMessages]) => {
+    scheduleTimelineSync(messages, anchorMessages, checkpoints, checkpointAnchors, compressionBlocks, activityRows, floorByMessageId, totalMessages);
+  },
+  { immediate: true, flush: 'post' }
 );
 
 // 初次进入/切换历史对话时，初始分页是最新 chunk；需要等数据落 DOM 后主动贴底，避免首帧停在顶部触发 older chunk 加载。
@@ -137,7 +141,25 @@ watch(
 onBeforeUnmount(() => {
   clearCheckpointAutoDismissTimers();
   cancelInitialBottomScrollFrame();
+  cancelTimelineSyncFrame();
 });
+
+function scheduleTimelineSync(...args: Parameters<typeof conversationUi.syncTimeline>): void {
+  pendingTimelineSync = args;
+  if (timelineSyncFrame !== undefined) return;
+  timelineSyncFrame = window.requestAnimationFrame(() => {
+    timelineSyncFrame = undefined;
+    const next = pendingTimelineSync;
+    pendingTimelineSync = undefined;
+    if (next) conversationUi.syncTimeline(...next);
+  });
+}
+
+function cancelTimelineSyncFrame(): void {
+  if (timelineSyncFrame !== undefined) window.cancelAnimationFrame(timelineSyncFrame);
+  timelineSyncFrame = undefined;
+  pendingTimelineSync = undefined;
+}
 
 function scheduleInitialConversationBottomScroll(): void {
   const conversationId = currentConversationId.value;

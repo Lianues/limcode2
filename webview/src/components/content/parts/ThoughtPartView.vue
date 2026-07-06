@@ -30,12 +30,20 @@ const tailText = computed(() => {
 });
 
 function lastNonEmptyLine(text: string): string {
-  const lines = text.trimEnd().split(/\r?\n/);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index]?.trim();
+  let end = text.length;
+  while (end > 0 && /\s/.test(text.charAt(end - 1))) end -= 1;
+  if (end <= 0) return '';
+
+  let lineEnd = end;
+  while (lineEnd > 0) {
+    let lineStart = lineEnd;
+    while (lineStart > 0 && text.charAt(lineStart - 1) !== '\n' && text.charAt(lineStart - 1) !== '\r') lineStart -= 1;
+    const line = text.slice(lineStart, lineEnd).trim();
     if (line) return line;
+    lineEnd = lineStart;
+    while (lineEnd > 0 && (text.charAt(lineEnd - 1) === '\n' || text.charAt(lineEnd - 1) === '\r')) lineEnd -= 1;
   }
-  return text.trim();
+  return '';
 }
 
 function formatThoughtDuration(durationMs: number): string {
@@ -77,7 +85,8 @@ function formatThoughtDuration(durationMs: number): string {
       <span class="thought-tail">{{ tailText }}</span>
     </template>
 
-    <div class="thought-content">
+    <!-- 折叠时不要渲染完整思考正文。否则流式阶段每帧都会更新隐藏 pre 的完整 text node，长思考会明显掉帧。 -->
+    <div v-if="expanded" class="thought-content">
       <pre>{{ displayedText }}</pre>
     </div>
   </CollapsibleContentBlock>

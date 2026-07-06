@@ -63,6 +63,15 @@ const DEFAULT_INITIAL_CHUNK_COUNT = 2;
 const DEFAULT_INCREMENTAL_CHUNK_COUNT = 2;
 const TIMELINE_PROJECTIONS = ['task-list'];
 
+interface PendingClientStatePatchBatch {
+  streamId: string;
+  streamSeq: number;
+  patches: ClientPatchOp[];
+  frameId?: number;
+}
+
+const pendingClientStatePatchBatches = new Map<string, PendingClientStatePatchBatch>();
+
 export const useConversationTimelineStore = defineStore('conversationTimeline', {
   state: (): ConversationTimelineStoreState => ({
     byConversationId: {},
@@ -254,6 +263,7 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
     applyClientStateSnapshot(streamId: string, streamSeq: number, state: ClientState): void {
       const conversationId = conversationIdFromClientStateStreamId(streamId);
       if (!conversationId) return;
+      clearPendingClientStatePatch(streamId);
       const timeline = this.ensureTimeline(conversationId);
       if (streamSeq > 0 && streamSeq <= timeline.streamSeq && timeline.hasStreamSnapshot) return;
       const rawConversationMessageCount = state.messages.filter((message) => message.conversationId === conversationId).length;
@@ -282,12 +292,33 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       const conversationId = conversationIdFromClientStateStreamId(streamId);
       if (!conversationId) return;
       const timeline = this.ensureTimeline(conversationId);
-      if (streamSeq > 0 && streamSeq <= timeline.streamSeq) return;
-      createClientStateDb(timeline.streamState).applyPatches(patches);
+      const pending = pendingClientStatePatchBatches.get(streamId);
+      const latestSeq = pending?.streamSeq ?? timeline.streamSeq;
+      if (streamSeq > 0 && streamSeq <= latestSeq) return;
+
+      const batch = pending ?? { streamId, streamSeq: timeline.streamSeq, patches: [] };
+      batch.streamSeq = streamSeq;
+      batch.patches.push(...patches);
+      pendingClientStatePatchBatches.set(streamId, batch);
+      if (batch.frameId !== undefined) return;
+      batch.frameId = window.requestAnimationFrame(() => {
+        batch.frameId = undefined;
+        this.flushPendingClientStatePatch(streamId);
+      });
+    },
+    flushPendingClientStatePatch(streamId: string): void {
+      const conversationId = conversationIdFromClientStateStreamId(streamId);
+      if (!conversationId) return;
+      const batch = pendingClientStatePatchBatches.get(streamId);
+      if (!batch) return;
+      pendingClientStatePatchBatches.delete(streamId);
+      const timeline = this.ensureTimeline(conversationId);
+      if (batch.streamSeq > 0 && batch.streamSeq <= timeline.streamSeq) return;
+      createClientStateDb(timeline.streamState).applyPatches(batch.patches);
       pruneClientStateToTimelineWindow(timeline, timeline.streamState);
-      createClientStateDb(timeline.state).applyPatches(patches);
+      createClientStateDb(timeline.state).applyPatches(batch.patches);
       pruneClientStateToTimelineWindow(timeline, timeline.state);
-      timeline.streamSeq = streamSeq;
+      timeline.streamSeq = batch.streamSeq;
     },
     setError(conversationId: string | undefined, message: string): void {
       const target = conversationId ? this.ensureTimeline(conversationId) : this.currentTimeline;
@@ -303,6 +334,13 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
     }
   }
 });
+
+function clearPendingClientStatePatch(streamId: string): void {
+  const batch = pendingClientStatePatchBatches.get(streamId);
+  if (!batch) return;
+  if (batch.frameId !== undefined) window.cancelAnimationFrame(batch.frameId);
+  pendingClientStatePatchBatches.delete(streamId);
+}
 
 function createTimelineState(conversationId: string): ConversationTimelineState {
   return {

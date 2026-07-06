@@ -281,6 +281,7 @@ function parseUnifiedDiffLines(diffText: string): ParsedDiffLine[] {
 .tool-diff-split-row {
   display: grid;
   min-width: 0;
+  border-radius: 0;
 }
 
 .tool-diff-line {
@@ -306,6 +307,7 @@ function parseUnifiedDiffLines(diffText: string): ParsedDiffLine[] {
   display: block;
   min-width: 0;
   padding: 0 8px;
+  border-radius: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -370,5 +372,6 @@ function parseUnifiedDiffLines(diffText: string): ParsedDiffLine[] {
 .tool-diff-split-full {
   display: block;
   padding: 0 8px;
+  border-radius: 0;
 }
 </style>

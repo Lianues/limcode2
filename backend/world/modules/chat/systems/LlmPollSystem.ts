@@ -12,6 +12,7 @@ import {
   type LlmRetryPayload
 } from '../../llm/events';
 import { LlmInvocation, type LlmInvocationData } from '../../llm/components';
+import { compressionThresholdTokens, observedUsageTokenCount } from '../../llm/usage';
 import { ToolCall, ToolCallEvent } from '../../tools/components';
 import { spawnToolCall, ToolCallBundle } from '../../tools/bundles';
 import { AgentRun, ToolCallRunLink } from '../../agentRun/components';
@@ -196,8 +197,8 @@ function maybeEnqueueAutoCompression(
   const trigger = settings?.compressionTrigger;
   if (!settings || !trigger || trigger.mode !== 'token_threshold' || settings.compressionMethodKind === 'disabled') return;
 
-  const observedTokens = usageTokenCount(input.usageMetadata);
-  const thresholdTokens = autoCompressionThresholdTokens(settings);
+  const observedTokens = observedUsageTokenCount(input.usageMetadata);
+  const thresholdTokens = compressionThresholdTokens(settings);
   debugAutoCompression('llm.done.check', {
     stage: input.stage,
     conversationId: conversation?.id,
@@ -238,33 +239,6 @@ function maybeEnqueueAutoCompression(
       trigger: 'auto' as const
     }
   });
-}
-
-function autoCompressionThresholdTokens(settings: NonNullable<LlmInvocationData['settings']>): number | undefined {
-  const trigger = settings.compressionTrigger;
-  if (!trigger) return undefined;
-  const contextWindowTokens = finitePositiveNumber(settings.contextWindowTokens);
-  const thresholdPercent = finitePositiveNumber(trigger.thresholdPercent);
-  const configuredTokens = finitePositiveNumber(trigger.thresholdTokens)
-    ?? (contextWindowTokens !== undefined && thresholdPercent !== undefined
-      ? Math.floor(contextWindowTokens * Math.min(100, thresholdPercent) / 100)
-      : undefined);
-  return configuredTokens;
-}
-
-function usageTokenCount(usage: LlmUsageMetadataRecord): number | undefined {
-  const total = finitePositiveNumber(usage.totalTokenCount);
-  if (total !== undefined) return total;
-  const prompt = finitePositiveNumber(usage.promptTokenCount) ?? 0;
-  const candidates = finitePositiveNumber(usage.candidatesTokenCount) ?? 0;
-  const thoughts = finitePositiveNumber(usage.thoughtsTokenCount) ?? 0;
-  const sum = prompt + candidates + thoughts;
-  return sum > 0 ? sum : undefined;
-}
-
-function finitePositiveNumber(value: unknown): number | undefined {
-  const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
 }
 
 function hasCompressionBlockForAnchor(world: WorldReader, conversation: Entity, anchorMessageId: string): boolean {

@@ -20,12 +20,13 @@ import { ToolEventType } from '../events';
 import { isTerminalToolStatus, toolStateToResponse, transitionToolState } from '../state';
 import { simplifyToolResponseForModel } from '../responseSimplifier';
 import { readEvents } from '../../../events';
-import type { ContentPart, InlineDataPart, LlmInvocationSettingsSnapshotRecord, LlmUsageMetadataRecord, ToolCallStatus } from '../../../../../shared/protocol';
+import type { ContentPart, InlineDataPart, LlmInvocationSettingsSnapshotRecord, ToolCallStatus } from '../../../../../shared/protocol';
 import { isFunctionResponsePart, isInlineDataPart } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
 import { CompressionBlock } from '../../compression/components';
 import { CompressionEventType } from '../../compression/events';
 import { LlmInvocation, RunLlmInvocationLink, type LlmInvocationData } from '../../llm/components';
+import { compressionThresholdTokens, observedUsageTokenCount } from '../../llm/usage';
 import { isYoloToolPolicy } from '../policy';
 
 const AUTO_COMPRESSION_DEBUG_PREFIX = '[LimCode][AutoCompressionDebug]';
@@ -268,7 +269,7 @@ function maybeEnqueueAutoCompressionAfterToolResponses(
   if (!settings || !trigger || trigger.mode !== 'token_threshold' || settings.compressionMethodKind === 'disabled') return;
 
   const observedTokens = latestObservedTokensForRun(world, input.run);
-  const thresholdTokens = autoCompressionThresholdTokens(settings);
+  const thresholdTokens = compressionThresholdTokens(settings);
   debugAutoCompression('tool.response.check', {
     conversationId: input.conversationId,
     runId: input.runId,
@@ -362,7 +363,7 @@ function latestInvocationSettingsForRun(world: WorldReader, run: Entity): LlmInv
 
 function latestObservedTokensForRun(world: WorldReader, run: Entity): number | undefined {
   const invocation = latestInvocationForRun(world, run);
-  return invocation?.usageMetadata ? usageTokenCount(invocation.usageMetadata) : undefined;
+  return invocation?.usageMetadata ? observedUsageTokenCount(invocation.usageMetadata) : undefined;
 }
 
 function latestInvocationForRun(world: WorldReader, run: Entity): LlmInvocationData | undefined {
@@ -381,32 +382,6 @@ function latestInvocationForRun(world: WorldReader, run: Entity): LlmInvocationD
     }
   }
   return latest?.invocation;
-}
-
-function autoCompressionThresholdTokens(settings: LlmInvocationSettingsSnapshotRecord): number | undefined {
-  const trigger = settings.compressionTrigger;
-  if (!trigger) return undefined;
-  const contextWindowTokens = finitePositiveNumber(settings.contextWindowTokens);
-  const thresholdPercent = finitePositiveNumber(trigger.thresholdPercent);
-  return finitePositiveNumber(trigger.thresholdTokens)
-    ?? (contextWindowTokens !== undefined && thresholdPercent !== undefined
-      ? Math.floor(contextWindowTokens * Math.min(100, thresholdPercent) / 100)
-      : undefined);
-}
-
-function usageTokenCount(usage: LlmUsageMetadataRecord): number | undefined {
-  const total = finitePositiveNumber(usage.totalTokenCount);
-  if (total !== undefined) return total;
-  const prompt = finitePositiveNumber(usage.promptTokenCount) ?? 0;
-  const candidates = finitePositiveNumber(usage.candidatesTokenCount) ?? 0;
-  const thoughts = finitePositiveNumber(usage.thoughtsTokenCount) ?? 0;
-  const sum = prompt + candidates + thoughts;
-  return sum > 0 ? sum : undefined;
-}
-
-function finitePositiveNumber(value: unknown): number | undefined {
-  const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
 }
 
 function hasCompressionBlockForAnchor(world: WorldReader, conversation: Entity, anchorMessageId: string): boolean {

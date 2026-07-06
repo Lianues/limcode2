@@ -311,14 +311,14 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
   const conversationModeSelections = state.conversationModeSelections.filter((selection) => selection.conversationId === conversationId);
   const checkpointTimelineAnchors = state.checkpointTimelineAnchors.filter((anchor) => anchor.conversationId === conversationId && messageIds.has(anchor.floorMessageId));
   const checkpointIds = new Set(checkpointTimelineAnchors.map((anchor) => anchor.checkpointId));
-  const checkpoints = state.checkpoints.filter((checkpoint) => checkpoint.conversationId === conversationId || checkpointIds.has(checkpoint.id));
+  const checkpoints = state.checkpoints.filter((checkpoint) => checkpointIds.has(checkpoint.id));
   for (const checkpoint of checkpoints) {
     checkpointIds.add(checkpoint.id);
     projectContextIds.add(checkpoint.projectContextId);
   }
   const shadowRepositoryIds = new Set(checkpoints.map((checkpoint) => checkpoint.shadowRepositoryId));
   const conversationCheckpointRepositoryLinks = state.conversationCheckpointRepositoryLinks.filter((link) => {
-    const matches = link.conversationId === conversationId || shadowRepositoryIds.has(link.shadowRepositoryId) || projectContextIds.has(link.projectContextId);
+    const matches = shadowRepositoryIds.has(link.shadowRepositoryId) || projectContextIds.has(link.projectContextId);
     if (matches) {
       shadowRepositoryIds.add(link.shadowRepositoryId);
       projectContextIds.add(link.projectContextId);
@@ -354,7 +354,7 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
     checkpointTimelineAnchors,
     conversationModeSelections,
     messages,
-    messageRevisions: state.messageRevisions.filter((revision) => revision.conversationId === conversationId),
+    messageRevisions: state.messageRevisions.filter((revision) => messageIds.has(revision.messageId)),
     messageCurrentRevisionLinks: state.messageCurrentRevisionLinks.filter((link) => messageIds.has(link.messageId)),
     compressionBlocks,
     compressionBlockSourceLinks: state.compressionBlockSourceLinks.filter((link) => compressionBlockIds.has(link.blockId)),

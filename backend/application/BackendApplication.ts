@@ -1565,15 +1565,21 @@ function mergeClientStateRecords(target: ClientState, source: ClientState): void
   for (const tableKey of CLIENT_STATE_TABLE_KEYS) {
     const targetRecords = target[tableKey] as Array<{ id: string }>;
     const sourceRecords = source[tableKey] as Array<{ id: string }>;
-    for (const record of sourceRecords) upsertClientStateRecord(targetRecords, record);
+    if (sourceRecords.length === 0) continue;
+    const indexById = new Map(targetRecords.map((record, index) => [record.id, index]));
+    for (const record of sourceRecords) upsertClientStateRecord(targetRecords, indexById, record);
   }
 }
 
-function upsertClientStateRecord(list: Array<{ id: string }>, record: { id: string }): void {
-  const index = list.findIndex((candidate) => candidate.id === record.id);
+function upsertClientStateRecord(list: Array<{ id: string }>, indexById: Map<string, number>, record: { id: string }): void {
+  const index = indexById.get(record.id);
   const next = typeof structuredClone === 'function'
     ? structuredClone(record)
     : JSON.parse(JSON.stringify(record));
-  if (index >= 0) list[index] = next;
-  else list.push(next);
+  if (index !== undefined) {
+    list[index] = next;
+    return;
+  }
+  indexById.set(record.id, list.length);
+  list.push(next);
 }

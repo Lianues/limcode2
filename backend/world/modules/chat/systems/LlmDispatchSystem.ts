@@ -293,27 +293,24 @@ function latestModelMessageForRun(world: WorldReader, run: Entity): Entity | und
 }
 
 function recordInputRevisions(world: WorldReader, cmd: CommandSink, run: Entity, messages: Entity[]): void {
-  const existingRevisionIds = new Set(
-    world
-      .query(AgentRunInputRevision)
-      .filter((entity) => world.get(entity, AgentRunInputRevision)?.run === run)
-      .map((entity) => world.get(entity, AgentRunInputRevision)?.revision)
-      .filter((revision): revision is Entity => revision !== undefined)
-  );
+  const existingRevisionIds = new Set<Entity>();
+  for (const entity of world.query(AgentRunInputRevision)) {
+    const inputRevision = world.get(entity, AgentRunInputRevision);
+    if (inputRevision?.run === run) existingRevisionIds.add(inputRevision.revision);
+  }
+
+  const currentRevisionByMessage = new Map<Entity, Entity>();
+  for (const entity of world.query(MessageCurrentRevisionLink)) {
+    const link = world.get(entity, MessageCurrentRevisionLink);
+    if (link) currentRevisionByMessage.set(link.message, link.revision);
+  }
 
   for (const message of messages) {
-    const revision = currentRevisionForMessage(world, message);
+    const revision = currentRevisionByMessage.get(message);
     const conversation = world.get(message, PartOf)?.parent;
     if (revision === undefined || conversation === undefined || existingRevisionIds.has(revision)) continue;
     const entity = cmd.spawn();
     cmd.add(entity, AgentRunInputRevision, { id: `arir${entity}`, run, conversation, revision });
     existingRevisionIds.add(revision);
   }
-}
-
-function currentRevisionForMessage(world: WorldReader, message: Entity): Entity | undefined {
-  return world
-    .query(MessageCurrentRevisionLink)
-    .map((entity) => world.get(entity, MessageCurrentRevisionLink))
-    .find((link) => link?.message === message)?.revision;
 }

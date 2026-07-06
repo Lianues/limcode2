@@ -78,6 +78,8 @@ export function projectToolsClientState(world: WorldReader): Partial<ClientState
 
 export const projectToolsState = projectToolsClientState;
 
+const strippedToolResultCache = new WeakMap<object, unknown>();
+
 function buildToolCallRecord(world: WorldReader, entity: number): ToolCallRecord | undefined {
   const call = world.get(entity, ToolCall);
   const state = world.get(entity, ToolState);
@@ -113,9 +115,17 @@ function buildToolCallRecord(world: WorldReader, entity: number): ToolCallRecord
 }
 
 function stripToolResultAttachments(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stripToolResultAttachments);
   if (!value || typeof value !== 'object') return value;
-  const record = value as Record<string, unknown>;
+  const cached = strippedToolResultCache.get(value);
+  if (cached !== undefined) return cached;
+  const result = Array.isArray(value)
+    ? value.map(stripToolResultAttachments)
+    : stripToolResultRecord(value as Record<string, unknown>);
+  strippedToolResultCache.set(value, result);
+  return result;
+}
+
+function stripToolResultRecord(record: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(record)) {
     if (key === 'proposal') {

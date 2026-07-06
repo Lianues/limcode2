@@ -11,6 +11,7 @@ export function collectChangedClientStateConversationIds(prev: ClientState, next
   for (const tableKey of tableKeys) {
     const prevRecords = prev[tableKey] as ClientStateRecord[];
     const nextRecords = next[tableKey] as ClientStateRecord[];
+    if (prevRecords === nextRecords) continue;
     if (prevRecords.length === 0 && nextRecords.length === 0) continue;
 
     const prevById = new Map(prevRecords.map((record) => [record.id, record]));
@@ -18,7 +19,7 @@ export function collectChangedClientStateConversationIds(prev: ClientState, next
 
     for (const record of nextRecords) {
       const old = prevById.get(record.id);
-      if (old && JSON.stringify(old) === JSON.stringify(record)) continue;
+      if (old && (old === record || JSON.stringify(old) === JSON.stringify(record))) continue;
       addRecordConversationIds(ids, tableKey, record, nextIndex);
       if (old) addRecordConversationIds(ids, tableKey, old, prevIndex);
     }

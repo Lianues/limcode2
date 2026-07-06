@@ -15,7 +15,7 @@ export function diffUpsertRemove<T extends RecordWithId, TUpsert extends ClientP
 
   for (const item of next) {
     const old = prevMap.get(item.id);
-    if (!old || JSON.stringify(old) !== JSON.stringify(item)) {
+    if (!old || (old !== item && JSON.stringify(old) !== JSON.stringify(item))) {
       patches.push(createUpsert(item));
     }
   }

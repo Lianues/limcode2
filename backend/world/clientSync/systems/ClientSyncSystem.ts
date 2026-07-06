@@ -11,12 +11,13 @@ import {
 import { clientStateWithTables, createEmptyClientState, GLOBAL_CLIENT_STATE_TABLE_KEYS } from '../../../../shared/clientStateSchema';
 import { collectChangedClientStateConversationIds } from '../../../../shared/clientStateConversationScope';
 import { defineSystem, type AccessDeclaration, type WorldReader } from '../../../ecs/types';
+import { dirtyConversationIdsSince } from '../dirtyConversations';
 import { readEvents } from '../../events';
 import { LlmRequest } from '../../modules/chat/components';
 import type { ClientStateContributor } from '../contributors';
 import { diffClientStateTables } from '../diff';
 import { ClientSyncEventType } from '../events';
-import { ClientStateContributorsKey, ClientSyncFastPatchStateKey, ClientSyncStateKey, type ClientStreamState, type ClientSyncFastPatchState, type ClientSyncState } from '../resources';
+import { ClientStateContributorsKey, ClientStateDirtyConversationIdsKey, ClientSyncFastPatchStateKey, ClientSyncStateKey, type ClientStreamState, type ClientSyncFastPatchState, type ClientSyncState } from '../resources';
 import { projectClientStateWithCache } from '../projection';
 import { contributorClock } from '../../projection/cache';
 
@@ -32,7 +33,7 @@ export const ClientSyncSystem = defineSystem({
         components: [...(projectionReads.components ?? []), LlmRequest]
       },
       resources: {
-        read: [ClientStateContributorsKey, ClientSyncStateKey, ClientSyncFastPatchStateKey],
+        read: [ClientStateContributorsKey, ClientSyncStateKey, ClientSyncFastPatchStateKey, ClientStateDirtyConversationIdsKey],
         write: [ClientSyncStateKey, ClientSyncFastPatchStateKey],
         mutationMode: 'update'
       },
@@ -66,6 +67,12 @@ export const ClientSyncSystem = defineSystem({
     const changedTableKeys = sourceChanged ? changedClientStateTableKeys(contributors, projection.changedContributorKeys) : [];
     const nextFull = projection.state;
     const prevFull = syncState.lastState;
+    const dirtyConversationHint = sourceChanged
+      ? dirtyConversationIdsSince(world, syncState.dirtyConversationResourceVersion, changedTableKeys)
+      : undefined;
+    const nextDirtyConversationResourceVersion = sourceChanged
+      ? world.resourceVersion(ClientStateDirtyConversationIdsKey)
+      : syncState.dirtyConversationResourceVersion;
     const requestedConversationIds = new Set<string>();
     let wantsGlobalSnapshot = prevFull === null;
 
@@ -100,7 +107,7 @@ export const ClientSyncSystem = defineSystem({
       }
     }
 
-    for (const conversationId of collectConversationIds(prevFull, nextFull, streams, requestedConversationIds, sourceChanged, changedTableKeys)) {
+    for (const conversationId of collectConversationIds(prevFull, nextFull, streams, requestedConversationIds, sourceChanged, changedTableKeys, dirtyConversationHint?.ids)) {
       const streamId = conversationClientStateStreamId(conversationId);
       const existing = streams[streamId];
       const requested = requestedConversationIds.has(conversationId);
@@ -123,6 +130,7 @@ export const ClientSyncSystem = defineSystem({
         lastState: nextFull,
         projectionClock: projection.projectionClock,
         contributorStates: projection.contributorStates,
+        dirtyConversationResourceVersion: nextDirtyConversationResourceVersion,
         streams
       });
     }
@@ -166,7 +174,7 @@ function emitPatchIfChanged(
 
 function emitFastPatches(
   cmd: { effect(effect: unknown): void; setResource<T>(key: { readonly id: symbol; readonly name: string; readonly __t?: T }, value: T): void },
-  syncState: { lastState: ClientState | null; projectionClock: string; contributorStates: Record<string, unknown>; streams: Record<string, ClientStreamState> },
+  syncState: { lastState: ClientState | null; projectionClock: string; contributorStates: Record<string, unknown>; dirtyConversationResourceVersion: number; streams: Record<string, ClientStreamState> },
   fastPatchState: ClientSyncFastPatchState
 ): boolean {
   if (!syncState.lastState) return false;
@@ -193,6 +201,7 @@ function emitFastPatches(
     lastState: nextFull,
     projectionClock: syncState.projectionClock,
     contributorStates: syncState.contributorStates as never,
+    dirtyConversationResourceVersion: syncState.dirtyConversationResourceVersion,
     streams
   });
   cmd.setResource(ClientSyncFastPatchStateKey, {
@@ -452,7 +461,8 @@ function collectConversationIds(
   streams: Record<string, ClientStreamState>,
   requested: ReadonlySet<string>,
   sourceChanged: boolean,
-  changedTableKeys: readonly ClientStateTableKey[] | undefined
+  changedTableKeys: readonly ClientStateTableKey[] | undefined,
+  dirtyConversationIds: ReadonlySet<string> | undefined
 ): string[] {
   const ids = new Set<string>(requested);
   if (prev === null) {
@@ -465,7 +475,11 @@ function collectConversationIds(
   }
 
   if (sourceChanged) {
-    for (const conversationId of collectChangedClientStateConversationIds(prev, next, changedTableKeys)) ids.add(conversationId);
+    if (dirtyConversationIds) {
+      for (const conversationId of dirtyConversationIds) ids.add(conversationId);
+    } else {
+      for (const conversationId of collectChangedClientStateConversationIds(prev, next, changedTableKeys)) ids.add(conversationId);
+    }
   }
 
   const subscribedConversationIds = new Set<string>();

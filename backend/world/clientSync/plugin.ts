@@ -1,6 +1,7 @@
 import type { WorldPlugin } from '../plugin';
 import { ClientStateContributorRegistry } from './contributors';
-import { ClientStateContributorsKey, ClientSyncFastPatchStateKey, ClientSyncStateKey } from './resources';
+import { emptyDirtyConversationState } from './dirtyConversations';
+import { ClientStateContributorsKey, ClientStateDirtyConversationIdsKey, ClientSyncFastPatchStateKey, ClientSyncStateKey } from './resources';
 
 export function clientSyncPlugin(): WorldPlugin {
   return {
@@ -11,6 +12,7 @@ export function clientSyncPlugin(): WorldPlugin {
         lastState: null,
         projectionClock: '',
         contributorStates: {},
+        dirtyConversationResourceVersion: 0,
         streams: {}
       });
       ctx.world.setResource(ClientSyncFastPatchStateKey, {
@@ -18,6 +20,7 @@ export function clientSyncPlugin(): WorldPlugin {
         deferFullSync: false,
         requireFullSync: false
       });
+      ctx.world.setResource(ClientStateDirtyConversationIdsKey, emptyDirtyConversationState());
     }
   };
 }

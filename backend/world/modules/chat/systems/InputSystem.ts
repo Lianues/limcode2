@@ -15,6 +15,8 @@ import { CompressionBlock } from '../../compression/components';
 import { hasActiveBlockingCompression } from '../../compression/queries';
 import { conversationMessages } from '../queries';
 import { materializeUserInputMessage } from '../userInputMaterialization';
+import { markClientStateConversationDirty } from '../../../clientSync/dirtyConversations';
+import { ClientStateDirtyConversationIdsKey } from '../../../clientSync/resources';
 
 const ConversationsByIdQuery = defineQuery({
   name: 'ConversationsById',
@@ -30,6 +32,7 @@ export const InputSystem = defineSystem({
   access: {
     queries: [ConversationsByIdQuery],
     writes: { components: [CheckpointBarrier], mutationMode: 'create' },
+    resources: { read: [ClientStateDirtyConversationIdsKey], write: [ClientStateDirtyConversationIdsKey], mutationMode: 'update' },
     events: { read: [ChatEventType.Send], emit: [CheckpointEventType.Requested] },
     bundles: [UserMessageBundle, AgentRunBundle]
   },
@@ -44,6 +47,7 @@ export const InputSystem = defineSystem({
 });
 
 function handleSend(world: WorldReader, cmd: CommandSink, conversation: Entity, payload: ChatSendPayload): void {
+  markClientStateConversationDirty(world, cmd, payload.conversationId);
   const agent = payload.agentId ? findAgentById(world, payload.agentId) ?? defaultAgentForConversation(world, conversation) : defaultAgentForConversation(world, conversation);
   if (agent === undefined) return;
   const content = normalizeInputContent(payload);

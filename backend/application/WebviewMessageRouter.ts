@@ -4,7 +4,7 @@ import type { CommandCapability, FsCapability, LlmCapability, StorageCapability,
 import { ChatEventType } from '../world/modules/chat/events';
 import { AgentRunEventType } from '../world/modules/agentRun/events';
 import { AgentRun } from '../world/modules/agentRun/components';
-import { Conversation, Message } from '../world/modules/chat/components';
+import { Conversation, Message, PartOf } from '../world/modules/chat/components';
 import { LlmInvocation, MessageLlmInvocationLink, RunLlmInvocationLink } from '../world/modules/llm/components';
 import { buildLlmStartRequestForRun } from '../world/modules/chat/systems/LlmDispatchSystem';
 import { CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSourceLink } from '../world/modules/compression/components';
@@ -608,6 +608,10 @@ export class WebviewMessageRouter {
 
   private async enqueueAfterConversationTailLoaded(conversationId: string, action: () => void): Promise<void> {
     try {
+      if (this.isConversationTailAlreadyHydrated(conversationId)) {
+        action();
+        return;
+      }
       const page = await this.deps.storage.loadConversationTimelinePage({
         conversationId,
         direction: 'initial',
@@ -619,6 +623,12 @@ export class WebviewMessageRouter {
       console.warn('[LimCode] Failed to hydrate conversation tail before command.', error);
       action();
     }
+  }
+
+  private isConversationTailAlreadyHydrated(conversationId: string): boolean {
+    const conversation = this.deps.world.query(Conversation).find((entity) => this.deps.world.get(entity, Conversation)?.id === conversationId);
+    if (conversation === undefined) return false;
+    return this.deps.world.query(Message, PartOf).some((entity) => this.deps.world.get(entity, PartOf)?.parent === conversation);
   }
 
   private async handleMessageDeleteFrom(payload: MessageDeleteFromPayload): Promise<void> {

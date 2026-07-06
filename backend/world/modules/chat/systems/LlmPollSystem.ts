@@ -34,7 +34,8 @@ import {
   type LlmUsageMetadataRecord
 } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
-import { ClientSyncFastPatchStateKey, type ClientSyncFastPatchBatch } from '../../../clientSync/resources';
+import { markClientStateConversationDirty } from '../../../clientSync/dirtyConversations';
+import { ClientStateDirtyConversationIdsKey, ClientSyncFastPatchStateKey, type ClientSyncFastPatchBatch } from '../../../clientSync/resources';
 
 type PendingOperation =
   | { kind: 'started'; payload: LlmStartedPayload }
@@ -96,7 +97,7 @@ export const LlmPollSystem = defineSystem({
     queries: [LlmInvocationsByIdQuery, LlmRequestsByIdQuery, ModelMessagesQuery, ToolCallLookupQuery],
     reads: { components: [PartOf, CompressionBlock, ToolCallEvent, ToolCallRunLink] },
     writes: { components: [Streaming, AgentRun, ToolCall, ToolCallEvent, ToolCallRunLink] },
-    resources: { read: [ClientSyncFastPatchStateKey], write: [ClientSyncFastPatchStateKey], mutationMode: 'update' },
+    resources: { read: [ClientSyncFastPatchStateKey, ClientStateDirtyConversationIdsKey], write: [ClientSyncFastPatchStateKey, ClientStateDirtyConversationIdsKey], mutationMode: 'update' },
     events: { read: [LlmEventType.Started, LlmEventType.ThoughtDelta, LlmEventType.ThoughtProgress, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error, LlmEventType.RetryScheduled, LlmEventType.RetryStarted, LlmEventType.RetryCancelled, LlmEventType.RetryRecovered], emit: [CheckpointEventType.Requested, CompressionEventType.Create] },
     effects: { emit: ['client.transientNotice'] },
     bundles: [ToolCallBundle]
@@ -407,11 +408,15 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
     cmd.add(modelMessage, Message, next);
   }
 
-  if (requestData.invocation !== undefined && nextInvocation !== undefined && nextInvocation !== world.get(requestData.invocation, LlmInvocation)) {
-    cmd.add(requestData.invocation, LlmInvocation, nextInvocation);
+  const invocationChanged = requestData.invocation !== undefined && nextInvocation !== undefined && nextInvocation !== world.get(requestData.invocation, LlmInvocation);
+  if (invocationChanged) {
+    cmd.add(requestData.invocation!, LlmInvocation, nextInvocation!);
   }
 
   const conversation = world.get(requestData.conversation, Conversation);
+  if (conversation && (next !== current || invocationChanged || shouldFinish || sawToolCall)) {
+    markClientStateConversationDirty(world, cmd, conversation.id);
+  }
   const fastPatchBatches = fastPatchSafe && fastPatches.length > 0 && conversation
     ? [{ streamId: conversationClientStateStreamId(conversation.id), patches: fastPatches }]
     : [];

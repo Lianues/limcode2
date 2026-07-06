@@ -62,6 +62,7 @@ import {
   loadConversationTimelineRange,
   loadConversationTimelineDetail,
   saveConversationTimelineDetail,
+  saveConversationTimelineRenderDetailIncremental,
   truncateConversationTimeline
 } from './conversationTimelineStore';
 import { loadConversationCompressionDetail, saveConversationCompressionDetail } from './compressionStore';
@@ -500,14 +501,22 @@ export async function saveConversationRenderDetailToStores(paths: StoragePaths, 
   const detail = conversationRenderDetailSlice(state, conversationId);
   const compression = createEmptyClientState();
   copyCompressionTables(compression, detail);
-  const existingTimeline = await loadConversationTimelineDetail(paths, conversationId);
-  if (existingTimeline) mergeRenderDetailTables(existingTimeline, detail);
+  const incrementalSaved = await saveConversationTimelineRenderDetailIncremental(paths, conversationId, detail);
+  const timelineSave = incrementalSaved
+    ? Promise.resolve()
+    : saveMergedConversationTimelineDetail(paths, conversationId, detail);
   const existingCompression = await loadConversationCompressionDetail(paths, conversationId);
   if (existingCompression) preserveKnownCompressionSourceLinks(compression, existingCompression);
   await Promise.all([
-    saveConversationTimelineDetail(paths, conversationId, existingTimeline ?? detail),
+    timelineSave,
     saveConversationCompressionDetail(paths, conversationId, compression)
   ]);
+}
+
+async function saveMergedConversationTimelineDetail(paths: StoragePaths, conversationId: string, detail: ClientState): Promise<void> {
+  const existingTimeline = await loadConversationTimelineDetail(paths, conversationId);
+  if (existingTimeline) mergeRenderDetailTables(existingTimeline, detail);
+  await saveConversationTimelineDetail(paths, conversationId, existingTimeline ?? detail);
 }
 
 export async function saveConversationRunHistoryToStores(

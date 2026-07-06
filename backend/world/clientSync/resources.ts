@@ -19,8 +19,16 @@ export interface ClientSyncState {
   projectionClock: string;
   /** 每个 ClientState contributor 的独立投影缓存，用于按 reads clock 复用未变化 slice。 */
   contributorStates: Record<string, ClientContributorProjectionState>;
+  /** 已纳入本同步游标的 dirty conversation resource version。 */
+  dirtyConversationResourceVersion: number;
   /** 按 stream 独立维护前端同步游标：global 与 conversation 互不影响。 */
   streams: Record<string, ClientStreamState>;
+}
+
+export interface ClientStateDirtyConversationIdsState {
+  /** 领域 system 每次标记会递增；ids 可保留为去重集合，消费者按 resourceVersion 判断是否有新标记。 */
+  readonly revision: number;
+  readonly ids: readonly string[];
 }
 
 export interface ClientSyncFastPatchBatch {
@@ -40,3 +48,4 @@ export interface ClientSyncFastPatchState {
 export const ClientStateContributorsKey = defineResource<ClientStateContributorRegistry>('ClientStateContributors');
 export const ClientSyncStateKey = defineResource<ClientSyncState>('ClientSyncState');
 export const ClientSyncFastPatchStateKey = defineResource<ClientSyncFastPatchState>('ClientSyncFastPatchState');
+export const ClientStateDirtyConversationIdsKey = defineResource<ClientStateDirtyConversationIdsState>('ClientStateDirtyConversationIds');

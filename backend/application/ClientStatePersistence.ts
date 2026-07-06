@@ -6,6 +6,8 @@ import type { AgentRunStatus, ClientState, ClientStateTableKey, MessageContent, 
 import { conversationCreatedAtFromId, displayConversationTitle } from '../../shared/conversationTitle';
 import { collectChangedClientStateConversationIds } from '../../shared/clientStateConversationScope';
 import { conversationRenderDetailSlice, conversationRunHistorySlice } from '../capabilities/vscodeStorage/clientStateStore';
+import { dirtyConversationIdsSince } from '../world/clientSync/dirtyConversations';
+import { ClientStateDirtyConversationIdsKey } from '../world/clientSync/resources';
 
 const DEFAULT_PERSIST_DEBOUNCE_MS = 500;
 
@@ -69,6 +71,7 @@ export class ClientStatePersistence {
   private projectionClock = '';
   private contributorStates: Record<string, StorageContributorProjectionState> = {};
   private lastProjectedState: ClientState | undefined;
+  private dirtyConversationResourceVersion = 0;
 
   public constructor(
     private readonly world: WorldReader,
@@ -108,11 +111,18 @@ export class ClientStatePersistence {
     const latestState = latest?.state ?? this.lastProjectedState;
     if (!this.enabled || !latestState) return;
 
+    const shouldCheckDirtyConversationHints = !options.force && !!latest?.previousState;
+    const dirtyConversationHint = shouldCheckDirtyConversationHints
+      ? dirtyConversationIdsSince(this.world, this.dirtyConversationResourceVersion, latest.changedTableKeys)
+      : undefined;
     const targetConversationIds = options.force
       ? undefined
       : latest?.previousState
-        ? collectChangedClientStateConversationIds(latest.previousState, latestState, latest.changedTableKeys)
+        ? dirtyConversationHint?.ids ?? collectChangedClientStateConversationIds(latest.previousState, latestState, latest.changedTableKeys)
         : undefined;
+    if (shouldCheckDirtyConversationHints) {
+      this.dirtyConversationResourceVersion = this.world.resourceVersion(ClientStateDirtyConversationIdsKey);
+    }
     this.collectPendingStates(latestState, !!options.force, targetConversationIds);
     if (!this.pendingSkeletonState && this.pendingRenderDetailStates.size === 0 && this.pendingRunHistoryStates.size === 0 && this.pendingHistoryStates.size === 0) return;
 
@@ -162,11 +172,14 @@ export class ClientStatePersistence {
       this.pendingSkeletonState = state;
     }
 
+    const targetIdsAreKnownChanged = !!targetConversationIds && !force;
     for (const conversationId of this.renderLoadedConversationIds(state)) {
       if (targetConversationIds && !targetConversationIds.has(conversationId)) continue;
-      const detail = conversationRenderDetailSlice(state, conversationId);
-      const detailJson = JSON.stringify(detail);
-      if (!force && detailJson === this.lastPersistedRenderDetailJson.get(conversationId)) continue;
+      if (!targetIdsAreKnownChanged) {
+        const detail = conversationRenderDetailSlice(state, conversationId);
+        const detailJson = JSON.stringify(detail);
+        if (!force && detailJson === this.lastPersistedRenderDetailJson.get(conversationId)) continue;
+      }
       this.pendingRenderDetailStates.set(conversationId, state);
       this.pendingHistoryStates.set(conversationId, state);
     }
@@ -194,8 +207,11 @@ export class ClientStatePersistence {
     const detail = conversationRunHistorySlice(state, conversationId);
     if (!allowEmpty && !hasRunHistoryRecords(detail)) return;
 
-    const detailJson = JSON.stringify(detail);
-    if (!force && detailJson === this.lastPersistedRunHistoryJson.get(conversationId)) return;
+    const shouldCompareJson = !force;
+    if (shouldCompareJson) {
+      const detailJson = JSON.stringify(detail);
+      if (detailJson === this.lastPersistedRunHistoryJson.get(conversationId)) return;
+    }
 
     const existing = this.pendingRunHistoryStates.get(conversationId);
     if (existing?.mode === 'replace') return;

@@ -27,6 +27,7 @@ export function runClientSyncProjection(input: ClientSyncWorkerInput, cmd: Comma
       lastState: next,
       projectionClock: '',
       contributorStates: {},
+      dirtyConversationResourceVersion: 0,
       streams: { [GLOBAL_CLIENT_STATE_STREAM_ID]: { streamSeq, lastState: next } }
     });
     cmd.effect({ kind: 'client.snapshot', streamId: GLOBAL_CLIENT_STATE_STREAM_ID, streamSeq, state: next });
@@ -45,6 +46,7 @@ export function runClientSyncProjection(input: ClientSyncWorkerInput, cmd: Comma
       lastState: next,
       projectionClock: '',
       contributorStates: {},
+      dirtyConversationResourceVersion: 0,
       streams: { [GLOBAL_CLIENT_STATE_STREAM_ID]: { streamSeq, lastState: next } }
     });
     cmd.effect({ kind: 'client.patch', streamId: GLOBAL_CLIENT_STATE_STREAM_ID, streamSeq, patches });

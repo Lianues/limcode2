@@ -678,6 +678,192 @@ export async function saveConversationTimelineDetail(paths: StoragePaths, conver
   await removeStaleTimelineFiles(root, previousFiles, filesReferencedByIndex(nextIndex));
 }
 
+export async function saveConversationTimelineRenderDetailIncremental(paths: StoragePaths, conversationId: string, detail: ClientState): Promise<boolean> {
+  const storageDetail = await externalizeClientStateAttachments(paths, detail);
+  sortConversationTimelineDetail(storageDetail);
+  if (storageDetail.messages.length === 0) return true;
+
+  const savedAt = new Date().toISOString();
+  const root = conversationTimelineRoot(paths, conversationId);
+  const indexUri = vscode.Uri.joinPath(root, INDEX_FILE);
+  const previousIndex = await readJson<ConversationTimelineIndexFile>(indexUri);
+  if (!isConversationTimelineIndex(previousIndex, conversationId) || previousIndex.chunks.length === 0) return false;
+
+  const records = [...previousIndex.chunks].sort((left, right) => (left.index ?? 0) - (right.index ?? 0) || left.id.localeCompare(right.id));
+  if (!records.every(hasTimelineChunkIndexMetadata)) return false;
+
+  await Promise.all([
+    vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(root, CONVERSATION_TIMELINE_CHUNKS_DIR)),
+    vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(root, CONVERSATION_TIMELINE_SIDECARS_DIR)),
+    vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(root, CONVERSATION_TIMELINE_PROJECTIONS_DIR))
+  ]);
+
+  const messageIdToRecordIndex = new Map<string, number>();
+  records.forEach((record, index) => {
+    for (const messageId of record.messageIds) messageIdToRecordIndex.set(messageId, index);
+  });
+
+  const affected = collectIncrementalAffectedChunkIndexes(storageDetail, messageIdToRecordIndex, records.length);
+  const loaded = new Map<number, ConversationTimelineChunkData>();
+  const loadChunk = async (index: number): Promise<ConversationTimelineChunkData | undefined> => {
+    const cached = loaded.get(index);
+    if (cached) return cached;
+    const record = records[index];
+    if (!record) return undefined;
+    const chunk = await readConversationTimelineChunk(root, record);
+    if (!chunk) return undefined;
+    loaded.set(index, chunk);
+    return chunk;
+  };
+
+  const newMessages = storageDetail.messages
+    .filter((message) => !messageIdToRecordIndex.has(message.id))
+    .sort(compareMessagesBySeq);
+
+  for (const index of affected) {
+    if (!await loadChunk(index)) return false;
+  }
+
+  for (const message of newMessages) {
+    let index = records.length - 1;
+    let chunk = await loadChunk(index);
+    if (!chunk) return false;
+    if (chunk.messages.length >= CONVERSATION_TIMELINE_CHUNK_SIZE) {
+      index = records.length;
+      const chunkId = index.toString().padStart(6, '0');
+      records.push(createEmptyTimelineChunkRecord(chunkId, index));
+      chunk = emptyTimelineChunkData();
+      loaded.set(index, chunk);
+    }
+    chunk.messages = upsertTimelineRecordsById(chunk.messages, [message]).sort(compareMessagesBySeq);
+    messageIdToRecordIndex.set(message.id, index);
+    affected.add(index);
+  }
+
+  for (const index of affected) {
+    const chunk = loaded.get(index);
+    if (!chunk) return false;
+    mergeIncrementalRenderDetailIntoChunk(chunk, storageDetail, index === 0);
+  }
+
+  for (const index of [...affected].sort((left, right) => left - right)) {
+    const record = records[index];
+    const chunk = loaded.get(index);
+    if (!record || !chunk) return false;
+    records[index] = await rewriteTimelineChunk(root, { savedAt, conversationId, record, chunk });
+  }
+
+  const normalizedChunks = normalizeTimelineChunkOffsets(records);
+  const nextIndex: ConversationTimelineIndexFile = {
+    schemaVersion: STORAGE_VERSION,
+    savedAt,
+    conversationId,
+    chunkSize: previousIndex.chunkSize,
+    chunks: normalizedChunks
+  };
+  await writeJson(indexUri, nextIndex);
+  return true;
+}
+
+function collectIncrementalAffectedChunkIndexes(detail: ClientState, messageIdToRecordIndex: ReadonlyMap<string, number>, chunkCount: number): Set<number> {
+  const affected = new Set<number>();
+  if (chunkCount > 0) affected.add(chunkCount - 1);
+
+  // 常规发送/流式/工具结果只会修改尾块；如果把已加载的完整大对话中所有 message 都标记为 affected，
+  // 增量保存会退化成全量重写。这里只额外纳入仍在流式中的既有消息所在 chunk。
+  for (const message of detail.messages) {
+    if (message.status !== 'streaming') continue;
+    const index = messageIdToRecordIndex.get(message.id);
+    if (index !== undefined) affected.add(index);
+  }
+  return affected;
+}
+
+function createEmptyTimelineChunkRecord(chunkId: string, index: number): ConversationTimelineChunkIndexRecord {
+  return {
+    id: chunkId,
+    file: `${CONVERSATION_TIMELINE_CHUNKS_DIR}/${chunkId}.json`,
+    index,
+    startSeq: 0,
+    endSeq: 0,
+    messageCount: 0,
+    messageOffsetStart: 0,
+    messageOffsetEnd: 0,
+    messageIds: [],
+    toolCallIds: [],
+    toolCallCount: 0,
+    toolCallEventCount: 0,
+    messageHash: '',
+    sourceHash: '',
+    sidecars: emptyTimelineSidecarRefs(),
+    projections: {}
+  };
+}
+
+function emptyTimelineSidecarRefs(): Record<TimelineSidecarKey, TimelineSidecarRefRecord> {
+  const refs = {} as Record<TimelineSidecarKey, TimelineSidecarRefRecord>;
+  for (const key of TIMELINE_SIDECAR_KEYS) refs[key] = { file: '', sourceHash: '', count: 0 };
+  return refs;
+}
+
+function emptyTimelineChunkData(): ConversationTimelineChunkData {
+  return {
+    messages: [],
+    messageRevisions: [],
+    messageCurrentRevisionLinks: [],
+    toolCalls: [],
+    toolCallEvents: [],
+    projectContexts: [],
+    shadowRepositories: [],
+    conversationCheckpointRepositoryLinks: [],
+    checkpoints: [],
+    checkpointTimelineAnchors: []
+  };
+}
+
+function mergeIncrementalRenderDetailIntoChunk(chunk: ConversationTimelineChunkData, detail: ClientState, isFirstChunk: boolean): void {
+  const messageIds = new Set(chunk.messages.map((message) => message.id));
+  chunk.messages = upsertTimelineRecordsById(chunk.messages, detail.messages.filter((message) => messageIds.has(message.id))).sort(compareMessagesBySeq);
+
+  const nextMessageIds = new Set(chunk.messages.map((message) => message.id));
+  chunk.messageRevisions = upsertTimelineRecordsById(chunk.messageRevisions, detail.messageRevisions.filter((revision) => nextMessageIds.has(revision.messageId)))
+    .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+  const revisionIds = new Set(chunk.messageRevisions.map((revision) => revision.id));
+  chunk.messageCurrentRevisionLinks = upsertTimelineRecordsById(chunk.messageCurrentRevisionLinks, detail.messageCurrentRevisionLinks.filter((link) => nextMessageIds.has(link.messageId) || revisionIds.has(link.revisionId)))
+    .sort((left, right) => left.id.localeCompare(right.id));
+
+  chunk.toolCalls = upsertTimelineRecordsById(chunk.toolCalls, detail.toolCalls.filter((toolCall) => nextMessageIds.has(toolCall.messageId))).sort(compareToolCalls);
+  const toolCallIds = new Set(chunk.toolCalls.map((toolCall) => toolCall.id));
+  chunk.toolCallEvents = upsertTimelineRecordsById(chunk.toolCallEvents, detail.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId)))
+    .sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
+
+  chunk.checkpointTimelineAnchors = upsertTimelineRecordsById(chunk.checkpointTimelineAnchors, detail.checkpointTimelineAnchors.filter((anchor) => nextMessageIds.has(anchor.floorMessageId)))
+    .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+  const checkpointIds = new Set(chunk.checkpointTimelineAnchors.map((anchor) => anchor.checkpointId));
+  chunk.checkpoints = upsertTimelineRecordsById(chunk.checkpoints, detail.checkpoints.filter((checkpoint) => checkpointIds.has(checkpoint.id) || (isFirstChunk && checkpoint.trigger === 'conversation_initial')))
+    .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+
+  const shadowRepositoryIds = new Set(chunk.checkpoints.map((checkpoint) => checkpoint.shadowRepositoryId));
+  const projectContextIds = new Set(chunk.checkpoints.map((checkpoint) => checkpoint.projectContextId));
+  const sourceLinks = detail.conversationCheckpointRepositoryLinks.filter((link) => {
+    const matches = shadowRepositoryIds.has(link.shadowRepositoryId) || projectContextIds.has(link.projectContextId);
+    if (matches) {
+      shadowRepositoryIds.add(link.shadowRepositoryId);
+      projectContextIds.add(link.projectContextId);
+    }
+    return matches;
+  });
+  chunk.conversationCheckpointRepositoryLinks = upsertTimelineRecordsById(chunk.conversationCheckpointRepositoryLinks, sourceLinks).sort((left, right) => left.id.localeCompare(right.id));
+  chunk.projectContexts = upsertTimelineRecordsById(chunk.projectContexts, detail.projectContexts.filter((projectContext) => projectContextIds.has(projectContext.id))).sort((left, right) => left.id.localeCompare(right.id));
+  chunk.shadowRepositories = upsertTimelineRecordsById(chunk.shadowRepositories, detail.shadowRepositories.filter((repository) => shadowRepositoryIds.has(repository.id))).sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function upsertTimelineRecordsById<TRecord extends { id: string }>(existing: readonly TRecord[], next: readonly TRecord[]): TRecord[] {
+  const byId = new Map(existing.map((record) => [record.id, record]));
+  for (const record of next) byId.set(record.id, record);
+  return [...byId.values()];
+}
+
 export async function loadTimelineProjectionContext(
   paths: StoragePaths,
   conversationId: string,
@@ -888,7 +1074,7 @@ function conversationTimelineChunks(detail: ClientState): ConversationTimelineCh
   return chunks;
 }
 
-async function readConversationTimelineChunk(root: vscode.Uri, record: ConversationTimelineChunkIndexRecord): Promise<ConversationTimelineChunkData | undefined> {
+async function readConversationTimelineChunk(root: vscode.Uri, record: ConversationTimelineChunkIndexRecord, options: { validateSourceHash?: boolean } = {}): Promise<ConversationTimelineChunkData | undefined> {
   const file = await readJson<ConversationTimelineChunkFile>(vscode.Uri.joinPath(root, ...record.file.split('/')));
   if (!file || file.schemaVersion !== STORAGE_VERSION || file.chunkId !== record.id) return undefined;
   if (file.messageHash !== record.messageHash) return undefined;
@@ -928,7 +1114,9 @@ async function readConversationTimelineChunk(root: vscode.Uri, record: Conversat
     checkpoints,
     checkpointTimelineAnchors
   };
-  if (shortHash(stableJson(chunk)) !== record.sourceHash) return undefined;
+  // sourceHash 需要 JSON.stringify 整个 chunk；大工具结果/长对话下这是明显 CPU 热点。
+  // 常规加载已分别校验 chunk messageHash 与 sidecar 自身 hash/count，完整 sourceHash 仅保留给显式诊断路径。
+  if (options.validateSourceHash && shortHash(stableJson(chunk)) !== record.sourceHash) return undefined;
   return chunk;
 }
 

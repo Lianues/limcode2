@@ -16,6 +16,7 @@ import {
   type ClientState,
   type ClientStateTableKey
 } from '@shared/protocol';
+import { compactClientPatchOps } from './clientPatchCompaction';
 
 export interface ClientStateDb {
   applySnapshot(streamId: string, state: ClientState): boolean;
@@ -32,6 +33,10 @@ export function createClientStateDb(clientState: ClientState): ClientStateDb {
 }
 
 class ClientStateDbImpl implements ClientStateDb {
+  private readonly indexCache = new Map<ClientStateTableKey, { list: ClientStateMutableRecord[]; indexById: Map<string, number> }>();
+  private sortDeferDepth = 0;
+  private readonly pendingSortTables = new Set<ClientStateTableKey>();
+
   public constructor(private readonly clientState: ClientState) {}
 
   public applySnapshot(streamId: string, state: ClientState): boolean {
@@ -48,6 +53,7 @@ class ClientStateDbImpl implements ClientStateDb {
 
   private applyGlobalSnapshot(state: ClientState): void {
     copyClientStateTables(this.clientState, state, GLOBAL_CLIENT_STATE_TABLE_KEYS);
+    this.clearIndexCache();
   }
 
   private replaceConversationState(conversationId: string, state: ClientState): void {
@@ -63,18 +69,27 @@ class ClientStateDbImpl implements ClientStateDb {
 
       if (mode === 'replace') {
         const ids = scopedIds.get(tableKey) ?? new Set<string>();
-        removeWhere(target, (record) => ids.has(record.id));
+        if (removeWhere(target, (record) => ids.has(record.id))) this.invalidateIndex(tableKey);
       }
 
       if (mode !== 'removeOnly') {
-        upsertMany(target, incoming);
-        this.sortRegisteredTable(tableKey);
+        for (const record of incoming) this.upsertRecord(tableKey, record);
+        this.markSortTable(tableKey);
       }
     }
   }
 
   public applyPatches(patches: readonly ClientPatchOp[]): void {
-    for (const patch of patches) this.applyPatch(patch);
+    const compacted = compactClientPatchOps(patches);
+    if (compacted.length === 0) return;
+
+    this.sortDeferDepth += 1;
+    try {
+      for (const patch of compacted) this.applyPatch(patch);
+    } finally {
+      this.sortDeferDepth -= 1;
+      if (this.sortDeferDepth === 0) this.flushPendingSorts();
+    }
   }
 
   public applyPatch(patch: ClientPatchOp): void {
@@ -86,7 +101,6 @@ class ClientStateDbImpl implements ClientStateDb {
     const operation = GENERIC_CLIENT_PATCH_APPLY_BY_KIND[patch.kind];
     if (!operation) return false;
 
-    const list = this.records(operation.tableKey);
     if (operation.operation === 'remove') {
       this.removeRegisteredRecord(operation.tableKey, (patch as { id: string }).id);
       return true;
@@ -96,8 +110,8 @@ class ClientStateDbImpl implements ClientStateDb {
     if (!payloadField) return false;
     const record = (patch as unknown as Record<string, unknown>)[payloadField] as ClientStateMutableRecord | undefined;
     if (!record) return false;
-    upsert(list, record);
-    this.sortRegisteredTable(operation.tableKey);
+    this.upsertRecord(operation.tableKey, record);
+    this.markSortTable(operation.tableKey);
     return true;
   }
 
@@ -105,7 +119,7 @@ class ClientStateDbImpl implements ClientStateDb {
     const operation = GENERIC_CLIENT_MUTATION_APPLY_BY_KIND[patch.kind];
     if (!operation) return false;
 
-    const record = this.records(operation.tableKey).find((item) => item.id === (patch as { id: string }).id);
+    const record = this.recordById(operation.tableKey, (patch as { id: string }).id);
     if (!record) return true;
 
     applyMutation(record, patch as unknown as Record<string, unknown>, operation.apply);
@@ -130,12 +144,12 @@ class ClientStateDbImpl implements ClientStateDb {
 
       if ('cascade' in cascade && cascade.cascade) {
         for (const childId of childIds) this.removeRegisteredRecord(cascade.table, childId, visited);
-      } else {
-        removeWhere(childRecords, (record) => cascadeForeignKeys(cascade).some((foreignKey) => record[foreignKey] === id));
+      } else if (removeWhere(childRecords, (record) => cascadeForeignKeys(cascade).some((foreignKey) => record[foreignKey] === id))) {
+        this.invalidateIndex(cascade.table);
       }
     }
 
-    removeById(this.records(tableKey), id);
+    this.removeRecordById(tableKey, id);
   }
 
   private removeConversationScopedState(conversationId: string): void {
@@ -145,7 +159,7 @@ class ClientStateDbImpl implements ClientStateDb {
       if (!scope || scopeReplaceMode(scope) === 'upsertOnly') continue;
       const ids = scopedIds.get(tableKey);
       if (!ids || ids.size === 0) continue;
-      removeWhere(this.records(tableKey), (record) => ids.has(record.id));
+      if (removeWhere(this.records(tableKey), (record) => ids.has(record.id))) this.invalidateIndex(tableKey);
     }
   }
 
@@ -192,10 +206,71 @@ class ClientStateDbImpl implements ClientStateDb {
     return false;
   }
 
+  private markSortTable(tableKey: ClientStateTableKey): void {
+    const orderBy = CLIENT_STATE_TABLES[tableKey].clientSync.orderBy;
+    if (!orderBy || orderBy.length === 0) return;
+    if (this.sortDeferDepth > 0) {
+      this.pendingSortTables.add(tableKey);
+      return;
+    }
+    this.sortRegisteredTable(tableKey);
+  }
+
+  private flushPendingSorts(): void {
+    if (this.pendingSortTables.size === 0) return;
+    const tables = [...this.pendingSortTables];
+    this.pendingSortTables.clear();
+    for (const tableKey of tables) this.sortRegisteredTable(tableKey);
+  }
+
   private sortRegisteredTable(tableKey: ClientStateTableKey): void {
     const orderBy = CLIENT_STATE_TABLES[tableKey].clientSync.orderBy;
     if (!orderBy || orderBy.length === 0) return;
     this.records(tableKey).sort((left, right) => compareRecords(left, right, orderBy));
+    this.invalidateIndex(tableKey);
+  }
+
+  private upsertRecord(tableKey: ClientStateTableKey, record: ClientStateMutableRecord): void {
+    const list = this.records(tableKey);
+    const indexById = this.indexById(tableKey);
+    const next = cloneRecord(record);
+    const index = indexById.get(record.id);
+    if (index !== undefined) {
+      list[index] = next;
+      return;
+    }
+    indexById.set(record.id, list.length);
+    list.push(next);
+  }
+
+  private recordById(tableKey: ClientStateTableKey, id: string): ClientStateMutableRecord | undefined {
+    const index = this.indexById(tableKey).get(id);
+    return index === undefined ? undefined : this.records(tableKey)[index];
+  }
+
+  private removeRecordById(tableKey: ClientStateTableKey, id: string): void {
+    const index = this.indexById(tableKey).get(id);
+    if (index === undefined) return;
+    this.records(tableKey).splice(index, 1);
+    this.invalidateIndex(tableKey);
+  }
+
+  private indexById(tableKey: ClientStateTableKey): Map<string, number> {
+    const list = this.records(tableKey);
+    const cached = this.indexCache.get(tableKey);
+    if (cached?.list === list) return cached.indexById;
+    const indexById = new Map<string, number>();
+    list.forEach((record, index) => indexById.set(record.id, index));
+    this.indexCache.set(tableKey, { list, indexById });
+    return indexById;
+  }
+
+  private invalidateIndex(tableKey: ClientStateTableKey): void {
+    this.indexCache.delete(tableKey);
+  }
+
+  private clearIndexCache(): void {
+    this.indexCache.clear();
   }
 
   private records(tableKey: ClientStateTableKey): ClientStateMutableRecord[] {
@@ -298,21 +373,14 @@ function compareValues(left: unknown, right: unknown): number {
   return String(left).localeCompare(String(right));
 }
 
-function removeWhere<T>(list: T[], predicate: (item: T) => boolean): void {
+function removeWhere<T>(list: T[], predicate: (item: T) => boolean): boolean {
+  let removed = false;
   for (let index = list.length - 1; index >= 0; index -= 1) {
-    if (predicate(list[index])) list.splice(index, 1);
+    if (!predicate(list[index])) continue;
+    list.splice(index, 1);
+    removed = true;
   }
-}
-
-function upsertMany<T extends { id: string }>(list: T[], items: readonly T[]): void {
-  for (const item of items) upsert(list, item);
-}
-
-function upsert<T extends { id: string }>(list: T[], item: T): void {
-  const index = list.findIndex((candidate) => candidate.id === item.id);
-  const next = cloneRecord(item);
-  if (index >= 0) list[index] = next;
-  else list.push(next);
+  return removed;
 }
 
 function cloneRecord<T extends { id: string }>(record: T): T {
@@ -323,11 +391,6 @@ function cloneValue<T>(value: T): T {
   if (value === undefined || value === null) return value;
   if (typeof structuredClone === 'function') return structuredClone(value);
   return JSON.parse(JSON.stringify(value)) as T;
-}
-
-function removeById<T extends { id: string }>(list: T[], id: string): void {
-  const index = list.findIndex((candidate) => candidate.id === id);
-  if (index >= 0) list.splice(index, 1);
 }
 
 function isConversationScoped(scopedIds: ConversationScopeIndex, tableKey: ClientStateTableKey, id: string): boolean {

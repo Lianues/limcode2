@@ -24,6 +24,7 @@ import {
 import type { TimelineProjectionContextRecord } from '@shared/timelineProjection';
 import { bridge } from '@webview/transport';
 import { createClientStateDb } from './clientStateDb';
+import { areTimelineWindowStablePatches, compactClientPatchOps } from './clientPatchCompaction';
 
 export type ConversationTimelineStatus = 'idle' | 'loadingInitial' | 'loadingOlder' | 'loadingNewer' | 'error';
 
@@ -314,10 +315,12 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       pendingClientStatePatchBatches.delete(streamId);
       const timeline = this.ensureTimeline(conversationId);
       if (batch.streamSeq > 0 && batch.streamSeq <= timeline.streamSeq) return;
-      createClientStateDb(timeline.streamState).applyPatches(batch.patches);
-      pruneClientStateToTimelineWindow(timeline, timeline.streamState);
-      createClientStateDb(timeline.state).applyPatches(batch.patches);
-      pruneClientStateToTimelineWindow(timeline, timeline.state);
+      const patches = compactClientPatchOps(batch.patches);
+      const windowStable = areTimelineWindowStablePatches(patches);
+      createClientStateDb(timeline.streamState).applyPatches(patches);
+      if (!windowStable) pruneClientStateToTimelineWindow(timeline, timeline.streamState);
+      createClientStateDb(timeline.state).applyPatches(patches);
+      if (!windowStable) pruneClientStateToTimelineWindow(timeline, timeline.state);
       timeline.streamSeq = batch.streamSeq;
     },
     setError(conversationId: string | undefined, message: string): void {

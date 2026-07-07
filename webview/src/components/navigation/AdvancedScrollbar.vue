@@ -372,7 +372,10 @@ function attachScroller(element: HTMLElement | null): void {
   }
 
   mutationObserver = new MutationObserver(scheduleSync);
-  mutationObserver.observe(element, { childList: true, subtree: true, characterData: true });
+  // 流式文本会持续修改 TextNode.characterData；这里如果监听 characterData，
+  // 每个 token 都会额外触发 MutationObserver 微任务并挤占渲染帧。
+  // 滚动高度变化由 ResizeObserver 覆盖，MutationObserver 只需要关心节点增删。
+  mutationObserver.observe(element, { childList: true, subtree: true });
 
   void nextTick(scheduleSync);
 }

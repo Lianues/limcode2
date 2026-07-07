@@ -3,6 +3,7 @@ import { createEmptyClientState } from '@shared/clientStateSchema';
 import {
   GLOBAL_CLIENT_STATE_STREAM_ID,
   conversationClientStateStreamId,
+  conversationIdFromClientStateStreamId,
   isFunctionResponsePart,
   type AgentRunRecord,
   type AgentRunStatus,
@@ -18,6 +19,7 @@ import {
 } from '@shared/protocol';
 import { workEnvironmentSortKey as buildWorkEnvironmentSortKey } from '@shared/workEnvironmentCatalog';
 import { createClientStateDb, type ClientStateDb } from './clientStateDb';
+import { compactClientPatchOps } from './clientPatchCompaction';
 
 export interface ClientStateStoreState extends ClientState {
   /** 每个 state stream 当前已应用到的顺序号，用于判断 patch 是否断链。 */
@@ -48,6 +50,16 @@ export function isActiveAgentRunStatus(status: AgentRunStatus): boolean {
 }
 
 const dbByStore = new WeakMap<object, ClientStateDb>();
+
+interface PendingClientStatePatchBatch {
+  streamId: string;
+  streamSeq: number;
+  patches: ClientPatchOp[];
+  frameId?: number;
+  timerId?: number;
+}
+
+const pendingClientStatePatchBatches = new Map<string, PendingClientStatePatchBatch>();
 // 设置页依赖 startup + deferred 两阶段 ClientState：Ready 后第一次 global snapshot 可能还没有
 // workEnvironment / checkpoint 等 deferred 表；后端 deferred 加载完成后会再次 resync。
 // 因此配置页标题加载态至少等到 global stream seq >= 2 再收起。
@@ -61,6 +73,14 @@ function dbFor(store: ClientStateStoreState): ClientStateDb {
     dbByStore.set(key, db);
   }
   return db;
+}
+
+function clearPendingClientStatePatch(streamId: string): void {
+  const batch = pendingClientStatePatchBatches.get(streamId);
+  if (!batch) return;
+  if (batch.frameId !== undefined) window.cancelAnimationFrame(batch.frameId);
+  if (batch.timerId !== undefined) window.clearTimeout(batch.timerId);
+  pendingClientStatePatchBatches.delete(streamId);
 }
 
 /**
@@ -185,17 +205,51 @@ export const useClientStateStore = defineStore('clientState', {
   },
   actions: {
     applyClientSnapshot(streamId: string, streamSeq: number, state: ClientState): void {
+      clearPendingClientStatePatch(streamId);
       this.streamSeqs[streamId] = streamSeq;
       if (!dbFor(this).applySnapshot(streamId, state)) return;
       this.ensureCurrentConversation();
     },
     applyClientPatch(streamId: string, streamSeq: number, patches: ClientPatchOp[]): boolean {
-      const currentStreamSeq = this.streamSeqs[streamId] ?? 0;
+      const pending = pendingClientStatePatchBatches.get(streamId);
+      const currentStreamSeq = pending?.streamSeq ?? this.streamSeqs[streamId] ?? 0;
       if (streamSeq !== currentStreamSeq + 1) return false;
-      dbFor(this).applyPatches(patches);
+
+      // 对话流的 patch 高频且通常包含大量流式文本/思考耗时增量。先转入 RAF 批处理，
+      // 避免在 VS Code postMessage 回调内同步触发大规模 Pinia/Vue 响应式更新。
+      if (conversationIdFromClientStateStreamId(streamId)) {
+        const batch = pending ?? { streamId, streamSeq: currentStreamSeq, patches: [] };
+        batch.streamSeq = streamSeq;
+        batch.patches.push(...patches);
+        pendingClientStatePatchBatches.set(streamId, batch);
+        if (batch.frameId === undefined && batch.timerId === undefined) {
+          // clientState 是全局索引/标题/状态概要，消息正文展示走 conversationTimeline。
+          // 放到下一次绘制之后再应用，避免和可见 timeline flush 挤在同一个 RAF 长任务里。
+          batch.frameId = window.requestAnimationFrame(() => {
+            batch.frameId = undefined;
+            batch.timerId = window.setTimeout(() => {
+              batch.timerId = undefined;
+              this.flushPendingClientStatePatch(streamId);
+            }, 0);
+          });
+        }
+        return true;
+      }
+
+      dbFor(this).applyPatches(compactClientPatchOps(patches));
       this.streamSeqs[streamId] = streamSeq;
       this.ensureCurrentConversation();
       return true;
+    },
+    flushPendingClientStatePatch(streamId: string): void {
+      const batch = pendingClientStatePatchBatches.get(streamId);
+      if (!batch) return;
+      pendingClientStatePatchBatches.delete(streamId);
+      const currentStreamSeq = this.streamSeqs[streamId] ?? 0;
+      if (batch.streamSeq <= currentStreamSeq) return;
+      dbFor(this).applyPatches(compactClientPatchOps(batch.patches));
+      this.streamSeqs[streamId] = batch.streamSeq;
+      this.ensureCurrentConversation();
     },
     setCurrentConversation(conversationId: string): void {
       if (conversationId) this.currentConversationId = conversationId;

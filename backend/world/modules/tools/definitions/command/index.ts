@@ -39,13 +39,13 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
             type: 'string',
             description: '工作目录（相对于工作区根目录），默认为工作区根目录。仅 mode=execute 有效。'
           },
-          timeout: {
+          foregroundWaitMs: {
             type: 'number',
-            description: '必填。前台等待的超时时间（毫秒）。命令在该时间内未结束时不会被终止，而是转入后台继续运行并立即返回其 processId；随后可用 mode=output 获取新增输出、mode=kill 终止。设为 0 表示不前台等待、直接转入后台执行（适合长期运行的服务/进程）。'
+            description: '必填。前台等待预算（毫秒），不是命令超时/终止时间。mode=execute 时，命令启动后工具最多在当前响应中等待这么久：期间完成则同步返回结果；到点仍在运行则不杀进程，转入后台继续运行并返回 processId。设为 0 表示启动后立即转后台（适合长期服务、构建、打包等长任务）。'
           },
           processId: {
             type: 'string',
-            description: 'mode=output / mode=kill 时必填。目标后台进程的 id（由 execute 超时转后台时返回）。'
+            description: 'mode=output / mode=kill 时必填。目标后台进程的 id（由 execute 因前台等待预算用尽或 foregroundWaitMs=0 转后台时返回）。'
           },
           readonly: {
             type: 'string',
@@ -56,7 +56,7 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
             description: '是否等待前面的工具执行完再执行。默认串行(等待)。传 "false" 表示不等待、与前面的工具并行执行。'
           }
         },
-        required: ['explanation', 'timeout']
+        required: ['explanation', 'foregroundWaitMs']
       },
       metadata: {
         category: 'command',
@@ -137,13 +137,13 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
 
       const commandText = (args.command ?? '').trim();
       if (!commandText) return { ok: false, output: 'mode=execute 需要提供 command。' };
-      if (typeof args.timeout !== 'number' || !Number.isFinite(args.timeout) || args.timeout < 0) {
-        return { ok: false, output: 'timeout 为必填参数，需为非负的毫秒数（0 表示不设超时）。' };
+      if (typeof args.foregroundWaitMs !== 'number' || !Number.isFinite(args.foregroundWaitMs) || args.foregroundWaitMs < 0) {
+        return { ok: false, output: 'foregroundWaitMs 为必填参数，需为非负的毫秒数（0 表示启动后立即转后台）。' };
       }
       const deniedBy = firstMatchedCommandRule(commandText, config.denyCommands);
       if (deniedBy) return { ok: false, output: `命令已被工具策略黑名单拒绝：${deniedBy}` };
 
-      const result = await deps.command.run({ command: args.command, cwd: args.cwd, timeout: args.timeout }, {
+      const result = await deps.command.run({ command: args.command, cwd: args.cwd, foregroundWaitMs: args.foregroundWaitMs }, {
         onEvent(event) {
           ctx?.emit({
             kind: event.kind,
@@ -162,7 +162,7 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
 type CommandToolArgs = {
   command?: string;
   cwd?: string;
-  timeout?: number;
+  foregroundWaitMs?: number;
   mode?: string;
   processId?: string;
   readonly?: string;

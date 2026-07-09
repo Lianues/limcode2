@@ -59,7 +59,7 @@ export async function runRemoteServerCommand(
   const cwd = resolveRemoteCwd(args.cwd, environment);
   const script = cwd ? `cd ${shQuote(cwd)} && ${command}` : command;
   return executeRemoteServerScript(environment, script, {
-    timeout: resolveRemoteTimeout(args.timeout),
+    timeout: resolveRemoteTimeout(args.foregroundWaitMs),
     observer,
     displayCommand: command
   });

@@ -242,7 +242,8 @@ export interface CommandRunObserver {
 export interface CommandRunArgs {
   command?: string;
   cwd?: string;
-  timeout?: number;
+  /** 前台等待预算（毫秒）：到点仍未结束则转后台；不是命令终止超时。 */
+  foregroundWaitMs?: number;
 }
 
 /** 返回给模型的 stdout/stderr 输出上限（保留末尾内容）。 */
@@ -254,7 +255,7 @@ export interface CommandOutputLimits {
 /**
  * 命令执行/后台进程状态：
  * - completed：前台同步执行完毕。
- * - running：超时转入后台，进程仍在运行。
+ * - running：前台等待预算用尽后转入后台，进程仍在运行。
  * - exited：后台进程已自然退出（通过 output 读到）。
  * - killed：后台进程被 kill 终止。
  * - not_found：output/kill 指定的 processId 不存在（已清理或从未存在）。
@@ -334,7 +335,7 @@ export interface WorkEnvironmentRuntimeCapability {
 export interface CommandCapability {
   readonly toolName: 'shell' | 'bash';
   readonly description: string;
-  /** 执行新命令；超时不再 kill，而是转入后台并返回 { status:'running', processId }。limits 控制返回给模型的输出上限。 */
+  /** 执行新命令；前台等待预算用尽时不 kill，而是转入后台并返回 { status:'running', processId }。limits 控制返回给模型的输出上限。 */
   run(args: CommandRunArgs, observer?: CommandRunObserver, options?: WorkEnvironmentCapabilityOptions, limits?: CommandOutputLimits): Promise<CommandRunResult>;
   /** 读取某后台进程当前已累积的全部日志，并返回其运行状态；默认读取终态日志后清理，consume=false 仅同步。 */
   readOutput(processId: string, limits: CommandOutputLimits, options?: { consume?: boolean }): CommandRunResult;

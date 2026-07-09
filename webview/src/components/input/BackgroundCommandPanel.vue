@@ -74,7 +74,7 @@ interface CommandEntry {
   shell: string;
   command: string;
   cwd?: string;
-  timeout?: number;
+  foregroundWaitMs?: number;
   mode?: string;
   accessLabel: string;
   status: string;
@@ -97,7 +97,7 @@ interface CommandDraft {
   shell: string;
   command: string;
   cwd?: string;
-  timeout?: number;
+  foregroundWaitMs?: number;
   mode?: string;
   accessLabel: string;
   status: string;
@@ -255,7 +255,7 @@ function createDraft(processId: string, call: ToolCallRecord, args: ShellArgs, o
     shell: call.name,
     command: args.command?.trim() || output?.command?.trim() || '',
     cwd: args.cwd?.trim() || undefined,
-    timeout: args.timeout,
+    foregroundWaitMs: args.foregroundWaitMs,
     mode: normalizeMode(args.mode),
     accessLabel: readonlyLabel(args),
     status: output?.status ?? call.status,
@@ -279,7 +279,7 @@ function mergeCall(draft: CommandDraft, call: ToolCallRecord, args: ShellArgs, o
   draft.updatedAt = Math.max(draft.updatedAt, call.updatedAt);
   if (!draft.command) draft.command = args.command?.trim() || output?.command?.trim() || '';
   if (!draft.cwd && args.cwd?.trim()) draft.cwd = args.cwd.trim();
-  if (draft.timeout === undefined && args.timeout !== undefined) draft.timeout = args.timeout;
+  if (draft.foregroundWaitMs === undefined && args.foregroundWaitMs !== undefined) draft.foregroundWaitMs = args.foregroundWaitMs;
   if (!draft.mode) draft.mode = normalizeMode(args.mode);
   if (args.readonly !== undefined) draft.accessLabel = readonlyLabel(args);
 
@@ -478,7 +478,7 @@ function stringifyValue(value: unknown): string {
                   <dt>模式</dt><dd>{{ selectedEntry.mode }}</dd>
                   <dt>权限</dt><dd>{{ selectedEntry.accessLabel }}</dd>
                   <dt>工作目录</dt><dd>{{ selectedEntry.cwd || '-' }}</dd>
-                  <dt>Timeout</dt><dd>{{ selectedEntry.timeout === undefined ? '-' : `${selectedEntry.timeout}ms` }}</dd>
+                  <dt>前台等待</dt><dd>{{ selectedEntry.foregroundWaitMs === undefined ? '-' : `${selectedEntry.foregroundWaitMs}ms` }}</dd>
                   <dt>调用次数</dt><dd>{{ selectedEntry.callCount }}</dd>
                   <dt>开始</dt><dd>{{ formatTime(selectedEntry.startedAt) }}</dd>
                   <dt>更新</dt><dd>{{ formatTime(selectedEntry.updatedAt) }}</dd>

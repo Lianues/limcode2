@@ -21,7 +21,7 @@ export const runAgentTool: ToolDefinition = {
 - answerBridgeId 是继续/追加某个 run_agent 子对话的首选方式；传入后会自动找到它绑定的子 Agent 与子对话，并沿用同一个默认 submit_agent_answer 通道。
 - agent.id 仅用于兼容直接复用 run_agent 返回的临时 Agent 镜像；首选传 answerBridgeId。agent.id 不是类型配置 id，找不到会报错。
 - prompt 内应写清楚任务、背景、角色和补充信息，不再提供额外 context / conversation / mode / delivery 参数。
-- timeout 为前台等待时间（毫秒）：0 表示直接转后台；超过 timeout 后 AgentRun 会继续在后台运行，工具立即返回 agentId/runId/conversationId/answerBridgeId。`,
+- foregroundWaitMs 是工具响应的前台等待预算（毫秒），不是 AgentRun 终止超时；0 表示启动后立即转后台；等待预算用尽后 AgentRun 会继续在后台运行，工具立即返回 agentId/runId/conversationId/answerBridgeId。`,
     parameters: {
       type: 'object',
       properties: {
@@ -46,9 +46,9 @@ export const runAgentTool: ToolDefinition = {
             }
           }
         },
-        timeout: {
+        foregroundWaitMs: {
           type: 'number',
-          description: '必填。前台等待 AgentRun 完成的超时时间（毫秒）。设为 0 表示不前台等待、直接转后台执行；超过该时间后会转入后台继续运行并返回 agentId/runId/conversationId/answerBridgeId。'
+          description: '必填。工具响应的前台等待预算（毫秒），不是 AgentRun 终止超时。设为 0 表示启动后立即转后台执行；等待预算用尽后 AgentRun 会继续在后台运行，并返回 agentId/runId/conversationId/answerBridgeId。'
         },
         wait: {
           type: 'string',
@@ -60,7 +60,7 @@ export const runAgentTool: ToolDefinition = {
           description: '工具调度模式。默认 parallel；如果任务会互相影响，请显式传 serial。'
         }
       },
-      required: ['prompt', 'timeout']
+      required: ['prompt', 'foregroundWaitMs']
     },
     metadata: {
       category: 'agent',
@@ -76,7 +76,7 @@ export const runAgentTool: ToolDefinition = {
 };
 
 interface RunAgentSchedulingArgs {
-  timeout?: number;
+  foregroundWaitMs?: number;
   wait?: string;
   scheduling?: string;
 }

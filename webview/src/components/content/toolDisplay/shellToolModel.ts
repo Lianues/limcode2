@@ -4,7 +4,7 @@ import type { ToolDisplayContext, ToolDisplaySection } from './types';
 export interface ShellArgs {
   command?: string;
   cwd?: string;
-  timeout?: number;
+  foregroundWaitMs?: number;
   force?: boolean;
   scheduling?: string;
   explanation?: string;
@@ -32,7 +32,7 @@ export function parseShellArgs(value: unknown): ShellArgs {
   return {
     command: stringValue(record.command),
     cwd: stringValue(record.cwd),
-    timeout: numberValue(record.timeout),
+    foregroundWaitMs: numberValue(record.foregroundWaitMs),
     force: booleanValue(record.force),
     scheduling: stringValue(record.scheduling),
     explanation: stringValue(record.explanation),
@@ -69,7 +69,7 @@ export function shellInputSections(args: ShellArgs, context: ToolDisplayContext)
 
   const optionLines = [
     args.cwd?.trim() ? `cwd ${args.cwd.trim()}` : undefined,
-    typeof args.timeout === 'number' && Number.isFinite(args.timeout) ? `timeout ${args.timeout}ms` : undefined,
+    typeof args.foregroundWaitMs === 'number' && Number.isFinite(args.foregroundWaitMs) ? `前台等待预算 ${args.foregroundWaitMs}ms` : undefined,
     typeof args.force === 'boolean' ? `force ${args.force}` : undefined,
     args.scheduling?.trim() ? `scheduling ${args.scheduling.trim()}` : undefined
   ].filter((line): line is string => Boolean(line));

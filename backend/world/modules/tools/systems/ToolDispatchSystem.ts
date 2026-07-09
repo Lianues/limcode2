@@ -188,7 +188,7 @@ export const ToolDispatchSystem = defineSystem({
   },
   run(ctx) {
     const { world, cmd } = ctx;
-    backgroundTimedOutRunAgentTools(world, cmd);
+    backgroundForegroundWaitElapsedRunAgentTools(world, cmd);
 
     const handled = new Set<Entity>();
 
@@ -798,8 +798,8 @@ function executeReadAgentAnswerTool(world: WorldReader, cmd: CommandSink, entity
         status: 'interrupted',
         ...(agentId ? { agentId } : {}),
         error: agentId
-          ? `对应 answerBridgeId 绑定的子 Agent 已中断（没有在运行、也没有提交 answer）。请调用 run_agent({ answerBridgeId: "${answerBridgeId}", prompt, timeout }) 继续/追加同一个子对话；默认 submit_agent_answer 通道会继续沿用该 answerBridgeId。`
-          : `对应 answerBridgeId 绑定的子 Agent 已中断（没有在运行、也没有提交 answer）。请调用 run_agent({ answerBridgeId: "${answerBridgeId}", prompt, timeout }) 继续/追加同一个子对话。`
+          ? `对应 answerBridgeId 绑定的子 Agent 已中断（没有在运行、也没有提交 answer）。请调用 run_agent({ answerBridgeId: "${answerBridgeId}", prompt, foregroundWaitMs }) 继续/追加同一个子对话；默认 submit_agent_answer 通道会继续沿用该 answerBridgeId。`
+          : `对应 answerBridgeId 绑定的子 Agent 已中断（没有在运行、也没有提交 answer）。请调用 run_agent({ answerBridgeId: "${answerBridgeId}", prompt, foregroundWaitMs }) 继续/追加同一个子对话。`
       });
       return;
     }
@@ -820,22 +820,22 @@ function executeReadAgentAnswerTool(world: WorldReader, cmd: CommandSink, entity
   });
 }
 
-function backgroundTimedOutRunAgentTools(world: WorldReader, cmd: CommandSink): void {
+function backgroundForegroundWaitElapsedRunAgentTools(world: WorldReader, cmd: CommandSink): void {
   const now = Date.now();
   for (const entity of world.query(ToolCall, ToolState)) {
     const call = world.get(entity, ToolCall);
     const state = world.get(entity, ToolState);
     if (!call || !state || call.name !== RUN_AGENT_TOOL_NAME || state.status !== 'executing') continue;
     const progress = runAgentToolProgress(state.progress);
-    const timeoutMs = progress.timeoutMs;
+    const foregroundWaitMs = progress.foregroundWaitMs;
     const startedAt = progress.startedAt ?? call.createdAt;
-    if (timeoutMs === undefined || timeoutMs <= 0) continue;
-    if (now - startedAt < timeoutMs) continue;
+    if (foregroundWaitMs === undefined || foregroundWaitMs <= 0) continue;
+    if (now - startedAt < foregroundWaitMs) continue;
 
     const run = progress.runId ? findAgentRunById(world, progress.runId) : undefined;
     if (run !== undefined) setRunDeliveryPolicyMode(world, cmd, run, 'notification');
 
-    completeRunAgentToolAsBackground(cmd, entity, call, state, progress, 'timeout');
+    completeRunAgentToolAsBackground(cmd, entity, call, state, progress, 'foreground_wait_elapsed');
   }
 }
 
@@ -862,7 +862,7 @@ function runAgentToolProgress(value: unknown): RunAgentToolProgress {
     agentId: typeof record.agentId === 'string' ? record.agentId : undefined,
     conversationId: typeof record.conversationId === 'string' ? record.conversationId : undefined,
     answerBridgeId: typeof record.answerBridgeId === 'string' ? record.answerBridgeId : undefined,
-    timeoutMs: typeof record.timeoutMs === 'number' && Number.isFinite(record.timeoutMs) ? record.timeoutMs : undefined,
+    foregroundWaitMs: typeof record.foregroundWaitMs === 'number' && Number.isFinite(record.foregroundWaitMs) ? record.foregroundWaitMs : undefined,
     startedAt: typeof record.startedAt === 'number' && Number.isFinite(record.startedAt) ? record.startedAt : undefined
   };
 }
@@ -873,7 +873,7 @@ function completeRunAgentToolAsBackground(
   call: ToolCallData,
   state: ToolStateData,
   progress: RunAgentToolProgress,
-  reason: 'timeout' | 'timeout_zero'
+  reason: 'foreground_wait_elapsed' | 'background_immediately'
 ): void {
   const started = state.status === 'executing'
     ? { state, startedAt: progress.startedAt ?? call.createdAt }
@@ -888,11 +888,9 @@ function completeRunAgentToolAsBackground(
     ...(progress.runId ? { runId: progress.runId } : {}),
     ...(progress.conversationId ? { conversationId: progress.conversationId } : {}),
     ...(progress.answerBridgeId ? { answerBridgeId: progress.answerBridgeId } : {}),
-    message: reason === 'timeout_zero'
-      ? 'AgentRun 已直接转入后台执行；稍后可用 answerBridgeId 读取提交内容。'
-      : 'AgentRun 超过 timeout，已转入后台继续执行；稍后可用 answerBridgeId 读取提交内容。'
-
-
+    message: reason === 'background_immediately'
+      ? 'AgentRun 已启动并直接转入后台执行；稍后可用 answerBridgeId 读取提交内容。'
+      : 'AgentRun 前台等待预算已用尽，已转入后台继续执行；稍后可用 answerBridgeId 读取提交内容。'
   };
   cmd.add(entity, ToolState, transitionToolState(started.state, 'success', { result, durationMs }, now));
   cmd.remove(entity, InFlight);
@@ -1063,7 +1061,7 @@ interface RunAgentArgs {
   prompt?: string;
   answerBridgeId?: string;
   agent?: RunAgentAgentSelector;
-  timeout?: number;
+  foregroundWaitMs?: number;
   wait?: string;
   scheduling?: string;
 }
@@ -1079,7 +1077,7 @@ interface RunAgentToolProgress {
   agentId?: string;
   conversationId?: string;
   answerBridgeId?: string;
-  timeoutMs?: number;
+  foregroundWaitMs?: number;
   startedAt?: number;
 }
 
@@ -1143,9 +1141,9 @@ function resolveRunAgentPolicyDefaults(_definition: BuiltinAgentDefinition, _mod
   };
 }
 
-function normalizeRunAgentTimeout(value: unknown): { ok: true; value: number } | { ok: false; reason: string } {
+function normalizeRunAgentForegroundWaitMs(value: unknown): { ok: true; value: number } | { ok: false; reason: string } {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-    return { ok: false, reason: 'run_agent.timeout 为必填参数，需为非负毫秒数；0 表示直接转后台。' };
+    return { ok: false, reason: 'run_agent.foregroundWaitMs 为必填参数，需为非负毫秒数；0 表示启动后立即转后台。' };
   }
   return { ok: true, value: Math.floor(value) };
 }
@@ -1306,9 +1304,9 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     return;
   }
 
-  const timeout = normalizeRunAgentTimeout(args.timeout);
-  if (!timeout.ok) {
-    rejectToolCall(cmd, entity, call, state, timeout.reason);
+  const foregroundWait = normalizeRunAgentForegroundWaitMs(args.foregroundWaitMs);
+  if (!foregroundWait.ok) {
+    rejectToolCall(cmd, entity, call, state, foregroundWait.reason);
     return;
   }
 
@@ -1369,7 +1367,7 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
   const answerBridgeId = reusedAnswerBridgeId ?? `agent-answer:${createMessageId()}`;
   const promptWithAnswerBridge = `${prompt}\n\n[Agent answer bridge]\n本次任务已${reusedAnswerBridgeId ? '沿用' : '分配'}默认 answerBridgeId：${answerBridgeId}。当你需要把阶段性结论或最终正文提交给来源 Agent 时，请调用 submit_agent_answer({ title, content })，未传 answerBridgeId 时会自动使用这个 answerBridgeId；即使本次 AgentRun 中断、重试或用户补充条件，只要继续在同一子对话中执行，默认值也应保持为这个 answerBridgeId；如果用户要求提交到其它 answerBridgeId，可显式传 submit_agent_answer({ answerBridgeId, title, content })。同一个 answerBridgeId 可以重复提交，每次提交都会通知来源 Agent。最终自然语言回复可以保持简短。`;
   const inputMessage = spawnUserMessage(cmd, resolved.value.conversation, promptWithAnswerBridge);
-  const background = timeout.value === 0;
+  const background = foregroundWait.value === 0;
   const baseDeliveryPolicy: RunDeliveryPolicyBlueprint = {
     ...policyDefaults.deliveryPolicy,
     mode: background ? 'notification' : 'tool_response',
@@ -1409,11 +1407,11 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     agentId: targetAgentId,
     conversationId: resolved.value.conversationId,
     answerBridgeId,
-    timeoutMs: timeout.value,
+    foregroundWaitMs: foregroundWait.value,
     startedAt: now
   };
   if (background) {
-    completeRunAgentToolAsBackground(cmd, entity, call, state, progress, 'timeout_zero');
+    completeRunAgentToolAsBackground(cmd, entity, call, state, progress, 'background_immediately');
     return;
   }
 

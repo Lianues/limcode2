@@ -26,7 +26,7 @@ interface RunAgentPayloadLike {
 
 interface RunAgentArgsLike {
   prompt?: string;
-  timeout?: number;
+  foregroundWaitMs?: number;
   agent?: {
     id?: string;
     type?: string;
@@ -375,7 +375,7 @@ function readAnswerPayload(entry: AgentPanelEntry): string {
     error: running
       ? '对应 answerBridgeId 绑定的子对话仍在运行，尚未提交内容。请稍后重试或等待 submit_agent_answer 通知。'
       : entry.answerBridgeId
-        ? `对应的子对话已中断。可调用 run_agent({ answerBridgeId: "${entry.answerBridgeId}", prompt, timeout }) 继续/追加同一子对话。`
+        ? `对应的子对话已中断。可调用 run_agent({ answerBridgeId: "${entry.answerBridgeId}", prompt, foregroundWaitMs }) 继续/追加同一子对话。`
         : '对应的子对话已中断。可向同一个 Agent 追加消息以触发继续。'
   }, null, 2);
 }

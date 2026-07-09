@@ -13,7 +13,7 @@ import {
 } from '../../shared/workEnvironmentCatalog';
 import { isRemoteServerCommandEnvironment, runRemoteServerCommand } from './workEnvironmentProvider';
 
-const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_FOREGROUND_WAIT_MS = 30_000;
 /** 后台进程完整日志 buffer 的上限（远大于给模型的软上限，避免过早丢弃可能被 output 读取的历史）。 */
 const BACKGROUND_MAX_CHARS = 200_000;
 /** 兜底的输出上限（调用方未显式传入 limits 时使用）。 */
@@ -208,7 +208,7 @@ function detectCommandProfile(): CommandProfile {
       toolName: 'shell',
       commandPrefix: PS_UTF8_PREFIX,
       description: `在项目目录下通过 PowerShell 执行非交互命令(mode=execute)。返回 stdout、stderr 和退出码。
-超时行为：命令在 timeout(必填,毫秒)内未结束时不会被终止，而是转入后台继续运行并返回 processId(timeout=0 表示直接转后台)；随后可用 mode=output 查看当前全部输出、mode=kill 终止。后台进程结束后日志会一直保留，直到你用 mode=output 读取一次(读取即清理)。
+前台等待行为：foregroundWaitMs 是工具响应的前台等待预算，不是命令超时/终止时间。命令在 foregroundWaitMs 毫秒内未结束时不会被终止，而是转入后台继续运行并返回 processId；foregroundWaitMs=0 表示启动后立即转后台。随后可用 mode=output 查看当前全部输出、mode=kill 终止。后台进程结束后日志会一直保留，直到你用 mode=output 读取一次(读取即清理)。
 安全拦截：内置仅拦截格式化磁盘/文件系统和直接删除根目录；其他命令可通过工具策略中的命令黑名单控制。
 命令规范：多条命令用分号 ; 分隔；路径含空格时用双引号；长输出建议加 | Select-Object -First N。
 编码规范：工具默认把 PowerShell 输入/输出设为 UTF-8；如读取非 UTF-8 文件，请在命令中显式指定 -Encoding。`
@@ -220,7 +220,7 @@ function detectCommandProfile(): CommandProfile {
     toolName: 'bash',
     executable: process.env.SHELL || '/bin/bash',
     description: `在项目目录下通过 Bash/Shell 执行非交互命令(mode=execute)。返回 stdout、stderr 和退出码。
-超时行为：命令在 timeout(必填,毫秒)内未结束时不会被终止，而是转入后台继续运行并返回 processId(timeout=0 表示直接转后台)；随后可用 mode=output 查看当前全部输出、mode=kill 终止。后台进程结束后日志会一直保留，直到你用 mode=output 读取一次(读取即清理)。
+前台等待行为：foregroundWaitMs 是工具响应的前台等待预算，不是命令超时/终止时间。命令在 foregroundWaitMs 毫秒内未结束时不会被终止，而是转入后台继续运行并返回 processId；foregroundWaitMs=0 表示启动后立即转后台。随后可用 mode=output 查看当前全部输出、mode=kill 终止。后台进程结束后日志会一直保留，直到你用 mode=output 读取一次(读取即清理)。
 安全拦截：内置仅拦截格式化磁盘/文件系统和直接删除根目录；其他命令可通过工具策略中的命令黑名单控制。
 命令规范：多条命令建议用 && 连接；路径含空格时用双引号；长输出建议加 | head -n N。`
   };
@@ -255,18 +255,18 @@ async function runCommand(profile: CommandProfile, registry: Map<string, Backgro
   }
 
   if (remoteEnvironment) {
-    // TODO: 远程 SSH 分支暂不支持超时转后台，超时仍会终止；后台管理仅本地命令可用。
+    // TODO: 远程 SSH 分支暂不支持转后台，前台等待预算仍会作为远程命令终止上限；后台管理仅本地命令可用。
     const raw = await runRemoteServerCommand(remoteEnvironment, args, observer);
     return annotateResult('bash', { ...raw, status: raw.killed ? 'killed' : 'completed' });
   }
 
   const cwd = resolveWorkDir(args.cwd, options);
-  const timeout = resolveTimeout(args.timeout);
-  const raw = await executeCommand(profile, registry, archived, pathsProvider, command, cwd, timeout, limits, observer);
+  const foregroundWaitMs = resolveForegroundWaitMs(args.foregroundWaitMs);
+  const raw = await executeCommand(profile, registry, archived, pathsProvider, command, cwd, foregroundWaitMs, limits, observer);
   return annotateResult(profile.kind, raw);
 }
 
-function executeCommand(profile: CommandProfile, registry: Map<string, BackgroundProcessHandle>, archived: Map<string, PersistedBackgroundProcessRecord>, pathsProvider: BackgroundCommandPathsProvider | undefined, command: string, cwd: string, timeout: number, limits: CommandOutputLimits, observer?: CommandRunObserver): Promise<CommandRunResult> {
+function executeCommand(profile: CommandProfile, registry: Map<string, BackgroundProcessHandle>, archived: Map<string, PersistedBackgroundProcessRecord>, pathsProvider: BackgroundCommandPathsProvider | undefined, command: string, cwd: string, foregroundWaitMs: number, limits: CommandOutputLimits, observer?: CommandRunObserver): Promise<CommandRunResult> {
   const wrappedCommand = `${profile.commandPrefix ?? ''}${command}`;
   return new Promise((resolve) => {
     const stdout = new AppendBuffer(BACKGROUND_MAX_CHARS);
@@ -284,13 +284,13 @@ function executeCommand(profile: CommandProfile, registry: Map<string, Backgroun
       env: nonInteractiveEnv(profile.kind)
     });
 
-    // 转入后台继续运行（不再 kill），立即以 running 状态 resolve 前台 promise。
-    // 触发时机：timeout>0 到点触发；timeout===0 生成子进程后立即触发。
+    // 转入后台继续运行（不 kill），立即以 running 状态 resolve 前台 promise。
+    // 触发时机：foregroundWaitMs>0 到点触发；foregroundWaitMs===0 生成子进程后立即触发。
     const moveToBackground = (): void => {
       if (settled) return;
       backgrounded = true;
       settled = true;
-      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (foregroundWaitTimer) clearTimeout(foregroundWaitTimer);
       streamEvents.flush();
       streamEvents = createStreamEventEmitter(undefined); // 停止向已终态的 toolCall 推流，仅写 buffer
       const processId = generateProcessId(registry, archived);
@@ -312,13 +312,13 @@ function executeCommand(profile: CommandProfile, registry: Map<string, Backgroun
       });
     };
 
-    const timeoutTimer = timeout > 0 ? setTimeout(moveToBackground, timeout) : undefined;
-    timeoutTimer?.unref?.();
+    const foregroundWaitTimer = foregroundWaitMs > 0 ? setTimeout(moveToBackground, foregroundWaitMs) : undefined;
+    foregroundWaitTimer?.unref?.();
 
     const settleForeground = (exitCode: number): void => {
       if (settled) return;
       settled = true;
-      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (foregroundWaitTimer) clearTimeout(foregroundWaitTimer);
       streamEvents.flush();
       const out = stdout.snapshot();
       const err = stderr.snapshot();
@@ -371,8 +371,8 @@ function executeCommand(profile: CommandProfile, registry: Map<string, Backgroun
     });
     child.stdin?.end();
 
-    // timeout=0：不做前台等待，子进程一启动即转入后台执行。
-    if (timeout === 0) moveToBackground();
+    // foregroundWaitMs=0：不做前台等待，子进程一启动即转入后台执行。
+    if (foregroundWaitMs === 0) moveToBackground();
   });
 }
 
@@ -723,9 +723,9 @@ function emitStreamDelta(observer: CommandRunObserver | undefined, kind: StreamO
   }
 }
 
-function resolveTimeout(value: number | undefined): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return DEFAULT_TIMEOUT_MS;
-  return value;
+function resolveForegroundWaitMs(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return DEFAULT_FOREGROUND_WAIT_MS;
+  return Math.floor(value);
 }
 
 function resolveWorkDir(cwd: string | undefined, options: WorkEnvironmentCapabilityOptions): string {

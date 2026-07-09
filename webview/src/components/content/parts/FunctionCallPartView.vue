@@ -146,19 +146,19 @@ const commandAccessLabel = computed(() => {
   const args = parseShellArgs(props.part.functionCall.args);
   return args.readonly?.trim().toLowerCase() === 'true' ? '只读' : '读写';
 });
-const commandTimeoutLabel = computed(() => {
+const commandForegroundWaitLabel = computed(() => {
   if (!isCommandTool(props.part.functionCall.name)) return undefined;
   const args = parseShellArgs(props.part.functionCall.args);
-  return formatShellTimeoutLabel(args.timeout);
+  return formatShellForegroundWaitLabel(args.foregroundWaitMs);
 });
 const commandSummaryPrefix = computed(() => {
-  const labels = [commandAccessLabel.value, commandTimeoutLabel.value].filter((label): label is string => Boolean(label));
+  const labels = [commandAccessLabel.value, commandForegroundWaitLabel.value].filter((label): label is string => Boolean(label));
   if (labels.length === 0) return undefined;
   const prefix = labels.join(' · ');
   return summaryDisplay.value ? `${prefix} ·` : prefix;
 });
-const hasCommandSummaryMeta = computed(() => Boolean(commandAccessLabel.value || commandTimeoutLabel.value));
-const summaryTitle = computed(() => [commandAccessLabel.value, commandTimeoutLabel.value, summaryLabel.value].filter(Boolean).join(' · ') || undefined);
+const hasCommandSummaryMeta = computed(() => Boolean(commandAccessLabel.value || commandForegroundWaitLabel.value));
+const summaryTitle = computed(() => [commandAccessLabel.value, commandForegroundWaitLabel.value, summaryLabel.value].filter(Boolean).join(' · ') || undefined);
 const hasBatchMeta = computed(() => props.batchIndex !== undefined && props.batchMode !== undefined && props.batchState !== undefined);
 const batchModeLabel = computed(() => props.batchMode === 'parallel' ? '并行批次' : '串行批次');
 const batchStateLabel = computed(() => {
@@ -216,10 +216,10 @@ function isCommandTool(toolName: string): boolean {
   return toolName === 'shell' || toolName === 'bash';
 }
 
-function formatShellTimeoutLabel(timeout: number | undefined): string | undefined {
-  if (typeof timeout !== 'number' || !Number.isFinite(timeout)) return undefined;
-  if (timeout <= 0) return '后台';
-  return `超时 ${formatSeconds(timeout / 1000)}秒`;
+function formatShellForegroundWaitLabel(foregroundWaitMs: number | undefined): string | undefined {
+  if (typeof foregroundWaitMs !== 'number' || !Number.isFinite(foregroundWaitMs)) return undefined;
+  if (foregroundWaitMs <= 0) return '立即后台';
+  return `前台等待 ${formatSeconds(foregroundWaitMs / 1000)}秒`;
 }
 
 function formatSeconds(seconds: number): string {

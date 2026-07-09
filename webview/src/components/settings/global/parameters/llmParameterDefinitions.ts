@@ -1,4 +1,4 @@
-import type { LlmProviderKind, LlmThinkingLevel } from '@shared/protocol';
+import type { LlmProviderKind, LlmReasoningMode, LlmThinkingLevel } from '@shared/protocol';
 
 export type LlmParameterValueType = 'number' | 'boolean' | 'enum';
 
@@ -14,7 +14,7 @@ export interface LlmParameterDefinition {
   /** 当前 provider 下最终请求体里的原生字段路径，仅用于 UI 展示。 */
   displayPath: string;
   valueType: LlmParameterValueType;
-  defaultValue: number | boolean | LlmThinkingLevel;
+  defaultValue: number | boolean | LlmThinkingLevel | LlmReasoningMode;
   providers: readonly LlmProviderKind[];
   options?: readonly { value: string; label: string; description?: string }[];
 }
@@ -29,6 +29,10 @@ interface ProviderParameterDisplay {
 
 const ALL_PROVIDERS = ['openai-compatible', 'openai-responses', 'claude', 'gemini', 'deepseek'] as const satisfies readonly LlmProviderKind[];
 const GEMINI_CLAUDE = ['gemini', 'claude'] as const satisfies readonly LlmProviderKind[];
+const REASONING_MODE_OPTIONS = [
+  { value: 'standard', label: 'Standard' },
+  { value: 'pro', label: 'Pro' }
+] as const satisfies readonly { value: LlmReasoningMode; label: string }[];
 const THINKING_LEVEL_OPTIONS: Record<LlmProviderKind, readonly { value: LlmThinkingLevel; label: string; description?: string }[]> = {
   gemini: [
     { value: 'minimal', label: 'Minimal' },
@@ -107,6 +111,11 @@ const PROVIDER_PARAMETER_DISPLAY: Record<LlmProviderKind, Record<string, Provide
     temperature: { path: 'temperature' },
     topP: { path: 'top_p', label: 'Top P / top_p' },
     maxOutputTokens: { path: 'max_output_tokens', label: 'Max Output Tokens' },
+    reasoningMode: {
+      path: 'reasoning.mode',
+      label: 'Reasoning Mode',
+      description: 'OpenAI Responses 推理模式：standard 为标准模式，pro 为专业模式。'
+    },
     thinkingLevel: {
       path: 'reasoning.effort',
       label: 'Reasoning Effort',
@@ -179,6 +188,16 @@ export const LLM_PARAMETER_DEFINITIONS: readonly BaseLlmParameterDefinition[] = 
     valueType: 'number',
     defaultValue: 10000,
     providers: GEMINI_CLAUDE
+  },
+  {
+    key: 'reasoningMode',
+    path: ['thinkingConfig', 'reasoningMode'],
+    label: 'Reasoning Mode',
+    description: 'OpenAI Responses 推理模式。',
+    valueType: 'enum',
+    defaultValue: 'standard',
+    providers: ['openai-responses'],
+    options: REASONING_MODE_OPTIONS
   }
 ];
 

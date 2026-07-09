@@ -298,6 +298,7 @@ function sanitizeGenerationConfig(input: LlmGenerationConfigRecord | undefined):
     if (typeof thinkingConfig.includeThoughts === 'boolean') nextThinking.includeThoughts = thinkingConfig.includeThoughts;
     assignFiniteNumber(nextThinking, 'thinkingBudget', thinkingConfig.thinkingBudget);
     if (isKnownThinkingLevel(thinkingConfig.thinkingLevel)) nextThinking.thinkingLevel = thinkingConfig.thinkingLevel;
+    if (isKnownReasoningMode(thinkingConfig.reasoningMode)) nextThinking.reasoningMode = thinkingConfig.reasoningMode;
     if (Object.keys(nextThinking).length > 0) config.thinkingConfig = nextThinking;
   }
 
@@ -319,6 +320,10 @@ function isKnownThinkingLevel(value: unknown): value is NonNullable<NonNullable<
     || value === 'high'
     || value === 'xhigh'
     || value === 'max';
+}
+
+function isKnownReasoningMode(value: unknown): value is NonNullable<NonNullable<LlmGenerationConfigRecord['thinkingConfig']>['reasoningMode']> {
+  return value === 'standard' || value === 'pro';
 }
 
 function sanitizeRequestBody(input: LlmRequestBodyRecord | undefined): LlmRequestBodyRecord | undefined {

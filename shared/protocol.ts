@@ -426,11 +426,13 @@ export interface TaskListToolOutputRecord {
 export type LlmProviderKind = 'openai-compatible' | 'openai-responses' | 'claude' | 'gemini' | 'deepseek';
 export type LlmToolCallFormat = 'function-call';
 export type LlmThinkingLevel = 'not-set' | 'non-set' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type LlmReasoningMode = 'standard' | 'pro';
 
 export interface LlmThinkingConfigRecord {
   includeThoughts?: boolean;
   thinkingBudget?: number;
   thinkingLevel?: LlmThinkingLevel;
+  reasoningMode?: LlmReasoningMode;
 }
 
 export interface LlmGenerationConfigRecord {

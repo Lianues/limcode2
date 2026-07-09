@@ -121,7 +121,7 @@ const PROVIDER_PARAMETER_DISPLAY: Record<LlmProviderKind, Record<string, Provide
     thinkingLevel: {
       path: 'reasoning.effort',
       label: 'Reasoning Effort',
-      description: "OpenAI Responses 原生推理字段：reasoning.effort；unified 会补 reasoning.summary='auto'。"
+      description: "OpenAI Responses 原生推理字段：reasoning.effort；unified 会补 reasoning.summary='detailed'。"
     }
   },
   deepseek: {

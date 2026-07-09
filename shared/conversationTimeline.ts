@@ -64,13 +64,14 @@ function groupCompressionByDisplayAnchor(
 ): { byMessage: Map<string, CompressionBlockRecord[]> } {
   const byMessage = new Map<string, CompressionBlockRecord[]>();
   const messageById = new Map(messages.map((message) => [message.id, message]));
-  // 压缩块只展示在“可见消息”范围内。隐藏的 functionResponse / backfill 消息只用于
-  // LLM 上下文，不应扩展前端可见范围；范围外的压缩块可以存在于 state 中供后端上下文使用，
-  // 但不在当前 timeline 页里显示。
-  const firstSeq = messages[0]?.seq ?? anchorMessages[0]?.seq;
-  const lastSeq = messages[messages.length - 1]?.seq ?? anchorMessages[anchorMessages.length - 1]?.seq;
+  const anchorMessageById = new Map(anchorMessages.map((message) => [message.id, message]));
+  // 压缩块只展示在当前已加载 timeline 范围内。隐藏的 functionResponse / backfill 消息
+  // 可作为后端压缩锚点，但前端不直接渲染它们；此时把压缩卡片折叠挂到“锚点之前最近的可见消息”后面。
+  // 这样长对话或工具结果结尾时，running 压缩块不会只让按钮变成“压缩中”却没有占位卡片。
+  const firstLoadedSeq = anchorMessages[0]?.seq ?? messages[0]?.seq;
+  const lastLoadedSeq = anchorMessages[anchorMessages.length - 1]?.seq ?? messages[messages.length - 1]?.seq;
   for (const block of blocks) {
-    const anchorId = displayAnchorMessageId(block, messages, messageById, firstSeq, lastSeq);
+    const anchorId = displayAnchorMessageId(block, messages, messageById, anchorMessageById, firstLoadedSeq, lastLoadedSeq);
     if (!anchorId) continue;
     const list = byMessage.get(anchorId) ?? [];
     list.push(block);
@@ -84,13 +85,15 @@ function displayAnchorMessageId(
   block: CompressionBlockRecord,
   messages: readonly MessageRecord[],
   messageById: ReadonlyMap<string, MessageRecord>,
-  firstSeq: number | undefined,
-  lastSeq: number | undefined
+  anchorMessageById: ReadonlyMap<string, MessageRecord>,
+  firstLoadedSeq: number | undefined,
+  lastLoadedSeq: number | undefined
 ): string | undefined {
   if (block.anchorMessageId && messageById.has(block.anchorMessageId)) return block.anchorMessageId;
-  const anchorSeq = block.anchorSeq ?? block.endSeq;
-  if (anchorSeq === undefined || firstSeq === undefined || lastSeq === undefined) return undefined;
-  if (anchorSeq < firstSeq || anchorSeq > lastSeq) return undefined;
+  const hiddenAnchorSeq = block.anchorMessageId ? anchorMessageById.get(block.anchorMessageId)?.seq : undefined;
+  const anchorSeq = hiddenAnchorSeq ?? block.anchorSeq ?? block.endSeq;
+  if (anchorSeq === undefined || firstLoadedSeq === undefined || lastLoadedSeq === undefined) return undefined;
+  if (anchorSeq < firstLoadedSeq || anchorSeq > lastLoadedSeq) return undefined;
   let fallback: MessageRecord | undefined;
   for (const message of messages) {
     if (message.seq > anchorSeq) break;

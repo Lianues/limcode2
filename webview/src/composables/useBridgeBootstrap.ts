@@ -24,17 +24,55 @@ function globalSettingsSectionFromScope(scope: BridgeScope | undefined): GlobalS
 }
 
 function logCompressionClientDebug(stage: string, payload: Record<string, unknown>): void {
-  void stage; void payload;
+  console.info('[LimCode][Compression][Webview]', stage, payload);
 }
 
-function compressionSnapshotDebug(state: { compressionBlocks?: Array<{ id: string; status: string; error?: string; sourceHash?: string }>; compressionBlockLlmInvocationLinks?: Array<{ blockId: string; invocationId: string }>; llmInvocations?: Array<{ id: string; status: string; error?: string }> }): Record<string, unknown> | undefined {
-  void state;
-  return undefined;
+function compressionSnapshotDebug(state: { compressionBlocks?: Array<{ id: string; status: string; error?: string; sourceHash?: string; anchorSeq?: number; endSeq?: number; methodKind?: string }>; compressionBlockLlmInvocationLinks?: Array<{ blockId: string; invocationId: string }>; llmInvocations?: Array<{ id: string; status: string; error?: string }> }): Record<string, unknown> | undefined {
+  const blocks = state.compressionBlocks ?? [];
+  const links = state.compressionBlockLlmInvocationLinks ?? [];
+  if (blocks.length === 0 && links.length === 0) return undefined;
+  const invocationIds = new Set(links.map((link) => link.invocationId));
+  const invocations = (state.llmInvocations ?? []).filter((invocation) => invocationIds.has(invocation.id));
+  return {
+    compressionBlockCount: blocks.length,
+    compressionBlocks: blocks.slice(-8).map((block) => ({
+      id: block.id,
+      status: block.status,
+      methodKind: block.methodKind,
+      anchorSeq: block.anchorSeq,
+      endSeq: block.endSeq,
+      error: block.error
+    })),
+    compressionInvocationLinkCount: links.length,
+    compressionInvocations: invocations.slice(-8)
+  };
 }
 
 function compressionPatchDebug(patches: readonly { kind: string; [key: string]: unknown }[]): Record<string, unknown> | undefined {
-  void patches;
-  return undefined;
+  const compressionPatches = patches.filter((patch) =>
+    patch.kind.startsWith('compressionBlock')
+    || patch.kind.startsWith('compressionContextVariant')
+    || patch.kind.startsWith('runCompressionBlockLink')
+  );
+  if (compressionPatches.length === 0) return undefined;
+  return {
+    compressionPatchCount: compressionPatches.length,
+    compressionPatches: compressionPatches.slice(0, 12).map((patch) => summarizeCompressionPatch(patch)),
+    omittedPatchCount: Math.max(0, compressionPatches.length - 12)
+  };
+}
+
+function summarizeCompressionPatch(patch: { kind: string; [key: string]: unknown }): Record<string, unknown> {
+  const block = patch.block as { id?: string; status?: string; methodKind?: string; anchorSeq?: number; endSeq?: number; error?: string } | undefined;
+  const link = patch.link as { id?: string; blockId?: string; invocationId?: string; sourceId?: string; sourceKind?: string; role?: string } | undefined;
+  const variant = patch.variant as { id?: string; blockId?: string; kind?: string } | undefined;
+  return {
+    kind: patch.kind,
+    id: typeof patch.id === 'string' ? patch.id : block?.id ?? link?.id ?? variant?.id,
+    block: block ? { id: block.id, status: block.status, methodKind: block.methodKind, anchorSeq: block.anchorSeq, endSeq: block.endSeq, error: block.error } : undefined,
+    link: link ? { id: link.id, blockId: link.blockId, invocationId: link.invocationId, sourceKind: link.sourceKind, sourceId: link.sourceId, role: link.role } : undefined,
+    variant: variant ? { id: variant.id, blockId: variant.blockId, kind: variant.kind } : undefined
+  };
 }
 
 export function useBridgeBootstrap(): void {

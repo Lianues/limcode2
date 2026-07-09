@@ -1966,7 +1966,8 @@ function abortReasonText(reason: unknown): string | undefined {
 }
 
 function logCompressionDebug(stage: string, payload: Record<string, unknown>): void {
-  void stage; void payload;
+  const log = /throw|error|cancel|abort/i.test(stage) ? console.warn : console.info;
+  log('[LimCode][Compression][Provider]', stage, payload);
 }
 
 function emitLlmStarted(emit: Emit, requestId: string, invocationId: string | undefined, model: string | undefined): void {

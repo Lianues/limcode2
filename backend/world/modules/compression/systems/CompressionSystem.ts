@@ -86,7 +86,10 @@ function createCompressionBlock(
   payload: { conversationId: string; startMessageId?: string; endMessageId?: string; methodConfigId?: string; methodKind?: CompressionBlockRecord['methodKind']; trigger?: 'manual' | 'auto' }
 ): void {
   const conversation = findConversation(world, payload.conversationId);
-  if (conversation === undefined) return;
+  if (conversation === undefined) {
+    debugAutoCompression('compression.create.skipConversationNotFound', { payload });
+    return;
+  }
   const methodKind = payload.methodKind ?? 'llm_summary';
 
   debugAutoCompression('compression.create.begin', {
@@ -143,13 +146,35 @@ function prepareFullSelection(
 
   const predecessorBoundary = predecessorBlock.endSeq ?? predecessorBlock.anchorSeq ?? 0;
   const increment = selected.filter((entity) => (world.get(entity, Message)?.seq ?? 0) > predecessorBoundary);
-  if (increment.length === 0) return undefined;
-  if (hasUnresolvedFunctionCallsInEntities(world, increment)) return undefined;
+  if (increment.length === 0) {
+    debugAutoCompression('compression.selection.skipNoIncrementAfterReusableBlock', {
+      predecessorBlockId: predecessorBlock.id,
+      predecessorBoundary,
+      anchorSeq: direct.anchor.seq,
+      selectedCount: selected.length
+    });
+    return undefined;
+  }
+  if (hasUnresolvedFunctionCallsInEntities(world, increment)) {
+    debugAutoCompression('compression.selection.skipIncrementUnresolvedFunctionCalls', {
+      predecessorBlockId: predecessorBlock.id,
+      predecessorBoundary,
+      increment: increment.map((entity) => describeMessageEntity(world, entity))
+    });
+    return undefined;
+  }
 
   const first = world.get(increment[0], Message)!;
   const last = world.get(increment[increment.length - 1], Message)!;
   const incrementContents = messageContentsForEntities(world, increment);
-  if (incrementContents.length === 0) return undefined;
+  if (incrementContents.length === 0) {
+    debugAutoCompression('compression.selection.skipNoIncrementContents', {
+      predecessorBlockId: predecessorBlock.id,
+      predecessorBoundary,
+      increment: increment.map((entity) => describeMessageEntity(world, entity))
+    });
+    return undefined;
+  }
 
   return {
     selected: increment,
@@ -162,8 +187,16 @@ function prepareFullSelection(
 }
 
 function directCompressionSelection(world: WorldReader, selected: Entity[]): CompressionSelection | undefined {
-  if (selected.length === 0) return undefined;
-  if (hasUnresolvedFunctionCallsInEntities(world, selected)) return undefined;
+  if (selected.length === 0) {
+    debugAutoCompression('compression.selection.skipEmptySelection', {});
+    return undefined;
+  }
+  if (hasUnresolvedFunctionCallsInEntities(world, selected)) {
+    debugAutoCompression('compression.selection.skipUnresolvedFunctionCalls', {
+      selected: selected.map((entity) => describeMessageEntity(world, entity))
+    });
+    return undefined;
+  }
   const first = world.get(selected[0], Message)!;
   const last = world.get(selected[selected.length - 1], Message)!;
   const requestContents = messageContentsForEntities(world, selected);
@@ -532,7 +565,19 @@ function prepareSegmentedSelection(
     const message = world.get(entity, Message);
     return !!message && message.status === 'streaming' && message.seq <= endBoundarySeq;
   });
-  if (streamingInRange) return undefined;
+  if (streamingInRange) {
+    debugAutoCompression('compression.segmented.skipStreamingInRange', {
+      payload,
+      endBoundarySeq,
+      streamingMessages: messages
+        .filter((entity) => {
+          const message = world.get(entity, Message);
+          return !!message && message.status === 'streaming' && message.seq <= endBoundarySeq;
+        })
+        .map((entity) => describeMessageEntity(world, entity))
+    });
+    return undefined;
+  }
 
   const predecessor = latestReusableBlockBelow(world, conversation, endBoundarySeq, 'segmented_summary');
   const predecessorBlock = predecessor?.block;
@@ -542,7 +587,15 @@ function prepareSegmentedSelection(
     const seq = world.get(entity, Message)?.seq ?? 0;
     return seq > startBoundarySeq && seq <= endBoundarySeq;
   });
-  if (increment.length === 0) return undefined;
+  if (increment.length === 0) {
+    debugAutoCompression('compression.segmented.skipNoIncrementAfterReusableBlock', {
+      payload,
+      endBoundarySeq,
+      startBoundarySeq,
+      predecessorBlockId: predecessorBlock?.id
+    });
+    return undefined;
+  }
 
   const closedRounds = splitEntitiesIntoRounds(world, increment);
   debugAutoCompression('compression.segmented.rounds', {
@@ -553,10 +606,24 @@ function prepareSegmentedSelection(
     increment: increment.map((entity) => describeMessageEntity(world, entity)),
     closedRounds: closedRounds.map((round) => round.map((entity) => describeMessageEntity(world, entity)))
   });
-  if (closedRounds.length === 0) return undefined;
+  if (closedRounds.length === 0) {
+    debugAutoCompression('compression.segmented.skipNoClosedRounds', {
+      payload,
+      endBoundarySeq,
+      startBoundarySeq,
+      increment: increment.map((entity) => describeMessageEntity(world, entity))
+    });
+    return undefined;
+  }
 
   const selected = closedRounds.flat();
-  if (hasUnresolvedFunctionCallsInEntities(world, selected)) return undefined;
+  if (hasUnresolvedFunctionCallsInEntities(world, selected)) {
+    debugAutoCompression('compression.segmented.skipUnresolvedFunctionCalls', {
+      payload,
+      selected: selected.map((entity) => describeMessageEntity(world, entity))
+    });
+    return undefined;
+  }
 
   const requestContents = predecessor !== undefined
     ? [...predecessor.contents, ...messageContentsForEntities(world, selected)]
@@ -846,8 +913,25 @@ function safeJson(value: unknown): string {
 }
 
 function debugAutoCompression(stage: string, payload: Record<string, unknown>): void {
-  void stage;
-  void payload;
+  const log = /skip|fail|error/i.test(stage) ? console.warn : console.info;
+  log('[LimCode][Compression][System]', stage, sanitizeDebugValue(payload));
+}
+
+function sanitizeDebugValue(value: unknown, depth = 0): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') return value.length > 500 ? `${value.slice(0, 500)}…` : value;
+  if (typeof value !== 'object') return value;
+  if (Array.isArray(value)) {
+    const maxItems = 30;
+    const items = value.slice(0, maxItems).map((item) => sanitizeDebugValue(item, depth + 1));
+    return value.length > maxItems ? [...items, { omittedItems: value.length - maxItems }] : items;
+  }
+  if (depth >= 4) return '[Object]';
+  const result: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    result[key] = sanitizeDebugValue(item, depth + 1);
+  }
+  return result;
 }
 
 function describeConversation(world: WorldReader, conversation: Entity): Record<string, unknown> | undefined {

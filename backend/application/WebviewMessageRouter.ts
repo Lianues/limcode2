@@ -372,16 +372,33 @@ export class WebviewMessageRouter {
       case BridgeMessageType.CheckpointShadowDelete:
         if (message.payload) void this.handleCheckpointShadowDelete(clientId, message.payload.storageKeys, message.id);
         break;
-      case BridgeMessageType.CompressionCreate:
-        if (!this.deps.isHydrated() || !message.payload) return;
-        void (message.payload.startMessageId || message.payload.endMessageId
-          ? this.enqueueAfterTimelineRangeLoaded({ conversationId: message.payload.conversationId, mode: 'between', startMessageId: message.payload.startMessageId, endMessageId: message.payload.endMessageId }, () => {
-            this.deps.world.enqueue({ type: CompressionEventType.Create, payload: message.payload });
+      case BridgeMessageType.CompressionCreate: {
+        if (!this.deps.isHydrated() || !message.payload) {
+          this.logCompressionRoute('create.skipNotReady', { hydrated: this.deps.isHydrated(), hasPayload: !!message.payload });
+          return;
+        }
+        const payload = message.payload;
+        this.logCompressionRoute('create.received', {
+          payload,
+          beforeLoad: this.compressionRouteConversationDebug(payload.conversationId)
+        });
+        void (payload.startMessageId || payload.endMessageId
+          ? this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'between', startMessageId: payload.startMessageId, endMessageId: payload.endMessageId }, () => {
+            this.logCompressionRoute('create.enqueueAfterRangeLoaded', {
+              payload,
+              afterLoad: this.compressionRouteConversationDebug(payload.conversationId)
+            });
+            this.deps.world.enqueue({ type: CompressionEventType.Create, payload });
           })
-          : this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
-          this.deps.world.enqueue({ type: CompressionEventType.Create, payload: message.payload });
-        }));
+          : this.enqueueAfterConversationLoaded(payload.conversationId, () => {
+            this.logCompressionRoute('create.enqueueAfterConversationLoaded', {
+              payload,
+              afterLoad: this.compressionRouteConversationDebug(payload.conversationId)
+            });
+            this.deps.world.enqueue({ type: CompressionEventType.Create, payload });
+          }));
         break;
+      }
       case BridgeMessageType.CompressionDelete:
         if (!this.deps.isHydrated() || !message.payload) return;
         void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
@@ -565,6 +582,41 @@ export class WebviewMessageRouter {
       default:
         break;
     }
+  }
+
+
+  private logCompressionRoute(stage: string, payload: Record<string, unknown>): void {
+    console.info('[LimCode][Compression][Router]', stage, payload);
+  }
+
+  private compressionRouteConversationDebug(conversationId: string): Record<string, unknown> {
+    const conversation = this.deps.world.query(Conversation).find((entity) => this.deps.world.get(entity, Conversation)?.id === conversationId);
+    if (conversation === undefined) {
+      return { conversationId, conversationFound: false };
+    }
+    const messages = this.deps.world
+      .query(Message, PartOf)
+      .filter((entity) => this.deps.world.get(entity, PartOf)?.parent === conversation)
+      .map((entity) => this.deps.world.get(entity, Message))
+      .filter((record): record is NonNullable<typeof record> => !!record)
+      .sort((left, right) => left.seq - right.seq || left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+    const blocks = this.deps.world
+      .query(CompressionBlock)
+      .map((entity) => this.deps.world.get(entity, CompressionBlock))
+      .filter((block): block is NonNullable<typeof block> => !!block && block.conversation === conversation)
+      .sort((left, right) => (left.anchorSeq ?? left.endSeq ?? 0) - (right.anchorSeq ?? right.endSeq ?? 0) || left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+    return {
+      conversationId,
+      conversationFound: true,
+      hydratedMessageCount: messages.length,
+      firstSeq: messages[0]?.seq,
+      lastSeq: messages[messages.length - 1]?.seq,
+      streamingMessageCount: messages.filter((message) => message.status === 'streaming').length,
+      compressionBlockCount: blocks.length,
+      runningCompressionBlocks: blocks
+        .filter((block) => block.status === 'pending' || block.status === 'running')
+        .map((block) => ({ id: block.id, status: block.status, anchorSeq: block.anchorSeq, endSeq: block.endSeq }))
+    };
   }
 
 

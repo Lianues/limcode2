@@ -3,7 +3,7 @@ import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
-import type { CompressionBlockRecord } from '@shared/protocol';
+import type { CompressionBlockRecord, ConversationTimelineChunkSummaryRecord } from '@shared/protocol';
 
 export interface CreateCompressionOptions {
   startMessageId?: string;
@@ -20,25 +20,46 @@ export function useCompression() {
   function createCompression(options: CreateCompressionOptions | string = {}): boolean {
     const input = typeof options === 'string' ? { methodConfigId: options } : options;
     const conversationId = clientState.currentConversationId;
-    if (!conversationId) return false;
+    if (!conversationId) {
+      logCompressionClientAction('create.skipNoConversation', { input });
+      return false;
+    }
     const runningBlocks = conversationTimeline.currentCompressionBlocks.filter((block) => block.status === 'pending' || block.status === 'running');
     if (runningBlocks.length > 0) {
+      logCompressionClientAction('create.cancelRunningBlocks', {
+        conversationId,
+        blockIds: runningBlocks.map((block) => block.id)
+      });
       for (const block of runningBlocks) deleteCompression(block);
       return true;
     }
-    if (conversationTimeline.currentMessages.some((message) => message.status === 'streaming')) {
+    const currentMessages = conversationTimeline.currentMessages;
+    if (currentMessages.some((message) => message.status === 'streaming')) {
+      logCompressionClientAction('create.skipStreamingMessage', compressionTimelineDebugContext(conversationId, input));
       bridge.request(BridgeMessageType.ShowInfo, { message: '请等待 AI 响应结束后再压缩上下文。' });
       return false;
     }
     const minimumMessageCount = input.startMessageId || input.endMessageId ? 1 : 2;
-    if (conversationTimeline.currentMessages.length < minimumMessageCount) return false;
+    if (currentMessages.length < minimumMessageCount) {
+      logCompressionClientAction('create.skipInsufficientMessages', {
+        ...compressionTimelineDebugContext(conversationId, input),
+        minimumMessageCount
+      });
+      return false;
+    }
     const methodKind = activeCompressionConfigForConversation(conversationId)?.kind;
-    bridge.request(BridgeMessageType.CompressionCreate, {
+    const payload = {
       conversationId,
       ...(input.startMessageId ? { startMessageId: input.startMessageId } : {}),
       ...(input.endMessageId ? { endMessageId: input.endMessageId } : {}),
       ...(input.methodConfigId ? { methodConfigId: input.methodConfigId } : {}),
       ...(methodKind ? { methodKind } : {})
+    };
+    const requestId = bridge.request(BridgeMessageType.CompressionCreate, payload);
+    logCompressionClientAction('create.requestSent', {
+      requestId,
+      payload,
+      ...compressionTimelineDebugContext(conversationId, input)
     });
     return true;
   }
@@ -71,5 +92,30 @@ export function useCompression() {
       ?? globalSettings.llmCompressionConfigs.configs[0];
   }
 
+  function compressionTimelineDebugContext(conversationId: string, input: CreateCompressionOptions): Record<string, unknown> {
+    const timeline = conversationTimeline.currentTimeline;
+    const chunks = timeline.loadedChunkIds
+      .map((id) => timeline.chunkById[id])
+      .filter((chunk): chunk is ConversationTimelineChunkSummaryRecord => !!chunk)
+      .map((chunk) => ({ id: chunk.id, index: chunk.index, startSeq: chunk.startSeq, endSeq: chunk.endSeq, messageCount: chunk.messageCount }));
+    const messages = conversationTimeline.currentMessages;
+    return {
+      conversationId,
+      timelineConversationId: conversationTimeline.currentConversationId,
+      input,
+      loadedMessageCount: messages.length,
+      totalMessages: conversationTimeline.currentTotalMessages,
+      hasOlder: conversationTimeline.currentHasOlder,
+      hasNewer: conversationTimeline.currentHasNewer,
+      firstSeq: messages[0]?.seq,
+      lastSeq: messages[messages.length - 1]?.seq,
+      loadedChunks: chunks
+    };
+  }
+
   return { createCompression, deleteCompression, regenerateCompression, setCompressionEnabled };
+}
+
+function logCompressionClientAction(stage: string, payload: Record<string, unknown>): void {
+  console.info('[LimCode][Compression][Webview]', stage, payload);
 }

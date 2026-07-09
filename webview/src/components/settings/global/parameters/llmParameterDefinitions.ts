@@ -54,7 +54,8 @@ const THINKING_LEVEL_OPTIONS: Record<LlmProviderKind, readonly { value: LlmThink
     { value: 'low', label: 'Low' },
     { value: 'medium', label: 'Medium' },
     { value: 'high', label: 'High' },
-    { value: 'xhigh', label: 'XHigh' }
+    { value: 'xhigh', label: 'XHigh' },
+    { value: 'max', label: 'Max' }
   ],
   'openai-responses': [
     { value: 'none', label: 'None', description: '关闭推理强度' },
@@ -62,7 +63,8 @@ const THINKING_LEVEL_OPTIONS: Record<LlmProviderKind, readonly { value: LlmThink
     { value: 'low', label: 'Low' },
     { value: 'medium', label: 'Medium' },
     { value: 'high', label: 'High' },
-    { value: 'xhigh', label: 'XHigh' }
+    { value: 'xhigh', label: 'XHigh' },
+    { value: 'max', label: 'Max' }
   ],
   deepseek: [
     { value: 'none', label: 'None', description: '关闭思考' },

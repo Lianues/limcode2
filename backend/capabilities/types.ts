@@ -354,7 +354,8 @@ export interface WebviewClientRuntimeRecord {
 /** Webview 能力：集中管理多个 Webview client，真实 vscode.Webview 句柄不进入 ECS world。 */
 export interface WebviewCapability {
   attach(webview: vscode.Webview, meta?: WebviewClientMeta): BridgeClientId;
-  detach(clientId: BridgeClientId): void;
+  /** 分离 client，并返回因此失去最后一个订阅者的 stream。 */
+  detach(clientId: BridgeClientId): string[];
   detachAll(): void;
   subscribe(clientId: BridgeClientId, streamId: string): void;
   unsubscribe(clientId: BridgeClientId, streamId: string): void;

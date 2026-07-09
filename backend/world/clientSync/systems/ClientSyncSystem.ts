@@ -11,9 +11,8 @@ import {
 import { clientStateWithTables, createEmptyClientState, GLOBAL_CLIENT_STATE_TABLE_KEYS } from '../../../../shared/clientStateSchema';
 import { collectChangedClientStateConversationIds } from '../../../../shared/clientStateConversationScope';
 import { defineSystem, type AccessDeclaration, type WorldReader } from '../../../ecs/types';
-import { dirtyConversationIdsSince } from '../dirtyConversations';
 import { readEvents } from '../../events';
-import { LlmRequest } from '../../modules/chat/components';
+import { LlmRequest, Message } from '../../modules/chat/components';
 import type { ClientStateContributor } from '../contributors';
 import { diffClientStateTables } from '../diff';
 import { ClientSyncEventType } from '../events';
@@ -37,17 +36,26 @@ export const ClientSyncSystem = defineSystem({
         write: [ClientSyncStateKey, ClientSyncFastPatchStateKey],
         mutationMode: 'update'
       },
-      events: { read: [ClientSyncEventType.Resync] },
+      events: { read: [ClientSyncEventType.Resync, ClientSyncEventType.StreamsReleased] },
       effects: { emit: ['client.snapshot', 'client.patch'] }
     };
   },
   run(ctx) {
     const { world, cmd } = ctx;
     const registry = world.getResource(ClientStateContributorsKey);
-    const syncState = world.getResource(ClientSyncStateKey);
+    const storedSyncState = world.getResource(ClientSyncStateKey);
     const fastPatchState = world.getResource(ClientSyncFastPatchStateKey);
     const contributors = registry.list();
     const resyncRequests = readEvents(ctx, ClientSyncEventType.Resync);
+    const requestedStreamIds = new Set(resyncRequests.map((request) =>
+      request.streamId
+      ?? (request.conversationId ? conversationClientStateStreamId(request.conversationId) : GLOBAL_CLIENT_STATE_STREAM_ID)
+    ));
+    const releasedStreamIds = new Set(
+      readEvents(ctx, ClientSyncEventType.StreamsReleased).flatMap((payload) => payload.streamIds)
+    );
+    const syncState = releaseUnusedStreamStates(storedSyncState, releasedStreamIds, requestedStreamIds);
+    const didReleaseStreamStates = syncState !== storedSyncState;
     const hasResyncRequests = resyncRequests.length > 0;
     const hasActiveLlmRequests = world.query(LlmRequest).length > 0;
     const shouldDeferFullSync = fastPatchState.deferFullSync && hasActiveLlmRequests;
@@ -55,20 +63,24 @@ export const ClientSyncSystem = defineSystem({
       && shouldDeferFullSync
       && !fastPatchState.requireFullSync
       && syncState.lastState !== null
-      && !hasResyncRequests;
+      && !hasResyncRequests
+      && hasOnlyFastPatchCompatibleChanges(world, contributors, syncState);
     if (canUseFastPath) {
       if (emitFastPatches(cmd, syncState, fastPatchState)) return;
     }
 
-    if (shouldDeferFullSync && !fastPatchState.requireFullSync && !hasResyncRequests && fastPatchState.patches.length === 0 && canSkipFullSyncForActiveStream(world, contributors, syncState)) return;
+    if (shouldDeferFullSync && !fastPatchState.requireFullSync && !hasResyncRequests && fastPatchState.patches.length === 0 && canSkipFullSyncForActiveStream(world, contributors, syncState)) {
+      if (didReleaseStreamStates) cmd.setResource(ClientSyncStateKey, syncState);
+      return;
+    }
 
     const projection = projectClientStateWithCache(world, contributors, syncState);
     const sourceChanged = syncState.lastState === null || projection.changed || fastPatchState.requireFullSync;
     const changedTableKeys = sourceChanged ? changedClientStateTableKeys(contributors, projection.changedContributorKeys) : [];
     const nextFull = projection.state;
     const prevFull = syncState.lastState;
-    const dirtyConversationHint = sourceChanged
-      ? dirtyConversationIdsSince(world, syncState.dirtyConversationResourceVersion, changedTableKeys)
+    const changedConversationIds = sourceChanged && prevFull !== null
+      ? collectChangedClientStateConversationIds(prevFull, nextFull, changedTableKeys)
       : undefined;
     const nextDirtyConversationResourceVersion = sourceChanged
       ? world.resourceVersion(ClientStateDirtyConversationIdsKey)
@@ -87,6 +99,7 @@ export const ClientSyncSystem = defineSystem({
     }
 
     if (!sourceChanged && !hasResyncRequests) {
+      if (didReleaseStreamStates) cmd.setResource(ClientSyncStateKey, syncState);
       clearFastPatchStateIfNeeded(cmd, fastPatchState);
       return;
     }
@@ -107,7 +120,7 @@ export const ClientSyncSystem = defineSystem({
       }
     }
 
-    for (const conversationId of collectConversationIds(prevFull, nextFull, streams, requestedConversationIds, sourceChanged, changedTableKeys, dirtyConversationHint?.ids)) {
+    for (const conversationId of collectConversationIds(prevFull, nextFull, streams, requestedConversationIds, sourceChanged, changedTableKeys, changedConversationIds)) {
       const streamId = conversationClientStateStreamId(conversationId);
       const existing = streams[streamId];
       const requested = requestedConversationIds.has(conversationId);
@@ -125,7 +138,7 @@ export const ClientSyncSystem = defineSystem({
       }
     }
 
-    if (sourceChanged || didUpdateStreams) {
+    if (sourceChanged || didUpdateStreams || didReleaseStreamStates) {
       cmd.setResource(ClientSyncStateKey, {
         lastState: nextFull,
         projectionClock: projection.projectionClock,
@@ -142,6 +155,19 @@ function emptyReads(): AccessDeclaration {
   return { components: [], resources: [], events: [], effects: [] };
 }
 
+function releaseUnusedStreamStates(
+  state: ClientSyncState,
+  releasedStreamIds: ReadonlySet<string>,
+  requestedStreamIds: ReadonlySet<string>
+): ClientSyncState {
+  const removable = [...releasedStreamIds].filter((streamId) => streamId && !requestedStreamIds.has(streamId) && state.streams[streamId]);
+  if (removable.length === 0) return state;
+
+  const streams = { ...state.streams };
+  for (const streamId of removable) delete streams[streamId];
+  return { ...state, streams };
+}
+
 function canSkipFullSyncForActiveStream(world: WorldReader, contributors: readonly ClientStateContributor[], syncState: ClientSyncState): boolean {
   if (!syncState.lastState) return false;
   return contributors.every((contributor) => {
@@ -149,6 +175,33 @@ function canSkipFullSyncForActiveStream(world: WorldReader, contributors: readon
     const nextClock = contributorClock(world, contributor);
     return previousClock === nextClock;
   });
+}
+
+/**
+ * 流式快路径只能吞掉 Message 文本/思考增量。
+ * 任一其他 component/resource 同轮发生变化（例如另一对话新建消息、Run、Conversation）时，
+ * 必须立即走 full projection，不能因为某个对话持续吐 token 而让其他对话饥饿。
+ */
+function hasOnlyFastPatchCompatibleChanges(
+  world: WorldReader,
+  contributors: readonly ClientStateContributor[],
+  syncState: ClientSyncState
+): boolean {
+  const messageClockPrefix = `c:${Message.name}:`;
+  for (const contributor of contributors) {
+    const previousClock = syncState.contributorStates[contributor.key]?.clock;
+    if (previousClock === undefined) return false;
+    const nextClock = contributorClock(world, contributor);
+    if (clockWithoutPrefix(previousClock, messageClockPrefix) !== clockWithoutPrefix(nextClock, messageClockPrefix)) return false;
+  }
+  return true;
+}
+
+function clockWithoutPrefix(clock: string, prefix: string): string {
+  return clock
+    .split('|')
+    .filter((part) => !part.startsWith(prefix))
+    .join('|');
 }
 
 function emitSnapshot(cmd: { effect(effect: unknown): void }, streamId: string, current: ClientStreamState | undefined, state: ClientState): ClientStreamState {
@@ -494,7 +547,7 @@ function collectConversationIds(
   requested: ReadonlySet<string>,
   sourceChanged: boolean,
   changedTableKeys: readonly ClientStateTableKey[] | undefined,
-  dirtyConversationIds: ReadonlySet<string> | undefined
+  changedConversationIds: ReadonlySet<string> | undefined
 ): string[] {
   const ids = new Set<string>(requested);
   if (prev === null) {
@@ -507,10 +560,8 @@ function collectConversationIds(
   }
 
   if (sourceChanged) {
-    if (dirtyConversationIds) {
-      for (const conversationId of dirtyConversationIds) ids.add(conversationId);
-    } else {
-      for (const conversationId of collectChangedClientStateConversationIds(prev, next, changedTableKeys)) ids.add(conversationId);
+    for (const conversationId of changedConversationIds ?? collectChangedClientStateConversationIds(prev, next, changedTableKeys)) {
+      ids.add(conversationId);
     }
   }
 

@@ -81,6 +81,7 @@ export interface WebviewMessageRouterDeps {
   isHydrated: () => boolean;
   requestSnapshot: (conversationId?: string) => void;
   ensureConversationDetailLoaded: (conversationId: string) => Promise<void>;
+  ensureConversationTailLoaded: (conversationId: string) => Promise<void>;
   getProjectFolderCandidates: () => ProjectFolderCandidateRecord[];
   setConversationProjectFolder: (input: SetConversationProjectFolderInput) => boolean;
   importWorkEnvironmentsFromVscode: () => Promise<number>;
@@ -660,27 +661,11 @@ export class WebviewMessageRouter {
 
   private async enqueueAfterConversationTailLoaded(conversationId: string, action: () => void): Promise<void> {
     try {
-      if (this.isConversationTailAlreadyHydrated(conversationId)) {
-        action();
-        return;
-      }
-      const page = await this.deps.storage.loadConversationTimelinePage({
-        conversationId,
-        direction: 'initial',
-        chunkCount: 1
-      });
-      if (page.state.messages.length > 0) await hydrateConversationDetail(this.deps.world, page.state, conversationId);
-      action();
+      await this.deps.ensureConversationTailLoaded(conversationId);
     } catch (error) {
       console.warn('[LimCode] Failed to hydrate conversation tail before command.', error);
-      action();
     }
-  }
-
-  private isConversationTailAlreadyHydrated(conversationId: string): boolean {
-    const conversation = this.deps.world.query(Conversation).find((entity) => this.deps.world.get(entity, Conversation)?.id === conversationId);
-    if (conversation === undefined) return false;
-    return this.deps.world.query(Message, PartOf).some((entity) => this.deps.world.get(entity, PartOf)?.parent === conversation);
+    action();
   }
 
   private async handleMessageDeleteFrom(payload: MessageDeleteFromPayload): Promise<void> {

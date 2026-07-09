@@ -33,8 +33,12 @@ export class WebviewHub implements WebviewCapability {
     return clientId;
   }
 
-  public detach(clientId: BridgeClientId): void {
+  public detach(clientId: BridgeClientId): string[] {
+    const client = this.clients.get(clientId);
+    if (!client) return [];
+
     this.clients.delete(clientId);
+    return [...client.subscriptions].filter((streamId) => !this.hasStreamSubscriber(streamId));
   }
 
   public detachAll(): void {
@@ -79,6 +83,10 @@ export class WebviewHub implements WebviewCapability {
       meta: client.meta,
       attachedAt: client.attachedAt
     }));
+  }
+
+  private hasStreamSubscriber(streamId: string): boolean {
+    return [...this.clients.values()].some((client) => client.subscriptions.has(streamId));
   }
 }
 

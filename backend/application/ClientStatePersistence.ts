@@ -6,8 +6,6 @@ import type { AgentRunStatus, ClientState, ClientStateTableKey, MessageContent, 
 import { conversationCreatedAtFromId, displayConversationTitle } from '../../shared/conversationTitle';
 import { collectChangedClientStateConversationIds } from '../../shared/clientStateConversationScope';
 import { conversationRenderDetailSlice, conversationRunHistorySlice } from '../capabilities/vscodeStorage/clientStateStore';
-import { dirtyConversationIdsSince } from '../world/clientSync/dirtyConversations';
-import { ClientStateDirtyConversationIdsKey } from '../world/clientSync/resources';
 
 const DEFAULT_PERSIST_DEBOUNCE_MS = 500;
 
@@ -71,7 +69,6 @@ export class ClientStatePersistence {
   private projectionClock = '';
   private contributorStates: Record<string, StorageContributorProjectionState> = {};
   private lastProjectedState: ClientState | undefined;
-  private dirtyConversationResourceVersion = 0;
 
   public constructor(
     private readonly world: WorldReader,
@@ -111,18 +108,11 @@ export class ClientStatePersistence {
     const latestState = latest?.state ?? this.lastProjectedState;
     if (!this.enabled || !latestState) return;
 
-    const shouldCheckDirtyConversationHints = !options.force && !!latest?.previousState;
-    const dirtyConversationHint = shouldCheckDirtyConversationHints
-      ? dirtyConversationIdsSince(this.world, this.dirtyConversationResourceVersion, latest.changedTableKeys)
-      : undefined;
     const targetConversationIds = options.force
       ? undefined
       : latest?.previousState
-        ? dirtyConversationHint?.ids ?? collectChangedClientStateConversationIds(latest.previousState, latestState, latest.changedTableKeys)
+        ? collectChangedClientStateConversationIds(latest.previousState, latestState, latest.changedTableKeys)
         : undefined;
-    if (shouldCheckDirtyConversationHints) {
-      this.dirtyConversationResourceVersion = this.world.resourceVersion(ClientStateDirtyConversationIdsKey);
-    }
     this.collectPendingStates(latestState, !!options.force, targetConversationIds);
     if (!this.pendingSkeletonState && this.pendingRenderDetailStates.size === 0 && this.pendingRunHistoryStates.size === 0 && this.pendingHistoryStates.size === 0) return;
 
@@ -142,15 +132,16 @@ export class ClientStatePersistence {
         this.lastPersistedSkeletonJson = JSON.stringify(skeletonPersistenceSlice(skeletonState));
       }
 
-      for (const [conversationId, state] of renderDetailStates) {
+      // 每个 conversation 使用独立存储目录，可并行落盘；共享 history index 仍在下方串行更新。
+      await awaitAllPersistTasks(renderDetailStates.map(async ([conversationId, state]) => {
         await this.storage.saveConversationRenderDetail(conversationId, state);
         this.lastPersistedRenderDetailJson.set(conversationId, JSON.stringify(conversationRenderDetailSlice(state, conversationId)));
-      }
+      }));
 
-      for (const [conversationId, pending] of runHistoryStates) {
+      await awaitAllPersistTasks(runHistoryStates.map(async ([conversationId, pending]) => {
         await this.storage.saveConversationRunHistory(conversationId, pending.state, { mode: pending.mode });
         this.lastPersistedRunHistoryJson.set(conversationId, JSON.stringify(conversationRunHistorySlice(pending.state, conversationId)));
-      }
+      }));
 
       await this.persistHistoryEntries(historyStates);
     } catch (error) {
@@ -298,6 +289,12 @@ export class ClientStatePersistence {
       changedTableKeys: changedStorageTableKeys(projection.changedContributorKeys, projection.contributorStates)
     };
   }
+}
+
+async function awaitAllPersistTasks(tasks: Promise<void>[]): Promise<void> {
+  const results = await Promise.allSettled(tasks);
+  const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failure) throw failure.reason;
 }
 
 function changedStorageTableKeys(

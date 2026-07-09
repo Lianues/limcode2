@@ -143,6 +143,8 @@ export class BackendApplication {
   private readonly pendingHydrationMessages: Array<{ clientId: BridgeClientId; message: WebviewToExtensionMessage }> = [];
   private readonly renderLoadedConversationDetails = new Set<string>();
   private readonly runHistoryLoadedConversationDetails = new Set<string>();
+  private readonly conversationTailLoaded = new Set<string>();
+  private readonly conversationTailLoadInFlight = new Map<string, Promise<void>>();
   private readonly conversationContextLoadInFlight = new Set<string>();
   private readonly conversationHistoryChangedEmitter = new vscode.EventEmitter<void>();
   private readonly disposables: vscode.Disposable[] = [];
@@ -184,6 +186,7 @@ export class BackendApplication {
       isHydrated: () => this.hydrated,
       requestSnapshot: (conversationId) => this.requestSnapshot(conversationId),
       ensureConversationDetailLoaded: (conversationId) => this.ensureConversationDetailLoaded(conversationId),
+      ensureConversationTailLoaded: (conversationId) => this.ensureConversationTailLoaded(conversationId),
       getProjectFolderCandidates: () => this.getProjectFolderCandidates(),
       setConversationProjectFolder: (input) => this.setConversationProjectFolder(input),
       importWorkEnvironmentsFromVscode: () => this.importWorkEnvironmentsFromVscode(),
@@ -283,8 +286,10 @@ export class BackendApplication {
 
     this.renderLoadedConversationDetails.add(conversationId);
     this.runHistoryLoadedConversationDetails.add(conversationId);
-    await this.upsertConversationHistoryEntry(conversationId);
+    this.conversationTailLoaded.add(conversationId);
     this.requestSnapshot();
+    void this.upsertConversationHistoryEntry(conversationId)
+      .catch((error) => console.warn('[LimCode] Failed to persist new conversation history entry.', error));
     return conversationId;
   }
 
@@ -492,6 +497,44 @@ export class BackendApplication {
     return clientId;
   }
 
+  public ensureConversationTailLoaded(conversationId: string): Promise<void> {
+    const normalizedConversationId = conversationId.trim();
+    if (!normalizedConversationId || this.isConversationTailLoaded(normalizedConversationId)) return Promise.resolve();
+
+    const existing = this.conversationTailLoadInFlight.get(normalizedConversationId);
+    if (existing) return existing;
+
+    const load = this.loadConversationTail(normalizedConversationId);
+    this.conversationTailLoadInFlight.set(normalizedConversationId, load);
+    const clear = (): void => {
+      if (this.conversationTailLoadInFlight.get(normalizedConversationId) === load) {
+        this.conversationTailLoadInFlight.delete(normalizedConversationId);
+      }
+    };
+    void load.then(clear, clear);
+    return load;
+  }
+
+  private isConversationTailLoaded(conversationId: string): boolean {
+    if (this.conversationTailLoaded.has(conversationId)) return true;
+    const conversation = this.findConversationEntity(conversationId);
+    if (conversation === undefined) return false;
+    const loaded = this.world.has(conversation, ConversationFullContextLoaded)
+      || this.world.query(Message, PartOf).some((entity) => this.world.get(entity, PartOf)?.parent === conversation);
+    if (loaded) this.conversationTailLoaded.add(conversationId);
+    return loaded;
+  }
+
+  private async loadConversationTail(conversationId: string): Promise<void> {
+    const page = await this.env.storage.loadConversationTimelinePage({
+      conversationId,
+      direction: 'initial',
+      chunkCount: 1
+    });
+    if (page.state.messages.length > 0) await hydrateConversationDetail(this.world, page.state, conversationId);
+    this.conversationTailLoaded.add(conversationId);
+  }
+
   public async ensureConversationDetailLoaded(conversationId: string): Promise<void> {
     if (!conversationId) return;
     if (!this.hydrated) await this.waitUntilHydrated();
@@ -584,6 +627,7 @@ export class BackendApplication {
   private markConversationFullContextLoaded(conversationId: string): void {
     const conversation = this.findConversationEntity(conversationId);
     if (conversation === undefined) return;
+    this.conversationTailLoaded.add(conversationId);
     this.world.add(conversation, ConversationFullContextLoaded, { loadedAt: Date.now() });
     this.world.remove(conversation, ConversationFullContextPending);
   }
@@ -595,8 +639,14 @@ export class BackendApplication {
   }
 
   public detachWebview(clientId: BridgeClientId): void {
-    this.env.webview.detach(clientId);
+    const releasedStreamIds = this.env.webview.detach(clientId);
     this.webviewClients.unregister(clientId);
+    if (releasedStreamIds.length > 0) {
+      this.world.enqueue({
+        type: ClientSyncEventType.StreamsReleased,
+        payload: { streamIds: releasedStreamIds }
+      });
+    }
   }
 
   public handleWebviewMessage(clientId: BridgeClientId, message: WebviewToExtensionMessage): void {

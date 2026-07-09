@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { IconVariable } from '@tabler/icons-vue';
-import type { ProjectFolderCandidateRecord } from '@shared/protocol';
+import type { AgentRunStatus, ProjectFolderCandidateRecord, ToolCallRecord, ToolCallStatus } from '@shared/protocol';
 import { displayConversationTitle } from '@shared/conversationTitle';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
+import HoverTooltipPanel from '@webview/components/ui/HoverTooltipPanel.vue';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useRuntimeContextStore } from '@webview/stores/useRuntimeContextStore';
@@ -19,13 +20,106 @@ const runtimeContextScroller = ref<HTMLElement | null>(null);
 const projectFolders = ref<ProjectFolderCandidateRecord[]>([]);
 const projectFoldersLoaded = ref(false);
 
+interface RunStatusTooltipRow {
+  kind?: 'row';
+  label: string;
+  value: string;
+  nested?: boolean;
+}
+
+interface RunStatusTooltipDivider {
+  kind: 'divider';
+  id: string;
+}
+
+type RunStatusTooltipItem = RunStatusTooltipRow | RunStatusTooltipDivider;
+
+const TERMINAL_TOOL_CALL_STATUSES = new Set<ToolCallStatus>(['success', 'warning', 'error']);
+const MAX_TOOLTIP_TOOL_CALLS = 2;
+
 const title = computed(() => {
   const conversationId = clientState.currentConversation?.id ?? clientState.currentConversationId;
   if (!conversationId) return '正在初始化默认对话...';
   return displayConversationTitle({ id: conversationId, title: clientState.currentConversation?.title, messages: conversationTimeline.currentMessages });
 });
 const runSummary = computed(() => clientState.currentRunSummary);
-const runStatusClass = computed(() => `run-status-${runSummary.value.status ?? 'idle'}`);
+const runDetailRun = computed(() =>
+  runSummary.value.activeRuns.find((run) => run.status !== 'queued') ?? runSummary.value.primaryRun
+);
+const runDetailStatusLabel = computed(() => runDetailRun.value ? agentRunStatusLabel(runDetailRun.value.status) : '空闲');
+const runStatusClass = computed(() => `run-status-${runDetailRun.value?.status ?? 'idle'}`);
+const runStatusTriggerLabel = computed(() => runSummary.value.isRunning ? '响应中' : '空闲');
+const primaryRunToolCalls = computed<ToolCallRecord[]>(() => {
+  const run = runDetailRun.value;
+  if (!run) return [];
+
+  const toolCallIds = new Set(
+    clientState.toolCallRunLinks
+      .filter((link) => link.runId === run.id)
+      .map((link) => link.toolCallId)
+  );
+  const linkedCalls = clientState.toolCalls.filter((call) => toolCallIds.has(call.id));
+  const activeCalls = linkedCalls.filter((call) => !TERMINAL_TOOL_CALL_STATUSES.has(call.status));
+  const visibleCalls = activeCalls.length > 0
+    ? activeCalls
+    : run.status === 'waiting_tool'
+      ? [...linkedCalls].sort(compareToolCallsByLatest).slice(0, 1)
+      : [];
+
+  return [...visibleCalls].sort(compareToolCallsByExecutionOrder);
+});
+const primaryRunAgentName = computed(() => {
+  const runId = runDetailRun.value?.id;
+  if (!runId) return undefined;
+  const target = clientState.agentRunTargetLinks.find((link) => link.runId === runId);
+  return clientState.agents.find((agent) => agent.id === target?.agentId)?.name;
+});
+const runStatusTooltipRows = computed<RunStatusTooltipItem[]>(() => {
+  const summary = runSummary.value;
+  const run = runDetailRun.value;
+  if (!summary.isRunning || !run) {
+    return [{ label: '状态', value: '当前无后台任务' }];
+  }
+
+  const rows: RunStatusTooltipItem[] = [
+    { label: '当前阶段', value: runDetailStatusLabel.value },
+    { label: '执行者', value: primaryRunAgentName.value ?? '当前 Agent' },
+    { label: '活跃任务', value: `${summary.activeRuns.length} 个` }
+  ];
+  const toolCalls = primaryRunToolCalls.value;
+  if (toolCalls.length > 0) {
+    rows.push({ kind: 'divider', id: 'tools' });
+    for (const [index, call] of toolCalls.slice(0, MAX_TOOLTIP_TOOL_CALLS).entries()) {
+      const toolLabel = toolCalls.length > 1 ? `工具 ${index + 1}` : '工具';
+      rows.push({ label: toolLabel, value: call.name });
+      const content = toolCallContentPreview(call);
+      if (content) rows.push({ label: '内容', value: content, nested: true });
+      rows.push({ label: '进度', value: toolCallStatusLabel(call.status), nested: true });
+    }
+    if (toolCalls.length > MAX_TOOLTIP_TOOL_CALLS) {
+      const otherNames = toolCalls.slice(MAX_TOOLTIP_TOOL_CALLS).map((call) => call.name).join('、');
+      rows.push({ label: '其他工具', value: compactTooltipText(otherNames, 72) });
+    }
+  } else if (run.status === 'waiting_tool') {
+    rows.push(
+      { kind: 'divider', id: 'tools-pending' },
+      { label: '等待对象', value: '工具状态同步中' }
+    );
+  } else if (run.status === 'waiting_child_run') {
+    rows.push(
+      { kind: 'divider', id: 'child-run' },
+      { label: '等待对象', value: '子任务' }
+    );
+  }
+  return rows;
+});
+const runStatusAriaLabel = computed(() => {
+  const summary = runSummary.value;
+  if (!summary.isRunning) return '当前无后台任务';
+  const toolNames = primaryRunToolCalls.value.map((call) => call.name);
+  const toolDetail = toolNames.length > 0 ? `；当前工具：${toolNames.join('、')}` : '';
+  return `后台任务响应中；当前阶段：${runDetailStatusLabel.value}${toolDetail}`;
+});
 const currentProject = computed(() => clientState.currentProjectContext);
 const projectPath = computed(() => currentProject.value ? displayProjectUri(currentProject.value.uri) : '未绑定项目');
 const compactProjectPath = computed(() => middleEllipsis(projectPath.value, 58));
@@ -121,6 +215,58 @@ function middleEllipsis(value: string, maxLength: number): string {
   const tail = value.slice(value.length - keep);
   return `${head}...${tail}`;
 }
+
+function compareToolCallsByExecutionOrder(left: ToolCallRecord, right: ToolCallRecord): number {
+  return left.createdAt - right.createdAt || left.id.localeCompare(right.id);
+}
+
+function compareToolCallsByLatest(left: ToolCallRecord, right: ToolCallRecord): number {
+  return right.updatedAt - left.updatedAt || right.createdAt - left.createdAt || right.id.localeCompare(left.id);
+}
+
+function agentRunStatusLabel(status: AgentRunStatus): string {
+  switch (status) {
+    case 'queued': return '排队中';
+    case 'preparing': return '准备中';
+    case 'running': return '执行中';
+    case 'waiting_tool': return '等待工具';
+    case 'waiting_child_run': return '等待子任务';
+    case 'delivering': return '整理回复';
+    case 'paused': return '已暂停';
+    case 'completed': return '已完成';
+    case 'failed': return '失败';
+    case 'cancelled': return '已终止';
+    case 'stale': return '已过期';
+  }
+}
+
+function toolCallStatusLabel(status: ToolCallStatus): string {
+  switch (status) {
+    case 'streaming': return '正在生成';
+    case 'queued': return '等待调度';
+    case 'awaiting_approval': return '等待批准';
+    case 'executing': return '执行中';
+    case 'awaiting_change_apply': return '等待应用更改';
+    case 'applying_change': return '应用更改中';
+    case 'change_applied': return '更改已应用';
+    case 'change_rejected': return '更改已拒绝';
+    case 'awaiting_result_submit': return '等待结果回传';
+    case 'success': return '已完成';
+    case 'warning': return '已完成（有警告）';
+    case 'error': return '失败';
+  }
+}
+
+function toolCallContentPreview(call: ToolCallRecord): string | undefined {
+  const value = call.summary?.trim() || call.args.trim();
+  if (!value || value === '{}') return undefined;
+  return compactTooltipText(value);
+}
+
+function compactTooltipText(value: string, maxLength = 72): string {
+  const text = value.replace(/\s+/g, ' ').trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
 </script>
 
 <template>
@@ -194,14 +340,20 @@ function middleEllipsis(value: string, maxLength: number): string {
             </section>
           </Transition>
         </span>
-        <span
+        <HoverTooltipPanel
           class="run-status"
           :class="[runStatusClass, { 'is-active': runSummary.isRunning }]"
-          :title="runSummary.isRunning ? `后台任务：${runSummary.label}` : '当前无后台任务'"
+          :aria-label="runStatusAriaLabel"
+          :panel-title="runSummary.isRunning ? '响应详情' : '运行状态'"
+          :rows="runStatusTooltipRows"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          tabindex="0"
         >
           <span class="run-status-dot" aria-hidden="true"></span>
-          <span>{{ runSummary.isRunning ? runSummary.label : '空闲' }}</span>
-        </span>
+          <span>{{ runStatusTriggerLabel }}</span>
+        </HoverTooltipPanel>
         <button
           type="button"
           class="new-conversation-button"
@@ -496,9 +648,26 @@ function middleEllipsis(value: string, maxLength: number): string {
   opacity: 0.55;
 }
 
+.run-status:hover,
+.run-status:focus-visible {
+  color: var(--vscode-foreground);
+  border-color: var(--vscode-panel-border, transparent);
+  background: var(--vscode-list-hoverBackground, transparent);
+}
+
+.run-status:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, currentColor);
+  outline-offset: 1px;
+}
+
 .run-status.is-active {
   color: var(--vscode-foreground);
   background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-foreground) 8%);
+}
+
+.run-status.is-active:hover,
+.run-status.is-active:focus-visible {
+  background: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%);
 }
 
 .run-status.is-active .run-status-dot {

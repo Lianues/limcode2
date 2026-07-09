@@ -13,7 +13,7 @@ import { Conversation, Message, PartOf } from '../chat/components';
 import { ConversationModeSelection, Mode, ToolPolicy } from '../mode/components';
 import { McpToolSourcesKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey } from './resources';
 import { toolSchedulingDecision } from './scheduling';
-import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolPolicyScopeLinkData } from './components';
+import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolPolicyScopeLinkData, type ToolStateData } from './components';
 import { isYoloToolPolicy } from './policy';
 
 export const toolsRuntimeStateProjectionReads: AccessDeclaration = {
@@ -89,7 +89,7 @@ function buildToolCallRecord(world: WorldReader, entity: number): ToolCallRecord
   const message = world.get(messageEntity, Message);
   if (!message) return undefined;
   const scheduling = toolSchedulingDecision(world, entity);
-  const summary = resolveToolCallSummary(world, call);
+  const summary = resolveToolCallSummary(world, call, state);
   const display = resolveToolCallDisplay(world, entity, call);
   const changeApply = resolveToolCallChangeApply(world, entity, call);
 
@@ -198,7 +198,7 @@ function normalizeAutoApplyDelay(value: unknown): number {
   return Math.min(600, Math.max(0, Math.floor(value)));
 }
 
-function resolveToolCallSummary(world: WorldReader, call: ToolCallData): string | undefined {
+function resolveToolCallSummary(world: WorldReader, call: ToolCallData, state: ToolStateData): string | undefined {
   const definitions = world.tryGetResource(ToolRuntimeDefinitionsKey) ?? [];
   const definition = definitions.find((tool) => tool.declaration.name === call.name);
   if (!definition?.summary) return undefined;
@@ -206,7 +206,9 @@ function resolveToolCallSummary(world: WorldReader, call: ToolCallData): string 
   try {
     return normalizeToolCallSummary(definition.summary(parseToolCallArgs(call.argsJson), {
       toolName: call.name,
-      argsJson: call.argsJson
+      argsJson: call.argsJson,
+      ...(state.progress !== undefined ? { progress: state.progress } : {}),
+      ...(state.result !== undefined ? { result: state.result } : {})
     }));
   } catch {
     return undefined;

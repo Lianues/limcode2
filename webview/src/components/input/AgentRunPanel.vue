@@ -8,17 +8,20 @@ import type {
   AgentRunStatus,
   AgentRunTargetLinkRecord,
   ToolCallRecord,
+  ToolCallRunLinkRecord,
   ToolCallStatus
 } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
+import HoverTooltipPanel from '@webview/components/ui/HoverTooltipPanel.vue';
 import { bridge, BridgeMessageType } from '@webview/transport';
 
 interface RunAgentPayloadLike {
   runId?: string;
   childRunId?: string;
   agentId?: string;
+  agentType?: string;
   conversationId?: string;
   answerBridgeId?: string;
   status?: string;
@@ -45,13 +48,30 @@ interface AgentPanelEntry {
   status: AgentRunStatus | ToolCallStatus | string;
   statusLabel: string;
   statusTone: 'running' | 'done' | 'warning' | 'error';
+  toolCalls: ToolCallRecord[];
   startedAt: number;
   updatedAt: number;
 }
 
+interface AgentRunTooltipRow {
+  kind?: 'row';
+  label: string;
+  value: string;
+  nested?: boolean;
+}
+
+interface AgentRunTooltipDivider {
+  kind: 'divider';
+  id: string;
+}
+
+type AgentRunTooltipItem = AgentRunTooltipRow | AgentRunTooltipDivider;
+
 const RUN_AGENT_TOOL_NAME = 'run_agent';
+const DEFAULT_RUN_AGENT_TYPE = 'worker';
 const TERMINAL_RUN_STATUSES = new Set<AgentRunStatus>(['completed', 'failed', 'cancelled', 'stale']);
 const TERMINAL_TOOL_STATUSES = new Set<ToolCallStatus>(['success', 'warning', 'error']);
+const MAX_TOOLTIP_TOOL_CALLS = 2;
 
 const clientState = useClientStateStore();
 const conversationTimeline = useConversationTimelineStore();
@@ -138,9 +158,14 @@ function buildEntries(): AgentPanelEntry[] {
   const targetsByRunId = latestByRunId<AgentRunTargetLinkRecord>([...clientState.agentRunTargetLinks, ...timelineState.agentRunTargetLinks]);
   const sourceLinks = [...clientState.agentRunSourceLinks, ...timelineState.agentRunSourceLinks];
   const answersById = recordMap<AgentAnswerRecord>([...clientState.agentAnswers, ...timelineState.agentAnswers]);
+  const toolCallsById = recordMap<ToolCallRecord>([...clientState.toolCalls, ...timelineState.toolCalls]);
+  const callsByRunId = groupToolCallsByRunId(
+    toolCallsById,
+    [...clientState.toolCallRunLinks, ...timelineState.toolCallRunLinks]
+  );
 
   const built = calls
-    .map((call) => buildEntry(call, runsById, targetsByRunId, sourceLinks, answersById))
+    .map((call) => buildEntry(call, runsById, targetsByRunId, sourceLinks, answersById, callsByRunId))
     .filter((entry): entry is AgentPanelEntry => !!entry);
   return dedupeEntriesByKey(built)
     .sort((left, right) => statusPriority(left) - statusPriority(right) || right.updatedAt - left.updatedAt || right.startedAt - left.startedAt || entryKey(left).localeCompare(entryKey(right)));
@@ -167,7 +192,8 @@ function buildEntry(
   runsById: Map<string, AgentRunRecord>,
   targetsByRunId: Map<string, AgentRunTargetLinkRecord>,
   sourceLinks: AgentRunSourceLinkRecord[],
-  answersById: Map<string, AgentAnswerRecord>
+  answersById: Map<string, AgentAnswerRecord>,
+  toolCallsByRunId: Map<string, ToolCallRecord[]>
 ): AgentPanelEntry | undefined {
   const args = parseJson<RunAgentArgsLike>(call.args) ?? {};
   const toolData = readRunAgentPayload(call.result) ?? readRunAgentPayload(call.progress) ?? {};
@@ -189,7 +215,14 @@ function buildEntry(
   const agentId = toolData.agentId || target?.agentId;
   const conversationId = toolData.conversationId || target?.conversationId;
   const prompt = args.prompt?.trim() ?? '';
-  const targetLabel = args.agent?.id?.trim() || args.agent?.type?.trim() || agentId || 'general-purpose';
+  const targetLabel = args.agent?.id?.trim()
+    || args.agent?.type?.trim()
+    || toolData.agentType
+    || agentId
+    || DEFAULT_RUN_AGENT_TYPE;
+  const toolCalls = runId
+    ? selectActiveToolCalls(run?.status, toolCallsByRunId.get(runId) ?? [])
+    : [];
 
   return {
     toolCallId: call.id,
@@ -203,8 +236,9 @@ function buildEntry(
     status,
     statusLabel,
     statusTone,
+    toolCalls,
     startedAt: call.createdAt,
-    updatedAt: Math.max(call.updatedAt, run?.updatedAt ?? 0, answer?.updatedAt ?? 0)
+    updatedAt: Math.max(call.updatedAt, run?.updatedAt ?? 0, answer?.updatedAt ?? 0, ...toolCalls.map((toolCall) => toolCall.updatedAt))
   };
 }
 
@@ -217,6 +251,7 @@ function readRunAgentPayload(value: unknown): RunAgentPayloadLike | undefined {
     runId: stringField(candidate, 'runId'),
     childRunId: stringField(candidate, 'childRunId'),
     agentId: stringField(candidate, 'agentId'),
+    agentType: stringField(candidate, 'agentType'),
     conversationId: stringField(candidate, 'conversationId'),
     answerBridgeId: stringField(candidate, 'answerBridgeId'),
     status: stringField(candidate, 'status')
@@ -248,6 +283,42 @@ function recordMap<T extends { id: string }>(records: T[]): Map<string, T> {
   const map = new Map<string, T>();
   for (const record of records) map.set(record.id, record);
   return map;
+}
+
+function groupToolCallsByRunId(
+  toolCallsById: Map<string, ToolCallRecord>,
+  links: ToolCallRunLinkRecord[]
+): Map<string, ToolCallRecord[]> {
+  const groupedIds = new Map<string, Set<string>>();
+  for (const link of links) {
+    const ids = groupedIds.get(link.runId) ?? new Set<string>();
+    ids.add(link.toolCallId);
+    groupedIds.set(link.runId, ids);
+  }
+
+  const grouped = new Map<string, ToolCallRecord[]>();
+  for (const [runId, ids] of groupedIds) {
+    const calls = [...ids]
+      .map((id) => toolCallsById.get(id))
+      .filter((call): call is ToolCallRecord => !!call);
+    grouped.set(runId, calls);
+  }
+  return grouped;
+}
+
+function selectActiveToolCalls(runStatus: AgentRunStatus | undefined, calls: ToolCallRecord[]): ToolCallRecord[] {
+  const activeCalls = calls.filter((call) => !TERMINAL_TOOL_STATUSES.has(call.status));
+  if (activeCalls.length > 0) return [...activeCalls].sort(compareToolCallsByExecutionOrder);
+  if (runStatus !== 'waiting_tool') return [];
+  return [...calls].sort(compareToolCallsByLatest).slice(0, 1);
+}
+
+function compareToolCallsByExecutionOrder(left: ToolCallRecord, right: ToolCallRecord): number {
+  return left.createdAt - right.createdAt || left.id.localeCompare(right.id);
+}
+
+function compareToolCallsByLatest(left: ToolCallRecord, right: ToolCallRecord): number {
+  return right.updatedAt - left.updatedAt || right.createdAt - left.createdAt || right.id.localeCompare(left.id);
 }
 
 function latestByRunId<T extends { runId: string; id: string }>(records: T[]): Map<string, T> {
@@ -334,6 +405,76 @@ function toolStatusTone(status: ToolCallStatus, hasAnswer: boolean): AgentPanelE
   if (status === 'error') return 'error';
   if (status === 'warning') return 'warning';
   return TERMINAL_TOOL_STATUSES.has(status) ? 'done' : 'running';
+}
+
+function entryTooltipTitle(entry: AgentPanelEntry): string {
+  return `${entry.targetLabel} · 运行详情`;
+}
+
+function entryStatusAriaLabel(entry: AgentPanelEntry): string {
+  const toolNames = [...new Set(entry.toolCalls.map((call) => call.name))];
+  const toolDetail = toolNames.length > 0 ? `，当前工具：${toolNames.join('、')}` : '';
+  return `${entry.targetLabel}，${entry.statusLabel}${toolDetail}`;
+}
+
+function entryStatusTooltipRows(entry: AgentPanelEntry): AgentRunTooltipItem[] {
+  const rows: AgentRunTooltipItem[] = [
+    { label: '当前阶段', value: entry.statusLabel },
+    { label: '任务', value: previewText(entry.prompt, 72) }
+  ];
+  if (entry.toolCalls.length > 0) {
+    rows.push({ kind: 'divider', id: 'tools' });
+    for (const [index, call] of entry.toolCalls.slice(0, MAX_TOOLTIP_TOOL_CALLS).entries()) {
+      const toolLabel = entry.toolCalls.length > 1 ? `工具 ${index + 1}` : '工具';
+      rows.push({ label: toolLabel, value: call.name });
+      const content = toolCallContentPreview(call);
+      if (content) rows.push({ label: '内容', value: content, nested: true });
+      rows.push({ label: '进度', value: toolCallDetailStatusLabel(call.status), nested: true });
+    }
+    if (entry.toolCalls.length > MAX_TOOLTIP_TOOL_CALLS) {
+      const otherNames = entry.toolCalls.slice(MAX_TOOLTIP_TOOL_CALLS).map((call) => call.name).join('、');
+      rows.push({ label: '其他工具', value: compactTooltipValue(otherNames, 72) });
+    }
+  } else if (entry.status === 'waiting_tool') {
+    rows.push(
+      { kind: 'divider', id: 'tools-pending' },
+      { label: '等待对象', value: '工具信息同步中' }
+    );
+  } else if (entry.status === 'waiting_child_run') {
+    rows.push(
+      { kind: 'divider', id: 'child-run' },
+      { label: '等待对象', value: '子任务' }
+    );
+  }
+  return rows;
+}
+
+function toolCallContentPreview(call: ToolCallRecord): string | undefined {
+  const value = call.summary?.trim() || call.args.trim();
+  if (!value || value === '{}') return undefined;
+  return compactTooltipValue(value, 72);
+}
+
+function compactTooltipValue(value: string, maxLength: number): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return compact.length > maxLength ? `${compact.slice(0, maxLength - 1)}…` : compact;
+}
+
+function toolCallDetailStatusLabel(status: ToolCallStatus): string {
+  switch (status) {
+    case 'streaming': return '正在生成';
+    case 'queued': return '等待调度';
+    case 'awaiting_approval': return '等待批准';
+    case 'executing': return '执行中';
+    case 'awaiting_change_apply': return '等待应用更改';
+    case 'applying_change': return '应用更改中';
+    case 'change_applied': return '更改已应用';
+    case 'change_rejected': return '更改已拒绝';
+    case 'awaiting_result_submit': return '等待结果回传';
+    case 'success': return '已完成';
+    case 'warning': return '已完成（有警告）';
+    case 'error': return '失败';
+  }
 }
 
 function formatTime(value: number): string {
@@ -432,7 +573,19 @@ function readAnswerPayload(entry: AgentPanelEntry): string {
         <article v-if="selectedEntry" class="agent-run-detail">
           <header class="agent-run-detail-header">
             <span class="agent-run-detail-main">
-              <span class="agent-run-status" :class="`is-${selectedEntry.statusTone}`">{{ selectedEntry.statusLabel }}</span>
+              <HoverTooltipPanel
+                class="agent-run-status"
+                :class="`is-${selectedEntry.statusTone}`"
+                :aria-label="entryStatusAriaLabel(selectedEntry)"
+                :panel-title="entryTooltipTitle(selectedEntry)"
+                :rows="entryStatusTooltipRows(selectedEntry)"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+                tabindex="0"
+              >
+                <span>{{ selectedEntry.statusLabel }}</span>
+              </HoverTooltipPanel>
               <span class="agent-run-detail-id">{{ selectedEntry.runId || selectedEntry.toolCallId }}</span>
             </span>
             <button
@@ -702,6 +855,11 @@ function readAnswerPayload(entry: AgentPanelEntry): string {
 
 .agent-run-status.is-error {
   color: var(--vscode-errorForeground, #f48771);
+}
+
+.agent-run-status:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, currentColor);
+  outline-offset: 1px;
 }
 
 .agent-run-target,

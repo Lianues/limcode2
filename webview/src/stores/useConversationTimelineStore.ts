@@ -408,7 +408,14 @@ function pruneClientStateToTimelineWindow(timeline: ConversationTimelineState, s
   state.messageCurrentRevisionLinks = state.messageCurrentRevisionLinks.filter((link) =>
     messageIds.has(link.messageId) || revisionIds.has(link.revisionId)
   );
-  state.toolCalls = state.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId));
+  const runIds = new Set(state.agentRuns.map((run) => run.id));
+  // 对话流会额外投影关联子 Run 的当前工具；它们的 message 属于子对话，不能按当前消息窗口裁掉。
+  const runToolCallIds = new Set(
+    state.toolCallRunLinks
+      .filter((link) => runIds.has(link.runId))
+      .map((link) => link.toolCallId)
+  );
+  state.toolCalls = state.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId) || runToolCallIds.has(toolCall.id));
   const toolCallIds = new Set(state.toolCalls.map((toolCall) => toolCall.id));
   state.toolCallEvents = state.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId));
   state.toolCallRunLinks = state.toolCallRunLinks.filter((link) => toolCallIds.has(link.toolCallId));

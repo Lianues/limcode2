@@ -331,7 +331,7 @@ conversation: same_conversation / visible
 context: full
 delivery: direct_reply / full
 edit: mark_stale / queue_next_run
-general-purpose
+worker
 conversation: new_conversation / collapsed
 context: full
 delivery: tool_response / summary

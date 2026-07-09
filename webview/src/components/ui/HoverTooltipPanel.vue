@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref } from 'vue';
+import { getCurrentInstance, nextTick, onBeforeUnmount, ref } from 'vue';
 
 interface TooltipPanelRow {
   kind?: 'row';
@@ -26,6 +26,8 @@ const props = withDefaults(
   { delayMs: 320 }
 );
 
+const instanceId = getCurrentInstance()?.uid ?? Math.random().toString(36).slice(2);
+const panelId = `lc-hover-tooltip-${instanceId}`;
 const open = ref(false);
 const placement = ref<'top' | 'bottom'>('top');
 const panelStyle = ref<Record<string, string>>(initialPanelStyle());
@@ -36,12 +38,14 @@ let showTimer: number | undefined;
 let hideTimer: number | undefined;
 let positionFrame: number | undefined;
 let positionListenersAttached = false;
+let panelResizeObserver: ResizeObserver | undefined;
 
 onBeforeUnmount(() => {
   cancelShowTimer();
   cancelHideTimer();
   if (positionFrame !== undefined) window.cancelAnimationFrame(positionFrame);
   detachPositionListeners();
+  detachPanelResizeObserver();
 });
 
 function scheduleOpen(): void {
@@ -56,10 +60,17 @@ function scheduleOpen(): void {
 function openNow(): void {
   cancelShowTimer();
   cancelHideTimer();
+  if (open.value) {
+    schedulePosition();
+    return;
+  }
   open.value = true;
   panelStyle.value = initialPanelStyle();
   attachPositionListeners();
-  void nextTick(() => updatePosition());
+  void nextTick(() => {
+    attachPanelResizeObserver();
+    updatePosition();
+  });
 }
 
 function scheduleClose(): void {
@@ -73,9 +84,11 @@ function scheduleClose(): void {
 
 function closeNow(): void {
   cancelShowTimer();
+  cancelHideTimer();
   open.value = false;
   panelStyle.value = initialPanelStyle();
   detachPositionListeners();
+  detachPanelResizeObserver();
 }
 
 function cancelShowTimer(): void {
@@ -149,6 +162,18 @@ function detachPositionListeners(): void {
   positionListenersAttached = false;
 }
 
+function attachPanelResizeObserver(): void {
+  detachPanelResizeObserver();
+  if (typeof ResizeObserver === 'undefined' || !panelRef.value) return;
+  panelResizeObserver = new ResizeObserver(() => schedulePosition());
+  panelResizeObserver.observe(panelRef.value);
+}
+
+function detachPanelResizeObserver(): void {
+  panelResizeObserver?.disconnect();
+  panelResizeObserver = undefined;
+}
+
 function initialPanelStyle(): Record<string, string> {
   const viewportWidth = viewportSize().width;
   return {
@@ -183,11 +208,14 @@ function itemKey(item: TooltipPanelItem, index: number): string {
   <span
     ref="triggerRef"
     class="lc-hover-tooltip-trigger"
+    role="group"
     v-bind="$attrs"
+    :aria-describedby="open ? panelId : undefined"
     @mouseenter="scheduleOpen"
     @mouseleave="scheduleClose"
     @focusin="openNow"
     @focusout="scheduleClose"
+    @keydown.esc.stop.prevent="closeNow"
   >
     <slot />
 
@@ -195,6 +223,7 @@ function itemKey(item: TooltipPanelItem, index: number): string {
       <Transition name="lc-hover-tooltip">
         <span
           v-if="open"
+          :id="panelId"
           ref="panelRef"
           class="lc-hover-tooltip-panel"
           :class="[`is-placement-${placement}`]"
@@ -315,13 +344,18 @@ function itemKey(item: TooltipPanelItem, index: number): string {
 }
 
 .lc-hover-tooltip-label {
+  flex: 0 0 auto;
   color: var(--vscode-descriptionForeground);
 }
 
 .lc-hover-tooltip-value {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 220px;
   color: var(--vscode-foreground);
   font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .lc-hover-tooltip-divider {

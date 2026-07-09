@@ -20,7 +20,7 @@ export const readAgentAnswerToolModule = defineToolDefinitionModule({
 export const submitAgentAnswerTool: ToolDefinition = {
   declaration: {
     name: SUBMIT_AGENT_ANSWER_TOOL_NAME,
-    description: "Submit this AgentRun's interim conclusion or final answer to a given answerBridgeId. When answerBridgeId is omitted, the default answerBridgeId assigned to the current run_agent task is used; pass answerBridgeId explicitly to submit to a different answer channel.",
+    description: "Submit this AgentRun's interim conclusion or final answer to a given answerBridgeId. When answerBridgeId is omitted, the default answerBridgeId assigned to the current run_agent task is used; pass answerBridgeId explicitly to submit to a different answer channel. If a background submission is delivered while the parent conversation is still responding, it interrupts that response and force-sends the answer notification instead of waiting in the normal queue.",
     parameters: {
       type: 'object',
       properties: {

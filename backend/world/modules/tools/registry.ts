@@ -62,10 +62,12 @@ export interface ToolDeclaration {
 export interface ToolCallSummaryContext {
   toolName: string;
   argsJson: string;
+  progress?: unknown;
+  result?: unknown;
 }
 
 /**
- * 工具调用收起条摘要。由工具定义根据调用参数临时生成，前端只展示投影结果。
+ * 工具调用收起条摘要。由工具定义根据调用参数及当前运行状态临时生成，前端只展示投影结果。
  */
 export type ToolCallSummaryResolver = (args: unknown, context: ToolCallSummaryContext) => string | undefined;
 

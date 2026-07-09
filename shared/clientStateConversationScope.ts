@@ -36,6 +36,7 @@ export function collectChangedClientStateConversationIds(prev: ClientState, next
 class ConversationReferenceIndex {
   private _conversationIdToRelatedConversationIds: Map<string, Set<string>> | undefined;
   private _messageIdToConversationId: Map<string, string> | undefined;
+  private _messageToolCallIdToConversationIds: Map<string, Set<string>> | undefined;
   private _toolCallIdToConversationIds: Map<string, Set<string>> | undefined;
   private _runIdToConversationIds: Map<string, Set<string>> | undefined;
   private _blockIdToConversationId: Map<string, string> | undefined;
@@ -68,10 +69,24 @@ class ConversationReferenceIndex {
     return this._messageIdToConversationId;
   }
 
+  private get messageToolCallIdToConversationIds(): Map<string, Set<string>> {
+    if (!this._messageToolCallIdToConversationIds) {
+      const result = new Map<string, Set<string>>();
+      for (const toolCall of this.state.toolCalls) addOptionalToSetMap(result, toolCall.id, this.messageIdToConversationId.get(toolCall.messageId));
+      this._messageToolCallIdToConversationIds = result;
+    }
+    return this._messageToolCallIdToConversationIds;
+  }
+
   public get toolCallIdToConversationIds(): Map<string, Set<string>> {
     if (!this._toolCallIdToConversationIds) {
       const result = new Map<string, Set<string>>();
-      for (const toolCall of this.state.toolCalls) addOptionalToSetMap(result, toolCall.id, this.messageIdToConversationId.get(toolCall.messageId));
+      for (const [toolCallId, conversationIds] of this.messageToolCallIdToConversationIds) {
+        addOptionalSetToSetMap(result, toolCallId, conversationIds);
+      }
+      for (const link of this.state.toolCallRunLinks) {
+        addOptionalSetToSetMap(result, link.toolCallId, this.runIdToConversationIds.get(link.runId));
+      }
       this._toolCallIdToConversationIds = result;
     }
     return this._toolCallIdToConversationIds;
@@ -84,10 +99,10 @@ class ConversationReferenceIndex {
       for (const link of this.state.agentRunSourceLinks) {
         addOptionalToSetMap(result, link.runId, link.sourceConversationId);
         addOptionalSetToSetMap(result, link.runId, link.sourceMessageId ? setOf(this.messageIdToConversationId.get(link.sourceMessageId)) : undefined);
-        addOptionalSetToSetMap(result, link.runId, link.sourceToolCallId ? this.toolCallIdToConversationIds.get(link.sourceToolCallId) : undefined);
+        addOptionalSetToSetMap(result, link.runId, link.sourceToolCallId ? this.messageToolCallIdToConversationIds.get(link.sourceToolCallId) : undefined);
       }
       for (const link of this.state.messageRunLinks) addOptionalToSetMap(result, link.runId, this.messageIdToConversationId.get(link.messageId));
-      for (const link of this.state.toolCallRunLinks) addOptionalSetToSetMap(result, link.runId, this.toolCallIdToConversationIds.get(link.toolCallId));
+      for (const link of this.state.toolCallRunLinks) addOptionalSetToSetMap(result, link.runId, this.messageToolCallIdToConversationIds.get(link.toolCallId));
       for (const input of this.state.agentRunInputRevisions) addToSetMap(result, input.runId, input.conversationId);
 
       let propagated = true;

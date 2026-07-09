@@ -15,7 +15,7 @@ import { LlmInvocation, type LlmInvocationData } from '../../llm/components';
 import { compressionThresholdTokens, observedUsageTokenCount } from '../../llm/usage';
 import { ToolCall, ToolCallEvent } from '../../tools/components';
 import { spawnToolCall, ToolCallBundle } from '../../tools/bundles';
-import { AgentRun, ToolCallRunLink } from '../../agentRun/components';
+import { AgentRun, AgentRunSourceLink, ToolCallRunLink } from '../../agentRun/components';
 import { spawnToolCallRunLink } from '../../agentRun/bundles';
 import { CompressionBlock } from '../../compression/components';
 import { CompressionEventType } from '../../compression/events';
@@ -34,7 +34,7 @@ import {
   type LlmUsageMetadataRecord
 } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
-import { markClientStateConversationDirty } from '../../../clientSync/dirtyConversations';
+import { markClientStateConversationsDirty } from '../../../clientSync/dirtyConversations';
 import { ClientStateDirtyConversationIdsKey, ClientSyncFastPatchStateKey, type ClientSyncFastPatchBatch } from '../../../clientSync/resources';
 
 type PendingOperation =
@@ -93,7 +93,7 @@ export const LlmPollSystem = defineSystem({
   name: 'LlmPollSystem',
   access: {
     queries: [LlmInvocationsByIdQuery, LlmRequestsByIdQuery, ModelMessagesQuery, ToolCallLookupQuery],
-    reads: { components: [PartOf, CompressionBlock, ToolCallEvent, ToolCallRunLink] },
+    reads: { components: [PartOf, CompressionBlock, ToolCallEvent, ToolCallRunLink, AgentRunSourceLink] },
     writes: { components: [Streaming, AgentRun, ToolCall, ToolCallEvent, ToolCallRunLink] },
     resources: { read: [ClientSyncFastPatchStateKey, ClientStateDirtyConversationIdsKey], write: [ClientSyncFastPatchStateKey, ClientStateDirtyConversationIdsKey], mutationMode: 'update' },
     events: { read: [LlmEventType.Started, LlmEventType.ThoughtDelta, LlmEventType.ThoughtProgress, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error, LlmEventType.RetryScheduled, LlmEventType.RetryStarted, LlmEventType.RetryCancelled, LlmEventType.RetryRecovered], emit: [CheckpointEventType.Requested, CompressionEventType.Create] },
@@ -413,7 +413,11 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
 
   const conversation = world.get(requestData.conversation, Conversation);
   if (conversation && (next !== current || invocationChanged || shouldFinish || sawToolCall)) {
-    markClientStateConversationDirty(world, cmd, conversation.id);
+    // 子 Run 的调用阶段或工具阶段变化时，来源对话的 Agent 面板也需要立即刷新运行详情。
+    markClientStateConversationsDirty(world, cmd, [
+      conversation.id,
+      ...(invocationChanged || sawToolCall || shouldFinish ? runSourceConversationIds(world, requestData.run) : [])
+    ]);
   }
   const fastPatchBatches = fastPatchSafe && fastPatches.length > 0 && conversation
     ? [{ streamId: conversationClientStateStreamId(conversation.id), patches: fastPatches }]
@@ -735,6 +739,27 @@ function cleanupCancelledRequest(world: WorldReader, cmd: CommandSink, request: 
   }
   cmd.remove(modelMessage, Streaming);
   cmd.despawn(request);
+}
+
+function runSourceConversationIds(world: WorldReader, run: Entity): string[] {
+  const conversationIds = new Set<string>();
+  const pendingRuns = [run];
+  const visitedRuns = new Set<Entity>();
+  while (pendingRuns.length > 0) {
+    const currentRun = pendingRuns.pop();
+    if (currentRun === undefined || visitedRuns.has(currentRun)) continue;
+    visitedRuns.add(currentRun);
+    for (const entity of world.query(AgentRunSourceLink)) {
+      const link = world.get(entity, AgentRunSourceLink);
+      if (!link || link.run !== currentRun) continue;
+      if (link.sourceConversation !== undefined) {
+        const id = world.get(link.sourceConversation, Conversation)?.id;
+        if (id) conversationIds.add(id);
+      }
+      if (link.sourceRun !== undefined && !visitedRuns.has(link.sourceRun)) pendingRuns.push(link.sourceRun);
+    }
+  }
+  return [...conversationIds];
 }
 
 function mergeUsageMetadata(previous: MessageData['usageMetadata'], next: MessageData['usageMetadata']): MessageData['usageMetadata'] {

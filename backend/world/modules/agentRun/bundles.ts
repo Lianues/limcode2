@@ -1,5 +1,5 @@
 import { defineBundle, type CommandSink, type Entity } from '../../../ecs/types';
-import type { AgentRunKind, AgentRunSourceKind, DeliveryMode, MessageContent, TranscriptInclusion } from '../../../../shared/protocol';
+import type { AgentRunKind, AgentRunQueueHoldReason, AgentRunSourceKind, DeliveryMode, MessageContent, TranscriptInclusion } from '../../../../shared/protocol';
 import {
   AgentRun,
   AgentRunInputRevision,
@@ -65,6 +65,8 @@ export interface SpawnAgentRunInput {
   attempt?: number;
   needsModel?: boolean;
   queuedInputContent?: MessageContent;
+  /** 初始 queue hold；持有期间不会附加 AgentRunNeedsModel，由队列系统在解除后启动。 */
+  queueHoldReason?: AgentRunQueueHoldReason;
 }
 
 export function spawnAgentRun(cmd: CommandSink, input: SpawnAgentRunInput): Entity {
@@ -79,7 +81,9 @@ export function spawnAgentRun(cmd: CommandSink, input: SpawnAgentRunInput): Enti
     ...(input.retryOfRunId ? { retryOfRunId: input.retryOfRunId } : {}),
     ...(input.attempt !== undefined ? { attempt: input.attempt } : {})
   });
-  if (input.needsModel !== false) cmd.add(run, AgentRunNeedsModel, { since: now });
+  if (input.needsModel !== false && input.queueHoldReason === undefined) {
+    cmd.add(run, AgentRunNeedsModel, { since: now });
+  }
 
   const queueOrder = cmd.spawn();
   cmd.add(queueOrder, AgentRunQueueOrder, {
@@ -98,6 +102,18 @@ export function spawnAgentRun(cmd: CommandSink, input: SpawnAgentRunInput): Enti
       run,
       conversation: input.conversation,
       content: input.queuedInputContent,
+      createdAt: now,
+      updatedAt: now
+    });
+  }
+
+  if (input.queueHoldReason !== undefined) {
+    const queueHold = cmd.spawn();
+    cmd.add(queueHold, AgentRunQueueHold, {
+      id: `arqh${queueHold}`,
+      run,
+      conversation: input.conversation,
+      reason: input.queueHoldReason,
       createdAt: now,
       updatedAt: now
     });

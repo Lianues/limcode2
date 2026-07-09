@@ -77,14 +77,6 @@ export function createDefaultAgentBlueprints(): BuiltinAgentRegistry {
         systemPrompt: 'You are a peer LimCode worker agent. Complete assigned implementation or investigation tasks independently, use tools when useful, and report concise results with important details.',
         toolPolicy: { name: 'Worker Agent Tools', allowedTools: DEFAULT_TOOLS, toolConfigs: DEFAULT_TOOL_CONFIGS }
       },
-      'general-purpose': {
-        id: 'general-purpose',
-        kind: 'general-purpose',
-        name: 'General Purpose Agent',
-        description: '兼容 run_agent 默认 type 的通用 Agent。',
-        systemPrompt: 'You are an autonomous peer execution subject in LimCode. Complete delegated tasks independently, use tools when useful, and return a concise result with findings.',
-        toolPolicy: { name: 'General Purpose Agent Tools', allowedTools: DEFAULT_TOOLS, toolConfigs: DEFAULT_TOOL_CONFIGS }
-      },
       explore: {
         id: 'explore',
         kind: 'explore',

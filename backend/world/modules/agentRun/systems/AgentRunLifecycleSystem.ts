@@ -273,12 +273,14 @@ function promoteRun(world: WorldReader, cmd: CommandSink, runId: string, convers
   const targetConversation = target ? world.get(target.conversation, Conversation) : undefined;
   if (!target || targetConversation?.id !== conversationId) return;
 
-  // 取消当前正在执行的（非 queued、非终态）run
+  // 取消当前正在执行的 run。普通 queued run（没有 NeedsModel）仍保留，稍后会和目标消息一起批量物化；
+  // queued + NeedsModel 已进入直接启动链路，必须视为活跃 run 终止，否则 Promote 后两者会并发请求模型。
   const activeRuns = activeRunsForConversation(world, conversationId);
   for (const run of activeRuns) {
     if (run === targetRun) continue;
     const data = world.get(run, AgentRun);
-    if (!data || data.status === 'queued' || isTerminalRunStatus(data.status)) continue;
+    if (!data || isTerminalRunStatus(data.status)) continue;
+    if (data.status === 'queued' && !world.has(run, AgentRunNeedsModel)) continue;
     terminateRun(world, cmd, run, 'cancelled', 'cancelled_by_user', 'cancelled', 'Force send: cancelled for promotion.');
   }
 

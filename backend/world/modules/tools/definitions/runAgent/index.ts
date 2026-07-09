@@ -1,7 +1,8 @@
-import type { ToolDefinition } from '../../registry';
+import type { ToolCallSummaryContext, ToolDefinition } from '../../registry';
 import { defineToolDefinitionModule } from '../types';
 
 export const RUN_AGENT_TOOL_NAME = 'run_agent';
+export const DEFAULT_RUN_AGENT_TYPE = 'worker';
 
 export const runAgentToolModule = defineToolDefinitionModule({
   id: RUN_AGENT_TOOL_NAME,
@@ -14,50 +15,52 @@ export const runAgentTool: ToolDefinition = {
   execution: 'agentRun',
   declaration: {
     name: RUN_AGENT_TOOL_NAME,
-    description: `启动一个 AgentRun，让已有 Agent 继续执行任务，或创建一个新 Agent 执行任务。
+    description: `Start an AgentRun to continue an existing child-agent conversation or create a new child agent for a task.
 
-使用方式：
-- agent.type 表示要使用哪种 Agent 类型/配置（例如 main、worker、explore）；不传时默认 general-purpose。
-- answerBridgeId 是继续/追加某个 run_agent 子对话的首选方式；传入后会自动找到它绑定的子 Agent 与子对话，并沿用同一个默认 submit_agent_answer 通道。
-- agent.id 仅用于兼容直接复用 run_agent 返回的临时 Agent 镜像；首选传 answerBridgeId。agent.id 不是类型配置 id，找不到会报错。
-- prompt 内应写清楚任务、背景、角色和补充信息，不再提供额外 context / conversation / mode / delivery 参数。
-- foregroundWaitMs 是工具响应的前台等待预算（毫秒），不是 AgentRun 终止超时；0 表示启动后立即转后台；等待预算用尽后 AgentRun 会继续在后台运行，工具立即返回 agentId/runId/conversationId/answerBridgeId。`,
+Usage:
+- Use agent.type to select an Agent type/configuration such as main, worker, or explore. It defaults to ${DEFAULT_RUN_AGENT_TYPE}.
+- Prefer answerBridgeId when continuing or appending to an existing run_agent child conversation. It resolves the bound child Agent and conversation and preserves the same default submit_agent_answer channel.
+- If the reused child conversation is still responding, this call interrupts its current Run and force-sends the new message immediately instead of placing it in the normal queue.
+- agent.id is a compatibility selector for a temporary Agent mirror previously returned by run_agent. Prefer answerBridgeId. agent.id is not an Agent type/configuration id and fails when the mirror cannot be found.
+- Put the complete task, background, role, and supplemental instructions in prompt. Separate context, conversation, mode, and delivery parameters are not supported.
+- foregroundWaitMs is the foreground wait budget in milliseconds, not an AgentRun termination timeout. Use 0 to background immediately. When the budget expires, the AgentRun continues in the background and the tool returns agentId, runId, conversationId, and answerBridgeId.`,
     parameters: {
       type: 'object',
       properties: {
         prompt: {
           type: 'string',
-          description: '交给目标 AgentRun 执行的任务描述。请在这里写清楚任务、背景、角色和所有补充信息。'
+          description: 'The complete task for the target AgentRun, including all relevant background, role instructions, constraints, and supplemental information.'
         },
         answerBridgeId: {
           type: 'string',
-          description: '可选。继续/追加某个已有 run_agent 子任务时传 answerBridgeId；后端会自动找到它绑定的子 Agent/子对话，并保持 submit_agent_answer 默认值为同一个 answerBridgeId。'
+          description: 'Optional. Continue or append to an existing run_agent child conversation by its answerBridgeId. The bound child Agent and conversation are reused, the same default submit_agent_answer channel is preserved, and any active response is interrupted before this message is force-sent.'
         },
         agent: {
           type: 'object',
+          description: 'Selects the child Agent. Omit this when answerBridgeId already identifies an existing child conversation.',
           properties: {
             id: {
               type: 'string',
-              description: '兼容入口：run_agent 返回的临时 Agent 镜像 id。首选传 answerBridgeId；仅在没有 answerBridgeId 时使用。新开同类型独立镜像时不要传 id，只传 agent.type。'
+              description: 'Compatibility selector for a temporary Agent mirror previously returned by run_agent. Prefer answerBridgeId and use this only when answerBridgeId is unavailable. To create a separate mirror of the same type, omit id and provide only agent.type.'
             },
             type: {
               type: 'string',
-              description: '要使用的 Agent 类型/配置 id（例如 main、worker、explore）。未传 answerBridgeId/agent.id 时后端会按该类型创建只属于本次子对话的临时镜像；可用类型会由后端运行时补充到工具说明中；默认 general-purpose。'
+              description: `The Agent type/configuration id to use, such as main, worker, or explore. When neither answerBridgeId nor agent.id is provided, the backend creates a temporary mirror dedicated to this child conversation. Available types are appended to the tool description at runtime. Defaults to ${DEFAULT_RUN_AGENT_TYPE}.`
             }
           }
         },
         foregroundWaitMs: {
           type: 'number',
-          description: '必填。工具响应的前台等待预算（毫秒），不是 AgentRun 终止超时。设为 0 表示启动后立即转后台执行；等待预算用尽后 AgentRun 会继续在后台运行，并返回 agentId/runId/conversationId/answerBridgeId。'
+          description: 'Required foreground wait budget in milliseconds; this is not an AgentRun termination timeout. Use 0 to background immediately. When the budget expires, the AgentRun continues in the background and the tool returns agentId, runId, conversationId, and answerBridgeId.'
         },
         wait: {
           type: 'string',
-          description: '是否等待前面的工具执行完再启动。默认不等待、并行启动；传 "true" 表示等待前面的工具完成后再启动。'
+          description: 'Whether this tool call should wait for preceding tool calls before it starts. The default is parallel execution without waiting; pass "true" to wait.'
         },
         scheduling: {
           type: 'string',
           enum: ['parallel', 'serial'],
-          description: '工具调度模式。默认 parallel；如果任务会互相影响，请显式传 serial。'
+          description: 'Tool-call scheduling mode. Defaults to parallel. Use serial when this task may interfere with other tool calls.'
         }
       },
       required: ['prompt', 'foregroundWaitMs']
@@ -81,17 +84,30 @@ interface RunAgentSchedulingArgs {
   scheduling?: string;
 }
 
-function summarizeRunAgentToolCall(rawArgs: unknown): string | undefined {
+function summarizeRunAgentToolCall(rawArgs: unknown, context: ToolCallSummaryContext): string | undefined {
   const args = (rawArgs ?? {}) as RunAgentSchedulingArgs & { prompt?: unknown; answerBridgeId?: unknown; agent?: { type?: unknown; id?: unknown } };
   const prompt = typeof args.prompt === 'string' ? normalizeSummaryText(args.prompt) : '';
-  const target = typeof args.answerBridgeId === 'string' && args.answerBridgeId.trim()
-    ? args.answerBridgeId.trim()
-    : typeof args.agent?.id === 'string' && args.agent.id.trim()
-      ? args.agent.id.trim()
-      : typeof args.agent?.type === 'string' && args.agent.type.trim()
-        ? args.agent.type.trim()
-        : 'general-purpose';
-  return prompt ? `运行 ${target} · ${truncateSummary(prompt, 96)}` : `运行 ${target}`;
+  const resolvedType = runAgentTypeFromValue(context.result) ?? runAgentTypeFromValue(context.progress);
+  const requestedType = typeof args.agent?.type === 'string' && args.agent.type.trim()
+    ? args.agent.type.trim()
+    : undefined;
+  const hasIndirectTarget = (typeof args.answerBridgeId === 'string' && !!args.answerBridgeId.trim())
+    || (typeof args.agent?.id === 'string' && !!args.agent.id.trim());
+  const targetType = resolvedType ?? requestedType ?? (hasIndirectTarget ? 'Agent' : DEFAULT_RUN_AGENT_TYPE);
+  return prompt ? `Run ${targetType} · ${truncateSummary(prompt, 96)}` : `Run ${targetType}`;
+}
+
+function runAgentTypeFromValue(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const output = record.output;
+  if (output && typeof output === 'object' && !Array.isArray(output)) {
+    const nestedType = (output as Record<string, unknown>).agentType;
+    if (typeof nestedType === 'string' && nestedType.trim()) return nestedType.trim();
+  }
+  return typeof record.agentType === 'string' && record.agentType.trim()
+    ? record.agentType.trim()
+    : undefined;
 }
 
 function resolveRunAgentScheduling(rawArgs: unknown): { mode: 'parallel' | 'serial'; reason: string } {

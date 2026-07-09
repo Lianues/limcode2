@@ -1,7 +1,7 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
 import { readEvents } from '../../../events';
 import { Agent, AgentConversationLink, AgentKind, type AgentData } from '../../agent/components';
-import { agentSelectorSlug, findAgentTypeEntity, isTemporaryAgentEntity } from '../../agent/identity';
+import { agentSelectorSlug, isTemporaryAgentEntity } from '../../agent/identity';
 import {
   AgentBlueprintsKey,
   type BuiltinAgentDefinition,
@@ -53,6 +53,7 @@ import {
   activeToolPolicyForRun,
   answerBridgeIdForConversation,
   conversationForAnswerBridgeId,
+  conversationHasActiveRun,
   defaultAgentForConversation,
   latestAnswerBridgeSourceById,
   runForToolCall,
@@ -100,7 +101,7 @@ import { effectiveCheckpointPolicyForRequest } from '../../checkpoint/queries';
 import { effectiveCheckpointToolTriggerConfig } from '../../checkpoint/policy';
 import { isReadonlyCommandCall } from '../definitions/command';
 import { allowOutsideProjectPathsFromConfig } from '../definitions/filePathPolicy';
-import { RUN_AGENT_TOOL_NAME } from '../definitions/runAgent';
+import { DEFAULT_RUN_AGENT_TYPE, RUN_AGENT_TOOL_NAME } from '../definitions/runAgent';
 import {
   compareToolCallOrder,
   isExecutionApproved,
@@ -183,7 +184,7 @@ export const ToolDispatchSystem = defineSystem({
     writes: { components: [CheckpointBarrier] },
     resources: { read: [AgentBlueprintsKey, ToolSchemasKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey] },
     bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentAnswerBundle, AgentFromBlueprintBundle, ModeBundle, ConversationProjectLinkBundle, WorkEnvironmentBundle],
-    events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested, ToolEventType.ExecutionCancelRequested, ToolEventType.ChangeApplyRequested, ToolEventType.ChangeRejectRequested], emit: [CheckpointEventType.Requested, AgentRunEventType.Cancel] },
+    events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested, ToolEventType.ExecutionCancelRequested, ToolEventType.ChangeApplyRequested, ToolEventType.ChangeRejectRequested], emit: [CheckpointEventType.Requested, AgentRunEventType.Cancel, AgentRunEventType.Promote] },
     effects: { emit: ['tool.run', 'tool.change.apply', 'tool.abort'] }
   },
   run(ctx) {
@@ -667,7 +668,11 @@ function notifyAgentAnswerSubmitted(
     return;
   }
 
-  spawnAgentRun(cmd, {
+  // 后台 answer 回流不能在主对话普通排队：主对话仍在响应时，创建瞬时 hold 的通知 Run，
+  // 再复用 Promote 先中断当前 Run、后物化 answer 通知，语义与队列“强制发送”一致。
+  const sourceConversationData = world.get(sourceConversation, Conversation);
+  const forcePromoteNotification = !!sourceConversationData && conversationHasActiveRun(world, sourceConversation);
+  const notificationRun = spawnAgentRun(cmd, {
     kind: 'notification',
     agent,
     conversation: sourceConversation,
@@ -677,8 +682,15 @@ function notifyAgentAnswerSubmitted(
     deliveryMode: 'direct_reply',
     includeTranscript: 'full',
     needsModel: false,
-    queuedInputContent: { role: 'user', parts: [{ text }] }
+    queuedInputContent: { role: 'user', parts: [{ text }] },
+    ...(forcePromoteNotification ? { queueHoldReason: 'manual' as const } : {})
   });
+  if (forcePromoteNotification) {
+    cmd.enqueue({
+      type: AgentRunEventType.Promote,
+      payload: { runId: `run${notificationRun}`, conversationId: sourceConversationData.id }
+    });
+  }
 }
 
 function completeSourceRunAgentToolWithSubmittedAnswer(
@@ -736,11 +748,13 @@ function submittedAgentAnswerResult(
   answerBridgeId: string;
   runId: string;
   agentId?: string;
+  agentType?: string;
   conversationId?: string;
   title: string;
   content: string;
 } {
   const agentId = input.submitterTarget?.agent !== undefined ? world.get(input.submitterTarget.agent, Agent)?.id : undefined;
+  const agentType = input.submitterTarget?.agent !== undefined ? world.get(input.submitterTarget.agent, AgentKind)?.kind : undefined;
   const conversationId = input.submitterTarget?.conversation !== undefined ? world.get(input.submitterTarget.conversation, Conversation)?.id : undefined;
   return {
     ok: true,
@@ -749,6 +763,7 @@ function submittedAgentAnswerResult(
     answerBridgeId: input.answerBridgeId,
     runId: input.submitterRunId,
     ...(agentId ? { agentId } : {}),
+    ...(agentType ? { agentType } : {}),
     ...(conversationId ? { conversationId } : {}),
     title: input.title,
     content: input.content
@@ -860,6 +875,7 @@ function runAgentToolProgress(value: unknown): RunAgentToolProgress {
     childRunId: typeof record.childRunId === 'string' ? record.childRunId : undefined,
     runId: typeof record.runId === 'string' ? record.runId : undefined,
     agentId: typeof record.agentId === 'string' ? record.agentId : undefined,
+    agentType: typeof record.agentType === 'string' ? record.agentType : undefined,
     conversationId: typeof record.conversationId === 'string' ? record.conversationId : undefined,
     answerBridgeId: typeof record.answerBridgeId === 'string' ? record.answerBridgeId : undefined,
     foregroundWaitMs: typeof record.foregroundWaitMs === 'number' && Number.isFinite(record.foregroundWaitMs) ? record.foregroundWaitMs : undefined,
@@ -885,6 +901,7 @@ function completeRunAgentToolAsBackground(
     status: 'backgrounded',
     reason,
     ...(progress.agentId ? { agentId: progress.agentId } : {}),
+    ...(progress.agentType ? { agentType: progress.agentType } : {}),
     ...(progress.runId ? { runId: progress.runId } : {}),
     ...(progress.conversationId ? { conversationId: progress.conversationId } : {}),
     ...(progress.answerBridgeId ? { answerBridgeId: progress.answerBridgeId } : {}),
@@ -942,6 +959,7 @@ function resolveRunAgentTargetByAnswerBridge(
     value: {
       targetAgent: target.agent,
       targetAgentId: agentData.id,
+      targetAgentType: kind,
       definition,
       resolved: {
         ok: true,
@@ -1075,6 +1093,7 @@ interface RunAgentToolProgress {
   childRunId?: string;
   runId?: string;
   agentId?: string;
+  agentType?: string;
   conversationId?: string;
   answerBridgeId?: string;
   foregroundWaitMs?: number;
@@ -1151,6 +1170,7 @@ function normalizeRunAgentForegroundWaitMs(value: unknown): { ok: true; value: n
 interface ResolvedRunAgentTarget {
   targetAgent: Entity;
   targetAgentId: string;
+  targetAgentType: string;
   definition: BuiltinAgentDefinition;
   resolved: { ok: true; value: ResolvedConversation } | { ok: false; reason: string };
 }
@@ -1182,6 +1202,7 @@ function resolveRunAgentTarget(
       value: {
         targetAgent: existingAgent,
         targetAgentId: agentData.id,
+        targetAgentType: kind,
         definition,
         resolved: resolveRunAgentConversation(world, cmd, {
           sourceConversation: input.sourceConversation,
@@ -1213,6 +1234,7 @@ function resolveRunAgentTarget(
     value: {
       targetAgent,
       targetAgentId,
+      targetAgentType: targetKind,
       definition,
       resolved: resolveRunAgentConversation(world, cmd, {
         sourceConversation: input.sourceConversation,
@@ -1233,7 +1255,7 @@ function resolveAgentDefinition(blueprints: BuiltinAgentRegistry, kind: string):
 }
 
 function resolveAgentType(world: WorldReader, blueprints: BuiltinAgentRegistry, selector: string): { definition: BuiltinAgentDefinition; typeId: string; typeAgent?: Entity; typeAgentData?: AgentData } | undefined {
-  const configured = findAgentTypeBySelector(world, selector);
+  const configured = findAgentTypeBySelector(world, blueprints, selector);
   if (configured !== undefined) {
     const agent = world.get(configured, Agent);
     if (!agent) return undefined;
@@ -1248,19 +1270,30 @@ function resolveAgentType(world: WorldReader, blueprints: BuiltinAgentRegistry, 
   }
   const definition = resolveAgentDefinition(blueprints, selector);
   if (!definition) return undefined;
-  const typeAgent = findAgentTypeEntity(world, definition.id) ?? findAgentTypeEntity(world, definition.kind);
+  const typeAgent = findAgentTypeBySelector(world, blueprints, definition.id)
+    ?? findAgentTypeBySelector(world, blueprints, definition.kind);
   const typeAgentData = typeAgent !== undefined ? world.get(typeAgent, Agent) : undefined;
   const typeId = typeAgentData?.id ?? definition.id;
   return { definition, typeId, ...(typeAgent !== undefined ? { typeAgent } : {}), ...(typeAgentData ? { typeAgentData } : {}) };
 }
 
-function findAgentTypeBySelector(world: WorldReader, selector: string): Entity | undefined {
+function findAgentTypeBySelector(world: WorldReader, blueprints: BuiltinAgentRegistry, selector: string): Entity | undefined {
   return world.query(Agent).find((entity) => {
-    if (isTemporaryAgentEntity(world, entity)) return false;
+    if (!isAvailableAgentTypeEntity(world, blueprints, entity)) return false;
     const agent = world.get(entity, Agent);
     const kind = world.get(entity, AgentKind)?.kind;
     return agent?.id === selector || kind === selector;
   });
+}
+
+function isAvailableAgentTypeEntity(world: WorldReader, blueprints: BuiltinAgentRegistry, entity: Entity): boolean {
+  if (isTemporaryAgentEntity(world, entity)) return false;
+  const agent = world.get(entity, Agent);
+  if (!agent) return false;
+  if (agent.source !== 'builtin') return true;
+  const kind = world.get(entity, AgentKind)?.kind;
+  return resolveAgentDefinition(blueprints, agent.id) !== undefined
+    || (!!kind && resolveAgentDefinition(blueprints, kind) !== undefined);
 }
 
 function definitionFromExistingAgent(agent: { id: string; name: string; description?: string }, kind: string): BuiltinAgentDefinition {
@@ -1276,7 +1309,7 @@ function definitionFromExistingAgent(agent: { id: string; name: string; descript
 
 function availableAgentTypes(world: WorldReader, blueprints: BuiltinAgentRegistry): string[] {
   const configured = world.query(Agent)
-    .filter((entity) => !isTemporaryAgentEntity(world, entity))
+    .filter((entity) => isAvailableAgentTypeEntity(world, blueprints, entity))
     .map((entity) => world.get(entity, Agent)?.id)
     .filter((id): id is string => !!id);
   return [...new Set([...configured, ...Object.values(blueprints.agents).map((definition) => definition.kind)])];
@@ -1318,7 +1351,7 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
 
   const requestedAnswerBridgeId = args.answerBridgeId?.trim();
   const requestedAgentId = args.agent?.id?.trim();
-  const requestedKind = args.agent?.type?.trim() || 'general-purpose';
+  const requestedKind = args.agent?.type?.trim() || DEFAULT_RUN_AGENT_TYPE;
   const blueprints = world.getResource(AgentBlueprintsKey);
   const resolvedTarget = requestedAnswerBridgeId
     ? resolveRunAgentTargetByAnswerBridge(world, cmd, {
@@ -1338,7 +1371,7 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     return;
   }
 
-  const { targetAgent, targetAgentId, definition, resolved } = resolvedTarget.value;
+  const { targetAgent, targetAgentId, targetAgentType, definition, resolved } = resolvedTarget.value;
   const policyDefaults = resolveRunAgentPolicyDefaults(definition, undefined);
   if (!resolved.ok) {
     rejectToolCall(cmd, entity, call, state, resolved.reason);
@@ -1366,7 +1399,11 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
   const reusedAnswerBridgeId = requestedAnswerBridgeId || answerBridgeIdForConversation(world, resolved.value.conversation);
   const answerBridgeId = reusedAnswerBridgeId ?? `agent-answer:${createMessageId()}`;
   const promptWithAnswerBridge = `${prompt}\n\n[Agent answer bridge]\n本次任务已${reusedAnswerBridgeId ? '沿用' : '分配'}默认 answerBridgeId：${answerBridgeId}。当你需要把阶段性结论或最终正文提交给来源 Agent 时，请调用 submit_agent_answer({ title, content })，未传 answerBridgeId 时会自动使用这个 answerBridgeId；即使本次 AgentRun 中断、重试或用户补充条件，只要继续在同一子对话中执行，默认值也应保持为这个 answerBridgeId；如果用户要求提交到其它 answerBridgeId，可显式传 submit_agent_answer({ answerBridgeId, title, content })。同一个 answerBridgeId 可以重复提交，每次提交都会通知来源 Agent。最终自然语言回复可以保持简短。`;
-  const inputMessage = spawnUserMessage(cmd, resolved.value.conversation, promptWithAnswerBridge);
+  const forcePromoteContinuation = !!reusedAnswerBridgeId && conversationHasActiveRun(world, resolved.value.conversation);
+  const queuedInputContent: MessageContent = { role: 'user', parts: [{ text: promptWithAnswerBridge }] };
+  const inputMessage = forcePromoteContinuation
+    ? undefined
+    : spawnUserMessage(cmd, resolved.value.conversation, promptWithAnswerBridge);
   const background = foregroundWait.value === 0;
   const baseDeliveryPolicy: RunDeliveryPolicyBlueprint = {
     ...policyDefaults.deliveryPolicy,
@@ -1385,7 +1422,8 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     sourceToolCall: entity,
     sourceRun: authorization.run,
     answerBridgeId,
-    inputMessage,
+    ...(inputMessage !== undefined ? { inputMessage } : {}),
+    ...(forcePromoteContinuation ? { needsModel: false, queuedInputContent, queueHoldReason: 'manual' as const } : {}),
     deliveryMode,
     includeTranscript
   });
@@ -1400,11 +1438,22 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
   applyRunEditPolicy(cmd, childRun, policyDefaults.editPolicy);
 
   const childRunId = `run${childRun}`;
+  if (forcePromoteContinuation) {
+    // 与队列面板的“中断当前请求并发送队列”保持同一语义：续发内容先保持为
+    // 暂停且未物化的排队输入，由 Promote 终止旧 Run、解除瞬时 hold 后再插入消息并启动新 Run。
+    // hold 防止 QueueSystem 在 Promote 事件进入下一调度 pass 前抢先合并/激活该 Run；若直接附加
+    // AgentRunNeedsModel，ContextAssembly 还会在旧 Run 仍运行时并发启动第二个响应。
+    cmd.enqueue({
+      type: AgentRunEventType.Promote,
+      payload: { runId: childRunId, conversationId: resolved.value.conversationId }
+    });
+  }
   const now = Date.now();
   const progress: RunAgentToolProgress = {
     childRunId,
     runId: childRunId,
     agentId: targetAgentId,
+    agentType: targetAgentType,
     conversationId: resolved.value.conversationId,
     answerBridgeId,
     foregroundWaitMs: foregroundWait.value,

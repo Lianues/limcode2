@@ -86,11 +86,24 @@ const DIRTY_HINT_IGNORED_GLOBAL_TABLE_KEYS = new Set<ClientStateTableKey>([
 ]);
 
 export function markClientStateConversationDirty(world: WorldReader, cmd: CommandSink, conversationId: string | undefined): void {
-  const id = conversationId?.trim();
-  if (!id) return;
+  markClientStateConversationsDirty(world, cmd, [conversationId]);
+}
+
+export function markClientStateConversationsDirty(
+  world: WorldReader,
+  cmd: CommandSink,
+  conversationIds: Iterable<string | undefined>
+): void {
   const current = world.tryGetResource(ClientStateDirtyConversationIdsKey) ?? emptyDirtyConversationState();
   const ids = new Set(current.ids);
-  ids.add(id);
+  let hasConversationId = false;
+  for (const conversationId of conversationIds) {
+    const id = conversationId?.trim();
+    if (!id) continue;
+    hasConversationId = true;
+    ids.add(id);
+  }
+  if (!hasConversationId) return;
   cmd.setResource(ClientStateDirtyConversationIdsKey, {
     revision: current.revision + 1,
     ids: [...ids]

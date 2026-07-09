@@ -242,10 +242,11 @@ const toolCallsTable: ClientSyncOverrides = {
   ],
   globalSnapshot: false,
   scope: {
-    kind: 'conversationVia',
-    table: 'messages',
-    localField: 'messageId',
-    foreignField: 'id'
+    kind: 'conversationAnyOf',
+    scopes: [
+      { kind: 'conversationVia', table: 'messages', localField: 'messageId', foreignField: 'id' },
+      { kind: 'conversationReverseVia', table: 'toolCallRunLinks', localField: 'id', foreignField: 'toolCallId' }
+    ]
   }
 };
 const toolCallEventsTable: ClientSyncOverrides = {

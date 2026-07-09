@@ -1,3 +1,5 @@
+import MarkdownIt from 'markdown-it';
+
 type MarkdownToken = {
   attrs: Array<[string, string]> | null;
   type: string;
@@ -41,12 +43,13 @@ export type MarkdownRenderedPart =
 
 const FINAL_CACHE_LIMIT = 80;
 
-let parserPromise: Promise<MarkdownParser> | undefined;
+// ChatView 本身会在 bridge 握手后按需加载；解析器随 ChatView 一起就绪，避免消息首帧后再发起 Markdown 分包请求。
+const parser = createParser(MarkdownIt as unknown as MarkdownItConstructor);
 const finalRenderCache = new Map<string, string>();
 const finalPartCache = new Map<string, MarkdownRenderedPart[]>();
 
 /** 渲染 Markdown。streaming=true 时不写入最终缓存，避免流式增量产生大量一次性 key。 */
-export async function renderMarkdown(text: string, options: { streaming?: boolean } = {}): Promise<string> {
+export function renderMarkdown(text: string, options: { streaming?: boolean } = {}): string {
   const normalized = text.trimStart();
   if (!normalized) return '';
 
@@ -59,7 +62,6 @@ export async function renderMarkdown(text: string, options: { streaming?: boolea
     }
   }
 
-  const parser = await getParser();
   const html = parser.render(normalized);
 
   if (!options.streaming) rememberFinalRender(normalized, html);
@@ -70,7 +72,7 @@ export async function renderMarkdown(text: string, options: { streaming?: boolea
  * 渲染 Markdown 为可由 Vue 组合展示的片段。
  * fenced / indented code block 会拆成 code 片段，交给专门的代码块显示器处理。
  */
-export async function renderMarkdownParts(text: string, options: { streaming?: boolean } = {}): Promise<MarkdownRenderedPart[]> {
+export function renderMarkdownParts(text: string, options: { streaming?: boolean } = {}): MarkdownRenderedPart[] {
   const normalized = text.trimStart();
   if (!normalized) return [];
 
@@ -83,7 +85,6 @@ export async function renderMarkdownParts(text: string, options: { streaming?: b
     }
   }
 
-  const parser = await getParser();
   const tokens = parser.parse(normalized, {});
   const parts = tokensToRenderedParts(parser, tokens);
 
@@ -143,21 +144,6 @@ function trimFinalCache(cache: Map<string, unknown>): void {
 
   const oldestKey = cache.keys().next().value as string | undefined;
   if (oldestKey !== undefined) cache.delete(oldestKey);
-}
-
-function getParser(): Promise<MarkdownParser> {
-  parserPromise ??= import('markdown-it')
-    .then((module) => createParser(markdownItConstructorFromModule(module)))
-    .catch((error) => {
-      parserPromise = undefined;
-      throw error;
-    });
-  return parserPromise;
-}
-
-function markdownItConstructorFromModule(module: unknown): MarkdownItConstructor {
-  const candidate = (module as { default?: unknown }).default ?? module;
-  return candidate as MarkdownItConstructor;
 }
 
 function createParser(MarkdownItCtor: MarkdownItConstructor): MarkdownParser {

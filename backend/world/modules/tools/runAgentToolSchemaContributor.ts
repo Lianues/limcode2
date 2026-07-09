@@ -4,7 +4,7 @@ import { AgentBlueprintsKey, type BuiltinAgentDefinition, type BuiltinAgentRegis
 import { Agent, AgentKind } from '../agent/components';
 import { isTemporaryAgentEntity } from '../agent/identity';
 import type { ToolSchemaContributor } from './schemaContributors';
-import { RUN_AGENT_TOOL_NAME } from './definitions/runAgent';
+import { DEFAULT_RUN_AGENT_TYPE, RUN_AGENT_TOOL_NAME } from './definitions/runAgent';
 
 export const runAgentToolSchemaContributor: ToolSchemaContributor = {
   key: 'run-agent-blueprint-types',
@@ -27,8 +27,8 @@ function withAgentTypeList(tool: ToolSchema, world: WorldReader, blueprints: Bui
   const typeProperty = cloneRecord(agentProperties.type);
 
   typeProperty.description = [
-    '要使用的 Agent 类型/配置 id。默认 general-purpose；未传 answerBridgeId/agent.id 时后端会创建只属于本次子对话的临时镜像。继续已有子对话时首选传 answerBridgeId；agent.id 仅作为兼容入口。',
-    '当前可用 Agent 类型：',
+    `The Agent type/configuration id to use. Defaults to ${DEFAULT_RUN_AGENT_TYPE}. When neither answerBridgeId nor agent.id is provided, the backend creates a temporary mirror dedicated to this child conversation. Prefer answerBridgeId for an existing child conversation; agent.id is only a compatibility selector.`,
+    'Currently available Agent types:',
     typeList
   ].join('\n');
   agentProperties.type = typeProperty;
@@ -38,7 +38,7 @@ function withAgentTypeList(tool: ToolSchema, world: WorldReader, blueprints: Bui
 
   return {
     ...tool,
-    description: `${tool.description}\n\n继续已有子对话时首选传 answerBridgeId；新开子 Agent 时可选以下 Agent 类型：\n${typeList}`,
+    description: `${tool.description}\n\nPrefer answerBridgeId when continuing an existing child conversation. When creating a new child Agent, choose from these Agent types:\n${typeList}`,
     parameters
   };
 }
@@ -51,10 +51,11 @@ function formatAgentTypeList(world: WorldReader, agents: Record<string, BuiltinA
     if (isTemporaryAgentEntity(world, entity)) continue;
     const agent = world.get(entity, Agent);
     if (!agent?.id || seen.has(agent.id)) continue;
-    seen.add(agent.id);
     const kind = world.get(entity, AgentKind)?.kind;
+    if (agent.source === 'builtin' && !hasBuiltinAgentDefinition(agents, agent.id, kind)) continue;
+    seen.add(agent.id);
     const label = agent.description?.trim() || agent.name.trim();
-    const suffix = kind && kind !== agent.id ? `（kind: ${kind}）` : '';
+    const suffix = kind && kind !== agent.id ? ` (kind: ${kind})` : '';
     lines.push(label ? `- ${agent.id}: ${label}${suffix}` : `- ${agent.id}${suffix}`);
   }
 
@@ -66,6 +67,12 @@ function formatAgentTypeList(world: WorldReader, agents: Record<string, BuiltinA
   }
 
   return lines.join('\n');
+}
+
+function hasBuiltinAgentDefinition(agents: Record<string, BuiltinAgentDefinition>, id: string, kind: string | undefined): boolean {
+  return Object.values(agents).some((definition) => definition.id === id
+    || definition.kind === id
+    || (!!kind && (definition.id === kind || definition.kind === kind)));
 }
 
 function cloneRecord(value: unknown): Record<string, unknown> {

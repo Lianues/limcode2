@@ -92,7 +92,14 @@ function updateRunSourceMessage(world: WorldReader, cmd: CommandSink, run: Entit
   if (sourceEntity === undefined) return;
   const source = world.get(sourceEntity, AgentRunSourceLink);
   if (!source) return;
-  cmd.add(sourceEntity, AgentRunSourceLink, { ...source, sourceConversation: conversation, sourceMessage: message, updatedAt: Date.now() });
+  // tool_invoked / agentRun 等 Run 的 sourceConversation 表示来源对话，可能与当前目标对话不同；
+  // 队列输入物化时只在缺失来源对话时补齐，不能把跨对话来源覆盖成目标对话。
+  cmd.add(sourceEntity, AgentRunSourceLink, {
+    ...source,
+    sourceConversation: source.sourceConversation ?? conversation,
+    sourceMessage: message,
+    updatedAt: Date.now()
+  });
 }
 
 function markRunPreparing(world: WorldReader, cmd: CommandSink, run: Entity): void {

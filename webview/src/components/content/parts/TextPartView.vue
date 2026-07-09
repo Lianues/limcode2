@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, shallowRef, watch } from 'vue';
+import { computed, shallowRef, watch } from 'vue';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import CodeBlockViewer from '../CodeBlockViewer.vue';
 import StreamingIndicatorTail from '../StreamingIndicatorTail.vue';
@@ -32,77 +32,32 @@ const { displayedText, replacing: replaceAnimating } = useSmoothStreamingText(
   { animateReplace: true }
 );
 const renderedParts = shallowRef<MarkdownRenderedPart[]>([]);
-// 保留流式 Markdown 实时渲染体验。当前 Trace 的主瓶颈在 postMessage 后的响应式扇出、timeline 重建和思考折叠内容 DOM 更新，
-// 不是 markdown-it 本身；若后续长代码块仍掉帧，再单独对 Markdown 做节流/增量优化。
+// displayedText 已经由平滑输出逻辑控制更新频率；Markdown 紧跟它同步解析，不再额外等待下一帧。
 const markdownReady = computed(() => props.markdown);
-
-let renderVersion = 0;
-let frameId: number | undefined;
-let scheduled = false;
-let disposed = false;
 
 watch(
   () => [displayedText.value, props.streaming, props.markdown] as const,
-  () => scheduleMarkdownRender(),
+  () => renderCurrentMarkdown(),
   { immediate: true }
 );
 
-onBeforeUnmount(() => {
-  disposed = true;
-  clearScheduledRender();
-});
-
-function scheduleMarkdownRender(): void {
-  renderVersion += 1;
-
+function renderCurrentMarkdown(): void {
   if (!markdownReady.value) {
-    clearScheduledRender();
     renderedParts.value = [];
     return;
   }
 
-  if (scheduled) return;
-
-  scheduled = true;
-  frameId = window.requestAnimationFrame(() => {
-    frameId = undefined;
-    scheduled = false;
-    void renderCurrentMarkdown(renderVersion);
-  });
-}
-
-async function renderCurrentMarkdown(version: number): Promise<void> {
-  const source = displayedText.value;
-  const streaming = props.streaming;
-
   try {
-    const parts = await renderMarkdownParts(source, { streaming });
-    if (disposed) return;
-
-    if (version === renderVersion) {
-      renderedParts.value = parts;
-      return;
-    }
-
-    scheduleMarkdownRender();
+    renderedParts.value = renderMarkdownParts(displayedText.value, { streaming: props.streaming });
   } catch (error) {
     console.warn('[LimCode] Failed to render markdown.', error);
-    if (version === renderVersion) renderedParts.value = [];
+    renderedParts.value = [];
   }
 }
 
 function markdownPartKey(part: MarkdownRenderedPart, index: number): string {
   const content = part.kind === 'html' ? part.html : `${part.language}\n${part.code}`;
   return `${part.kind}-${index}-${content.length}`;
-}
-
-function clearScheduledRender(): void {
-  scheduled = false;
-
-  if (frameId !== undefined) {
-    window.cancelAnimationFrame(frameId);
-    frameId = undefined;
-  }
 }
 </script>
 

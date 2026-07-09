@@ -302,9 +302,13 @@ function globalClientState(state: ClientState): ClientState {
 function conversationClientState(state: ClientState, conversationId: string): ClientState {
   const messages = recentConversationStreamMessages(state.messages.filter((message) => message.conversationId === conversationId));
   const messageIds = new Set(messages.map((message) => message.id));
-  const toolCalls = state.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId));
-  const toolCallIds = new Set(toolCalls.map((toolCall) => toolCall.id));
-  const runIds = collectConversationRunIds(state, conversationId, messageIds, toolCallIds);
+  const messageToolCalls = state.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId));
+  const messageToolCallIds = new Set(messageToolCalls.map((toolCall) => toolCall.id));
+  const runIds = collectConversationRunIds(state, conversationId, messageIds, messageToolCallIds);
+  const toolCallIds = new Set(messageToolCallIds);
+  // 父对话的 Agent 面板需要解释关联子 Run 的 waiting_tool；仅补入这些 Run 当前仍活跃的工具详情。
+  for (const toolCallId of collectRunDetailToolCallIds(state, runIds)) toolCallIds.add(toolCallId);
+  const toolCalls = state.toolCalls.filter((toolCall) => toolCallIds.has(toolCall.id));
   const runPolicyIds = collectRunPolicyIds(state, runIds);
   const conversationProjectLinks = state.conversationProjectLinks.filter((link) => link.conversationId === conversationId);
   const projectContextIds = new Set(conversationProjectLinks.map((link) => link.projectContextId));
@@ -373,7 +377,7 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
     agentRunQueueHolds: state.agentRunQueueHolds.filter((hold) => runIds.has(hold.runId)),
     agentRunQueuedInputs: state.agentRunQueuedInputs.filter((input) => runIds.has(input.runId)),
     messageRunLinks: state.messageRunLinks.filter((link) => runIds.has(link.runId) || messageIds.has(link.messageId)),
-    toolCallRunLinks: state.toolCallRunLinks.filter((link) => runIds.has(link.runId) || toolCallIds.has(link.toolCallId)),
+    toolCallRunLinks: state.toolCallRunLinks.filter((link) => toolCallIds.has(link.toolCallId)),
     runConversationPolicies: state.runConversationPolicies.filter((policy) => runPolicyIds.conversationPolicyIds.has(policy.id)),
     runContextPolicies: state.runContextPolicies.filter((policy) => runPolicyIds.contextPolicyIds.has(policy.id)),
     runDeliveryPolicies: state.runDeliveryPolicies.filter((policy) => runPolicyIds.deliveryPolicyIds.has(policy.id)),
@@ -408,6 +412,34 @@ function compressionBlockInMessageWindow(block: { anchorSeq?: number; endSeq?: n
   const firstSeq = messages[0]?.seq;
   const lastSeq = messages[messages.length - 1]?.seq;
   return firstSeq !== undefined && lastSeq !== undefined && seq >= firstSeq && seq <= lastSeq;
+}
+
+function collectRunDetailToolCallIds(state: ClientState, runIds: ReadonlySet<string>): Set<string> {
+  const toolCallsById = new Map(state.toolCalls.map((toolCall) => [toolCall.id, toolCall]));
+  const linkedIdsByRun = new Map<string, Set<string>>();
+  for (const link of state.toolCallRunLinks) {
+    if (!runIds.has(link.runId)) continue;
+    const ids = linkedIdsByRun.get(link.runId) ?? new Set<string>();
+    ids.add(link.toolCallId);
+    linkedIdsByRun.set(link.runId, ids);
+  }
+
+  const visibleIds = new Set<string>();
+  for (const runId of runIds) {
+    const calls = [...(linkedIdsByRun.get(runId) ?? [])]
+      .map((id) => toolCallsById.get(id))
+      .filter((call): call is NonNullable<typeof call> => !!call);
+    const activeCalls = calls.filter((call) => call.status !== 'success' && call.status !== 'warning' && call.status !== 'error');
+    if (activeCalls.length > 0) {
+      for (const call of activeCalls) visibleIds.add(call.id);
+      continue;
+    }
+    const run = state.agentRuns.find((candidate) => candidate.id === runId);
+    if (run?.status !== 'waiting_tool') continue;
+    const latest = [...calls].sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt || right.id.localeCompare(left.id))[0];
+    if (latest) visibleIds.add(latest.id);
+  }
+  return visibleIds;
 }
 
 function collectConversationRunIds(state: ClientState, conversationId: string, messageIds: ReadonlySet<string>, toolCallIds: ReadonlySet<string>): Set<string> {

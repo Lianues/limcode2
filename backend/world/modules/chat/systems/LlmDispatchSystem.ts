@@ -25,7 +25,7 @@ import { CompressionBlock, CompressionContextVariant, RunCompressionBlockLink } 
 import { hasActiveBlockingCompression } from '../../compression/queries';
 import { ToolCall, ToolPolicyScopeLink, ToolState } from '../../tools/components';
 import { ToolDefinitionsKey, ToolSchemasKey } from '../../tools/resources';
-import { isToolAllowedByPolicy } from '../../tools/policy';
+import { isToolNameAllowedByPolicy } from '../../tools/policy';
 import { buildRuntimeToolSchemas, TOOL_SCHEMA_CONTRIBUTOR_READS } from '../../tools/schemaContributors';
 import {
   ConversationRuntimeContextSnapshotLink,
@@ -174,10 +174,7 @@ export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmSt
   const allTools = input.tools ?? world.tryGetResource(ToolSchemasKey) ?? [];
   const definitionsByName = new Map((world.tryGetResource(ToolDefinitionsKey) ?? []).map((tool) => [tool.name, tool]));
   const filteredTools = toolPolicy
-    ? allTools.filter((tool) => {
-        const definition = definitionsByName.get(tool.name);
-        return definition ? isToolAllowedByPolicy(toolPolicy, definition) : toolPolicy.allowedTools.includes(tool.name);
-      })
+    ? allTools.filter((tool) => isToolNameAllowedByPolicy(toolPolicy, tool.name, definitionsByName.get(tool.name)))
     : [];
   const tools = buildRuntimeToolSchemas(filteredTools, { world, run: input.run, conversation: context.conversation });
   const contextPolicy = activeContextPolicyForRun(world, input.run);

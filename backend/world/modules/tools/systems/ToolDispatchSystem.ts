@@ -44,6 +44,7 @@ import {
   RunEditPolicy,
   RunEditPolicyLink,
   RunModeLink,
+  RunToolPolicyLink,
   ToolCallRunLink
 } from '../../agentRun/components';
 import { AgentRunEventType } from '../../agentRun/events';
@@ -93,7 +94,7 @@ import {
   WorkEnvironmentBundle
 } from '../../workEnvironment/bundles';
 import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey, ToolSchemasKey } from '../resources';
-import { isToolAllowedByPolicy, isYoloToolPolicy } from '../policy';
+import { isToolNameAllowedByPolicy, isYoloToolPolicy } from '../policy';
 import { spawnCheckpointBarrier, consumeReleasedCheckpointBarrier, newestBarrierForTarget } from '../../checkpoint/barriers';
 import { effectiveCheckpointPolicyForRequest } from '../../checkpoint/queries';
 import { effectiveCheckpointToolTriggerConfig } from '../../checkpoint/policy';
@@ -164,6 +165,7 @@ const QueuedToolCallsQuery = defineQuery({
     RunWorkEnvironmentLink,
     RunDeliveryPolicy,
     RunDeliveryPolicyLink,
+    RunToolPolicyLink,
     LlmInvocation,
     RunLlmInvocationLink
   ],
@@ -323,7 +325,7 @@ function authorizeRunToolExecution(world: WorldReader, toolCall: Entity, call: T
   const policy = activeToolPolicyForRun(world, run);
   if (!policy) return { ok: false, reason: `AgentRun ${runData.id} 没有 active ToolPolicy。` };
   const definition = (world.tryGetResource(ToolDefinitionsKey) ?? []).find((tool) => tool.name === call.name);
-  if (!definition || !isToolAllowedByPolicy(policy, definition)) {
+  if (!isToolNameAllowedByPolicy(policy, call.name, definition)) {
     return { ok: false, reason: `AgentRun ${runData.id} 不允许执行工具 ${call.name}。` };
   }
   if ((call.name === SWITCH_WORK_ENVIRONMENT_TOOL_NAME || call.name === TRANSFER_TOOL_NAME) && effectiveWorkEnvironmentPolicyForRun(world, run).policy?.enabled === false) {

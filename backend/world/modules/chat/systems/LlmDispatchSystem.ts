@@ -1,3 +1,4 @@
+import { estimateTokenCount } from 'tokenx';
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
 import {
   ConversationModeSelection,
@@ -21,7 +22,8 @@ import {
   RunSystemPromptLink,
   RunToolPolicyLink
 } from '../../agentRun/components';
-import { CompressionBlock, CompressionContextVariant, RunCompressionBlockLink } from '../../compression/components';
+import { CompressionBlock, CompressionContextVariant, RunCompressionBlockLink, type CompressionBlockData } from '../../compression/components';
+import { CompressionEventType } from '../../compression/events';
 import { hasActiveBlockingCompression } from '../../compression/queries';
 import { ToolCall, ToolPolicyScopeLink, ToolState } from '../../tools/components';
 import { ToolDefinitionsKey, ToolSchemasKey } from '../../tools/resources';
@@ -32,9 +34,21 @@ import {
   RuntimeContextSnapshot,
   RunRuntimeContextSnapshotLink
 } from '../../runtimeContext/components';
+import { compressionThresholdTokens } from '../../llm/usage';
 import { PROMPT_CONTEXT_PLACEHOLDER_READS, renderSystemPromptTemplate } from '../../runtimeContext/placeholders';
 import { Conversation, InFlight, LlmRequest, Message, MessageCurrentRevisionLink, PartOf, type LlmRequestData } from '../components';
-import { textContent } from '../../../../../shared/protocol';
+import {
+  isFileDataPart,
+  isFunctionCallPart,
+  isFunctionResponsePart,
+  isInlineDataPart,
+  isProviderContextPart,
+  isTextPart,
+  textContent,
+  type ContentPart,
+  type LlmInvocationSettingsSnapshotRecord,
+  type MessageContent
+} from '../../../../../shared/protocol';
 import type { LlmModelSettings, LlmStartRequest, ToolSchema } from '../../llm/contracts';
 import { LlmInvocation } from '../../llm/components';
 import { CheckpointBarrier, type CheckpointBarrierData } from '../../checkpoint/components';
@@ -47,6 +61,7 @@ import {
 } from '../../agentRun/queries';
 import { buildRunContextContents, selectRunContextCompressionVariant, selectRunContextMessageEntities } from '../../agentRun/contextPolicy';
 import { AgentRunBundle } from '../../agentRun/bundles';
+import { conversationMessages } from '../queries';
 
 const PendingLlmRequestsQuery = defineQuery({
   name: 'PendingLlmRequests',
@@ -115,6 +130,7 @@ export const LlmDispatchSystem = defineSystem({
     writes: { components: [RunCompressionBlockLink, CheckpointBarrier] },
     bundles: [AgentRunBundle],
     resources: { read: [ToolSchemasKey, ToolDefinitionsKey, ...(TOOL_SCHEMA_CONTRIBUTOR_READS.resources ?? [])] },
+    events: { emit: [CompressionEventType.Create] },
     effects: { emit: ['llm.start'] }
   },
   run({ world, cmd }) {
@@ -142,6 +158,7 @@ export const LlmDispatchSystem = defineSystem({
       recordInputRevisions(world, cmd, contextInput.run, selectRunContextMessageEntities(world, contextInput));
       const llmRequest = buildLlmStartRequestForRun(world, { run: data.run, conversation: data.conversation, modelMessage: data.modelMessage, invocation: data.invocation, requestId: data.id, tools: allTools });
       if (!llmRequest) continue;
+      if (maybeEnqueuePreDispatchCompression(world, cmd, data, llmRequest)) continue;
       recordCompressionContextLink(world, cmd, data.run, data.conversation, llmRequest.settingsSnapshot);
 
       cmd.effect({
@@ -224,6 +241,195 @@ function inputMessageEntitiesForRun(world: WorldReader, run: Entity): Set<Entity
   }
   return result;
 }
+
+interface PreDispatchCompressionAnchor {
+  entity: Entity;
+  id: string;
+  seq: number;
+  role: string;
+}
+
+interface PreDispatchCompressionRisk {
+  shouldCompress: boolean;
+  estimatedTokens: number;
+  thresholdTokens?: number;
+  contextWindowTokens?: number;
+  currentBoundarySeq: number;
+  uncompressedHistoryMessages: number;
+  uncompressedRunScopedMessages: number;
+  preserveLatestMessages: number;
+  reasons: string[];
+}
+
+function maybeEnqueuePreDispatchCompression(
+  world: WorldReader,
+  cmd: CommandSink,
+  data: LlmRequestData,
+  llmRequest: LlmStartRequest
+): boolean {
+  const settings = llmRequest.settingsSnapshot;
+  const methodKind = settings?.compressionMethodKind;
+  if (!settings || methodKind === undefined || methodKind === 'disabled' || methodKind === 'manual_summary') return false;
+  const conversation = world.get(data.conversation, Conversation);
+  const anchor = selectPreDispatchCompressionAnchor(world, data, settings);
+  if (!conversation || !anchor) return false;
+
+  const selected = selectRunContextCompressionVariant(world, data.conversation, settings);
+  const selectedBlock = selected ? world.get(selected.block, CompressionBlock) : undefined;
+  const currentBoundarySeq = selectedBlock?.endSeq ?? selectedBlock?.anchorSeq ?? 0;
+  if (anchor.seq <= currentBoundarySeq) return false;
+
+  const risk = preDispatchCompressionRisk(world, data, llmRequest, currentBoundarySeq, settings);
+  if (!risk.shouldCompress) return false;
+
+  const existingAnchorBlock = latestCompressionBlockForAnchor(world, data.conversation, anchor.id, methodKind);
+  if (existingAnchorBlock) return false;
+
+  cmd.enqueue({
+    type: CompressionEventType.Create,
+    payload: {
+      conversationId: conversation.id,
+      endMessageId: anchor.id,
+      ...(settings.compressionConfigId ? { methodConfigId: settings.compressionConfigId } : {}),
+      methodKind,
+      trigger: 'auto' as const
+    }
+  });
+  return true;
+}
+
+function selectPreDispatchCompressionAnchor(
+  world: WorldReader,
+  data: LlmRequestData,
+  settings: LlmInvocationSettingsSnapshotRecord
+): PreDispatchCompressionAnchor | undefined {
+  const targetMessages = nonStreamingConversationMessagesBefore(world, data.conversation, data.modelMessage);
+  if (targetMessages.length === 0) return undefined;
+  const runScopedSet = runScopedMessagesIn(world, data.run, targetMessages);
+  const runScopedMessages = targetMessages.filter((entity) => runScopedSet.has(entity));
+  const preserveLatestMessages = positiveInteger(settings.compressionTrigger?.preserveLatestMessages) ?? 8;
+  const candidates = runScopedMessages.length > 0
+    ? targetMessages.filter((entity) => {
+      const seq = world.get(entity, Message)?.seq ?? 0;
+      const earliestRunScopedSeq = Math.min(...runScopedMessages.map((message) => world.get(message, Message)?.seq ?? Number.POSITIVE_INFINITY));
+      return seq < earliestRunScopedSeq;
+    })
+    : targetMessages.slice(0, Math.max(0, targetMessages.length - preserveLatestMessages));
+  if (candidates.length === 0) return undefined;
+
+  const preferred = [...candidates].reverse().find((entity) => isClosedCompressionBoundary(world.get(entity, Message)?.content));
+  const anchorEntity = preferred ?? candidates[candidates.length - 1];
+  const anchor = world.get(anchorEntity, Message);
+  return anchor ? { entity: anchorEntity, id: anchor.id, seq: anchor.seq, role: anchor.role } : undefined;
+}
+
+function preDispatchCompressionRisk(
+  world: WorldReader,
+  data: LlmRequestData,
+  llmRequest: LlmStartRequest,
+  currentBoundarySeq: number,
+  settings: LlmInvocationSettingsSnapshotRecord
+): PreDispatchCompressionRisk {
+  const targetMessages = nonStreamingConversationMessagesBefore(world, data.conversation, data.modelMessage);
+  const runScopedSet = runScopedMessagesIn(world, data.run, targetMessages);
+  const uncompressedHistoryMessages = targetMessages.filter((entity) => !runScopedSet.has(entity) && (world.get(entity, Message)?.seq ?? 0) > currentBoundarySeq).length;
+  const uncompressedRunScopedMessages = targetMessages.filter((entity) => runScopedSet.has(entity) && (world.get(entity, Message)?.seq ?? 0) > currentBoundarySeq).length;
+  const preserveLatestMessages = positiveInteger(settings.compressionTrigger?.preserveLatestMessages) ?? 8;
+  const estimatedTokens = estimateLlmRequestTokens(llmRequest);
+  const thresholdTokens = compressionThresholdTokens(settings);
+  const contextWindowTokens = positiveInteger(settings.contextWindowTokens);
+  const triggerAllowsAuto = settings.compressionTrigger?.mode === 'token_threshold';
+  const reasons: string[] = [];
+  if (triggerAllowsAuto && thresholdTokens !== undefined && estimatedTokens >= thresholdTokens) reasons.push('estimated_tokens_over_threshold');
+  if (contextWindowTokens !== undefined && estimatedTokens >= Math.floor(contextWindowTokens * 0.95)) reasons.push('estimated_tokens_near_context_window');
+
+  return {
+    shouldCompress: reasons.length > 0,
+    estimatedTokens,
+    ...(thresholdTokens !== undefined ? { thresholdTokens } : {}),
+    ...(contextWindowTokens !== undefined ? { contextWindowTokens } : {}),
+    currentBoundarySeq,
+    uncompressedHistoryMessages,
+    uncompressedRunScopedMessages,
+    preserveLatestMessages,
+    reasons
+  };
+}
+
+function latestCompressionBlockForAnchor(
+  world: WorldReader,
+  conversation: Entity,
+  anchorMessageId: string,
+  methodKind: NonNullable<LlmInvocationSettingsSnapshotRecord['compressionMethodKind']>
+): { entity: Entity; block: CompressionBlockData } | undefined {
+  return world.query(CompressionBlock)
+    .map((entity) => ({ entity, block: world.get(entity, CompressionBlock) }))
+    .filter((item): item is { entity: Entity; block: CompressionBlockData } => {
+      const block = item.block;
+      if (!block) return false;
+      return block.conversation === conversation
+        && block.anchorMessageId === anchorMessageId
+        && block.methodKind === methodKind
+        && (block.status === 'pending' || block.status === 'running' || block.status === 'complete' || block.status === 'error');
+    })
+    .sort((left, right) => right.block.createdAt - left.block.createdAt || right.block.id.localeCompare(left.block.id))[0];
+}
+
+function nonStreamingConversationMessagesBefore(world: WorldReader, conversation: Entity, modelMessage: Entity): Entity[] {
+  const currentModel = world.get(modelMessage, Message);
+  return conversationMessages(world, conversation)
+    .filter((entity) => entity !== modelMessage)
+    .filter((entity) => world.get(entity, Message)?.status !== 'streaming')
+    .filter((entity) => currentModel === undefined || (world.get(entity, Message)?.seq ?? 0) < currentModel.seq);
+}
+
+function runScopedMessagesIn(world: WorldReader, run: Entity, candidates: Entity[]): Set<Entity> {
+  const candidateSet = new Set(candidates);
+  const result = new Set<Entity>();
+  for (const entity of world.query(MessageRunLink)) {
+    const link = world.get(entity, MessageRunLink);
+    if (link?.run === run && candidateSet.has(link.message)) result.add(link.message);
+  }
+  return result;
+}
+
+function isClosedCompressionBoundary(content: MessageContent | undefined): boolean {
+  if (!content) return false;
+  if (content.role === 'model') {
+    return content.parts.some((part) => isTextPart(part) && part.thought !== true && part.text.trim())
+      && !content.parts.some(isFunctionCallPart);
+  }
+  return content.role === 'user' && content.parts.some(isFunctionResponsePart);
+}
+
+function estimateLlmRequestTokens(request: LlmStartRequest): number {
+  const text = [
+    ...(request.systemInstruction ? request.systemInstruction.parts.map(renderTokenEstimatePart) : []),
+    ...request.contents.flatMap((content) => content.parts.map(renderTokenEstimatePart))
+  ].join('\n');
+  const estimated = estimateTokenCount(text);
+  return Number.isFinite(estimated) ? Math.max(0, estimated) : 0;
+}
+
+function renderTokenEstimatePart(part: ContentPart): string {
+  if (isTextPart(part)) return part.thought === true ? '' : part.text;
+  if (isFunctionCallPart(part)) return `[tool call] ${part.functionCall.name}: ${safeJson(part.functionCall.args)}`;
+  if (isFunctionResponsePart(part)) return `[tool result] ${part.functionResponse.name}: ${safeJson(part.functionResponse.response)}`;
+  if (isProviderContextPart(part)) return `[provider context] ${part.providerContext.format}:${part.providerContext.itemType ?? 'context'}`;
+  if (isInlineDataPart(part)) return `[inline data] ${part.inlineData.mimeType}`;
+  if (isFileDataPart(part)) return `[file] ${part.fileData.uri}`;
+  return '';
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
+}
+
+function safeJson(value: unknown): string {
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
+
 
 function composeSystemInstruction(prompts: Array<{ name: string; text: string }>): string {
   return prompts

@@ -349,7 +349,7 @@ async function rewriteTimelineChunk(root: vscode.Uri, input: {
   chunk: ConversationTimelineChunkData;
 }): Promise<ConversationTimelineChunkIndexRecord> {
   const visibleMessages = input.chunk.messages.filter(isTimelineVisibleMessage);
-  const seq = chunkSeqRange(input.chunk.messages);
+  const seq = chunkDisplaySeqRange(input.chunk.messages);
   const messageHash = shortHash(stableJson({ messages: input.chunk.messages }));
   const sourceHash = shortHash(stableJson(input.chunk));
   const sidecars = await writeTimelineSidecars({
@@ -460,6 +460,7 @@ async function normalizeTimelineChunkIndexRecords(root: vscode.Uri, records: Con
   const ordered = [...records].sort((left, right) => (left.index ?? 0) - (right.index ?? 0) || left.id.localeCompare(right.id));
   const normalized: ConversationTimelineChunkIndexRecord[] = [];
   let visibleMessageOffset = 0;
+  let previousEndSeq: number | undefined;
   for (let position = 0; position < ordered.length; position += 1) {
     const record = ordered[position] as ConversationTimelineChunkIndexRecord & Partial<{
       index: number;
@@ -474,17 +475,26 @@ async function normalizeTimelineChunkIndexRecords(root: vscode.Uri, records: Con
       toolCallEventCount: number;
     }>;
     const hasIndexMetadata = hasTimelineChunkIndexMetadata(record);
-    const messages = hasIndexMetadata
-      ? undefined
-      : await readChunkMessagesForIndexNormalization(root, record);
-    const messageCount = hasIndexMetadata ? Math.max(0, Math.floor(record.messageCount)) : (messages ?? []).filter(isTimelineVisibleMessage).length;
+    const hasSeqOrderAnomaly = hasIndexMetadata
+      && previousEndSeq !== undefined
+      && record.startSeq < previousEndSeq;
+    const messages = (!hasIndexMetadata || hasSeqOrderAnomaly)
+      ? await readChunkMessagesForIndexNormalization(root, record)
+      : undefined;
+    const visibleMessages = messages?.filter(isTimelineVisibleMessage) ?? [];
+    const seq = messages ? chunkDisplaySeqRange(messages) : undefined;
+    const messageCount = messages
+      ? visibleMessages.length
+      : hasIndexMetadata ? Math.max(0, Math.floor(record.messageCount)) : 0;
     const messageOffsetStart = visibleMessageOffset + 1;
     const messageOffsetEnd = visibleMessageOffset + messageCount;
+    const startSeq = seq?.startSeq ?? (typeof record.startSeq === 'number' ? record.startSeq : 0);
+    const endSeq = seq?.endSeq ?? (typeof record.endSeq === 'number' ? record.endSeq : 0);
     normalized.push({
       ...record,
       index: typeof record.index === 'number' ? record.index : position,
-      startSeq: typeof record.startSeq === 'number' ? record.startSeq : messages?.[0]?.seq ?? 0,
-      endSeq: typeof record.endSeq === 'number' ? record.endSeq : messages?.[messages.length - 1]?.seq ?? 0,
+      startSeq,
+      endSeq,
       messageCount,
       messageOffsetStart,
       messageOffsetEnd,
@@ -494,6 +504,7 @@ async function normalizeTimelineChunkIndexRecords(root: vscode.Uri, records: Con
       toolCallEventCount: typeof record.toolCallEventCount === 'number' ? record.toolCallEventCount : 0
     });
     visibleMessageOffset += messageCount;
+    previousEndSeq = endSeq;
   }
   return normalized;
 }
@@ -618,7 +629,7 @@ export async function saveConversationTimelineDetail(paths: StoragePaths, conver
     const chunkId = index.toString().padStart(6, '0');
     const chunk = chunks[index];
     const visibleMessages = chunk.messages.filter(isTimelineVisibleMessage);
-    const seq = chunkSeqRange(chunk.messages);
+    const seq = chunkDisplaySeqRange(chunk.messages);
     const messageHash = shortHash(stableJson({ messages: chunk.messages }));
     const sourceHash = shortHash(stableJson(chunk));
     const file = `${CONVERSATION_TIMELINE_CHUNKS_DIR}/${chunkId}.json`;
@@ -720,6 +731,10 @@ export async function saveConversationTimelineRenderDetailIncremental(paths: Sto
     .filter((message) => !messageIdToRecordIndex.has(message.id))
     .sort(compareMessagesBySeq);
 
+  if (hasNonTailNewMessages(newMessages, records)) {
+    return false;
+  }
+
   for (const index of affected) {
     if (!await loadChunk(index)) return false;
   }
@@ -777,6 +792,16 @@ function collectIncrementalAffectedChunkIndexes(detail: ClientState, messageIdTo
     if (index !== undefined) affected.add(index);
   }
   return affected;
+}
+
+function hasNonTailNewMessages(newMessages: readonly MessageRecord[], records: readonly ConversationTimelineChunkIndexRecord[]): boolean {
+  if (newMessages.length === 0 || records.length === 0) return false;
+  const lastRecord = records[records.length - 1];
+  if (!lastRecord) return false;
+  // 增量写只能追加真正位于尾部的新消息。工具响应恢复/历史 backfill 可能产生旧 seq 的
+  // 新 message；如果继续塞进尾块，会把 chunk 的 seq 范围拉到很早，进而让分页窗口、楼层
+  // 和压缩块锚点全部失真。此时退回全量重写，让消息按 seq 重新分块。
+  return newMessages.some((message) => message.seq <= lastRecord.endSeq);
 }
 
 function createEmptyTimelineChunkRecord(chunkId: string, index: number): ConversationTimelineChunkIndexRecord {
@@ -1142,11 +1167,12 @@ function conversationTimelineRoot(paths: StoragePaths, conversationId: string): 
   return vscode.Uri.joinPath(paths.conversationsRootUri, CONVERSATION_DETAILS_DIR, safeShardName(conversationId), CONVERSATION_MESSAGES_DIR);
 }
 
-function chunkSeqRange(messages: readonly MessageRecord[]): { startSeq: number; endSeq: number } {
-  const seqs = messages.map((message) => message.seq);
+function chunkDisplaySeqRange(messages: readonly MessageRecord[]): { startSeq: number; endSeq: number } {
+  const visibleMessages = messages.filter(isTimelineVisibleMessage);
+  const seqs = (visibleMessages.length > 0 ? visibleMessages : messages).map((message) => message.seq);
   return {
-    startSeq: Math.min(...seqs),
-    endSeq: Math.max(...seqs)
+    startSeq: seqs.length > 0 ? Math.min(...seqs) : 0,
+    endSeq: seqs.length > 0 ? Math.max(...seqs) : 0
   };
 }
 
@@ -1221,6 +1247,7 @@ function filesReferencedByIndex(index: ConversationTimelineIndexFile): string[] 
 
 async function removeStaleTimelineFiles(root: vscode.Uri, previousFiles: readonly string[], currentFiles: readonly string[]): Promise<void> {
   const current = new Set(currentFiles);
+
   await Promise.all(previousFiles.filter((file) => !current.has(file)).map(async (file) => {
     try {
       await vscode.workspace.fs.delete(vscode.Uri.joinPath(root, ...file.split('/')));
@@ -1229,7 +1256,6 @@ async function removeStaleTimelineFiles(root: vscode.Uri, previousFiles: readonl
     }
   }));
 }
-
 function safeProjectionKey(key: string): string {
   return key
     .trim()

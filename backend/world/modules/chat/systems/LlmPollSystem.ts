@@ -55,8 +55,6 @@ interface PendingRequestUpdate {
   operations: PendingOperation[];
 }
 
-const AUTO_COMPRESSION_DEBUG_PREFIX = '[LimCode][AutoCompressionDebug]';
-
 const LlmInvocationsByIdQuery = defineQuery({
   name: 'LlmInvocationsById',
   all: [LlmInvocation],

@@ -29,8 +29,6 @@ import { LlmInvocation, RunLlmInvocationLink, type LlmInvocationData } from '../
 import { compressionThresholdTokens, observedUsageTokenCount } from '../../llm/usage';
 import { isYoloToolPolicy } from '../policy';
 
-const AUTO_COMPRESSION_DEBUG_PREFIX = '[LimCode][AutoCompressionDebug]';
-
 const SettledToolCallsQuery = defineQuery({
   name: 'SettledToolCalls',
   all: [ToolCall, ToolState],

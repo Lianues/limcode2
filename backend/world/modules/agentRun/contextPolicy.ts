@@ -26,7 +26,6 @@ import { runRuntimeContextSnapshots } from '../runtimeContext/queries';
 const DEFAULT_LAST_N = 20;
 const MAX_SYNTHETIC_CONTEXT_CHARS = 12_000;
 const MAX_JSON_PREVIEW_CHARS = 4_000;
-
 export interface BuildRunContextInput {
   run: Entity;
   conversation: Entity;
@@ -112,11 +111,12 @@ function buildTargetConversationContents(
     const afterCompressedHistory = extraHistoryMessages.filter((entity) => (world.get(entity, Message)?.seq ?? 0) > boundarySeq);
     const afterCompressedRunScoped = runScopedMessages.filter((entity) => (world.get(entity, Message)?.seq ?? 0) > boundarySeq);
     const variant = world.get(compression.variant, CompressionContextVariant);
-    return [
+    const contents = [
       ...(variant?.contents ?? []),
       ...messageContents(world, afterCompressedHistory),
       ...messageContents(world, afterCompressedRunScoped)
     ];
+    return contents;
   }
 
   if (policy.historyMode === 'summary') {
@@ -159,10 +159,14 @@ export function selectRunContextCompressionVariant(
     const canUseOpenAIResponsesNative = settingsSnapshot?.provider === 'openai-responses' && settingsSnapshot.compressionMethodKind === 'openai_responses_compact' && block.methodKind === 'openai_responses_compact';
     if (canUseOpenAIResponsesNative) {
       const native = variants.find((entity) => world.get(entity, CompressionContextVariant)?.kind === 'provider_native');
-      if (native !== undefined) return { block: blockEntity, variant: native, mode: 'provider_native' };
+      if (native !== undefined) {
+        return { block: blockEntity, variant: native, mode: 'provider_native' };
+      }
     }
     const summary = variants.find((entity) => world.get(entity, CompressionContextVariant)?.kind === 'provider_neutral_summary');
-    if (summary !== undefined) return { block: blockEntity, variant: summary, mode: 'summary_fallback' };
+    if (summary !== undefined) {
+      return { block: blockEntity, variant: summary, mode: 'summary_fallback' };
+    }
   }
   return undefined;
 }
@@ -280,7 +284,6 @@ function syntheticSourceToolBlock(world: WorldReader, toolCall: Entity): Message
   ];
   return syntheticTextContent(truncate(lines.join('\n'), MAX_SYNTHETIC_CONTEXT_CHARS));
 }
-
 function renderMessage(message: MessageData): string {
   const body = message.content.parts
     .map(renderPart)

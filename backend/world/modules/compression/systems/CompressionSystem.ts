@@ -14,8 +14,6 @@ import type { CompressionBlockRecord, ContentPart, MessageContent, MessageRecord
 import { isFileDataPart, isFunctionCallPart, isFunctionResponsePart, isInlineDataPart, isProviderContextPart, isTextPart, isVisibleTextPart } from '../../../../../shared/protocol';
 import { buildTaskListTimeline, formatTaskListSnapshotForContext } from '../../../../../shared/taskListProjection';
 
-const AUTO_COMPRESSION_DEBUG_PREFIX = '[LimCode][AutoCompressionDebug]';
-
 const COMPRESSION_WRITE_COMPONENTS = [
   Conversation,
   Message,
@@ -481,10 +479,6 @@ function deleteCompressionBlock(world: WorldReader, cmd: CommandSink, blockId: s
 
 function selectMessagesForCompression(world: WorldReader, conversation: Entity, startMessageId?: string, endMessageId?: string): Entity[] {
   const allMessages = conversationMessages(world, conversation);
-  if (allMessages.some((entity) => world.get(entity, Message)?.status === 'streaming')) {
-    debugAutoCompression('compression.select.skipStreaming', { conversation: describeConversation(world, conversation), messages: allMessages.map((entity) => describeMessageEntity(world, entity)) });
-    return [];
-  }
   const messages = allMessages.filter((entity) => !containsOnlyProviderContext(world.get(entity, Message)?.content));
   const startIndex = startMessageId ? messages.findIndex((entity) => world.get(entity, Message)?.id === startMessageId) : 0;
   const endIndex = endMessageId ? messages.findIndex((entity) => world.get(entity, Message)?.id === endMessageId) : messages.length - 1;
@@ -492,6 +486,11 @@ function selectMessagesForCompression(world: WorldReader, conversation: Entity, 
   const from = Math.max(0, startIndex < 0 ? 0 : startIndex);
   const to = Math.max(from, endIndex < 0 ? messages.length - 1 : endIndex);
   const selected = messages.slice(from, to + 1);
+  const streamingSelected = selected.filter((entity) => world.get(entity, Message)?.status === 'streaming');
+  if (streamingSelected.length > 0) {
+    debugAutoCompression('compression.select.skipStreaming', { conversation: describeConversation(world, conversation), messages: streamingSelected.map((entity) => describeMessageEntity(world, entity)) });
+    return [];
+  }
   debugAutoCompression('compression.select.full', {
     conversation: describeConversation(world, conversation),
     startMessageId,
@@ -522,7 +521,6 @@ function prepareSegmentedSelection(
   payload: { endMessageId?: string }
 ): CompressionSelection | undefined {
   const allMessages = conversationMessages(world, conversation);
-  if (allMessages.some((entity) => world.get(entity, Message)?.status === 'streaming')) return undefined;
   const messages = allMessages.filter((entity) => !containsOnlyProviderContext(world.get(entity, Message)?.content));
   if (messages.length === 0) return undefined;
 
@@ -530,6 +528,11 @@ function prepareSegmentedSelection(
   const endBoundarySeq = endEntity
     ? world.get(endEntity, Message)!.seq
     : world.get(messages[messages.length - 1], Message)!.seq;
+  const streamingInRange = messages.some((entity) => {
+    const message = world.get(entity, Message);
+    return !!message && message.status === 'streaming' && message.seq <= endBoundarySeq;
+  });
+  if (streamingInRange) return undefined;
 
   const predecessor = latestReusableBlockBelow(world, conversation, endBoundarySeq, 'segmented_summary');
   const predecessorBlock = predecessor?.block;

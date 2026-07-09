@@ -44,7 +44,6 @@ export function buildConversationTimelineRows(input: BuildConversationTimelineRo
   const compressionRows = groupCompressionByDisplayAnchor(input.compressionBlocks ?? [], messages, anchorMessages);
   const rows: ConversationTimelineRow[] = [];
   appendInitialCheckpointRows(rows, input.checkpoints, anchoredCheckpointIds);
-  appendInitialCompressionRows(rows, compressionRows.initial);
 
   messages.forEach((message, index) => {
     const messageFloorNumber = index + 1;
@@ -62,26 +61,23 @@ function groupCompressionByDisplayAnchor(
   blocks: readonly CompressionBlockRecord[],
   messages: readonly MessageRecord[],
   anchorMessages: readonly MessageRecord[]
-): { byMessage: Map<string, CompressionBlockRecord[]>; initial: CompressionBlockRecord[] } {
+): { byMessage: Map<string, CompressionBlockRecord[]> } {
   const byMessage = new Map<string, CompressionBlockRecord[]>();
-  const initial: CompressionBlockRecord[] = [];
   const messageById = new Map(messages.map((message) => [message.id, message]));
-  const firstSeq = anchorMessages[0]?.seq ?? messages[0]?.seq;
-  const lastSeq = anchorMessages[anchorMessages.length - 1]?.seq ?? messages[messages.length - 1]?.seq;
+  // 压缩块只展示在“可见消息”范围内。隐藏的 functionResponse / backfill 消息只用于
+  // LLM 上下文，不应扩展前端可见范围；范围外的压缩块可以存在于 state 中供后端上下文使用，
+  // 但不在当前 timeline 页里显示。
+  const firstSeq = messages[0]?.seq ?? anchorMessages[0]?.seq;
+  const lastSeq = messages[messages.length - 1]?.seq ?? anchorMessages[anchorMessages.length - 1]?.seq;
   for (const block of blocks) {
-    if (isBeforeLoadedRange(block, firstSeq)) {
-      initial.push(block);
-      continue;
-    }
     const anchorId = displayAnchorMessageId(block, messages, messageById, firstSeq, lastSeq);
     if (!anchorId) continue;
     const list = byMessage.get(anchorId) ?? [];
     list.push(block);
     byMessage.set(anchorId, list);
   }
-  initial.sort(compareCompressionBlocks);
   for (const list of byMessage.values()) list.sort(compareCompressionBlocks);
-  return { byMessage, initial };
+  return { byMessage };
 }
 
 function displayAnchorMessageId(
@@ -101,17 +97,6 @@ function displayAnchorMessageId(
     fallback = message;
   }
   return fallback?.id;
-}
-
-function isBeforeLoadedRange(block: CompressionBlockRecord, firstSeq: number | undefined): boolean {
-  const anchorSeq = block.anchorSeq ?? block.endSeq;
-  return anchorSeq !== undefined && firstSeq !== undefined && anchorSeq < firstSeq;
-}
-
-function appendInitialCompressionRows(rows: ConversationTimelineRow[], blocks: readonly CompressionBlockRecord[]): void {
-  for (const block of blocks) {
-    rows.push({ kind: 'compression', id: `compression:initial:${block.id}`, block });
-  }
 }
 
 function appendCompressionRows(rows: ConversationTimelineRow[], blocks: readonly CompressionBlockRecord[], messageFloorNumber: number, floorMessageId: string): void {

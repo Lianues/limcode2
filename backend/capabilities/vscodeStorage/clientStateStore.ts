@@ -319,7 +319,9 @@ export async function loadConversationDetailFromStores(
 ): Promise<ClientState | undefined> {
   const includeRunHistory = options.includeRunHistory ?? false;
   const state = (await loadConversationTimelineDetail(paths, conversationId)) ?? createEmptyClientState();
-  const compression = await loadConversationCompressionDetail(paths, conversationId);
+  const compression = await loadConversationCompressionDetail(paths, conversationId, {
+    knownMessageIds: new Set(state.messages.map((message) => message.id))
+  });
   if (compression) copyCompressionTables(state, compression);
 
   if (includeRunHistory) {
@@ -730,6 +732,7 @@ function copyCompressionTables(target: ClientState, source: ClientState): void {
 }
 
 function pruneCompressionTablesToTimelinePage(state: ClientState, startSeq: number | undefined, endSeq: number | undefined): void {
+  const beforeBlockCount = state.compressionBlocks.length;
   if (startSeq === undefined || endSeq === undefined) {
     state.compressionBlocks = [];
     state.compressionBlockSourceLinks = [];
@@ -738,10 +741,24 @@ function pruneCompressionTablesToTimelinePage(state: ClientState, startSeq: numb
     return;
   }
 
+  const latestCompleteBeforeStart = state.compressionBlocks
+    .filter((block) => block.status === 'complete')
+    .filter((block) => {
+      const seq = block.anchorSeq ?? block.endSeq;
+      return seq !== undefined && seq < startSeq;
+    })
+    .sort((left, right) => (right.anchorSeq ?? right.endSeq ?? 0) - (left.anchorSeq ?? left.endSeq ?? 0) || right.createdAt - left.createdAt || right.id.localeCompare(left.id))[0];
+  const keptBlockIds = new Set<string>();
   state.compressionBlocks = state.compressionBlocks.filter((block) => {
     const seq = block.anchorSeq ?? block.endSeq;
-    return seq !== undefined && seq >= startSeq && seq <= endSeq;
+    const keep = seq !== undefined && seq >= startSeq && seq <= endSeq;
+    if (keep) keptBlockIds.add(block.id);
+    return keep;
   });
+  if (latestCompleteBeforeStart && !keptBlockIds.has(latestCompleteBeforeStart.id)) {
+    state.compressionBlocks.push(latestCompleteBeforeStart);
+    keptBlockIds.add(latestCompleteBeforeStart.id);
+  }
   const blockIds = new Set(state.compressionBlocks.map((block) => block.id));
   state.compressionBlockSourceLinks = state.compressionBlockSourceLinks.filter((link) => blockIds.has(link.blockId));
   state.compressionContextVariants = state.compressionContextVariants.filter((variant) => blockIds.has(variant.blockId));
@@ -1104,9 +1121,9 @@ function textPreview(message: MessageRecord): string {
 }
 
 function normalizeText(text: string): string {
+
   return text.replace(/\s+/g, ' ').trim();
 }
-
 function truncateText(text: string, maxLength: number): string {
   return text.length > maxLength ? `${text.slice(0, Math.max(0, maxLength - 1))}…` : text;
 }

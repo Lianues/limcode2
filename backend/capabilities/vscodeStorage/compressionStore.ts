@@ -3,16 +3,20 @@ import type { ClientState, CompressionBlockLlmInvocationLinkRecord, CompressionB
 import { createEmptyClientState } from '../../../shared/clientStateSchema';
 import { INDEX_FILE } from './constants';
 import type { StoragePaths } from './clientStateStore';
-import { loadRecordStore, saveRecordStore } from './recordStore';
+import { loadRecordStoreWithDiagnostics, saveRecordStore, type RecordStoreDiagnosticsResult } from './recordStore';
 
 const CONVERSATIONS_DIR = 'conversations';
-
 export interface LoadConversationCompressionDetailOptions {
   /**
    * 首屏 timeline 只需要压缩块和摘要变体用于展示，不需要“压缩块 -> 源消息”的明细链接。
    * 这些 source links 可能非常多，默认仍加载以满足后端 hydrate / 编辑删除 / 失效判断。
    */
   includeSourceLinks?: boolean;
+  /**
+   * 完整 timeline 已加载时传入全量 message id，可安全恢复仍有源消息的 orphan compression record。
+   */
+  knownMessageIds?: ReadonlySet<string>;
+  recoverOrphanRecords?: boolean;
 }
 
 export async function loadConversationCompressionDetail(
@@ -21,26 +25,62 @@ export async function loadConversationCompressionDetail(
   options: LoadConversationCompressionDetailOptions = {}
 ): Promise<ClientState | undefined> {
   const includeSourceLinks = options.includeSourceLinks ?? true;
+  const recoverOrphanRecords = options.recoverOrphanRecords ?? options.knownMessageIds !== undefined;
   const state = createEmptyClientState();
   const now = Date.now();
-  const blocks = await loadRecordStore<CompressionBlockRecord, 'block'>(conversationScopedRoot(paths.compressionBlocksRootUri, conversationId), conversationScopedIndex(paths.compressionBlocksRootUri, conversationId), 'block') ?? [];
-  state.compressionBlocks = blocks.filter((block) => block.conversationId === conversationId).map((block) => normalizeLoadedCompressionBlock(block, now));
+  const blockStore = conversationScopedStore(paths.compressionBlocksRootUri, conversationId);
+  const sourceLinkStore = conversationScopedStore(paths.compressionBlockSourceLinksRootUri, conversationId);
+  const variantStore = conversationScopedStore(paths.compressionContextVariantsRootUri, conversationId);
+  const invocationLinkStore = conversationScopedStore(paths.compressionBlockLlmInvocationLinksRootUri, conversationId);
+  const invocationStore = conversationScopedStore(paths.compressionLlmInvocationsRootUri, conversationId);
+
+  const blockDiag = await loadRecordStoreWithDiagnostics<CompressionBlockRecord, 'block'>(blockStore.root, blockStore.index, 'block');
+  const sourceLinkDiag = includeSourceLinks || recoverOrphanRecords
+    ? await loadRecordStoreWithDiagnostics<CompressionBlockSourceLinkRecord, 'link'>(sourceLinkStore.root, sourceLinkStore.index, 'link')
+    : emptyDiagnostics<CompressionBlockSourceLinkRecord>();
+  const variantDiag = await loadRecordStoreWithDiagnostics<CompressionContextVariantRecord, 'variant'>(variantStore.root, variantStore.index, 'variant');
+
+  const indexedBlockIds = new Set(blockDiag.indexedIds);
+  const sourceLinksByBlock = groupBy(sourceLinkDiag.records, (link) => link.blockId);
+  const variantsByBlock = groupBy(variantDiag.records, (variant) => variant.blockId);
+  const indexedBlocks = blockDiag.records
+    .filter((block) => indexedBlockIds.has(block.id) && block.conversationId === conversationId)
+    .map((block) => normalizeLoadedCompressionBlock(block, now));
+  const latestIndexedCompleteSeq = Math.max(
+    -1,
+    ...indexedBlocks
+      .filter((block) => block.status === 'complete')
+      .map((block) => block.anchorSeq ?? block.endSeq ?? -1)
+  );
+  state.compressionBlocks = blockDiag.records
+    .filter((block) => block.conversationId === conversationId)
+    .map((block) => normalizeLoadedCompressionBlock(block, now))
+    .filter((block) => {
+      if (indexedBlockIds.has(block.id)) return true;
+      if (!recoverOrphanRecords) return false;
+      const decision = shouldRecoverOrphanCompressionBlock(block, {
+        latestIndexedCompleteSeq,
+        sourceLinks: sourceLinksByBlock.get(block.id) ?? [],
+        variants: variantsByBlock.get(block.id) ?? [],
+        knownMessageIds: options.knownMessageIds
+      });
+      if (!decision.recover) return false;
+      return true;
+    });
   const blockIds = new Set(state.compressionBlocks.map((block) => block.id));
 
   if (includeSourceLinks) {
-    const links = await loadRecordStore<CompressionBlockSourceLinkRecord, 'link'>(conversationScopedRoot(paths.compressionBlockSourceLinksRootUri, conversationId), conversationScopedIndex(paths.compressionBlockSourceLinksRootUri, conversationId), 'link') ?? [];
-    state.compressionBlockSourceLinks = links.filter((link) => blockIds.has(link.blockId));
+    state.compressionBlockSourceLinks = sourceLinkDiag.records.filter((link) => blockIds.has(link.blockId));
   }
 
-  const variants = await loadRecordStore<CompressionContextVariantRecord, 'variant'>(conversationScopedRoot(paths.compressionContextVariantsRootUri, conversationId), conversationScopedIndex(paths.compressionContextVariantsRootUri, conversationId), 'variant') ?? [];
-  state.compressionContextVariants = variants.filter((variant) => blockIds.has(variant.blockId));
+  state.compressionContextVariants = variantDiag.records.filter((variant) => blockIds.has(variant.blockId));
 
-  const invocationLinks = await loadRecordStore<CompressionBlockLlmInvocationLinkRecord, 'link'>(conversationScopedRoot(paths.compressionBlockLlmInvocationLinksRootUri, conversationId), conversationScopedIndex(paths.compressionBlockLlmInvocationLinksRootUri, conversationId), 'link') ?? [];
-  state.compressionBlockLlmInvocationLinks = invocationLinks.filter((link) => blockIds.has(link.blockId));
+  const invocationLinkDiag = await loadRecordStoreWithDiagnostics<CompressionBlockLlmInvocationLinkRecord, 'link'>(invocationLinkStore.root, invocationLinkStore.index, 'link');
+  state.compressionBlockLlmInvocationLinks = invocationLinkDiag.records.filter((link) => blockIds.has(link.blockId));
 
   const invocationIds = new Set(state.compressionBlockLlmInvocationLinks.map((link) => link.invocationId));
-  const invocations = await loadRecordStore<LlmInvocationRecord, 'invocation'>(conversationScopedRoot(paths.compressionLlmInvocationsRootUri, conversationId), conversationScopedIndex(paths.compressionLlmInvocationsRootUri, conversationId), 'invocation') ?? [];
-  state.llmInvocations = invocations.filter((invocation) => invocationIds.has(invocation.id)).map((invocation) => normalizeLoadedLlmInvocation(invocation, now));
+  const invocationDiag = await loadRecordStoreWithDiagnostics<LlmInvocationRecord, 'invocation'>(invocationStore.root, invocationStore.index, 'invocation');
+  state.llmInvocations = invocationDiag.records.filter((invocation) => invocationIds.has(invocation.id)).map((invocation) => normalizeLoadedLlmInvocation(invocation, now));
 
   const hasCompression = state.compressionBlocks.length || state.compressionBlockSourceLinks.length || state.compressionContextVariants.length || state.compressionBlockLlmInvocationLinks.length || state.llmInvocations.length;
   return hasCompression ? state : undefined;
@@ -49,17 +89,34 @@ export async function loadConversationCompressionDetail(
 export async function saveConversationCompressionDetail(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
   const blocks = state.compressionBlocks.filter((block) => block.conversationId === conversationId);
   const blockIds = new Set(blocks.map((block) => block.id));
-  const links = state.compressionBlockSourceLinks.filter((link) => blockIds.has(link.blockId));
-  const variants = state.compressionContextVariants.filter((variant) => blockIds.has(variant.blockId));
-  const invocationLinks = state.compressionBlockLlmInvocationLinks.filter((link) => blockIds.has(link.blockId));
-  const invocationIds = new Set(invocationLinks.map((link) => link.invocationId));
-  const invocations = state.llmInvocations.filter((invocation) => invocationIds.has(invocation.id));
+  let links = state.compressionBlockSourceLinks.filter((link) => blockIds.has(link.blockId));
+  let variants = state.compressionContextVariants.filter((variant) => blockIds.has(variant.blockId));
+  let invocationLinks = state.compressionBlockLlmInvocationLinks.filter((link) => blockIds.has(link.blockId));
+  let invocationIds = new Set(invocationLinks.map((link) => link.invocationId));
+  let invocations = state.llmInvocations.filter((invocation) => invocationIds.has(invocation.id));
+  const existingSourceLinkStore = conversationScopedStore(paths.compressionBlockSourceLinksRootUri, conversationId);
+  const existingVariantStore = conversationScopedStore(paths.compressionContextVariantsRootUri, conversationId);
+  const existingInvocationLinkStore = conversationScopedStore(paths.compressionBlockLlmInvocationLinksRootUri, conversationId);
+  const existingInvocationStore = conversationScopedStore(paths.compressionLlmInvocationsRootUri, conversationId);
+  const [existingSourceLinks, existingVariants, existingInvocationLinks, existingInvocations] = await Promise.all([
+    loadRecordStoreWithDiagnostics<CompressionBlockSourceLinkRecord, 'link'>(existingSourceLinkStore.root, existingSourceLinkStore.index, 'link'),
+    loadRecordStoreWithDiagnostics<CompressionContextVariantRecord, 'variant'>(existingVariantStore.root, existingVariantStore.index, 'variant'),
+    loadRecordStoreWithDiagnostics<CompressionBlockLlmInvocationLinkRecord, 'link'>(existingInvocationLinkStore.root, existingInvocationLinkStore.index, 'link'),
+    loadRecordStoreWithDiagnostics<LlmInvocationRecord, 'invocation'>(existingInvocationStore.root, existingInvocationStore.index, 'invocation')
+  ]);
+
+  links = mergeRecordsById(existingSourceLinks.records.filter((link) => blockIds.has(link.blockId)), links);
+  variants = mergeRecordsById(existingVariants.records.filter((variant) => blockIds.has(variant.blockId)), variants);
+  invocationLinks = mergeRecordsById(existingInvocationLinks.records.filter((link) => blockIds.has(link.blockId)), invocationLinks);
+  invocationIds = new Set(invocationLinks.map((link) => link.invocationId));
+  invocations = mergeRecordsById(existingInvocations.records.filter((invocation) => invocationIds.has(invocation.id)), invocations.filter((invocation) => invocationIds.has(invocation.id)));
+
   await Promise.all([
-    saveRecordStore(conversationScopedRoot(paths.compressionBlocksRootUri, conversationId), conversationScopedIndex(paths.compressionBlocksRootUri, conversationId), blocks, 'block', (record) => record.title || record.id),
-    saveRecordStore(conversationScopedRoot(paths.compressionBlockSourceLinksRootUri, conversationId), conversationScopedIndex(paths.compressionBlockSourceLinksRootUri, conversationId), links, 'link'),
-    saveRecordStore(conversationScopedRoot(paths.compressionContextVariantsRootUri, conversationId), conversationScopedIndex(paths.compressionContextVariantsRootUri, conversationId), variants, 'variant'),
-    saveRecordStore(conversationScopedRoot(paths.compressionBlockLlmInvocationLinksRootUri, conversationId), conversationScopedIndex(paths.compressionBlockLlmInvocationLinksRootUri, conversationId), invocationLinks, 'link'),
-    saveRecordStore(conversationScopedRoot(paths.compressionLlmInvocationsRootUri, conversationId), conversationScopedIndex(paths.compressionLlmInvocationsRootUri, conversationId), invocations, 'invocation')
+    saveRecordStore(conversationScopedRoot(paths.compressionBlocksRootUri, conversationId), conversationScopedIndex(paths.compressionBlocksRootUri, conversationId), blocks, 'block', (record) => record.title || record.id, { pruneMissing: true }),
+    saveRecordStore(conversationScopedRoot(paths.compressionBlockSourceLinksRootUri, conversationId), conversationScopedIndex(paths.compressionBlockSourceLinksRootUri, conversationId), links, 'link', (record) => record.id, { pruneMissing: true }),
+    saveRecordStore(conversationScopedRoot(paths.compressionContextVariantsRootUri, conversationId), conversationScopedIndex(paths.compressionContextVariantsRootUri, conversationId), variants, 'variant', (record) => record.id, { pruneMissing: true }),
+    saveRecordStore(conversationScopedRoot(paths.compressionBlockLlmInvocationLinksRootUri, conversationId), conversationScopedIndex(paths.compressionBlockLlmInvocationLinksRootUri, conversationId), invocationLinks, 'link', (record) => record.id, { pruneMissing: true }),
+    saveRecordStore(conversationScopedRoot(paths.compressionLlmInvocationsRootUri, conversationId), conversationScopedIndex(paths.compressionLlmInvocationsRootUri, conversationId), invocations, 'invocation', (record) => record.id, { pruneMissing: true })
   ]);
 }
 
@@ -90,6 +147,55 @@ function conversationScopedRoot(root: vscode.Uri, conversationId: string): vscod
 
 function conversationScopedIndex(root: vscode.Uri, conversationId: string): vscode.Uri {
   return vscode.Uri.joinPath(conversationScopedRoot(root, conversationId), INDEX_FILE);
+}
+
+function conversationScopedStore(root: vscode.Uri, conversationId: string): { root: vscode.Uri; index: vscode.Uri } {
+  const scopedRoot = conversationScopedRoot(root, conversationId);
+  return { root: scopedRoot, index: vscode.Uri.joinPath(scopedRoot, INDEX_FILE) };
+}
+
+function emptyDiagnostics<TRecord extends { id: string }>(): RecordStoreDiagnosticsResult<TRecord> {
+  return { records: [], indexCount: 0, recordFileCount: 0, indexedIds: [], orphanIds: [] };
+}
+
+function groupBy<T>(items: readonly T[], keyOf: (item: T) => string): Map<string, T[]> {
+  const map = new Map<string, T[]>();
+  for (const item of items) {
+    const key = keyOf(item);
+    const list = map.get(key) ?? [];
+    list.push(item);
+    map.set(key, list);
+  }
+  return map;
+}
+
+function mergeRecordsById<TRecord extends { id: string }>(existing: readonly TRecord[], next: readonly TRecord[]): TRecord[] {
+  const merged = new Map<string, TRecord>();
+  for (const record of existing) merged.set(record.id, record);
+  for (const record of next) merged.set(record.id, record);
+  return [...merged.values()];
+}
+
+function shouldRecoverOrphanCompressionBlock(
+  block: CompressionBlockRecord,
+  input: {
+    latestIndexedCompleteSeq: number;
+    sourceLinks: readonly CompressionBlockSourceLinkRecord[];
+    variants: readonly CompressionContextVariantRecord[];
+    knownMessageIds?: ReadonlySet<string>;
+  }
+): { recover: boolean; reason: string } {
+  if (block.status !== 'complete') return { recover: false, reason: `status:${block.status}` };
+  const seq = block.anchorSeq ?? block.endSeq ?? -1;
+  if (seq <= input.latestIndexedCompleteSeq) return { recover: false, reason: 'not_newer_than_indexed_complete' };
+  if (input.variants.length === 0) return { recover: false, reason: 'missing_variant' };
+  const messageSources = input.sourceLinks.filter((link) => link.sourceKind === 'message');
+  if (input.knownMessageIds !== undefined) {
+    if (messageSources.length === 0) return { recover: false, reason: 'missing_message_sources' };
+    const missing = messageSources.find((link) => !input.knownMessageIds?.has(link.sourceId));
+    if (missing) return { recover: false, reason: `missing_source_message:${missing.sourceId}` };
+  }
+  return { recover: true, reason: 'valid_orphan_complete_block' };
 }
 
 function safeShardName(id: string): string {

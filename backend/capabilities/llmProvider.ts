@@ -774,6 +774,18 @@ async function compactWithOpenAIResponses(
     });
   } catch (error) {
     logCompressionDebug('provider.compact.openaiResponses.throw', { ...compactRequestDebugInfo(request), error: errorDebugInfo(error), signalAborted: signal?.aborted === true });
+    if (!isRequestAbort(signal) && shouldFallbackOpenAICompactToSegmentedSummary(error, methodConfig)) {
+      const fallbackConfig = createSegmentedSummaryFallbackConfig(methodConfig);
+      const fallbackSegments = request.segments?.length ? request.segments : segmentContentsForSummaryFallback(request.contents);
+      logCompressionDebug('provider.compact.openaiResponses.fallbackSegmentedSummary', {
+        ...compactRequestDebugInfo(request),
+        reason: 'context_length_exceeded',
+        fallbackConfigId: fallbackConfig.id,
+        fallbackSegmentCount: fallbackSegments.length,
+        fallbackSegmentSizes: fallbackSegments.map((segment) => segment.length)
+      });
+      return compactWithSegmentedSummary({ ...request, segments: fallbackSegments }, fallbackConfig, options, signal);
+    }
     throw error;
   }
 
@@ -788,6 +800,84 @@ async function compactWithOpenAIResponses(
     methodConfig
   };
 }
+
+function shouldFallbackOpenAICompactToSegmentedSummary(error: unknown, methodConfig: LlmCompressionConfigRecord): boolean {
+  if (!isContextLengthExceededError(error)) return false;
+  const mode = methodConfig.fallbackPolicy?.whenNativeUnavailable;
+  return mode !== 'use_raw_history' && mode !== 'block_and_ask';
+}
+
+function createSegmentedSummaryFallbackConfig(methodConfig: LlmCompressionConfigRecord): LlmCompressionConfigRecord {
+  const now = Date.now();
+  const { openaiResponsesCompact: _openaiResponsesCompact, ...rest } = methodConfig;
+  void _openaiResponsesCompact;
+  return {
+    ...rest,
+    id: `${methodConfig.id || 'openai-compact'}-segmented-fallback`,
+    name: `${methodConfig.name || 'OpenAI 原生压缩'}（分段总结 fallback）`,
+    kind: 'segmented_summary',
+    trigger: methodConfig.trigger ?? { mode: 'manual', preserveLatestMessages: 8 },
+    llmSummary: methodConfig.llmSummary ?? { targetTokens: 2000 },
+    fallbackPolicy: methodConfig.fallbackPolicy ?? { whenNativeUnavailable: 'use_summary' },
+    createdAt: methodConfig.createdAt ?? now,
+    updatedAt: now
+  };
+}
+
+const SUMMARY_FALLBACK_SEGMENT_MAX_CHARS = 24_000;
+const SUMMARY_FALLBACK_SEGMENT_MAX_CONTENTS = 80;
+
+function segmentContentsForSummaryFallback(contents: MessageContent[]): MessageContent[][] {
+  const segments: MessageContent[][] = [];
+  let current: MessageContent[] = [];
+  let currentChars = 0;
+
+  for (const content of contents) {
+    const renderedChars = Math.max(1, renderContentsForSummary([content]).length);
+    const shouldStartNext = current.length > 0
+      && (current.length >= SUMMARY_FALLBACK_SEGMENT_MAX_CONTENTS || currentChars + renderedChars > SUMMARY_FALLBACK_SEGMENT_MAX_CHARS);
+    if (shouldStartNext) {
+      segments.push(current);
+      current = [];
+      currentChars = 0;
+    }
+    current.push(content);
+    currentChars += renderedChars;
+  }
+
+  if (current.length > 0) segments.push(current);
+  return segments.length > 0 ? segments : [contents];
+}
+
+function isContextLengthExceededError(error: unknown): boolean {
+  const text = errorSearchText(error).toLowerCase();
+  return text.includes('context_length_exceeded')
+    || text.includes('context window')
+    || text.includes('exceeds the context')
+    || text.includes('maximum context length')
+    || text.includes('too many tokens');
+}
+
+function errorSearchText(error: unknown): string {
+  const parts: string[] = [];
+  if (typeof error === 'string') parts.push(error);
+  if (error instanceof Error) {
+    parts.push(error.name, error.message);
+    const cause = (error as { cause?: unknown }).cause;
+    if (cause !== undefined) parts.push(stringifyJson(toPlainJsonLike(cause)));
+  }
+  if (isRecord(error)) {
+    parts.push(stringifyJson(toPlainJsonLike(error)));
+    for (const key of ['message', 'bodyText', 'data', 'rawBody', 'rawResponse', 'response', 'error']) {
+      const value = error[key];
+      if (value !== undefined) parts.push(typeof value === 'string' ? value : stringifyJson(toPlainJsonLike(value)));
+    }
+  } else {
+    parts.push(stringifyJson(toPlainJsonLike(error)));
+  }
+  return parts.filter(Boolean).join('\n');
+}
+
 
 async function compactWithSummary(
   request: LlmCompactRequest,
@@ -943,18 +1033,28 @@ async function summarizeSingleRound(
     generationConfig: prompt.generationConfig ?? resolved.settings.generationConfig
   };
 
-  if (resolved.stream) {
-    let text = '';
-    for await (const chunk of resolved.provider.chatStream<UnifiedLLMStreamChunk>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified', signal })) {
-      text += chunk.textDelta ?? visibleTextFromParts(chunk.partsDelta ?? []);
+  try {
+    if (resolved.stream) {
+      let text = '';
+      for await (const chunk of resolved.provider.chatStream<UnifiedLLMStreamChunk>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified', signal })) {
+        text += chunk.textDelta ?? visibleTextFromParts(chunk.partsDelta ?? []);
+      }
+      const trimmed = text.trim();
+      return trimmed ? extractSummaryTag(trimmed) : fallback();
     }
-    const trimmed = text.trim();
-    return trimmed ? extractSummaryTag(trimmed) : fallback();
-  }
 
-  const response = await resolved.provider.chat<UnifiedLLMResponse>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified', signal });
-  const trimmed = visibleTextFromParts(response.content?.parts ?? []).trim();
-  return trimmed ? extractSummaryTag(trimmed) : fallback();
+    const response = await resolved.provider.chat<UnifiedLLMResponse>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified', signal });
+    const trimmed = visibleTextFromParts(response.content?.parts ?? []).trim();
+    return trimmed ? extractSummaryTag(trimmed) : fallback();
+  } catch (error) {
+    if (isRequestAbort(signal)) throw error;
+    logCompressionDebug('provider.compact.segmentedSummary.segmentFallback', {
+      error: errorDebugInfo(error),
+      segmentContents: segment.length,
+      contextLength: isContextLengthExceededError(error)
+    });
+    return fallback();
+  }
 }
 
 interface GeneratedSummaryTextResult { text: string; settings?: LlmProviderConfigRecord }

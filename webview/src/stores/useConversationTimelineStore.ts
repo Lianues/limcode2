@@ -113,8 +113,11 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
         .sort((left, right) => left.order - right.order || left.createdAt - right.createdAt || left.id.localeCompare(right.id));
     },
     currentCompressionBlocks(): CompressionBlockRecord[] {
-      return this.currentTimeline.state.compressionBlocks
+      const timeline = this.currentTimeline;
+      const window = timelineSeqWindow(timeline);
+      return timeline.state.compressionBlocks
         .filter((block) => block.conversationId === this.currentConversationId)
+        .filter((block) => !window || compressionBlockInTimelineWindow(block, window))
         .sort((left, right) => (left.anchorSeq ?? left.endSeq ?? 0) - (right.anchorSeq ?? right.endSeq ?? 0) || left.createdAt - right.createdAt || left.id.localeCompare(right.id));
     },
     currentMessageFloorById(): Record<string, number> {

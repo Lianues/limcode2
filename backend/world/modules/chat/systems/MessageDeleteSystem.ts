@@ -107,8 +107,8 @@ function deleteMessages(world: WorldReader, cmd: CommandSink, deletedMessages: S
   const deletedCheckpointAnchors = checkpointAnchorsForMessages(world, deletedMessages);
   const deletedCheckpoints = checkpointsOrphanedByDeletedAnchors(world, deletedCheckpointAnchors);
   const affectedRuns = runsAffectedByDeletion(world, deletedMessages, deletedRevisions, deletedToolCalls);
-  const affectedCompressionBlocks = compressionBlocksAffectedByDeletion(world, deletedMessages);
-
+  const compressionMatches = compressionBlockSourceMatchesForDeletion(world, deletedMessages);
+  const affectedCompressionBlocks = collectDependentCompressionBlocks(world, new Set(compressionMatches.map((match) => match.block)));
   // 被删除消息下的 ToolCall 会在本次删除中 despawn，因此只需要尽力中断外部运行时，
   // 不再补 ToolCallEvent，避免新事件的 PartOf 指向随后被删除的 ToolCall。
   abortDeletedOpenToolCalls(world, cmd, deletedToolCalls);
@@ -166,8 +166,16 @@ function deleteMessages(world: WorldReader, cmd: CommandSink, deletedMessages: S
   for (const entity of entitiesToDespawn) cmd.despawn(entity);
 }
 
-function compressionBlocksAffectedByDeletion(world: WorldReader, deletedMessages: ReadonlySet<Entity>): Set<Entity> {
-  const directBlocks = new Set<Entity>();
+interface CompressionDeletionMatch {
+  block: Entity;
+  sourceMessageId: string;
+  role?: string;
+  order?: number;
+}
+
+function compressionBlockSourceMatchesForDeletion(world: WorldReader, deletedMessages: ReadonlySet<Entity>): CompressionDeletionMatch[] {
+  const matches: CompressionDeletionMatch[] = [];
+  const seen = new Set<string>();
   const deletedMessageIds = new Set(
     [...deletedMessages]
       .map((entity) => world.get(entity, Message)?.id)
@@ -178,9 +186,12 @@ function compressionBlocksAffectedByDeletion(world: WorldReader, deletedMessages
     if (!link || link.sourceKind !== 'message') continue;
     const sourceDeleted = (link.source !== undefined && deletedMessages.has(link.source)) || deletedMessageIds.has(link.sourceId);
     if (!sourceDeleted) continue;
-    directBlocks.add(link.block);
+    const key = `${link.block}:${link.sourceId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    matches.push({ block: link.block, sourceMessageId: link.sourceId, role: link.role, order: link.order });
   }
-  return collectDependentCompressionBlocks(world, directBlocks);
+  return matches;
 }
 
 function deleteCompressionBlocksCascade(world: WorldReader, cmd: CommandSink, initial: ReadonlySet<Entity>): void {
@@ -348,11 +359,11 @@ function failOpenToolCallsForRun(
     if (excludedToolCalls.has(entity) || !toolCallEntitiesInRun.has(entity)) continue;
     const call = world.get(entity, ToolCall);
     const state = world.get(entity, ToolState);
+
     if (!call || !state) continue;
     interruptToolCall(cmd, entity, call, state, { emitAbort: true });
   }
 }
-
 function entitiesWithParent(
   world: WorldReader,
   component: typeof MessageRevision | typeof ToolCall | typeof ToolCallEvent,

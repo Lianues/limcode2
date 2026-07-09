@@ -1485,6 +1485,8 @@ function labelForAgentRunStatus(status: AgentRunStatus): string {
     case 'completed':
       return '已完成';
     case 'failed':
+
+
       return '失败';
     case 'cancelled':
       return '已终止';
@@ -1492,7 +1494,6 @@ function labelForAgentRunStatus(status: AgentRunStatus): string {
       return '已过期';
   }
 }
-
 function isPassFlushEffect(effect: WorldEffect): boolean {
   const kind = (effect as { kind?: string }).kind;
   return kind === 'client.patch'

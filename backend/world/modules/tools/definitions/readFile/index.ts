@@ -103,6 +103,7 @@ function normalizeDisplayPath(path: string | undefined): string {
 function lineRangeSuffix(startLine: number | undefined, endLine: number | undefined): string {
   const start = normalizeLineNumber(startLine);
   const end = normalizeLineNumber(endLine);
+  if (start !== undefined && end !== undefined) return `[L${start}-${end}]`;
   if (start !== undefined) return `[L${start}-]`;
   if (end !== undefined) return `[L1-${end}]`;
   return '';

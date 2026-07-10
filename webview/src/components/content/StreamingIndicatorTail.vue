@@ -41,6 +41,7 @@ const props = withDefaults(
 }
 
 .streaming-tail-text {
+  font-style: italic;
   background: linear-gradient(
     90deg,
     var(--lc-wave-color, var(--vscode-descriptionForeground)) 0%,

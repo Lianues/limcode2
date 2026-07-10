@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue';
 import {
+  IconArrowFork,
   IconArrowNarrowDown,
   IconArrowNarrowUp,
   IconBolt,
@@ -46,6 +47,7 @@ const emit = defineEmits<{
   (event: 'retry-from', message: MessageRecord): void;
   (event: 'delete-from', message: MessageRecord): void;
   (event: 'compact-to', message: MessageRecord): void;
+  (event: 'fork-from', message: MessageRecord): void;
   (event: 'view-run-detail', message: MessageRecord): void;
   (event: 'close-error-block', id: string): void;
   (event: 'cancel-error-retry', block: LlmErrorBlockRecord): void;
@@ -103,12 +105,16 @@ const copied = ref(false);
 const confirmRetryOpen = ref(false);
 const confirmDeleteOpen = ref(false);
 const confirmCompactOpen = ref(false);
+const confirmForkOpen = ref(false);
 const rollbackPending = ref(false);
 const deleteDescriptionHtml = computed(
   () => `将删除这条消息以及它之后的所有共 ${props.deleteCount} 条消息，此操作<strong>无法撤销</strong>。`
 );
 const compactDescriptionHtml = computed(
   () => `确定从此处开始往前进行总结吗？共 <strong>${props.compactCount}</strong> 条消息（前面的总结块本身额外算一条）。总结块会追加到这条消息后面。`
+);
+const forkDescriptionHtml = computed(
+  () => `将从对话开头复制到此处，共 <strong>${Math.max(1, props.floorNumber)}</strong> 条消息。确认后会创建并自动打开新的分支对话。`
 );
 const retryDescriptionHtml = computed(
   () => `确定要重试此消息吗？这将删除此消息及后续共 ${props.deleteCount} 条消息，然后重新请求 AI 响应。此操作<strong>不可撤销</strong>。`
@@ -643,6 +649,10 @@ function openCompactConfirm(): void {
   confirmCompactOpen.value = true;
 }
 
+function openForkConfirm(): void {
+  confirmForkOpen.value = true;
+}
+
 function editMessage(): void {
   emit('edit-message', props.message);
 }
@@ -704,6 +714,14 @@ function confirmCompact(): void {
   confirmCompactOpen.value = false;
 }
 
+function cancelFork(): void {
+  confirmForkOpen.value = false;
+}
+
+function confirmFork(): void {
+  emit('fork-from', props.message);
+  confirmForkOpen.value = false;
+}
 
 function onDeleteConfirmAction(action: ConfirmPanelAction): void {
   if (action.key === 'cancel') cancelDelete();
@@ -844,6 +862,16 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
       <button
         type="button"
         class="message-action-button"
+        :disabled="streaming || floorNumber < 1"
+        aria-label="复制本对话至此"
+        title="复制本对话至此"
+        @click="openForkConfirm"
+      >
+        <IconArrowFork class="message-action-icon" stroke="2" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        class="message-action-button"
         :class="{ 'is-copied': copied }"
         :disabled="!messageText"
         :aria-label="copied ? '已复制消息' : '复制消息'"
@@ -886,6 +914,14 @@ function onRetryConfirmAction(action: ConfirmPanelAction): void {
       confirm-label="开始总结"
       @confirm="confirmCompact"
       @cancel="cancelCompact"
+    />
+    <ConfirmPanel
+      :open="confirmForkOpen"
+      title="复制本对话至此？"
+      :description-html="forkDescriptionHtml"
+      confirm-label="复制并打开"
+      @confirm="confirmFork"
+      @cancel="cancelFork"
     />
   </article>
 </template>

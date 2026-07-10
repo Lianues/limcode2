@@ -20,7 +20,7 @@ const props = withDefaults(
 
 const ui = useConversationUiStore();
 const timeline = useConversationTimelineStore();
-const { retryMessageFrom, deleteMessagesFrom, cancelLlmAutoRetry } = useChat();
+const { retryMessageFrom, deleteMessagesFrom, forkConversationFrom, cancelLlmAutoRetry } = useChat();
 const { createCompression, deleteCompression, regenerateCompression, setCompressionEnabled } = useCompression();
 const runHistory = useRunHistoryStore();
 
@@ -59,6 +59,10 @@ function onRetryFrom(message: MessageRecord): void {
 
 function onCompactTo(message: MessageRecord): void {
   createCompression({ endMessageId: message.id });
+}
+
+function onForkFrom(message: MessageRecord): void {
+  forkConversationFrom(message.conversationId, message.id);
 }
 
 function onCloseErrorBlock(id: string): void {
@@ -267,6 +271,7 @@ function maybeLoadOlder(): void {
         @retry-from="onRetryFrom"
         @delete-from="onDeleteFrom"
         @compact-to="onCompactTo"
+        @fork-from="onForkFrom"
         @view-run-detail="onViewRunDetail"
         @close-error-block="onCloseErrorBlock"
         @cancel-error-retry="onCancelErrorRetry"

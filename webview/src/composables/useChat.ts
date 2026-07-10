@@ -49,6 +49,12 @@ export function useChat() {
     return true;
   }
 
+  function forkConversationFrom(sourceConversationId: string, messageId: string): boolean {
+    if (!sourceConversationId || !messageId) return false;
+    bridge.request(BridgeMessageType.ConversationFork, { sourceConversationId, messageId });
+    return true;
+  }
+
   function cancelLlmAutoRetry(input: { requestId: string; conversationId?: string; messageId?: string; runId?: string }): boolean {
     if (!input.requestId) return false;
     bridge.request(BridgeMessageType.LlmRetryCancel, { ...input, reason: 'user_cancelled_auto_retry' });
@@ -136,5 +142,5 @@ export function useChat() {
     return config.model?.trim() === id || config.models.some((model) => model.id === id);
   }
 
-  return { sendMessage, editMessage, retryMessageFrom, deleteMessagesFrom, cancelLlmAutoRetry, abortCurrentConversation, removeQueueRun, promoteQueueRun, reorderQueue, pauseQueueRun, resumeQueueRun, resumeAllQueueRuns, updateQueueInput };
+  return { sendMessage, editMessage, retryMessageFrom, deleteMessagesFrom, forkConversationFrom, cancelLlmAutoRetry, abortCurrentConversation, removeQueueRun, promoteQueueRun, reorderQueue, pauseQueueRun, resumeQueueRun, resumeAllQueueRuns, updateQueueInput };
 }

@@ -137,6 +137,10 @@ export class MainPanel {
           this.createConversationFromPanel(message.payload?.projectFolderUri);
           return;
         }
+        if (message.type === BridgeMessageType.ConversationFork && message.payload) {
+          this.forkConversationFromPanel(message.payload.sourceConversationId, message.payload.messageId);
+          return;
+        }
         this.backendApp.handleWebviewMessage(this.clientId, message);
         this.refreshTitleFromOutgoingMessage(message);
       },
@@ -164,6 +168,19 @@ export class MainPanel {
         MainPanel.createOrShow(this.extensionUri, this.backendApp, { conversationId });
       })
       .catch((error) => console.warn('[LimCode] Failed to create panel conversation.', error));
+  }
+
+  private forkConversationFromPanel(sourceConversationId: string, messageId: string): void {
+    void this.backendApp
+      .forkConversation(sourceConversationId, messageId)
+      .then((conversationId) => {
+        MainPanel.createOrShow(this.extensionUri, this.backendApp, { conversationId });
+      })
+      .catch((error) => {
+        console.warn('[LimCode] Failed to fork panel conversation.', error);
+        const message = error instanceof Error ? error.message : '无法创建分支对话。';
+        void vscode.window.showErrorMessage(`LimCode: ${message}`);
+      });
   }
 
   private matches(options: MainPanelOptions): boolean {

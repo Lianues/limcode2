@@ -82,6 +82,7 @@ export enum BridgeMessageType {
   ChatAbort = 'chat.abort',
   ConversationOpen = 'conversation.open',
   ConversationCreate = 'conversation.create',
+  ConversationFork = 'conversation.fork',
   AgentCreate = 'agent.create',
   AgentUpdate = 'agent.update',
   AgentDelete = 'agent.delete',
@@ -1919,6 +1920,10 @@ export interface MessageEditPayload {
 }
 export interface ConversationOpenPayload { conversationId: string; title?: string }
 export interface ConversationCreatePayload { projectFolderUri?: string }
+export interface ConversationForkPayload {
+  sourceConversationId: string;
+  messageId: string;
+}
 export interface AgentCreatePayload { name: string; description?: string; kind?: string }
 export interface AgentUpdatePayload { agentId: string; name?: string; description?: string; kind?: string }
 export interface AgentDeletePayload { agentId: string }
@@ -2492,6 +2497,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.LlmRetryCancel, LlmRetryCancelPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationOpen, ConversationOpenPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationCreate, ConversationCreatePayload>
+  | BridgeEnvelope<BridgeMessageType.ConversationFork, ConversationForkPayload>
   | BridgeEnvelope<BridgeMessageType.AgentCreate, AgentCreatePayload>
   | BridgeEnvelope<BridgeMessageType.AgentUpdate, AgentUpdatePayload>
   | BridgeEnvelope<BridgeMessageType.AgentDelete, AgentDeletePayload>

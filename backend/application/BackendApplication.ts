@@ -83,6 +83,7 @@ import type {
   ConversationHistoryScope,
   ClientState,
   ConversationLlmSettingsRecord,
+  ConversationSettingsRecord,
   LlmProviderKind,
   MessageContent,
   ProjectFolderCandidateRecord,
@@ -109,6 +110,7 @@ import { McpToolSourcesKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey, ToolS
 import { SkillCatalogKey } from '../world/modules/skill/resources';
 import { RulesCatalogKey } from '../world/modules/rules/resources';
 import { conversationDetailEvictionBlocker, evictConversationDetail } from './conversationDetailEviction';
+import { forkConversationInWorld } from './conversationFork';
 
 const MAX_WARM_CLOSED_CONVERSATIONS = 3;
 
@@ -300,6 +302,33 @@ export class BackendApplication {
     this.requestSnapshot();
     void this.upsertConversationHistoryEntry(conversationId)
       .catch((error) => console.warn('[LimCode] Failed to persist new conversation history entry.', error));
+    return conversationId;
+  }
+
+  /** 从源对话开头复制到指定消息（含）并创建一条独立的 fork conversation。 */
+  public async forkConversation(sourceConversationId: string, messageId: string): Promise<string> {
+    const normalizedSourceId = sourceConversationId.trim();
+    const normalizedMessageId = messageId.trim();
+    if (!normalizedSourceId || !normalizedMessageId) throw new Error('缺少源对话或目标消息。');
+
+    await this.waitUntilHydrated();
+    await this.ensureConversationDetailLoaded(normalizedSourceId);
+
+    const conversationId = `conversation-${createMessageId()}`;
+    forkConversationInWorld(this.world, {
+      sourceConversationId: normalizedSourceId,
+      throughMessageId: normalizedMessageId,
+      targetConversationId: conversationId
+    });
+
+    this.renderLoadedConversationDetails.add(conversationId);
+    this.runHistoryLoadedConversationDetails.add(conversationId);
+    this.conversationTailLoaded.add(conversationId);
+    await this.copyConversationSettings(normalizedSourceId, conversationId);
+
+    this.requestSnapshot();
+    this.requestSnapshot(conversationId);
+    await this.persistence.persistImmediately({ forceConversationId: conversationId });
     return conversationId;
   }
 
@@ -985,6 +1014,41 @@ export class BackendApplication {
     }
     if (payload.section === 'llmProviderConfigs') {
       await this.freezeLoadedConversationsToCurrentProviderModels();
+    }
+  }
+
+  private async copyConversationSettings(sourceConversationId: string, targetConversationId: string): Promise<void> {
+    try {
+      const common = await this.env.storage.loadConversationSettings(sourceConversationId, 'common');
+      const settings = common?.settings as ConversationSettingsRecord | undefined;
+      if (settings) {
+        await this.env.storage.saveConversationSettings('common', {
+          conversationId: targetConversationId,
+          name: settings.name
+        });
+        const target = this.findConversationEntity(targetConversationId);
+        const conversation = target !== undefined ? this.world.get(target, Conversation) : undefined;
+        if (target !== undefined && conversation) {
+          this.world.add(target, Conversation, { ...conversation, title: settings.name });
+        }
+      }
+    } catch (error) {
+      console.warn(`[LimCode] Failed to copy common settings to fork "${targetConversationId}".`, error);
+    }
+
+    try {
+      const llm = await this.env.storage.loadConversationSettings(sourceConversationId, 'llm');
+      const settings = llm?.settings as ConversationLlmSettingsRecord | undefined;
+      if (!settings) return;
+      const copied: ConversationLlmSettingsRecord = {
+        conversationId: targetConversationId,
+        activeProviderConfigId: settings.activeProviderConfigId,
+        ...(settings.modelOverrides ? { modelOverrides: { ...settings.modelOverrides } } : {})
+      };
+      await this.env.storage.saveConversationSettings('llm', copied);
+      await this.applyConversationModelSettingsToWorld(copied);
+    } catch (error) {
+      console.warn(`[LimCode] Failed to copy LLM settings to fork "${targetConversationId}".`, error);
     }
   }
 

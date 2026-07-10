@@ -9,6 +9,7 @@ import { useRunHistoryStore } from '@webview/stores/useRunHistoryStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
 import { useSystemPromptStore } from '@webview/stores/useSystemPromptStore';
+import { useRuntimeContextStore } from '@webview/stores/useRuntimeContextStore';
 
 /**
  * 在 App 根组件挂载时调用一次：集中注册所有入站桥接监听并接入对应 store，
@@ -84,6 +85,7 @@ export function useBridgeBootstrap(): void {
   const conversationTimeline = useConversationTimelineStore();
   const conversationUi = useConversationUiStore();
   const systemPromptStore = useSystemPromptStore();
+  const runtimeContextStore = useRuntimeContextStore();
 
   const disposers: Array<() => void> = [];
   const requestedConversationStreams = new Set<string>();
@@ -140,6 +142,7 @@ export function useBridgeBootstrap(): void {
       clientState.applyClientSnapshot(message.payload.streamId, message.payload.streamSeq, message.payload.state);
       conversationTimeline.applyClientStateSnapshot(message.payload.streamId, message.payload.streamSeq, message.payload.state);
       systemPromptStore.reconcilePendingSave();
+      runtimeContextStore.reconcilePendingSave();
       if (debug) logCompressionClientDebug('clientSnapshot.applied', { streamId: message.payload.streamId, streamSeq: message.payload.streamSeq });
     })
   );
@@ -158,6 +161,7 @@ export function useBridgeBootstrap(): void {
       if (applied) {
         conversationTimeline.applyClientStatePatch(message.payload.streamId, message.payload.streamSeq, message.payload.patches);
         systemPromptStore.reconcilePendingSave();
+        runtimeContextStore.reconcilePendingSave();
       }
       if (!applied) {
         if (debug) logCompressionClientDebug('clientPatch.resync', { streamId: message.payload.streamId, streamSeq: message.payload.streamSeq });

@@ -10,13 +10,25 @@ import {
 import { bridge } from '@webview/transport';
 import { useClientStateStore } from './useClientStateStore';
 
+interface PendingRuntimeContextSave {
+  scopeKind: ConfigScopeKind;
+  scopeId?: string;
+  template: string;
+  requestedAt: number;
+}
+
+interface RuntimeContextStoreState {
+  status: string;
+  pendingSave?: PendingRuntimeContextSave;
+}
+
 function scopeIdFor(scopeKind: ConfigScopeKind, scopeId?: string): string | undefined { return scopeKind === 'global' ? undefined : scopeId?.trim(); }
 function matches(link: RuntimeContextScopeLinkRecord, scopeKind: ConfigScopeKind, scopeId?: string): boolean { return link.role === 'active' && link.scopeKind === scopeKind && scopeIdFor(scopeKind, link.scopeId) === scopeIdFor(scopeKind, scopeId); }
 function latest<T extends { createdAt: number; updatedAt: number; id: string }>(items: T[]): T | undefined { return [...items].sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt || b.id.localeCompare(a.id))[0]; }
 function sortPlaceholders(items: PromptPlaceholderRecord[]): PromptPlaceholderRecord[] { return [...items].sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.label.localeCompare(b.label) || a.id.localeCompare(b.id)); }
 
 export const useRuntimeContextStore = defineStore('runtimeContext', {
-  state: () => ({ status: '' }),
+  state: (): RuntimeContextStoreState => ({ status: '' }),
   getters: {
     runtimePlaceholders(): PromptPlaceholderRecord[] {
       return sortPlaceholders(useClientStateStore().promptPlaceholders.filter((item) => item.target === 'runtimeContext'));
@@ -36,10 +48,31 @@ export const useRuntimeContextStore = defineStore('runtimeContext', {
       return clientState.runtimeContextSnapshots.find((item) => item.id === link?.runtimeContextSnapshotId);
     },
     setContextForScope(scopeKind: ConfigScopeKind, scopeId: string | undefined, template: string, name?: string): void {
+      const normalizedScopeId = scopeIdFor(scopeKind, scopeId);
+      if (scopeKind !== 'global' && !normalizedScopeId) {
+        this.status = '缺少运行时模板作用域，无法保存。';
+        return;
+      }
+
+      const normalizedTemplate = template.trim();
+      if (!normalizedTemplate) {
+        this.status = scopeKind === 'global'
+          ? '全局运行时模板不能为空。'
+          : '模板内容为空；若要继承上级配置，请点击“恢复继承”。';
+        return;
+      }
+
+      const requestedAt = Date.now();
+      this.pendingSave = {
+        scopeKind,
+        ...(normalizedScopeId ? { scopeId: normalizedScopeId } : {}),
+        template: normalizedTemplate,
+        requestedAt
+      };
       bridge.request(BridgeMessageType.RuntimeContextScopeSet, {
         scopeKind,
-        ...(scopeIdFor(scopeKind, scopeId) ? { scopeId: scopeIdFor(scopeKind, scopeId) } : {}),
-        template,
+        ...(normalizedScopeId ? { scopeId: normalizedScopeId } : {}),
+        template: normalizedTemplate,
         ...(name?.trim() ? { name: name.trim() } : {})
       });
       this.status = '正在保存运行时模板...';
@@ -48,7 +81,19 @@ export const useRuntimeContextStore = defineStore('runtimeContext', {
       if (scopeKind === 'global') return;
       const clientState = useClientStateStore();
       clientState.runtimeContextScopeLinks = clientState.runtimeContextScopeLinks.filter((link) => !matches(link, scopeKind, scopeId));
+      this.pendingSave = undefined;
+      this.status = '已恢复继承';
       bridge.request(BridgeMessageType.RuntimeContextScopeClear, { scopeKind, ...(scopeIdFor(scopeKind, scopeId) ? { scopeId: scopeIdFor(scopeKind, scopeId) } : {}) });
+    },
+    reconcilePendingSave(): void {
+      const pending = this.pendingSave;
+      if (!pending) return;
+      const local = this.localContextFor(pending.scopeKind, pending.scopeId);
+      if (!local.runtimeContext || !local.link) return;
+      if (local.runtimeContext.template.trim() !== pending.template) return;
+      if (local.link.updatedAt < pending.requestedAt) return;
+      this.pendingSave = undefined;
+      this.status = '运行时模板已同步';
     },
     refreshConversationSnapshot(conversationId?: string): void {
       if (!conversationId) return;

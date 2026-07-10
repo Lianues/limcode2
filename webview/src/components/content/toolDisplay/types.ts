@@ -2,6 +2,7 @@ import type { Component } from 'vue';
 import type {
   AgentRunSourceLinkRecord,
   AgentRunTargetLinkRecord,
+  AskUserToolRequestRecord,
   CheckpointRecord,
   CheckpointTimelineAnchorRecord,
   MessageRecord,
@@ -39,12 +40,18 @@ export interface ToolDisplaySection {
   rowStyle?: 'keyValue' | 'lineNumber';
   diff?: ToolDisplayDiff;
   taskList?: ToolDisplayTaskList;
+  askUser?: ToolDisplayAskUser;
 }
 
 export interface ToolDisplayTaskList {
   items: Array<TaskListItemView | TaskListChangeItemView>;
   showChange?: boolean;
   emptyText?: string;
+}
+
+export interface ToolDisplayAskUser {
+  request: AskUserToolRequestRecord;
+  toolCall?: ToolCallRecord;
 }
 
 export interface ToolDisplayContext {

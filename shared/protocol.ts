@@ -125,6 +125,7 @@ export enum BridgeMessageType {
   ToolChangeReject = 'tool.change.reject',
   ToolResultSubmit = 'tool.result.submit',
   ToolResultReject = 'tool.result.reject',
+  AskUserAnswerSubmit = 'askUser.answer.submit',
   CheckpointDiffOpen = 'checkpoint.diff.open',
   AttachmentOpen = 'attachment.open',
   AttachmentReload = 'attachment.reload',
@@ -293,6 +294,7 @@ export const TOOL_CALL_STATUSES = [
   'streaming',
   'queued',
   'awaiting_approval',
+  'awaiting_user_input',
   'executing',
   'awaiting_change_apply',
   'applying_change',
@@ -378,6 +380,7 @@ export interface ToolDefinitionSourceRecord {
 }
 
 export const TASK_LIST_TOOL_NAME = 'update_task_list';
+export const ASK_USER_TOOL_NAME = 'ask_user';
 export const SWITCH_WORK_ENVIRONMENT_TOOL_NAME = 'switch_work_environment';
 export const TRANSFER_TOOL_NAME = 'transfer';
 export const READ_TOOL_NAME = 'read';
@@ -422,6 +425,33 @@ export interface TaskListToolOutputRecord {
   kind: 'task_list.result';
   operation: TaskListToolOperationRecord;
   summary: string;
+}
+
+export interface AskUserOptionRecord {
+  label: string;
+  description?: string;
+}
+
+export interface AskUserToolRequestRecord {
+  question: string;
+  options: AskUserOptionRecord[];
+  /** false 为单选；true 为多选。模型省略该参数时按 false 处理。 */
+  multiple: boolean;
+}
+
+export interface AskUserAnswerRecord {
+  /** 选项在请求 options 数组中的索引；不要求模型生成额外选项 id。 */
+  selectedOptionIndexes: number[];
+  /** 自定义描述始终可用；多选时可以与预设选项同时提交。 */
+  customText?: string;
+}
+
+export interface AskUserToolOutputRecord {
+  kind: 'ask_user.result';
+  question: string;
+  multiple: boolean;
+  selectedOptions: AskUserOptionRecord[];
+  customText?: string;
 }
 
 export type LlmProviderKind = 'openai-compatible' | 'openai-responses' | 'claude' | 'gemini' | 'deepseek';
@@ -1977,6 +2007,10 @@ export interface ToolDecisionPayload {
   conversationId?: string;
   reason?: string;
 }
+export interface AskUserAnswerSubmitPayload {
+  toolCallId: string;
+  answer: AskUserAnswerRecord;
+}
 export interface ToolDiffOpenPayload {
   toolCallId: string;
   conversationId?: string;
@@ -2543,6 +2577,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ToolChangeReject, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ToolResultSubmit, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ToolResultReject, ToolDecisionPayload>
+  | BridgeEnvelope<BridgeMessageType.AskUserAnswerSubmit, AskUserAnswerSubmitPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointDiffOpen, CheckpointDiffOpenPayload>
   | BridgeEnvelope<BridgeMessageType.AttachmentOpen, AttachmentOpenPayload>
   | BridgeEnvelope<BridgeMessageType.AttachmentReload, AttachmentReloadPayload>

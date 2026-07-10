@@ -11,6 +11,7 @@ import type {
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { bridge, BridgeMessageType } from '@webview/transport';
+import AskUserContent from '@webview/components/askUser/AskUserContent.vue';
 import TaskListDisplay from '@webview/components/taskList/TaskListDisplay.vue';
 import { resolveToolDisplay } from '../toolDisplay/registry';
 import { parseShellArgs, parseShellResultOutput } from '../toolDisplay/shellToolModel';
@@ -112,6 +113,7 @@ const canCancel = computed(() => {
   if (!call) return false;
   switch (call.status) {
     case 'queued':
+    case 'awaiting_user_input':
     case 'executing':
     case 'applying_change':
       return true;
@@ -322,6 +324,7 @@ function labelForStatus(status: ToolCallStatus): string {
     streaming: '正在生成工具调用',
     queued: '等待调度执行',
     awaiting_approval: '等待批准执行',
+    awaiting_user_input: '等待用户回答',
     executing: '工具执行中',
     awaiting_change_apply: '等待应用更改',
     applying_change: '正在应用更改',
@@ -473,6 +476,13 @@ function isInternalApprovalProgress(progress: unknown): boolean {
           :show-change="section.taskList.showChange ?? false"
           :empty-text="section.taskList.emptyText"
         />
+        <AskUserContent
+          v-if="section.askUser"
+          class="tool-display-ask-user"
+          :request="section.askUser.request"
+          :tool-call="section.askUser.toolCall"
+          placement="tool-detail"
+        />
       </ContentBlockSection>
       <ContentBlockSection
         v-for="(section, index) in outputSections"
@@ -495,6 +505,13 @@ function isInternalApprovalProgress(progress: unknown): boolean {
           :items="section.taskList.items"
           :show-change="section.taskList.showChange ?? false"
           :empty-text="section.taskList.emptyText"
+        />
+        <AskUserContent
+          v-if="section.askUser"
+          class="tool-display-ask-user"
+          :request="section.askUser.request"
+          :tool-call="section.askUser.toolCall"
+          placement="tool-detail"
         />
       </ContentBlockSection>
       <p v-if="toolCall?.error" class="part-card-error">{{ toolCall.error }}</p>

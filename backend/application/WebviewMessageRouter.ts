@@ -208,6 +208,10 @@ export class WebviewMessageRouter {
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ToolEventType.ResultRejectRequested, payload: message.payload });
         break;
+      case BridgeMessageType.AskUserAnswerSubmit:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: ToolEventType.AskUserAnswerSubmitted, payload: message.payload });
+        break;
       case BridgeMessageType.AgentRunCancel:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: AgentRunEventType.Cancel, payload: message.payload });

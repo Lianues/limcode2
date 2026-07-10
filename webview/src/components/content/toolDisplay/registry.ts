@@ -2,6 +2,7 @@ import type { Component } from 'vue';
 import {
   IconBook,
   IconFileDescription,
+  IconMessageQuestion,
   IconPencil,
   IconPlaylistAdd,
   IconSwitch,
@@ -13,6 +14,7 @@ import {
   IconWriting
 } from '@tabler/icons-vue';
 import {
+  ASK_USER_TOOL_NAME,
   DELETE_TOOL_NAME,
   EDIT_TOOL_NAME,
   READ_AGENT_ANSWER_TOOL_NAME,
@@ -25,6 +27,7 @@ import {
   WRITE_TOOL_NAME
 } from '@shared/protocol';
 import { readAgentAnswerToolDisplay, submitAgentAnswerToolDisplay } from './agentAnswerToolDisplay';
+import { askUserToolDisplay } from './askUserToolDisplay';
 import { deleteToolDisplay, editToolDisplay, writeToolDisplay } from './fileChangeToolDisplay';
 import { readFileToolDisplay } from './readFileToolDisplay';
 import { runAgentToolDisplay } from './runAgentToolDisplay';
@@ -37,6 +40,7 @@ import type { ToolDisplayContext, ToolDisplayResolver, ToolDisplayResult, ToolDi
 
 const TOOL_DISPLAY_RESOLVERS: Record<string, ToolDisplayResolver> = {
   [TASK_LIST_TOOL_NAME]: taskListToolDisplay,
+  [ASK_USER_TOOL_NAME]: askUserToolDisplay,
   [READ_TOOL_NAME]: readFileToolDisplay,
   [EDIT_TOOL_NAME]: editToolDisplay,
   [WRITE_TOOL_NAME]: writeToolDisplay,
@@ -53,6 +57,7 @@ const TOOL_DISPLAY_RESOLVERS: Record<string, ToolDisplayResolver> = {
 
 const TOOL_HEADER_ICONS: Record<string, Component> = {
   [TASK_LIST_TOOL_NAME]: IconPlaylistAdd,
+  [ASK_USER_TOOL_NAME]: IconMessageQuestion,
   [READ_TOOL_NAME]: IconFileDescription,
   [EDIT_TOOL_NAME]: IconPencil,
   [WRITE_TOOL_NAME]: IconWriting,

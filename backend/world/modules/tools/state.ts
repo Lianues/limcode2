@@ -13,8 +13,9 @@ export interface ToolStateTransitionPayload {
 
 const VALID_TRANSITIONS: Record<ToolCallStatus, readonly ToolCallStatus[]> = {
   streaming: ['queued', 'error'],
-  queued: ['awaiting_approval', 'executing', 'error'],
-  awaiting_approval: ['executing', 'error'],
+  queued: ['awaiting_approval', 'awaiting_user_input', 'executing', 'error'],
+  awaiting_approval: ['awaiting_user_input', 'executing', 'error'],
+  awaiting_user_input: ['success', 'error'],
   executing: ['executing', 'awaiting_approval', 'awaiting_change_apply', 'success', 'warning', 'error'],
   awaiting_change_apply: ['applying_change', 'change_rejected', 'error'],
   applying_change: ['applying_change', 'change_applied', 'change_rejected', 'error'],

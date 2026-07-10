@@ -111,15 +111,17 @@ export function runByAnswerBridgeId(world: WorldReader, answerBridgeId: string):
 export function conversationForAnswerBridgeId(
   world: WorldReader,
   answerBridgeId: string
-): { conversation: Entity; agent?: Entity; hasActiveRun: boolean } | undefined {
+): { conversation: Entity; agent?: Entity; activeRuns: Entity[]; hasActiveRun: boolean } | undefined {
   const source = latestAnswerBridgeSourceById(world, answerBridgeId);
   if (!source) return undefined;
   const target = runTarget(world, source.run);
   if (!target) return undefined;
+  const activeRuns = activeRunsForConversation(world, target.conversation);
   return {
     conversation: target.conversation,
     agent: target.agent,
-    hasActiveRun: conversationHasActiveRun(world, target.conversation)
+    activeRuns,
+    hasActiveRun: activeRuns.length > 0
   };
 }
 
@@ -167,14 +169,18 @@ function compareAnswerBridgeSourcesByNewest(left: AgentRunSourceLinkData, right:
     || right.id.localeCompare(left.id);
 }
 
+/** Return every run in the conversation that is not in a terminal state (queued/preparing/running/… ). */
+export function activeRunsForConversation(world: WorldReader, conversation: Entity): Entity[] {
+  return world.query(AgentRunTargetLink)
+    .map((entity) => world.get(entity, AgentRunTargetLink))
+    .filter((link): link is NonNullable<typeof link> => !!link && link.conversation === conversation)
+    .map((link) => link.run)
+    .filter((run, index, runs) => runs.indexOf(run) === index && !isTerminalRunStatus(world.get(run, AgentRun)?.status ?? 'completed'));
+}
+
 /** True when the conversation has any run that is not in a terminal state (queued/preparing/running/… ). */
 export function conversationHasActiveRun(world: WorldReader, conversation: Entity): boolean {
-  return world.query(AgentRunTargetLink).some((entity) => {
-    const link = world.get(entity, AgentRunTargetLink);
-    if (!link || link.conversation !== conversation) return false;
-    const status = world.get(link.run, AgentRun)?.status;
-    return status !== undefined && !isTerminalRunStatus(status);
-  });
+  return activeRunsForConversation(world, conversation).length > 0;
 }
 
 export function runForToolCall(world: WorldReader, toolCall: Entity): Entity | undefined {

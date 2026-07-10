@@ -1,4 +1,4 @@
-import type { ToolCallEventKind, ToolCallStatus, ToolDecisionPayload, ToolPolicyScopeClearPayload, ToolPolicyScopeSetPayload } from '../../../../shared/protocol';
+import type { AskUserAnswerSubmitPayload, ToolCallEventKind, ToolCallStatus, ToolDecisionPayload, ToolPolicyScopeClearPayload, ToolPolicyScopeSetPayload } from '../../../../shared/protocol';
 
 export const ToolEventType = {
   State: 'tool:state',
@@ -10,7 +10,8 @@ export const ToolEventType = {
   ChangeApplyRequested: 'tool:changeApplyRequested',
   ChangeRejectRequested: 'tool:changeRejectRequested',
   ResultSubmitRequested: 'tool:resultSubmitRequested',
-  ResultRejectRequested: 'tool:resultRejectRequested'
+  ResultRejectRequested: 'tool:resultRejectRequested',
+  AskUserAnswerSubmitted: 'tool:askUserAnswerSubmitted'
 } as const;
 
 export interface ToolStatePayload {
@@ -36,5 +37,6 @@ declare module '@backend/world/events' {
     'tool:changeRejectRequested': ToolDecisionPayload;
     'tool:resultSubmitRequested': ToolDecisionPayload;
     'tool:resultRejectRequested': ToolDecisionPayload;
+    'tool:askUserAnswerSubmitted': AskUserAnswerSubmitPayload;
   }
 }

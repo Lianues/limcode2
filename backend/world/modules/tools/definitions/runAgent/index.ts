@@ -24,7 +24,14 @@ Usage:
 - Use mode="interrupt" with answerBridgeId to interrupt the active Run in that child conversation and recursively cancel all descendant child AgentRuns, including already-backgrounded descendants. Interrupt mode does not require prompt or foregroundWaitMs.
 - agent.id is a compatibility selector for a temporary Agent mirror previously returned by run_agent. Prefer answerBridgeId. agent.id is not an Agent type/configuration id and fails when the mirror cannot be found.
 - In run mode, put the complete task, background, role, and supplemental instructions in prompt. Separate context, conversation, and delivery parameters are not supported.
-- In run mode, foregroundWaitMs is the foreground wait budget in milliseconds, not an AgentRun termination timeout. Use 0 to background immediately. When the budget expires, the AgentRun continues in the background and the tool returns agentId, runId, conversationId, and answerBridgeId.`,
+- In run mode, foregroundWaitMs is the foreground wait budget in milliseconds, not an AgentRun termination timeout. Use 0 to background immediately. When the budget expires, the AgentRun continues in the background and the tool returns agentId, runId, conversationId, and answerBridgeId.
+
+IMPORTANT - Background execution behavior:
+When a child Agent is executed in the background (foregroundWaitMs budget expires, or foregroundWaitMs=0), you MUST NOT attempt to perform the delegated task yourself or continue working on it — the child agent is handling it.
+
+You have two options instead:
+1. Respond to the user with a concise waiting message and end your current response, letting the child agent's result come back through the delivery policy (tool_response, notification, or append_to_source_conversation).
+2. Continue doing other independent work that does NOT require the child agent's answer — i.e., work that you can fully complete without waiting for the child agent's result.`,
     parameters: {
       type: 'object',
       properties: {

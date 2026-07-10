@@ -65,7 +65,7 @@ export function createDefaultAgentBlueprints(): BuiltinAgentRegistry {
         id: 'main',
         kind: 'main',
         name: 'LimCode Agent',
-        description: '日常对话和开发协作的默认 Agent。',
+        description: 'General-purpose Agent for daily conversation and development collaboration.',
         systemPrompt: DEFAULT_SYSTEM_PROMPT,
         toolPolicy: { name: 'Main Agent Tools', allowedTools: DEFAULT_TOOLS, toolConfigs: DEFAULT_TOOL_CONFIGS }
       },
@@ -73,7 +73,7 @@ export function createDefaultAgentBlueprints(): BuiltinAgentRegistry {
         id: 'worker',
         kind: 'worker',
         name: 'Worker Agent',
-        description: '可执行多步工具操作的通用工作 Agent。',
+        description: 'General-purpose worker Agent capable of multi-step tool operations.',
         systemPrompt: 'You are a peer LimCode worker agent. Complete assigned implementation or investigation tasks independently, use tools when useful, and report concise results with important details.',
         toolPolicy: { name: 'Worker Agent Tools', allowedTools: DEFAULT_TOOLS, toolConfigs: DEFAULT_TOOL_CONFIGS }
       },
@@ -81,16 +81,16 @@ export function createDefaultAgentBlueprints(): BuiltinAgentRegistry {
         id: 'explore',
         kind: 'explore',
         name: 'Explore Agent',
-        description: '只读搜索、阅读和分析代码的 Agent。',
+        description: 'Read-only Agent for searching, reading, and analyzing code.',
         systemPrompt: 'You are a read-only exploration agent. Inspect code, run safe read-only commands, and report findings. Do not modify files.',
         toolPolicy: { name: 'Explore Agent Tools', allowedTools: READONLY_TOOLS, toolConfigs: DEFAULT_TOOL_CONFIGS }
       },
       reviewer: {
         id: 'reviewer',
         kind: 'reviewer',
-        name: 'Code Reviewer',
-        description: '审查代码、风险和维护性问题的 Agent。',
-        systemPrompt: 'Review code and point out risks, bugs, and maintainability issues. Do not modify files unless explicitly requested.',
+        name: 'Reviewer',
+        description: 'Review code, design, risks, bugs, and maintainability issues. Only use when you are uncertain about the consequences of changes — skip trivial/small modifications and changes you are confident about.',
+        systemPrompt: 'Review code, design, risks, bugs, and maintainability issues. Do not modify files unless explicitly requested. Only use this reviewer when you are uncertain about the consequences of changes — skip trivial/small modifications and changes you are confident about.',
         toolPolicy: { name: 'Reviewer Agent Tools', allowedTools: READONLY_TOOLS, toolConfigs: DEFAULT_TOOL_CONFIGS }
       }
     },
@@ -98,25 +98,25 @@ export function createDefaultAgentBlueprints(): BuiltinAgentRegistry {
       default: {
         id: 'default',
         name: 'Default',
-        description: '默认交互模式，尽量少加额外约束。'
+        description: 'Default interaction mode with minimal extra constraints.'
       },
       plan: {
         id: 'builtin:plan',
         name: 'Plan',
-        description: '先规划、分析和拆解任务，再执行后续实现。',
+        description: 'Plan first: analyze requirements, identify risks, and decompose tasks before implementation.',
         systemPrompt: 'Plan first. Analyze requirements, identify risks, and present a concise implementation plan before making large changes.'
       },
       review: {
         id: 'builtin:review',
         name: 'Review',
-        description: '以代码审查方式输出风险、问题和建议。',
+        description: 'Review mode: assess risks, correctness, regressions, security, and maintainability.',
         systemPrompt: 'Act in review mode. Focus on correctness, risks, regressions, security, maintainability, and concrete improvement suggestions.',
         toolPolicy: { name: 'Review Mode Tool Narrowing', allowedTools: READONLY_TOOLS, toolConfigs: DEFAULT_TOOL_CONFIGS }
       },
       readonly: {
         id: 'builtin:readonly',
         name: 'Read Only',
-        description: '只读探索模式，会收窄到只读工具。',
+        description: 'Read-only exploration mode with tool narrowing to read-only tools.',
         systemPrompt: 'Use read-only exploration. Do not modify files or execute destructive commands.',
         toolPolicy: { name: 'Read Only Mode Tools', allowedTools: READONLY_TOOLS, toolConfigs: DEFAULT_TOOL_CONFIGS }
       }

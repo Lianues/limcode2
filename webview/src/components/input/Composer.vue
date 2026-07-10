@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { IconFolder, IconListDetails, IconPaperclip, IconPencilExclamation, IconPlayerStop, IconRobot, IconSend2, IconTrash, IconWorld } from '@tabler/icons-vue';
 import { workEnvironmentDisplayPath, workEnvironmentSortKey as buildWorkEnvironmentSortKey } from '@shared/workEnvironmentCatalog';
-import type { AgentRecord, InlineDataPart, LlmProviderConfigRecord, LlmProviderModelRecord, MessageContent, WorkEnvironmentRecord } from '@shared/protocol';
+import { ASK_USER_TOOL_NAME, type AgentRecord, type InlineDataPart, type LlmProviderConfigRecord, type LlmProviderModelRecord, type MessageContent, type WorkEnvironmentRecord } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
@@ -15,6 +15,7 @@ import { useModelProfileStore } from '@webview/stores/useModelProfileStore';
 import { useCompression } from '@webview/composables/useCompression';
 import { useChat } from '@webview/composables/useChat';
 import RichContentEditor from '@webview/components/content/RichContentEditor.vue';
+import AskUserTopPanel from '@webview/components/askUser/AskUserTopPanel.vue';
 import QueuePanel, { type QueueItem } from '@webview/components/input/QueuePanel.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
 import SettingsSelectableList, { type SettingsSelectableListItem } from '@webview/components/settings/global/SettingsSelectableList.vue';
@@ -65,8 +66,14 @@ const draft = computed({
   get: () => ui.composerDraft,
   set: (next: string) => ui.setComposerDraft(next)
 });
+const hasPendingAskUser = computed(() => conversationTimeline.currentTimeline.state.toolCalls.some(
+  (call) => call.name === ASK_USER_TOOL_NAME && call.status === 'awaiting_user_input'
+));
+const conversationInputDisabled = computed(() => props.disabled || hasPendingAskUser.value);
+const effectivePlaceholder = computed(() => hasPendingAskUser.value ? '请先回答上方问题' : props.placeholder);
 const expandTitle = computed(() => (editorExpanded.value ? '恢复输入框高度' : '扩大输入框'));
 const sendTitle = computed(() => {
+  if (hasPendingAskUser.value) return '请先回答上方问题';
   if (ui.isEditing) return '提交编辑';
   return runSummary.value.isRunning ? '加入消息队列，下次 LLM 调用时合并发送' : '发送';
 });
@@ -193,7 +200,7 @@ function onWindowResize(): void {
 
 function submit(): void {
   const text = draft.value.trim();
-  if ((!text && selectedAttachments.value.length === 0) || props.disabled) return;
+  if ((!text && selectedAttachments.value.length === 0) || conversationInputDisabled.value) return;
   const content = buildMessageContent(text, selectedAttachments.value);
   emit('submit', text, content);
   selectedAttachments.value = [];
@@ -317,7 +324,7 @@ function onQueueResumeAll(): void {
 }
 
 function compactConversation(): void {
-  if (props.disabled) return;
+  if (conversationInputDisabled.value) return;
   compression.createCompression();
 }
 
@@ -550,6 +557,7 @@ function middleEllipsis(value: string, maxLength: number): string {
   <div class="composer" :class="{ 'is-editing': ui.isEditing, 'is-highlighted': highlighted, 'is-editor-expanded': editorExpanded }">
     <div class="composer-zone composer-zone-top" aria-label="输入框上方功能区">
       <div class="composer-top-main">
+        <AskUserTopPanel />
         <QueuePanel
           @edit="onQueueEdit"
           @delete="onQueueDelete"
@@ -598,8 +606,8 @@ function middleEllipsis(value: string, maxLength: number): string {
           ref="editor"
           v-model="draft"
           class="composer-editor"
-          :placeholder="ui.isEditing ? (ui.editingQueueRunId ? '编辑排队消息内容...' : '编辑消息内容...') : placeholder"
-          :disabled="disabled"
+          :placeholder="ui.isEditing ? (ui.editingQueueRunId ? '编辑排队消息内容...' : '编辑消息内容...') : effectivePlaceholder"
+          :disabled="conversationInputDisabled"
           :rows="5"
           @submit="submit"
           @paste-files="onPasteFiles"
@@ -664,7 +672,7 @@ function middleEllipsis(value: string, maxLength: number): string {
           class="composer-side-action"
           aria-label="添加附件"
           title="添加图片、PDF、文本、音频或视频附件"
-          :disabled="disabled"
+          :disabled="conversationInputDisabled"
           @click="openFilePicker"
         >
           <IconPaperclip class="composer-side-action-icon" stroke="2" aria-hidden="true" />
@@ -781,7 +789,7 @@ function middleEllipsis(value: string, maxLength: number): string {
         type="button"
         class="composer-compact"
         :class="{ 'is-compacting': compacting }"
-        :disabled="disabled || (!compacting && conversationTimeline.currentMessages.length < 2)"
+        :disabled="conversationInputDisabled || (!compacting && conversationTimeline.currentMessages.length < 2)"
         aria-label="压缩上下文"
         :title="compactTitle"
         @click="compactConversation"
@@ -794,7 +802,7 @@ function middleEllipsis(value: string, maxLength: number): string {
       <button
         type="button"
         class="composer-send"
-        :disabled="disabled || !hasDraftContent"
+        :disabled="conversationInputDisabled || !hasDraftContent"
         :aria-label="sendTitle"
         :title="sendTitle"
         @click="submit"

@@ -21,7 +21,7 @@ import { isTerminalToolStatus, toolStateToResponse, transitionToolState } from '
 import { simplifyToolResponseForModel } from '../responseSimplifier';
 import { readEvents } from '../../../events';
 import type { ContentPart, InlineDataPart, LlmInvocationSettingsSnapshotRecord, ToolCallStatus } from '../../../../../shared/protocol';
-import { isFunctionResponsePart, isInlineDataPart } from '../../../../../shared/protocol';
+import { ASK_USER_TOOL_NAME, isFunctionResponsePart, isInlineDataPart } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
 import { CompressionBlock } from '../../compression/components';
 import { CompressionEventType } from '../../compression/events';
@@ -218,7 +218,8 @@ export const ToolResultSystem = defineSystem({
 
 /**
  * 本回合（run 最新一条 model 消息下）的工具调用是否全部被用户手动中断。
- * “被用户中断”= 结果里带 interrupted 标记（interruptToolCall 写入的 { interrupted: true }）。
+ * “被用户中断”= 工具以 error 收尾，且结果是 interruptToolCall 写入的
+ * { ok: false, interrupted: true }。成功工具可能描述“目标已被中断”，不能只按字段名判断。
  * 用于：AI 一次输出的多个工具若被逐个中断完，就不再自动进入下一轮 LLM。
  */
 function allCurrentTurnToolCallsUserInterrupted(world: WorldReader, run: Entity): boolean {
@@ -235,9 +236,11 @@ function allCurrentTurnToolCallsUserInterrupted(world: WorldReader, run: Entity)
 }
 
 function isUserInterruptedToolState(state: ToolStateData | undefined): boolean {
-  if (!state) return false;
+  if (!state || state.status !== 'error') return false;
   const result = state.result;
-  return !!result && typeof result === 'object' && !Array.isArray(result) && (result as { interrupted?: unknown }).interrupted === true;
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return false;
+  const record = result as { ok?: unknown; interrupted?: unknown };
+  return record.ok === false && record.interrupted === true;
 }
 
 function latestModelMessageForRun(world: WorldReader, run: Entity): Entity | undefined {
@@ -303,7 +306,8 @@ function maybeEnqueueAutoCompressionAfterToolResponses(
 }
 
 function requiresResultSubmitApproval(world: WorldReader, run: Entity, toolName: string, state: ToolStateData): boolean {
-  if (hasResultSubmitDecision(state)) return false;
+  // ask_user 的用户提交动作本身就是明确确认，不再叠加通用“结果回传”审批。
+  if (toolName === ASK_USER_TOOL_NAME || hasResultSubmitDecision(state)) return false;
   const policy = activeToolPolicyForRun(world, run);
   if (isYoloToolPolicy(policy)) return false;
   return policy?.toolConfigs?.[toolName]?.autoSubmitResult === false;

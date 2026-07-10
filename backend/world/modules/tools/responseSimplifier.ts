@@ -1,4 +1,6 @@
+import { askUserOutputFromResult } from '../../../../shared/askUser';
 import {
+  ASK_USER_TOOL_NAME,
   DELETE_TOOL_NAME,
   EDIT_TOOL_NAME,
   READ_TOOL_NAME,
@@ -40,6 +42,8 @@ export function simplifyToolResponseForModel(toolName: string, status: ToolCallS
       return simplifyTransferResponse(value);
     case TASK_LIST_TOOL_NAME:
       return isError ? errorResponse(value) : { ok: true };
+    case ASK_USER_TOOL_NAME:
+      return isError ? errorResponse(value) : simplifyAskUserResponse(value);
     case SWITCH_WORK_ENVIRONMENT_TOOL_NAME:
       return isError ? errorResponse(value) : simplifySwitchWorkEnvironmentResponse(value);
     case 'run_agent':
@@ -145,6 +149,18 @@ function simplifyTransferResponse(value: unknown): JsonRecord {
   return withOkFallback(pickDefined({
     results: entries.length > 0 ? entries : undefined
   }), 'success');
+}
+
+function simplifyAskUserResponse(value: unknown): JsonRecord {
+  const output = askUserOutputFromResult(value);
+  if (!output) return simplifyGenericSuccess(value);
+  const answers = [
+    ...output.selectedOptions.map((option) => option.label),
+    ...(output.customText ? [output.customText] : [])
+  ];
+  return output.multiple
+    ? { answers }
+    : { answer: answers[0] };
 }
 
 function simplifySwitchWorkEnvironmentResponse(value: unknown): JsonRecord {

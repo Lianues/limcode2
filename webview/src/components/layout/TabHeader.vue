@@ -245,6 +245,7 @@ function toolCallStatusLabel(status: ToolCallStatus): string {
     case 'streaming': return '正在生成';
     case 'queued': return '等待调度';
     case 'awaiting_approval': return '等待批准';
+    case 'awaiting_user_input': return '等待用户回答';
     case 'executing': return '执行中';
     case 'awaiting_change_apply': return '等待应用更改';
     case 'applying_change': return '应用更改中';

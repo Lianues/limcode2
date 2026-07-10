@@ -1,8 +1,11 @@
 import { IconFileDescription } from '@tabler/icons-vue';
 import type { ToolDisplayContext, ToolDisplayResolver, ToolDisplaySection } from './types';
 
+type ReadFileMode = 'text' | 'attachment';
+
 interface ReadFileArgs {
   path?: string;
+  mode?: ReadFileMode;
   startLine?: number;
   endLine?: number;
 }
@@ -19,6 +22,8 @@ interface ReadFileOutputRecord {
   totalLines?: number;
   lines?: unknown;
   content?: unknown;
+  mimeType?: unknown;
+  sizeBytes?: unknown;
 }
 
 export const readFileToolDisplay: ToolDisplayResolver = (context) => {
@@ -39,7 +44,8 @@ function readFileInputSections(args: ReadFileArgs, context: ToolDisplayContext):
 
   const rows = parameterRows([
     { label: 'path', value: path },
-    { label: 'lines', value: lineRangeText(args.startLine, args.endLine) }
+    { label: 'mode', value: args.mode ?? 'text' },
+    { label: 'lines', value: args.mode === 'attachment' ? undefined : lineRangeText(args.startLine, args.endLine) }
   ]);
 
   return rows.length > 0
@@ -51,9 +57,15 @@ function readFileOutputSections(args: ReadFileArgs, context: ToolDisplayContext)
   if (context.result === undefined) return undefined;
 
   const output = toolOutput(context.result);
-  const path = normalizePath(outputRecord(output)?.path) || normalizePath(args.path);
+  const record = outputRecord(output);
+  const path = normalizePath(record?.path) || normalizePath(args.path);
+  const mode: ReadFileMode = attachmentOutput(record) ? 'attachment' : args.mode ?? 'text';
+  const modeSuffix = `[${mode}]`;
+  const rangeSuffix = mode === 'attachment'
+    ? ''
+    : lineRangeSuffix(record?.startLine ?? args.startLine, record?.endLine ?? args.endLine);
   const title = path
-    ? `读取结果 · ${path}${lineRangeSuffix(outputRecord(output)?.startLine ?? args.startLine, outputRecord(output)?.endLine ?? args.endLine)}`
+    ? `读取结果 · ${path}${modeSuffix}${rangeSuffix}`
     : '读取结果';
 
   const section = readFileOutputSection(title, output);
@@ -67,6 +79,7 @@ function readFileArgs(value: unknown): ReadFileArgs {
   if (!record) return {};
   return {
     path: stringValue(record.path),
+    mode: readFileMode(record.mode),
     startLine: numberValue(record.startLine),
     endLine: numberValue(record.endLine)
   };
@@ -85,6 +98,14 @@ function readFileOutputSection(title: string, output: unknown): ToolDisplaySecti
 
   const lines = lineRecords(record.lines);
   if (lines.length > 0) return { kind: 'output', title, rows: readLineRows(lines), rowStyle: 'lineNumber' };
+
+  if (attachmentOutput(record)) {
+    const rows = parameterRows([
+      { label: 'mimeType', value: stringValue(record.mimeType) },
+      { label: 'size', value: attachmentSizeText(record.sizeBytes) }
+    ]);
+    return rows.length > 0 ? { kind: 'output', title, rows, rowStyle: 'keyValue' } : undefined;
+  }
 
   return typeof record.content === 'string' ? { kind: 'output', title, text: record.content } : undefined;
 }
@@ -149,6 +170,19 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
+}
+
+function readFileMode(value: unknown): ReadFileMode | undefined {
+  return value === 'text' || value === 'attachment' ? value : undefined;
+}
+
+function attachmentOutput(record: ReadFileOutputRecord | undefined): boolean {
+  return typeof record?.mimeType === 'string' && typeof record?.sizeBytes === 'number';
+}
+
+function attachmentSizeText(value: unknown): string | undefined {
+  const size = numberValue(value);
+  return size === undefined ? undefined : `${size} bytes`;
 }
 
 function numberValue(value: unknown): number | undefined {

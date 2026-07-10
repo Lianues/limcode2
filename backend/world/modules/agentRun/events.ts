@@ -21,6 +21,8 @@ export type AgentRunControlEventPayload = AgentRunControlPayload;
 export interface AgentRunConversationControlEventPayload {
   conversationId: string;
   reason?: string;
+  /** 显式中断工具使用 true，递归取消所有后代 AgentRun；普通停止/强制发送默认保留已后台化子任务。 */
+  cascadeChildAgents?: boolean;
 }
 export interface AgentRunPromoteEventPayload {
   runId: string;

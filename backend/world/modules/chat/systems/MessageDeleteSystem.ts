@@ -252,7 +252,7 @@ function checkpointAnchorsForMessages(world: WorldReader, deletedMessages: Reado
   const result = new Set<Entity>();
   for (const entity of world.query(CheckpointTimelineAnchor)) {
     const anchor = world.get(entity, CheckpointTimelineAnchor);
-    if (anchor && deletedMessages.has(anchor.floorMessage)) result.add(entity);
+    if (anchor?.floorMessage !== undefined && deletedMessages.has(anchor.floorMessage)) result.add(entity);
   }
   return result;
 }

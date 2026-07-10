@@ -1,10 +1,12 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
 import { readEvents } from '../../../events';
 import { Conversation, InFlight, LlmRequest, Message, Streaming } from '../../chat/components';
-import { ToolCall, ToolState } from '../../tools/components';
-import { ToolCallEventBundle } from '../../tools/bundles';
+import { ToolCall, ToolResultConsumed, ToolState, type ToolCallData, type ToolStateData } from '../../tools/components';
+import { ToolCallEventBundle, spawnToolCallEvent } from '../../tools/bundles';
 import { interruptToolCall } from '../../tools/interrupt';
-import { isTerminalToolStatus } from '../../tools/state';
+import { activeExecutionBatchForRun } from '../../tools/scheduling';
+import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey } from '../../tools/resources';
+import { isTerminalToolStatus, transitionToolState } from '../../tools/state';
 import type { AgentRunEndReason, AgentRunErrorType, AgentRunKind, AgentRunQueueHoldReason, MessageContent, QueueInputUpdatePayload } from '../../../../../shared/protocol';
 import { AgentRunBundle, markRunNeedsModel, spawnAgentRun } from '../bundles';
 import { cleanupRunLlmRequests, type RunLlmCleanupReason } from '../llmRequestCleanup';
@@ -18,6 +20,7 @@ import {
   AgentRunTargetLink,
   RunContextPolicyLink,
   RunConversationPolicyLink,
+  RunDeliveryPolicy,
   RunDeliveryPolicyLink,
   RunEditPolicyLink,
   RunModeLink,
@@ -29,6 +32,10 @@ import {
 } from '../components';
 import { AgentRunEventType } from '../events';
 import { answerBridgeIdForConversation, childRunsForRun, isTerminalRunStatus, runSource, runTarget } from '../queries';
+import { RUN_AGENT_TOOL_NAME } from '../../tools/definitions/runAgent';
+import { activeWorkEnvironmentForRun } from '../../workEnvironment/queries';
+import { RunWorkEnvironmentLink, WorkEnvironment } from '../../workEnvironment/components';
+import { isRemoteServerWorkEnvironmentKind } from '../../../../../shared/workEnvironmentCatalog';
 
 const LifecycleRunsQuery = defineQuery({
   name: 'AgentRunLifecycle',
@@ -47,6 +54,7 @@ const LifecycleRunsQuery = defineQuery({
     Streaming,
     ToolCall,
     ToolState,
+    ToolResultConsumed,
     ToolCallRunLink,
     InFlight,
     RunModeLink,
@@ -55,11 +63,14 @@ const LifecycleRunsQuery = defineQuery({
     RunToolPolicyLink,
     RunConversationPolicyLink,
     RunContextPolicyLink,
+    RunDeliveryPolicy,
     RunDeliveryPolicyLink,
     RunEditPolicyLink,
+    RunWorkEnvironmentLink,
+    WorkEnvironment,
     Conversation
   ],
-  write: [AgentRun, AgentRunQueueHold, AgentRunQueueOrder, AgentRunQueuedInput, Message, ToolState],
+  write: [AgentRun, AgentRunQueueHold, AgentRunQueueOrder, AgentRunQueuedInput, Message, ToolState, RunDeliveryPolicy],
   remove: [AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunNeedsModel, Streaming, InFlight, LlmRequest],
   mutationMode: 'update',
   role: 'work'
@@ -69,6 +80,7 @@ export const AgentRunLifecycleSystem = defineSystem({
   name: 'AgentRunLifecycleSystem',
   access: {
     queries: [LifecycleRunsQuery],
+    resources: { read: [ToolDefinitionsKey, ToolRuntimeDefinitionsKey] },
     events: {
       read: [
         AgentRunEventType.Cancel,
@@ -87,7 +99,7 @@ export const AgentRunLifecycleSystem = defineSystem({
         AgentRunEventType.UpdateQueuedInput
       ]
     },
-    effects: { emit: ['llm.abort', 'tool.abort'] },
+    effects: { emit: ['llm.abort', 'tool.abort', 'tool.background'] },
     bundles: [AgentRunBundle, ToolCallEventBundle]
   },
   run(ctx) {
@@ -95,13 +107,19 @@ export const AgentRunLifecycleSystem = defineSystem({
 
     for (const payload of readEvents(ctx, AgentRunEventType.Cancel)) {
       const run = findRunById(world, payload.runId);
-      if (run !== undefined) cancelRunCascade(world, cmd, run, 'cancelled_by_user', payload.reason ?? 'Run cancelled by user.');
+      if (run !== undefined) {
+        cancelRunCascade(world, cmd, run, 'cancelled_by_user', payload.reason ?? 'Run cancelled by user.', new Set(), {
+          cascadeChildAgents: payload.cascadeChildAgents === true
+        });
+      }
     }
 
     for (const payload of readEvents(ctx, AgentRunEventType.CancelConversation)) {
       const seen = new Set<Entity>();
       for (const run of activeRunsForConversation(world, payload.conversationId)) {
-        cancelRunCascade(world, cmd, run, 'cancelled_by_user', payload.reason ?? 'Conversation active run cancelled.', seen);
+        cancelRunCascade(world, cmd, run, 'cancelled_by_user', payload.reason ?? 'Conversation active run cancelled.', seen, {
+          cascadeChildAgents: payload.cascadeChildAgents === true
+        });
       }
     }
 
@@ -213,10 +231,13 @@ function terminateRun(
   status: Extract<AgentRunData['status'], 'cancelled' | 'stale'>,
   endReason: AgentRunEndReason,
   errorType: AgentRunErrorType,
-  message: string
+  message: string,
+  options: { backgroundedToolCalls?: ReadonlySet<Entity> } = {}
 ): void {
   const data = world.get(run, AgentRun);
   if (!data || isTerminalRunStatus(data.status)) return;
+  const backgroundedToolCalls = options.backgroundedToolCalls
+    ?? (endReason === 'cancelled_by_user' ? backgroundForegroundWaitingToolsInActiveBatch(world, cmd, run) : new Set<Entity>());
   const now = Date.now();
   cmd.add(run, AgentRun, {
     ...data,
@@ -229,7 +250,7 @@ function terminateRun(
   });
   removeQueueArtifactsForRun(world, cmd, run);
   cleanupLlmRequests(world, cmd, run, cleanupReasonForEndReason(endReason));
-  failOpenToolCalls(world, cmd, run);
+  failOpenToolCalls(world, cmd, run, backgroundedToolCalls);
 }
 
 /**
@@ -237,23 +258,47 @@ function terminateRun(
  *
  * run_agent / shell 等工具一旦已经向父 run 返回“已后台执行/已完成工具响应”，工具状态就是终态；
  * 此后对应后台 Agent / 后台进程已经脱离当前对话的中断按钮，不应再被全局中断牵连。
- * 只有用户手速足够快、在 run_agent 工具调用尚未返回前点击中断时，sourceToolCall 仍是非终态，才级联取消子 Agent。
+ * 若它们仍在当前执行批次中前台等待，则先主动转后台再终止父 run；不在当前批次或尚未启动的工具仍按中断处理。
  */
+interface CancelRunCascadeOptions {
+  /** 显式终止子 Agent 树时，不把当前批次的 run_agent 转后台，并穿透已终态中间节点递归取消所有后代。 */
+  cascadeChildAgents: boolean;
+}
+
 function cancelRunCascade(
   world: WorldReader,
   cmd: CommandSink,
   run: Entity,
   endReason: AgentRunEndReason,
   message: string,
-  seen: Set<Entity> = new Set()
+  seen: Set<Entity> = new Set(),
+  options: CancelRunCascadeOptions = { cascadeChildAgents: false }
 ): void {
   if (seen.has(run)) return;
   seen.add(run);
-  // 先取子 run（terminateRun 不改结构关系，但先取更稳妥），再递归。
-  const children = childRunsForRun(world, run).filter((child) => shouldCascadeCancellationToChildRun(world, child));
-  terminateRun(world, cmd, run, 'cancelled', endReason, 'cancelled', message);
+  const data = world.get(run, AgentRun);
+  const runIsActive = !!data && !isTerminalRunStatus(data.status);
+  // 普通停止/插队：当前批次的 run_agent 先转后台并脱离父 Run。
+  // 显式 cancel-tree（run_agent interrupt / 单工具取消）：run_agent 不后台化，所有后代 AgentRun 都递归取消。
+  const backgroundedToolCalls = runIsActive
+    ? backgroundForegroundWaitingToolsInActiveBatch(world, cmd, run, { backgroundRunAgentTools: !options.cascadeChildAgents })
+    : new Set<Entity>();
+  const children: Entity[] = [];
+  for (const child of childRunsForRun(world, run)) {
+    if (options.cascadeChildAgents) {
+      children.push(child);
+      continue;
+    }
+    const sourceToolCall = runSource(world, child)?.sourceToolCall;
+    if (sourceToolCall !== undefined && backgroundedToolCalls.has(sourceToolCall)) {
+      seen.add(child);
+      continue;
+    }
+    if (shouldCascadeCancellationToChildRun(world, child)) children.push(child);
+  }
+  terminateRun(world, cmd, run, 'cancelled', endReason, 'cancelled', message, { backgroundedToolCalls });
   for (const child of children) {
-    cancelRunCascade(world, cmd, child, endReason, message, seen);
+    cancelRunCascade(world, cmd, child, endReason, message, seen, options);
   }
 }
 
@@ -479,7 +524,154 @@ function cleanupReasonForEndReason(endReason: AgentRunEndReason): RunLlmCleanupR
   }
 }
 
-function failOpenToolCalls(world: WorldReader, cmd: CommandSink, run: Entity): void {
+interface ForegroundRunAgentProgress {
+  runId?: string;
+  agentId?: string;
+  agentType?: string;
+  conversationId?: string;
+  answerBridgeId?: string;
+  foregroundWaitMs?: number;
+  startedAt?: number;
+}
+
+/**
+ * 仅后台化当前执行批次里已经启动、且具备前台等待语义的 shell/bash 与 run_agent。
+ * 不在 active batch 中的后续工具以及尚未启动的工具不会在这里执行，随后由 failOpenToolCalls 标记为中断。
+ */
+function backgroundForegroundWaitingToolsInActiveBatch(
+  world: WorldReader,
+  cmd: CommandSink,
+  run: Entity,
+  options: { backgroundRunAgentTools: boolean } = { backgroundRunAgentTools: true }
+): Set<Entity> {
+  const backgrounded = new Set<Entity>();
+  const batch = activeExecutionBatchForRun(world, run);
+  if (!batch) return backgrounded;
+
+  for (const entity of batch.calls) {
+    const call = world.get(entity, ToolCall);
+    const state = world.get(entity, ToolState);
+    if (!call || !state || state.status !== 'executing' || !world.has(entity, InFlight)) continue;
+
+    if (call.name === RUN_AGENT_TOOL_NAME) {
+      if (options.backgroundRunAgentTools && backgroundForegroundRunAgentTool(world, cmd, entity, call, state)) {
+        backgrounded.add(entity);
+      }
+      continue;
+    }
+
+    if ((call.name === 'shell' || call.name === 'bash') && isBackgroundableForegroundCommand(world, run, call)) {
+      cmd.effect({ kind: 'tool.background', toolCallId: call.id });
+      backgrounded.add(entity);
+    }
+  }
+
+  return backgrounded;
+}
+
+function isBackgroundableForegroundCommand(world: WorldReader, run: Entity, call: ToolCallData): boolean {
+  const args = parseToolArgs(call.argsJson);
+  const mode = args.mode === 'output' || args.mode === 'kill' ? args.mode : 'execute';
+  if (mode !== 'execute') return false;
+  const foregroundWaitMs = args.foregroundWaitMs;
+  if (typeof foregroundWaitMs !== 'number' || !Number.isFinite(foregroundWaitMs) || foregroundWaitMs < 0) return false;
+  const workEnvironment = activeWorkEnvironmentForRun(world, run)?.data;
+  return !workEnvironment || !isRemoteServerWorkEnvironmentKind(workEnvironment.kind);
+}
+
+function backgroundForegroundRunAgentTool(
+  world: WorldReader,
+  cmd: CommandSink,
+  entity: Entity,
+  call: ToolCallData,
+  state: ToolStateData
+): boolean {
+  const progress = foregroundRunAgentProgress(state.progress);
+  if (progress.foregroundWaitMs === undefined || progress.foregroundWaitMs < 0 || !progress.runId) return false;
+  const childRun = findRunById(world, progress.runId);
+  const childData = childRun !== undefined ? world.get(childRun, AgentRun) : undefined;
+  if (childRun === undefined || !childData || isTerminalRunStatus(childData.status)) return false;
+
+  setRunDeliveryToNotification(world, cmd, childRun);
+  const now = Date.now();
+  const startedAt = progress.startedAt ?? call.createdAt;
+  const durationMs = Math.max(0, now - startedAt);
+  const result = {
+    ok: true,
+    status: 'backgrounded',
+    reason: 'parent_run_interrupted',
+    ...(progress.agentId ? { agentId: progress.agentId } : {}),
+    ...(progress.agentType ? { agentType: progress.agentType } : {}),
+    runId: progress.runId,
+    ...(progress.conversationId ? { conversationId: progress.conversationId } : {}),
+    ...(progress.answerBridgeId ? { answerBridgeId: progress.answerBridgeId } : {}),
+    message: '父 AgentRun 即将中断，子 AgentRun 已立即转入后台继续执行。'
+  };
+  cmd.add(entity, ToolState, transitionToolState(state, 'success', { result, durationMs }, now));
+  cmd.remove(entity, InFlight);
+  spawnToolCallEvent(cmd, {
+    toolCall: entity,
+    toolCallId: call.id,
+    kind: 'completed',
+    status: 'success',
+    at: now,
+    elapsedMs: Math.max(0, now - call.createdAt),
+    durationMs,
+    payload: result
+  });
+  return true;
+}
+
+function foregroundRunAgentProgress(value: unknown): ForegroundRunAgentProgress {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const record = value as Record<string, unknown>;
+  return {
+    runId: typeof record.runId === 'string' ? record.runId : undefined,
+    agentId: typeof record.agentId === 'string' ? record.agentId : undefined,
+    agentType: typeof record.agentType === 'string' ? record.agentType : undefined,
+    conversationId: typeof record.conversationId === 'string' ? record.conversationId : undefined,
+    answerBridgeId: typeof record.answerBridgeId === 'string' ? record.answerBridgeId : undefined,
+    foregroundWaitMs: typeof record.foregroundWaitMs === 'number' && Number.isFinite(record.foregroundWaitMs) ? record.foregroundWaitMs : undefined,
+    startedAt: typeof record.startedAt === 'number' && Number.isFinite(record.startedAt) ? record.startedAt : undefined
+  };
+}
+
+function setRunDeliveryToNotification(world: WorldReader, cmd: CommandSink, run: Entity): void {
+  const linkEntity = world.query(RunDeliveryPolicyLink).find((entity) => {
+    const link = world.get(entity, RunDeliveryPolicyLink);
+    return link?.run === run && link.role === 'active';
+  });
+  const link = linkEntity !== undefined ? world.get(linkEntity, RunDeliveryPolicyLink) : undefined;
+  const policy = link ? world.get(link.policy, RunDeliveryPolicy) : undefined;
+  if (link && policy) {
+    cmd.add(link.policy, RunDeliveryPolicy, { ...policy, mode: 'notification', includeTranscript: policy.includeTranscript ?? 'summary' });
+    return;
+  }
+
+  const now = Date.now();
+  const policyEntity = cmd.spawn();
+  cmd.add(policyEntity, RunDeliveryPolicy, { id: `run-interrupt-delivery:${run}:${policyEntity}`, mode: 'notification', includeTranscript: 'summary' });
+  const policyLink = cmd.spawn();
+  cmd.add(policyLink, RunDeliveryPolicyLink, {
+    id: `run-interrupt-delivery-link:${run}:${policyLink}`,
+    run,
+    policy: policyEntity,
+    role: 'active',
+    createdAt: now,
+    updatedAt: now
+  });
+}
+
+function parseToolArgs(argsJson: string): Record<string, unknown> {
+  try {
+    const value = argsJson ? JSON.parse(argsJson) : {};
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function failOpenToolCalls(world: WorldReader, cmd: CommandSink, run: Entity, backgroundedToolCalls: ReadonlySet<Entity> = new Set()): void {
   // ToolCallRunLink 是独立实体（toolCall/run 是其字段），不与 ToolCall/ToolState 同实体，
   // 因此必须先按 run 收集 toolCall 实体集合，再遍历工具调用——不能三组件同实体 query（永远为空）。
   const toolCallEntitiesInRun = new Set(
@@ -490,7 +682,7 @@ function failOpenToolCalls(world: WorldReader, cmd: CommandSink, run: Entity): v
       .filter((entity): entity is Entity => entity !== undefined)
   );
   for (const entity of world.query(ToolCall, ToolState)) {
-    if (!toolCallEntitiesInRun.has(entity)) continue;
+    if (!toolCallEntitiesInRun.has(entity) || backgroundedToolCalls.has(entity)) continue;
     const call = world.get(entity, ToolCall);
     const state = world.get(entity, ToolState);
     if (!call || !state) continue;

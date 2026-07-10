@@ -143,7 +143,7 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
       const deniedBy = firstMatchedCommandRule(commandText, config.denyCommands);
       if (deniedBy) return { ok: false, output: `命令已被工具策略黑名单拒绝：${deniedBy}` };
 
-      const result = await deps.command.run({ command: args.command, cwd: args.cwd, foregroundWaitMs: args.foregroundWaitMs }, {
+      const result = await deps.command.run({ command: args.command, cwd: args.cwd, foregroundWaitMs: args.foregroundWaitMs, executionId: ctx?.toolCallId }, {
         onEvent(event) {
           ctx?.emit({
             kind: event.kind,

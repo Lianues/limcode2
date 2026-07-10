@@ -1,8 +1,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { IconAdjustmentsAlt, IconEdit, IconListDetails, IconMessage, IconPlayerStop, IconRobot, IconSettings, IconTrash } from '@tabler/icons-vue';
-import type { ConversationHistoryPageInfo, OpenConversationPanelRecord } from '@shared/protocol';
+import { IconAdjustmentsAlt, IconChevronRight, IconEdit, IconListDetails, IconMessage, IconPlayerStop, IconRobot, IconSettings, IconTrash } from '@tabler/icons-vue';
+import type {
+  ConversationHistoryPageInfo,
+  ConversationHistoryPageRecord,
+  ConversationOriginLinkRecord,
+  OpenConversationPanelRecord
+} from '@shared/protocol';
 import { displayConversationTitle as formatConversationTitle } from '@shared/conversationTitle';
+import {
+  buildConversationHistoryForest,
+  flattenConversationHistoryForest,
+  selectConversationOriginLinks,
+  type ConversationHistoryTreeNode
+} from '@shared/conversationHistoryTree';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
@@ -24,10 +35,24 @@ interface ScopeOption {
   projectFolderUri?: string;
 }
 
+interface VisibleHistoryTreeNode {
+  entry: SidebarConversationHistoryEntry;
+  originLink?: ConversationOriginLinkRecord;
+  parentConversationId?: string;
+  depth: number;
+  visualDepth: number;
+  childCount: number;
+  hasChildren: boolean;
+  expanded: boolean;
+}
+
 const PAGE_SIZE = 50;
+const MAX_VISUAL_TREE_DEPTH = 8;
 const SCOPE_PAGE_SIZE = 3;
 const view = ref<SidebarView>('history');
 const entries = ref<SidebarConversationHistoryEntry[]>([]);
+const originLinks = ref<ConversationOriginLinkRecord[]>([]);
+const expandedConversationIds = ref<Set<string>>(new Set());
 const projectFolders = ref<ProjectFolderCandidateRecord[]>([]);
 const activeScopeKind = ref<SidebarHistoryScopeKind>('currentProject');
 const activeProjectFolderUri = ref<string | undefined>();
@@ -39,6 +64,10 @@ const renameTarget = ref<SidebarConversationHistoryEntry>();
 const deleteTarget = ref<SidebarConversationHistoryEntry>();
 const abortTarget = ref<SidebarConversationHistoryEntry>();
 const historyList = ref<HTMLElement | null>(null);
+const historyForest = computed(() => buildConversationHistoryForest(entries.value, originLinks.value));
+const originLinkByConversationId = computed(() => selectConversationOriginLinks(originLinks.value));
+const visibleHistoryNodes = computed(() => flattenVisibleHistoryNodes(historyForest.value, expandedConversationIds.value));
+const historyScrollbarRefreshKey = computed(() => `${entries.value.length}:${visibleHistoryNodes.value.length}`);
 const historyCountText = computed(() => {
   const total = pageInfo.value?.total ?? entries.value.length;
   const page = pageInfo.value ? `第 ${pageInfo.value.pageIndex + 1} 页` : '当前页';
@@ -121,12 +150,20 @@ const abortConfirmActions: ConfirmPanelAction[] = [
 ];
 
 let disposeMessages: (() => void) | undefined;
+let currentHistoryPageIdentity = '';
+let autoExpandedActiveConversationId: string | undefined;
 
 onMounted(() => {
   disposeMessages = onSidebarMessage((message) => {
     if (message.type !== SIDEBAR_MESSAGE.state) return;
     const nextScopeKind = message.activeScopeKind ?? activeScopeKind.value;
+    const nextPageIdentity = historyPageIdentity(message.history);
+    if (nextPageIdentity !== currentHistoryPageIdentity) {
+      currentHistoryPageIdentity = nextPageIdentity;
+      autoExpandedActiveConversationId = undefined;
+    }
     entries.value = Array.isArray(message.history?.entries) ? message.history.entries : [];
+    originLinks.value = Array.isArray(message.history?.originLinks) ? message.history.originLinks : [];
     pageInfo.value = message.history?.pageInfo;
     activeScopeKind.value = nextScopeKind;
     if (message.activeProjectFolderUri !== undefined) activeProjectFolderUri.value = message.activeProjectFolderUri;
@@ -135,6 +172,7 @@ onMounted(() => {
     projectFolders.value = Array.isArray(message.projectFolders) ? message.projectFolders : [];
     openConversations.value = Array.isArray(message.openConversations) ? message.openConversations : [];
     ensureActiveScopeVisible();
+    ensureActiveConversationAncestorsExpanded();
   });
   postSidebarMessage({ type: SIDEBAR_MESSAGE.ready });
 });
@@ -257,10 +295,29 @@ function closeAbortDialog(): void {
   abortTarget.value = undefined;
 }
 
-function onHistoryItemKeydown(event: KeyboardEvent, entry: SidebarConversationHistoryEntry): void {
-  if (event.key !== 'Enter' && event.key !== ' ') return;
-  event.preventDefault();
-  openConversation(entry);
+function toggleHistoryNode(node: VisibleHistoryTreeNode): void {
+  if (!node.hasChildren) return;
+  const next = new Set(expandedConversationIds.value);
+  if (next.has(node.entry.id)) next.delete(node.entry.id);
+  else next.add(node.entry.id);
+  expandedConversationIds.value = next;
+}
+
+function onHistoryItemKeydown(event: KeyboardEvent, node: VisibleHistoryTreeNode): void {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    openConversation(node.entry);
+    return;
+  }
+  if (event.key === 'ArrowRight' && node.hasChildren && !node.expanded) {
+    event.preventDefault();
+    toggleHistoryNode(node);
+    return;
+  }
+  if (event.key === 'ArrowLeft' && node.hasChildren && node.expanded) {
+    event.preventDefault();
+    toggleHistoryNode(node);
+  }
 }
 
 function statusClass(entry: SidebarConversationHistoryEntry): string {
@@ -285,8 +342,9 @@ function historyMeta(entry: SidebarConversationHistoryEntry): string {
 }
 
 function originBadgeText(entry: SidebarConversationHistoryEntry): string | undefined {
-  if (entry.originKind === 'agent') return entry.originSourceKind === 'toolCall' ? 'AI 触发' : 'Agent 创建';
-  if (entry.originKind === 'system') return '系统创建';
+  const origin = originLinkByConversationId.value.get(entry.id);
+  if (origin?.originKind === 'agent') return origin.sourceKind === 'toolCall' ? 'AI 触发' : 'Agent 创建';
+  if (origin?.originKind === 'system') return '系统创建';
   return undefined;
 }
 
@@ -358,6 +416,71 @@ function ensureActiveScopeVisible(): void {
   if (index < 0) return;
   scopePageIndex.value = Math.floor(index / SCOPE_PAGE_SIZE);
 }
+
+function flattenVisibleHistoryNodes(
+  roots: readonly ConversationHistoryTreeNode[],
+  expandedIds: ReadonlySet<string>
+): VisibleHistoryTreeNode[] {
+  const result: VisibleHistoryTreeNode[] = [];
+  const append = (node: ConversationHistoryTreeNode, depth: number): void => {
+    const hasChildren = node.children.length > 0;
+    const expanded = hasChildren && expandedIds.has(node.entry.id);
+    result.push({
+      entry: node.entry,
+      ...(node.originLink ? { originLink: node.originLink } : {}),
+      ...(node.parentConversationId ? { parentConversationId: node.parentConversationId } : {}),
+      depth,
+      visualDepth: Math.min(depth, MAX_VISUAL_TREE_DEPTH),
+      childCount: node.children.length,
+      hasChildren,
+      expanded
+    });
+    if (!expanded) return;
+    for (const child of node.children) append(child, depth + 1);
+  };
+  for (const root of roots) append(root, 0);
+  return result;
+}
+
+function ensureActiveConversationAncestorsExpanded(): void {
+  const activeConversationId = openConversations.value.find((item) => item.active)?.conversationId;
+  if (!activeConversationId) {
+    autoExpandedActiveConversationId = undefined;
+    return;
+  }
+  if (activeConversationId === autoExpandedActiveConversationId) return;
+
+  const nodeById = new Map(
+    flattenConversationHistoryForest(historyForest.value).map((node) => [node.entry.id, node])
+  );
+  let node = nodeById.get(activeConversationId);
+  if (!node) return;
+  autoExpandedActiveConversationId = activeConversationId;
+
+  const next = new Set(expandedConversationIds.value);
+  let changed = false;
+  while (node.parentConversationId) {
+    if (!next.has(node.parentConversationId)) {
+      next.add(node.parentConversationId);
+      changed = true;
+    }
+    const parent = nodeById.get(node.parentConversationId);
+    if (!parent) break;
+    node = parent;
+  }
+  if (changed) expandedConversationIds.value = next;
+}
+
+function historyPageIdentity(history: ConversationHistoryPageRecord): string {
+  const scope = history.scope.kind === 'project'
+    ? `project:${history.scope.folderUri}`
+    : history.scope.kind;
+  return `${scope}:${history.pageInfo.cursor ?? history.pageInfo.pageIndex}`;
+}
+
+function historyNodeStyle(node: VisibleHistoryTreeNode): Record<string, string> {
+  return { '--history-tree-depth': String(node.visualDepth) };
+}
 </script>
 
 <template>
@@ -426,54 +549,85 @@ function ensureActiveScopeVisible(): void {
       </div>
 
       <div class="history-list-shell">
-        <div ref="historyList" class="history-list">
+        <div ref="historyList" class="history-list" role="tree" aria-label="分级对话历史">
           <div
-            v-for="entry in entries"
-            :key="entry.id"
+            v-for="node in visibleHistoryNodes"
+            :key="node.entry.id"
             class="history-item"
-            :class="[{ 'is-running': entry.isRunning }, openConversationClass(entry)]"
-            role="button"
+            :class="[
+              { 'is-running': node.entry.isRunning, 'is-tree-child': node.depth > 0 },
+              openConversationClass(node.entry)
+            ]"
+            :style="historyNodeStyle(node)"
+            role="treeitem"
             tabindex="0"
-            :aria-label="`打开对话：${displayConversationTitle(entry)}`"
-            @click="openConversation(entry)"
-            @keydown="onHistoryItemKeydown($event, entry)"
+            :data-conversation-id="node.entry.id"
+            :aria-level="node.depth + 1"
+            :aria-expanded="node.hasChildren ? node.expanded : undefined"
+            :aria-label="`打开对话：${displayConversationTitle(node.entry)}`"
+            @click="openConversation(node.entry)"
+            @keydown="onHistoryItemKeydown($event, node)"
           >
+            <span class="history-tree-guides" aria-hidden="true">
+              <span
+                v-for="level in node.visualDepth"
+                :key="level"
+                class="history-tree-guide"
+                :style="{ left: `${11 + (level - 1) * 16}px` }"
+              ></span>
+            </span>
             <span class="history-open-strip" aria-hidden="true"></span>
-            <div class="history-status" :aria-label="statusText(entry)">
-              <span class="status-dot" :class="statusClass(entry)" aria-hidden="true"></span>
-              <span class="history-status-tooltip" role="tooltip">{{ statusText(entry) }}</span>
+            <button
+              v-if="node.hasChildren"
+              type="button"
+              class="history-disclosure-button"
+              tabindex="-1"
+              :aria-label="`${node.expanded ? '折叠' : '展开'}“${displayConversationTitle(node.entry)}”的 ${node.childCount} 个子对话`"
+              @click.stop="toggleHistoryNode(node)"
+            >
+              <IconChevronRight
+                class="history-disclosure-icon lc-collapse-chevron"
+                :class="{ 'is-expanded': node.expanded }"
+                stroke="2"
+                aria-hidden="true"
+              />
+            </button>
+            <span v-else class="history-disclosure-placeholder" aria-hidden="true"></span>
+            <div class="history-status" :aria-label="statusText(node.entry)">
+              <span class="status-dot" :class="statusClass(node.entry)" aria-hidden="true"></span>
+              <span class="history-status-tooltip" role="tooltip">{{ statusText(node.entry) }}</span>
             </div>
             <div class="history-main">
               <div class="history-title-row">
-                <div class="history-title">{{ displayConversationTitle(entry) }}</div>
-                <span v-if="originBadgeText(entry)" class="origin-badge">{{ originBadgeText(entry) }}</span>
+                <div class="history-title">{{ displayConversationTitle(node.entry) }}</div>
+                <span v-if="originBadgeText(node.entry)" class="origin-badge">{{ originBadgeText(node.entry) }}</span>
               </div>
-              <div class="history-preview" :class="{ 'is-pending': entry.previewState === 'pending', 'is-empty': entry.previewState === 'empty' }">{{ entry.preview || '暂无消息，点击继续对话。' }}</div>
+              <div class="history-preview" :class="{ 'is-pending': node.entry.previewState === 'pending', 'is-empty': node.entry.previewState === 'empty' }">{{ node.entry.preview || '暂无消息，点击继续对话。' }}</div>
               <div class="history-meta">
-                <span>{{ historyMeta(entry) }}</span>
-                <span v-if="entry.isRunning" class="run-badge" :aria-label="`后台任务：${entry.runStatusLabel || '执行中'}`">
+                <span>{{ historyMeta(node.entry) }}</span>
+                <span v-if="node.entry.isRunning" class="run-badge" :aria-label="`后台任务：${node.entry.runStatusLabel || '执行中'}`">
                   <span class="run-badge-dot" aria-hidden="true"></span>
-                  <span>{{ entry.runStatusLabel || '执行中' }}</span>
+                  <span>{{ node.entry.runStatusLabel || '执行中' }}</span>
                 </span>
               </div>
             </div>
             <div class="history-actions" @click.stop @keydown.stop>
-              <button type="button" class="history-action-button" title="重命名对话标题" aria-label="重命名对话标题" @click="renameConversation(entry)">
+              <button type="button" class="history-action-button" title="重命名对话标题" aria-label="重命名对话标题" @click="renameConversation(node.entry)">
                 <IconEdit class="history-action-icon" stroke="2" aria-hidden="true" />
               </button>
-              <button type="button" class="history-action-button" title="删除对话" aria-label="删除对话" @click="deleteConversation(entry)">
+              <button type="button" class="history-action-button" title="删除对话" aria-label="删除对话" @click="deleteConversation(node.entry)">
                 <IconTrash class="history-action-icon" stroke="2" aria-hidden="true" />
               </button>
               <button
                 type="button"
                 class="history-action-button"
-                :class="{ 'is-hidden': !entry.isRunning }"
-                :disabled="!entry.isRunning"
-                :aria-hidden="!entry.isRunning"
-                :tabindex="entry.isRunning ? 0 : -1"
+                :class="{ 'is-hidden': !node.entry.isRunning }"
+                :disabled="!node.entry.isRunning"
+                :aria-hidden="!node.entry.isRunning"
+                :tabindex="node.entry.isRunning ? 0 : -1"
                 title="终止后台任务"
                 aria-label="终止后台任务"
-                @click="entry.isRunning && abortConversation(entry)"
+                @click="node.entry.isRunning && abortConversation(node.entry)"
               >
                 <IconPlayerStop class="history-action-icon" stroke="2" aria-hidden="true" />
               </button>
@@ -483,7 +637,7 @@ function ensureActiveScopeVisible(): void {
         <AdvancedScrollbar
           class="history-edge-scrollbar"
           :scroller="historyList"
-          :refresh-key="entries.length"
+          :refresh-key="historyScrollbarRefreshKey"
         />
       </div>
 

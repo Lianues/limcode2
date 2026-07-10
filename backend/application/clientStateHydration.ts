@@ -219,7 +219,15 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState, opt
     if (sourceConversation === undefined || targetConversation === undefined) continue;
     const entity = world.spawn();
     const now = Date.now();
-    world.add(entity, ConversationBranchLink, { id: record.id, sourceConversation, targetConversation, kind: record.kind, createdAt: now, updatedAt: now });
+    world.add(entity, ConversationBranchLink, {
+      id: record.id,
+      sourceConversation,
+      targetConversation,
+      ...(record.sourceRevisionId ? { sourceRevisionId: record.sourceRevisionId } : {}),
+      kind: record.kind,
+      createdAt: now,
+      updatedAt: now
+    });
   }
 
   hydrateConversationModeSelections(world, state, conversationEntities, modeEntities);
@@ -1317,20 +1325,21 @@ function hydrateCheckpointRecords(world: World, state: ClientState, maps: Checkp
     });
   }
 
-  const anchorIds = existingIds(world, CheckpointTimelineAnchor);
+  const anchorEntities = existingRecords(world, CheckpointTimelineAnchor);
   for (const record of state.checkpointTimelineAnchors ?? []) {
-    if (anchorIds.has(record.id)) continue;
     const conversation = maps.conversations.get(record.conversationId);
     const checkpoint = checkpointEntities.get(record.checkpointId);
     const floorMessage = maps.messages.get(record.floorMessageId);
-    if (conversation === undefined || checkpoint === undefined || floorMessage === undefined) continue;
-    const entity = world.spawn();
-    anchorIds.add(record.id);
+    if (conversation === undefined || checkpoint === undefined) continue;
+    const existing = anchorEntities.get(record.id);
+    const entity = existing ?? world.spawn();
+    anchorEntities.set(record.id, entity);
     world.add(entity, CheckpointTimelineAnchor, {
       id: record.id,
       conversation,
       checkpoint,
-      floorMessage,
+      ...(floorMessage !== undefined ? { floorMessage } : {}),
+      floorMessageId: record.floorMessageId,
       position: record.position,
       order: record.order,
       ...(record.sourceRunId ? { sourceRunId: record.sourceRunId } : {}),

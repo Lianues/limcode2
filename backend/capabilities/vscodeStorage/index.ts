@@ -146,9 +146,9 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       const paths = getPaths();
       return loadConversationHistoryPageFromStore(paths, request);
     },
-    async upsertConversationHistoryEntry(entry) {
+    async upsertConversationHistoryEntry(entry, originLink) {
       const paths = getPaths();
-      await upsertConversationHistoryEntryInStore(paths, entry);
+      await upsertConversationHistoryEntryInStore(paths, entry, originLink);
     },
     async removeConversationHistoryEntry(conversationId) {
       const paths = getPaths();

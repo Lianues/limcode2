@@ -184,7 +184,7 @@ export const ToolDispatchSystem = defineSystem({
     writes: { components: [CheckpointBarrier] },
     resources: { read: [AgentBlueprintsKey, ToolSchemasKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey] },
     bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentAnswerBundle, AgentFromBlueprintBundle, ModeBundle, ConversationProjectLinkBundle, WorkEnvironmentBundle],
-    events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested, ToolEventType.ExecutionCancelRequested, ToolEventType.ChangeApplyRequested, ToolEventType.ChangeRejectRequested], emit: [CheckpointEventType.Requested, AgentRunEventType.Cancel, AgentRunEventType.Promote] },
+    events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested, ToolEventType.ExecutionCancelRequested, ToolEventType.ChangeApplyRequested, ToolEventType.ChangeRejectRequested], emit: [CheckpointEventType.Requested, AgentRunEventType.Cancel, AgentRunEventType.CancelConversation, AgentRunEventType.Promote] },
     effects: { emit: ['tool.run', 'tool.change.apply', 'tool.abort'] }
   },
   run(ctx) {
@@ -348,7 +348,7 @@ function isRunReadyForToolExecution(authorization: Extract<AuthorizationResult, 
 }
 
 function dispatchToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
-  if (awaitToolExecutionBeforeCheckpoint(world, cmd, entity, call, authorization)) return;
+  if (!isRunAgentInterruptCall(call) && awaitToolExecutionBeforeCheckpoint(world, cmd, entity, call, authorization)) return;
   if (call.name === SUBMIT_AGENT_ANSWER_TOOL_NAME) {
     executeSubmitAgentAnswerTool(world, cmd, entity, call, state, authorization);
     return;
@@ -862,7 +862,8 @@ function cancelSynchronousRunAgentChild(cmd: CommandSink, call: ToolCallData, st
     type: AgentRunEventType.Cancel,
     payload: {
       runId: progress.runId,
-      reason: reason ?? 'run_agent tool call cancelled before it returned.'
+      reason: reason ?? 'run_agent tool call cancelled before it returned.',
+      cascadeChildAgents: true
     }
   });
 }
@@ -1076,6 +1077,7 @@ function executeSwitchWorkEnvironmentTool(world: WorldReader, cmd: CommandSink, 
 }
 
 interface RunAgentArgs {
+  mode?: string;
   prompt?: string;
   answerBridgeId?: string;
   agent?: RunAgentAgentSelector;
@@ -1323,6 +1325,60 @@ function createRunAgentAgentId(world: WorldReader, kind: string): string {
   return `agent-${agentSelectorSlug(kind)}-${Date.now().toString(36)}`;
 }
 
+function executeRunAgentInterruptMode(
+  world: WorldReader,
+  cmd: CommandSink,
+  entity: Entity,
+  call: ToolCallData,
+  state: ToolStateData,
+  authorization: Extract<AuthorizationResult, { ok: true }>,
+  rawAnswerBridgeId: string | undefined
+): void {
+  const answerBridgeId = rawAnswerBridgeId?.trim();
+  if (!answerBridgeId) {
+    rejectToolCall(cmd, entity, call, state, 'run_agent.mode=interrupt 需要 answerBridgeId。');
+    return;
+  }
+
+  const child = conversationForAnswerBridgeId(world, answerBridgeId);
+  if (!child) {
+    rejectToolCall(cmd, entity, call, state, `未找到 answerBridgeId 绑定的子 Agent 对话：${answerBridgeId}`);
+    return;
+  }
+  const conversation = world.get(child.conversation, Conversation);
+  if (!conversation) {
+    rejectToolCall(cmd, entity, call, state, `answerBridgeId 绑定的子 Agent 对话数据不完整：${answerBridgeId}`);
+    return;
+  }
+
+  const callerTarget = runTarget(world, authorization.run);
+  if (callerTarget?.conversation === child.conversation) {
+    rejectToolCall(cmd, entity, call, state, 'run_agent.mode=interrupt 不能中断当前工具调用所属的同一对话。');
+    return;
+  }
+
+  if (child.hasActiveRun) {
+    cmd.enqueue({
+      type: AgentRunEventType.CancelConversation,
+      payload: {
+        conversationId: conversation.id,
+        reason: `run_agent interrupt requested for ${answerBridgeId}`,
+        cascadeChildAgents: true
+      }
+    });
+  }
+
+  completeInlineToolCallSuccess(cmd, entity, call, state, {
+    ok: true,
+    mode: 'interrupt',
+    cascadeChildAgents: true,
+    answerBridgeId,
+    conversationId: conversation.id,
+    status: child.hasActiveRun ? 'interrupt_requested' : 'already_stopped',
+    interrupted: child.hasActiveRun
+  });
+}
+
 function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
   let args: RunAgentArgs = {};
   try {
@@ -1331,6 +1387,17 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     rejectToolCall(cmd, entity, call, state, `run_agent 参数不是合法 JSON: ${String(error)}`);
     return;
   }
+
+  const mode = args.mode?.trim() || 'run';
+  if (mode !== 'run' && mode !== 'interrupt') {
+    rejectToolCall(cmd, entity, call, state, `run_agent.mode 不支持：${mode}`);
+    return;
+  }
+  if (mode === 'interrupt') {
+    executeRunAgentInterruptMode(world, cmd, entity, call, state, authorization, args.answerBridgeId);
+    return;
+  }
+
   const prompt = args.prompt?.trim();
   if (!prompt) {
     rejectToolCall(cmd, entity, call, state, 'run_agent 缺少必填 prompt。');
@@ -1748,6 +1815,7 @@ function toolGateSettings(world: WorldReader, policy: ToolPolicyData, toolName: 
 }
 
 function requiresExecutionApproval(world: WorldReader, toolPolicy: ToolPolicyData, call: ToolCallData): boolean {
+  if (isRunAgentInterruptCall(call)) return false;
   if (toolGateSettings(world, toolPolicy, call.name).autoApproveExecution !== false) return false;
   // 未开启"自动批准执行"时，若该工具开启了"只读命令自动跳过审批"且本次调用被标记为只读，则仍免审批。
   if (autoApprovesReadonlyCommand(world, toolPolicy, call)) return false;
@@ -1759,6 +1827,14 @@ function autoApprovesReadonlyCommand(world: WorldReader, toolPolicy: ToolPolicyD
   const config = effectiveToolConfig(world, toolPolicy, call.name);
   if (config?.autoApproveReadonly === undefined || config.autoApproveReadonly === false) return false;
   return isReadonlyCommandCall(parseToolCallArgs(call.argsJson));
+}
+
+function isRunAgentInterruptCall(call: ToolCallData): boolean {
+  if (call.name !== RUN_AGENT_TOOL_NAME) return false;
+  const args = parseToolCallArgs(call.argsJson);
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return false;
+  const mode = (args as { mode?: unknown }).mode;
+  return typeof mode === 'string' && mode.trim() === 'interrupt';
 }
 
 function parseToolCallArgs(argsJson: string | undefined): unknown {

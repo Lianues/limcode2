@@ -244,6 +244,8 @@ export interface CommandRunArgs {
   cwd?: string;
   /** 前台等待预算（毫秒）：到点仍未结束则转后台；不是命令终止超时。 */
   foregroundWaitMs?: number;
+  /** 内部执行标识（通常为 toolCallId），用于在父 Run 中断前主动把前台命令转入后台。 */
+  executionId?: string;
 }
 
 /** 返回给模型的 stdout/stderr 输出上限（保留末尾内容）。 */
@@ -337,6 +339,8 @@ export interface CommandCapability {
   readonly description: string;
   /** 执行新命令；前台等待预算用尽时不 kill，而是转入后台并返回 { status:'running', processId }。limits 控制返回给模型的输出上限。 */
   run(args: CommandRunArgs, observer?: CommandRunObserver, options?: WorkEnvironmentCapabilityOptions, limits?: CommandOutputLimits): Promise<CommandRunResult>;
+  /** 将仍在前台等待的本地命令立即转入后台；不存在、已结束或不支持后台化时返回 false。 */
+  backgroundForeground(executionId: string): boolean;
   /** 读取某后台进程当前已累积的全部日志，并返回其运行状态；默认读取终态日志后清理，consume=false 仅同步。 */
   readOutput(processId: string, limits: CommandOutputLimits, options?: { consume?: boolean }): CommandRunResult;
   /** 终止某后台进程；终止后日志临时保留一小段时间，可用 readOutput 查看最终结果。 */
@@ -629,7 +633,10 @@ export interface StorageCapability {
   loadConversationRunDetail(request: ConversationRunDetailRequest): Promise<ConversationRunDetailRecord | undefined>;
   resolveConversationRunIdForMessage(conversationId: string, messageId: string): Promise<string | undefined>;
   loadConversationHistoryPage(request: ConversationHistoryPageRequest): Promise<ConversationHistoryPageRecord>;
-  upsertConversationHistoryEntry(entry: import('../../shared/protocol').SidebarConversationHistoryEntry): Promise<void>;
+  upsertConversationHistoryEntry(
+    entry: import('../../shared/protocol').SidebarConversationHistoryEntry,
+    originLink?: import('../../shared/protocol').ConversationOriginLinkRecord
+  ): Promise<void>;
   removeConversationHistoryEntry(conversationId: string): Promise<void>;
   saveMessageSnapshot(conversationId: string, message: import('../../shared/protocol').MessageRecord): Promise<void>;
   removeMessage(conversationId: string, messageId: string): Promise<void>;

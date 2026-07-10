@@ -34,7 +34,9 @@ export interface ConversationBranchLinkData {
   id: string;
   sourceConversation: Entity;
   targetConversation: Entity;
+  /** 详情已加载时的实体引用；冷卸载后使用 sourceRevisionId。 */
   sourceRevision?: Entity;
+  sourceRevisionId?: string;
   kind: ConversationBranchKind;
   createdAt: number;
   updatedAt: number;

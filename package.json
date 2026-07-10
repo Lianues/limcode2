@@ -69,6 +69,7 @@
     "dev:webview": "vite --host 127.0.0.1 --port 31819 --strictPort",
     "build": "npm run compile && npm run build:webview",
     "typecheck:webview": "vue-tsc -p tsconfig.webview.json --noEmit",
+    "test:conversation-history": "npm run compile && node --test tests/conversationHistoryTree.test.cjs",
     "check": "npm run compile && npm run typecheck:webview",
     "vscode:prepublish": "npm run build",
     "package:local": "vsce package --allow-missing-repository"

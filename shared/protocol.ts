@@ -244,8 +244,6 @@ export interface SidebarConversationHistoryEntry {
   runStatusLabel?: string;
   projectFolderUri?: string;
   projectName?: string;
-  originKind?: ConversationOriginKind;
-  originSourceKind?: AgentRunSourceKind;
 }
 
 export interface OpenConversationPanelRecord {
@@ -281,6 +279,8 @@ export interface ConversationHistoryPageInfo {
 export interface ConversationHistoryPageRecord {
   scope: ConversationHistoryScope;
   entries: SidebarConversationHistoryEntry[];
+  /** 独立的会话来源关系；历史列表按需解释 sourceConversationId，不嵌入条目。 */
+  originLinks: ConversationOriginLinkRecord[];
   pageInfo: ConversationHistoryPageInfo;
 }
 
@@ -1935,6 +1935,8 @@ export interface AgentRunControlPayload {
   runId: string;
   conversationId?: string;
   reason?: string;
+  /** true 表示显式终止整个子 Agent 树；默认中断会先把当前批次的 run_agent 转后台并保留子任务。 */
+  cascadeChildAgents?: boolean;
 }
 export interface QueuePromotePayload {
   conversationId: string;

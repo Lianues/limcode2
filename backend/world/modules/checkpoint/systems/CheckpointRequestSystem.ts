@@ -202,6 +202,7 @@ function addCheckpointTimelineAnchor(
     conversation: input.conversation,
     checkpoint: input.checkpoint,
     floorMessage: input.floorMessage,
+    floorMessageId: input.anchor.floorMessageId ?? world.get(input.floorMessage, Message)?.id ?? '',
     position: input.anchor.anchorPosition ?? 'after',
     order: input.now,
     ...(input.anchor.sourceRunId ? { sourceRunId: input.anchor.sourceRunId } : {}),

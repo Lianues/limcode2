@@ -15,25 +15,31 @@ export const runAgentTool: ToolDefinition = {
   execution: 'agentRun',
   declaration: {
     name: RUN_AGENT_TOOL_NAME,
-    description: `Start an AgentRun to continue an existing child-agent conversation or create a new child agent for a task.
+    description: `Start, continue, or interrupt a child AgentRun.
 
 Usage:
 - Use agent.type to select an Agent type/configuration such as main, worker, or explore. It defaults to ${DEFAULT_RUN_AGENT_TYPE}.
 - Prefer answerBridgeId when continuing or appending to an existing run_agent child conversation. It resolves the bound child Agent and conversation and preserves the same default submit_agent_answer channel.
-- If the reused child conversation is still responding, this call interrupts its current Run and force-sends the new message immediately instead of placing it in the normal queue.
+- In the default run mode, if the reused child conversation is still responding, this call interrupts its current Run and force-sends the new message immediately instead of placing it in the normal queue.
+- Use mode="interrupt" with answerBridgeId to interrupt the active Run in that child conversation and recursively cancel all descendant child AgentRuns, including already-backgrounded descendants. Interrupt mode does not require prompt or foregroundWaitMs.
 - agent.id is a compatibility selector for a temporary Agent mirror previously returned by run_agent. Prefer answerBridgeId. agent.id is not an Agent type/configuration id and fails when the mirror cannot be found.
-- Put the complete task, background, role, and supplemental instructions in prompt. Separate context, conversation, mode, and delivery parameters are not supported.
-- foregroundWaitMs is the foreground wait budget in milliseconds, not an AgentRun termination timeout. Use 0 to background immediately. When the budget expires, the AgentRun continues in the background and the tool returns agentId, runId, conversationId, and answerBridgeId.`,
+- In run mode, put the complete task, background, role, and supplemental instructions in prompt. Separate context, conversation, and delivery parameters are not supported.
+- In run mode, foregroundWaitMs is the foreground wait budget in milliseconds, not an AgentRun termination timeout. Use 0 to background immediately. When the budget expires, the AgentRun continues in the background and the tool returns agentId, runId, conversationId, and answerBridgeId.`,
     parameters: {
       type: 'object',
       properties: {
+        mode: {
+          type: 'string',
+          enum: ['run', 'interrupt'],
+          description: 'Operation mode. Defaults to "run". Use "interrupt" with answerBridgeId to stop the active Run in an existing child conversation and recursively cancel its descendant child AgentRuns.'
+        },
         prompt: {
           type: 'string',
-          description: 'The complete task for the target AgentRun, including all relevant background, role instructions, constraints, and supplemental information.'
+          description: 'Required in run mode. The complete task for the target AgentRun, including all relevant background, role instructions, constraints, and supplemental information.'
         },
         answerBridgeId: {
           type: 'string',
-          description: 'Optional. Continue or append to an existing run_agent child conversation by its answerBridgeId. The bound child Agent and conversation are reused, the same default submit_agent_answer channel is preserved, and any active response is interrupted before this message is force-sent.'
+          description: 'Continue, append to, or interrupt an existing run_agent child conversation. Required in interrupt mode. Interrupt mode recursively cancels descendant child AgentRuns. In run mode, the bound child Agent and conversation are reused, the same submit_agent_answer channel is preserved, and any active response is interrupted before this message is force-sent.'
         },
         agent: {
           type: 'object',
@@ -51,7 +57,7 @@ Usage:
         },
         foregroundWaitMs: {
           type: 'number',
-          description: 'Required foreground wait budget in milliseconds; this is not an AgentRun termination timeout. Use 0 to background immediately. When the budget expires, the AgentRun continues in the background and the tool returns agentId, runId, conversationId, and answerBridgeId.'
+          description: 'Required in run mode. Foreground wait budget in milliseconds; this is not an AgentRun termination timeout. Use 0 to background immediately. When the budget expires, the AgentRun continues in the background and the tool returns agentId, runId, conversationId, and answerBridgeId.'
         },
         wait: {
           type: 'string',
@@ -62,8 +68,7 @@ Usage:
           enum: ['parallel', 'serial'],
           description: 'Tool-call scheduling mode. Defaults to parallel. Use serial when this task may interfere with other tool calls.'
         }
-      },
-      required: ['prompt', 'foregroundWaitMs']
+      }
     },
     metadata: {
       category: 'agent',
@@ -79,6 +84,7 @@ Usage:
 };
 
 interface RunAgentSchedulingArgs {
+  mode?: string;
   foregroundWaitMs?: number;
   wait?: string;
   scheduling?: string;
@@ -86,6 +92,8 @@ interface RunAgentSchedulingArgs {
 
 function summarizeRunAgentToolCall(rawArgs: unknown, context: ToolCallSummaryContext): string | undefined {
   const args = (rawArgs ?? {}) as RunAgentSchedulingArgs & { prompt?: unknown; answerBridgeId?: unknown; agent?: { type?: unknown; id?: unknown } };
+  const answerBridgeId = typeof args.answerBridgeId === 'string' ? args.answerBridgeId.trim() : '';
+  if (args.mode?.trim() === 'interrupt') return answerBridgeId ? `Interrupt Agent · ${answerBridgeId}` : 'Interrupt Agent';
   const prompt = typeof args.prompt === 'string' ? normalizeSummaryText(args.prompt) : '';
   const resolvedType = runAgentTypeFromValue(context.result) ?? runAgentTypeFromValue(context.progress);
   const requestedType = typeof args.agent?.type === 'string' && args.agent.type.trim()
@@ -112,6 +120,7 @@ function runAgentTypeFromValue(value: unknown): string | undefined {
 
 function resolveRunAgentScheduling(rawArgs: unknown): { mode: 'parallel' | 'serial'; reason: string } {
   const args = (rawArgs ?? {}) as RunAgentSchedulingArgs;
+  if (args.mode?.trim() === 'interrupt') return { mode: 'serial', reason: 'interrupt_mode' };
   if (args.scheduling === 'serial') return { mode: 'serial', reason: 'explicit_serial' };
   if (args.scheduling === 'parallel') return { mode: 'parallel', reason: 'explicit_parallel' };
 

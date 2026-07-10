@@ -49,6 +49,7 @@ interface CommandSafetyConfig {
 }
 
 type BackgroundCommandPathsProvider = () => Pick<RuntimePaths, 'backgroundCommandsRootPath' | 'backgroundCommandsIndexPath'>;
+type ForegroundCommandControl = () => boolean;
 
 interface BackgroundCommandIndexRecord {
   processId: string;
@@ -101,6 +102,7 @@ export function createCommandCapability(capabilityOptions: { paths?: BackgroundC
   const profile = detectCommandProfile();
   const registry = new Map<string, BackgroundProcessHandle>();
   const archived = new Map<string, PersistedBackgroundProcessRecord>();
+  const foregroundControls = new Map<string, ForegroundCommandControl>();
   let persistedLoaded = false;
   const ensurePersistedLoaded = (): void => {
     if (persistedLoaded) return;
@@ -112,7 +114,11 @@ export function createCommandCapability(capabilityOptions: { paths?: BackgroundC
     description: profile.description,
     run(args, observer, options, limits) {
       ensurePersistedLoaded();
-      return runCommand(profile, registry, archived, capabilityOptions.paths, args, observer, options, limits ?? DEFAULT_OUTPUT_LIMITS);
+      return runCommand(profile, registry, archived, foregroundControls, capabilityOptions.paths, args, observer, options, limits ?? DEFAULT_OUTPUT_LIMITS);
+    },
+    backgroundForeground(executionId) {
+      const control = foregroundControls.get(executionId);
+      return control?.() ?? false;
     },
     readOutput(processId, limits, options) {
       ensurePersistedLoaded();
@@ -124,6 +130,8 @@ export function createCommandCapability(capabilityOptions: { paths?: BackgroundC
     },
     dispose() {
       ensurePersistedLoaded();
+      for (const control of [...foregroundControls.values()]) control();
+      foregroundControls.clear();
       disposeRegistry(registry, capabilityOptions.paths);
     }
   };
@@ -238,7 +246,7 @@ function resolvePowerShell(): string {
   return cachedPowerShell;
 }
 
-async function runCommand(profile: CommandProfile, registry: Map<string, BackgroundProcessHandle>, archived: Map<string, PersistedBackgroundProcessRecord>, pathsProvider: BackgroundCommandPathsProvider | undefined, args: CommandRunArgs, observer: CommandRunObserver | undefined, options: WorkEnvironmentCapabilityOptions = {}, limits: CommandOutputLimits = DEFAULT_OUTPUT_LIMITS): Promise<CommandRunResult> {
+async function runCommand(profile: CommandProfile, registry: Map<string, BackgroundProcessHandle>, archived: Map<string, PersistedBackgroundProcessRecord>, foregroundControls: Map<string, ForegroundCommandControl>, pathsProvider: BackgroundCommandPathsProvider | undefined, args: CommandRunArgs, observer: CommandRunObserver | undefined, options: WorkEnvironmentCapabilityOptions = {}, limits: CommandOutputLimits = DEFAULT_OUTPUT_LIMITS): Promise<CommandRunResult> {
   const command = (args.command ?? '').trim();
   if (!command) return failedResult('', 'Missing required argument: command');
 
@@ -262,11 +270,11 @@ async function runCommand(profile: CommandProfile, registry: Map<string, Backgro
 
   const cwd = resolveWorkDir(args.cwd, options);
   const foregroundWaitMs = resolveForegroundWaitMs(args.foregroundWaitMs);
-  const raw = await executeCommand(profile, registry, archived, pathsProvider, command, cwd, foregroundWaitMs, limits, observer);
+  const raw = await executeCommand(profile, registry, archived, foregroundControls, pathsProvider, command, cwd, foregroundWaitMs, limits, observer, args.executionId);
   return annotateResult(profile.kind, raw);
 }
 
-function executeCommand(profile: CommandProfile, registry: Map<string, BackgroundProcessHandle>, archived: Map<string, PersistedBackgroundProcessRecord>, pathsProvider: BackgroundCommandPathsProvider | undefined, command: string, cwd: string, foregroundWaitMs: number, limits: CommandOutputLimits, observer?: CommandRunObserver): Promise<CommandRunResult> {
+function executeCommand(profile: CommandProfile, registry: Map<string, BackgroundProcessHandle>, archived: Map<string, PersistedBackgroundProcessRecord>, foregroundControls: Map<string, ForegroundCommandControl>, pathsProvider: BackgroundCommandPathsProvider | undefined, command: string, cwd: string, foregroundWaitMs: number, limits: CommandOutputLimits, observer?: CommandRunObserver, executionId?: string): Promise<CommandRunResult> {
   const wrappedCommand = `${profile.commandPrefix ?? ''}${command}`;
   return new Promise((resolve) => {
     const stdout = new AppendBuffer(BACKGROUND_MAX_CHARS);
@@ -286,10 +294,17 @@ function executeCommand(profile: CommandProfile, registry: Map<string, Backgroun
 
     // 转入后台继续运行（不 kill），立即以 running 状态 resolve 前台 promise。
     // 触发时机：foregroundWaitMs>0 到点触发；foregroundWaitMs===0 生成子进程后立即触发。
-    const moveToBackground = (): void => {
-      if (settled) return;
+    const clearForegroundControl = (): void => {
+      if (executionId && foregroundControls.get(executionId) === moveToBackground) {
+        foregroundControls.delete(executionId);
+      }
+    };
+
+    const moveToBackground = (): boolean => {
+      if (settled) return false;
       backgrounded = true;
       settled = true;
+      clearForegroundControl();
       if (foregroundWaitTimer) clearTimeout(foregroundWaitTimer);
       streamEvents.flush();
       streamEvents = createStreamEventEmitter(undefined); // 停止向已终态的 toolCall 推流，仅写 buffer
@@ -310,14 +325,17 @@ function executeCommand(profile: CommandProfile, registry: Map<string, Backgroun
         stdout: truncateOutput(out.text, limits),
         stderr: truncateOutput(err.text, limits)
       });
+      return true;
     };
 
-    const foregroundWaitTimer = foregroundWaitMs > 0 ? setTimeout(moveToBackground, foregroundWaitMs) : undefined;
+    const foregroundWaitTimer = foregroundWaitMs > 0 ? setTimeout(() => { moveToBackground(); }, foregroundWaitMs) : undefined;
     foregroundWaitTimer?.unref?.();
+    if (executionId) foregroundControls.set(executionId, moveToBackground);
 
     const settleForeground = (exitCode: number): void => {
       if (settled) return;
       settled = true;
+      clearForegroundControl();
       if (foregroundWaitTimer) clearTimeout(foregroundWaitTimer);
       streamEvents.flush();
       const out = stdout.snapshot();

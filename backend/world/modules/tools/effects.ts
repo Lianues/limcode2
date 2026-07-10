@@ -31,10 +31,17 @@ export interface ToolAbortEffect {
   toolCallId: string;
 }
 
+/** 请求把仍在前台等待的可后台化运行时工具立即转入后台，不终止底层任务。 */
+export interface ToolBackgroundEffect {
+  kind: 'tool.background';
+  toolCallId: string;
+}
+
 declare module '@backend/world/effects' {
   interface WorldEffectMap {
     'tool.run': ToolRunEffect;
     'tool.change.apply': ToolChangeApplyEffect;
     'tool.abort': ToolAbortEffect;
+    'tool.background': ToolBackgroundEffect;
   }
 }

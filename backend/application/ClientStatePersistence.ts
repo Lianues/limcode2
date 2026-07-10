@@ -2,7 +2,7 @@ import type { WorldReader } from '../ecs/types';
 import type { ConversationRunHistorySaveMode, StorageCapability } from '../capabilities/types';
 import { StorageStateContributorsKey } from '../world/storageProjection/resources';
 import { projectStorageStateWithCache, type StorageContributorProjectionState } from '../world/storageProjection/projection';
-import type { AgentRunStatus, ClientState, ClientStateTableKey, MessageContent, MessageRecord, SidebarConversationHistoryEntry } from '../../shared/protocol';
+import type { AgentRunStatus, ClientState, ClientStateTableKey, ConversationOriginLinkRecord, MessageContent, MessageRecord, SidebarConversationHistoryEntry } from '../../shared/protocol';
 import { conversationCreatedAtFromId, displayConversationTitle } from '../../shared/conversationTitle';
 import { collectChangedClientStateConversationIds } from '../../shared/clientStateConversationScope';
 import { conversationRenderDetailSlice, conversationRunHistorySlice } from '../capabilities/vscodeStorage/clientStateStore';
@@ -93,7 +93,7 @@ export class ClientStatePersistence {
     this.schedulePersistCheck();
   }
 
-  public async persistImmediately(options: { force?: boolean; throwOnError?: boolean } = {}): Promise<void> {
+  public async persistImmediately(options: { force?: boolean; forceConversationId?: string; throwOnError?: boolean } = {}): Promise<void> {
     this.clearPersistTimer();
 
     if (this.persistInFlight) {
@@ -103,7 +103,8 @@ export class ClientStatePersistence {
     }
 
     const latest = this.projectLatestState();
-    if (!options.force && latest && !latest.changed) return;
+    const forcedConversationId = options.forceConversationId?.trim();
+    if (!options.force && !forcedConversationId && latest && !latest.changed) return;
 
     const latestState = latest?.state ?? this.lastProjectedState;
     if (!this.enabled || !latestState) return;
@@ -114,6 +115,7 @@ export class ClientStatePersistence {
         ? collectChangedClientStateConversationIds(latest.previousState, latestState, latest.changedTableKeys)
         : undefined;
     this.collectPendingStates(latestState, !!options.force, targetConversationIds);
+    if (forcedConversationId) this.collectForcedConversationState(latestState, forcedConversationId);
     if (!this.pendingSkeletonState && this.pendingRenderDetailStates.size === 0 && this.pendingRunHistoryStates.size === 0 && this.pendingHistoryStates.size === 0) return;
 
     const skeletonState = this.pendingSkeletonState;
@@ -185,6 +187,27 @@ export class ClientStatePersistence {
       if (targetConversationIds && !targetConversationIds.has(conversationId)) continue;
       if (replaceRunHistoryIds.has(conversationId)) continue;
       this.collectPendingRunHistoryState(state, conversationId, 'merge', force, false);
+    }
+  }
+
+  private collectForcedConversationState(state: ClientState, conversationId: string): void {
+    if (this.renderLoadedConversationIds(state).includes(conversationId)) {
+      this.pendingRenderDetailStates.set(conversationId, state);
+      this.pendingHistoryStates.set(conversationId, state);
+    }
+
+    if (this.runHistoryLoadedConversationIds(state).includes(conversationId)) {
+      this.pendingRunHistoryStates.set(conversationId, { state, mode: 'replace' });
+      this.pendingHistoryStates.set(conversationId, state);
+      return;
+    }
+
+    if (knownRunHistoryConversationIds(state).includes(conversationId)) {
+      const detail = conversationRunHistorySlice(state, conversationId);
+      if (hasRunHistoryRecords(detail)) {
+        this.pendingRunHistoryStates.set(conversationId, { state, mode: 'merge' });
+        this.pendingHistoryStates.set(conversationId, state);
+      }
     }
   }
 
@@ -266,7 +289,7 @@ export class ClientStatePersistence {
   private async persistHistoryEntries(historyStates: Array<[string, ClientState]>): Promise<void> {
     for (const [conversationId, state] of historyStates) {
       const entry = projectConversationHistoryEntry(state, conversationId);
-      if (entry) await this.storage.upsertConversationHistoryEntry(entry);
+      if (entry) await this.storage.upsertConversationHistoryEntry(entry, originLinkForConversation(state, conversationId));
     }
   }
 
@@ -401,7 +424,6 @@ function projectConversationHistoryEntry(state: ClientState, conversationId: str
   const latest = latestMessage(messages);
   const runSummary = activeRunSummary(state, conversationId);
   const project = projectInfoForConversation(state, conversationId);
-  const origin = originInfoForConversation(state, conversationId);
   const title = displayConversationTitle({ id: conversation.id, title: conversation.title, messages });
   const fallbackUpdatedAt = conversationCreatedAtFromId(conversation.id);
   const preview = latest ? messagePreview(latest) : '暂无消息，点击开始新的交流。';
@@ -415,9 +437,7 @@ function projectConversationHistoryEntry(state: ClientState, conversationId: str
     ...(latest ? { updatedAt: latest.createdAt } : fallbackUpdatedAt !== undefined ? { updatedAt: fallbackUpdatedAt } : {}),
     ...(agentNameForConversation(state, conversationId) ? { agentName: agentNameForConversation(state, conversationId) } : {}),
     ...(project?.uri ? { projectFolderUri: project.uri } : {}),
-    ...(project?.name ? { projectName: project.name } : {}),
-    ...(origin?.originKind ? { originKind: origin.originKind } : {}),
-    ...(origin?.originSourceKind ? { originSourceKind: origin.originSourceKind } : {})
+    ...(project?.name ? { projectName: project.name } : {})
   };
   const previewState = latest ? aiPreviewState(latest) : undefined;
   if (previewState) entry.previewState = previewState;
@@ -483,11 +503,10 @@ function projectInfoForConversation(state: ClientState, conversationId: string):
   return project ? { uri: project.uri, name: project.name } : undefined;
 }
 
-function originInfoForConversation(state: ClientState, conversationId: string): Pick<SidebarConversationHistoryEntry, 'originKind' | 'originSourceKind'> | undefined {
-  const origin = state.conversationOriginLinks
+function originLinkForConversation(state: ClientState, conversationId: string): ConversationOriginLinkRecord | undefined {
+  return state.conversationOriginLinks
     .filter((candidate) => candidate.conversationId === conversationId)
     .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))[0];
-  return origin ? { originKind: origin.originKind, ...(origin.sourceKind ? { originSourceKind: origin.sourceKind } : {}) } : undefined;
 }
 
 function normalizeText(text: string): string {

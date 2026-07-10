@@ -73,7 +73,9 @@ export interface CheckpointTimelineAnchorData {
   id: string;
   conversation: Entity;
   checkpoint: Entity;
-  floorMessage: Entity;
+  /** 详情已加载时的实体引用；冷卸载后仅保留稳定记录 ID。 */
+  floorMessage?: Entity;
+  floorMessageId: string;
   position: CheckpointFloorAnchorPosition;
   order: number;
   sourceRun?: Entity;

@@ -54,6 +54,10 @@ export function registerToolEffectHandlers(registry: EffectHandlerRegistry): voi
     controller.abort();
   });
 
+  registry.register('tool.background', (effect, env) => {
+    env.command.backgroundForeground(effect.toolCallId);
+  });
+
   registry.register('tool.change.apply', (effect, env, emit) => {
     const startedAt = Date.now();
     env.fs

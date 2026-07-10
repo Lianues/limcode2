@@ -135,15 +135,16 @@ function buildCheckpointTimelineAnchorRecord(world: WorldReader, entity: number)
   if (!anchor) return undefined;
   const conversation = world.get(anchor.conversation, Conversation);
   const checkpoint = world.get(anchor.checkpoint, Checkpoint);
-  const floorMessage = world.get(anchor.floorMessage, Message);
-  if (!conversation || !checkpoint || !floorMessage) return undefined;
+  const floorMessage = anchor.floorMessage !== undefined ? world.get(anchor.floorMessage, Message) : undefined;
+  const floorMessageId = floorMessage?.id ?? anchor.floorMessageId;
+  if (!conversation || !checkpoint || !floorMessageId) return undefined;
   const sourceRun = anchor.sourceRun !== undefined ? world.get(anchor.sourceRun, AgentRun) : undefined;
   const sourceToolCall = anchor.sourceToolCall !== undefined ? world.get(anchor.sourceToolCall, ToolCall) : undefined;
   return {
     id: anchor.id,
     conversationId: conversation.id,
     checkpointId: checkpoint.id,
-    floorMessageId: floorMessage.id,
+    floorMessageId,
     position: anchor.position,
     order: anchor.order,
     ...(sourceRun?.id ?? anchor.sourceRunId ? { sourceRunId: sourceRun?.id ?? anchor.sourceRunId } : {}),

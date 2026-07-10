@@ -91,8 +91,9 @@ function buildConversationBranchLinkRecord(world: WorldReader, entity: number): 
   const sourceConversation = world.get(link.sourceConversation, Conversation);
   const targetConversation = world.get(link.targetConversation, Conversation);
   const sourceRevision = link.sourceRevision !== undefined ? world.get(link.sourceRevision, MessageRevision) : undefined;
+  const sourceRevisionId = sourceRevision?.id ?? link.sourceRevisionId;
   if (!sourceConversation || !targetConversation) return undefined;
-  return { id: link.id, sourceConversationId: sourceConversation.id, targetConversationId: targetConversation.id, ...(sourceRevision ? { sourceRevisionId: sourceRevision.id } : {}), kind: link.kind };
+  return { id: link.id, sourceConversationId: sourceConversation.id, targetConversationId: targetConversation.id, ...(sourceRevisionId ? { sourceRevisionId } : {}), kind: link.kind };
 }
 
 function buildConversationOriginLinkRecord(world: WorldReader, entity: number): ConversationOriginLinkRecord | undefined {

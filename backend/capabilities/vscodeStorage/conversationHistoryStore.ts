@@ -3,8 +3,14 @@ import type {
   ConversationHistoryPageRecord,
   ConversationHistoryPageRequest,
   ConversationHistoryScope,
+  ConversationOriginLinkRecord,
   SidebarConversationHistoryEntry
 } from '../../../shared/protocol';
+import {
+  buildConversationHistoryForest,
+  packConversationHistoryForestIntoPages,
+  selectConversationOriginLinks
+} from '../../../shared/conversationHistoryTree';
 import { INDEX_FILE, STORAGE_VERSION } from './constants';
 import { readJson, writeJson } from './json';
 import type { StoragePaths } from './clientStateStore';
@@ -15,6 +21,7 @@ const PROJECTS_DIR = 'projects';
 const ALL_DIR = 'all';
 const UNBOUND_DIR = 'unbound';
 const SCOPE_FILE = 'scope.json';
+
 interface ConversationHistoryScopeIndexFile {
   schemaVersion: typeof STORAGE_VERSION;
   savedAt: string;
@@ -36,6 +43,12 @@ interface ConversationHistoryPageFile {
   savedAt: string;
   scope: ConversationHistoryScope;
   entries: SidebarConversationHistoryEntry[];
+  originLinks: ConversationOriginLinkRecord[];
+}
+
+interface ConversationHistoryScopeProjection {
+  entries: SidebarConversationHistoryEntry[];
+  originLinks: ConversationOriginLinkRecord[];
 }
 
 interface ScopeFile {
@@ -44,21 +57,38 @@ interface ScopeFile {
   scope: ConversationHistoryScope;
 }
 
-export async function loadConversationHistoryPageFromStore(paths: StoragePaths, request: ConversationHistoryPageRequest): Promise<ConversationHistoryPageRecord> {
+export async function loadConversationHistoryPageFromStore(
+  paths: StoragePaths,
+  request: ConversationHistoryPageRequest
+): Promise<ConversationHistoryPageRecord> {
   const root = scopeRoot(paths, request.scope);
-  const index = await readJson<ConversationHistoryScopeIndexFile>(vscode.Uri.joinPath(root, INDEX_FILE));
+  const storedIndex = await readJson<ConversationHistoryScopeIndexFile>(vscode.Uri.joinPath(root, INDEX_FILE));
+  const index = storedIndex?.schemaVersion === STORAGE_VERSION
+    && sameScope(storedIndex.scope, request.scope)
+    && Array.isArray(storedIndex.pages)
+    ? storedIndex
+    : undefined;
   const pageSize = normalizePageSize(index?.pageSize ?? request.limit);
   const requestedPageIndex = Math.max(0, Number.parseInt(request.cursor ?? '0', 10) || 0);
   const total = index?.total ?? 0;
-  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  // 会话树不能跨页拆分，因此页面条目数可能超过名义 pageSize；页面总数以索引为准。
+  const pageCount = Math.max(1, index?.pages.length ?? 0);
   const pageIndex = Math.min(requestedPageIndex, pageCount - 1);
   const pageRecord = index?.pages[pageIndex];
-  const page = pageRecord ? await readJson<ConversationHistoryPageFile>(vscode.Uri.joinPath(root, ...pageRecord.file.split('/'))) : undefined;
-  const entries = page?.schemaVersion === STORAGE_VERSION && sameScope(page.scope, request.scope) ? page.entries : [];
+  const page = pageRecord
+    ? await readJson<ConversationHistoryPageFile>(vscode.Uri.joinPath(root, ...pageRecord.file.split('/')))
+    : undefined;
+  const validPage = page?.schemaVersion === STORAGE_VERSION
+    && sameScope(page.scope, request.scope)
+    && Array.isArray(page.entries)
+    && Array.isArray(page.originLinks);
+  const entries = validPage ? page.entries : [];
+  const originLinks = validPage ? page.originLinks : [];
 
   return {
     scope: request.scope,
     entries,
+    originLinks,
     pageInfo: {
       cursor: String(pageIndex),
       ...(pageIndex > 0 ? { previousCursor: String(pageIndex - 1) } : {}),
@@ -72,81 +102,137 @@ export async function loadConversationHistoryPageFromStore(paths: StoragePaths, 
   };
 }
 
-export async function upsertConversationHistoryEntryInStore(paths: StoragePaths, entry: SidebarConversationHistoryEntry): Promise<void> {
-  const scoped = entry.projectFolderUri ? { kind: 'project' as const, folderUri: entry.projectFolderUri } : { kind: 'unbound' as const };
+export async function upsertConversationHistoryEntryInStore(
+  paths: StoragePaths,
+  entry: SidebarConversationHistoryEntry,
+  originLink?: ConversationOriginLinkRecord
+): Promise<void> {
+  const scoped = entry.projectFolderUri
+    ? { kind: 'project' as const, folderUri: entry.projectFolderUri }
+    : { kind: 'unbound' as const };
   const targetScopes: ConversationHistoryScope[] = [{ kind: 'all' }, scoped];
-  await Promise.all(targetScopes.map((scope) => upsertIntoScope(paths, scope, entry)));
+  await Promise.all(targetScopes.map((scope) => upsertIntoScope(paths, scope, entry, originLink)));
   await removeFromStaleScopes(paths, entry.id, targetScopes);
 }
 
-export async function removeConversationHistoryEntryFromStore(paths: StoragePaths, conversationId: string): Promise<void> {
+export async function removeConversationHistoryEntryFromStore(
+  paths: StoragePaths,
+  conversationId: string
+): Promise<void> {
   const scopes = await existingScopes(paths);
   await Promise.all(scopes.map((scope) => removeFromScope(paths, scope, conversationId)));
 }
 
-async function upsertIntoScope(paths: StoragePaths, scope: ConversationHistoryScope, entry: SidebarConversationHistoryEntry): Promise<void> {
-  const entries = await loadAllEntriesForScope(paths, scope);
-  const index = entries.findIndex((candidate) => candidate.id === entry.id);
+async function upsertIntoScope(
+  paths: StoragePaths,
+  scope: ConversationHistoryScope,
+  entry: SidebarConversationHistoryEntry,
+  originLink?: ConversationOriginLinkRecord
+): Promise<void> {
+  const projection = await loadScopeProjection(paths, scope);
+  const index = projection.entries.findIndex((candidate) => candidate.id === entry.id);
   const nextEntry = { ...entry };
-  if (index >= 0) entries[index] = nextEntry;
-  else entries.push(nextEntry);
-  await writeScopeEntries(paths, scope, entries);
+  if (index >= 0) projection.entries[index] = nextEntry;
+  else projection.entries.push(nextEntry);
+
+  projection.originLinks = projection.originLinks.filter((candidate) => candidate.conversationId !== entry.id);
+  if (originLink?.conversationId === entry.id) projection.originLinks.push({ ...originLink });
+  await writeScopeProjection(paths, scope, projection);
 }
 
-async function removeFromScope(paths: StoragePaths, scope: ConversationHistoryScope, conversationId: string): Promise<void> {
-  const entries = await loadAllEntriesForScope(paths, scope);
-  const next = entries.filter((entry) => entry.id !== conversationId);
-  if (next.length === entries.length) return;
-  await writeScopeEntries(paths, scope, next);
+async function removeFromScope(
+  paths: StoragePaths,
+  scope: ConversationHistoryScope,
+  conversationId: string
+): Promise<void> {
+  const projection = await loadScopeProjection(paths, scope);
+  const entries = projection.entries.filter((entry) => entry.id !== conversationId);
+  const originLinks = projection.originLinks.filter((link) => link.conversationId !== conversationId);
+  if (entries.length === projection.entries.length && originLinks.length === projection.originLinks.length) return;
+  await writeScopeProjection(paths, scope, { entries, originLinks });
 }
 
-async function removeFromStaleScopes(paths: StoragePaths, conversationId: string, targetScopes: ConversationHistoryScope[]): Promise<void> {
+async function removeFromStaleScopes(
+  paths: StoragePaths,
+  conversationId: string,
+  targetScopes: ConversationHistoryScope[]
+): Promise<void> {
   const scopes = await existingScopes(paths);
   const staleScopes = scopes.filter((scope) => !targetScopes.some((target) => sameScope(scope, target)));
   await Promise.all(staleScopes.map((scope) => removeFromScope(paths, scope, conversationId)));
 }
 
-
-async function loadAllEntriesForScope(paths: StoragePaths, scope: ConversationHistoryScope): Promise<SidebarConversationHistoryEntry[]> {
+async function loadScopeProjection(
+  paths: StoragePaths,
+  scope: ConversationHistoryScope
+): Promise<ConversationHistoryScopeProjection> {
   const root = scopeRoot(paths, scope);
   const index = await readJson<ConversationHistoryScopeIndexFile>(vscode.Uri.joinPath(root, INDEX_FILE));
-  if (!index || index.schemaVersion !== STORAGE_VERSION || !sameScope(index.scope, scope)) return [];
+  if (!index || index.schemaVersion !== STORAGE_VERSION || !sameScope(index.scope, scope) || !Array.isArray(index.pages)) {
+    return { entries: [], originLinks: [] };
+  }
 
-  const result: SidebarConversationHistoryEntry[] = [];
+  const entries: SidebarConversationHistoryEntry[] = [];
+  const originLinks: ConversationOriginLinkRecord[] = [];
   for (const page of index.pages) {
     const file = await readJson<ConversationHistoryPageFile>(vscode.Uri.joinPath(root, ...page.file.split('/')));
-    if (file?.schemaVersion === STORAGE_VERSION && sameScope(file.scope, scope)) result.push(...file.entries);
+    if (
+      file?.schemaVersion === STORAGE_VERSION
+      && sameScope(file.scope, scope)
+      && Array.isArray(file.entries)
+      && Array.isArray(file.originLinks)
+    ) {
+      entries.push(...file.entries);
+      originLinks.push(...file.originLinks);
+    }
   }
-  return result;
+  return { entries, originLinks };
 }
 
-async function writeScopeEntries(paths: StoragePaths, scope: ConversationHistoryScope, rawEntries: SidebarConversationHistoryEntry[]): Promise<void> {
+async function writeScopeProjection(
+  paths: StoragePaths,
+  scope: ConversationHistoryScope,
+  projection: ConversationHistoryScopeProjection
+): Promise<void> {
   const savedAt = new Date().toISOString();
   const root = scopeRoot(paths, scope);
   const pagesRoot = vscode.Uri.joinPath(root, PAGES_DIR);
   await vscode.workspace.fs.createDirectory(pagesRoot);
   if (scope.kind === 'project') {
-    await writeJson(vscode.Uri.joinPath(root, SCOPE_FILE), { schemaVersion: STORAGE_VERSION, savedAt, scope } satisfies ScopeFile);
+    await writeJson(vscode.Uri.joinPath(root, SCOPE_FILE), {
+      schemaVersion: STORAGE_VERSION,
+      savedAt,
+      scope
+    } satisfies ScopeFile);
   }
 
-  const entries = uniqueById(rawEntries).sort(compareHistoryEntries);
-  const pageSize = DEFAULT_PAGE_SIZE;
+  const entries = uniqueById(projection.entries);
+  const entryIds = new Set(entries.map((entry) => entry.id));
+  const originLinks = [...selectConversationOriginLinks(projection.originLinks).values()]
+    .filter((link) => entryIds.has(link.conversationId));
+  const forest = buildConversationHistoryForest(entries, originLinks);
+  const pageGroups = packConversationHistoryForestIntoPages(forest, DEFAULT_PAGE_SIZE);
   const pages: ConversationHistoryPageIndexRecord[] = [];
-  const pageCount = Math.ceil(entries.length / pageSize);
-  for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
-    const pageEntries = entries.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize);
+
+  for (let pageIndex = 0; pageIndex < pageGroups.length; pageIndex += 1) {
+    const nodes = pageGroups[pageIndex];
+    const pageEntries = nodes.map((node) => node.entry);
+    const pageOriginLinks = nodes
+      .map((node) => node.originLink)
+      .filter((link): link is ConversationOriginLinkRecord => link !== undefined);
     const file = `${PAGES_DIR}/${pageIndex.toString().padStart(6, '0')}.json`;
     await writeJson(vscode.Uri.joinPath(root, ...file.split('/')), {
       schemaVersion: STORAGE_VERSION,
       savedAt,
       scope,
-      entries: pageEntries
+      entries: pageEntries,
+      originLinks: pageOriginLinks
     } satisfies ConversationHistoryPageFile);
+
     pages.push({
       file,
       count: pageEntries.length,
-      ...(pageEntries[0]?.updatedAt !== undefined ? { newestUpdatedAt: pageEntries[0].updatedAt } : {}),
-      ...(pageEntries[pageEntries.length - 1]?.updatedAt !== undefined ? { oldestUpdatedAt: pageEntries[pageEntries.length - 1].updatedAt } : {})
+      ...historyPageTimeRange(pageEntries)
     });
   }
 
@@ -154,7 +240,7 @@ async function writeScopeEntries(paths: StoragePaths, scope: ConversationHistory
     schemaVersion: STORAGE_VERSION,
     savedAt,
     scope,
-    pageSize,
+    pageSize: DEFAULT_PAGE_SIZE,
     total: entries.length,
     pages
   } satisfies ConversationHistoryScopeIndexFile);
@@ -213,10 +299,17 @@ function uniqueById(entries: SidebarConversationHistoryEntry[]): SidebarConversa
   return [...new Map(entries.map((entry) => [entry.id, entry])).values()];
 }
 
-function compareHistoryEntries(left: SidebarConversationHistoryEntry, right: SidebarConversationHistoryEntry): number {
-  return (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
-    || left.title.localeCompare(right.title, 'zh-CN')
-    || left.id.localeCompare(right.id, 'zh-CN');
+function historyPageTimeRange(entries: readonly SidebarConversationHistoryEntry[]): Pick<ConversationHistoryPageIndexRecord, 'newestUpdatedAt' | 'oldestUpdatedAt'> {
+  let newestUpdatedAt: number | undefined;
+  let oldestUpdatedAt: number | undefined;
+  for (const entry of entries) {
+    if (entry.updatedAt === undefined) continue;
+    newestUpdatedAt = newestUpdatedAt === undefined ? entry.updatedAt : Math.max(newestUpdatedAt, entry.updatedAt);
+    oldestUpdatedAt = oldestUpdatedAt === undefined ? entry.updatedAt : Math.min(oldestUpdatedAt, entry.updatedAt);
+  }
+  return newestUpdatedAt === undefined || oldestUpdatedAt === undefined
+    ? {}
+    : { newestUpdatedAt, oldestUpdatedAt };
 }
 
 function sameScope(left: ConversationHistoryScope, right: ConversationHistoryScope): boolean {
@@ -247,4 +340,3 @@ function isFileNotFound(error: unknown): boolean {
     .join('\n');
   return /FileNotFound|EntryNotFound|ENOENT|ENOTDIR|not found|no such file|不存在|无法解析不存在的文件/i.test(text);
 }
-

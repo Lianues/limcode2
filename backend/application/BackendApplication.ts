@@ -76,7 +76,6 @@ import { flushEffects, flushEffectsWhere } from './executeEffects';
 import type { RuntimeEnv } from './RuntimeEnv';
 import { BridgeMessageType, GLOBAL_SETTINGS_SECTIONS, conversationClientStateStreamId, createMessageId } from '../../shared/protocol';
 import type {
-  AgentRunSourceKind,
   AgentRunStatus,
   CheckpointMaintenanceSettingsRecord,
   BridgeClientId,
@@ -87,7 +86,7 @@ import type {
   LlmProviderKind,
   MessageContent,
   ProjectFolderCandidateRecord,
-  ConversationOriginKind,
+  ConversationOriginLinkRecord,
   RuleScope,
   SidebarHistoryScopeKind,
   SidebarConversationHistoryEntry,
@@ -109,6 +108,9 @@ import { loadRemoteServerWorkEnvironmentRecordsFromVscode } from './workEnvironm
 import { McpToolSourcesKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey, ToolSchemasKey } from '../world/modules/tools/resources';
 import { SkillCatalogKey } from '../world/modules/skill/resources';
 import { RulesCatalogKey } from '../world/modules/rules/resources';
+import { conversationDetailEvictionBlocker, evictConversationDetail } from './conversationDetailEviction';
+
+const MAX_WARM_CLOSED_CONVERSATIONS = 3;
 
 export interface CreateConversationOptions {
   projectFolderUri?: string;
@@ -145,7 +147,14 @@ export class BackendApplication {
   private readonly runHistoryLoadedConversationDetails = new Set<string>();
   private readonly conversationTailLoaded = new Set<string>();
   private readonly conversationTailLoadInFlight = new Map<string, Promise<void>>();
+  private readonly conversationDetailLoadInFlight = new Map<string, Promise<void>>();
   private readonly conversationContextLoadInFlight = new Set<string>();
+  /** 从旧到新排列；仅记录最后一个主面板已经关闭的 conversation。 */
+  private readonly recentClosedConversationIds: string[] = [];
+  /** 冷卸载后仅保留历史列表摘要，避免重命名等轻量更新把预览误写为空。 */
+  private readonly coldConversationHistoryEntries = new Map<string, SidebarConversationHistoryEntry>();
+  private readonly conversationEvictionGeneration = new Map<string, number>();
+  private conversationEvictionInFlight: string | undefined;
   private readonly conversationHistoryChangedEmitter = new vscode.EventEmitter<void>();
   private readonly disposables: vscode.Disposable[] = [];
   public readonly onDidChangeConversationHistory = this.conversationHistoryChangedEmitter.event;
@@ -212,6 +221,7 @@ export class BackendApplication {
         flushEffects(this.outbox, this.env, (event) => this.world.enqueue(event), this.effectHandlers);
         this.persistence.queuePersist();
         this.conversationHistoryChangedEmitter.fire();
+        this.processConversationDetailEvictions();
       }
     }, {
       parallelWorkers: true,
@@ -299,7 +309,6 @@ export class BackendApplication {
     const agentNamesByConversation = this.collectAgentNamesByConversation();
     const runSummariesByConversation = this.collectRunSummariesByConversation();
     const projectsByConversation = this.collectProjectsByConversation();
-    const originsByConversation = this.collectConversationOriginsByConversation();
     const entries: SidebarConversationHistoryEntry[] = [];
 
     for (const entity of this.world.query(Conversation)) {
@@ -310,7 +319,6 @@ export class BackendApplication {
       const agentName = agentNamesByConversation.get(entity);
       const runSummary = runSummariesByConversation.get(entity);
       const project = projectsByConversation.get(entity);
-      const origin = originsByConversation.get(entity);
       const preview = latest ? messagePreview(latest) : '暂无消息，点击开始新的交流。';
       const entry: SidebarConversationHistoryEntry = {
         id: conversation.id,
@@ -328,10 +336,6 @@ export class BackendApplication {
       if (project) {
         entry.projectFolderUri = project.uri;
         entry.projectName = project.name;
-      }
-      if (origin) {
-        entry.originKind = origin.originKind;
-        if (origin.originSourceKind) entry.originSourceKind = origin.originSourceKind;
       }
       if (runSummary) {
         entry.runStatus = runSummary.status;
@@ -439,6 +443,10 @@ export class BackendApplication {
     }
     this.renderLoadedConversationDetails.delete(conversationId);
     this.runHistoryLoadedConversationDetails.delete(conversationId);
+    this.conversationTailLoaded.delete(conversationId);
+    this.coldConversationHistoryEntries.delete(conversationId);
+    this.removeRecentClosedConversation(conversationId);
+    this.bumpConversationEvictionGeneration(conversationId);
     void this.env.storage.removeConversationHistoryEntry(conversationId);
     this.requestSnapshot();
     this.requestSnapshot(conversationId);
@@ -494,6 +502,9 @@ export class BackendApplication {
   public attachWebview(webview: vscode.Webview, meta: WebviewClientMeta = { kind: 'unknown' }): BridgeClientId {
     const clientId = this.env.webview.attach(webview, meta);
     this.webviewClients.register(clientId, meta);
+    if (meta.kind === 'mainPanel' && meta.conversationId?.trim()) {
+      this.markConversationOpened(meta.conversationId.trim());
+    }
     return clientId;
   }
 
@@ -509,6 +520,7 @@ export class BackendApplication {
     const clear = (): void => {
       if (this.conversationTailLoadInFlight.get(normalizedConversationId) === load) {
         this.conversationTailLoadInFlight.delete(normalizedConversationId);
+        this.processConversationDetailEvictions();
       }
     };
     void load.then(clear, clear);
@@ -519,8 +531,7 @@ export class BackendApplication {
     if (this.conversationTailLoaded.has(conversationId)) return true;
     const conversation = this.findConversationEntity(conversationId);
     if (conversation === undefined) return false;
-    const loaded = this.world.has(conversation, ConversationFullContextLoaded)
-      || this.world.query(Message, PartOf).some((entity) => this.world.get(entity, PartOf)?.parent === conversation);
+    const loaded = this.world.has(conversation, ConversationFullContextLoaded);
     if (loaded) this.conversationTailLoaded.add(conversationId);
     return loaded;
   }
@@ -533,10 +544,33 @@ export class BackendApplication {
     });
     if (page.state.messages.length > 0) await hydrateConversationDetail(this.world, page.state, conversationId);
     this.conversationTailLoaded.add(conversationId);
+    this.coldConversationHistoryEntries.delete(conversationId);
   }
 
-  public async ensureConversationDetailLoaded(conversationId: string): Promise<void> {
-    if (!conversationId) return;
+  public ensureConversationDetailLoaded(conversationId: string): Promise<void> {
+    const normalizedConversationId = conversationId.trim();
+    if (!normalizedConversationId) return Promise.resolve();
+    if (this.renderLoadedConversationDetails.has(normalizedConversationId)) {
+      this.markConversationFullContextLoaded(normalizedConversationId);
+      return Promise.resolve();
+    }
+
+    const existing = this.conversationDetailLoadInFlight.get(normalizedConversationId);
+    if (existing) return existing;
+
+    const load = this.loadConversationDetail(normalizedConversationId);
+    this.conversationDetailLoadInFlight.set(normalizedConversationId, load);
+    const clear = (): void => {
+      if (this.conversationDetailLoadInFlight.get(normalizedConversationId) === load) {
+        this.conversationDetailLoadInFlight.delete(normalizedConversationId);
+        this.processConversationDetailEvictions();
+      }
+    };
+    void load.then(clear, clear);
+    return load;
+  }
+
+  private async loadConversationDetail(conversationId: string): Promise<void> {
     if (!this.hydrated) await this.waitUntilHydrated();
     if (this.renderLoadedConversationDetails.has(conversationId)) {
       this.markConversationFullContextLoaded(conversationId);
@@ -560,6 +594,7 @@ export class BackendApplication {
     const loaded = hydrated || this.findConversationEntity(conversationId) !== undefined;
     if (loaded) {
       this.renderLoadedConversationDetails.add(conversationId);
+      this.coldConversationHistoryEntries.delete(conversationId);
       this.markConversationFullContextLoaded(conversationId);
     }
     if (hydrated && backfilled.addedCount > 0) {
@@ -592,9 +627,25 @@ export class BackendApplication {
 
 
   private async upsertConversationHistoryEntry(conversationId: string): Promise<void> {
-    const entry = this.getConversationHistoryEntries().find((candidate) => candidate.id === conversationId);
-    if (!entry) return;
-    await this.env.storage.upsertConversationHistoryEntry(entry);
+    const projected = this.getConversationHistoryEntries().find((candidate) => candidate.id === conversationId);
+    if (!projected) return;
+    const retained = this.coldConversationHistoryEntries.get(conversationId);
+    const entry = retained && !this.renderLoadedConversationDetails.has(conversationId)
+      ? {
+          ...retained,
+          ...projected,
+          preview: retained.preview,
+          messageCount: retained.messageCount,
+          status: retained.status,
+          updatedAt: Math.max(retained.updatedAt ?? 0, projected.updatedAt ?? 0),
+          ...(retained.previewState ? { previewState: retained.previewState } : {})
+        }
+      : projected;
+    const conversationEntity = this.findConversationEntity(conversationId);
+    const originLink = conversationEntity === undefined
+      ? undefined
+      : this.collectConversationOriginsByConversation().get(conversationEntity);
+    await this.env.storage.upsertConversationHistoryEntry(entry, originLink);
   }
 
 
@@ -639,6 +690,7 @@ export class BackendApplication {
   }
 
   public detachWebview(clientId: BridgeClientId): void {
+    const registration = this.webviewClients.get(clientId);
     const releasedStreamIds = this.env.webview.detach(clientId);
     this.webviewClients.unregister(clientId);
     if (releasedStreamIds.length > 0) {
@@ -646,6 +698,107 @@ export class BackendApplication {
         type: ClientSyncEventType.StreamsReleased,
         payload: { streamIds: releasedStreamIds }
       });
+    }
+
+    const conversationId = registration?.meta.kind === 'mainPanel' ? registration.meta.conversationId?.trim() : undefined;
+    if (conversationId && !this.hasOpenConversationPanel(conversationId)) {
+      this.rememberRecentlyClosedConversation(conversationId);
+    }
+  }
+
+  private markConversationOpened(conversationId: string): void {
+    this.removeRecentClosedConversation(conversationId);
+    this.bumpConversationEvictionGeneration(conversationId);
+  }
+
+  private rememberRecentlyClosedConversation(conversationId: string): void {
+    if (this.findConversationEntity(conversationId) === undefined) return;
+    this.removeRecentClosedConversation(conversationId);
+    this.recentClosedConversationIds.push(conversationId);
+    this.bumpConversationEvictionGeneration(conversationId);
+    this.processConversationDetailEvictions();
+  }
+
+  private removeRecentClosedConversation(conversationId: string): void {
+    const index = this.recentClosedConversationIds.indexOf(conversationId);
+    if (index >= 0) this.recentClosedConversationIds.splice(index, 1);
+  }
+
+  private bumpConversationEvictionGeneration(conversationId: string): number {
+    const next = (this.conversationEvictionGeneration.get(conversationId) ?? 0) + 1;
+    this.conversationEvictionGeneration.set(conversationId, next);
+    return next;
+  }
+
+  private hasOpenConversationPanel(conversationId: string): boolean {
+    return this.env.webview.clientRecords().some((client) =>
+      client.meta.kind === 'mainPanel' && client.meta.conversationId?.trim() === conversationId
+    );
+  }
+
+  private processConversationDetailEvictions(): void {
+    if (this.conversationEvictionInFlight || this.recentClosedConversationIds.length <= MAX_WARM_CLOSED_CONVERSATIONS) return;
+
+    const overflowCount = this.recentClosedConversationIds.length - MAX_WARM_CLOSED_CONVERSATIONS;
+    for (const conversationId of this.recentClosedConversationIds.slice(0, overflowCount)) {
+      if (this.hasOpenConversationPanel(conversationId)) {
+        this.removeRecentClosedConversation(conversationId);
+        this.processConversationDetailEvictions();
+        return;
+      }
+      if (this.conversationTailLoadInFlight.has(conversationId)
+        || this.conversationDetailLoadInFlight.has(conversationId)
+        || this.conversationContextLoadInFlight.has(conversationId)) continue;
+
+      const conversation = this.findConversationEntity(conversationId);
+      if (conversation === undefined) {
+        this.removeRecentClosedConversation(conversationId);
+        this.processConversationDetailEvictions();
+        return;
+      }
+      if (conversationDetailEvictionBlocker(this.world, conversation)) continue;
+
+      const generation = this.conversationEvictionGeneration.get(conversationId) ?? 0;
+      this.conversationEvictionInFlight = conversationId;
+      void this.persistAndEvictConversationDetail(conversationId, generation);
+      return;
+    }
+  }
+
+  private async persistAndEvictConversationDetail(conversationId: string, generation: number): Promise<void> {
+    let continueDraining = true;
+    try {
+      await this.persistence.persistImmediately({ forceConversationId: conversationId, throwOnError: true });
+      if ((this.conversationEvictionGeneration.get(conversationId) ?? 0) !== generation) return;
+      if (this.hasOpenConversationPanel(conversationId)) return;
+      if (this.conversationTailLoadInFlight.has(conversationId)
+        || this.conversationDetailLoadInFlight.has(conversationId)
+        || this.conversationContextLoadInFlight.has(conversationId)) return;
+
+      const warmStart = Math.max(0, this.recentClosedConversationIds.length - MAX_WARM_CLOSED_CONVERSATIONS);
+      const queueIndex = this.recentClosedConversationIds.indexOf(conversationId);
+      if (queueIndex < 0 || queueIndex >= warmStart) return;
+
+      const conversation = this.findConversationEntity(conversationId);
+      if (conversation === undefined || conversationDetailEvictionBlocker(this.world, conversation)) return;
+
+      const historyEntry = this.getConversationHistoryEntries().find((candidate) => candidate.id === conversationId);
+      if (historyEntry) this.coldConversationHistoryEntries.set(conversationId, historyEntry);
+      const result = evictConversationDetail(this.world, conversation);
+      this.renderLoadedConversationDetails.delete(conversationId);
+      this.runHistoryLoadedConversationDetails.delete(conversationId);
+      this.conversationTailLoaded.delete(conversationId);
+      this.world.remove(conversation, ConversationFullContextLoaded);
+      this.world.remove(conversation, ConversationFullContextPending);
+      this.removeRecentClosedConversation(conversationId);
+      this.requestSnapshot();
+      console.debug(`[LimCode] Cold-evicted conversation detail "${conversationId}" (${result.removedEntities} entities).`);
+    } catch (error) {
+      continueDraining = false;
+      console.warn(`[LimCode] Failed to persist conversation "${conversationId}" before cold eviction.`, error);
+    } finally {
+      if (this.conversationEvictionInFlight === conversationId) this.conversationEvictionInFlight = undefined;
+      if (continueDraining) this.processConversationDetailEvictions();
     }
   }
 
@@ -1345,23 +1498,36 @@ export class BackendApplication {
     }
   }
 
-  private collectConversationOriginsByConversation(): Map<Entity, { originKind: ConversationOriginKind; originSourceKind?: AgentRunSourceKind }> {
-    const result = new Map<Entity, { originKind: ConversationOriginKind; originSourceKind?: AgentRunSourceKind; createdAt: number }>();
+  private collectConversationOriginsByConversation(): Map<Entity, ConversationOriginLinkRecord> {
+    const result = new Map<Entity, ConversationOriginLinkRecord>();
     for (const entity of this.world.query(ConversationOriginLink)) {
       const link = this.world.get(entity, ConversationOriginLink);
       if (!link) continue;
+      const conversation = this.world.get(link.conversation, Conversation);
+      if (!conversation?.id) continue;
       const existing = result.get(link.conversation);
-      if (existing && existing.createdAt <= link.createdAt) continue;
+      if (existing && (existing.createdAt < link.createdAt || (existing.createdAt === link.createdAt && existing.id.localeCompare(link.id) <= 0))) continue;
+
+      const sourceAgentId = (link.sourceAgent !== undefined ? this.world.get(link.sourceAgent, Agent)?.id : undefined) ?? link.sourceAgentId;
+      const sourceConversationId = (link.sourceConversation !== undefined ? this.world.get(link.sourceConversation, Conversation)?.id : undefined) ?? link.sourceConversationId;
+      const sourceMessageId = (link.sourceMessage !== undefined ? this.world.get(link.sourceMessage, Message)?.id : undefined) ?? link.sourceMessageId;
+      const sourceToolCallId = (link.sourceToolCall !== undefined ? this.world.get(link.sourceToolCall, ToolCall)?.id : undefined) ?? link.sourceToolCallId;
+      const sourceRunId = (link.sourceRun !== undefined ? this.world.get(link.sourceRun, AgentRun)?.id : undefined) ?? link.sourceRunId;
       result.set(link.conversation, {
+        id: link.id,
+        conversationId: conversation.id,
         originKind: link.originKind,
-        ...(link.sourceKind ? { originSourceKind: link.sourceKind } : {}),
-        createdAt: link.createdAt
+        ...(link.sourceKind ? { sourceKind: link.sourceKind } : {}),
+        ...(sourceAgentId ? { sourceAgentId } : {}),
+        ...(sourceConversationId ? { sourceConversationId } : {}),
+        ...(sourceMessageId ? { sourceMessageId } : {}),
+        ...(sourceToolCallId ? { sourceToolCallId } : {}),
+        ...(sourceRunId ? { sourceRunId } : {}),
+        createdAt: link.createdAt,
+        updatedAt: link.updatedAt
       });
     }
-    return new Map([...result].map(([conversation, origin]) => [conversation, {
-      originKind: origin.originKind,
-      ...(origin.originSourceKind ? { originSourceKind: origin.originSourceKind } : {})
-    }]));
+    return result;
   }
 
   private collectRunOwnedEntities(runs: ReadonlySet<Entity>, runPolicies: ReadonlySet<Entity>, entities: Set<Entity>): void {
@@ -1556,6 +1722,7 @@ function isPassFlushEffect(effect: WorldEffect): boolean {
     || kind === 'tool.run'
     || kind === 'tool.change.apply'
     || kind === 'tool.abort'
+    || kind === 'tool.background'
     || kind === 'checkpoint.create';
 }
 

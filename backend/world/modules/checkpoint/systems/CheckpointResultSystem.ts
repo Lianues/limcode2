@@ -58,6 +58,7 @@ export const CheckpointResultSystem = defineSystem({
             conversation,
             checkpoint: entity,
             floorMessage,
+            floorMessageId: payload.floorMessageId,
             position: payload.anchorPosition ?? 'after',
             order: payload.createdAt,
             ...(payload.sourceRunId ? { sourceRunId: payload.sourceRunId } : {}),

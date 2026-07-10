@@ -246,8 +246,10 @@ test('fork 对话只复制目标楼层及之前的消息，并创建独立关系
 
   const origin = world.query(ConversationOriginLink).map((entity) => world.get(entity, ConversationOriginLink))[0];
   assert.equal(origin.conversation, result.conversation);
-  assert.equal(origin.sourceConversation, source);
-  assert.equal(origin.sourceMessage, second.entity);
+  assert.equal(origin.sourceConversation, undefined);
+  assert.equal(origin.sourceConversationId, undefined);
+  assert.equal(origin.sourceMessage, undefined);
+  assert.equal(origin.sourceMessageId, undefined);
 
   const targetAgentLinks = world.query(AgentConversationLink)
     .map((entity) => world.get(entity, AgentConversationLink))

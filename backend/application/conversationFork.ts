@@ -114,10 +114,6 @@ export function forkConversationInWorld(world: World, input: ForkConversationInW
     conversation,
     originKind: 'user',
     sourceKind: 'user',
-    sourceConversation,
-    sourceConversationId,
-    sourceMessage,
-    sourceMessageId: throughMessageId,
     createdAt: now,
     updatedAt: now
   });

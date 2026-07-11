@@ -2,6 +2,8 @@ import type { FsFileDiffRecord, FsHunkEditRequest } from './types';
 
 const DEFAULT_DIFF_CONTEXT_LINES = 3;
 const MAX_LCS_CELLS = 1_000_000;
+const MAX_MYERS_EDIT_DISTANCE = 4_000;
+const MAX_MYERS_TRACE_CELLS = 2_000_000;
 const MAX_DIFF_TEXT_CHARS = 120_000;
 
 type DiffOpType = 'ctx' | 'add' | 'del';
@@ -112,10 +114,7 @@ function diffSegment(oldLines: string[], newLines: string[]): RawDiffOp[] {
   if (newLines.length === 0) return oldLines.map((content) => ({ type: 'del', content }));
 
   if (oldLines.length * newLines.length > MAX_LCS_CELLS) {
-    return [
-      ...oldLines.map((content) => ({ type: 'del' as const, content })),
-      ...newLines.map((content) => ({ type: 'add' as const, content }))
-    ];
+    return diffSegmentByMyers(oldLines, newLines) ?? fullReplacementDiffOps(oldLines, newLines);
   }
 
   const rows = oldLines.length + 1;
@@ -155,6 +154,107 @@ function diffSegment(oldLines: string[], newLines: string[]): RawDiffOp[] {
     newIndex += 1;
   }
   return ops;
+}
+
+function diffSegmentByMyers(oldLines: string[], newLines: string[]): RawDiffOp[] | undefined {
+  const oldLength = oldLines.length;
+  const newLength = newLines.length;
+  const maxDistance = Math.min(oldLength + newLength, MAX_MYERS_EDIT_DISTANCE);
+  let traceCells = 0;
+  const furthest = new Map<number, number>([[1, 0]]);
+  const trace: Array<Map<number, number>> = [];
+
+  for (let distance = 0; distance <= maxDistance; distance += 1) {
+    trace.push(new Map(furthest));
+    traceCells += furthest.size;
+    if (traceCells > MAX_MYERS_TRACE_CELLS) return undefined;
+
+    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+      const useDownMove = diagonal === -distance
+        || (diagonal !== distance && getFurthest(furthest, diagonal - 1) < getFurthest(furthest, diagonal + 1));
+      const previousDiagonal = useDownMove ? diagonal + 1 : diagonal - 1;
+      let oldIndex = useDownMove ? getFurthest(furthest, previousDiagonal) : getFurthest(furthest, previousDiagonal) + 1;
+      if (!Number.isFinite(oldIndex) || oldIndex < 0) oldIndex = 0;
+      let newIndex = oldIndex - diagonal;
+
+      while (
+        oldIndex < oldLength
+        && newIndex < newLength
+        && newIndex >= 0
+        && oldLines[oldIndex] === newLines[newIndex]
+      ) {
+        oldIndex += 1;
+        newIndex += 1;
+      }
+
+      furthest.set(diagonal, oldIndex);
+      if (oldIndex >= oldLength && newIndex >= newLength) {
+        return backtrackMyersDiff(trace, oldLines, newLines, distance);
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function backtrackMyersDiff(trace: Array<Map<number, number>>, oldLines: string[], newLines: string[], editDistance: number): RawDiffOp[] {
+  let oldIndex = oldLines.length;
+  let newIndex = newLines.length;
+  const reversed: RawDiffOp[] = [];
+
+  for (let distance = editDistance; distance > 0; distance -= 1) {
+    const furthest = trace[distance];
+    const diagonal = oldIndex - newIndex;
+    const useDownMove = diagonal === -distance
+      || (diagonal !== distance && getFurthest(furthest, diagonal - 1) < getFurthest(furthest, diagonal + 1));
+    const previousDiagonal = useDownMove ? diagonal + 1 : diagonal - 1;
+    const previousOldRaw = getFurthest(furthest, previousDiagonal);
+    const previousOld = Number.isFinite(previousOldRaw) ? previousOldRaw : 0;
+    const previousNew = previousOld - previousDiagonal;
+
+    while (oldIndex > previousOld && newIndex > previousNew) {
+      reversed.push({ type: 'ctx', content: oldLines[oldIndex - 1] });
+      oldIndex -= 1;
+      newIndex -= 1;
+    }
+
+    if (useDownMove) {
+      if (newIndex > 0) {
+        reversed.push({ type: 'add', content: newLines[newIndex - 1] });
+        newIndex -= 1;
+      }
+    } else if (oldIndex > 0) {
+      reversed.push({ type: 'del', content: oldLines[oldIndex - 1] });
+      oldIndex -= 1;
+    }
+  }
+
+  while (oldIndex > 0 && newIndex > 0) {
+    reversed.push({ type: 'ctx', content: oldLines[oldIndex - 1] });
+    oldIndex -= 1;
+    newIndex -= 1;
+  }
+  while (oldIndex > 0) {
+    reversed.push({ type: 'del', content: oldLines[oldIndex - 1] });
+    oldIndex -= 1;
+  }
+  while (newIndex > 0) {
+    reversed.push({ type: 'add', content: newLines[newIndex - 1] });
+    newIndex -= 1;
+  }
+
+  return reversed.reverse();
+}
+
+function getFurthest(furthest: Map<number, number>, diagonal: number): number {
+  return furthest.get(diagonal) ?? Number.NEGATIVE_INFINITY;
+}
+
+function fullReplacementDiffOps(oldLines: string[], newLines: string[]): RawDiffOp[] {
+  return [
+    ...oldLines.map((content) => ({ type: 'del' as const, content })),
+    ...newLines.map((content) => ({ type: 'add' as const, content }))
+  ];
 }
 
 function numberDiffOps(rawOps: RawDiffOp[]): NumberedDiffOp[] {

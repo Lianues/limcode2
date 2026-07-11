@@ -80,6 +80,7 @@ export interface WebviewMessageRouterDeps {
   conversationSettingsBridge: ConversationSettingsBridge;
   isHydrated: () => boolean;
   requestSnapshot: (conversationId?: string) => void;
+  requestPersist?: (reason: string) => void;
   ensureConversationDetailLoaded: (conversationId: string) => Promise<void>;
   ensureConversationTailLoaded: (conversationId: string) => Promise<void>;
   getProjectFolderCandidates: () => ProjectFolderCandidateRecord[];
@@ -144,21 +145,25 @@ export class WebviewMessageRouter {
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ToolEventType.PolicyScopeSetRequested, payload: message.payload });
         this.deps.requestSnapshot();
+        this.deps.requestPersist?.('toolPolicy.scope.set');
         break;
       case BridgeMessageType.ToolPolicyScopeClear:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ToolEventType.PolicyScopeClearRequested, payload: message.payload });
         this.deps.requestSnapshot();
+        this.deps.requestPersist?.('toolPolicy.scope.clear');
         break;
       case BridgeMessageType.SkillPolicyScopeSet:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: SkillEventType.PolicyScopeSetRequested, payload: message.payload });
         this.deps.requestSnapshot();
+        this.deps.requestPersist?.('skillPolicy.scope.set');
         break;
       case BridgeMessageType.SkillPolicyScopeClear:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: SkillEventType.PolicyScopeClearRequested, payload: message.payload });
         this.deps.requestSnapshot();
+        this.deps.requestPersist?.('skillPolicy.scope.clear');
         break;
       case BridgeMessageType.SkillCatalogRefresh:
         if (!this.deps.isHydrated()) return;
@@ -289,11 +294,13 @@ export class WebviewMessageRouter {
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: AgentEventType.SystemPromptScopeSet, payload: message.payload });
         this.deps.requestSnapshot();
+        this.deps.requestPersist?.('systemPrompt.scope.set');
         break;
       case BridgeMessageType.SystemPromptScopeClear:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: AgentEventType.SystemPromptScopeClear, payload: message.payload });
         this.deps.requestSnapshot();
+        this.deps.requestPersist?.('systemPrompt.scope.clear');
         break;
       case BridgeMessageType.RuntimeContextScopeSet:
         if (!this.deps.isHydrated() || !message.payload) return;
@@ -508,11 +515,13 @@ export class WebviewMessageRouter {
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: CheckpointEventType.PolicyScopeSetRequested, payload: message.payload });
         this.deps.requestSnapshot();
+        this.deps.requestPersist?.('checkpointPolicy.scope.set');
         break;
       case BridgeMessageType.CheckpointPolicyScopeClear:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: CheckpointEventType.PolicyScopeClearRequested, payload: message.payload });
         this.deps.requestSnapshot();
+        this.deps.requestPersist?.('checkpointPolicy.scope.clear');
         break;
       case BridgeMessageType.CheckpointDismiss:
         if (!this.deps.isHydrated() || !message.payload) return;
@@ -1436,8 +1445,6 @@ function normalizePath(value: string): string {
 function looksLikeAbsolutePath(value: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(value) || /^\\\\/.test(value) || /^\//.test(value);
 }
-
-
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;

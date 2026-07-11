@@ -291,7 +291,11 @@ async function preflightRecordStore<TRecord extends { id: string }, TKey extends
 async function loadRecordsIndex(indexUri: vscode.Uri, strict: boolean): Promise<RecordsIndexFile | undefined> {
   const index = await readJson<RecordsIndexFile>(indexUri, { throwOnError: strict });
   if (index === undefined) return undefined;
-  if (isRecordsIndexFile(index)) return index;
+  const normalized = normalizeRecordsIndexFile(index);
+  if (normalized) {
+    if (normalized.repaired) await writeJson(indexUri, normalized.index);
+    return normalized.index;
+  }
   if (strict) throw new Error(`Record store index is invalid: ${indexUri.fsPath}`);
   return undefined;
 }
@@ -306,20 +310,48 @@ function yieldToExtensionHost(): Promise<void> {
   });
 }
 
-function isRecordsIndexFile(value: unknown): value is RecordsIndexFile {
+interface NormalizedRecordsIndexResult {
+  index: RecordsIndexFile;
+  repaired: boolean;
+}
+
+function normalizeRecordsIndexFile(value: unknown): NormalizedRecordsIndexResult | undefined {
   const candidate = value as Partial<RecordsIndexFile> | undefined;
-  if (!candidate || candidate.schemaVersion !== STORAGE_VERSION || !Array.isArray(candidate.records)) return false;
-  const ids = new Set<string>();
-  const files = new Set<string>();
-  return candidate.records.every((record) => {
-    if (!record || typeof record.id !== 'string' || !record.id.trim()) return false;
-    if (typeof record.file !== 'string' || !isRecordFilePath(record.file)) return false;
-    if (typeof record.updatedAt !== 'string' || !record.updatedAt) return false;
-    if (ids.has(record.id) || files.has(record.file)) return false;
-    ids.add(record.id);
-    files.add(record.file);
-    return true;
-  });
+  if (!candidate || candidate.schemaVersion !== STORAGE_VERSION || typeof candidate.savedAt !== 'string' || !Array.isArray(candidate.records)) return undefined;
+
+  const validRecords: RecordIndexRecord[] = [];
+  for (const record of candidate.records) {
+    if (isRecordIndexRecord(record)) validRecords.push({ id: record.id, file: record.file, updatedAt: record.updatedAt });
+  }
+
+  const byId = new Map<string, RecordIndexRecord>();
+  for (const record of validRecords) {
+    if (byId.has(record.id)) byId.delete(record.id);
+    byId.set(record.id, record);
+  }
+
+  const byFile = new Map<string, RecordIndexRecord>();
+  for (const record of byId.values()) {
+    if (byFile.has(record.file)) byFile.delete(record.file);
+    byFile.set(record.file, record);
+  }
+
+  const records = [...byFile.values()];
+  return {
+    index: { schemaVersion: STORAGE_VERSION, savedAt: candidate.savedAt, records },
+    repaired: records.length !== candidate.records.length
+  };
+}
+
+function isRecordIndexRecord(value: unknown): value is RecordIndexRecord {
+  const record = value as Partial<RecordIndexRecord> | undefined;
+  return !!record
+    && typeof record.id === 'string'
+    && !!record.id.trim()
+    && typeof record.file === 'string'
+    && isRecordFilePath(record.file)
+    && typeof record.updatedAt === 'string'
+    && !!record.updatedAt;
 }
 
 function isRecordFilePath(file: string): boolean {

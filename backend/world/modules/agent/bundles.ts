@@ -44,7 +44,8 @@ export const AgentFromBlueprintBundle = defineBundle({
     PartOf
   ],
   mutationMode: 'create',
-  spawns: true
+  spawns: true,
+  despawns: true
 });
 
 export interface SpawnAgentProfileInput {
@@ -87,13 +88,6 @@ export function spawnAgentProfileFromBlueprint(cmd: CommandSink, input: SpawnAge
   });
   cmd.add(agent, AgentKind, { kind: definition.kind });
   cmd.add(agent, AgentStatus, { status: 'idle' });
-
-  const prompt = spawnSystemPrompt(cmd, {
-    id: `system-prompt:agent:${agentId}`,
-    name: `${definition.name} Prompt`,
-    text: definition.systemPrompt
-  });
-  linkSystemPromptToScope(cmd, { scopeKind: 'agent', scopeId: agentId, agent, systemPrompt: prompt });
 
   const policy = spawnToolPolicy(cmd, {
     id: `tool-policy:agent:${agentId}`,
@@ -141,15 +135,6 @@ export function spawnModeFromDefinition(cmd: CommandSink, definition: BuiltinMod
     createdAt: now,
     updatedAt: now
   });
-
-  if (definition.systemPrompt?.trim()) {
-    const prompt = spawnSystemPrompt(cmd, {
-      id: `system-prompt:mode:${definition.id}`,
-      name: `${definition.name} Prompt`,
-      text: definition.systemPrompt
-    });
-    linkSystemPromptToScope(cmd, { scopeKind: 'mode', scopeId: definition.id, mode, systemPrompt: prompt });
-  }
 
   if (definition.toolPolicy) {
     const policy = spawnToolPolicy(cmd, {

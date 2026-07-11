@@ -40,6 +40,21 @@ function linkIdForScope(scopeKind: ToolPolicyScopeKind, scopeId?: string): strin
   return `tool-policy-scope:${scopeKind}:${scopeIdFor(scopeKind, scopeId) ?? 'global'}`;
 }
 
+function defaultAllowedTools(definitions: ToolDefinitionRecord[]): string[] {
+  return definitions
+    .filter((tool) => tool.source?.kind !== 'mcp' && tool.metadata?.defaultEnabled !== false)
+    .map((tool) => tool.name);
+}
+
+function defaultToolPolicy(definitions: ToolDefinitionRecord[], scopeKind: ToolPolicyScopeKind): ToolPolicyRecord {
+  return {
+    id: policyIdForScope(scopeKind, undefined),
+    name: defaultPolicyName(scopeKind),
+    allowedTools: defaultAllowedTools(definitions),
+    preset: 'custom'
+  };
+}
+
 function defaultPolicyName(scopeKind: ToolPolicyScopeKind): string {
   switch (scopeKind) {
     case 'global': return '全局默认工具策略';
@@ -135,14 +150,12 @@ export const useToolPolicyStore = defineStore('toolPolicy', {
       if (local.policy) return local;
 
       const clientState = useClientStateStore();
-      void clientState;
       if (scopeKind !== 'global') {
         const global = this.localPolicyFor('global');
         if (global.policy) return { ...global, inheritedFrom: 'global' };
       }
 
-      const fallback = clientState.toolPolicies[0];
-      return fallback ? { policy: fallback, inheritedFrom: 'global' } : {};
+      return { policy: defaultToolPolicy(clientState.toolDefinitions, 'global'), inheritedFrom: 'global' };
     },
     setPolicyForScope(scopeKind: ToolPolicyScopeKind, scopeId: string | undefined, allowedTools: string[], name?: string, toolConfigs?: Record<string, ToolPolicyToolConfigRecord>, sourceConfigs?: Record<string, ToolPolicySourceConfigRecord>, preset?: ToolPolicyPresetKind): void {
       const clientState = useClientStateStore();

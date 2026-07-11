@@ -154,6 +154,8 @@ export class BackendApplication {
   private pendingGlobalSnapshot = false;
   private readonly pendingSnapshotConversationIds = new Set<string>();
   private readonly pendingHydrationMessages: Array<{ clientId: BridgeClientId; message: WebviewToExtensionMessage }> = [];
+  private readonly pendingDeferredSkeletonMessages: Array<{ clientId: BridgeClientId; message: WebviewToExtensionMessage }> = [];
+  private deferredSkeletonComplete = false;
   private readonly renderLoadedConversationDetails = new Set<string>();
   private readonly runHistoryLoadedConversationDetails = new Set<string>();
   private readonly conversationTailLoaded = new Set<string>();
@@ -206,6 +208,7 @@ export class BackendApplication {
       conversationSettingsBridge: this.conversationSettingsBridge,
       isHydrated: () => this.hydrated,
       requestSnapshot: (conversationId) => this.requestSnapshot(conversationId),
+      requestPersist: (reason) => this.requestPersistSoon(reason),
       ensureConversationDetailLoaded: (conversationId) => this.ensureConversationDetailLoaded(conversationId),
       ensureConversationTailLoaded: (conversationId) => this.ensureConversationTailLoaded(conversationId),
       getProjectFolderCandidates: () => this.getProjectFolderCandidates(),
@@ -954,6 +957,10 @@ export class BackendApplication {
       this.pendingHydrationMessages.push({ clientId, message });
       return;
     }
+    if (this.hydrated && !this.deferredSkeletonComplete && shouldDeferUntilDeferredSkeleton(message)) {
+      this.pendingDeferredSkeletonMessages.push({ clientId, message });
+      return;
+    }
     this.webviewRouter.handle(clientId, message);
   }
 
@@ -1098,15 +1105,15 @@ export class BackendApplication {
       requestSpawnAgent(this.world, createDefaultAgentSpawnRequest());
     } finally {
       this.hydrated = true;
+      this.deferredSkeletonComplete = false;
+      // 工作环境、存档点等策略属于 deferred skeleton。先启动 deferred hydration，再放行配置类消息，
+      // 避免设置页刚打开时的修改被尚未加载的旧 skeleton 覆盖或因 scope 依赖未就绪而丢弃。
+      this.deferredSkeletonReady = this.startDeferredClientStateSkeletonLoad(startupStorageHealthy);
       this.flushPendingSnapshots();
       this.flushPendingHydrationMessages();
       for (const section of GLOBAL_SETTINGS_SECTIONS) {
         void this.globalSettingsBridge.postSnapshot(undefined, section);
       }
-      // 工作环境与策略属于 deferred skeleton。必须先加载已保存策略，再同步 VS Code workspace folders，
-      // 而且在 deferred hydration 完成前不能开启 skeleton 持久化；否则任一 startup 表变化都会把
-      // 尚未加载的 deferred 表以空索引写回。
-      this.deferredSkeletonReady = this.startDeferredClientStateSkeletonLoad(startupStorageHealthy);
       this.startCheckpointShadowAutoCleanup();
       void this.refreshMcpRuntime(true);
       void this.syncSkillCatalogResource();
@@ -1142,6 +1149,8 @@ export class BackendApplication {
       } else {
         console.warn('[LimCode] Skeleton persistence is disabled for this session to avoid overwriting partially loaded data.');
       }
+      this.deferredSkeletonComplete = true;
+      this.flushPendingDeferredSkeletonMessages();
     }
   }
 
@@ -1159,6 +1168,14 @@ export class BackendApplication {
         console.warn('[LimCode] Failed to auto-clean unused shadow worktrees.', error);
       }
     })();
+  }
+
+  private requestPersistSoon(reason: string): void {
+    setTimeout(() => {
+      void this.persistence.persistImmediately({ force: true }).catch((error) => {
+        console.warn(`[LimCode] Failed to persist after config mutation (${reason}).`, error);
+      });
+    }, 750);
   }
 
   private requestSnapshot(conversationId?: string): void {
@@ -1372,7 +1389,16 @@ export class BackendApplication {
       return;
     }
     const pending = this.pendingHydrationMessages.splice(0);
-    for (const item of pending) this.webviewRouter.handle(item.clientId, item.message);
+    for (const item of pending) this.handleWebviewMessage(item.clientId, item.message);
+  }
+
+  private flushPendingDeferredSkeletonMessages(): void {
+    if (this.disposing) {
+      this.pendingDeferredSkeletonMessages.length = 0;
+      return;
+    }
+    const pending = this.pendingDeferredSkeletonMessages.splice(0);
+    for (const item of pending) this.handleWebviewMessage(item.clientId, item.message);
   }
 
   private primeConversationStreamState(conversationId: string, detail: ClientState): void {
@@ -1987,8 +2013,24 @@ function shouldDeferUntilHydrated(message: WebviewToExtensionMessage): boolean {
     case 'message.edit':
     case 'message.deleteFrom':
     case 'message.retryFrom':
+    case 'agent.create':
+    case 'agent.update':
+    case 'agent.delete':
+    case 'conversation.agent.select':
+    case 'systemPrompt.scope.set':
+    case 'systemPrompt.scope.clear':
+    case 'runtimeContext.scope.set':
+    case 'runtimeContext.scope.clear':
+    case 'runtimeContext.refresh':
+    case 'runtimeContext.snapshot.clear':
+    case 'modelProfile.scope.set':
+    case 'modelProfile.scope.clear':
     case 'toolPolicy.scope.set':
     case 'toolPolicy.scope.clear':
+    case 'skillPolicy.scope.set':
+    case 'skillPolicy.scope.clear':
+    case 'checkpointPolicy.scope.set':
+    case 'checkpointPolicy.scope.clear':
     case 'tool.execution.approve':
     case 'tool.execution.reject':
     case 'tool.change.apply':
@@ -2019,6 +2061,41 @@ function shouldDeferUntilHydrated(message: WebviewToExtensionMessage): boolean {
   }
 }
 
+function shouldDeferUntilDeferredSkeleton(message: WebviewToExtensionMessage): boolean {
+  switch (message.type) {
+    case 'agent.create':
+    case 'agent.update':
+    case 'agent.delete':
+    case 'conversation.agent.select':
+    case 'systemPrompt.scope.set':
+    case 'systemPrompt.scope.clear':
+    case 'runtimeContext.scope.set':
+    case 'runtimeContext.scope.clear':
+    case 'runtimeContext.refresh':
+    case 'runtimeContext.snapshot.clear':
+    case 'modelProfile.scope.set':
+    case 'modelProfile.scope.clear':
+    case 'mode.create':
+    case 'mode.update':
+    case 'mode.delete':
+    case 'conversation.mode.select':
+    case 'toolPolicy.scope.set':
+    case 'toolPolicy.scope.clear':
+    case 'skillPolicy.scope.set':
+    case 'skillPolicy.scope.clear':
+    case 'workEnvironment.select':
+    case 'workEnvironment.upsert':
+    case 'workEnvironment.remove':
+    case 'workEnvironment.importFromVscode':
+    case 'workEnvironmentPolicy.scope.set':
+    case 'workEnvironmentPolicy.scope.clear':
+    case 'checkpointPolicy.scope.set':
+    case 'checkpointPolicy.scope.clear':
+      return true;
+    default:
+      return false;
+  }
+}
 
 function cloneClientState(state: ClientState): ClientState {
   if (typeof structuredClone === 'function') return structuredClone(state);

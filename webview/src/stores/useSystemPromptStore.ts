@@ -15,10 +15,19 @@ interface SystemPromptStoreState {
   pendingSave?: PendingSystemPromptSave;
 }
 
+export interface SystemPromptResolution {
+  prompt?: SystemPromptRecord;
+  link?: SystemPromptScopeLinkRecord;
+  inheritedPrompts: SystemPromptRecord[];
+  inheritedText: string;
+  effectiveText: string;
+}
+
 function scopeIdFor(scopeKind: ConfigScopeKind, scopeId?: string): string | undefined { return scopeKind === 'global' ? undefined : scopeId?.trim(); }
 function matches(link: SystemPromptScopeLinkRecord, scopeKind: ConfigScopeKind, scopeId?: string): boolean { return link.role === 'active' && link.scopeKind === scopeKind && scopeIdFor(scopeKind, link.scopeId) === scopeIdFor(scopeKind, scopeId); }
 function latest<T extends { createdAt: number; updatedAt: number; id: string }>(items: T[]): T | undefined { return [...items].sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt || b.id.localeCompare(a.id))[0]; }
 function sortPlaceholders(items: PromptPlaceholderRecord[]): PromptPlaceholderRecord[] { return [...items].sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.label.localeCompare(b.label) || a.id.localeCompare(b.id)); }
+function promptText(prompts: SystemPromptRecord[]): string { return prompts.map((prompt) => prompt.text.trim()).filter(Boolean).join('\n\n'); }
 
 export const useSystemPromptStore = defineStore('systemPrompt', {
   state: (): SystemPromptStoreState => ({ status: '' }),
@@ -34,6 +43,57 @@ export const useSystemPromptStore = defineStore('systemPrompt', {
       const prompt = clientState.systemPrompts.find((item) => item.id === link?.systemPromptId);
       return { ...(prompt ? { prompt } : {}), ...(link ? { link } : {}) };
     },
+    promptResolutionFor(scopeKind: ConfigScopeKind, scopeId?: string): SystemPromptResolution {
+      const local = this.localPromptFor(scopeKind, scopeId);
+      const inheritedPrompts = this.inheritedPromptsFor(scopeKind, scopeId);
+      const inheritedText = promptText(inheritedPrompts);
+      const effectiveText = promptText([...inheritedPrompts, ...(local.prompt ? [local.prompt] : [])]);
+      return {
+        ...(local.prompt ? { prompt: local.prompt } : {}),
+        ...(local.link ? { link: local.link } : {}),
+        inheritedPrompts,
+        inheritedText,
+        effectiveText
+      };
+    },
+    inheritedPromptsFor(scopeKind: ConfigScopeKind, scopeId?: string): SystemPromptRecord[] {
+      const clientState = useClientStateStore();
+      const prompts: SystemPromptRecord[] = [];
+      const pushLocal = (kind: ConfigScopeKind, id?: string): void => {
+        const prompt = this.localPromptFor(kind, id).prompt;
+        if (prompt?.text.trim()) prompts.push(prompt);
+      };
+
+      switch (scopeKind) {
+        case 'global':
+          return [];
+        case 'agent':
+        case 'mode':
+          pushLocal('global');
+          return prompts;
+        case 'conversation': {
+          pushLocal('global');
+          const conversationId = scopeIdFor(scopeKind, scopeId);
+          if (!conversationId) return prompts;
+          const agentId = activeAgentIdForConversation(conversationId);
+          if (agentId) pushLocal('agent', agentId);
+          const modeId = activeModeIdForConversation(conversationId);
+          if (modeId) pushLocal('mode', modeId);
+          return prompts;
+        }
+        case 'run': {
+          pushLocal('global');
+          const runId = scopeIdFor(scopeKind, scopeId);
+          if (!runId) return prompts;
+          const target = clientState.agentRunTargetLinks.find((link) => link.runId === runId && link.role === 'executor');
+          if (target?.agentId) pushLocal('agent', target.agentId);
+          const runMode = clientState.runModeLinks.find((link) => link.runId === runId && link.role === 'active')?.modeId;
+          if (runMode) pushLocal('mode', runMode);
+          if (target?.conversationId) pushLocal('conversation', target.conversationId);
+          return prompts;
+        }
+      }
+    },
     setPromptForScope(scopeKind: ConfigScopeKind, scopeId: string | undefined, text: string, name?: string): void {
       const normalizedScopeId = scopeIdFor(scopeKind, scopeId);
       if (scopeKind !== 'global' && !normalizedScopeId) {
@@ -43,9 +103,11 @@ export const useSystemPromptStore = defineStore('systemPrompt', {
 
       const normalizedText = text.trim();
       if (!normalizedText) {
-        this.status = scopeKind === 'global'
-          ? 'Global Prompt 不能为空。'
-          : 'Prompt 内容为空；若要继承上级配置，请点击“恢复继承”。';
+        if (scopeKind === 'global') {
+          this.clearPromptScope(scopeKind, normalizedScopeId);
+          return;
+        }
+        this.status = 'Prompt 内容为空；若要继承上级配置，请点击“恢复继承”。';
         return;
       }
 
@@ -60,12 +122,12 @@ export const useSystemPromptStore = defineStore('systemPrompt', {
       this.status = '正在保存 Prompt...';
     },
     clearPromptScope(scopeKind: ConfigScopeKind, scopeId?: string): void {
-      if (scopeKind === 'global') return;
+      const normalizedScopeId = scopeIdFor(scopeKind, scopeId);
       const clientState = useClientStateStore();
-      clientState.systemPromptScopeLinks = clientState.systemPromptScopeLinks.filter((link) => !matches(link, scopeKind, scopeId));
+      clientState.systemPromptScopeLinks = clientState.systemPromptScopeLinks.filter((link) => !matches(link, scopeKind, normalizedScopeId));
       this.pendingSave = undefined;
-      this.status = '已恢复继承';
-      bridge.request(BridgeMessageType.SystemPromptScopeClear, { scopeKind, ...(scopeIdFor(scopeKind, scopeId) ? { scopeId: scopeIdFor(scopeKind, scopeId) } : {}) });
+      this.status = scopeKind === 'global' ? '已恢复默认 Prompt' : '已恢复继承';
+      bridge.request(BridgeMessageType.SystemPromptScopeClear, { scopeKind, ...(normalizedScopeId ? { scopeId: normalizedScopeId } : {}) });
     },
     reconcilePendingSave(): void {
       const pending = this.pendingSave;
@@ -79,3 +141,19 @@ export const useSystemPromptStore = defineStore('systemPrompt', {
     }
   }
 });
+
+function activeAgentIdForConversation(conversationId: string): string | undefined {
+  const clientState = useClientStateStore();
+  const selection = latest(clientState.conversationAgentSelections.filter((item) => item.conversationId === conversationId && item.role === 'active'));
+  const fallbackLink = selection
+    ? undefined
+    : clientState.agentConversationLinks.find((link) => link.conversationId === conversationId && link.role === 'default')
+      ?? clientState.agentConversationLinks.find((link) => link.conversationId === conversationId);
+  return selection?.agentId ?? fallbackLink?.agentId;
+}
+
+function activeModeIdForConversation(conversationId: string): string | undefined {
+  const clientState = useClientStateStore();
+  const selection = latest(clientState.conversationModeSelections.filter((item) => item.conversationId === conversationId && item.role === 'active'));
+  return selection?.scopeKind === 'mode' ? selection.modeId : undefined;
+}

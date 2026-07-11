@@ -15,16 +15,83 @@ const store = useSystemPromptStore();
 const { loading: promptLoading, text: promptLoadingText } = useSettingsLoadingText('提示词配置', () => props.scopeKind, () => props.scopeId);
 const scroller = ref<HTMLTextAreaElement | null>(null);
 const draft = ref('');
+const inheritMode = ref(false);
+const currentScopeKey = ref('');
 const local = computed(() => store.localPromptFor(props.scopeKind, props.scopeId));
+const resolution = computed(() => store.promptResolutionFor(props.scopeKind, props.scopeId));
 const placeholders = computed(() => store.systemPlaceholders);
+const isInherited = computed(() => props.scopeKind !== 'global' && inheritMode.value && !local.value.prompt);
+const canRestoreScope = computed(() => props.scopeKind === 'global' ? !!local.value.link || !!local.value.prompt : !isInherited.value);
+const restoreButtonLabel = computed(() => props.scopeKind === 'global' ? '恢复默认' : '恢复继承');
+const canSave = computed(() => !isInherited.value && draft.value.trim().length > 0);
+const statusLabel = computed(() => {
+  if (props.scopeKind === 'global') {
+    if (local.value.prompt?.text.trim()) return '全局已配置';
+    if (local.value.link || local.value.prompt) return '全局覆盖为空';
+    return '等待内置默认';
+  }
+  if (local.value.prompt) return '当前作用域已配置';
+  return resolution.value.inheritedText ? '继承上级 / 内置' : '继承中（上级未配置）';
+});
+const inheritedStatusText = computed(() => resolution.value.inheritedText
+  ? '当前显示继承得到的 Prompt；不会写入本作用域。'
+  : '当前继承上级配置；上级暂未提供 Prompt。'
+);
+const promptPlaceholder = computed(() => isInherited.value
+  ? '上级或内置 Prompt 暂未配置；点击“自定义 Prompt”可为当前作用域追加内容。'
+  : '输入这个作用域要追加的 system prompt...'
+);
 
-watch(() => [props.scopeKind, props.scopeId, local.value.prompt?.id], () => {
-  draft.value = local.value.prompt?.text ?? '';
+watch(() => [props.scopeKind, props.scopeId, local.value.prompt?.id, local.value.prompt?.text, resolution.value.inheritedText], () => {
+  const nextScopeKey = `${props.scopeKind}:${props.scopeId ?? ''}`;
+  const scopeChanged = currentScopeKey.value !== nextScopeKey;
+  currentScopeKey.value = nextScopeKey;
+
+  if (props.scopeKind === 'global') {
+    inheritMode.value = false;
+    draft.value = local.value.prompt?.text ?? '';
+    return;
+  }
+  if (local.value.prompt) {
+    inheritMode.value = false;
+    draft.value = local.value.prompt.text;
+    return;
+  }
+  if (scopeChanged || inheritMode.value) {
+    inheritMode.value = true;
+    draft.value = resolution.value.inheritedText;
+  }
 }, { immediate: true });
 
-function save(): void { store.setPromptForScope(props.scopeKind, props.scopeId, draft.value, `${props.scopeKind} System Prompt`); }
-function clear(): void { draft.value = ''; store.clearPromptScope(props.scopeKind, props.scopeId); }
+function onInput(event: Event): void {
+  if (isInherited.value) return;
+  draft.value = (event.target as HTMLTextAreaElement | null)?.value ?? '';
+}
+
+function save(): void {
+  if (!canSave.value) return;
+  store.setPromptForScope(props.scopeKind, props.scopeId, draft.value, `${props.scopeKind} System Prompt`);
+}
+
+function clear(): void {
+  store.clearPromptScope(props.scopeKind, props.scopeId);
+  if (props.scopeKind === 'global') {
+    draft.value = '';
+    return;
+  }
+  inheritMode.value = true;
+  draft.value = resolution.value.inheritedText;
+}
+
+function startCustom(): void {
+  if (props.scopeKind === 'global') return;
+  inheritMode.value = false;
+  draft.value = local.value.prompt?.text ?? resolution.value.inheritedText;
+  void nextTick(() => scroller.value?.focus());
+}
+
 function insertPlaceholder(token: string): void {
+  if (isInherited.value) return;
   const textarea = scroller.value;
   if (!textarea) {
     draft.value += token;
@@ -51,22 +118,24 @@ function insertPlaceholder(token: string): void {
         </h3>
         <p v-if="description">{{ description }}</p>
       </div>
-      <span>{{ local.prompt ? '当前作用域已配置' : '未配置' }}</span>
+      <span>{{ statusLabel }}</span>
     </header>
-    <div class="prompt-shell">
+    <div class="prompt-shell" :class="{ 'is-inherited': isInherited }">
       <div v-if="placeholders.length > 0" class="placeholder-bar" aria-label="可插入系统提示词占位符">
-        <button v-for="placeholder in placeholders" :key="placeholder.id" type="button" class="placeholder-chip" @click="insertPlaceholder(placeholder.token)">
+        <button v-for="placeholder in placeholders" :key="placeholder.id" type="button" class="placeholder-chip" :disabled="isInherited" @click="insertPlaceholder(placeholder.token)">
           <span>{{ placeholder.token }}</span>
           <small>{{ placeholder.label }}</small>
         </button>
       </div>
-      <textarea ref="scroller" v-model="draft" rows="8" placeholder="输入这个作用域要追加的 system prompt..."></textarea>
+      <textarea ref="scroller" :value="draft" :readonly="isInherited" rows="8" :placeholder="promptPlaceholder" @input="onInput"></textarea>
       <AdvancedScrollbar :scroller="scroller" variant="minimal" />
     </div>
     <div class="scope-editor-actions">
-      <button type="button" @click="save">保存 Prompt</button>
-      <button type="button" class="secondary" :disabled="scopeKind === 'global' || !local.prompt" @click="clear">恢复继承</button>
-      <span>{{ store.status }}</span>
+      <button v-if="isInherited" type="button" @click="startCustom">自定义 Prompt</button>
+      <button v-else type="button" :disabled="!canSave" @click="save">保存 Prompt</button>
+      <button type="button" class="secondary" :disabled="!canRestoreScope" @click="clear">{{ restoreButtonLabel }}</button>
+      <span v-if="isInherited">{{ inheritedStatusText }}</span>
+      <span v-else>{{ store.status }}</span>
     </div>
   </section>
 </template>
@@ -77,14 +146,17 @@ function insertPlaceholder(token: string): void {
 h3 { margin: 0; color: var(--vscode-foreground); font-size: var(--font-size-md); }
 p { margin: 2px 0 0; font-size: var(--font-size-sm); }
 .prompt-shell { position: relative; min-height: 130px; }
+.prompt-shell.is-inherited textarea { color: var(--vscode-descriptionForeground); background: color-mix(in srgb, var(--vscode-input-background) 92%, var(--vscode-foreground) 8%); }
 .placeholder-bar { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-bottom: var(--space-2); }
 .placeholder-chip { border: 1px solid var(--vscode-panel-border); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-foreground) 8%); color: var(--vscode-foreground); display: inline-flex; align-items: center; gap: 6px; padding: 3px 7px; font: inherit; }
 .placeholder-chip small { color: var(--vscode-descriptionForeground); font-size: var(--font-size-xs); }
-.placeholder-chip:hover,
-.placeholder-chip:focus-visible { background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-editor-background) 86%, var(--vscode-foreground) 14%)); outline: none; }
+.placeholder-chip:hover:not(:disabled),
+.placeholder-chip:focus-visible:not(:disabled) { background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-editor-background) 86%, var(--vscode-foreground) 14%)); outline: none; }
+.placeholder-chip:disabled { opacity: 0.55; }
 textarea { width: 100%; min-height: 130px; box-sizing: border-box; resize: vertical; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: var(--radius-sm); background: var(--vscode-input-background); color: var(--vscode-input-foreground); padding: var(--space-2); font: inherit; scrollbar-width: none; }
+textarea:read-only { cursor: text; }
 textarea::-webkit-scrollbar { display: none; }
-.scope-editor-actions { display: flex; align-items: center; gap: var(--space-2); color: var(--vscode-descriptionForeground); font-size: var(--font-size-sm); }
+.scope-editor-actions { display: flex; align-items: center; gap: var(--space-2); color: var(--vscode-descriptionForeground); font-size: var(--font-size-sm); flex-wrap: wrap; }
 .scope-editor-actions button {
   min-height: 28px;
   border: 1px solid var(--vscode-panel-border);

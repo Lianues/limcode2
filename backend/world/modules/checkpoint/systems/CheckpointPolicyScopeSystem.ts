@@ -51,7 +51,6 @@ export const CheckpointPolicyScopeSystem = defineSystem({
     }
 
     for (const payload of readEvents(ctx, CheckpointEventType.PolicyScopeClearRequested)) {
-      if (payload.scopeKind === 'global') continue;
       const scope = resolveScope(world, payload.scopeKind, payload.scopeId);
       if (!scope.ok) continue;
       const existing = findActiveCheckpointPolicyScopeLink(world, payload.scopeKind, scope.scopeId);
@@ -74,20 +73,24 @@ function resolveScope(world: WorldReader, scopeKind: CheckpointPolicyScopeKind, 
     case 'global':
       return { ok: true, data: {} };
     case 'conversation': {
-      const conversation = scopeId ? findByRecordId(world, Conversation, scopeId) : undefined;
-      return conversation === undefined ? { ok: false } : { ok: true, scopeId, data: { conversation } };
+      if (!scopeId) return { ok: false };
+      const conversation = findByRecordId(world, Conversation, scopeId);
+      return { ok: true, scopeId, data: conversation !== undefined ? { conversation } : {} };
     }
     case 'agent': {
-      const agent = scopeId ? findByRecordId(world, Agent, scopeId) : undefined;
-      return agent === undefined ? { ok: false } : { ok: true, scopeId, data: { agent } };
+      if (!scopeId) return { ok: false };
+      const agent = findByRecordId(world, Agent, scopeId);
+      return { ok: true, scopeId, data: agent !== undefined ? { agent } : {} };
     }
     case 'mode': {
-      const mode = scopeId ? findByRecordId(world, Mode, scopeId) : undefined;
-      return mode === undefined ? { ok: false } : { ok: true, scopeId, data: { mode } };
+      if (!scopeId) return { ok: false };
+      const mode = findByRecordId(world, Mode, scopeId);
+      return { ok: true, scopeId, data: mode !== undefined ? { mode } : {} };
     }
     case 'run': {
-      const run = scopeId ? findByRecordId(world, AgentRun, scopeId) : undefined;
-      return run === undefined ? { ok: false } : { ok: true, scopeId, data: { run } };
+      if (!scopeId) return { ok: false };
+      const run = findByRecordId(world, AgentRun, scopeId);
+      return { ok: true, scopeId, data: run !== undefined ? { run } : {} };
     }
   }
 }

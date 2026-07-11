@@ -527,7 +527,7 @@ function cancelDelete(): void {
           </div>
         </article>
 
-        <article class="settings-collapse-panel">
+        <article class="settings-collapse-panel model-specific-group-panel">
           <header class="settings-collapse-head">
             <button type="button" class="settings-collapse-toggle" :aria-expanded="modelSpecificGroupOpen" @click="modelSpecificGroupOpen = !modelSpecificGroupOpen">
               <IconChevronDown class="settings-collapse-caret" :class="{ collapsed: !modelSpecificGroupOpen }" stroke="2" aria-hidden="true" />
@@ -549,6 +549,7 @@ function cancelDelete(): void {
                   empty-text="当前模型列表没有可创建专属配置的模型。"
                   searchable
                   search-placeholder="筛选模型..."
+                  placement="top"
                 />
               </label>
               <button type="button" class="model-manager-button model-specific-create-button" :disabled="!canCreateModelSpecificConfig" @click="createModelSpecificConfig">
@@ -785,6 +786,10 @@ function cancelDelete(): void {
 .settings-collapse-body {
   padding: var(--space-3);
   border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 72%, transparent);
+}
+
+.model-specific-group-panel {
+  overflow: visible;
 }
 
 .model-specific-body {

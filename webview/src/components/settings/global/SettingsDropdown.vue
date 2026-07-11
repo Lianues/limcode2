@@ -28,6 +28,7 @@ const props = withDefaults(
     maxHeight?: number | string;
     height?: number | string;
     closeSignal?: number | string;
+    placement?: 'bottom' | 'top';
   }>(),
   {
     placeholder: '请选择',
@@ -38,7 +39,8 @@ const props = withDefaults(
     searchable: false,
     searchPlaceholder: '筛选...',
     maxHeight: 260,
-    height: ''
+    height: '',
+    placement: 'bottom'
   }
 );
 
@@ -158,7 +160,14 @@ function cssLength(value: number | string): string {
     </button>
 
     <Transition name="lc-dropdown">
-      <section v-if="open" class="project-dropdown settings-dropdown-panel lc-dropdown-panel" :style="panelStyle" role="listbox" @click.stop>
+      <section
+        v-if="open"
+        class="project-dropdown settings-dropdown-panel lc-dropdown-panel"
+        :class="`placement-${placement}`"
+        :style="panelStyle"
+        role="listbox"
+        @click.stop
+      >
         <div ref="scroller" class="settings-dropdown-scroll">
           <div v-if="title" class="project-dropdown-title">{{ title }}</div>
           <label v-if="searchable" class="settings-dropdown-filter" aria-label="筛选选项">
@@ -277,6 +286,11 @@ button.settings-dropdown-button:active {
   border-radius: var(--radius-sm);
   background: var(--vscode-editor-background);
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+}
+
+.settings-dropdown-panel.placement-top {
+  top: auto;
+  bottom: calc(100% + 4px);
 }
 
 .settings-dropdown-scroll {

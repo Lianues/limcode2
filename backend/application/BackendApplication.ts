@@ -176,7 +176,7 @@ export class BackendApplication {
     this.world.setResource(OpenConversationPanelIdsKey, []);
     this.env.mcp.setStateChangeListener(() => this.syncMcpRuntimeResources());
     this.persistence = new ClientStatePersistence(this.world, this.env.storage, {
-      renderLoadedConversationIds: () => this.renderLoadedConversationDetails,
+      renderLoadedConversationIds: () => this.persistableRenderDetailConversationIds(),
       runHistoryLoadedConversationIds: () => this.runHistoryLoadedConversationDetails
     });
     this.globalSettingsBridge = new GlobalSettingsBridge({
@@ -573,7 +573,8 @@ export class BackendApplication {
     if (this.conversationTailLoaded.has(conversationId)) return true;
     const conversation = this.findConversationEntity(conversationId);
     if (conversation === undefined) return false;
-    const loaded = this.world.has(conversation, ConversationFullContextLoaded);
+    const loaded = this.world.has(conversation, ConversationFullContextLoaded)
+      || this.world.query(Message, PartOf).some((entity) => this.world.get(entity, PartOf)?.parent === conversation);
     if (loaded) this.conversationTailLoaded.add(conversationId);
     return loaded;
   }
@@ -584,6 +585,9 @@ export class BackendApplication {
       direction: 'initial',
       chunkCount: 1
     });
+    if (page.state.messages.length > 0 && this.findConversationEntity(conversationId) === undefined) {
+      this.spawnPreHydrationConversation(conversationId);
+    }
     if (page.state.messages.length > 0) await hydrateConversationDetail(this.world, page.state, conversationId);
     this.conversationTailLoaded.add(conversationId);
     this.coldConversationHistoryEntries.delete(conversationId);
@@ -657,7 +661,8 @@ export class BackendApplication {
 
   public async getConversationHistoryPage(input: { scopeKind: SidebarHistoryScopeKind; projectFolderUri?: string; cursor?: string; limit?: number }): Promise<ConversationHistoryPageRecord> {
     const scope = this.resolveHistoryScope(input.scopeKind, input.projectFolderUri);
-    return this.env.storage.loadConversationHistoryPage({ scope, cursor: input.cursor, limit: input.limit });
+    const page = await this.env.storage.loadConversationHistoryPage({ scope, cursor: input.cursor, limit: input.limit });
+    return this.mergeLiveConversationHistoryPage(page, scope);
   }
 
   private resolveHistoryScope(scopeKind: SidebarHistoryScopeKind, projectFolderUri: string | undefined): ConversationHistoryScope {
@@ -667,12 +672,79 @@ export class BackendApplication {
     return this.getCurrentProjectHistoryScope();
   }
 
+  private mergeLiveConversationHistoryPage(page: ConversationHistoryPageRecord, scope: ConversationHistoryScope): ConversationHistoryPageRecord {
+    const entriesById = new Map(page.entries.map((entry) => [entry.id, entry]));
+    const liveEntries = this.getConversationHistoryEntries()
+      .filter((entry) => this.isConversationHistorySummaryLoaded(entry.id) && (historyEntryMatchesScope(entry, scope) || entriesById.has(entry.id)));
+    if (liveEntries.length === 0) return page;
+
+    const isFirstPage = page.pageInfo.pageIndex === 0;
+    let changed = false;
+    for (const entry of liveEntries) {
+      if (!isFirstPage && !entriesById.has(entry.id)) continue;
+      const existing = entriesById.get(entry.id);
+      const scopedEntry = existing && !historyEntryMatchesScope(entry, scope)
+        ? { ...entry, projectFolderUri: existing.projectFolderUri, projectName: existing.projectName }
+        : entry;
+      if (existing && JSON.stringify(existing) === JSON.stringify(scopedEntry)) continue;
+      entriesById.set(entry.id, scopedEntry);
+      changed = true;
+    }
+    if (!changed) return page;
+
+    const nominalPageSize = Math.max(page.pageInfo.pageSize || 0, page.entries.length || 0, 1);
+    const entries = [...entriesById.values()].sort(compareConversationHistoryEntries);
+    const visibleEntries = isFirstPage ? entries.slice(0, nominalPageSize) : entries;
+    const visibleEntryIds = new Set(visibleEntries.map((entry) => entry.id));
+    const originLinksByConversationId = new Map(page.originLinks.map((link) => [link.conversationId, link]));
+    for (const [conversationId, originLink] of this.collectConversationOriginLinksById()) {
+      if (visibleEntryIds.has(conversationId)) originLinksByConversationId.set(conversationId, originLink);
+    }
+
+    return {
+      ...page,
+      entries: visibleEntries,
+      originLinks: [...originLinksByConversationId.values()].filter((link) => visibleEntryIds.has(link.conversationId)),
+      pageInfo: {
+        ...page.pageInfo,
+        total: Math.max(page.pageInfo.total, visibleEntries.length)
+      }
+    };
+  }
+
+  private persistableRenderDetailConversationIds(): string[] {
+    const ids = new Set(this.renderLoadedConversationDetails);
+    for (const conversationId of this.conversationTailLoaded) ids.add(conversationId);
+    return [...ids].filter((conversationId) => this.findConversationEntity(conversationId) !== undefined);
+  }
+
+  private isConversationHistorySummaryLoaded(conversationId: string): boolean {
+    return this.renderLoadedConversationDetails.has(conversationId)
+      || this.conversationTailLoaded.has(conversationId)
+      || this.conversationHasHydratedMessages(conversationId);
+  }
+
+  private conversationHasHydratedMessages(conversationId: string): boolean {
+    const conversation = this.findConversationEntity(conversationId);
+    if (conversation === undefined) return false;
+    return this.world.query(Message, PartOf).some((entity) => this.world.get(entity, PartOf)?.parent === conversation);
+  }
+
+  private collectConversationOriginLinksById(): Map<string, ConversationOriginLinkRecord> {
+    const result = new Map<string, ConversationOriginLinkRecord>();
+    for (const [entity, originLink] of this.collectConversationOriginsByConversation()) {
+      const conversation = this.world.get(entity, Conversation);
+      if (conversation?.id) result.set(conversation.id, originLink);
+    }
+    return result;
+  }
+
 
   private async upsertConversationHistoryEntry(conversationId: string): Promise<void> {
     const projected = this.getConversationHistoryEntries().find((candidate) => candidate.id === conversationId);
     if (!projected) return;
     const retained = this.coldConversationHistoryEntries.get(conversationId);
-    const entry = retained && !this.renderLoadedConversationDetails.has(conversationId)
+    const entry = retained && !this.isConversationHistorySummaryLoaded(conversationId)
       ? {
           ...retained,
           ...projected,
@@ -1773,6 +1845,12 @@ function compareConversationHistoryEntries(left: SidebarConversationHistoryEntry
   return (right.updatedAt ?? 0) - (left.updatedAt ?? 0)
     || left.title.localeCompare(right.title, 'zh-CN')
     || left.id.localeCompare(right.id, 'zh-CN');
+}
+
+function historyEntryMatchesScope(entry: SidebarConversationHistoryEntry, scope: ConversationHistoryScope): boolean {
+  if (scope.kind === 'all') return true;
+  if (scope.kind === 'unbound') return !entry.projectFolderUri;
+  return entry.projectFolderUri === scope.folderUri;
 }
 
 function compareMessagesBySeq(left: MessageData, right: MessageData): number {

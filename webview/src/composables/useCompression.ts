@@ -3,7 +3,7 @@ import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
-import type { CompressionBlockRecord, ConversationTimelineChunkSummaryRecord } from '@shared/protocol';
+import type { CompressionBlockRecord, ConversationTimelineChunkSummaryRecord, LlmProviderConfigRecord } from '@shared/protocol';
 
 export interface CreateCompressionOptions {
   startMessageId?: string;
@@ -84,12 +84,31 @@ export function useCompression() {
       ?? globalSettings.llmProviderConfigs.configs.find((config) => config.id === globalSettings.llm.activeProviderConfigId)
       ?? globalSettings.llmProviderConfigs.configs[0];
     const activeProviderConfigId = activeProvider?.id;
+    const modelId = selectedModelIdForProvider(activeProvider, conversationId);
+    const modelBinding = activeProviderConfigId && modelId
+      ? globalSettings.llmCompression.modelBindings.find((item) => item.providerConfigId === activeProviderConfigId && item.modelId === modelId)
+      : undefined;
     const binding = activeProviderConfigId
       ? globalSettings.llmCompression.providerBindings.find((item) => item.providerConfigId === activeProviderConfigId)
       : undefined;
-    const configId = binding?.compressionConfigId ?? globalSettings.llmCompression.defaultConfigId;
+    const configId = modelBinding?.compressionConfigId ?? binding?.compressionConfigId ?? globalSettings.llmCompression.defaultConfigId;
     return globalSettings.llmCompressionConfigs.configs.find((config) => config.id === configId)
       ?? globalSettings.llmCompressionConfigs.configs[0];
+  }
+
+  function selectedModelIdForProvider(config: LlmProviderConfigRecord | undefined, conversationId: string): string {
+    if (!config) return '';
+    const conversationOverride = conversationSettings.llm.conversationId === conversationId
+      ? conversationSettings.llm.modelOverrides?.[config.id]?.trim()
+      : '';
+    if (conversationOverride && modelExistsInProvider(config, conversationOverride)) return conversationOverride;
+    return config.model?.trim() ?? '';
+  }
+
+  function modelExistsInProvider(config: LlmProviderConfigRecord, modelId: string): boolean {
+    const id = modelId.trim();
+    if (!id) return false;
+    return config.model?.trim() === id || config.models.some((candidate) => candidate.id.trim() === id);
   }
 
   function compressionTimelineDebugContext(conversationId: string, input: CreateCompressionOptions): Record<string, unknown> {

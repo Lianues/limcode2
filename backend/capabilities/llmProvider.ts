@@ -82,7 +82,7 @@ export interface LlmProviderOptions {
   settings: MaybeProvider<LlmProviderConfigRecord, LlmSettingsRequest>;
   proxy?: MaybeProvider<string>;
   compressionSettings?: LlmCompressionSettingsProvider;
-  activeCompressionSettings?: (conversationId?: string) => LlmCompressionConfigRecord | undefined | Promise<LlmCompressionConfigRecord | undefined>;
+  activeCompressionSettings?: (request?: { conversationId?: string; providerConfigId?: string; model?: string }) => LlmCompressionConfigRecord | undefined | Promise<LlmCompressionConfigRecord | undefined>;
 
   headers?: MaybeProvider<Record<string, string>>;
   resolveAttachment?: (input: { attachmentId?: string; sourcePath?: string; mimeType?: string; name?: string }) => Promise<InlineDataPart | undefined>;
@@ -524,7 +524,7 @@ export async function resolveLlmInvocationProvider(
 ): Promise<void> {
   try {
     const settings = normalizeSettings(await resolveMaybe(options.settings, request));
-    const compressionConfig = await options.activeCompressionSettings?.(request.conversationId);
+    const compressionConfig = await options.activeCompressionSettings?.({ conversationId: request.conversationId, providerConfigId: settings.id, model: settings.model });
     resolvedRuntimeSettingsByInvocationId?.set(request.invocationId, settings);
     emit({ type: LlmEventType.InvocationResolved, payload: { invocationId: request.invocationId, requestId: request.requestId, settings: snapshotFromSettings(settings, compressionConfig), resolvedAt: Date.now() } });
   } catch (error) {
@@ -1218,6 +1218,7 @@ function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmPr
     ...(headers ? { headers } : {}),
     ...(nonEmptyRecord(generationConfig) ? { generationConfig } : {}),
     ...(nonEmptyRecord(requestBody) ? { requestBody } : {}),
+    modelConfigs: settings?.modelConfigs ?? [],
     createdAt: settings?.createdAt ?? 0,
     updatedAt: settings?.updatedAt ?? 0
   };

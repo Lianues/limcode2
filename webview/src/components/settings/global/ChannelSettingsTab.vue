@@ -1,38 +1,32 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { IconCloudDown, IconPencil, IconPlus, IconSearch, IconTrash } from '@tabler/icons-vue';
+import { IconChevronDown, IconCloudDown, IconPencil, IconPlus, IconSearch, IconTrash } from '@tabler/icons-vue';
 import {
-  DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS,
-  DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
-  DEFAULT_LLM_RETRY_ON_ERROR,
+  type LlmCompressionConfigRecord,
   type LlmGenerationConfigRecord,
   type LlmProviderConfigRecord,
   type LlmProviderHeadersRecord,
   type LlmProviderKind,
-  type LlmCompressionMethodKind,
+  type LlmProviderModelConfigRecord,
   type LlmProviderModelRecord,
-  type LlmRequestBodyRecord,
-  type LlmToolCallFormat
+  type LlmRequestBodyRecord
 } from '@shared/protocol';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import ConfirmPanel from '@webview/components/ui/ConfirmPanel.vue';
 import InputPanel from '@webview/components/ui/InputPanel.vue';
-import LcCheckbox from '@webview/components/ui/LcCheckbox.vue';
-import TokenThresholdSlider from '@webview/components/ui/TokenThresholdSlider.vue';
 import SettingsLoadingInline from '@webview/components/settings/SettingsLoadingInline.vue';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
+import LlmAdvancedConfigEditor from './LlmAdvancedConfigEditor.vue';
+import LlmCompressionSettingsEditor from './LlmCompressionSettingsEditor.vue';
 import ModelFetchDialog from './ModelFetchDialog.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from './SettingsDropdown.vue';
-import LlmHeadersSettings from './parameters/LlmHeadersSettings.vue';
-import LlmParameterSettings from './parameters/LlmParameterSettings.vue';
 
 const settings = useGlobalSettingsStore();
 const { loading: channelLoading, text: channelLoadingText } = useSettingsLoadingText('渠道配置', 'global', undefined, {
   globalSettingsSections: ['llm', 'llmProviderConfigs', 'llmCompression', 'llmCompressionConfigs'] as const
 });
 type SelectableCompressionMethodKind = 'openai_responses_compact' | 'llm_summary' | 'segmented_summary' | 'deterministic_summary';
-const TOKEN_STEP = 1_000;
 const createOpen = ref(false);
 const createProvider = ref<LlmProviderKind>('openai-compatible');
 const renameOpen = ref(false);
@@ -42,6 +36,12 @@ const newModelName = ref('');
 const modelFilter = ref('');
 const modelListScroller = ref<HTMLElement | null>(null);
 const clearModelsConfirmOpen = ref(false);
+const defaultConfigOpen = ref(true);
+const modelSpecificGroupOpen = ref(true);
+const modelSpecificPanelOpen = ref<Record<string, boolean>>({});
+const newModelSpecificModelId = ref('');
+const deleteModelConfigConfirmOpen = ref(false);
+const deletingModelConfigId = ref('');
 
 const providerOptions: SettingsDropdownOption[] = [
   { value: 'openai-compatible', label: 'OpenAI Compatible' },
@@ -51,9 +51,10 @@ const providerOptions: SettingsDropdownOption[] = [
   { value: 'deepseek', label: 'DeepSeek' }
 ];
 
-const toolCallFormatOptions: SettingsDropdownOption[] = [
-  { value: 'function-call', label: 'Function Call' }
-];
+type AdvancedConfigPatch = Partial<Pick<
+  LlmProviderConfigRecord,
+  'toolCallFormat' | 'stream' | 'retryOnError' | 'retryMaxAttempts' | 'enableMultimodalTools'
+>>;
 
 const activeConfig = computed(() => settings.activeLlmProviderConfig);
 const canDeleteActiveConfig = computed(() => !!activeConfig.value && settings.llmProviderConfigs.configs.length > 1);
@@ -61,42 +62,10 @@ const activeConfigId = computed({
   get: () => settings.llm.activeProviderConfigId || activeConfig.value?.id || '',
   set: (configId: string) => settings.selectLlmProviderConfig(configId)
 });
-const activeCompressionMethodKind = computed<SelectableCompressionMethodKind>(() => {
-  const kind = settings.activeCompressionConfig?.kind ?? 'segmented_summary';
-  if (kind === 'disabled' || kind === 'manual_summary') return 'llm_summary';
-  return kind;
-});
 const configPageOptions = computed<SettingsDropdownOption[]>(() =>
   settings.llmProviderConfigs.configs.map((config) => ({ value: config.id, label: config.name, description: providerLabel(config.provider) }))
 );
 const activeProviderLabel = computed(() => providerLabel(activeConfig.value?.provider));
-const compressionProviderConfigId = computed({
-  get: () => settings.activeCompressionConfig?.openaiResponsesCompact?.providerConfigId
-    ?? settings.activeCompressionConfig?.llmSummary?.providerConfigId
-    ?? '__current__',
-  set: (configId: string) => settings.setActiveCompressionProviderConfig(configId === '__current__' ? '' : configId)
-});
-const compressionProviderConfig = computed(() => {
-  const id = compressionProviderConfigId.value;
-  return id === '__current__'
-    ? activeConfig.value
-    : settings.llmProviderConfigs.configs.find((config) => config.id === id) ?? activeConfig.value;
-});
-const compressionProviderOptions = computed<SettingsDropdownOption[]>(() => [
-  { value: '__current__', label: '跟随当前渠道', description: activeConfig.value ? `${activeConfig.value.name} · ${providerLabel(activeConfig.value.provider)}` : '使用当前聊天渠道' },
-  ...settings.llmProviderConfigs.configs.map((config) => ({ value: config.id, label: config.name, description: config.model ? `${providerLabel(config.provider)} · ${config.model}` : providerLabel(config.provider) }))
-]);
-const compressionMethodOptions = computed<SettingsDropdownOption[]>(() => {
-  const base: SettingsDropdownOption[] = [
-    { value: 'segmented_summary', label: '分段总结拼接' },
-    { value: 'llm_summary', label: 'LLM 总结' },
-    { value: 'deterministic_summary', label: '确定性摘要' }
-  ];
-  if (compressionProviderConfig.value?.provider === 'openai-responses' || settings.activeCompressionConfig?.kind === 'openai_responses_compact') {
-    base.splice(2, 0, { value: 'openai_responses_compact', label: 'OpenAI 原生压缩' });
-  }
-  return base;
-});
 const filteredModels = computed<LlmProviderModelRecord[]>(() => {
   const keyword = modelFilter.value.trim().toLowerCase();
   const models = activeConfig.value?.models ?? [];
@@ -106,33 +75,31 @@ const filteredModels = computed<LlmProviderModelRecord[]>(() => {
   });
 });
 const contextWindowTokens = computed(() => normalizeTokenCount(activeConfig.value?.contextWindowTokens) ?? 0);
-const activeCompressionTrigger = computed(() => settings.activeCompressionConfig?.trigger);
-const compressionAutoEnabled = computed(() => (activeCompressionTrigger.value?.mode ?? 'token_threshold') === 'token_threshold');
-const compressionReserveTokens = computed(() => normalizeTokenCount(activeCompressionTrigger.value?.reserveLatestUserMessageTokens) ?? DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS);
-const configuredThresholdPercent = computed(() => clampPercent(activeCompressionTrigger.value?.thresholdPercent ?? 80));
-const compressionThresholdTokens = computed(() => {
-  const contextWindow = contextWindowTokens.value;
-  const tokenValue = normalizeTokenCount(activeCompressionTrigger.value?.thresholdTokens);
-  if (tokenValue !== undefined) return contextWindow > 0 ? Math.min(tokenValue, contextWindow) : tokenValue;
-  if (contextWindow <= 0) return 0;
-  return clampTokenToContext((contextWindow * configuredThresholdPercent.value) / 100, contextWindow);
-});
-const compressionThresholdPercent = computed(() => {
-  const contextWindow = contextWindowTokens.value;
-  const thresholdTokens = compressionThresholdTokens.value;
-  if (contextWindow > 0 && thresholdTokens > 0) return clampPercent((thresholdTokens / contextWindow) * 100);
-  return configuredThresholdPercent.value;
-});
-const recommendedThresholdTokens = computed(() => {
-  const contextWindow = contextWindowTokens.value;
-  if (contextWindow <= 0) return 0;
-  return clampTokenToContext(contextWindow - compressionReserveTokens.value, contextWindow);
-});
-const compressionThresholdInputValue = computed(() => String(compressionThresholdTokens.value || ''));
-
 
 const hasModels = computed(() => (activeConfig.value?.models.length ?? 0) > 0);
 const canClearModels = computed(() => !!activeConfig.value && hasModels.value);
+const activeModelConfigs = computed<LlmProviderModelConfigRecord[]>(() => activeConfig.value?.modelConfigs ?? []);
+const modelSpecificOptions = computed<SettingsDropdownOption[]>(() => {
+  const config = activeConfig.value;
+  if (!config) return [];
+  const configured = new Set(config.modelConfigs.map((item) => item.modelId));
+  return config.models
+    .filter((model) => !configured.has(model.id))
+    .map((model) => ({ value: model.id, label: model.name, description: model.id }));
+});
+const selectedNewModelSpecificModelId = computed({
+  get: () => {
+    const options = modelSpecificOptions.value;
+    if (options.some((option) => option.value === newModelSpecificModelId.value)) return newModelSpecificModelId.value;
+    return options[0]?.value ?? '';
+  },
+  set: (modelId: string) => {
+    newModelSpecificModelId.value = modelId;
+  }
+});
+const canCreateModelSpecificConfig = computed(() => !!activeConfig.value && !!selectedNewModelSpecificModelId.value);
+const deletingModelConfig = computed(() => activeModelConfigs.value.find((config) => config.id === deletingModelConfigId.value));
+const deletingModelConfigLabel = computed(() => deletingModelConfig.value ? modelLabel(deletingModelConfig.value.modelId) : '该模型');
 
 /** 获取模型弹窗对应配置中已存在的模型 ID，用于在弹窗中标记「已添加」状态。 */
 const fetchedDialogExistingModelIds = computed<string[]>(() => {
@@ -156,118 +123,160 @@ function formatModelTime(value: string | undefined): string {
 function updateActiveConfigField<K extends keyof LlmProviderConfigRecord>(key: K, value: LlmProviderConfigRecord[K]): void {
   settings.updateActiveLlmProviderConfig({ [key]: value } as Partial<LlmProviderConfigRecord>);
 }
+
+function updateDefaultAdvancedPatch(patch: AdvancedConfigPatch): void {
+  settings.updateActiveLlmProviderConfig(patch);
+}
+
+function updateDefaultContextWindowTokens(value: number | undefined): void {
+  settings.updateActiveLlmContextWindowTokens(value);
+}
+
+function updateDefaultGenerationConfig(value: LlmGenerationConfigRecord | undefined): void {
+  settings.updateActiveLlmGenerationConfig(value);
+}
+
+function updateDefaultRequestBody(value: LlmRequestBodyRecord | undefined): void {
+  settings.updateActiveLlmRequestBody(value);
+}
+
+function updateDefaultHeaders(value: LlmProviderHeadersRecord | undefined): void {
+  settings.updateActiveLlmHeaders(value);
+}
+
+function updateModelAdvancedPatch(modelConfigId: string, patch: Partial<LlmProviderModelConfigRecord>): void {
+  settings.updateActiveModelConfig(modelConfigId, patch);
+}
+
+function updateModelContextWindowTokens(modelConfigId: string, value: number | undefined): void {
+  settings.updateActiveModelConfigContextWindowTokens(modelConfigId, value);
+}
+
+function updateModelGenerationConfig(modelConfigId: string, value: LlmGenerationConfigRecord | undefined): void {
+  settings.updateActiveModelConfigGenerationConfig(modelConfigId, value);
+}
+
+function updateModelRequestBody(modelConfigId: string, value: LlmRequestBodyRecord | undefined): void {
+  settings.updateActiveModelConfigRequestBody(modelConfigId, value);
+}
+
+function updateModelHeaders(modelConfigId: string, value: LlmProviderHeadersRecord | undefined): void {
+  settings.updateActiveModelConfigHeaders(modelConfigId, value);
+}
+
 function normalizeTokenCount(value: unknown): number | undefined {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined;
 }
 
-function alignTokenCountToK(value: number): number {
-  return Math.max(TOKEN_STEP, Math.round(value / TOKEN_STEP) * TOKEN_STEP);
-}
-
-function clampTokenToContext(value: number, contextWindow = contextWindowTokens.value): number {
-  const aligned = alignTokenCountToK(value);
-  return contextWindow > 0 ? Math.min(contextWindow, aligned) : aligned;
-}
-
-function clampPercent(value: unknown): number {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return 1;
-  return Math.min(100, Math.max(1, number));
-}
-
-function percentForTokens(tokens: number, contextWindow = contextWindowTokens.value): number {
-  return contextWindow > 0 ? clampPercent((tokens / contextWindow) * 100) : compressionThresholdPercent.value;
-}
-
-function formatTokenLabel(value: number | undefined): string {
-  const tokens = normalizeTokenCount(value);
-  if (tokens === undefined) return '未设置';
-  const kilo = tokens / 1_000;
-  if (kilo >= 1) return `${Number.isInteger(kilo) ? kilo.toFixed(0) : kilo.toFixed(1)}k`;
-  return `${tokens}`;
-}
-
-function numericInputValue(event: Event): number | undefined {
-  const value = (event.target as HTMLInputElement).value.trim();
-  if (!value) return undefined;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : undefined;
-}
-
-function updateContextWindowTokens(event: Event): void {
-  const value = numericInputValue(event);
-  settings.updateActiveLlmContextWindowTokens(value === undefined ? undefined : alignTokenCountToK(value));
-}
-
-function normalizeRetryMaxAttempts(value: unknown): number {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return DEFAULT_LLM_RETRY_MAX_ATTEMPTS;
-  const attempts = Math.floor(number);
-  return attempts < -1 ? -1 : attempts;
-}
-
-function updateRetryMaxAttempts(event: Event): void {
-  updateActiveConfigField('retryMaxAttempts', normalizeRetryMaxAttempts(numericInputValue(event)));
-}
-
-function updateCompressionAutoEnabled(enabled: boolean): void {
-  settings.updateActiveCompressionTrigger({ mode: enabled ? 'token_threshold' : 'manual' });
-}
-
-function updateCompressionThresholdTokens(event: Event): void {
-  const value = numericInputValue(event);
-  if (value === undefined) return;
-  updateCompressionThresholdFromTokens(value);
-}
-
-function updateCompressionThresholdFromTokens(value: number): void {
-  const tokens = clampTokenToContext(value);
-  settings.updateActiveCompressionTrigger({
-    thresholdUnit: 'tokens',
-    thresholdTokens: tokens,
-    thresholdPercent: percentForTokens(tokens)
-  });
-}
-
-
-
 function inputValue(event: Event): string {
   return (event.target as HTMLInputElement).value;
 }
 
-function updateGenerationConfig(value: LlmGenerationConfigRecord | undefined): void {
-  settings.updateActiveLlmGenerationConfig(value);
+function modelLabel(modelId: string): string {
+  const model = activeConfig.value?.models.find((candidate) => candidate.id === modelId);
+  return model?.name?.trim() || modelId;
 }
 
-function updateRequestBody(value: LlmRequestBodyRecord | undefined): void {
-  settings.updateActiveLlmRequestBody(value);
+function modelConfigDescription(modelConfig: LlmProviderModelConfigRecord): string {
+  return `模型 ID：${modelConfig.modelId} · 命中该模型时完整替代渠道默认配置与上下文压缩`;
 }
 
-function updateHeaders(value: LlmProviderHeadersRecord | undefined): void {
-  settings.updateActiveLlmHeaders(value);
+function modelConfigAsProviderConfig(modelConfig: LlmProviderModelConfigRecord): LlmProviderConfigRecord {
+  const base = activeConfig.value;
+  const now = Date.now();
+  return {
+    id: modelConfig.id,
+    name: base ? `${base.name} · ${modelLabel(modelConfig.modelId)}` : modelLabel(modelConfig.modelId),
+    provider: base?.provider ?? 'openai-compatible',
+    baseUrl: base?.baseUrl ?? '',
+    model: modelConfig.modelId,
+    models: base?.models ?? [],
+    apiKey: base?.apiKey ?? '',
+    toolCallFormat: modelConfig.toolCallFormat,
+    stream: modelConfig.stream,
+    retryOnError: modelConfig.retryOnError,
+    retryMaxAttempts: modelConfig.retryMaxAttempts,
+    enableMultimodalTools: modelConfig.enableMultimodalTools,
+    contextWindowTokens: modelConfig.contextWindowTokens,
+    headers: modelConfig.headers ?? {},
+    generationConfig: modelConfig.generationConfig ?? {},
+    requestBody: modelConfig.requestBody ?? {},
+    modelConfigs: [],
+    createdAt: modelConfig.createdAt || now,
+    updatedAt: modelConfig.updatedAt || now
+  };
+}
+
+function isModelConfigOpen(modelConfigId: string): boolean {
+  return modelSpecificPanelOpen.value[modelConfigId] ?? true;
+}
+
+function toggleModelConfig(modelConfigId: string): void {
+  modelSpecificPanelOpen.value = {
+    ...modelSpecificPanelOpen.value,
+    [modelConfigId]: !isModelConfigOpen(modelConfigId)
+  };
+}
+
+function createModelSpecificConfig(): void {
+  const modelId = selectedNewModelSpecificModelId.value;
+  if (!modelId) return;
+  const created = settings.createModelConfigForActiveConfig(modelId);
+  if (!created) return;
+  modelSpecificPanelOpen.value = { ...modelSpecificPanelOpen.value, [created.id]: true };
+  newModelSpecificModelId.value = '';
+}
+
+function openDeleteModelConfigConfirm(modelConfigId: string): void {
+  deletingModelConfigId.value = modelConfigId;
+  deleteModelConfigConfirmOpen.value = true;
+}
+
+function confirmDeleteModelConfig(): void {
+  const id = deletingModelConfigId.value;
+  deleteModelConfigConfirmOpen.value = false;
+  deletingModelConfigId.value = '';
+  if (!id) return;
+  settings.deleteModelConfigFromActiveConfig(id);
+}
+
+function cancelDeleteModelConfig(): void {
+  deleteModelConfigConfirmOpen.value = false;
+  deletingModelConfigId.value = '';
 }
 
 function providerLabel(provider: LlmProviderKind | undefined): string {
   return providerOptions.find((option) => option.value === provider)?.label ?? '未知渠道';
 }
 
-function compressionKindLabel(kind: LlmCompressionMethodKind | undefined): string {
-  switch (kind) {
-    case 'openai_responses_compact': return 'OpenAI 原生压缩';
-    case 'llm_summary': return 'LLM 总结';
-    case 'segmented_summary': return '分段总结拼接';
-    case 'deterministic_summary': return '确定性摘要';
-    case 'manual_summary': return '手动摘要';
-    case 'disabled': return '关闭';
-    default: return '未知方法';
-  }
+function modelCompressionConfig(modelId: string): LlmCompressionConfigRecord | undefined {
+  return settings.compressionConfigForActiveModel(modelId);
 }
 
-function updateActiveCompressionMethod(value: string): void {
-  settings.setActiveCompressionMethodKind(value as SelectableCompressionMethodKind);
+function updateDefaultCompressionProviderConfigId(providerConfigId: string): void {
+  settings.setActiveCompressionProviderConfig(providerConfigId);
 }
 
+function updateDefaultCompressionMethodKind(kind: SelectableCompressionMethodKind): void {
+  settings.setActiveCompressionMethodKind(kind);
+}
+
+function updateDefaultCompressionTrigger(patch: Partial<LlmCompressionConfigRecord['trigger']>): void {
+  settings.updateActiveCompressionTrigger(patch);
+}
+
+function updateModelCompressionProviderConfigId(modelId: string, providerConfigId: string): void {
+  settings.setModelCompressionProviderConfig(modelId, providerConfigId);
+}
+
+function updateModelCompressionMethodKind(modelId: string, kind: SelectableCompressionMethodKind): void {
+  settings.setModelCompressionMethodKind(modelId, kind);
+}
+
+function updateModelCompressionTrigger(modelId: string, patch: Partial<LlmCompressionConfigRecord['trigger']>): void {
+  settings.updateModelCompressionTrigger(modelId, patch);
+}
 
 function openCreate(): void {
   createProvider.value = 'openai-compatible';
@@ -406,19 +415,9 @@ function cancelDelete(): void {
     </div>
 
     <div v-if="activeConfig" class="global-settings-grid">
-      <label class="global-settings-field">
+      <label class="global-settings-field global-settings-field-wide">
         <span>渠道类型</span>
         <input :value="activeProviderLabel" type="text" readonly />
-      </label>
-
-      <label class="global-settings-field">
-        <span>工具调用格式</span>
-        <SettingsDropdown
-          :model-value="activeConfig.toolCallFormat"
-          :options="toolCallFormatOptions"
-          title="选择工具调用格式"
-          @update:model-value="updateActiveConfigField('toolCallFormat', $event as LlmToolCallFormat)"
-        />
       </label>
 
       <label class="global-settings-field global-settings-field-wide">
@@ -429,77 +428,6 @@ function cancelDelete(): void {
       <label class="global-settings-field global-settings-api-key-field global-settings-field-wide">
         <span>API Key</span>
         <input :value="activeConfig.apiKey" type="text" placeholder="sk-..." autocomplete="off" spellcheck="false" @input="updateActiveConfigField('apiKey', inputValue($event))" />
-      </label>
-
-      <label class="global-settings-field context-window-field">
-        <span>上下文窗口 token 数</span>
-        <input
-          class="token-number-input"
-          :value="activeConfig.contextWindowTokens ?? ''"
-          type="number"
-          min="1000"
-          :step="TOKEN_STEP"
-          placeholder="例如 200000"
-          @change="updateContextWindowTokens"
-        />
-      </label>
-
-      <div class="global-settings-field stream-field">
-        <span>流式生成</span>
-        <div class="stream-checkbox-row">
-          <LcCheckbox
-            :model-value="activeConfig.stream !== false"
-            size="sm"
-            aria-label="启用流式生成"
-            @update:model-value="updateActiveConfigField('stream', $event)"
-          >
-            <span class="stream-checkbox-enable">启用</span>
-          </LcCheckbox>
-        </div>
-        <span class="stream-checkbox-text">启用流式生成。普通回复和上下文压缩会复用此配置。</span>
-      </div>
-
-      <div class="global-settings-field stream-field">
-        <span>多模态工具</span>
-        <div class="stream-checkbox-row">
-          <LcCheckbox
-            :model-value="activeConfig.enableMultimodalTools !== false"
-            size="sm"
-            aria-label="启用多模态工具"
-            @update:model-value="updateActiveConfigField('enableMultimodalTools', $event)"
-          >
-            <span class="stream-checkbox-enable">启用</span>
-          </LcCheckbox>
-        </div>
-        <span class="stream-checkbox-text">启用后 read 可返回图片、PDF 等附件内容；关闭后 read 只读取文本。</span>
-      </div>
-
-      <div class="global-settings-field stream-field retry-field">
-        <span>报错自动重试</span>
-        <div class="stream-checkbox-row">
-          <LcCheckbox
-            :model-value="activeConfig.retryOnError ?? DEFAULT_LLM_RETRY_ON_ERROR"
-            size="sm"
-            aria-label="启用报错自动重试"
-            @update:model-value="updateActiveConfigField('retryOnError', $event)"
-          >
-            <span class="stream-checkbox-enable">启用</span>
-          </LcCheckbox>
-        </div>
-        <span class="stream-checkbox-text">请求报错时自动重试。重试次数不包含原始请求；设置为 -1 表示无限重试。</span>
-      </div>
-
-      <label class="global-settings-field retry-attempts-field">
-        <span>最大重试次数</span>
-        <input
-          class="token-number-input"
-          :value="activeConfig.retryMaxAttempts ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS"
-          type="number"
-          min="-1"
-          step="1"
-          placeholder="3"
-          @change="updateRetryMaxAttempts"
-        />
       </label>
 
       <section class="model-manager global-settings-field-wide" aria-label="模型列表">
@@ -536,7 +464,7 @@ function cancelDelete(): void {
                   v-for="model in filteredModels"
                   :key="model.id"
                   class="model-item"
-                  :class="{ enabled: model.id === activeConfig.model }"
+                  :class="{ enabled: model.id === activeConfig.model, 'has-model-config': activeModelConfigs.some((config) => config.modelId === model.id) }"
                   role="button"
                   tabindex="0"
                   @click="settings.selectActiveConfigModel(model.id)"
@@ -548,6 +476,7 @@ function cancelDelete(): void {
                     <span class="model-name">{{ model.name }}</span>
                     <span class="model-id">ID: {{ model.id }}</span>
                     <span v-if="model.createdAt" class="model-time">时间: {{ formatModelTime(model.createdAt) }}</span>
+                    <span v-if="activeModelConfigs.some((config) => config.modelId === model.id)" class="model-time">已设置模型专属配置</span>
                   </span>
                   <button
                     type="button"
@@ -565,98 +494,116 @@ function cancelDelete(): void {
         </div>
       </section>
 
-      <section class="compression-settings global-settings-field-wide" aria-label="上下文压缩">
-        <header class="compression-settings-header">
-          <div>
-            <label>上下文压缩</label>
-            <p>OpenAI 原生压缩必须使用 OpenAI Responses 渠道；调用失败时保留失败状态，不回退为普通摘要。</p>
+      <section class="channel-config-groups global-settings-field-wide" aria-label="模型配置分组">
+        <article class="settings-collapse-panel">
+          <header class="settings-collapse-head">
+            <button type="button" class="settings-collapse-toggle" :aria-expanded="defaultConfigOpen" @click="defaultConfigOpen = !defaultConfigOpen">
+              <IconChevronDown class="settings-collapse-caret" :class="{ collapsed: !defaultConfigOpen }" stroke="2" aria-hidden="true" />
+              <span class="settings-collapse-title-wrap">
+                <span class="settings-collapse-title">渠道默认配置</span>
+                <span class="settings-collapse-desc">当前渠道的默认高级配置与上下文压缩；未设置模型专属配置时使用这里。</span>
+              </span>
+            </button>
+          </header>
+          <div v-if="defaultConfigOpen" class="settings-collapse-body">
+            <LlmAdvancedConfigEditor
+              :config="activeConfig"
+              @update-field="updateDefaultAdvancedPatch"
+              @update-context-window-tokens="updateDefaultContextWindowTokens"
+              @update-generation-config="updateDefaultGenerationConfig"
+              @update-request-body="updateDefaultRequestBody"
+              @update-headers="updateDefaultHeaders"
+            />
+            <LlmCompressionSettingsEditor
+              class="advanced-compression-editor"
+              :config="settings.activeCompressionConfig"
+              :current-provider-config="activeConfig"
+              :provider-configs="settings.llmProviderConfigs.configs"
+              :context-window-tokens="contextWindowTokens"
+              @update-provider-config-id="updateDefaultCompressionProviderConfigId"
+              @update-method-kind="updateDefaultCompressionMethodKind"
+              @update-trigger="updateDefaultCompressionTrigger"
+            />
           </div>
-        </header>
-        <div class="global-settings-grid compression-settings-grid">
-          <label class="global-settings-field">
-            <span>压缩使用的模型渠道</span>
-            <SettingsDropdown
-              v-model="compressionProviderConfigId"
-              :options="compressionProviderOptions"
-              title="选择压缩使用的渠道配置"
-              searchable
-              search-placeholder="筛选渠道..."
-            />
-          </label>
-          <label class="global-settings-field">
-            <span>压缩方法</span>
-            <SettingsDropdown
-              :model-value="activeCompressionMethodKind"
-              :options="compressionMethodOptions"
-              title="选择压缩方法"
-              @update:model-value="updateActiveCompressionMethod"
-            />
-          </label>
+        </article>
 
-          <label class="global-settings-field global-settings-field-wide compression-auto-field">
-            <span>自动触发</span>
-            <LcCheckbox
-              :model-value="compressionAutoEnabled"
-              aria-label="启用自动触发上下文压缩"
-              @update:model-value="updateCompressionAutoEnabled"
-            >
-              <span class="compression-auto-text">启用后，当上下文达到阈值时自动准备压缩。默认建议开启。</span>
-            </LcCheckbox>
-          </label>
+        <article class="settings-collapse-panel">
+          <header class="settings-collapse-head">
+            <button type="button" class="settings-collapse-toggle" :aria-expanded="modelSpecificGroupOpen" @click="modelSpecificGroupOpen = !modelSpecificGroupOpen">
+              <IconChevronDown class="settings-collapse-caret" :class="{ collapsed: !modelSpecificGroupOpen }" stroke="2" aria-hidden="true" />
+              <span class="settings-collapse-title-wrap">
+                <span class="settings-collapse-title">模型专属配置</span>
+                <span class="settings-collapse-desc">为某个模型创建独立折叠面板；命中该模型时整体替代渠道默认配置与上下文压缩。</span>
+              </span>
+            </button>
+          </header>
 
-          <div v-if="compressionAutoEnabled" class="compression-trigger-panel global-settings-field-wide">
-            <div class="compression-trigger-head">
-              <div>
-                <span class="compression-trigger-title">触发上下文 token 数阈值</span>
-                <p>直接填写触发压缩的上下文 token 数；建议至少预留 {{ formatTokenLabel(compressionReserveTokens) }} 窗口给最后一轮用户消息。</p>
-              </div>
-            </div>
-
-            <div class="compression-threshold-control">
-              <label class="global-settings-field compression-threshold-input-field">
-                <span>上下文 token 数</span>
-                <span class="threshold-input-shell">
-                  <input
-                    class="token-number-input"
-                    :value="compressionThresholdInputValue"
-                    type="number"
-                    :min="TOKEN_STEP"
-                    :max="contextWindowTokens || undefined"
-                    :step="TOKEN_STEP"
-                    :disabled="contextWindowTokens <= 0"
-                    @change="updateCompressionThresholdTokens"
-                  />
-                  <span>token</span>
-                </span>
+          <div v-if="modelSpecificGroupOpen" class="settings-collapse-body model-specific-body">
+            <div class="model-specific-create-row">
+              <label class="global-settings-field model-specific-select-field">
+                <span>选择模型</span>
+                <SettingsDropdown
+                  v-model="selectedNewModelSpecificModelId"
+                  :options="modelSpecificOptions"
+                  title="选择要创建专属配置的模型"
+                  empty-text="当前模型列表没有可创建专属配置的模型。"
+                  searchable
+                  search-placeholder="筛选模型..."
+                />
               </label>
-
-              <TokenThresholdSlider
-                :model-value="compressionThresholdTokens"
-                :max-tokens="contextWindowTokens"
-                :step-tokens="TOKEN_STEP"
-                :recommended-tokens="recommendedThresholdTokens"
-                :disabled="contextWindowTokens <= 0"
-                aria-label="拖拽调整自动压缩触发阈值"
-                @update:model-value="updateCompressionThresholdFromTokens"
-              />
+              <button type="button" class="model-manager-button model-specific-create-button" :disabled="!canCreateModelSpecificConfig" @click="createModelSpecificConfig">
+                <IconPlus stroke="2" aria-hidden="true" />
+                <span>创建模型配置</span>
+              </button>
             </div>
+
+            <p class="model-specific-note">
+              模型专属配置是完整配置副本：Header、Body、重试、多模态、上下文窗口与上下文压缩都会替代默认配置；空 Header / Body 表示不使用默认 Header / Body。
+            </p>
+
+            <div v-if="!activeModelConfigs.length" class="model-specific-empty">暂无模型专属配置。</div>
+
+            <article v-for="modelConfig in activeModelConfigs" :key="modelConfig.id" class="settings-collapse-panel model-config-panel">
+              <header class="settings-collapse-head model-config-head">
+                <button type="button" class="settings-collapse-toggle" :aria-expanded="isModelConfigOpen(modelConfig.id)" @click="toggleModelConfig(modelConfig.id)">
+                  <IconChevronDown class="settings-collapse-caret" :class="{ collapsed: !isModelConfigOpen(modelConfig.id) }" stroke="2" aria-hidden="true" />
+                  <span class="settings-collapse-title-wrap">
+                    <span class="settings-collapse-title">{{ modelLabel(modelConfig.modelId) }}</span>
+                    <span class="settings-collapse-desc">{{ modelConfigDescription(modelConfig) }}</span>
+                  </span>
+                </button>
+                <button type="button" class="icon-action model-config-delete" aria-label="删除模型专属配置" @click="openDeleteModelConfigConfirm(modelConfig.id)">
+                  <IconTrash stroke="2" aria-hidden="true" />
+                </button>
+              </header>
+
+              <div v-if="isModelConfigOpen(modelConfig.id)" class="settings-collapse-body model-config-body">
+                <LlmAdvancedConfigEditor
+                  :config="modelConfigAsProviderConfig(modelConfig)"
+                  @update-field="updateModelAdvancedPatch(modelConfig.id, $event)"
+                  @update-context-window-tokens="updateModelContextWindowTokens(modelConfig.id, $event)"
+                  @update-generation-config="updateModelGenerationConfig(modelConfig.id, $event)"
+                  @update-request-body="updateModelRequestBody(modelConfig.id, $event)"
+                  @update-headers="updateModelHeaders(modelConfig.id, $event)"
+                />
+                <LlmCompressionSettingsEditor
+                  class="advanced-compression-editor"
+                  :config="modelCompressionConfig(modelConfig.modelId)"
+                  :current-provider-config="modelConfigAsProviderConfig(modelConfig)"
+                  :provider-configs="settings.llmProviderConfigs.configs"
+                  :context-window-tokens="normalizeTokenCount(modelConfig.contextWindowTokens) ?? 0"
+                  @update-provider-config-id="updateModelCompressionProviderConfigId(modelConfig.modelId, $event)"
+                  @update-method-kind="updateModelCompressionMethodKind(modelConfig.modelId, $event)"
+                  @update-trigger="updateModelCompressionTrigger(modelConfig.modelId, $event)"
+                />
+              </div>
+            </article>
           </div>
-        </div>
+        </article>
       </section>
-
-      <LlmParameterSettings
-        class="global-settings-field-wide"
-        :config="activeConfig"
-        @update-generation-config="updateGenerationConfig"
-        @update-request-body="updateRequestBody"
-      />
-
-      <LlmHeadersSettings
-        class="global-settings-field-wide"
-        :model-value="activeConfig.headers ?? {}"
-        @update:model-value="updateHeaders"
-      />
     </div>
+
+
 
     <div v-else class="global-settings-empty">暂无渠道配置，请新建一个配置页。</div>
 
@@ -741,6 +688,16 @@ function cancelDelete(): void {
       @cancel="cancelDelete"
     />
 
+    <ConfirmPanel
+      :open="deleteModelConfigConfirmOpen"
+      title="删除模型专属配置？"
+      :description-html="`将删除「${deletingModelConfigLabel}」的模型专属配置。删除后该模型会重新使用渠道默认配置，此操作<strong>无法撤销</strong>。`"
+      confirm-label="删除"
+      cancel-label="取消"
+      @confirm="confirmDeleteModelConfig"
+      @cancel="cancelDeleteModelConfig"
+    />
+
     <ModelFetchDialog
       :open="settings.fetchedModelsDialog.open"
       :loading="settings.fetchedModelsDialog.loading"
@@ -753,158 +710,148 @@ function cancelDelete(): void {
 </template>
 
 <style scoped>
-.compression-settings {
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-editor-foreground) 6%);
-}
-
-.compression-settings-header {
+.channel-config-groups {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   gap: var(--space-3);
 }
 
-.compression-settings-header p {
-  margin: 2px 0 0;
-  color: var(--vscode-descriptionForeground);
-  font-size: var(--font-size-xs);
+.settings-collapse-panel {
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--vscode-editor-background) 95%, var(--vscode-foreground) 5%);
+  overflow: hidden;
 }
 
-.compression-settings-grid {
-  margin: 0;
+.settings-collapse-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  border-bottom: 1px solid transparent;
 }
 
-.stream-field {
-  justify-content: start;
-}
-
-.stream-checkbox-row {
-  min-height: 20px;
-  display: flex;
-  align-items: center;
-}
-
-.stream-checkbox-row :deep(.lc-checkbox-control) {
-  align-items: center;
-}
-
-.stream-checkbox-row :deep(.lc-checkbox-box) {
-  flex: 0 0 auto;
-}
-
-.stream-checkbox-enable {
+.settings-collapse-toggle {
+  min-width: 0;
+  border: 0;
+  padding: var(--space-3);
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: start;
   color: var(--vscode-foreground);
-  font-size: var(--font-size-xs);
-  line-height: 1.2;
+  background: transparent;
+  text-align: left;
 }
 
-.stream-checkbox-text,
-.compression-auto-text {
+.settings-collapse-toggle:hover,
+.settings-collapse-toggle:focus-visible,
+.model-config-delete:hover,
+.model-config-delete:focus-visible {
+  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%));
+  outline: none;
+}
+
+.settings-collapse-caret {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  transition: transform 0.16s ease;
+}
+
+.settings-collapse-caret.collapsed {
+  transform: rotate(-90deg);
+}
+
+.settings-collapse-title-wrap {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settings-collapse-title {
+  font-size: var(--font-size-sm);
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.settings-collapse-desc,
+.model-specific-note {
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-xs);
   line-height: 1.45;
 }
 
-.token-number-input[type='number'] {
-  appearance: textfield;
-  -moz-appearance: textfield;
-}
-
-.token-number-input[type='number']::-webkit-outer-spin-button,
-.token-number-input[type='number']::-webkit-inner-spin-button {
-  margin: 0;
-  -webkit-appearance: none;
-}
-
-.compression-auto-field {
-  padding-top: var(--space-1);
+.settings-collapse-body {
+  padding: var(--space-3);
   border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 72%, transparent);
 }
 
-.compression-trigger-panel {
-  display: grid;
+.model-specific-body {
+  display: flex;
+  flex-direction: column;
   gap: var(--space-3);
-  padding: var(--space-3);
-  border: 1px solid var(--vscode-panel-border);
+}
+
+.model-specific-create-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: end;
+}
+
+.model-specific-create-button {
+  min-height: 30px;
+  margin-bottom: 0;
+}
+
+.model-specific-note {
+  margin: 0;
+}
+
+.model-specific-empty {
+  border: 1px dashed var(--vscode-panel-border);
   border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-sm);
+}
+
+.model-config-panel {
   background: color-mix(in srgb, var(--vscode-editor-background) 97%, var(--vscode-foreground) 3%);
 }
 
-.compression-trigger-head {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-3);
-  align-items: flex-start;
+.model-config-head {
+  grid-template-columns: minmax(0, 1fr) 34px;
 }
 
-.compression-trigger-title {
-  display: block;
-  color: var(--vscode-foreground);
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-}
-
-.compression-trigger-head p {
-  margin: 3px 0 0;
-  color: var(--vscode-descriptionForeground);
-  font-size: var(--font-size-xs);
-  line-height: 1.5;
-}
-
-
-.compression-threshold-control {
-  display: grid;
-  grid-template-columns: minmax(130px, 190px) minmax(0, 1fr);
-  gap: var(--space-3);
-  align-items: center;
-}
-
-.compression-threshold-input-field {
-  min-width: 0;
-}
-
-.threshold-input-shell {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
-  border-radius: var(--radius-sm);
-  background: var(--vscode-input-background);
-  color: var(--vscode-descriptionForeground);
-  overflow: hidden;
-}
-
-.threshold-input-shell input {
-  min-width: 0;
-  border: 0;
+.model-config-delete {
+  align-self: stretch;
+  width: 34px;
+  height: auto;
+  border-left: 1px solid color-mix(in srgb, var(--vscode-panel-border) 68%, transparent);
   border-radius: 0;
-  background: transparent;
 }
 
-.threshold-input-shell input:focus {
-  outline: none;
+.model-config-body {
+  background: color-mix(in srgb, var(--vscode-editor-background) 98%, var(--vscode-foreground) 2%);
 }
 
-.threshold-input-shell > span {
-  padding: 0 var(--space-2);
-  font-size: var(--font-size-xs);
+.model-item.has-model-config .model-status {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-foreground) 22%, transparent);
 }
 
+.advanced-compression-editor {
+  margin-top: var(--space-3);
+}
 
 @media (max-width: 720px) {
-  .compression-trigger-head,
-  .compression-threshold-control {
+  .model-specific-create-row {
     grid-template-columns: 1fr;
   }
 
-  .compression-trigger-head {
-    display: grid;
+  .model-specific-create-button {
+    justify-self: start;
   }
 }
 </style>

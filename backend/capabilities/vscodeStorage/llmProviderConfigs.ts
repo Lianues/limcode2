@@ -5,6 +5,7 @@ import type {
   LlmProviderConfigsRecord,
   LlmProviderHeadersRecord,
   LlmProviderKind,
+  LlmProviderModelConfigRecord,
   LlmProviderModelRecord,
   LlmRequestBodyJsonValue,
   LlmRequestBodyRecord,
@@ -75,6 +76,7 @@ export function createDefaultLlmProviderConfig(input: { name?: string } = {}): L
     retryMaxAttempts: DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     enableMultimodalTools: true,
     contextWindowTokens: DEFAULT_LLM_CONTEXT_WINDOW_TOKENS,
+    modelConfigs: [],
     createdAt: now,
     updatedAt: now
   };
@@ -86,10 +88,11 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
   const updatedAt = finiteTimestamp(input?.updatedAt, createdAt);
   const model = typeof input?.model === 'string' && input.model.trim() ? input.model.trim() : fallback.model;
   const models = normalizeProviderModels(input?.models, model);
+  const provider = isKnownProvider(input?.provider) ? input.provider : fallback.provider;
   const headers = normalizeHeaders(input?.headers);
   const generationConfig = normalizeGenerationConfig(input?.generationConfig);
   const requestBody = normalizeRequestBody(input?.requestBody);
-  const provider = isKnownProvider(input?.provider) ? input.provider : fallback.provider;
+  const modelConfigs = normalizeModelConfigs(input?.modelConfigs, models, provider);
   const contextWindowTokens = finitePositiveInteger(input?.contextWindowTokens) ?? providerDefaultContextWindow(provider);
   return {
     id: stringOrDefault(input?.id, fallback.id),
@@ -108,6 +111,7 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
     ...(headers ? { headers } : {}),
     ...(generationConfig ? { generationConfig } : {}),
     ...(requestBody ? { requestBody } : {}),
+    modelConfigs,
     createdAt,
     updatedAt
   };
@@ -172,6 +176,47 @@ function normalizeProviderModels(input: LlmProviderModelRecord[] | undefined, ac
   }
 
   return [...byId.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function normalizeModelConfigs(
+  input: unknown,
+  models: LlmProviderModelRecord[],
+  provider: LlmProviderKind
+): LlmProviderModelConfigRecord[] {
+  if (!Array.isArray(input)) return [];
+  const availableModelIds = new Set(models.map((model) => model.id));
+  const byModelId = new Map<string, LlmProviderModelConfigRecord>();
+  for (const item of input) {
+    if (!isPlainObject(item)) continue;
+    const modelId = typeof item.modelId === 'string' ? item.modelId.trim() : '';
+    if (!modelId || !availableModelIds.has(modelId)) continue;
+    const now = Date.now();
+    const createdAt = finiteTimestamp(item.createdAt, now);
+    const updatedAt = finiteTimestamp(item.updatedAt, createdAt);
+    const headers = normalizeHeaders(item.headers);
+    const generationConfig = normalizeGenerationConfig(item.generationConfig);
+    const requestBody = normalizeRequestBody(item.requestBody);
+    byModelId.set(modelId, {
+      id: stringOrDefault(item.id, `llm-model-config-${createMessageId()}`),
+      modelId,
+      toolCallFormat: isKnownToolCallFormat(item.toolCallFormat) ? item.toolCallFormat : 'function-call',
+      stream: typeof item.stream === 'boolean' ? item.stream : true,
+      retryOnError: typeof item.retryOnError === 'boolean' ? item.retryOnError : DEFAULT_LLM_RETRY_ON_ERROR,
+      retryMaxAttempts: finiteRetryMaxAttempts(item.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
+      enableMultimodalTools: typeof item.enableMultimodalTools === 'boolean' ? item.enableMultimodalTools : true,
+      contextWindowTokens: finitePositiveInteger(item.contextWindowTokens) ?? providerDefaultContextWindow(provider),
+      ...(headers ? { headers } : {}),
+      ...(generationConfig ? { generationConfig } : {}),
+      ...(requestBody ? { requestBody } : {}),
+      createdAt,
+      updatedAt
+    });
+  }
+  return [...byModelId.values()].sort((left, right) => {
+    const leftIndex = models.findIndex((model) => model.id === left.modelId);
+    const rightIndex = models.findIndex((model) => model.id === right.modelId);
+    return leftIndex - rightIndex || left.modelId.localeCompare(right.modelId) || left.id.localeCompare(right.id);
+  });
 }
 
 function isKnownProvider(provider: unknown): provider is LlmProviderKind {

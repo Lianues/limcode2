@@ -3,6 +3,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT,
   type LlmCompressionConfigRecord,
+  type LlmProviderConfigRecord,
+  type LlmProviderModelConfigRecord,
   type MessageRecord
 } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
@@ -68,8 +70,10 @@ const latestUsage = computed(() => usageItems.value[usageItems.value.length - 1]
 const hasUsage = computed(() => usageItems.value.length > 0);
 const refreshKey = computed(() => usageItems.value.map((item) => `${item.id}:${item.total}:${item.ratio}`).join('|'));
 const activeProviderConfig = computed(() => activeProviderConfigForCurrentConversation());
-const activeCompressionTrigger = computed(() => compressionConfigForProvider(activeProviderConfig.value?.id)?.trigger);
-const contextWindowTokens = computed(() => normalizeTokenCount(activeProviderConfig.value?.contextWindowTokens) ?? 0);
+const activeModelId = computed(() => selectedModelIdForProvider(activeProviderConfig.value));
+const activeModelConfig = computed(() => modelConfigForProvider(activeProviderConfig.value, activeModelId.value));
+const activeCompressionTrigger = computed(() => compressionConfigForProvider(activeProviderConfig.value?.id, activeModelId.value)?.trigger);
+const contextWindowTokens = computed(() => normalizeTokenCount(activeModelConfig.value?.contextWindowTokens ?? activeProviderConfig.value?.contextWindowTokens) ?? 0);
 const actualContextTokens = computed(() => latestActualModelTotalTokens(conversationTimeline.currentMessages) ?? 0);
 const hasContextUsage = computed(() => contextWindowTokens.value > 0 && actualContextTokens.value > 0);
 const contextUsageRatio = computed(() => hasContextUsage.value ? actualContextTokens.value / contextWindowTokens.value : 0);
@@ -160,7 +164,7 @@ function latestActualModelTotalTokens(messages: MessageRecord[]): number | undef
   return undefined;
 }
 
-function activeProviderConfigForCurrentConversation() {
+function activeProviderConfigForCurrentConversation(): LlmProviderConfigRecord | undefined {
   const conversationProviderConfigId = conversationSettings.llm.conversationId === clientState.currentConversationId
     ? conversationSettings.llm.activeProviderConfigId
     : '';
@@ -169,11 +173,36 @@ function activeProviderConfigForCurrentConversation() {
     ?? globalSettings.llmProviderConfigs.configs[0];
 }
 
-function compressionConfigForProvider(providerConfigId: string | undefined) {
+function selectedModelIdForProvider(config: LlmProviderConfigRecord | undefined): string {
+  if (!config) return '';
+  const conversationOverride = conversationSettings.llm.conversationId === clientState.currentConversationId
+    ? conversationSettings.llm.modelOverrides?.[config.id]?.trim()
+    : '';
+  if (conversationOverride && modelExistsInProvider(config, conversationOverride)) return conversationOverride;
+  return config.model?.trim() ?? '';
+}
+
+function modelConfigForProvider(config: LlmProviderConfigRecord | undefined, modelId: string): LlmProviderModelConfigRecord | undefined {
+  const id = modelId.trim();
+  if (!config || !id) return undefined;
+  return config.modelConfigs.find((candidate) => candidate.modelId === id);
+}
+
+function modelExistsInProvider(config: LlmProviderConfigRecord, modelId: string): boolean {
+  const id = modelId.trim();
+  if (!id) return false;
+  return config.model?.trim() === id || config.models.some((candidate) => candidate.id.trim() === id);
+}
+
+function compressionConfigForProvider(providerConfigId: string | undefined, modelId: string | undefined) {
+  const model = modelId?.trim();
+  const modelBinding = providerConfigId && model
+    ? globalSettings.llmCompression.modelBindings.find((item) => item.providerConfigId === providerConfigId && item.modelId === model)
+    : undefined;
   const binding = providerConfigId
     ? globalSettings.llmCompression.providerBindings.find((item) => item.providerConfigId === providerConfigId)
     : undefined;
-  const configId = binding?.compressionConfigId ?? globalSettings.llmCompression.defaultConfigId;
+  const configId = modelBinding?.compressionConfigId ?? binding?.compressionConfigId ?? globalSettings.llmCompression.defaultConfigId;
   return globalSettings.llmCompressionConfigs.configs.find((config) => config.id === configId)
     ?? globalSettings.llmCompressionConfigs.configs[0];
 }
@@ -182,6 +211,8 @@ function contextSummaryTitle(): string {
   const lines: string[] = [];
   const providerName = activeProviderConfig.value?.name?.trim();
   if (providerName) lines.push(`渠道：${providerName}`);
+  const modelName = activeModelDisplayName();
+  if (modelName) lines.push(`模型：${modelName}${activeModelConfig.value ? '（模型专属配置）' : ''}`);
   lines.push(contextWindowTokens.value > 0 ? `上下文窗口：${formatTokenNumber(contextWindowTokens.value)} token` : '上下文窗口：未设置');
   lines.push(
     hasContextUsage.value
@@ -196,6 +227,14 @@ function contextSummaryTitle(): string {
     lines.push(messageTitle(latestUsage.value));
   }
   return lines.join('\n');
+}
+
+function activeModelDisplayName(): string {
+  const modelId = activeModelId.value;
+  if (!modelId) return '';
+  const model = activeProviderConfig.value?.models.find((candidate) => candidate.id === modelId);
+  const label = model?.name?.trim() || modelId;
+  return label === modelId ? label : `${label} (${modelId})`;
 }
 
 function resolveCompressionThresholdTokens(

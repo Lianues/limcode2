@@ -538,6 +538,7 @@ export const DEFAULT_SEGMENTED_SUMMARY_USER_PROMPT = '请总结下面这个回�
 export interface LlmCompressionSettingsRecord {
   defaultConfigId?: string;
   providerBindings: LlmCompressionProviderBindingRecord[];
+  modelBindings: LlmCompressionModelBindingRecord[];
 }
 
 export interface LlmCompressionProviderBindingRecord {
@@ -545,6 +546,16 @@ export interface LlmCompressionProviderBindingRecord {
   providerConfigId: string;
   compressionConfigId: string;
   role: 'default';
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface LlmCompressionModelBindingRecord {
+  id: string;
+  providerConfigId: string;
+  modelId: string;
+  compressionConfigId: string;
+  role: 'model';
   createdAt: number;
   updatedAt: number;
 }
@@ -587,7 +598,7 @@ export interface LlmCompressionConfigRecord {
 }
 
 export function createDefaultLlmCompressionSettings(): LlmCompressionSettingsRecord {
-  return { providerBindings: [] };
+  return { providerBindings: [], modelBindings: [] };
 }
 
 export function createDefaultLlmCompressionConfig(name = '默认压缩方法'): LlmCompressionConfigRecord {
@@ -618,6 +629,25 @@ export interface LlmProviderModelRecord {
   createdAt?: string;
 }
 
+export interface LlmProviderModelConfigRecord {
+  id: string;
+  /** 绑定当前渠道模型列表中的模型 ID。 */
+  modelId: string;
+  toolCallFormat: LlmToolCallFormat;
+  stream: boolean;
+  /** 请求报错时是否自动重试。 */
+  retryOnError: boolean;
+  /** 最大重试次数，不包含原始请求；3 表示最多 1 + 3 次请求，-1 表示无限重试。 */
+  retryMaxAttempts: number;
+  enableMultimodalTools: boolean;
+  contextWindowTokens?: number;
+  headers?: LlmProviderHeadersRecord;
+  generationConfig?: LlmGenerationConfigRecord;
+  requestBody?: LlmRequestBodyRecord;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface LlmProviderConfigRecord {
   id: string;
   name: string;
@@ -637,6 +667,8 @@ export interface LlmProviderConfigRecord {
   headers?: LlmProviderHeadersRecord;
   generationConfig?: LlmGenerationConfigRecord;
   requestBody?: LlmRequestBodyRecord;
+  /** 针对单个模型的完整高级配置；命中模型时整体替代渠道默认高级配置。 */
+  modelConfigs: LlmProviderModelConfigRecord[];
   createdAt: number;
   updatedAt: number;
 }

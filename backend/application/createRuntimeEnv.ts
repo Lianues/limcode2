@@ -47,18 +47,20 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
         ...(canUseOverrideModel && override?.provider ? { provider: override.provider } : {}),
         ...(canUseOverrideModel ? { model: overrideModel } : {})
       };
-      return applyConversationModelOverride(storage, request?.conversationId, resolved);
+      const withConversationModel = await applyConversationModelOverride(storage, request?.conversationId, resolved);
+      return applyModelSpecificConfig(withConversationModel);
     },
     compressionSettings: async (request) => {
       const activeProvider = await storage.loadActiveLlmProviderConfig(request.conversationId);
       const config = request.methodConfigId
         ? await storage.loadLlmCompressionConfigById(request.methodConfigId)
-        : await storage.loadActiveLlmCompressionConfig(activeProvider.id);
+        : await storage.loadActiveLlmCompressionConfig(activeProvider.id, activeProvider.model);
       return config;
     },
-    activeCompressionSettings: async (conversationId) => {
-      const activeProvider = await storage.loadActiveLlmProviderConfig(conversationId);
-      return storage.loadActiveLlmCompressionConfig(activeProvider.id);
+    activeCompressionSettings: async (request) => {
+      if (request?.providerConfigId) return storage.loadActiveLlmCompressionConfig(request.providerConfigId, request.model);
+      const activeProvider = await storage.loadActiveLlmProviderConfig(request?.conversationId);
+      return storage.loadActiveLlmCompressionConfig(activeProvider.id, activeProvider.model);
     },
     headers: { 'User-Agent': 'LimCode/0.0.1' },
     proxy: async () => createGlobalSettingsRecord(context).proxy || undefined,
@@ -119,6 +121,29 @@ async function applyConversationModelOverride(
   return { ...config, model };
 }
 
+function applyModelSpecificConfig(config: LlmProviderConfigRecord): LlmProviderConfigRecord {
+  const modelId = config.model.trim();
+  const modelConfig = modelId ? config.modelConfigs.find((candidate) => candidate.modelId === modelId) : undefined;
+  if (!modelConfig) return config;
+  const next: LlmProviderConfigRecord = {
+    ...config,
+    toolCallFormat: modelConfig.toolCallFormat,
+    stream: modelConfig.stream,
+    retryOnError: modelConfig.retryOnError,
+    retryMaxAttempts: modelConfig.retryMaxAttempts,
+    enableMultimodalTools: modelConfig.enableMultimodalTools,
+    contextWindowTokens: modelConfig.contextWindowTokens
+  };
+
+  if (modelConfig.headers) next.headers = modelConfig.headers;
+  else delete next.headers;
+  if (modelConfig.generationConfig) next.generationConfig = modelConfig.generationConfig;
+  else delete next.generationConfig;
+  if (modelConfig.requestBody) next.requestBody = modelConfig.requestBody;
+  else delete next.requestBody;
+  return next;
+}
+
 function modelExistsInConfig(config: LlmProviderConfigRecord, model: string): boolean {
   const id = model.trim();
   if (!id) return false;
@@ -134,10 +159,9 @@ async function resolveSnapshotLlmProviderConfig(
   const base = storedConfig ?? await storage.loadActiveLlmProviderConfig(conversationId);
   const modelId = snapshot.modelId ?? base.model;
   const modelName = snapshot.modelName ?? snapshot.displayModelName ?? modelId;
-  return {
+  const resolved: LlmProviderConfigRecord = {
     ...base,
     apiKey: storedConfig?.apiKey ?? (!snapshot.providerConfigId ? base.apiKey : ''),
-    headers: storedConfig?.headers ?? (!snapshot.providerConfigId ? base.headers : undefined),
     id: snapshot.providerConfigId ?? base.id,
     name: snapshot.providerConfigName ?? base.name,
     ...(snapshot.provider ? { provider: snapshot.provider } : {}),
@@ -148,9 +172,21 @@ async function resolveSnapshotLlmProviderConfig(
     ...(snapshot.stream !== undefined ? { stream: snapshot.stream } : {}),
     ...(snapshot.retryOnError !== undefined ? { retryOnError: snapshot.retryOnError } : {}),
     ...(snapshot.retryMaxAttempts !== undefined ? { retryMaxAttempts: snapshot.retryMaxAttempts } : {}),
-    ...(snapshot.enableMultimodalTools !== undefined ? { enableMultimodalTools: snapshot.enableMultimodalTools } : {}),
-    ...(snapshot.contextWindowTokens !== undefined ? { contextWindowTokens: snapshot.contextWindowTokens } : {}),
-    ...(snapshot.generationConfig ? { generationConfig: snapshot.generationConfig } : {}),
-    ...(snapshot.requestBody ? { requestBody: snapshot.requestBody } : {})
+    ...(snapshot.enableMultimodalTools !== undefined ? { enableMultimodalTools: snapshot.enableMultimodalTools } : {})
   };
+
+  if (snapshot.contextWindowTokens !== undefined) resolved.contextWindowTokens = snapshot.contextWindowTokens;
+  else delete resolved.contextWindowTokens;
+  if (snapshot.generationConfig !== undefined) resolved.generationConfig = snapshot.generationConfig;
+  else delete resolved.generationConfig;
+  if (snapshot.requestBody !== undefined) resolved.requestBody = snapshot.requestBody;
+  else delete resolved.requestBody;
+  if (snapshot.headers !== undefined) {
+    const headers = storedConfig?.headers ?? (!snapshot.providerConfigId ? base.headers : undefined);
+    if (headers) resolved.headers = headers;
+    else delete resolved.headers;
+  } else {
+    delete resolved.headers;
+  }
+  return resolved;
 }

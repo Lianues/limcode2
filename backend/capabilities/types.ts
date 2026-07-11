@@ -653,7 +653,7 @@ export interface StorageCapability {
   saveGlobalSettings(section: GlobalSettingsSection, settings: GlobalSettingsSectionValue): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
   loadActiveLlmProviderConfig(conversationId?: string): Promise<LlmProviderConfigRecord>;
   loadLlmProviderConfigById(configId: string): Promise<LlmProviderConfigRecord | undefined>;
-  loadActiveLlmCompressionConfig(providerConfigId?: string): Promise<LlmCompressionConfigRecord | undefined>;
+  loadActiveLlmCompressionConfig(providerConfigId?: string, modelId?: string): Promise<LlmCompressionConfigRecord | undefined>;
   loadLlmCompressionConfigById(configId: string): Promise<LlmCompressionConfigRecord | undefined>;
   loadConversationSettings(conversationId: string, section: ConversationSettingsSection): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string } | undefined>;
   saveConversationSettings(section: ConversationSettingsSection, settings: ConversationSettingsSectionValue): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }>;

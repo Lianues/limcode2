@@ -68,7 +68,25 @@ export function normalizeLlmCompressionSettings(input: Partial<LlmCompressionSet
       };
     })
     .filter((item): item is NonNullable<typeof item> => item !== undefined);
-  return { ...(defaultConfigId ? { defaultConfigId } : {}), providerBindings };
+  const modelBindings = (Array.isArray(input?.modelBindings) ? input.modelBindings : [])
+    .map((binding) => {
+      const providerConfigId = typeof binding?.providerConfigId === 'string' ? binding.providerConfigId.trim() : '';
+      const modelId = typeof binding?.modelId === 'string' ? binding.modelId.trim() : '';
+      const compressionConfigId = typeof binding?.compressionConfigId === 'string' ? binding.compressionConfigId.trim() : '';
+      if (!providerConfigId || !modelId || !compressionConfigId || (configIds.size > 0 && !configIds.has(compressionConfigId))) return undefined;
+      const createdAt = finiteTimestamp(binding.createdAt, Date.now());
+      return {
+        id: typeof binding.id === 'string' && binding.id.trim() ? binding.id.trim() : `llm-compression-model-binding-${providerConfigId}-${safeId(modelId)}`,
+        providerConfigId,
+        modelId,
+        compressionConfigId,
+        role: 'model' as const,
+        createdAt,
+        updatedAt: finiteTimestamp(binding.updatedAt, createdAt)
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== undefined);
+  return { ...(defaultConfigId ? { defaultConfigId } : {}), providerBindings, modelBindings };
 }
 
 export function normalizeLlmCompressionConfig(input: Partial<LlmCompressionConfigRecord> | undefined): LlmCompressionConfigRecord {
@@ -184,6 +202,10 @@ function stringOrDefault(value: unknown, fallback: string): string {
 function optionalString(value: unknown): string | undefined {
   const trimmed = typeof value === 'string' ? value.trim() : '';
   return trimmed || undefined;
+}
+
+function safeId(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '') || 'model';
 }
 
 function finiteTimestamp(value: unknown, fallback: number): number {

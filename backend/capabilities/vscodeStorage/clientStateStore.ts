@@ -457,7 +457,7 @@ async function loadConversationRunHistoryForMessagesFromStores(paths: StoragePat
 }
 
 export async function saveClientStateSkeletonToStores(paths: StoragePaths, state: ClientState): Promise<void> {
-  await Promise.all([
+  const results = await Promise.allSettled([
     saveRecords(paths.agentsRootUri, paths.agentsIndexUri, state.agents, 'agent', (record) => record.name || record.id),
     saveRecords(paths.modesRootUri, paths.modesIndexUri, state.modes, 'mode', (record) => record.name || record.id),
     saveRecords(paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri, state.toolPolicies, 'toolPolicy', (record) => record.name || record.id),
@@ -497,6 +497,11 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
     saveRecords(paths.checkpointsRootUri, paths.checkpointsIndexUri, state.checkpoints, 'checkpoint', (record) => record.projectDisplayPath || record.id),
     saveRecords(paths.checkpointTimelineAnchorsRootUri, paths.checkpointTimelineAnchorsIndexUri, state.checkpointTimelineAnchors, 'anchor')
   ]);
+  const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failures.length > 0) {
+    const details = failures.map((failure) => failure.reason instanceof Error ? failure.reason.message : String(failure.reason)).join('; ');
+    throw new Error(`Failed to save ${failures.length} client state store(s): ${details}`);
+  }
 }
 
 export async function saveConversationRenderDetailToStores(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {

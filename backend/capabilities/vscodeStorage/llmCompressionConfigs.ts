@@ -39,7 +39,7 @@ export async function saveLlmCompressionConfigsSettings(
   const nextIds = new Set(configs.map((config) => config.id));
   for (const previousConfig of previous.settings.configs) {
     if (!nextIds.has(previousConfig.id)) {
-      await removeRecordStoreRecord(configsRootUri(paths), configsIndexUri(paths), previousConfig.id);
+      await removeRecordStoreRecord(configsRootUri(paths), configsIndexUri(paths), previousConfig.id, RECORD_KEY);
     }
   }
 

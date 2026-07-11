@@ -39,10 +39,10 @@ export async function loadRecordStore<TRecord extends { id: string }, TKey exten
   indexUri: vscode.Uri,
   recordKey: TKey
 ): Promise<TRecord[] | undefined> {
-  const index = await readJson<RecordsIndexFile>(indexUri);
-  if (!isRecordsIndexFile(index)) return undefined;
+  const index = await loadRecordsIndex(indexUri, true);
+  if (!index) return undefined;
 
-  const files = await loadRecordFilesInBatches<TRecord, TKey>(root, index.records, recordKey);
+  const files = await loadRecordFilesInBatches<TRecord, TKey>(root, index.records, recordKey, true);
   const records: TRecord[] = [];
   for (const record of files) {
     if (record) records.push(record);
@@ -55,8 +55,8 @@ export async function loadRecordStoreWithDiagnostics<TRecord extends { id: strin
   indexUri: vscode.Uri,
   recordKey: TKey
 ): Promise<RecordStoreDiagnosticsResult<TRecord>> {
-  const index = await readJson<RecordsIndexFile>(indexUri);
-  const indexRecords = isRecordsIndexFile(index) ? index.records : [];
+  const index = await loadRecordsIndex(indexUri, false);
+  const indexRecords = index?.records ?? [];
   const indexedIds = indexRecords.map((record) => record.id);
   const indexedFiles = new Set(indexRecords.map((record) => record.file));
   const indexed = await loadRecordFilesInBatches<TRecord, TKey>(root, indexRecords, recordKey);
@@ -94,14 +94,14 @@ export async function loadRecordStoreByIds<TRecord extends { id: string }, TKey 
   recordKey: TKey,
   ids: Iterable<string>
 ): Promise<TRecord[]> {
-  const index = await readJson<RecordsIndexFile>(indexUri);
-  if (!isRecordsIndexFile(index)) return [];
+  const index = await loadRecordsIndex(indexUri, true);
+  if (!index) return [];
 
   const wanted = new Set(ids);
   if (wanted.size === 0) return [];
   const indexById = new Map(index.records.map((record) => [record.id, record]));
   const wantedRecords = [...wanted].map((id) => indexById.get(id)).filter((record): record is RecordIndexRecord => record !== undefined);
-  const files = await loadRecordFilesInBatches<TRecord, TKey>(root, wantedRecords, recordKey);
+  const files = await loadRecordFilesInBatches<TRecord, TKey>(root, wantedRecords, recordKey, true);
   const records: TRecord[] = [];
   for (const record of files) {
     if (record) records.push(record);
@@ -121,8 +121,9 @@ export async function saveRecordStore<TRecord extends { id: string }, TKey exten
   const savedAt = new Date().toISOString();
   const recordsRoot = vscode.Uri.joinPath(root, RECORDS_DIR);
   await vscode.workspace.fs.createDirectory(recordsRoot);
-  const previousIndex = await readJson<RecordsIndexFile>(indexUri);
-  const previousRecords = isRecordsIndexFile(previousIndex) ? previousIndex.records : [];
+  const previousIndex = await loadRecordsIndex(indexUri, true);
+  await preflightRecordStore<TRecord, TKey>(root, previousIndex, recordKey);
+  const previousRecords = previousIndex?.records ?? [];
   const previousById = new Map(previousRecords.map((record) => [record.id, record]));
 
   const nextIndexRecords: RecordIndexRecord[] = [];
@@ -136,6 +137,13 @@ export async function saveRecordStore<TRecord extends { id: string }, TKey exten
     nextIndexRecords.push({ id: record.id, file, updatedAt: savedAt });
   }
 
+  // 先发布新索引，再清理旧文件；并发读取者只会看到“旧索引 + 完整旧文件”或新索引。
+  await writeJson(indexUri, {
+    schemaVersion: STORAGE_VERSION,
+    savedAt,
+    records: nextIndexRecords
+  } satisfies RecordsIndexFile);
+
   if (options.pruneMissing) {
     const nextFiles = new Set(nextIndexRecords.map((record) => record.file));
     const existingFiles = await listRecordFiles(root);
@@ -143,12 +151,6 @@ export async function saveRecordStore<TRecord extends { id: string }, TKey exten
       .filter((file) => !nextFiles.has(file))
       .map((file) => deleteRecordFile(root, file)));
   }
-
-  await writeJson(indexUri, {
-    schemaVersion: STORAGE_VERSION,
-    savedAt,
-    records: nextIndexRecords
-  } satisfies RecordsIndexFile);
 }
 
 
@@ -162,8 +164,9 @@ export async function upsertRecordStoreRecords<TRecord extends { id: string }, T
   const savedAt = new Date().toISOString();
   const recordsRoot = vscode.Uri.joinPath(root, RECORDS_DIR);
   await vscode.workspace.fs.createDirectory(recordsRoot);
-  const previousIndex = await readJson<RecordsIndexFile>(indexUri);
-  const previousRecords = isRecordsIndexFile(previousIndex) ? previousIndex.records : [];
+  const previousIndex = await loadRecordsIndex(indexUri, true);
+  await preflightRecordStore<TRecord, TKey>(root, previousIndex, recordKey);
+  const previousRecords = previousIndex?.records ?? [];
   const nextById = new Map(previousRecords.map((record) => [record.id, record]));
 
   for (const record of records) {
@@ -187,15 +190,24 @@ export async function upsertRecordStoreRecords<TRecord extends { id: string }, T
 export async function removeRecordStoreRecord(
   root: vscode.Uri,
   indexUri: vscode.Uri,
-  id: string
+  id: string,
+  recordKey: string
 ): Promise<void> {
   const savedAt = new Date().toISOString();
-  const previousIndex = await readJson<RecordsIndexFile>(indexUri);
-  if (!isRecordsIndexFile(previousIndex)) return;
+  const previousIndex = await loadRecordsIndex(indexUri, true);
+  if (!previousIndex) return;
+  await preflightRecordStore<{ id: string }, string>(root, previousIndex, recordKey);
 
   const removed = previousIndex.records.find((record) => record.id === id);
   const nextRecords = previousIndex.records.filter((record) => record.id !== id);
   if (nextRecords.length === previousIndex.records.length) return;
+
+  // 删除也先提交索引，避免旧索引在短窗口内指向已删除文件。
+  await writeJson(indexUri, {
+    schemaVersion: STORAGE_VERSION,
+    savedAt,
+    records: nextRecords
+  } satisfies RecordsIndexFile);
 
   if (removed) {
     try {
@@ -204,24 +216,19 @@ export async function removeRecordStoreRecord(
       if (!isFileNotFound(error)) console.warn(`[LimCode] Failed to delete record file: ${removed.file}`, error);
     }
   }
-
-  await writeJson(indexUri, {
-    schemaVersion: STORAGE_VERSION,
-    savedAt,
-    records: nextRecords
-  } satisfies RecordsIndexFile);
 }
 
 async function loadRecordFilesInBatches<TRecord extends { id: string }, TKey extends string>(
   root: vscode.Uri,
   records: RecordIndexRecord[],
-  recordKey: TKey
+  recordKey: TKey,
+  strict = false
 ): Promise<Array<TRecord | undefined>> {
   const result: Array<TRecord | undefined> = [];
   for (let index = 0; index < records.length; index += LOAD_RECORD_BATCH_SIZE) {
     const batch = records.slice(index, index + LOAD_RECORD_BATCH_SIZE);
     const files = await Promise.all(batch.map(async (record) => {
-      return loadRecordFile<TRecord, TKey>(root, record.file, recordKey);
+      return loadRecordFile<TRecord, TKey>(root, record.file, recordKey, strict, record.id);
     }));
     result.push(...files);
     if (index + batch.length < records.length) {
@@ -234,11 +241,18 @@ async function loadRecordFilesInBatches<TRecord extends { id: string }, TKey ext
 async function loadRecordFile<TRecord extends { id: string }, TKey extends string>(
   root: vscode.Uri,
   file: string,
-  recordKey: TKey
+  recordKey: TKey,
+  strict = false,
+  expectedId?: string
 ): Promise<TRecord | undefined> {
   const fileUri = vscode.Uri.joinPath(root, ...file.split('/'));
-  const recordFile = await readJson<RecordFile<TKey, TRecord>>(fileUri);
-  return recordFile?.schemaVersion === STORAGE_VERSION ? recordFile[recordKey] : undefined;
+  const recordFile = await readJson<RecordFile<TKey, TRecord>>(fileUri, { throwOnError: strict });
+  const candidate = recordFile?.schemaVersion === STORAGE_VERSION ? recordFile[recordKey] : undefined;
+  const record = isStoreRecord(candidate) ? candidate : undefined;
+  if (strict && (!record || expectedId !== undefined && record.id !== expectedId)) {
+    throw new Error(`Indexed record file is missing or invalid: ${fileUri.fsPath}`);
+  }
+  return record;
 }
 
 async function listRecordFiles(root: vscode.Uri): Promise<string[]> {
@@ -265,6 +279,23 @@ async function deleteRecordFile(root: vscode.Uri, file: string): Promise<void> {
 }
 
 
+async function preflightRecordStore<TRecord extends { id: string }, TKey extends string>(
+  root: vscode.Uri,
+  index: RecordsIndexFile | undefined,
+  recordKey: TKey
+): Promise<void> {
+  if (!index || index.records.length === 0) return;
+  await loadRecordFilesInBatches<TRecord, TKey>(root, index.records, recordKey, true);
+}
+
+async function loadRecordsIndex(indexUri: vscode.Uri, strict: boolean): Promise<RecordsIndexFile | undefined> {
+  const index = await readJson<RecordsIndexFile>(indexUri, { throwOnError: strict });
+  if (index === undefined) return undefined;
+  if (isRecordsIndexFile(index)) return index;
+  if (strict) throw new Error(`Record store index is invalid: ${indexUri.fsPath}`);
+  return undefined;
+}
+
 function yieldToExtensionHost(): Promise<void> {
   return new Promise((resolve) => {
     if (typeof setImmediate === 'function') {
@@ -275,14 +306,33 @@ function yieldToExtensionHost(): Promise<void> {
   });
 }
 
-function isRecordsIndexFile(value: RecordsIndexFile | undefined): value is RecordsIndexFile {
-  if (!value || value.schemaVersion !== STORAGE_VERSION || !Array.isArray(value.records)) return false;
-  return value.records.every((record) => {
-    return !!record
-      && typeof record.id === 'string'
-      && typeof record.file === 'string'
-      && typeof record.updatedAt === 'string';
+function isRecordsIndexFile(value: unknown): value is RecordsIndexFile {
+  const candidate = value as Partial<RecordsIndexFile> | undefined;
+  if (!candidate || candidate.schemaVersion !== STORAGE_VERSION || !Array.isArray(candidate.records)) return false;
+  const ids = new Set<string>();
+  const files = new Set<string>();
+  return candidate.records.every((record) => {
+    if (!record || typeof record.id !== 'string' || !record.id.trim()) return false;
+    if (typeof record.file !== 'string' || !isRecordFilePath(record.file)) return false;
+    if (typeof record.updatedAt !== 'string' || !record.updatedAt) return false;
+    if (ids.has(record.id) || files.has(record.file)) return false;
+    ids.add(record.id);
+    files.add(record.file);
+    return true;
   });
+}
+
+function isRecordFilePath(file: string): boolean {
+  const parts = file.split('/');
+  return parts.length === 2
+    && parts[0] === RECORDS_DIR
+    && !!parts[1]
+    && parts[1].toLowerCase().endsWith('.json')
+    && !parts[1].includes('\\');
+}
+
+function isStoreRecord(value: unknown): value is { id: string } {
+  return !!value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string' && !!(value as { id: string }).id.trim();
 }
 
 function isFileNotFound(error: unknown): boolean {

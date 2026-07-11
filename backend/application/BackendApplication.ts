@@ -142,6 +142,9 @@ export class BackendApplication {
   private hydrated = false;
   private resolveHydrated: () => void = () => undefined;
   private readonly hydratedReady = new Promise<void>((resolve) => { this.resolveHydrated = resolve; });
+  private deferredSkeletonReady: Promise<void> = Promise.resolve();
+  private disposePromise: Promise<void> | undefined;
+  private disposing = false;
   private pendingGlobalSnapshot = false;
   private readonly pendingSnapshotConversationIds = new Set<string>();
   private readonly pendingHydrationMessages: Array<{ clientId: BridgeClientId; message: WebviewToExtensionMessage }> = [];
@@ -832,6 +835,7 @@ export class BackendApplication {
   }
 
   public handleWebviewMessage(clientId: BridgeClientId, message: WebviewToExtensionMessage): void {
+    if (this.disposing) return;
     if (!this.hydrated && this.handlePreHydrationChatSend(clientId, message)) return;
     if (!this.hydrated && shouldDeferUntilHydrated(message)) {
       this.pendingHydrationMessages.push({ clientId, message });
@@ -921,17 +925,49 @@ export class BackendApplication {
     });
   }
 
-  public dispose(): void {
-    this.scheduler.dispose();
+  public dispose(): Promise<void> {
+    this.disposePromise ??= this.disposeInternal();
+    return this.disposePromise;
+  }
+
+  private async disposeInternal(): Promise<void> {
+    this.disposing = true;
     for (const disposable of this.disposables.splice(0)) disposable.dispose();
-    void this.env.mcp.dispose();
-    this.env.command.dispose();
     this.env.webview.detachAll();
     this.webviewClients.clear();
-    void this.persistence.persistImmediately();
+    this.env.mcp.setStateChangeListener(undefined);
+    this.env.command.dispose();
+
+    await this.hydratedReady;
+    await this.deferredSkeletonReady;
+    await this.scheduler.stopAndDrain();
+
+    let persistenceError: unknown;
+    try {
+      await this.persistForShutdown();
+    } catch (error) {
+      persistenceError = error;
+    }
+
+    await this.env.mcp.dispose();
+    if (persistenceError) throw persistenceError;
+  }
+
+  private async persistForShutdown(): Promise<void> {
+    const maxAttempts = 3;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await this.persistence.persistImmediately({ ensurePersisted: true, throwOnError: true });
+        return;
+      } catch (error) {
+        if (attempt >= maxAttempts) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 25 * attempt));
+      }
+    }
   }
 
   private async initializeClientState(): Promise<void> {
+    let startupStorageHealthy = true;
     try {
       await this.env.storage.ensureReady();
       const restored = await this.env.storage.loadClientStateSkeleton({ profile: 'startup' });
@@ -944,19 +980,20 @@ export class BackendApplication {
         requestSpawnAgent(this.world, createDefaultAgentSpawnRequest());
       }
     } catch (error) {
-      console.warn('[LimCode] Failed to initialize stored chat state. Starting with a fresh conversation.', error);
+      startupStorageHealthy = false;
+      console.warn('[LimCode] Failed to initialize stored chat state. Starting with a fresh in-memory conversation; skeleton persistence remains disabled to protect existing data.', error);
       requestSpawnAgent(this.world, createDefaultAgentSpawnRequest());
     } finally {
       this.hydrated = true;
-      this.persistence.enable();
       this.flushPendingSnapshots();
       this.flushPendingHydrationMessages();
       for (const section of GLOBAL_SETTINGS_SECTIONS) {
         void this.globalSettingsBridge.postSnapshot(undefined, section);
       }
       // 工作环境与策略属于 deferred skeleton。必须先加载已保存策略，再同步 VS Code workspace folders，
-      // 否则启动时会临时生成只包含当前本地目录的全局策略，覆盖用户勾选的 SSH / 允许列表。
-      this.startDeferredClientStateSkeletonLoad();
+      // 而且在 deferred hydration 完成前不能开启 skeleton 持久化；否则任一 startup 表变化都会把
+      // 尚未加载的 deferred 表以空索引写回。
+      this.deferredSkeletonReady = this.startDeferredClientStateSkeletonLoad(startupStorageHealthy);
       this.startCheckpointShadowAutoCleanup();
       void this.refreshMcpRuntime(true);
       void this.syncSkillCatalogResource();
@@ -965,21 +1002,34 @@ export class BackendApplication {
     }
   }
 
-  private startDeferredClientStateSkeletonLoad(): void {
-    void this.env.storage.loadClientStateSkeleton({ profile: 'deferred' })
-      .then(async (deferred) => {
-        if (deferred) {
-          const hydrated = await hydrateClientStateSkeleton(this.world, deferred, { allowDefaults: false, resetMessageSeq: false });
-          if (hydrated) {
-            this.requestSnapshot();
-            this.conversationHistoryChangedEmitter.fire();
-          }
+  private async startDeferredClientStateSkeletonLoad(startupStorageHealthy: boolean): Promise<void> {
+    let deferredStorageHealthy = true;
+    try {
+      const deferred = await this.env.storage.loadClientStateSkeleton({ profile: 'deferred' });
+      if (deferred) {
+        const hydrated = await hydrateClientStateSkeleton(this.world, deferred, { allowDefaults: false, resetMessageSeq: false });
+        if (hydrated) {
+          this.requestSnapshot();
+          this.conversationHistoryChangedEmitter.fire();
         }
-      })
-      .catch((error) => console.warn('[LimCode] Failed to lazy-load deferred client state skeleton.', error))
-      .finally(() => {
+      }
+    } catch (error) {
+      deferredStorageHealthy = false;
+      console.warn('[LimCode] Failed to lazy-load deferred client state skeleton.', error);
+    } finally {
+      try {
         this.syncWorkEnvironmentsFromWorkspaceFolders();
-      });
+      } catch (error) {
+        deferredStorageHealthy = false;
+        console.warn('[LimCode] Failed to synchronize workspace work environments after deferred hydration.', error);
+      }
+      if (startupStorageHealthy && deferredStorageHealthy) {
+        this.persistence.enable();
+        this.persistence.queuePersist();
+      } else {
+        console.warn('[LimCode] Skeleton persistence is disabled for this session to avoid overwriting partially loaded data.');
+      }
+    }
   }
 
   private startCheckpointShadowAutoCleanup(): void {
@@ -999,6 +1049,7 @@ export class BackendApplication {
   }
 
   private requestSnapshot(conversationId?: string): void {
+    if (this.disposing) return;
     if (!this.hydrated) {
       if (conversationId) this.pendingSnapshotConversationIds.add(conversationId);
       else this.pendingGlobalSnapshot = true;
@@ -1099,10 +1150,11 @@ export class BackendApplication {
 
   private async refreshMcpRuntime(discover: boolean): Promise<void> {
     await this.env.mcp.refreshFromSettings({ discover });
-    this.syncMcpRuntimeResources();
+    if (!this.disposing) this.syncMcpRuntimeResources();
   }
 
   private syncMcpRuntimeResources(): void {
+    if (this.disposing) return;
     const builtinTools = this.env.tools.registry.filter((tool) => tool.declaration.source?.kind !== 'mcp');
     const mcpTools = dedupeMcpToolNames(this.env.mcp.runtimeTools(), builtinTools.map((tool) => tool.declaration.name));
     const mergedTools = [...builtinTools, ...mcpTools];
@@ -1173,12 +1225,14 @@ export class BackendApplication {
 
   private async syncSkillCatalogResource(): Promise<void> {
     await this.env.skills.refresh();
+    if (this.disposing) return;
     this.world.setResource(SkillCatalogKey, this.env.skills.list());
     if (this.hydrated) this.requestSnapshot();
   }
 
   private async syncRulesCatalogResource(): Promise<void> {
     await this.env.rules.refresh();
+    if (this.disposing) return;
     this.world.setResource(RulesCatalogKey, this.env.rules.list());
     if (this.hydrated) this.requestSnapshot();
   }
@@ -1200,6 +1254,10 @@ export class BackendApplication {
   }
 
   private flushPendingHydrationMessages(): void {
+    if (this.disposing) {
+      this.pendingHydrationMessages.length = 0;
+      return;
+    }
     const pending = this.pendingHydrationMessages.splice(0);
     for (const item of pending) this.webviewRouter.handle(item.clientId, item.message);
   }
@@ -1223,7 +1281,7 @@ export class BackendApplication {
   }
 
   private syncWorkEnvironmentsFromWorkspaceFolders(): void {
-    if (!this.hydrated) return;
+    if (!this.hydrated || this.disposing) return;
     this.world.enqueue({
       type: WorkEnvironmentEventType.WorkspaceFoldersSynced,
       payload: { folders: this.getLocalWorkEnvironmentCandidates() }

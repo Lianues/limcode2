@@ -16,7 +16,8 @@ export function activate(context: vscode.ExtensionContext): void {
   console.log('LimCode (ECS backend) is active.');
 }
 
-export function deactivate(): void {
-  backendApp?.dispose();
+export async function deactivate(): Promise<void> {
+  const app = backendApp;
   backendApp = undefined;
+  await app?.dispose();
 }

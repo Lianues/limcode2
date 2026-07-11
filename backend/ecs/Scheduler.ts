@@ -87,6 +87,7 @@ export class Scheduler {
   private readonly systems: RegisteredSystem[] = [];
   private running = false;
   private scheduled = false;
+  private stopped = false;
   private nextOrder = 0;
   private readonly workerPool?: SystemWorkerPool;
 
@@ -117,6 +118,18 @@ export class Scheduler {
   }
 
   public dispose(): void {
+    this.stopped = true;
+    this.workerPool?.dispose();
+  }
+
+  public async stopAndDrain(): Promise<void> {
+    if (this.stopped) return;
+    for (;;) {
+      if (!this.running && !this.scheduled && this.world.pendingCount() === 0) break;
+      if (!this.running && !this.scheduled && this.world.pendingCount() > 0) this.wake();
+      await yieldToEventLoop();
+    }
+    this.stopped = true;
     this.workerPool?.dispose();
   }
 
@@ -131,6 +144,7 @@ export class Scheduler {
   }
 
   private wake(): void {
+    if (this.stopped) return;
     // 运行期间的同步入队由不动点循环消化；空闲时才安排下一次 tick。
     if (this.scheduled || this.running) {
       return;
@@ -143,6 +157,7 @@ export class Scheduler {
   }
 
   private tick(): void {
+    if (this.stopped) return;
     this.running = true;
     const schedule = this.compileSchedule();
     void this.runTick(schedule);

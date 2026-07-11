@@ -93,7 +93,7 @@ export class ClientStatePersistence {
     this.schedulePersistCheck();
   }
 
-  public async persistImmediately(options: { force?: boolean; forceConversationId?: string; throwOnError?: boolean } = {}): Promise<void> {
+  public async persistImmediately(options: { force?: boolean; ensurePersisted?: boolean; forceConversationId?: string; throwOnError?: boolean } = {}): Promise<void> {
     this.clearPersistTimer();
 
     if (this.persistInFlight) {
@@ -104,12 +104,12 @@ export class ClientStatePersistence {
 
     const latest = this.projectLatestState();
     const forcedConversationId = options.forceConversationId?.trim();
-    if (!options.force && !forcedConversationId && latest && !latest.changed) return;
-
     const latestState = latest?.state ?? this.lastProjectedState;
+    if (!options.force && !options.ensurePersisted && !forcedConversationId && latest && !latest.changed && !this.hasPendingStates()) return;
+
     if (!this.enabled || !latestState) return;
 
-    const targetConversationIds = options.force
+    const targetConversationIds = options.force || options.ensurePersisted
       ? undefined
       : latest?.previousState
         ? collectChangedClientStateConversationIds(latest.previousState, latestState, latest.changedTableKeys)
@@ -147,6 +147,7 @@ export class ClientStatePersistence {
 
       await this.persistHistoryEntries(historyStates);
     } catch (error) {
+      this.restorePendingStates(skeletonState, renderDetailStates, runHistoryStates, historyStates);
       console.warn('[LimCode] Failed to persist client state:', error);
       if (options.throwOnError) throw error;
     } finally {
@@ -156,6 +157,31 @@ export class ClientStatePersistence {
         this.persistPendingAfterInFlight = false;
         this.schedulePersistCheck();
       }
+    }
+  }
+
+  private hasPendingStates(): boolean {
+    return !!this.pendingSkeletonState
+      || this.pendingRenderDetailStates.size > 0
+      || this.pendingRunHistoryStates.size > 0
+      || this.pendingHistoryStates.size > 0;
+  }
+
+  private restorePendingStates(
+    skeletonState: ClientState | undefined,
+    renderDetailStates: Array<[string, ClientState]>,
+    runHistoryStates: Array<[string, PendingRunHistoryState]>,
+    historyStates: Array<[string, ClientState]>
+  ): void {
+    if (skeletonState && !this.pendingSkeletonState) this.pendingSkeletonState = skeletonState;
+    for (const [conversationId, state] of renderDetailStates) {
+      if (!this.pendingRenderDetailStates.has(conversationId)) this.pendingRenderDetailStates.set(conversationId, state);
+    }
+    for (const [conversationId, state] of runHistoryStates) {
+      if (!this.pendingRunHistoryStates.has(conversationId)) this.pendingRunHistoryStates.set(conversationId, state);
+    }
+    for (const [conversationId, state] of historyStates) {
+      if (!this.pendingHistoryStates.has(conversationId)) this.pendingHistoryStates.set(conversationId, state);
     }
   }
 

@@ -1,12 +1,22 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { MapWorld } = require('../dist/extension/backend/ecs/World.js');
-const { ToolCallRunLink } = require('../dist/extension/backend/world/modules/agentRun/components.js');
+const {
+  AgentRunSourceLink,
+  AgentRunTargetLink,
+  ToolCallRunLink
+} = require('../dist/extension/backend/world/modules/agentRun/components.js');
+const { Conversation } = require('../dist/extension/backend/world/modules/chat/components.js');
+const { OpenConversationPanelIdsKey } = require('../dist/extension/backend/world/modules/chat/resources.js');
 const { askUserTool } = require('../dist/extension/backend/world/modules/tools/definitions/askUser/index.js');
 const { ToolCall, ToolCallEvent, ToolState } = require('../dist/extension/backend/world/modules/tools/components.js');
 const { ToolRuntimeDefinitionsKey } = require('../dist/extension/backend/world/modules/tools/resources.js');
 const { activeExecutionBatchForRun } = require('../dist/extension/backend/world/modules/tools/scheduling.js');
-const { AskUserSystem } = require('../dist/extension/backend/world/modules/tools/systems/AskUserSystem.js');
+const {
+  AskUserSystem,
+  BACKGROUND_ASK_USER_AUTO_ANSWER,
+  isAwaitingBackgroundAskUserCall
+} = require('../dist/extension/backend/world/modules/tools/systems/AskUserSystem.js');
 const { createToolState, transitionToolState } = require('../dist/extension/backend/world/modules/tools/state.js');
 const { simplifyToolResponseForModel } = require('../dist/extension/backend/world/modules/tools/responseSimplifier.js');
 const {
@@ -172,6 +182,109 @@ test('AskUserSystem consumes the first valid multiple answer and completes the t
   assert.equal(events[0].status, 'success');
 });
 
+test('closed main conversation panel auto-answers ask_user with the fixed custom response', () => {
+  const world = new MapWorld();
+  const run = world.spawn();
+  addRunContext(world, run, {
+    targetConversationId: 'conversation-main'
+  });
+  world.setResource(OpenConversationPanelIdsKey, []);
+  const entity = addToolCall(world, run, 'ask-background-main', 'ask_user', Date.now() - 20);
+  world.add(entity, ToolState, createToolState('awaiting_user_input'));
+
+  const events = [{
+    type: 'chat:conversationPanelPresenceChanged',
+    payload: { conversationId: 'conversation-main', open: false }
+  }];
+  assert.equal(isAwaitingBackgroundAskUserCall(world, entity), true);
+  assert.equal(AskUserSystem.shouldRun({ world, events }), true);
+  AskUserSystem.run({ world, cmd: commandSink(world), events });
+
+  const state = world.get(entity, ToolState);
+  assert.equal(state.status, 'success');
+  assert.deepEqual(state.result.output.selectedOptions, []);
+  assert.equal(state.result.output.customText, BACKGROUND_ASK_USER_AUTO_ANSWER);
+  assert.deepEqual(simplifyToolResponseForModel('ask_user', 'success', state.result), {
+    answer: BACKGROUND_ASK_USER_AUTO_ANSWER
+  });
+});
+
+test('explicit user answer wins when the last panel closes in the same tick', () => {
+  const world = new MapWorld();
+  const run = world.spawn();
+  addRunContext(world, run, {
+    targetConversationId: 'conversation-closing'
+  });
+  world.setResource(OpenConversationPanelIdsKey, []);
+  const entity = addToolCall(world, run, 'ask-closing', 'ask_user', Date.now() - 20);
+  world.add(entity, ToolState, createToolState('awaiting_user_input'));
+  const events = [
+    {
+      type: 'tool:askUserAnswerSubmitted',
+      payload: { toolCallId: 'ask-closing', answer: { selectedOptionIndexes: [1] } }
+    },
+    {
+      type: 'chat:conversationPanelPresenceChanged',
+      payload: { conversationId: 'conversation-closing', open: false }
+    }
+  ];
+
+  AskUserSystem.run({ world, cmd: commandSink(world), events });
+
+  const output = world.get(entity, ToolState).result.output;
+  assert.deepEqual(output.selectedOptions.map((option) => option.label), ['替换实现']);
+  assert.equal(output.customText, undefined);
+});
+
+test('child agent auto-answers when only its parent conversation panel is open', () => {
+  const world = new MapWorld();
+  const run = world.spawn();
+  addRunContext(world, run, {
+    targetConversationId: 'conversation-child',
+    sourceConversationId: 'conversation-parent'
+  });
+  world.setResource(OpenConversationPanelIdsKey, ['conversation-parent']);
+  const entity = addToolCall(world, run, 'ask-child-with-parent-open', 'ask_user', Date.now() - 20);
+  world.add(entity, ToolState, createToolState('awaiting_user_input'));
+
+  assert.equal(isAwaitingBackgroundAskUserCall(world, entity), true);
+  AskUserSystem.run({ world, cmd: commandSink(world), events: [] });
+  const output = world.get(entity, ToolState).result.output;
+  assert.equal(output.customText, BACKGROUND_ASK_USER_AUTO_ANSWER);
+});
+
+test('foreground ask_user keeps waiting when its conversation panel is open', () => {
+  const world = new MapWorld();
+  const run = world.spawn();
+  addRunContext(world, run, {
+    targetConversationId: 'conversation-foreground'
+  });
+  world.setResource(OpenConversationPanelIdsKey, ['conversation-foreground']);
+  const entity = addToolCall(world, run, 'ask-foreground', 'ask_user', Date.now() - 20);
+  world.add(entity, ToolState, createToolState('awaiting_user_input'));
+
+  assert.equal(isAwaitingBackgroundAskUserCall(world, entity), false);
+  assert.equal(AskUserSystem.shouldRun({ world, events: [] }), false);
+  AskUserSystem.run({ world, cmd: commandSink(world), events: [] });
+  assert.equal(world.get(entity, ToolState).status, 'awaiting_user_input');
+});
+
+test('child agent keeps waiting when its own target conversation panel is open', () => {
+  const world = new MapWorld();
+  const run = world.spawn();
+  addRunContext(world, run, {
+    targetConversationId: 'conversation-visible-child',
+    sourceConversationId: 'conversation-closed-parent'
+  });
+  world.setResource(OpenConversationPanelIdsKey, ['conversation-visible-child']);
+  const entity = addToolCall(world, run, 'ask-visible-child', 'ask_user', Date.now() - 20);
+  world.add(entity, ToolState, createToolState('awaiting_user_input'));
+
+  assert.equal(isAwaitingBackgroundAskUserCall(world, entity), false);
+  AskUserSystem.run({ world, cmd: commandSink(world), events: [] });
+  assert.equal(world.get(entity, ToolState).status, 'awaiting_user_input');
+});
+
 test('tool state supports the explicit awaiting_user_input lifecycle', () => {
   const queued = createToolState('queued', 1);
   const awaiting = transitionToolState(queued, 'awaiting_user_input', {}, 2);
@@ -219,6 +332,46 @@ function addToolCall(world, run, id, name, createdAt) {
     updatedAt: createdAt
   });
   return entity;
+}
+
+function addRunContext(world, run, input) {
+  const targetConversation = world.spawn();
+  world.add(targetConversation, Conversation, {
+    id: input.targetConversationId,
+    title: input.targetConversationId,
+    visibility: 'visible'
+  });
+  const targetAgent = world.spawn();
+  const targetLink = world.spawn();
+  world.add(targetLink, AgentRunTargetLink, {
+    id: `target-${run}`,
+    run,
+    agent: targetAgent,
+    conversation: targetConversation,
+    role: 'executor',
+    createdAt: 1,
+    updatedAt: 1
+  });
+
+  let sourceConversation;
+  if (input.sourceConversationId) {
+    sourceConversation = world.spawn();
+    world.add(sourceConversation, Conversation, {
+      id: input.sourceConversationId,
+      title: input.sourceConversationId,
+      visibility: 'visible'
+    });
+  }
+  const sourceLink = world.spawn();
+  world.add(sourceLink, AgentRunSourceLink, {
+    id: `source-${run}`,
+    run,
+    sourceKind: sourceConversation === undefined ? 'user' : 'toolCall',
+    ...(sourceConversation === undefined ? {} : { sourceConversation }),
+    createdAt: 1,
+    updatedAt: 1
+  });
+
 }
 
 function commandSink(world) {

@@ -39,6 +39,8 @@ import {
   PartOf
 } from '../world/modules/chat/components';
 import type { MessageData } from '../world/modules/chat/components';
+import { ChatEventType } from '../world/modules/chat/events';
+import { OpenConversationPanelIdsKey } from '../world/modules/chat/resources';
 import {
   AgentRun,
   AgentRunInputRevision,
@@ -104,7 +106,7 @@ import { GlobalSettingsBridge } from './GlobalSettingsBridge';
 import { ConversationSettingsBridge } from './ConversationSettingsBridge';
 import { WebviewClientRegistry } from './WebviewClientRegistry';
 import { WebviewMessageRouter } from './WebviewMessageRouter';
-import { conversationCreatedAtFromId, createNewConversationTitle, displayConversationTitle } from '../../shared/conversationTitle';
+import { conversationCreatedAtFromId, createNewConversationTitle, DEFAULT_CONVERSATION_ID, displayConversationTitle } from '../../shared/conversationTitle';
 import { loadRemoteServerWorkEnvironmentRecordsFromVscode } from './workEnvironments/vscodeSshImport';
 import { McpToolSourcesKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey, ToolSchemasKey } from '../world/modules/tools/resources';
 import { SkillCatalogKey } from '../world/modules/skill/resources';
@@ -167,6 +169,7 @@ export class BackendApplication {
   public constructor(context: vscode.ExtensionContext) {
     const { env, toolSchemas, toolDefinitions } = createRuntimeEnv(context);
     this.env = env;
+    this.world.setResource(OpenConversationPanelIdsKey, []);
     this.env.mcp.setStateChangeListener(() => this.syncMcpRuntimeResources());
     this.persistence = new ClientStatePersistence(this.world, this.env.storage, {
       renderLoadedConversationIds: () => this.renderLoadedConversationDetails,
@@ -534,8 +537,10 @@ export class BackendApplication {
   public attachWebview(webview: vscode.Webview, meta: WebviewClientMeta = { kind: 'unknown' }): BridgeClientId {
     const clientId = this.env.webview.attach(webview, meta);
     this.webviewClients.register(clientId, meta);
-    if (meta.kind === 'mainPanel' && meta.conversationId?.trim()) {
-      this.markConversationOpened(meta.conversationId.trim());
+    const conversationId = mainPanelConversationId(meta);
+    if (conversationId) {
+      this.markConversationOpened(conversationId);
+      this.syncOpenConversationPanelPresence(conversationId);
     }
     return clientId;
   }
@@ -732,10 +737,24 @@ export class BackendApplication {
       });
     }
 
-    const conversationId = registration?.meta.kind === 'mainPanel' ? registration.meta.conversationId?.trim() : undefined;
-    if (conversationId && !this.hasOpenConversationPanel(conversationId)) {
-      this.rememberRecentlyClosedConversation(conversationId);
+    const conversationId = registration ? mainPanelConversationId(registration.meta) : undefined;
+    if (conversationId) {
+      this.syncOpenConversationPanelPresence(conversationId);
+      if (!this.hasOpenConversationPanel(conversationId)) this.rememberRecentlyClosedConversation(conversationId);
     }
+  }
+
+  private syncOpenConversationPanelPresence(changedConversationId: string): void {
+    const conversationIds = [...new Set(
+      this.env.webview.clientRecords()
+        .map((client) => mainPanelConversationId(client.meta))
+        .filter((conversationId): conversationId is string => !!conversationId)
+    )].sort();
+    this.world.setResource(OpenConversationPanelIdsKey, conversationIds);
+    this.world.enqueue({
+      type: ChatEventType.ConversationPanelPresenceChanged,
+      payload: { conversationId: changedConversationId, open: conversationIds.includes(changedConversationId) }
+    });
   }
 
   private markConversationOpened(conversationId: string): void {
@@ -763,9 +782,7 @@ export class BackendApplication {
   }
 
   private hasOpenConversationPanel(conversationId: string): boolean {
-    return this.env.webview.clientRecords().some((client) =>
-      client.meta.kind === 'mainPanel' && client.meta.conversationId?.trim() === conversationId
-    );
+    return this.env.webview.clientRecords().some((client) => mainPanelConversationId(client.meta) === conversationId);
   }
 
   private processConversationDetailEvictions(): void {
@@ -1846,6 +1863,11 @@ function isPassFlushEffect(effect: WorldEffect): boolean {
     || kind === 'tool.abort'
     || kind === 'tool.background'
     || kind === 'checkpoint.create';
+}
+
+function mainPanelConversationId(meta: WebviewClientMeta): string | undefined {
+  if (meta.kind !== 'mainPanel') return undefined;
+  return meta.conversationId?.trim() || DEFAULT_CONVERSATION_ID;
 }
 
 function modelProfileIdForConversation(conversationId: string): string { return `model-profile:conversation:${conversationId}`; }

@@ -113,8 +113,11 @@ import { SkillCatalogKey } from '../world/modules/skill/resources';
 import { RulesCatalogKey } from '../world/modules/rules/resources';
 import { conversationDetailEvictionBlocker, evictConversationDetail } from './conversationDetailEviction';
 import { forkConversationInWorld } from './conversationFork';
+import { AskUserAttentionTracker, askUserAttentionMessage, collectPendingAskUserAttention } from './askUserAttention';
 
 const MAX_WARM_CLOSED_CONVERSATIONS = 3;
+const ASK_USER_NOTIFICATION_ACTION = '打开标签页';
+const OPEN_PANEL_COMMAND = 'limcode.openPanel';
 
 export interface CreateConversationOptions {
   projectFolderUri?: string;
@@ -141,6 +144,7 @@ export class BackendApplication {
   private readonly conversationSettingsBridge: ConversationSettingsBridge;
   private readonly webviewClients = new WebviewClientRegistry();
   private readonly webviewRouter: WebviewMessageRouter;
+  private readonly askUserAttentionTracker = new AskUserAttentionTracker();
   private hydrated = false;
   private resolveHydrated: () => void = () => undefined;
   private readonly hydratedReady = new Promise<void>((resolve) => { this.resolveHydrated = resolve; });
@@ -227,6 +231,7 @@ export class BackendApplication {
       },
       afterTick: () => {
         flushEffects(this.outbox, this.env, (event) => this.world.enqueue(event), this.effectHandlers);
+        this.notifyPendingAskUserAttention();
         this.persistence.queuePersist();
         this.conversationHistoryChangedEmitter.fire();
         this.processConversationDetailEvictions();
@@ -741,6 +746,25 @@ export class BackendApplication {
     if (conversationId) {
       this.syncOpenConversationPanelPresence(conversationId);
       if (!this.hasOpenConversationPanel(conversationId)) this.rememberRecentlyClosedConversation(conversationId);
+    }
+  }
+
+  private notifyPendingAskUserAttention(): void {
+    const requests = this.askUserAttentionTracker.takeNew(collectPendingAskUserAttention(this.world));
+    for (const request of requests) {
+      void vscode.window.showInformationMessage(
+        askUserAttentionMessage(request),
+        ASK_USER_NOTIFICATION_ACTION
+      ).then((selection) => {
+        if (selection !== ASK_USER_NOTIFICATION_ACTION) return undefined;
+        return vscode.commands.executeCommand(OPEN_PANEL_COMMAND, {
+          conversationId: request.conversationId,
+          ...(request.conversationTitle ? { title: request.conversationTitle } : {}),
+          reuse: true
+        });
+      }).then(undefined, (error) => {
+        console.warn('[LimCode] Failed to open the conversation awaiting user input.', error);
+      });
     }
   }
 

@@ -2,6 +2,11 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { MapWorld } = require('../dist/extension/backend/ecs/World.js');
 const {
+  AskUserAttentionTracker,
+  askUserAttentionMessage,
+  collectPendingAskUserAttention
+} = require('../dist/extension/backend/application/askUserAttention.js');
+const {
   AgentRunSourceLink,
   AgentRunTargetLink,
   ToolCallRunLink
@@ -248,6 +253,7 @@ test('child agent auto-answers when only its parent conversation panel is open',
   world.add(entity, ToolState, createToolState('awaiting_user_input'));
 
   assert.equal(isAwaitingBackgroundAskUserCall(world, entity), true);
+  assert.deepEqual(collectPendingAskUserAttention(world), []);
   AskUserSystem.run({ world, cmd: commandSink(world), events: [] });
   const output = world.get(entity, ToolState).result.output;
   assert.equal(output.customText, BACKGROUND_ASK_USER_AUTO_ANSWER);
@@ -283,6 +289,40 @@ test('child agent keeps waiting when its own target conversation panel is open',
   assert.equal(isAwaitingBackgroundAskUserCall(world, entity), false);
   AskUserSystem.run({ world, cmd: commandSink(world), events: [] });
   assert.equal(world.get(entity, ToolState).status, 'awaiting_user_input');
+});
+
+test('pending ask_user notifications are grouped once by the AgentRun target conversation tab', () => {
+  const world = new MapWorld();
+  const run = world.spawn();
+  addRunContext(world, run, { targetConversationId: 'conversation-notification' });
+  world.setResource(OpenConversationPanelIdsKey, ['conversation-notification']);
+  const first = addToolCall(world, run, 'ask-notification-1', 'ask_user', 10);
+  const second = addToolCall(world, run, 'ask-notification-2', 'ask_user', 11);
+  world.add(first, ToolState, createToolState('awaiting_user_input'));
+  world.add(second, ToolState, createToolState('awaiting_user_input'));
+
+  const requests = collectPendingAskUserAttention(world);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].conversationId, 'conversation-notification');
+  assert.equal(requests[0].questionCount, 2);
+  assert.equal(requests[0].firstQuestion, requestArgs.question);
+  assert.match(askUserAttentionMessage(requests[0]), /2 个问题等待回答/);
+});
+
+test('ask_user notification tracker only emits once per continuous waiting episode', () => {
+  const tracker = new AskUserAttentionTracker();
+  const request = {
+    conversationId: 'conversation-notification',
+    conversationTitle: '通知测试',
+    questionCount: 1,
+    firstQuestion: '应该如何继续？',
+    firstCreatedAt: 1
+  };
+
+  assert.deepEqual(tracker.takeNew([request]), [request]);
+  assert.deepEqual(tracker.takeNew([request]), []);
+  assert.deepEqual(tracker.takeNew([]), []);
+  assert.deepEqual(tracker.takeNew([request]), [request]);
 });
 
 test('tool state supports the explicit awaiting_user_input lifecycle', () => {

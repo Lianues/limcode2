@@ -1,9 +1,14 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import {
   DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
   DEFAULT_LLM_RETRY_ON_ERROR,
+  defaultLlmPromptCacheTtlForProvider,
+  isPromptCacheSupportedProvider,
   type LlmGenerationConfigRecord,
   type LlmProviderConfigRecord,
+  type LlmPromptCacheConfigRecord,
+  type LlmPromptCacheTtl,
   type LlmProviderHeadersRecord,
   type LlmRequestBodyRecord,
   type LlmToolCallFormat
@@ -29,12 +34,30 @@ const emit = defineEmits<{
   (event: 'update-context-window-tokens', value: number | undefined): void;
   (event: 'update-generation-config', value: LlmGenerationConfigRecord | undefined): void;
   (event: 'update-request-body', value: LlmRequestBodyRecord | undefined): void;
+  (event: 'update-prompt-cache', value: LlmPromptCacheConfigRecord | undefined): void;
   (event: 'update-headers', value: LlmProviderHeadersRecord | undefined): void;
 }>();
 
 const toolCallFormatOptions: SettingsDropdownOption[] = [
   { value: 'function-call', label: 'Function Call' }
 ];
+const promptCacheSupported = computed(() => isPromptCacheSupportedProvider(props.config.provider));
+const promptCache = computed<LlmPromptCacheConfigRecord>(() => props.config.promptCache ?? {
+  enabled: true,
+  ttl: defaultLlmPromptCacheTtlForProvider(props.config.provider)
+});
+const promptCacheTtlOptions = computed<SettingsDropdownOption[]>(() => {
+  if (props.config.provider === 'openai-responses') {
+    return [{ value: '30m', label: '30 分钟', description: 'OpenAI Responses 目前仅支持 30m。' }];
+  }
+  if (props.config.provider === 'claude') {
+    return [
+      { value: '1h', label: '1 小时', description: 'Anthropic 最长档位，写入成本更高但命中窗口更长。' },
+      { value: '5m', label: '5 分钟', description: 'Anthropic 默认档位。' }
+    ];
+  }
+  return [{ value: defaultLlmPromptCacheTtlForProvider(props.config.provider), label: '最长档位', description: '当前渠道暂未接入 Prompt Cache 断点。' }];
+});
 
 function numericInputValue(event: Event): number | undefined {
   const value = (event.target as HTMLInputElement).value.trim();
@@ -65,6 +88,27 @@ function updateRetryMaxAttempts(event: Event): void {
 
 function updateToolCallFormat(value: string): void {
   emit('update-field', { toolCallFormat: value as LlmToolCallFormat });
+}
+
+function updatePromptCacheEnabled(enabled: boolean): void {
+  emit('update-prompt-cache', {
+    ...promptCache.value,
+    enabled,
+    ttl: normalizePromptCacheTtl(promptCache.value.ttl)
+  });
+}
+
+function updatePromptCacheTtl(value: string): void {
+  emit('update-prompt-cache', {
+    ...promptCache.value,
+    ttl: normalizePromptCacheTtl(value)
+  });
+}
+
+function normalizePromptCacheTtl(value: string | undefined): LlmPromptCacheTtl {
+  if (props.config.provider === 'openai-responses') return '30m';
+  if (props.config.provider === 'claude') return value === '5m' || value === '1h' ? value : '1h';
+  return defaultLlmPromptCacheTtlForProvider(props.config.provider);
 }
 </script>
 
@@ -122,6 +166,33 @@ function updateToolCallFormat(value: string): void {
       </div>
       <span class="stream-checkbox-text">启用后 read 可返回图片、PDF 等附件内容；关闭后 read 只读取文本。</span>
     </div>
+
+    <div class="global-settings-field stream-field prompt-cache-field">
+      <span>Prompt Cache</span>
+      <div class="stream-checkbox-row">
+        <LcCheckbox
+          :model-value="promptCache.enabled && promptCacheSupported"
+          :disabled="!promptCacheSupported"
+          size="sm"
+          aria-label="启用 Prompt Cache 断点"
+          @update:model-value="updatePromptCacheEnabled"
+        >
+          <span class="stream-checkbox-enable">启用缓存断点</span>
+        </LcCheckbox>
+      </div>
+      <span class="stream-checkbox-text">Claude 会写入系统提示词、工具定义结束、聊天记录末尾断点并支持时间档位；OpenAI Responses 默认使用按对话自动生成的 prompt_cache_key，不发送显式断点或缓存时间参数。</span>
+    </div>
+
+    <label v-if="config.provider === 'claude'" class="global-settings-field prompt-cache-ttl-field">
+      <span>缓存时间</span>
+      <SettingsDropdown
+        :model-value="promptCache.ttl"
+        :options="promptCacheTtlOptions"
+        :disabled="!promptCacheSupported || !promptCache.enabled"
+        title="选择 Prompt Cache 时间档位"
+        @update:model-value="updatePromptCacheTtl"
+      />
+    </label>
 
     <div class="global-settings-field stream-field retry-field">
       <span>报错自动重试</span>

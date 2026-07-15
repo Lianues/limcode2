@@ -132,7 +132,8 @@ function applyModelSpecificConfig(config: LlmProviderConfigRecord): LlmProviderC
     retryOnError: modelConfig.retryOnError,
     retryMaxAttempts: modelConfig.retryMaxAttempts,
     enableMultimodalTools: modelConfig.enableMultimodalTools,
-    contextWindowTokens: modelConfig.contextWindowTokens
+    contextWindowTokens: modelConfig.contextWindowTokens,
+    promptCache: modelConfig.promptCache
   };
 
   if (modelConfig.headers) next.headers = modelConfig.headers;

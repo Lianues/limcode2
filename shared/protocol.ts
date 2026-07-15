@@ -456,6 +456,7 @@ export interface AskUserToolOutputRecord {
 
 export type LlmProviderKind = 'openai-compatible' | 'openai-responses' | 'claude' | 'gemini' | 'deepseek';
 export type LlmToolCallFormat = 'function-call';
+export type LlmPromptCacheTtl = '5m' | '30m' | '1h';
 export type LlmThinkingLevel = 'not-set' | 'non-set' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type LlmReasoningMode = 'standard' | 'pro';
 
@@ -512,6 +513,7 @@ export type LlmCompressionThresholdUnit = 'percent' | 'tokens';
 export const DEFAULT_LLM_CONTEXT_WINDOW_TOKENS = 200_000;
 export const DEFAULT_LLM_RETRY_ON_ERROR = true;
 export const DEFAULT_LLM_RETRY_MAX_ATTEMPTS = 3;
+export const DEFAULT_LLM_PROMPT_CACHE_ENABLED = true;
 export const DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT = 90;
 export const DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS = 20_000;
 export const DEFAULT_LLM_COMPRESSION_SUMMARY_SYSTEM_PROMPT = 'You have written a partial transcript for the initial task above. Please write a summary of the transcript. The purpose of this summary is to provide continuity so you can continue to make progress towards solving the task in a future context, where the raw history above may not be accessible and will be replaced with this summary. Write down anything that would be helpful, including the state, next steps, learnings etc. You must wrap your summary in a <summary></summary> block.';
@@ -629,6 +631,28 @@ export interface LlmProviderModelRecord {
   createdAt?: string;
 }
 
+export interface LlmPromptCacheConfigRecord {
+  enabled: boolean;
+  /** 缓存 TTL 档位：Claude 支持 5m / 1h；OpenAI Responses 目前固定使用 30m。 */
+  ttl: LlmPromptCacheTtl;
+}
+
+export function isPromptCacheSupportedProvider(provider: LlmProviderKind | undefined): boolean {
+  return provider === 'openai-responses' || provider === 'claude';
+}
+
+export function defaultLlmPromptCacheTtlForProvider(provider: LlmProviderKind | undefined): LlmPromptCacheTtl {
+  if (provider === 'openai-responses') return '30m';
+  return '1h';
+}
+
+export function createDefaultLlmPromptCacheConfig(provider: LlmProviderKind | undefined): LlmPromptCacheConfigRecord {
+  return {
+    enabled: DEFAULT_LLM_PROMPT_CACHE_ENABLED,
+    ttl: defaultLlmPromptCacheTtlForProvider(provider)
+  };
+}
+
 export interface LlmProviderModelConfigRecord {
   id: string;
   /** 绑定当前渠道模型列表中的模型 ID。 */
@@ -641,6 +665,7 @@ export interface LlmProviderModelConfigRecord {
   retryMaxAttempts: number;
   enableMultimodalTools: boolean;
   contextWindowTokens?: number;
+  promptCache?: LlmPromptCacheConfigRecord;
   headers?: LlmProviderHeadersRecord;
   generationConfig?: LlmGenerationConfigRecord;
   requestBody?: LlmRequestBodyRecord;
@@ -664,6 +689,7 @@ export interface LlmProviderConfigRecord {
   retryMaxAttempts: number;
   enableMultimodalTools: boolean;
   contextWindowTokens?: number;
+  promptCache?: LlmPromptCacheConfigRecord;
   headers?: LlmProviderHeadersRecord;
   generationConfig?: LlmGenerationConfigRecord;
   requestBody?: LlmRequestBodyRecord;
@@ -692,6 +718,7 @@ export interface LlmInvocationSettingsSnapshotRecord {
   retryMaxAttempts?: number;
   enableMultimodalTools?: boolean;
   contextWindowTokens?: number;
+  promptCache?: LlmPromptCacheConfigRecord;
   generationConfig?: LlmGenerationConfigRecord;
   requestBody?: LlmRequestBodyRecord;
   compressionConfigId?: string;

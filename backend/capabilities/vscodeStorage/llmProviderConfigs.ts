@@ -7,6 +7,8 @@ import type {
   LlmProviderKind,
   LlmProviderModelConfigRecord,
   LlmProviderModelRecord,
+  LlmPromptCacheConfigRecord,
+  LlmPromptCacheTtl,
   LlmRequestBodyJsonValue,
   LlmRequestBodyRecord,
   LlmThinkingConfigRecord,
@@ -17,7 +19,9 @@ import {
   DEFAULT_LLM_CONTEXT_WINDOW_TOKENS,
   DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
   DEFAULT_LLM_RETRY_ON_ERROR,
-  createMessageId
+  createDefaultLlmPromptCacheConfig,
+  createMessageId,
+  defaultLlmPromptCacheTtlForProvider
 } from '../../../shared/protocol';
 import { DEFAULT_LLM_BASE_URL } from '../llmProvider';
 import type { StoragePaths } from './clientStateStore';
@@ -76,6 +80,7 @@ export function createDefaultLlmProviderConfig(input: { name?: string } = {}): L
     retryMaxAttempts: DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     enableMultimodalTools: true,
     contextWindowTokens: DEFAULT_LLM_CONTEXT_WINDOW_TOKENS,
+    promptCache: createDefaultLlmPromptCacheConfig('openai-compatible'),
     modelConfigs: [],
     createdAt: now,
     updatedAt: now
@@ -92,6 +97,7 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
   const headers = normalizeHeaders(input?.headers);
   const generationConfig = normalizeGenerationConfig(input?.generationConfig);
   const requestBody = normalizeRequestBody(input?.requestBody);
+  const promptCache = normalizePromptCache(input?.promptCache, provider);
   const modelConfigs = normalizeModelConfigs(input?.modelConfigs, models, provider);
   const contextWindowTokens = finitePositiveInteger(input?.contextWindowTokens) ?? providerDefaultContextWindow(provider);
   return {
@@ -108,6 +114,7 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
     retryMaxAttempts: finiteRetryMaxAttempts(input?.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     enableMultimodalTools: typeof input?.enableMultimodalTools === 'boolean' ? input.enableMultimodalTools : true,
     contextWindowTokens,
+    promptCache,
     ...(headers ? { headers } : {}),
     ...(generationConfig ? { generationConfig } : {}),
     ...(requestBody ? { requestBody } : {}),
@@ -196,6 +203,7 @@ function normalizeModelConfigs(
     const headers = normalizeHeaders(item.headers);
     const generationConfig = normalizeGenerationConfig(item.generationConfig);
     const requestBody = normalizeRequestBody(item.requestBody);
+    const promptCache = normalizePromptCache(item.promptCache, provider);
     byModelId.set(modelId, {
       id: stringOrDefault(item.id, `llm-model-config-${createMessageId()}`),
       modelId,
@@ -205,6 +213,7 @@ function normalizeModelConfigs(
       retryMaxAttempts: finiteRetryMaxAttempts(item.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
       enableMultimodalTools: typeof item.enableMultimodalTools === 'boolean' ? item.enableMultimodalTools : true,
       contextWindowTokens: finitePositiveInteger(item.contextWindowTokens) ?? providerDefaultContextWindow(provider),
+      promptCache,
       ...(headers ? { headers } : {}),
       ...(generationConfig ? { generationConfig } : {}),
       ...(requestBody ? { requestBody } : {}),
@@ -306,6 +315,20 @@ function isKnownThinkingLevel(value: unknown): value is LlmThinkingLevel {
 
 function isKnownReasoningMode(value: unknown): value is NonNullable<LlmThinkingConfigRecord['reasoningMode']> {
   return value === 'standard' || value === 'pro';
+}
+
+function normalizePromptCache(input: unknown, provider: LlmProviderKind): LlmPromptCacheConfigRecord {
+  if (!isPlainObject(input)) return createDefaultLlmPromptCacheConfig(provider);
+  return {
+    enabled: typeof input.enabled === 'boolean' ? input.enabled : true,
+    ttl: normalizePromptCacheTtl(input.ttl, provider)
+  };
+}
+
+function normalizePromptCacheTtl(input: unknown, provider: LlmProviderKind): LlmPromptCacheTtl {
+  if (provider === 'openai-responses') return '30m';
+  if (provider === 'claude') return input === '5m' || input === '1h' ? input : defaultLlmPromptCacheTtlForProvider(provider);
+  return defaultLlmPromptCacheTtlForProvider(provider);
 }
 
 function normalizeRequestBody(input: unknown): LlmRequestBodyRecord | undefined {

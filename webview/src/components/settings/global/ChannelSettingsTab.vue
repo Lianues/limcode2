@@ -9,6 +9,7 @@ import {
   type LlmProviderKind,
   type LlmProviderModelConfigRecord,
   type LlmProviderModelRecord,
+  type LlmPromptCacheConfigRecord,
   type LlmRequestBodyRecord
 } from '@shared/protocol';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
@@ -140,6 +141,10 @@ function updateDefaultRequestBody(value: LlmRequestBodyRecord | undefined): void
   settings.updateActiveLlmRequestBody(value);
 }
 
+function updateDefaultPromptCache(value: LlmPromptCacheConfigRecord | undefined): void {
+  settings.updateActiveLlmPromptCache(value);
+}
+
 function updateDefaultHeaders(value: LlmProviderHeadersRecord | undefined): void {
   settings.updateActiveLlmHeaders(value);
 }
@@ -158,6 +163,10 @@ function updateModelGenerationConfig(modelConfigId: string, value: LlmGeneration
 
 function updateModelRequestBody(modelConfigId: string, value: LlmRequestBodyRecord | undefined): void {
   settings.updateActiveModelConfigRequestBody(modelConfigId, value);
+}
+
+function updateModelPromptCache(modelConfigId: string, value: LlmPromptCacheConfigRecord | undefined): void {
+  settings.updateActiveModelConfigPromptCache(modelConfigId, value);
 }
 
 function updateModelHeaders(modelConfigId: string, value: LlmProviderHeadersRecord | undefined): void {
@@ -199,6 +208,7 @@ function modelConfigAsProviderConfig(modelConfig: LlmProviderModelConfigRecord):
     retryMaxAttempts: modelConfig.retryMaxAttempts,
     enableMultimodalTools: modelConfig.enableMultimodalTools,
     contextWindowTokens: modelConfig.contextWindowTokens,
+    promptCache: modelConfig.promptCache,
     headers: modelConfig.headers ?? {},
     generationConfig: modelConfig.generationConfig ?? {},
     requestBody: modelConfig.requestBody ?? {},
@@ -512,6 +522,7 @@ function cancelDelete(): void {
               @update-context-window-tokens="updateDefaultContextWindowTokens"
               @update-generation-config="updateDefaultGenerationConfig"
               @update-request-body="updateDefaultRequestBody"
+              @update-prompt-cache="updateDefaultPromptCache"
               @update-headers="updateDefaultHeaders"
             />
             <LlmCompressionSettingsEditor
@@ -559,7 +570,7 @@ function cancelDelete(): void {
             </div>
 
             <p class="model-specific-note">
-              模型专属配置是完整配置副本：Header、Body、重试、多模态、上下文窗口与上下文压缩都会替代默认配置；空 Header / Body 表示不使用默认 Header / Body。
+              模型专属配置是完整配置副本：Header、Body、重试、多模态、上下文窗口、Prompt Cache 与上下文压缩都会替代默认配置；空 Header / Body 表示不使用默认 Header / Body。
             </p>
 
             <div v-if="!activeModelConfigs.length" class="model-specific-empty">暂无模型专属配置。</div>
@@ -585,6 +596,7 @@ function cancelDelete(): void {
                   @update-context-window-tokens="updateModelContextWindowTokens(modelConfig.id, $event)"
                   @update-generation-config="updateModelGenerationConfig(modelConfig.id, $event)"
                   @update-request-body="updateModelRequestBody(modelConfig.id, $event)"
+                  @update-prompt-cache="updateModelPromptCache(modelConfig.id, $event)"
                   @update-headers="updateModelHeaders(modelConfig.id, $event)"
                 />
                 <LlmCompressionSettingsEditor

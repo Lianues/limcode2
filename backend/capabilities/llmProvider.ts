@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { createProxyFetch } from './proxyFetch';
 import { LlmEventType } from '../world/modules/llm/events';
 import type {
@@ -23,7 +24,10 @@ import {
   DEFAULT_LLM_RETRY_ON_ERROR,
   isTextPart,
   isVisibleTextPart,
-  isProviderContextPart
+  isProviderContextPart,
+  createDefaultLlmPromptCacheConfig,
+  defaultLlmPromptCacheTtlForProvider,
+  isPromptCacheSupportedProvider
 } from '../../shared/protocol';
 import type {
   ContentPart,
@@ -37,6 +41,9 @@ import type {
   LlmProviderHeadersRecord,
   LlmProviderKind,
   LlmProviderModelRecord,
+  LlmPromptCacheConfigRecord,
+  LlmPromptCacheTtl,
+  LlmRequestBodyRecord,
   LlmToolCallFormat,
   LlmRawErrorInfoRecord,
   LlmUsageMetadataRecord,
@@ -214,6 +221,7 @@ export async function startLlmProvider(
     const proxy = normalizeOptionalString(await resolveMaybe(options.proxy));
     const proxyFetch = proxy ? createProxyFetch(proxy) : undefined;
     const headers = mergeHeaders(await resolveMaybe(options.headers), settings.headers);
+    const requestBody = requestBodyWithOpenAIPromptCacheKey(settings, request.conversationId);
     if (proxy) console.log(`[LimCode] LLM proxy enabled: ${proxy}`);
     const provider = unified.createLLMFromConfig({
       provider: settings.provider,
@@ -222,7 +230,8 @@ export async function startLlmProvider(
       baseUrl: settings.baseUrl,
       ...(settings.contextWindowTokens ? { contextWindow: settings.contextWindowTokens } : {}),
       ...(headers ? { headers } : {}),
-      ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
+      ...(requestBody ? { requestBody } : {}),
+      ...unifiedPromptCacheConfigEntry(settings, requestBody),
       ...(proxy ? { proxy, fetch: proxyFetch } : {})
     }, registry.llmProviders);
 
@@ -542,6 +551,7 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
   const proxy = normalizeOptionalString(await resolveMaybe(options.proxy));
   const proxyFetch = proxy ? createProxyFetch(proxy) : undefined;
   const headers = mergeHeaders(await resolveMaybe(options.headers), runtimeSettings.headers);
+  const requestBody = requestBodyWithOpenAIPromptCacheKey(runtimeSettings, request.conversationId);
   const provider = unified.createLLMFromConfig({
     provider: runtimeSettings.provider,
     model: runtimeSettings.model,
@@ -549,7 +559,8 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
     baseUrl: runtimeSettings.baseUrl,
     ...(runtimeSettings.contextWindowTokens ? { contextWindow: runtimeSettings.contextWindowTokens } : {}),
     ...(headers ? { headers } : {}),
-    ...(runtimeSettings.requestBody ? { requestBody: runtimeSettings.requestBody } : {}),
+    ...(requestBody ? { requestBody } : {}),
+    ...unifiedPromptCacheConfigEntry(runtimeSettings, requestBody),
     ...(proxy ? { proxy, fetch: proxyFetch } : {})
   }, registry.llmProviders);
 
@@ -747,6 +758,7 @@ async function compactWithOpenAIResponses(
     ...(settings.contextWindowTokens ? { contextWindow: settings.contextWindowTokens } : {}),
     ...(headers ? { headers } : {}),
     ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
+    ...unifiedPromptCacheConfigEntry(settings),
     ...(proxy ? { proxy, fetch: proxyFetch } : {})
   }, registry.llmProviders) as unknown as { compact?: (request: unknown, options?: unknown) => Promise<UnifiedLLMCompactResponse> };
 
@@ -1008,6 +1020,7 @@ async function resolveSummaryProvider(
     ...(settings.contextWindowTokens ? { contextWindow: settings.contextWindowTokens } : {}),
     ...(headers ? { headers } : {}),
     ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
+    ...unifiedPromptCacheConfigEntry(settings),
     ...(proxy ? { proxy, fetch: proxyFetch } : {})
   }, registry.llmProviders);
   return { provider, settings, stream: settings.stream !== false };
@@ -1218,6 +1231,7 @@ function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmPr
     ...(headers ? { headers } : {}),
     ...(nonEmptyRecord(generationConfig) ? { generationConfig } : {}),
     ...(nonEmptyRecord(requestBody) ? { requestBody } : {}),
+    promptCache: normalizePromptCache(settings?.promptCache, normalizeProvider(settings?.provider)),
     modelConfigs: settings?.modelConfigs ?? [],
     createdAt: settings?.createdAt ?? 0,
     updatedAt: settings?.updatedAt ?? 0
@@ -1252,6 +1266,7 @@ function snapshotFromSettings(settings: LlmProviderConfigRecord, compressionConf
     ...(settings.contextWindowTokens ? { contextWindowTokens: settings.contextWindowTokens } : {}),
     ...(settings.generationConfig ? { generationConfig: settings.generationConfig } : {}),
     ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
+    ...(settings.promptCache ? { promptCache: settings.promptCache } : {}),
     ...(compressionConfig?.id ? { compressionConfigId: compressionConfig.id } : {}),
     ...(compressionConfig?.kind ? { compressionMethodKind: compressionConfig.kind } : {}),
     ...(compressionConfig?.trigger ? { compressionTrigger: compressionConfig.trigger } : {}),
@@ -1293,6 +1308,67 @@ function normalizeProvider(provider: LlmProviderKind | undefined): LlmProviderKi
 
 function normalizeToolCallFormat(format: LlmToolCallFormat | undefined): LlmToolCallFormat {
   return format === 'function-call' ? format : 'function-call';
+}
+
+function normalizePromptCache(input: LlmPromptCacheConfigRecord | undefined, provider: LlmProviderKind): LlmPromptCacheConfigRecord {
+  if (!input || typeof input !== 'object') return createDefaultLlmPromptCacheConfig(provider);
+  return {
+    enabled: typeof input.enabled === 'boolean' ? input.enabled : true,
+    ttl: normalizePromptCacheTtl(input.ttl, provider)
+  };
+}
+
+function normalizePromptCacheTtl(input: unknown, provider: LlmProviderKind): LlmPromptCacheTtl {
+  if (provider === 'openai-responses') return '30m';
+  if (provider === 'claude') return input === '5m' || input === '1h' ? input : defaultLlmPromptCacheTtlForProvider(provider);
+  return defaultLlmPromptCacheTtlForProvider(provider);
+}
+
+function unifiedPromptCacheConfigEntry(settings: LlmProviderConfigRecord, requestBody?: LlmRequestBodyRecord): { promptCache: Record<string, unknown> } | Record<string, never> {
+  const promptCache = unifiedPromptCacheFromSettings(settings, requestBody);
+  return promptCache ? { promptCache } : {};
+}
+
+function unifiedPromptCacheFromSettings(settings: LlmProviderConfigRecord, requestBody?: LlmRequestBodyRecord): Record<string, unknown> | undefined {
+  if (!isPromptCacheSupportedProvider(settings.provider)) return undefined;
+  const promptCache = normalizePromptCache(settings.promptCache, settings.provider);
+  if (!promptCache.enabled) return undefined;
+  if (settings.provider === 'openai-responses') {
+    const effectiveRequestBody = requestBody ?? settings.requestBody;
+    const key = typeof effectiveRequestBody?.prompt_cache_key === 'string' && effectiveRequestBody.prompt_cache_key.trim()
+      ? effectiveRequestBody.prompt_cache_key.trim()
+      : undefined;
+    return key ? { enabled: true, mode: 'key', key } : undefined;
+  }
+  return {
+    enabled: true,
+    ttl: promptCache.ttl,
+    mode: 'explicit',
+    breakpoints: { system: true, tools: true, messages: true }
+  };
+}
+
+function requestBodyWithOpenAIPromptCacheKey(settings: LlmProviderConfigRecord, conversationId?: string): LlmRequestBodyRecord | undefined {
+  const requestBody = settings.requestBody;
+  if (settings.provider !== 'openai-responses') return requestBody;
+  if (typeof requestBody?.prompt_cache_key === 'string' && requestBody.prompt_cache_key.trim()) return requestBody;
+  const promptCache = normalizePromptCache(settings.promptCache, settings.provider);
+  if (!promptCache.enabled || !conversationId?.trim()) return requestBody;
+  return {
+    ...(requestBody ?? {}),
+    prompt_cache_key: createOpenAIPromptCacheKey(settings, conversationId)
+  };
+}
+
+function createOpenAIPromptCacheKey(settings: LlmProviderConfigRecord, conversationId: string): string {
+  return createHash('sha256')
+    .update([
+      settings.id,
+      settings.model,
+      conversationId
+    ].join('\n'))
+    .digest('hex')
+    .slice(0, 32);
 }
 
 function normalizeHeaders(headers: unknown): LlmProviderHeadersRecord | undefined {

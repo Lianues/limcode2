@@ -9,6 +9,8 @@ import {
   DEFAULT_LLM_CONTEXT_WINDOW_TOKENS,
   DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
   DEFAULT_LLM_RETRY_ON_ERROR,
+  createDefaultLlmPromptCacheConfig,
+  defaultLlmPromptCacheTtlForProvider,
   type CheckpointMaintenanceSettingsRecord,
   type GlobalSettingsRecord,
   type GlobalSettingsSection,
@@ -24,6 +26,8 @@ import {
   type LlmProviderConfigRecord,
   type LlmProviderModelConfigRecord,
   type LlmProviderModelRecord,
+  type LlmPromptCacheConfigRecord,
+  type LlmPromptCacheTtl,
   type LlmRequestBodyJsonValue,
   type LlmRequestBodyRecord,
   type LlmProviderModelsSnapshotPayload,
@@ -168,6 +172,10 @@ function providerDefaultContextWindow(_provider: LlmProviderKind): number {
   return DEFAULT_LLM_CONTEXT_WINDOW_TOKENS;
 }
 
+function providerDefaultPromptCache(provider: LlmProviderKind): LlmPromptCacheConfigRecord {
+  return createDefaultLlmPromptCacheConfig(provider);
+}
+
 function createDefaultProviderConfig(name = '新渠道配置', provider: LlmProviderKind = 'openai-compatible'): LlmProviderConfigRecord {
   const now = Date.now();
   return {
@@ -184,6 +192,7 @@ function createDefaultProviderConfig(name = '新渠道配置', provider: LlmProv
     retryMaxAttempts: DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     enableMultimodalTools: true,
     contextWindowTokens: providerDefaultContextWindow(provider),
+    promptCache: providerDefaultPromptCache(provider),
     headers: {},
     generationConfig: {},
     requestBody: {},
@@ -204,6 +213,7 @@ function createModelConfigFromProviderConfig(config: LlmProviderConfigRecord, mo
     retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     enableMultimodalTools: config.enableMultimodalTools !== false,
     contextWindowTokens: normalizeTokenCount(config.contextWindowTokens) ?? providerDefaultContextWindow(config.provider),
+    promptCache: normalizePromptCacheForUi(config.promptCache, config.provider),
     headers: sanitizeHeaders(config.headers) ?? {},
     generationConfig: normalizeGenerationConfigForUi(config.generationConfig) ?? {},
     requestBody: sanitizeRequestBody(config.requestBody) ?? {},
@@ -251,6 +261,7 @@ function normalizeProviderConfigForUi(config: LlmProviderConfigRecord): LlmProvi
     retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     enableMultimodalTools: config.enableMultimodalTools !== false,
     contextWindowTokens: normalizeTokenCount(config.contextWindowTokens) ?? providerDefaultContextWindow(provider),
+    promptCache: normalizePromptCacheForUi(config.promptCache, provider),
     headers: sanitizeHeaders(config.headers) ?? {},
     generationConfig: normalizeGenerationConfigForUi(config.generationConfig) ?? {},
     requestBody: sanitizeRequestBody(config.requestBody) ?? {},
@@ -301,12 +312,27 @@ function normalizeModelConfigForUi(config: LlmProviderModelConfigRecord, modelId
     retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     enableMultimodalTools: config.enableMultimodalTools !== false,
     contextWindowTokens: normalizeTokenCount(config.contextWindowTokens) ?? providerDefaultContextWindow(provider),
+    promptCache: normalizePromptCacheForUi(config.promptCache, provider),
     headers: sanitizeHeaders(config.headers) ?? {},
     generationConfig: normalizeGenerationConfigForUi(config.generationConfig) ?? {},
     requestBody: sanitizeRequestBody(config.requestBody) ?? {},
     createdAt: Number.isFinite(config.createdAt) && config.createdAt > 0 ? config.createdAt : now,
     updatedAt: Number.isFinite(config.updatedAt) && config.updatedAt > 0 ? config.updatedAt : now
   };
+}
+
+function normalizePromptCacheForUi(input: LlmPromptCacheConfigRecord | undefined, provider: LlmProviderKind): LlmPromptCacheConfigRecord {
+  if (!input || typeof input !== 'object') return providerDefaultPromptCache(provider);
+  return {
+    enabled: typeof input.enabled === 'boolean' ? input.enabled : true,
+    ttl: normalizePromptCacheTtl(input.ttl, provider)
+  };
+}
+
+function normalizePromptCacheTtl(input: unknown, provider: LlmProviderKind): LlmPromptCacheTtl {
+  if (provider === 'openai-responses') return '30m';
+  if (provider === 'claude') return input === '5m' || input === '1h' ? input : defaultLlmPromptCacheTtlForProvider(provider);
+  return defaultLlmPromptCacheTtlForProvider(provider);
 }
 
 function normalizeRetryMaxAttempts(value: unknown): number | undefined {
@@ -347,6 +373,10 @@ function sanitizeModelConfigs(
     const rightIndex = models.findIndex((model) => model.id === right.modelId);
     return leftIndex - rightIndex || left.modelId.localeCompare(right.modelId) || left.id.localeCompare(right.id);
   });
+}
+
+function sanitizePromptCache(input: LlmPromptCacheConfigRecord | undefined, provider: LlmProviderKind): LlmPromptCacheConfigRecord {
+  return normalizePromptCacheForUi(input, provider);
 }
 
 function sanitizeHeaders(input: LlmProviderHeadersRecord | undefined): LlmProviderHeadersRecord | undefined {
@@ -566,6 +596,7 @@ function toPlainProviderConfig(config: LlmProviderConfigRecord): LlmProviderConf
     retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     enableMultimodalTools: config.enableMultimodalTools !== false,
     ...(normalizeTokenCount(config.contextWindowTokens) ? { contextWindowTokens: normalizeTokenCount(config.contextWindowTokens) } : {}),
+    promptCache: sanitizePromptCache(config.promptCache, config.provider),
     ...(sanitizeHeaders(config.headers) ? { headers: sanitizeHeaders(config.headers) } : {}),
     ...(sanitizeGenerationConfig(config.generationConfig) ? { generationConfig: sanitizeGenerationConfig(config.generationConfig) } : {}),
     ...(sanitizeRequestBody(config.requestBody) ? { requestBody: sanitizeRequestBody(config.requestBody) } : {}),
@@ -585,6 +616,7 @@ function toPlainModelConfig(config: LlmProviderModelConfigRecord, provider: LlmP
     retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     enableMultimodalTools: config.enableMultimodalTools !== false,
     ...(normalizeTokenCount(config.contextWindowTokens) ? { contextWindowTokens: normalizeTokenCount(config.contextWindowTokens) ?? providerDefaultContextWindow(provider) } : { contextWindowTokens: providerDefaultContextWindow(provider) }),
+    promptCache: sanitizePromptCache(config.promptCache, provider),
     ...(sanitizeHeaders(config.headers) ? { headers: sanitizeHeaders(config.headers) } : {}),
     ...(sanitizeGenerationConfig(config.generationConfig) ? { generationConfig: sanitizeGenerationConfig(config.generationConfig) } : {}),
     ...(sanitizeRequestBody(config.requestBody) ? { requestBody: sanitizeRequestBody(config.requestBody) } : {}),
@@ -1360,6 +1392,13 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       config.updatedAt = Date.now();
       this.queueLlmProviderConfigsAutoSave();
     },
+    updateActiveLlmPromptCache(promptCache: LlmPromptCacheConfigRecord | undefined): void {
+      const config = this.activeLlmProviderConfig;
+      if (!config) return;
+      config.promptCache = sanitizePromptCache(promptCache, config.provider);
+      config.updatedAt = Date.now();
+      this.queueLlmProviderConfigsAutoSave();
+    },
     updateActiveLlmHeaders(headers: LlmProviderHeadersRecord | undefined): void {
       const config = this.activeLlmProviderConfig;
       if (!config) return;
@@ -1431,6 +1470,16 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       const modelConfig = config.modelConfigs.find((candidate) => candidate.id === modelConfigId);
       if (!modelConfig) return;
       modelConfig.requestBody = sanitizeRequestBody(requestBody) ?? {};
+      modelConfig.updatedAt = Date.now();
+      config.updatedAt = Date.now();
+      this.queueLlmProviderConfigsAutoSave();
+    },
+    updateActiveModelConfigPromptCache(modelConfigId: string, promptCache: LlmPromptCacheConfigRecord | undefined): void {
+      const config = this.activeLlmProviderConfig;
+      if (!config) return;
+      const modelConfig = config.modelConfigs.find((candidate) => candidate.id === modelConfigId);
+      if (!modelConfig) return;
+      modelConfig.promptCache = sanitizePromptCache(promptCache, config.provider);
       modelConfig.updatedAt = Date.now();
       config.updatedAt = Date.now();
       this.queueLlmProviderConfigsAutoSave();

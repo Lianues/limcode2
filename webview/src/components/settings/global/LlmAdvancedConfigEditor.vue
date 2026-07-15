@@ -3,11 +3,13 @@ import { computed } from 'vue';
 import {
   DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
   DEFAULT_LLM_RETRY_ON_ERROR,
+  defaultLlmPromptCacheModeForProvider,
   defaultLlmPromptCacheTtlForProvider,
   isPromptCacheSupportedProvider,
   type LlmGenerationConfigRecord,
   type LlmProviderConfigRecord,
   type LlmPromptCacheConfigRecord,
+  type LlmPromptCacheMode,
   type LlmPromptCacheTtl,
   type LlmProviderHeadersRecord,
   type LlmRequestBodyRecord,
@@ -44,7 +46,31 @@ const toolCallFormatOptions: SettingsDropdownOption[] = [
 const promptCacheSupported = computed(() => isPromptCacheSupportedProvider(props.config.provider));
 const promptCache = computed<LlmPromptCacheConfigRecord>(() => props.config.promptCache ?? {
   enabled: true,
+  mode: defaultLlmPromptCacheModeForProvider(props.config.provider),
   ttl: defaultLlmPromptCacheTtlForProvider(props.config.provider)
+});
+const promptCacheModeOptions: SettingsDropdownOption[] = [
+  {
+    value: 'key',
+    label: '缓存 Key',
+    description: '仅发送按渠道、模型和对话自动生成的 prompt_cache_key；兼容不支持显式断点的模型。'
+  },
+  {
+    value: 'explicit',
+    label: '显式断点',
+    description: '发送 prompt_cache_options，并在聊天记录末尾写入 prompt_cache_breakpoint；需模型支持。'
+  }
+];
+const promptCacheDescription = computed(() => {
+  if (props.config.provider === 'openai-responses') {
+    return promptCache.value.mode === 'explicit'
+      ? '显式断点模式会发送 prompt_cache_options，并在聊天记录末尾添加断点；部分模型或兼容渠道不支持该参数。'
+      : '缓存 Key 模式会为同一渠道、模型和对话自动生成稳定的 prompt_cache_key；不发送显式断点或缓存时间参数。';
+  }
+  if (props.config.provider === 'claude') {
+    return 'Claude 会在系统提示词、工具定义结束和聊天记录末尾写入缓存断点，并支持缓存时间档位。';
+  }
+  return '当前渠道暂未接入 Prompt Cache。';
 });
 const promptCacheTtlOptions = computed<SettingsDropdownOption[]>(() => {
   if (props.config.provider === 'openai-responses') {
@@ -94,6 +120,15 @@ function updatePromptCacheEnabled(enabled: boolean): void {
   emit('update-prompt-cache', {
     ...promptCache.value,
     enabled,
+    mode: normalizePromptCacheMode(promptCache.value.mode),
+    ttl: normalizePromptCacheTtl(promptCache.value.ttl)
+  });
+}
+
+function updatePromptCacheMode(value: string): void {
+  emit('update-prompt-cache', {
+    ...promptCache.value,
+    mode: normalizePromptCacheMode(value),
     ttl: normalizePromptCacheTtl(promptCache.value.ttl)
   });
 }
@@ -103,6 +138,11 @@ function updatePromptCacheTtl(value: string): void {
     ...promptCache.value,
     ttl: normalizePromptCacheTtl(value)
   });
+}
+
+function normalizePromptCacheMode(value: string | undefined): LlmPromptCacheMode {
+  if (props.config.provider === 'openai-responses' && value === 'explicit') return 'explicit';
+  return defaultLlmPromptCacheModeForProvider(props.config.provider);
 }
 
 function normalizePromptCacheTtl(value: string | undefined): LlmPromptCacheTtl {
@@ -174,14 +214,25 @@ function normalizePromptCacheTtl(value: string | undefined): LlmPromptCacheTtl {
           :model-value="promptCache.enabled && promptCacheSupported"
           :disabled="!promptCacheSupported"
           size="sm"
-          aria-label="启用 Prompt Cache 断点"
+          aria-label="启用 Prompt Cache"
           @update:model-value="updatePromptCacheEnabled"
         >
-          <span class="stream-checkbox-enable">启用缓存断点</span>
+          <span class="stream-checkbox-enable">启用 Prompt Cache</span>
         </LcCheckbox>
       </div>
-      <span class="stream-checkbox-text">Claude 会写入系统提示词、工具定义结束、聊天记录末尾断点并支持时间档位；OpenAI Responses 默认使用按对话自动生成的 prompt_cache_key，不发送显式断点或缓存时间参数。</span>
+      <span class="stream-checkbox-text">{{ promptCacheDescription }}</span>
     </div>
+
+    <label v-if="config.provider === 'openai-responses'" class="global-settings-field prompt-cache-mode-field">
+      <span>缓存模式</span>
+      <SettingsDropdown
+        :model-value="promptCache.mode"
+        :options="promptCacheModeOptions"
+        :disabled="!promptCacheSupported || !promptCache.enabled"
+        title="选择 OpenAI Responses Prompt Cache 模式"
+        @update:model-value="updatePromptCacheMode"
+      />
+    </label>
 
     <label v-if="config.provider === 'claude'" class="global-settings-field prompt-cache-ttl-field">
       <span>缓存时间</span>

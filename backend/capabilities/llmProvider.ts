@@ -26,6 +26,7 @@ import {
   isVisibleTextPart,
   isProviderContextPart,
   createDefaultLlmPromptCacheConfig,
+  defaultLlmPromptCacheModeForProvider,
   defaultLlmPromptCacheTtlForProvider,
   isPromptCacheSupportedProvider
 } from '../../shared/protocol';
@@ -42,6 +43,7 @@ import type {
   LlmProviderKind,
   LlmProviderModelRecord,
   LlmPromptCacheConfigRecord,
+  LlmPromptCacheMode,
   LlmPromptCacheTtl,
   LlmRequestBodyRecord,
   LlmToolCallFormat,
@@ -1314,8 +1316,14 @@ function normalizePromptCache(input: LlmPromptCacheConfigRecord | undefined, pro
   if (!input || typeof input !== 'object') return createDefaultLlmPromptCacheConfig(provider);
   return {
     enabled: typeof input.enabled === 'boolean' ? input.enabled : true,
+    mode: normalizePromptCacheMode(input.mode, provider),
     ttl: normalizePromptCacheTtl(input.ttl, provider)
   };
+}
+
+function normalizePromptCacheMode(input: unknown, provider: LlmProviderKind): LlmPromptCacheMode {
+  if (provider === 'openai-responses' && input === 'explicit') return 'explicit';
+  return defaultLlmPromptCacheModeForProvider(provider);
 }
 
 function normalizePromptCacheTtl(input: unknown, provider: LlmProviderKind): LlmPromptCacheTtl {
@@ -1338,7 +1346,14 @@ function unifiedPromptCacheFromSettings(settings: LlmProviderConfigRecord, reque
     const key = typeof effectiveRequestBody?.prompt_cache_key === 'string' && effectiveRequestBody.prompt_cache_key.trim()
       ? effectiveRequestBody.prompt_cache_key.trim()
       : undefined;
-    return key ? { enabled: true, mode: 'key', key } : undefined;
+    if (promptCache.mode === 'key') return key ? { enabled: true, mode: 'key', key } : undefined;
+    return {
+      enabled: true,
+      mode: 'explicit',
+      ttl: promptCache.ttl,
+      breakpoints: { messages: true },
+      ...(key ? { key } : {})
+    };
   }
   return {
     enabled: true,

@@ -457,6 +457,12 @@ export interface AskUserToolOutputRecord {
 export type LlmProviderKind = 'openai-compatible' | 'openai-responses' | 'claude' | 'gemini' | 'deepseek';
 export type LlmToolCallFormat = 'function-call';
 export type LlmPromptCacheTtl = '5m' | '30m' | '1h';
+/**
+ * LimCode 暴露的 Prompt Cache 请求模式。
+ * - key：仅为 OpenAI Responses 发送稳定的 prompt_cache_key。
+ * - explicit：为 OpenAI Responses 发送 prompt_cache_options 与聊天记录末尾断点；Claude 固定使用此语义。
+ */
+export type LlmPromptCacheMode = 'key' | 'explicit';
 export type LlmThinkingLevel = 'not-set' | 'non-set' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type LlmReasoningMode = 'standard' | 'pro';
 
@@ -633,7 +639,9 @@ export interface LlmProviderModelRecord {
 
 export interface LlmPromptCacheConfigRecord {
   enabled: boolean;
-  /** 缓存 TTL 档位：Claude 支持 5m / 1h；OpenAI Responses 目前固定使用 30m。 */
+  /** OpenAI Responses 可在缓存 Key 与显式断点之间选择；Claude 固定使用显式断点。 */
+  mode: LlmPromptCacheMode;
+  /** 缓存 TTL 档位：Claude 支持 5m / 1h；OpenAI Responses 的显式断点模式固定使用 30m。 */
   ttl: LlmPromptCacheTtl;
 }
 
@@ -646,9 +654,14 @@ export function defaultLlmPromptCacheTtlForProvider(provider: LlmProviderKind | 
   return '1h';
 }
 
+export function defaultLlmPromptCacheModeForProvider(provider: LlmProviderKind | undefined): LlmPromptCacheMode {
+  return provider === 'openai-responses' ? 'key' : 'explicit';
+}
+
 export function createDefaultLlmPromptCacheConfig(provider: LlmProviderKind | undefined): LlmPromptCacheConfigRecord {
   return {
     enabled: DEFAULT_LLM_PROMPT_CACHE_ENABLED,
+    mode: defaultLlmPromptCacheModeForProvider(provider),
     ttl: defaultLlmPromptCacheTtlForProvider(provider)
   };
 }

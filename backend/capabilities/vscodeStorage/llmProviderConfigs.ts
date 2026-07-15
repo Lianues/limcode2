@@ -8,6 +8,7 @@ import type {
   LlmProviderModelConfigRecord,
   LlmProviderModelRecord,
   LlmPromptCacheConfigRecord,
+  LlmPromptCacheMode,
   LlmPromptCacheTtl,
   LlmRequestBodyJsonValue,
   LlmRequestBodyRecord,
@@ -21,6 +22,7 @@ import {
   DEFAULT_LLM_RETRY_ON_ERROR,
   createDefaultLlmPromptCacheConfig,
   createMessageId,
+  defaultLlmPromptCacheModeForProvider,
   defaultLlmPromptCacheTtlForProvider
 } from '../../../shared/protocol';
 import { DEFAULT_LLM_BASE_URL } from '../llmProvider';
@@ -321,8 +323,14 @@ function normalizePromptCache(input: unknown, provider: LlmProviderKind): LlmPro
   if (!isPlainObject(input)) return createDefaultLlmPromptCacheConfig(provider);
   return {
     enabled: typeof input.enabled === 'boolean' ? input.enabled : true,
+    mode: normalizePromptCacheMode(input.mode, provider),
     ttl: normalizePromptCacheTtl(input.ttl, provider)
   };
+}
+
+function normalizePromptCacheMode(input: unknown, provider: LlmProviderKind): LlmPromptCacheMode {
+  if (provider === 'openai-responses' && input === 'explicit') return 'explicit';
+  return defaultLlmPromptCacheModeForProvider(provider);
 }
 
 function normalizePromptCacheTtl(input: unknown, provider: LlmProviderKind): LlmPromptCacheTtl {

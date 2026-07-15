@@ -10,6 +10,7 @@ import {
   DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
   DEFAULT_LLM_RETRY_ON_ERROR,
   createDefaultLlmPromptCacheConfig,
+  defaultLlmPromptCacheModeForProvider,
   defaultLlmPromptCacheTtlForProvider,
   type CheckpointMaintenanceSettingsRecord,
   type GlobalSettingsRecord,
@@ -27,6 +28,7 @@ import {
   type LlmProviderModelConfigRecord,
   type LlmProviderModelRecord,
   type LlmPromptCacheConfigRecord,
+  type LlmPromptCacheMode,
   type LlmPromptCacheTtl,
   type LlmRequestBodyJsonValue,
   type LlmRequestBodyRecord,
@@ -325,8 +327,14 @@ function normalizePromptCacheForUi(input: LlmPromptCacheConfigRecord | undefined
   if (!input || typeof input !== 'object') return providerDefaultPromptCache(provider);
   return {
     enabled: typeof input.enabled === 'boolean' ? input.enabled : true,
+    mode: normalizePromptCacheMode(input.mode, provider),
     ttl: normalizePromptCacheTtl(input.ttl, provider)
   };
+}
+
+function normalizePromptCacheMode(input: unknown, provider: LlmProviderKind): LlmPromptCacheMode {
+  if (provider === 'openai-responses' && input === 'explicit') return 'explicit';
+  return defaultLlmPromptCacheModeForProvider(provider);
 }
 
 function normalizePromptCacheTtl(input: unknown, provider: LlmProviderKind): LlmPromptCacheTtl {

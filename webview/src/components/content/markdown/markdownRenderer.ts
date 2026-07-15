@@ -1,4 +1,6 @@
 import MarkdownIt from 'markdown-it';
+import * as katex from 'katex';
+import texmath from 'markdown-it-texmath';
 
 type MarkdownToken = {
   attrs: Array<[string, string]> | null;
@@ -27,6 +29,7 @@ type MarkdownParser = {
   options: MarkdownOptions;
   render(text: string): string;
   parse(text: string, env: unknown): MarkdownToken[];
+  use(plugin: unknown, options?: unknown): MarkdownParser;
   linkify?: {
     set(options: { fuzzyLink?: boolean; fuzzyIP?: boolean }): void;
   };
@@ -152,6 +155,18 @@ function createParser(MarkdownItCtor: MarkdownItConstructor): MarkdownParser {
     linkify: true,
     typographer: false,
     breaks: false
+  });
+
+  parser.use(texmath, {
+    engine: katex,
+    delimiters: ['dollars', 'brackets', 'beg_end', 'gitlab'],
+    katexOptions: {
+      throwOnError: false,
+      strict: 'warn',
+      trust: false,
+      maxSize: 8,
+      maxExpand: 1000
+    }
   });
 
   // markdown-it 的 linkify 默认会把裸域名自动转为链接。

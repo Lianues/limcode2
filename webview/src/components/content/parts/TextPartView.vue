@@ -107,6 +107,51 @@ function markdownPartKey(part: MarkdownRenderedPart, index: number): string {
   min-width: 0;
 }
 
+.rc-markdown :deep(.katex) {
+  color: var(--vscode-foreground);
+  font-size: 1em;
+}
+
+.rc-markdown :deep(eq) {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: -0.08em;
+}
+
+.rc-markdown :deep(eqn) {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}
+
+.rc-markdown :deep(eqn .katex-display) {
+  margin: 0.35em 0;
+}
+
+.rc-markdown :deep(section.eqno) {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+}
+
+.rc-markdown :deep(section.eqno > eqn) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rc-markdown :deep(section.eqno > span) {
+  flex: 0 0 auto;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-sm);
+}
+
+.rc-markdown :deep(.katex-error) {
+  color: var(--vscode-errorForeground, #f14c4c);
+}
+
 .rc-markdown:not(:last-child) {
   margin-bottom: var(--space-2);
 }

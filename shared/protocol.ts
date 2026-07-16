@@ -713,6 +713,7 @@ export interface LlmProviderConfigRecord {
 }
 
 export type LlmInvocationStatus = 'resolving' | 'ready' | 'streaming' | 'complete' | 'error' | 'cancelled';
+export type LlmInvocationRetryStatus = 'scheduled' | 'retrying' | 'cancelled' | 'recovered' | 'exhausted';
 export type RunLlmInvocationRole = 'primary';
 export type MessageLlmInvocationRole = 'modelOutput';
 export type CompressionBlockLlmInvocationRole = 'compact';
@@ -753,6 +754,13 @@ export interface LlmInvocationRecord {
   streamOutputDurationMs?: number;
   usageMetadata?: LlmUsageMetadataRecord;
   error?: string;
+  retryStatus?: LlmInvocationRetryStatus;
+  retryAttempt?: number;
+  retryMaxAttempts?: number;
+  retryDelayMs?: number;
+  retryMessage?: string;
+  retryRawError?: LlmRawErrorInfoRecord;
+  retryUpdatedAt?: number;
 }
 
 export interface RunLlmInvocationLinkRecord {

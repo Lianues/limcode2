@@ -1,7 +1,9 @@
 import { defineComponent, type Entity } from '../../../ecs/types';
 import type {
+  LlmInvocationRetryStatus,
   LlmInvocationSettingsSnapshotRecord,
   LlmInvocationStatus,
+  LlmRawErrorInfoRecord,
   LlmUsageMetadataRecord,
   MessageLlmInvocationRole,
   RunLlmInvocationRole
@@ -19,6 +21,13 @@ export interface LlmInvocationData {
   streamOutputDurationMs?: number;
   usageMetadata?: LlmUsageMetadataRecord;
   error?: string;
+  retryStatus?: LlmInvocationRetryStatus;
+  retryAttempt?: number;
+  retryMaxAttempts?: number;
+  retryDelayMs?: number;
+  retryMessage?: string;
+  retryRawError?: LlmRawErrorInfoRecord;
+  retryUpdatedAt?: number;
 }
 export const LlmInvocation = defineComponent<LlmInvocationData>('LlmInvocation');
 

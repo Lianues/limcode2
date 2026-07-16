@@ -8,6 +8,7 @@ import type {
   LlmDryRunResult,
   LlmResolveInvocationRequest,
   LlmStartRequest,
+  LlmModelSettings,
   ToolSchema
 } from '../world/modules/llm/contracts';
 import type { Emit, LlmCapability } from './types';
@@ -165,12 +166,15 @@ export function createLlmProviderCapability(options: LlmProviderOptions): LlmCap
       const previous = controllers.get(request.id);
       if (previous) {
         logCompressionDebug('capability.compact.supersede', compactRequestDebugInfo(request));
+        retryControls.get(request.id)?.wakeRetryWait?.();
         previous.abort(createAbortError(`Superseded LLM compact request: ${request.id}`));
       }
       const controller = new AbortController();
+      const retryControl: RetryControl = { cancelRequested: false };
       controllers.set(request.id, controller);
+      retryControls.set(request.id, retryControl);
       logCompressionDebug('capability.compact.start', compactRequestDebugInfo(request));
-      void compactLlmProvider(request, emit, options, controller.signal)
+      void compactLlmProvider(request, emit, options, controller.signal, retryControl)
         .finally(() => {
           const stillActive = controllers.get(request.id) === controller;
           logCompressionDebug('capability.compact.finally', {
@@ -180,6 +184,7 @@ export function createLlmProviderCapability(options: LlmProviderOptions): LlmCap
             abortReason: abortReasonText(controller.signal.reason)
           });
           if (stillActive) controllers.delete(request.id);
+          if (retryControls.get(request.id) === retryControl) retryControls.delete(request.id);
         });
     },
     dryRun(request, dryRunOptions) {
@@ -637,7 +642,13 @@ function ensureDefaultCompressionMethodsRegistered(): void {
   registerLlmCompressionMethod('manual_summary', compactWithSummary);
 }
 
-export async function compactLlmProvider(request: LlmCompactRequest, emit: Emit, options: LlmProviderOptions, signal?: AbortSignal): Promise<void> {
+export async function compactLlmProvider(
+  request: LlmCompactRequest,
+  emit: Emit,
+  options: LlmProviderOptions,
+  signal?: AbortSignal,
+  retryControl: RetryControl = { cancelRequested: false }
+): Promise<void> {
   logCompressionDebug('provider.compact.begin', { ...compactRequestDebugInfo(request), signalAborted: signal?.aborted === true });
   try {
     ensureDefaultCompressionMethodsRegistered();
@@ -654,27 +665,79 @@ export async function compactLlmProvider(request: LlmCompactRequest, emit: Emit,
 
     const handler = compressionMethodHandlers.get(methodConfig.kind);
     if (!handler) throw new Error(`未注册的压缩方法：${methodConfig.kind}`);
-    const result = await handler(request, methodConfig, options, signal);
-    logCompressionDebug('provider.compact.done', {
-      ...compactRequestDebugInfo(request),
-      resultId: result.id,
-      resultContentCount: result.contents.length,
-      resultMethodKind: result.methodConfig?.kind,
-      signalAborted: signal?.aborted === true
-    });
 
-    const completedAt = Date.now();
-    logCompressionDebug('provider.compact.emitDone', { ...compactRequestDebugInfo(request), completedAt });
-    emit({
-      type: LlmEventType.CompactDone,
-      payload: {
-        requestId: request.id,
-        blockId: request.blockId,
-        conversationId: request.conversationId,
-        result,
-        completedAt
+    const retrySettings = await resolveCompactRetrySettings(request, methodConfig, options);
+    const retryEnabled = retrySettings?.retryOnError !== false && isRetryCapableCompressionMethod(methodConfig.kind);
+    const maxRetries = normalizeRetryMaxAttempts(retrySettings?.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS;
+    let retryCount = 0;
+    let sawRetry = false;
+
+    while (true) {
+      try {
+        const result = await handler(request, methodConfig, options, signal);
+        logCompressionDebug('provider.compact.done', {
+          ...compactRequestDebugInfo(request),
+          resultId: result.id,
+          resultContentCount: result.contents.length,
+          resultMethodKind: result.methodConfig?.kind,
+          retryCount,
+          signalAborted: signal?.aborted === true
+        });
+
+        if (sawRetry) emitLlmRetryRecovered(emit, request.id, '自动重试成功，压缩已恢复。', retryCount, maxRetries);
+        emitCompactDone(emit, request, result, Date.now());
+        return;
+      } catch (error) {
+        if (isRequestAbort(signal)) {
+          logCompressionDebug('provider.compact.cancelledByRequestAbort', {
+            ...compactRequestDebugInfo(request),
+            error: errorDebugInfo(error),
+            abortReason: abortReasonText(signal?.reason)
+          });
+          return;
+        }
+
+        const failure = failureFromCaughtError(error);
+        const nextRetryCount = retryCount + 1;
+        const canRetry = retryEnabled
+          && isRetryableCompactFailure(error, failure)
+          && !retryControl.cancelRequested
+          && (maxRetries === -1 || nextRetryCount <= maxRetries);
+
+        if (!canRetry) {
+          if (retryControl.cancelRequested && retryCount > 0) {
+            emitLlmRetryCancelled(emit, request.id, failure.message, retryCount, maxRetries, failure.rawError);
+          }
+          emitCompactError(emit, request, failure, Date.now(), {
+            retryAttempt: retryCount || undefined,
+            retryMaxAttempts: retryEnabled ? maxRetries : 0
+          });
+          return;
+        }
+
+        sawRetry = true;
+        retryCount = nextRetryCount;
+        const retryDelayMs = retryDelayForAttempt(retryCount);
+        logCompressionDebug('provider.compact.retryScheduled', {
+          ...compactRequestDebugInfo(request),
+          message: failure.message,
+          retryCount,
+          maxRetries,
+          retryDelayMs
+        });
+        emitLlmRetryScheduled(emit, request.id, failure.message, failure.rawError, retryCount, maxRetries, retryDelayMs);
+        const shouldRetry = await waitForRetryDelay(retryDelayMs, retryControl, signal);
+        if (!shouldRetry) {
+          emitLlmRetryCancelled(emit, request.id, failure.message, retryCount, maxRetries, failure.rawError);
+          emitCompactError(emit, request, failure, Date.now(), {
+            retryAttempt: retryCount,
+            retryMaxAttempts: maxRetries
+          });
+          return;
+        }
+        emitLlmRetryStarted(emit, request.id, failure.message, failure.rawError, retryCount, maxRetries);
       }
-    });
+    }
   } catch (error) {
     if (isRequestAbort(signal)) {
       logCompressionDebug('provider.compact.cancelledByRequestAbort', {
@@ -685,27 +748,99 @@ export async function compactLlmProvider(request: LlmCompactRequest, emit: Emit,
       return;
     }
     const failure = failureFromCaughtError(error);
-    const completedAt = Date.now();
-    logCompressionDebug('provider.compact.emitError', {
-      ...compactRequestDebugInfo(request),
-      message: failure.message,
-      rawError: failure.rawError,
-      error: errorDebugInfo(error),
-      completedAt,
-      signalAborted: signal?.aborted === true
-    });
-    emit({
-      type: LlmEventType.CompactError,
-      payload: {
-        requestId: request.id,
-        blockId: request.blockId,
-        conversationId: request.conversationId,
-        message: failure.message,
-        completedAt
-      }
-    });
+    emitCompactError(emit, request, failure, Date.now());
   }
 }
+
+function emitCompactDone(emit: Emit, request: LlmCompactRequest, result: LlmCompactResult, completedAt: number): void {
+  logCompressionDebug('provider.compact.emitDone', { ...compactRequestDebugInfo(request), completedAt });
+  emit({
+    type: LlmEventType.CompactDone,
+    payload: {
+      requestId: request.id,
+      blockId: request.blockId,
+      conversationId: request.conversationId,
+      result,
+      completedAt
+    }
+  });
+}
+
+function emitCompactError(
+  emit: Emit,
+  request: LlmCompactRequest,
+  failure: LlmAttemptFailure,
+  completedAt: number,
+  extra: { retryAttempt?: number; retryMaxAttempts?: number } = {}
+): void {
+  logCompressionDebug('provider.compact.emitError', {
+    ...compactRequestDebugInfo(request),
+    message: failure.message,
+    rawError: failure.rawError,
+    completedAt,
+    retryAttempt: extra.retryAttempt,
+    retryMaxAttempts: extra.retryMaxAttempts
+  });
+  emit({
+    type: LlmEventType.CompactError,
+    payload: {
+      requestId: request.id,
+      blockId: request.blockId,
+      conversationId: request.conversationId,
+      message: failure.message,
+      ...(failure.rawError ? { rawError: failure.rawError } : {}),
+      ...(extra.retryAttempt !== undefined ? { retryAttempt: extra.retryAttempt } : {}),
+      ...(extra.retryMaxAttempts !== undefined ? { retryMaxAttempts: extra.retryMaxAttempts } : {}),
+      completedAt
+    }
+  });
+}
+
+async function resolveCompactRetrySettings(
+  request: LlmCompactRequest,
+  methodConfig: LlmCompressionConfigRecord,
+  options: LlmProviderOptions
+): Promise<LlmProviderConfigRecord | undefined> {
+  if (!isRetryCapableCompressionMethod(methodConfig.kind)) return undefined;
+  const model = compressionMethodModelOverride(methodConfig);
+  return resolveRuntimeSettings({
+    id: request.id,
+    contents: request.contents,
+    tools: [],
+    conversationId: request.conversationId,
+    ...(model ? { model } : {})
+  }, options);
+}
+
+function isRetryCapableCompressionMethod(kind: LlmCompressionConfigRecord['kind']): boolean {
+  return kind === 'openai_responses_compact' || kind === 'llm_summary' || kind === 'segmented_summary';
+}
+
+function compressionMethodModelOverride(methodConfig: LlmCompressionConfigRecord): LlmModelSettings | undefined {
+  if (methodConfig.kind === 'openai_responses_compact') {
+    const providerConfigId = methodConfig.openaiResponsesCompact?.providerConfigId?.trim();
+    const model = methodConfig.openaiResponsesCompact?.model?.trim();
+    return providerConfigId || model ? { ...(providerConfigId ? { providerConfigId } : {}), model: model || '' } : undefined;
+  }
+  if (methodConfig.kind === 'llm_summary' || methodConfig.kind === 'segmented_summary') {
+    const providerConfigId = methodConfig.llmSummary?.providerConfigId?.trim();
+    const model = methodConfig.llmSummary?.model?.trim();
+    return providerConfigId || model ? { ...(providerConfigId ? { providerConfigId } : {}), model: model || '' } : undefined;
+  }
+  return undefined;
+}
+
+function isRetryableCompactFailure(error: unknown, failure: LlmAttemptFailure): boolean {
+  const text = `${failure.message}\n${errorSearchText(error)}`.toLowerCase();
+  return !(
+    text.includes('当前压缩方法已关闭')
+    || text.includes('未注册的压缩方法')
+    || text.includes('缺少 llm api key')
+    || text.includes('openai 原生压缩仅支持')
+  );
+}
+
+
 
 async function compactWithOpenAIResponses(
   request: LlmCompactRequest,
@@ -779,6 +914,9 @@ async function compactWithOpenAIResponses(
       { contents: normalizedContext.contents.map(toUnifiedContent) },
       { inputFormat: 'unified', outputFormat: 'unified', signal }
     );
+    if (hasUnifiedError(compacted)) {
+      throw new LlmAttemptFailureError(failureFromProviderError(compacted.error, { rawResponse: compacted.rawResponse ?? compacted }));
+    }
     logCompressionDebug('provider.compact.openaiResponses.response', {
       ...compactRequestDebugInfo(request),
       responseId: compacted.id,
@@ -1052,6 +1190,9 @@ async function summarizeSingleRound(
     if (resolved.stream) {
       let text = '';
       for await (const chunk of resolved.provider.chatStream<UnifiedLLMStreamChunk>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified', signal })) {
+        if (hasUnifiedError(chunk)) {
+          throw new LlmAttemptFailureError(failureFromProviderError(chunk.error, { rawChunk: (chunk as { rawChunk?: unknown }).rawChunk ?? chunk }));
+        }
         text += chunk.textDelta ?? visibleTextFromParts(chunk.partsDelta ?? []);
       }
       const trimmed = text.trim();
@@ -1059,15 +1200,20 @@ async function summarizeSingleRound(
     }
 
     const response = await resolved.provider.chat<UnifiedLLMResponse>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified', signal });
+    if (hasUnifiedError(response)) {
+      throw new LlmAttemptFailureError(failureFromProviderError(response.error, { rawResponse: response.rawResponse ?? response }));
+    }
     const trimmed = visibleTextFromParts(response.content?.parts ?? []).trim();
     return trimmed ? extractSummaryTag(trimmed) : fallback();
   } catch (error) {
     if (isRequestAbort(signal)) throw error;
+    const contextLength = isContextLengthExceededError(error);
     logCompressionDebug('provider.compact.segmentedSummary.segmentFallback', {
       error: errorDebugInfo(error),
       segmentContents: segment.length,
-      contextLength: isContextLengthExceededError(error)
+      contextLength
     });
+    if (!contextLength) throw error;
     return fallback();
   }
 }
@@ -1100,12 +1246,18 @@ async function generateSummaryText(
   if (resolved.stream) {
     let text = '';
     for await (const chunk of resolved.provider.chatStream<UnifiedLLMStreamChunk>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified', signal })) {
+      if (hasUnifiedError(chunk)) {
+        throw new LlmAttemptFailureError(failureFromProviderError(chunk.error, { rawChunk: (chunk as { rawChunk?: unknown }).rawChunk ?? chunk }));
+      }
       text += chunk.textDelta ?? visibleTextFromParts(chunk.partsDelta ?? []);
     }
     return { text: text.trim() || deterministicSummary(request.contents), settings: resolved.settings };
   }
 
   const response = await resolved.provider.chat<UnifiedLLMResponse>(summaryRequest, { inputFormat: 'unified', outputFormat: 'unified', signal });
+  if (hasUnifiedError(response)) {
+    throw new LlmAttemptFailureError(failureFromProviderError(response.error, { rawResponse: response.rawResponse ?? response }));
+  }
 
   const text = visibleTextFromParts(response.content?.parts ?? []).trim();
   return { text: text || deterministicSummary(request.contents), settings: resolved.settings };

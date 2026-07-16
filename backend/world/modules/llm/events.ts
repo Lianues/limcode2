@@ -98,6 +98,9 @@ export interface LlmCompactErrorPayload {
   blockId: string;
   conversationId: string;
   message: string;
+  rawError?: LlmRawErrorInfoRecord;
+  retryAttempt?: number;
+  retryMaxAttempts?: number;
   completedAt: number;
 }
 

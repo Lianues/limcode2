@@ -10,10 +10,12 @@ import {
   isTextPart,
   type CompressionBlockRecord,
   type ContentPart,
+  type LlmInvocationRecord,
   type MessageContent
 } from '@shared/protocol';
 import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import CompressionRetryStatus from './CompressionRetryStatus.vue';
 
 const props = defineProps<{
   block: CompressionBlockRecord;
@@ -46,11 +48,15 @@ const methodLabel = computed(() => {
 });
 
 const statusLabel = computed(() => {
+  if (props.block.status === 'running') {
+    if (compressionInvocation.value?.retryStatus === 'scheduled') return '等待重试';
+    if (compressionInvocation.value?.retryStatus === 'retrying') return '重试中';
+  }
   switch (props.block.status) {
     case 'pending': return '等待中';
     case 'running': return '压缩中';
-    case 'complete': return '可用';
-    case 'error': return '失败';
+    case 'complete': return compressionInvocation.value?.retryStatus === 'recovered' ? '重试完成' : '可用';
+    case 'error': return compressionInvocation.value?.retryStatus === 'exhausted' ? '重试失败' : '失败';
     case 'stale': return '已失效';
     case 'disabled': return '已禁用';
   }
@@ -66,8 +72,19 @@ const tokenSavedLabel = computed(() => {
   return `节省约 ${formatCompactNumber(props.block.tokenSaved)} tokens`;
 });
 
-const isWorking = computed(() => props.block.status === 'pending' || props.block.status === 'running');
+const compressionInvocation = computed<LlmInvocationRecord | undefined>(() => {
+  const link = clientState.compressionBlockLlmInvocationLinks
+    .filter((candidate) => candidate.blockId === props.block.id)
+    .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id))[0];
+  return link ? clientState.llmInvocations.find((invocation) => invocation.id === link.invocationId) : undefined;
+});
+const retryActive = computed(() => compressionInvocation.value?.retryStatus === 'scheduled' || compressionInvocation.value?.retryStatus === 'retrying');
+const showRetryStatus = computed(() => !!compressionInvocation.value?.retryStatus && props.block.status !== 'stale' && props.block.status !== 'disabled');
+const isWorking = computed(() => props.block.status === 'pending' || props.block.status === 'running' || retryActive.value);
 const previewText = computed(() => {
+  const retryStatus = compressionInvocation.value?.retryStatus;
+  if (retryStatus === 'scheduled') return retryPreviewText('上次压缩请求报错，正在等待自动重试');
+  if (retryStatus === 'retrying') return retryPreviewText('上次压缩请求报错，正在自动重试压缩');
   if (props.block.summaryPreview?.trim()) return props.block.summaryPreview.trim();
   if (props.block.status === 'pending') return '已创建压缩占位，等待开始生成摘要...';
   if (props.block.status === 'running') return '正在压缩上下文，摘要生成后会显示在这里...';
@@ -167,6 +184,20 @@ function formatCompactNumber(value: number): string {
   if (value >= 1_000) return `${Math.round(value / 100) / 10}k`;
   return String(value);
 }
+
+function retryPreviewText(prefix: string): string {
+  const invocation = compressionInvocation.value;
+  const attempt = formatRetryAttempt(invocation?.retryAttempt, invocation?.retryMaxAttempts);
+  const suffix = attempt ? `（${attempt}）` : '';
+  return `${prefix}${suffix}...`;
+}
+
+function formatRetryAttempt(attempt: number | undefined, max: number | undefined): string {
+  if (attempt === undefined) return '';
+  if (max === -1) return `第 ${attempt}/∞ 次`;
+  if (max !== undefined) return `第 ${attempt}/${max} 次`;
+  return `第 ${attempt} 次`;
+}
 </script>
 
 <template>
@@ -219,10 +250,17 @@ function formatCompactNumber(value: number): string {
       {{ previewText }}
     </div>
 
+    <CompressionRetryStatus
+      v-if="showRetryStatus"
+      :invocation="compressionInvocation"
+      :block-status="block.status"
+    />
+
     <div v-if="expanded" class="compression-detail">
       <div class="detail-row"><span>来源范围</span><strong>{{ rangeLabel || '未知' }}</strong></div>
       <div class="detail-row"><span>压缩前</span><strong>{{ block.tokenCountBefore ?? '—' }}</strong></div>
       <div class="detail-row"><span>压缩后</span><strong>{{ block.tokenCountAfter ?? '—' }}</strong></div>
+      <div v-if="compressionInvocation?.retryAttempt" class="detail-row"><span>自动重试</span><strong>{{ formatRetryAttempt(compressionInvocation.retryAttempt, compressionInvocation.retryMaxAttempts) || '—' }}</strong></div>
       <div class="detail-row"><span>source hash</span><code>{{ block.sourceHash || '—' }}</code></div>
       <p v-if="block.summaryPreview" class="summary-preview">{{ block.summaryPreview }}</p>
       <p v-if="block.error" class="detail-error">{{ block.error }}</p>

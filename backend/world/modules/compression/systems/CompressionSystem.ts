@@ -5,7 +5,7 @@ import { AgentRun } from '../../agentRun/components';
 import { Conversation, Message, MessageCurrentRevisionLink, MessageRevision, PartOf } from '../../chat/components';
 import { conversationMessages } from '../../chat/queries';
 import { LlmEventType } from '../../llm/events';
-import type { LlmCompactDonePayload, LlmCompactErrorPayload } from '../../llm/events';
+import type { LlmCompactDonePayload, LlmCompactErrorPayload, LlmRetryPayload } from '../../llm/events';
 import { LlmInvocation } from '../../llm/components';
 import { CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSourceLink, CompressionContextVariant, RunCompressionBlockLink, type CompressionBlockData } from '../components';
 import { CompressionEventType } from '../events';
@@ -43,6 +43,10 @@ export const CompressionSystem = defineSystem({
         CompressionEventType.Regenerate,
         CompressionEventType.Disable,
         CompressionEventType.Enable,
+        LlmEventType.RetryScheduled,
+        LlmEventType.RetryStarted,
+        LlmEventType.RetryCancelled,
+        LlmEventType.RetryRecovered,
         LlmEventType.CompactDone,
         LlmEventType.CompactError
       ],
@@ -58,6 +62,10 @@ export const CompressionSystem = defineSystem({
     for (const payload of readEvents(ctx, CompressionEventType.Update)) updateCompressionBlock(world, cmd, payload);
     for (const payload of readEvents(ctx, CompressionEventType.Regenerate)) regenerateCompressionBlock(world, cmd, payload.blockId, payload.conversationId, payload.methodConfigId);
     for (const payload of readEvents(ctx, CompressionEventType.Create)) createCompressionBlock(world, cmd, payload);
+    for (const payload of readEvents(ctx, LlmEventType.RetryScheduled) as LlmRetryPayload[]) updateCompressionRetryState(world, cmd, payload, 'scheduled');
+    for (const payload of readEvents(ctx, LlmEventType.RetryStarted) as LlmRetryPayload[]) updateCompressionRetryState(world, cmd, payload, 'retrying');
+    for (const payload of readEvents(ctx, LlmEventType.RetryCancelled) as LlmRetryPayload[]) updateCompressionRetryState(world, cmd, payload, 'cancelled');
+    for (const payload of readEvents(ctx, LlmEventType.RetryRecovered) as LlmRetryPayload[]) updateCompressionRetryState(world, cmd, payload, 'recovered');
     for (const payload of readEvents(ctx, LlmEventType.CompactDone) as LlmCompactDonePayload[]) completeCompressionBlock(world, cmd, payload);
     for (const payload of readEvents(ctx, LlmEventType.CompactError) as LlmCompactErrorPayload[]) failCompressionBlock(world, cmd, payload);
   }
@@ -330,6 +338,46 @@ function spawnCompressionBlock(
     }
   });
 }
+function updateCompressionRetryState(
+  world: WorldReader,
+  cmd: CommandSink,
+  payload: LlmRetryPayload,
+  retryStatus: 'scheduled' | 'retrying' | 'cancelled' | 'recovered'
+): void {
+  const target = compressionInvocationByRequestId(world, payload.requestId);
+  if (!target) return;
+  const invocation = world.get(target.invocation, LlmInvocation);
+  if (!invocation) return;
+  const now = payload.createdAt ?? Date.now();
+  cmd.add(target.invocation, LlmInvocation, {
+    ...invocation,
+    status: invocation.status === 'complete' || invocation.status === 'error' || invocation.status === 'cancelled' ? invocation.status : 'streaming',
+    retryStatus,
+    retryAttempt: payload.retryAttempt,
+    retryMaxAttempts: payload.retryMaxAttempts,
+    retryDelayMs: retryStatus === 'scheduled' ? payload.retryDelayMs : undefined,
+    retryMessage: payload.message,
+    ...(payload.rawError ? { retryRawError: payload.rawError } : invocation.retryRawError ? { retryRawError: invocation.retryRawError } : {}),
+    retryUpdatedAt: now
+  });
+
+  const block = world.get(target.block, CompressionBlock);
+  if (block && (retryStatus === 'scheduled' || retryStatus === 'retrying')) {
+    cmd.add(target.block, CompressionBlock, { ...block, status: 'running', updatedAt: now });
+  }
+}
+
+function compressionInvocationByRequestId(world: WorldReader, requestId: string): { invocation: Entity; block: Entity } | undefined {
+  const invocation = world.query(LlmInvocation).find((entity) => world.get(entity, LlmInvocation)?.requestId === requestId);
+  if (invocation === undefined) return undefined;
+  const link = world
+    .query(CompressionBlockLlmInvocationLink)
+    .map((entity) => world.get(entity, CompressionBlockLlmInvocationLink))
+    .find((candidate): candidate is NonNullable<typeof candidate> => !!candidate && candidate.invocation === invocation);
+  return link ? { invocation, block: link.block } : undefined;
+}
+
+
 
 function completeCompressionBlock(world: WorldReader, cmd: CommandSink, payload: LlmCompactDonePayload): void {
   const blockEntity = findBlock(world, payload.blockId);
@@ -431,10 +479,20 @@ function failCompressionInvocation(world: WorldReader, cmd: CommandSink, block: 
   const invocationEntity = compressionInvocationForBlock(world, block);
   const invocation = invocationEntity !== undefined ? world.get(invocationEntity, LlmInvocation) : undefined;
   if (invocationEntity === undefined || !invocation) return;
+  const retryStatus = invocation.retryStatus === 'cancelled'
+    ? 'cancelled'
+    : payload.retryAttempt !== undefined && payload.retryAttempt > 0 ? 'exhausted' : invocation.retryStatus;
   cmd.add(invocationEntity, LlmInvocation, {
     ...invocation,
     status: 'error',
     error: payload.message,
+    ...(retryStatus ? { retryStatus } : {}),
+    ...(payload.retryAttempt !== undefined ? { retryAttempt: payload.retryAttempt } : {}),
+    ...(payload.retryMaxAttempts !== undefined ? { retryMaxAttempts: payload.retryMaxAttempts } : {}),
+    retryDelayMs: undefined,
+    retryMessage: payload.message,
+    ...(payload.rawError ? { retryRawError: payload.rawError } : {}),
+    retryUpdatedAt: payload.completedAt,
     completedAt: payload.completedAt
   });
 }

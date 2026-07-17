@@ -6,10 +6,10 @@ import type { PromptPlaceholderRecord } from '../../../../shared/protocol';
 import { stripInitialWorkEnvironmentSection } from '../../../../shared/runtimeContextText';
 import { formatWorkEnvironmentForDisplay } from '../../../../shared/workEnvironmentCatalog';
 import { Agent } from '../agent/components';
-import { AgentRunTargetLink, RunModeLink } from '../agentRun/components';
-import { activeModeForRun, runTarget } from '../agentRun/queries';
+import { AgentRunTargetLink, RunWorkflowLink } from '../agentRun/components';
+import { activeWorkflowForRun, runTarget } from '../agentRun/queries';
 import { Conversation } from '../chat/components';
-import { ConversationModeSelection, Mode } from '../mode/components';
+import { ConversationWorkflowSelection, Workflow } from '../workflow/components';
 import { ConversationProjectLink, ProjectContext } from '../project/components';
 import { runtimeContextWorkEnvironmentsForConversation, toPublicWorkEnvironmentRecord } from '../workEnvironment/queries';
 import {
@@ -23,8 +23,8 @@ import {
 export const SYSTEM_PROMPT_PLACEHOLDERS: PromptPlaceholderRecord[] = [
   { id: 'system:agent.name', token: '{{$agent.name}}', label: 'Agent 名称', description: '当前 Run 执行 Agent 的名称。', target: 'systemPrompt', order: 10 },
   { id: 'system:agent.description', token: '{{$agent.description}}', label: 'Agent 描述', description: '当前 Run 执行 Agent 的描述。', target: 'systemPrompt', order: 20 },
-  { id: 'system:mode.name', token: '{{$mode.name}}', label: 'Workflow 名称', description: '当前 Run 选中的工作流名称；未选择工作流时为空。', target: 'systemPrompt', order: 30 },
-  { id: 'system:mode.description', token: '{{$mode.description}}', label: 'Workflow 描述', description: '当前 Run 选中工作流的描述；未选择工作流时为空。', target: 'systemPrompt', order: 40 }
+  { id: 'system:workflow.name', token: '{{$workflow.name}}', label: 'Workflow 名称', description: '当前 Run 选中的工作流名称；未选择工作流时为空。', target: 'systemPrompt', order: 30 },
+  { id: 'system:workflow.description', token: '{{$workflow.description}}', label: 'Workflow 描述', description: '当前 Run 选中工作流的描述；未选择工作流时为空。', target: 'systemPrompt', order: 40 }
 ];
 
 export const RUNTIME_CONTEXT_PLACEHOLDERS: PromptPlaceholderRecord[] = [
@@ -48,10 +48,10 @@ export const PROMPT_CONTEXT_PLACEHOLDER_READS: AccessDeclaration = {
   components: [
     Agent,
     AgentRunTargetLink,
-    RunModeLink,
+    RunWorkflowLink,
     Conversation,
-    ConversationModeSelection,
-    Mode,
+    ConversationWorkflowSelection,
+    Workflow,
     ConversationProjectLink,
     ProjectContext,
     WorkEnvironment,
@@ -90,13 +90,13 @@ function resolveSystemPlaceholder(token: string, context: PromptPlaceholderRende
   const { world, run } = context;
   const target = run !== undefined ? runTarget(world, run) : undefined;
   const agent = target ? world.get(target.agent, Agent) : undefined;
-  const modeEntity = run !== undefined ? activeModeForRun(world, run) : undefined;
-  const mode = modeEntity !== undefined ? world.get(modeEntity, Mode) : undefined;
+  const workflowEntity = run !== undefined ? activeWorkflowForRun(world, run) : undefined;
+  const workflow = workflowEntity !== undefined ? world.get(workflowEntity, Workflow) : undefined;
   switch (token) {
     case '{{$agent.name}}': return agent?.name ?? '';
     case '{{$agent.description}}': return agent?.description ?? '';
-    case '{{$mode.name}}': return mode?.name ?? '';
-    case '{{$mode.description}}': return mode?.description ?? '';
+    case '{{$workflow.name}}': return workflow?.name ?? '';
+    case '{{$workflow.description}}': return workflow?.description ?? '';
     default: return undefined;
   }
 }

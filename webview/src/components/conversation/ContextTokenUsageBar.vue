@@ -444,11 +444,11 @@ function buildFixedContextUsageItems(): TokenUsageMessageEntry[] {
 function currentSystemPromptText(): string {
   const conversationId = clientState.currentConversationId;
   const agentId = currentAgentId();
-  const modeId = currentModeId();
+  const workflowId = currentWorkflowId();
   const scopeOrder = [
     { kind: 'global' as const },
     ...(agentId ? [{ kind: 'agent' as const, scopeId: agentId }] : []),
-    ...(modeId ? [{ kind: 'mode' as const, scopeId: modeId }] : []),
+    ...(workflowId ? [{ kind: 'workflow' as const, scopeId: workflowId }] : []),
     ...(conversationId ? [{ kind: 'conversation' as const, scopeId: conversationId }] : [])
   ];
   return scopeOrder
@@ -464,7 +464,7 @@ function currentRuntimeContextText(): string {
   return text;
 }
 
-function latestSystemPromptForScope(scopeKind: 'global' | 'agent' | 'mode' | 'conversation', scopeId?: string) {
+function latestSystemPromptForScope(scopeKind: 'global' | 'agent' | 'workflow' | 'conversation', scopeId?: string) {
   const link = latestByUpdatedAt(clientState.systemPromptScopeLinks.filter((item) => item.role === 'active' && item.scopeKind === scopeKind && (scopeKind === 'global' ? item.scopeId === undefined : item.scopeId === scopeId)));
   return clientState.systemPrompts.find((prompt) => prompt.id === link?.systemPromptId);
 }
@@ -477,9 +477,9 @@ function currentAgentId(): string | undefined {
     ?? clientState.agentConversationLinks.find((link) => link.conversationId === conversationId)?.agentId;
 }
 
-function currentModeId(): string | undefined {
-  const selection = latestByUpdatedAt(clientState.conversationModeSelections.filter((item) => item.conversationId === clientState.currentConversationId && item.role === 'active'));
-  return selection?.scopeKind === 'mode' ? selection.modeId : undefined;
+function currentWorkflowId(): string | undefined {
+  const selection = latestByUpdatedAt(clientState.conversationWorkflowSelections.filter((item) => item.conversationId === clientState.currentConversationId && item.role === 'active'));
+  return selection?.scopeKind === 'workflow' ? selection.workflowId : undefined;
 }
 
 function latestByUpdatedAt<T extends { id: string; createdAt: number; updatedAt: number }>(items: T[]): T | undefined {

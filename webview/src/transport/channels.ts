@@ -24,10 +24,10 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
     case BridgeMessageType.QueueResume:
     case BridgeMessageType.QueueResumeAll:
     case BridgeMessageType.QueueInputUpdate:
-    case BridgeMessageType.ModeCreate:
-    case BridgeMessageType.ModeUpdate:
-    case BridgeMessageType.ModeDelete:
-    case BridgeMessageType.ConversationModeSelect:
+    case BridgeMessageType.WorkflowCreate:
+    case BridgeMessageType.WorkflowUpdate:
+    case BridgeMessageType.WorkflowDelete:
+    case BridgeMessageType.ConversationWorkflowSelect:
     case BridgeMessageType.ModelProfileScopeSet:
     case BridgeMessageType.ModelProfileScopeClear:
     case BridgeMessageType.ConversationProjectSet:

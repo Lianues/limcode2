@@ -3,7 +3,7 @@ import { readEvents } from '../../../events';
 import { Agent } from '../../agent/components';
 import { AgentRun } from '../../agentRun/components';
 import { Conversation } from '../../chat/components';
-import { Mode, ToolPolicy } from '../../mode/components';
+import { Workflow, ToolPolicy } from '../../workflow/components';
 import { ToolPolicyScopeLink, type ToolPolicyScopeLinkData } from '../components';
 import { ToolEventType } from '../events';
 import { ToolDefinitionsKey } from '../resources';
@@ -16,7 +16,7 @@ export const ToolPolicyScopeSystem = defineSystem({
       || readEvents(ctx, ToolEventType.PolicyScopeClearRequested).length > 0;
   },
   access: {
-    reads: { components: [Agent, AgentRun, Conversation, Mode, ToolPolicy, ToolPolicyScopeLink] },
+    reads: { components: [Agent, AgentRun, Conversation, Workflow, ToolPolicy, ToolPolicyScopeLink] },
     writes: { components: [ToolPolicy, ToolPolicyScopeLink], mutationMode: 'update' },
     resources: { read: [ToolDefinitionsKey] },
     events: { read: [ToolEventType.PolicyScopeSetRequested, ToolEventType.PolicyScopeClearRequested] }
@@ -87,7 +87,7 @@ export const ToolPolicyScopeSystem = defineSystem({
 interface ResolvedToolPolicyScope {
   ok: true;
   scopeId?: string;
-  data: Partial<{ conversation: Entity; agent: Entity; mode: Entity; run: Entity; agentSystemId: string }>;
+  data: Partial<{ conversation: Entity; agent: Entity; workflow: Entity; run: Entity; agentSystemId: string }>;
 }
 
 function normalizeToolPolicyPreset(value: unknown): ToolPolicyPresetKind | undefined {
@@ -215,10 +215,10 @@ function resolveScope(world: WorldReader, scopeKind: ToolPolicyScopeKind, rawSco
       const agent = findByRecordId(world, Agent, scopeId);
       return { ok: true, scopeId, data: agent !== undefined ? { agent } : {} };
     }
-    case 'mode': {
+    case 'workflow': {
       if (!scopeId) return { ok: false };
-      const mode = findByRecordId(world, Mode, scopeId);
-      return { ok: true, scopeId, data: mode !== undefined ? { mode } : {} };
+      const workflow = findByRecordId(world, Workflow, scopeId);
+      return { ok: true, scopeId, data: workflow !== undefined ? { workflow } : {} };
     }
     case 'run': {
       if (!scopeId) return { ok: false };
@@ -257,7 +257,7 @@ function scopeIdForLink(world: WorldReader, link: ToolPolicyScopeLinkData): stri
   switch (link.scopeKind) {
     case 'conversation': return link.conversation !== undefined ? world.get(link.conversation, Conversation)?.id : undefined;
     case 'agent': return link.agent !== undefined ? world.get(link.agent, Agent)?.id : undefined;
-    case 'mode': return link.mode !== undefined ? world.get(link.mode, Mode)?.id : undefined;
+    case 'workflow': return link.workflow !== undefined ? world.get(link.workflow, Workflow)?.id : undefined;
     case 'run': return link.run !== undefined ? world.get(link.run, AgentRun)?.id : undefined;
     case 'agentSystem': return link.agentSystemId;
   }
@@ -281,7 +281,7 @@ function defaultPolicyName(scopeKind: ToolPolicyScopeKind): string {
     case 'conversation': return '对话工具策略';
     case 'agent': return 'Agent 工具策略';
     case 'agentSystem': return '多 Agent 系统工具策略';
-    case 'mode': return '工作流工具策略';
+    case 'workflow': return '工作流工具策略';
     case 'run': return '运行工具策略';
   }
 }

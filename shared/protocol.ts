@@ -10,10 +10,10 @@ export type BridgeScope =
   | { kind: 'global' }
   | { kind: 'conversation'; id: string }
   | { kind: 'agent'; id: string }
-  | { kind: 'settings'; level: 'global' | 'conversation' | 'agent' | 'mode'; id?: string };
+  | { kind: 'settings'; level: 'global' | 'conversation' | 'agent' | 'workflow'; id?: string };
 
 export interface WebviewClientMeta {
-  kind: 'mainPanel' | 'globalSettings' | 'modeSettings' | 'agentSettings' | 'sidebar' | 'unknown';
+  kind: 'mainPanel' | 'globalSettings' | 'workflowSettings' | 'agentSettings' | 'sidebar' | 'unknown';
   panelId?: string;
   title?: string;
   conversationId?: string;
@@ -156,10 +156,10 @@ export enum BridgeMessageType {
   ConversationSettingsSnapshot = 'settings.conversation.snapshot',
   ProjectFoldersGet = 'projectFolders.get',
   ProjectFoldersSnapshot = 'projectFolders.snapshot',
-  ModeCreate = 'mode.create',
-  ModeUpdate = 'mode.update',
-  ModeDelete = 'mode.delete',
-  ConversationModeSelect = 'conversation.mode.select',
+  WorkflowCreate = 'workflow.create',
+  WorkflowUpdate = 'workflow.update',
+  WorkflowDelete = 'workflow.delete',
+  ConversationWorkflowSelect = 'conversation.workflow.select',
   ConversationAgentSelect = 'conversation.agent.select',
   ConversationProjectSet = 'conversation.project.set',
   WorkEnvironmentSelect = 'workEnvironment.select',
@@ -817,25 +817,25 @@ export type AgentRunTargetRole = 'executor';
 export type MessageRunRole = 'input' | 'model' | 'tool_response' | 'notification';
 export type ToolCallRunRole = 'produced_by';
 export type PolicyBindingRole = 'active';
-export type ToolPolicyScopeKind = 'global' | 'conversation' | 'agent' | 'agentSystem' | 'mode' | 'run';
-export type ConfigScopeKind = 'global' | 'conversation' | 'agent' | 'mode' | 'run';
+export type ToolPolicyScopeKind = 'global' | 'conversation' | 'agent' | 'agentSystem' | 'workflow' | 'run';
+export type ConfigScopeKind = 'global' | 'conversation' | 'agent' | 'workflow' | 'run';
 export type ConfigScopeBindingRole = 'active';
 
-export type ModeSource = 'builtin' | 'user';
-export type ModeIconKey = 'list-details';
+export type WorkflowSource = 'builtin' | 'user';
+export type WorkflowIconKey = 'list-details';
 
-export interface ModeRecord {
+export interface WorkflowRecord {
   id: string;
   name: string;
   description?: string;
-  source: ModeSource;
-  icon?: ModeIconKey;
+  source: WorkflowSource;
+  icon?: WorkflowIconKey;
   createdAt: number;
   updatedAt: number;
 }
 
-export type ConversationModeScopeKind = 'global' | 'mode';
-export type ConversationModeSelectionRole = 'active';
+export type ConversationWorkflowScopeKind = 'global' | 'workflow';
+export type ConversationWorkflowSelectionRole = 'active';
 
 export interface ToolDisplayPolicyRecord {
   /** true 时前端默认展开该工具调用的内容面板；false/未设置则默认收起。 */
@@ -1058,12 +1058,12 @@ export interface ModelProfileScopeLinkRecord {
   updatedAt: number;
 }
 
-export interface ConversationModeSelectionRecord {
+export interface ConversationWorkflowSelectionRecord {
   id: string;
   conversationId: string;
-  scopeKind: ConversationModeScopeKind;
-  modeId?: string;
-  role: ConversationModeSelectionRole;
+  scopeKind: ConversationWorkflowScopeKind;
+  workflowId?: string;
+  role: ConversationWorkflowSelectionRole;
   createdAt: number;
   updatedAt: number;
 }
@@ -1115,7 +1115,7 @@ export type WorkEnvironmentKind = BuiltinWorkEnvironmentKind | (string & {});
 export type WorkEnvironmentSource = 'workspaceFolder' | 'vscodeSshConfig' | 'manual' | (string & {});
 export type WorkEnvironmentOs = 'linux' | 'windows' | 'macos' | 'unknown' | string;
 export type WorkEnvironmentCapabilityKind = 'localFileRead' | 'localCommand' | 'remoteFileRead' | 'remoteCommand' | 'containerFileRead' | 'containerCommand' | 'fileTransferRead' | 'fileTransferWrite' | (string & {});
-export type WorkEnvironmentPolicyScopeKind = 'global' | 'conversation' | 'agent' | 'agentSystem' | 'mode' | 'run';
+export type WorkEnvironmentPolicyScopeKind = 'global' | 'conversation' | 'agent' | 'agentSystem' | 'workflow' | 'run';
 
 export interface ProjectContextRecord {
   id: string;
@@ -1700,10 +1700,10 @@ export interface ToolCallRunLinkRecord {
   role: ToolCallRunRole;
 }
 
-export interface RunModeLinkRecord {
+export interface RunWorkflowLinkRecord {
   id: string;
   runId: string;
-  modeId: string;
+  workflowId: string;
   role: PolicyBindingRole;
 }
 
@@ -1884,7 +1884,7 @@ export interface ClientStateRecordByTable {
   agents: AgentRecord;
   toolDefinitions: ToolDefinitionRecord;
   mcpToolSources: McpToolSourceRecord;
-  modes: ModeRecord;
+  workflows: WorkflowRecord;
   toolPolicies: ToolPolicyRecord;
   toolPolicyScopeLinks: ToolPolicyScopeLinkRecord;
   skillDefinitions: SkillDefinitionRecord;
@@ -1901,7 +1901,7 @@ export interface ClientStateRecordByTable {
   runRuntimeContextSnapshotLinks: RunRuntimeContextSnapshotLinkRecord;
   modelProfiles: ModelProfileRecord;
   modelProfileScopeLinks: ModelProfileScopeLinkRecord;
-  conversationModeSelections: ConversationModeSelectionRecord;
+  conversationWorkflowSelections: ConversationWorkflowSelectionRecord;
   conversations: ConversationRecord;
   conversationReuseLinks: ConversationReuseLinkRecord;
   conversationBranchLinks: ConversationBranchLinkRecord;
@@ -1946,7 +1946,7 @@ export interface ClientStateRecordByTable {
   runContextPolicies: RunContextPolicyRecord;
   runDeliveryPolicies: RunDeliveryPolicyRecord;
   runEditPolicies: RunEditPolicyRecord;
-  runModeLinks: RunModeLinkRecord;
+  runWorkflowLinks: RunWorkflowLinkRecord;
   runSystemPromptLinks: RunSystemPromptLinkRecord;
   runModelProfileLinks: RunModelProfileLinkRecord;
   runToolPolicyLinks: RunToolPolicyLinkRecord;
@@ -2173,21 +2173,22 @@ export interface ClientResyncPayload {
   streamId?: string;
   conversationId?: string;
 }
-export interface ModeCreatePayload {
+export interface WorkflowCreatePayload {
   name: string;
   description?: string;
 }
-export interface ModeUpdatePayload {
-  modeId: string;
+export interface WorkflowUpdatePayload {
+  workflowId: string;
   name?: string;
   description?: string;
+  icon?: WorkflowIconKey;
 }
-export interface ModeDeletePayload {
-  modeId: string;
+export interface WorkflowDeletePayload {
+  workflowId: string;
 }
-export type ConversationModeSelectPayload =
+export type ConversationWorkflowSelectPayload =
   | { conversationId: string; scopeKind: 'global' }
-  | { conversationId: string; scopeKind: 'mode'; modeId: string };
+  | { conversationId: string; scopeKind: 'workflow'; workflowId: string };
 export interface ConversationAgentSelectPayload {
   conversationId: string; agentId: string;
 }
@@ -2683,10 +2684,10 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsGet, ConversationSettingsGetPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationSettingsUpdate, ConversationSettingsUpdatePayload>
   | BridgeEnvelope<BridgeMessageType.ProjectFoldersGet, undefined>
-  | BridgeEnvelope<BridgeMessageType.ModeCreate, ModeCreatePayload>
-  | BridgeEnvelope<BridgeMessageType.ModeUpdate, ModeUpdatePayload>
-  | BridgeEnvelope<BridgeMessageType.ModeDelete, ModeDeletePayload>
-  | BridgeEnvelope<BridgeMessageType.ConversationModeSelect, ConversationModeSelectPayload>
+  | BridgeEnvelope<BridgeMessageType.WorkflowCreate, WorkflowCreatePayload>
+  | BridgeEnvelope<BridgeMessageType.WorkflowUpdate, WorkflowUpdatePayload>
+  | BridgeEnvelope<BridgeMessageType.WorkflowDelete, WorkflowDeletePayload>
+  | BridgeEnvelope<BridgeMessageType.ConversationWorkflowSelect, ConversationWorkflowSelectPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationProjectSet, ConversationProjectSetPayload>
   | BridgeEnvelope<BridgeMessageType.WorkEnvironmentSelect, WorkEnvironmentSelectPayload>
   | BridgeEnvelope<BridgeMessageType.WorkEnvironmentUpsert, WorkEnvironmentUpsertPayload>

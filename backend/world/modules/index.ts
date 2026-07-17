@@ -2,7 +2,7 @@ export * from './common';
 export * from './agent';
 export * from './agentRun';
 export * from './agentAnswer';
-export * from './mode';
+export * from './workflow';
 export * from './chat';
 export * from './project';
 export * from './workEnvironment';

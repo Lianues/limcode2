@@ -95,7 +95,7 @@ llmProviderConfigs:
 storage.loadActiveLlmProviderConfig()
 ```
 
-这样 LLM capability 只拿当前激活的模型连接配置；未来 Agent / Mode / 其他对象如需复用某个渠道，应通过独立 Link/关系数据引用配置 id，不要把渠道配置嵌进 Agent 或 Conversation。
+这样 LLM capability 只拿当前激活的模型连接配置；未来 Agent / Workflow / 其他对象如需复用某个渠道，应通过独立 Link/关系数据引用配置 id，不要把渠道配置嵌进 Agent 或 Conversation。
 
 ## 5. 前端对接标准
 
@@ -116,6 +116,6 @@ storage.loadActiveLlmProviderConfig()
 3. 如果只是全局设置 section，是否复用了 GlobalSettingsGet/Update/Snapshot？
 4. 如果是可复用集合，是否在 settingsRootUri 下用 index + records 存储？
 5. 是否避免了为设置页 CRUD 新建 BridgeMessageType / Bridge？
-6. 如果未来需要被 Agent/Mode 等引用，是否计划用 Link 存 id，而不是嵌入配置对象？
+6. 如果未来需要被 Agent/Workflow 等引用，是否计划用 Link 存 id，而不是嵌入配置对象？
 7. 是否通过 getPaths() 获取路径？
 ```

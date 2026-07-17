@@ -14,11 +14,11 @@ import type { BackendApplication } from '../../backend/application/BackendApplic
 export interface MainPanelOptions {
   conversationId?: string;
   title?: string;
-  kind?: 'chat' | 'globalSettings' | 'modeSettings' | 'agentSettings';
+  kind?: 'chat' | 'globalSettings' | 'workflowSettings' | 'agentSettings';
   reuse?: boolean;
 }
 
-type MainPanelKind = 'chat' | 'globalSettings' | 'modeSettings' | 'agentSettings';
+type MainPanelKind = 'chat' | 'globalSettings' | 'workflowSettings' | 'agentSettings';
 
 const PANEL_TAB_TITLE_MAX_DISPLAY_UNITS = 20;
 const PANEL_TAB_TITLE_ELLIPSIS = '...';
@@ -113,7 +113,7 @@ export class MainPanel {
     this.refreshTitle(options.title);
     this.panel.webview.options = MainPanel.webviewPanelOptions(this.extensionUri);
     this.clientId = this.backendApp.attachWebview(panel.webview, {
-      kind: this.kind === 'globalSettings' ? 'globalSettings' : this.kind === 'modeSettings' ? 'modeSettings' : this.kind === 'agentSettings' ? 'agentSettings' : 'mainPanel',
+      kind: this.kind === 'globalSettings' ? 'globalSettings' : this.kind === 'workflowSettings' ? 'workflowSettings' : this.kind === 'agentSettings' ? 'agentSettings' : 'mainPanel',
       panelId: this.panelId,
       title: this.panel.title,
       conversationId: this.conversationId
@@ -186,7 +186,7 @@ export class MainPanel {
   private matches(options: MainPanelOptions): boolean {
     const kind = panelKind(options);
     if (kind !== this.kind) return false;
-    if (kind === 'globalSettings' || kind === 'modeSettings' || kind === 'agentSettings') return true;
+    if (kind === 'globalSettings' || kind === 'workflowSettings' || kind === 'agentSettings') return true;
     return (options.conversationId ?? '') === (this.conversationId ?? '');
   }
 
@@ -237,13 +237,13 @@ export class MainPanel {
 
 function panelKind(options: MainPanelOptions): MainPanelKind {
   if (options.kind === 'agentSettings') return 'agentSettings';
-  if (options.kind === 'modeSettings') return 'modeSettings';
+  if (options.kind === 'workflowSettings') return 'workflowSettings';
   return options.kind === 'globalSettings' ? 'globalSettings' : 'chat';
 }
 
 function panelTitle(options: MainPanelOptions, backendApp: BackendApplication): string {
   if (options.kind === 'globalSettings') return 'LimCode 设置';
-  if (options.kind === 'modeSettings') return 'LimCode 工作流设置';
+  if (options.kind === 'workflowSettings') return 'LimCode 工作流编辑';
   if (options.kind === 'agentSettings') return 'LimCode Agent 设置';
   if (!options.conversationId) return panelTabTitle('LimCode');
   const title = options.title
@@ -264,10 +264,10 @@ function optionsFromSerializedState(state: unknown, fallbackTitle: string): Main
     serializedKind === 'globalSettings' ||
     meta?.kind === 'globalSettings' ||
     fallbackTitle === 'LimCode 设置';
-  const isModeSettings =
-    serializedKind === 'modeSettings' ||
-    meta?.kind === 'modeSettings' ||
-    fallbackTitle === 'LimCode 工作流设置';
+  const isWorkflowSettings =
+    serializedKind === 'workflowSettings' ||
+    meta?.kind === 'workflowSettings' ||
+    fallbackTitle === 'LimCode 工作流编辑';
   const isAgentSettings =
     serializedKind === 'agentSettings' ||
     meta?.kind === 'agentSettings' ||
@@ -276,8 +276,8 @@ function optionsFromSerializedState(state: unknown, fallbackTitle: string): Main
   if (isGlobalSettings) {
     return { kind: 'globalSettings', reuse: true };
   }
-  if (isModeSettings) {
-    return { kind: 'modeSettings', reuse: true };
+  if (isWorkflowSettings) {
+    return { kind: 'workflowSettings', reuse: true };
   }
   if (isAgentSettings) {
     return { kind: 'agentSettings', reuse: true };
@@ -301,7 +301,7 @@ function metaFromState(value: unknown): WebviewClientMeta | undefined {
   if (!record) return undefined;
 
   const kind = stringValue(record.kind);
-  if (kind !== 'mainPanel' && kind !== 'globalSettings' && kind !== 'modeSettings' && kind !== 'agentSettings' && kind !== 'sidebar' && kind !== 'unknown') {
+  if (kind !== 'mainPanel' && kind !== 'globalSettings' && kind !== 'workflowSettings' && kind !== 'agentSettings' && kind !== 'sidebar' && kind !== 'unknown') {
     return undefined;
   }
 

@@ -3,7 +3,7 @@ import { readEvents } from '../../../events';
 import { Agent } from '../../agent/components';
 import { AgentRun } from '../../agentRun/components';
 import { Conversation } from '../../chat/components';
-import { Mode } from '../../mode/components';
+import { Workflow } from '../../workflow/components';
 import { SkillPolicy, SkillPolicyScopeLink, type SkillPolicyScopeLinkData } from '../components';
 import { SkillEventType } from '../events';
 import { SkillCatalogKey } from '../resources';
@@ -18,7 +18,7 @@ export const SkillPolicyScopeSystem = defineSystem({
       || readEvents(ctx, SkillEventType.PolicyScopeClearRequested).length > 0;
   },
   access: {
-    reads: { components: [Agent, AgentRun, Conversation, Mode, SkillPolicy, SkillPolicyScopeLink] },
+    reads: { components: [Agent, AgentRun, Conversation, Workflow, SkillPolicy, SkillPolicyScopeLink] },
     writes: { components: [SkillPolicy, SkillPolicyScopeLink], mutationMode: 'update' },
     resources: { read: [SkillCatalogKey] },
     events: { read: [SkillEventType.PolicyScopeSetRequested, SkillEventType.PolicyScopeClearRequested] }
@@ -79,7 +79,7 @@ export const SkillPolicyScopeSystem = defineSystem({
 interface ResolvedSkillPolicyScope {
   ok: true;
   scopeId?: string;
-  data: Partial<{ conversation: Entity; agent: Entity; mode: Entity; run: Entity; agentSystemId: string }>;
+  data: Partial<{ conversation: Entity; agent: Entity; workflow: Entity; run: Entity; agentSystemId: string }>;
 }
 
 type ScopeResult = ResolvedSkillPolicyScope | { ok: false };
@@ -119,10 +119,10 @@ function resolveScope(world: WorldReader, scopeKind: SkillPolicyScopeKind, rawSc
       const agent = findByRecordId(world, Agent, scopeId);
       return { ok: true, scopeId, data: agent !== undefined ? { agent } : {} };
     }
-    case 'mode': {
+    case 'workflow': {
       if (!scopeId) return { ok: false };
-      const mode = findByRecordId(world, Mode, scopeId);
-      return { ok: true, scopeId, data: mode !== undefined ? { mode } : {} };
+      const workflow = findByRecordId(world, Workflow, scopeId);
+      return { ok: true, scopeId, data: workflow !== undefined ? { workflow } : {} };
     }
     case 'run': {
       if (!scopeId) return { ok: false };
@@ -161,7 +161,7 @@ function scopeIdForLink(world: WorldReader, link: SkillPolicyScopeLinkData): str
   switch (link.scopeKind) {
     case 'conversation': return link.conversation !== undefined ? world.get(link.conversation, Conversation)?.id : undefined;
     case 'agent': return link.agent !== undefined ? world.get(link.agent, Agent)?.id : undefined;
-    case 'mode': return link.mode !== undefined ? world.get(link.mode, Mode)?.id : undefined;
+    case 'workflow': return link.workflow !== undefined ? world.get(link.workflow, Workflow)?.id : undefined;
     case 'run': return link.run !== undefined ? world.get(link.run, AgentRun)?.id : undefined;
     case 'agentSystem': return link.agentSystemId;
   }
@@ -185,7 +185,7 @@ function defaultPolicyName(scopeKind: SkillPolicyScopeKind): string {
     case 'conversation': return '对话技能策略';
     case 'agent': return 'Agent 技能策略';
     case 'agentSystem': return '多 Agent 系统技能策略';
-    case 'mode': return '工作流技能策略';
+    case 'workflow': return '工作流技能策略';
     case 'run': return '运行技能策略';
   }
 }

@@ -12,9 +12,9 @@ import {
 import { Agent } from '../agent/components';
 import { agentTypeEntityForRuntimeAgent } from '../agent/identity';
 import { AgentRun, AgentRunTargetLink } from '../agentRun/components';
-import { activeModeForRun, activeModeSelectionForConversation, runTarget } from '../agentRun/queries';
+import { activeWorkflowForRun, activeWorkflowSelectionForConversation, runTarget } from '../agentRun/queries';
 import { Conversation } from '../chat/components';
-import { Mode } from '../mode/components';
+import { Workflow } from '../workflow/components';
 import { ConversationProjectLink, ProjectContext } from '../project/components';
 import {
   ConversationWorkEnvironmentLink,
@@ -242,10 +242,10 @@ export function resolveWorkEnvironmentBySelector(
 }
 
 export function effectiveWorkEnvironmentPolicyForConversation(world: WorldReader, conversation: Entity): WorkEnvironmentPolicyResolution {
-  const selectedMode = activeModeSelectionForConversation(world, conversation);
-  if (selectedMode?.scopeKind === 'mode') {
-    const modePolicy = localPolicyForScopeEntity(world, 'mode', selectedMode.mode);
-    if (modePolicy.policy) return { ...modePolicy, inheritedFrom: 'mode' };
+  const selectedWorkflow = activeWorkflowSelectionForConversation(world, conversation);
+  if (selectedWorkflow?.scopeKind === 'workflow') {
+    const workflowPolicy = localPolicyForScopeEntity(world, 'workflow', selectedWorkflow.workflow);
+    if (workflowPolicy.policy) return { ...workflowPolicy, inheritedFrom: 'workflow' };
   }
 
   const local = localPolicyForScopeEntity(world, 'conversation', conversation);
@@ -261,10 +261,10 @@ export function effectiveWorkEnvironmentPolicyForRun(world: WorldReader, run: En
   const runLocal = localPolicyForScopeEntity(world, 'run', run);
   if (runLocal.policy) return runLocal;
 
-  const mode = activeModeForRun(world, run);
-  if (mode !== undefined) {
-    const modePolicy = localPolicyForScopeEntity(world, 'mode', mode);
-    if (modePolicy.policy) return { ...modePolicy, inheritedFrom: 'mode' };
+  const workflow = activeWorkflowForRun(world, run);
+  if (workflow !== undefined) {
+    const workflowPolicy = localPolicyForScopeEntity(world, 'workflow', workflow);
+    if (workflowPolicy.policy) return { ...workflowPolicy, inheritedFrom: 'workflow' };
   }
 
   const target = runTarget(world, run);
@@ -306,7 +306,7 @@ function scopeIdForEntity(world: WorldReader, scopeKind: WorkEnvironmentPolicySc
   switch (scopeKind) {
     case 'conversation': return world.get(entity, Conversation)?.id;
     case 'agent': return world.get(entity, Agent)?.id;
-    case 'mode': return world.get(entity, Mode)?.id;
+    case 'workflow': return world.get(entity, Workflow)?.id;
     case 'run': return world.get(entity, AgentRun)?.id;
     case 'agentSystem': return undefined;
     case 'global': return undefined;

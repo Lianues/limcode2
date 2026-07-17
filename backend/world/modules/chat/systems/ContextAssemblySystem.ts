@@ -1,12 +1,12 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
 import type { LlmModelSettings } from '../../llm/contracts';
 import { LlmEventType, type LlmInvocationResolvedPayload, type LlmInvocationResolveErrorPayload } from '../../llm/events';
-import { AgentRun, AgentRunNeedsModel, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunTargetLink, MessageRunLink, RunModeLink, RunModelProfileLink } from '../../agentRun/components';
+import { AgentRun, AgentRunNeedsModel, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunTargetLink, MessageRunLink, RunWorkflowLink, RunModelProfileLink } from '../../agentRun/components';
 import { spawnMessageRunLink } from '../../agentRun/bundles';
 import { activeModelProfileForRun, isTerminalRunStatus } from '../../agentRun/queries';
 import { CompressionBlock } from '../../compression/components';
 import { hasActiveBlockingCompression } from '../../compression/queries';
-import { ConversationModeSelection, Mode, ModelProfile, ModelProfileScopeLink } from '../../mode/components';
+import { ConversationWorkflowSelection, Workflow, ModelProfile, ModelProfileScopeLink } from '../../workflow/components';
 import { LlmRequest, Conversation, ConversationFullContextLoaded, ConversationFullContextPending, Message } from '../components';
 import { ModelMessageBundle, LlmRequestBundle, MessageBundle, spawnMessage, spawnModelMessage, spawnLlmRequest } from '../bundles';
 import { materializeUserInputMessage } from '../userInputMaterialization';
@@ -47,7 +47,7 @@ export const ContextAssemblySystem = defineSystem({
   name: 'ContextAssemblySystem',
   access: {
     queries: [RunsNeedingModelQuery, ActiveLlmRequestsQuery, LlmInvocationLookupQuery],
-    reads: { components: [RunModeLink, RunModelProfileLink, ConversationModeSelection, Mode, ModelProfile, ModelProfileScopeLink, CompressionBlock, ConversationFullContextLoaded, ConversationFullContextPending, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, Checkpoint] },
+    reads: { components: [RunWorkflowLink, RunModelProfileLink, ConversationWorkflowSelection, Workflow, ModelProfile, ModelProfileScopeLink, CompressionBlock, ConversationFullContextLoaded, ConversationFullContextPending, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, Checkpoint] },
     bundles: [ModelMessageBundle, MessageBundle, LlmRequestBundle, LlmInvocationBundle, MessageLlmInvocationLinkBundle],
     writes: { components: [AgentRun, MessageRunLink, ConversationFullContextPending, CheckpointBarrier] },
     events: { read: [LlmEventType.InvocationResolved, LlmEventType.InvocationResolveError], emit: [CheckpointEventType.Requested] },

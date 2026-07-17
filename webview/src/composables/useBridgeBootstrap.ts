@@ -117,7 +117,7 @@ export function useBridgeBootstrap(): void {
         globalSettings.requestAll();
         return;
       }
-      if (session.viewKind === 'modeSettings') {
+      if (session.viewKind === 'workflowSettings') {
         globalSettings.requestChannelSettings();
         return;
       }

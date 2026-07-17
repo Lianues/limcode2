@@ -3,22 +3,22 @@ import type { SkillPolicyScopeKind } from '../../../../shared/protocol';
 import { Agent } from '../agent/components';
 import { agentTypeEntityForRuntimeAgent } from '../agent/identity';
 import { AgentRun } from '../agentRun/components';
-import { runTarget, activeModeForRun } from '../agentRun/queries';
+import { runTarget, activeWorkflowForRun } from '../agentRun/queries';
 import { Conversation } from '../chat/components';
-import { Mode } from '../mode/components';
+import { Workflow } from '../workflow/components';
 import { SkillPolicy, SkillPolicyScopeLink, type SkillPolicyData, type SkillPolicyScopeLinkData } from './components';
 
 /**
- * 解析当前 run 的有效技能策略：最具体作用域优先（run > conversation > mode > agent），否则回退 global。
+ * 解析当前 run 的有效技能策略：最具体作用域优先（run > conversation > workflow > agent），否则回退 global。
  * 与前端 useSkillPolicyStore.effectivePolicyFor 的单策略模型保持一致。
  */
 export function activeSkillPolicyForRun(world: WorldReader, run: Entity): SkillPolicyData | undefined {
   const target = runTarget(world, run);
-  const mode = activeModeForRun(world, run);
+  const workflow = activeWorkflowForRun(world, run);
 
   return activeSkillPolicyForScopeEntity(world, 'run', run)
     ?? (target ? activeSkillPolicyForScopeEntity(world, 'conversation', target.conversation) : undefined)
-    ?? (mode !== undefined ? activeSkillPolicyForScopeEntity(world, 'mode', mode) : undefined)
+    ?? (workflow !== undefined ? activeSkillPolicyForScopeEntity(world, 'workflow', workflow) : undefined)
     ?? (target ? activeSkillPolicyForScopeEntity(world, 'agent', agentTypeEntityForRuntimeAgent(world, target.agent)) : undefined)
     ?? activeSkillPolicyForScopeEntity(world, 'global');
 }
@@ -57,7 +57,7 @@ function matchesSkillPolicyScope(
     switch (scopeKind) {
       case 'conversation': return link.conversation === scopeEntity || link.scopeId === world.get(scopeEntity, Conversation)?.id;
       case 'agent': return link.agent === scopeEntity || link.scopeId === world.get(scopeEntity, Agent)?.id;
-      case 'mode': return link.mode === scopeEntity || link.scopeId === world.get(scopeEntity, Mode)?.id;
+      case 'workflow': return link.workflow === scopeEntity || link.scopeId === world.get(scopeEntity, Workflow)?.id;
       case 'run': return link.run === scopeEntity || link.scopeId === world.get(scopeEntity, AgentRun)?.id;
     }
   }
@@ -69,7 +69,7 @@ function entityForSkillPolicyScope(world: WorldReader, scopeKind: SkillPolicySco
   switch (scopeKind) {
     case 'conversation': return findRecordEntity(world, Conversation, scopeId);
     case 'agent': return findRecordEntity(world, Agent, scopeId);
-    case 'mode': return findRecordEntity(world, Mode, scopeId);
+    case 'workflow': return findRecordEntity(world, Workflow, scopeId);
     case 'run': return findRecordEntity(world, AgentRun, scopeId);
     case 'global':
     case 'agentSystem':

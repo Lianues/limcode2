@@ -1,9 +1,9 @@
 import { SKILLS_TOOL_NAME } from '../../../../shared/protocol';
 import type { ToolSchema } from '../llm/contracts';
 import { Agent } from '../agent/components';
-import { AgentRun, AgentRunTargetLink, RunModeLink } from '../agentRun/components';
+import { AgentRun, AgentRunTargetLink, RunWorkflowLink } from '../agentRun/components';
 import { Conversation } from '../chat/components';
-import { ConversationModeSelection, Mode } from '../mode/components';
+import { ConversationWorkflowSelection, Workflow } from '../workflow/components';
 import type { ToolSchemaContributor } from '../tools/schemaContributors';
 import { SkillPolicy, SkillPolicyScopeLink } from './components';
 import { isSkillEnabledByPolicy } from './policy';
@@ -19,7 +19,7 @@ const SOURCE_DISPLAY: Record<string, string> = { agents: '.agents', claude: '.cl
 export const skillsToolSchemaContributor: ToolSchemaContributor = {
   key: 'skillsCatalog',
   reads: {
-    components: [Agent, AgentRun, AgentRunTargetLink, RunModeLink, Conversation, ConversationModeSelection, Mode, SkillPolicy, SkillPolicyScopeLink],
+    components: [Agent, AgentRun, AgentRunTargetLink, RunWorkflowLink, Conversation, ConversationWorkflowSelection, Workflow, SkillPolicy, SkillPolicyScopeLink],
     resources: [SkillCatalogKey]
   },
   augment(tools, context) {

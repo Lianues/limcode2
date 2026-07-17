@@ -4,7 +4,7 @@ import { readEvents } from '../../../events';
 import { Agent } from '../../agent/components';
 import { AgentRun, AgentRunTargetLink } from '../../agentRun/components';
 import { Conversation, Message, PartOf } from '../../chat/components';
-import { Mode, ConversationModeSelection } from '../../mode/components';
+import { Workflow, ConversationWorkflowSelection } from '../../workflow/components';
 import { ConversationProjectLink, ProjectContext, type ProjectContextData } from '../../project/components';
 import { ToolCall } from '../../tools/components';
 import { Checkpoint, CheckpointBarrier, CheckpointPolicy, CheckpointPolicyScopeLink, CheckpointTimelineAnchor, ConversationCheckpointRepositoryLink, ShadowRepository } from '../components';
@@ -30,8 +30,8 @@ const CheckpointRequestQuery = defineQuery({
     Agent,
     AgentRun,
     AgentRunTargetLink,
-    Mode,
-    ConversationModeSelection,
+    Workflow,
+    ConversationWorkflowSelection,
     ProjectContext,
     ConversationProjectLink,
     Message,

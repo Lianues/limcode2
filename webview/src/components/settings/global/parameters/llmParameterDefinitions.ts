@@ -115,7 +115,7 @@ const PROVIDER_PARAMETER_DISPLAY: Record<LlmProviderKind, Record<string, Provide
     maxOutputTokens: { path: 'max_output_tokens', label: 'Max Output Tokens' },
     reasoningMode: {
       path: 'reasoning.mode',
-      label: 'Reasoning Mode',
+      label: 'Reasoning Workflow',
       description: 'OpenAI Responses 推理模式：standard 为标准模式，pro 为专业模式。'
     },
     thinkingLevel: {
@@ -194,7 +194,7 @@ export const LLM_PARAMETER_DEFINITIONS: readonly BaseLlmParameterDefinition[] = 
   {
     key: 'reasoningMode',
     path: ['thinkingConfig', 'reasoningMode'],
-    label: 'Reasoning Mode',
+    label: 'Reasoning Workflow',
     description: 'OpenAI Responses 推理模式。',
     valueType: 'enum',
     defaultValue: 'standard',

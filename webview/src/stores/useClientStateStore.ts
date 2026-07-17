@@ -31,7 +31,7 @@ export interface ClientStateStoreState extends ClientState {
 /** 当前对话的模型 / 工作流概要，供标签头展示。 */
 export interface CurrentModelSummary {
   agentName?: string;
-  modeName?: string;
+  workflowName?: string;
   model?: string;
 }
 
@@ -181,26 +181,26 @@ export const useClientStateStore = defineStore('clientState', {
           state.agentConversationLinks.find((link) => link.conversationId === state.currentConversationId);
       const agent = state.agents.find((candidate) => candidate.id === (agentSelection?.agentId ?? agentLink?.agentId));
 
-      const conversationModeSelection = state.conversationModeSelections.find(
+      const conversationWorkflowSelection = state.conversationWorkflowSelections.find(
         (selection) => selection.conversationId === state.currentConversationId && selection.role === 'active'
       );
-      const mode = conversationModeSelection
-        ? conversationModeSelection.scopeKind === 'mode'
-          ? state.modes.find((candidate) => candidate.id === conversationModeSelection.modeId)
+      const workflow = conversationWorkflowSelection
+        ? conversationWorkflowSelection.scopeKind === 'workflow'
+          ? state.workflows.find((candidate) => candidate.id === conversationWorkflowSelection.workflowId)
           : undefined
         : undefined;
 
       const profileLink = latestScopeLink(state.modelProfileScopeLinks.filter((link) =>
         link.role === 'active' && (
           (link.scopeKind === 'conversation' && link.scopeId === state.currentConversationId) ||
-          (mode && link.scopeKind === 'mode' && link.scopeId === mode.id) ||
+          (workflow && link.scopeKind === 'workflow' && link.scopeId === workflow.id) ||
           (agent && link.scopeKind === 'agent' && link.scopeId === agent.id) ||
           link.scopeKind === 'global'
         )
       ));
       const profile = state.modelProfiles.find((candidate) => candidate.id === profileLink?.modelProfileId);
 
-      return { agentName: agent?.name, modeName: mode?.name, model: profile?.model };
+      return { agentName: agent?.name, workflowName: workflow?.name, model: profile?.model };
     }
   },
   actions: {

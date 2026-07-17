@@ -5,7 +5,7 @@ import {
   AgentRunNeedsModel,
   AgentRunTargetLink,
   MessageRunLink,
-  RunModeLink,
+  RunWorkflowLink,
   RunToolPolicyLink,
   ToolCallRunLink
 } from '../../agentRun/components';
@@ -13,7 +13,7 @@ import { markRunNeedsModel, spawnMessageRunLink } from '../../agentRun/bundles';
 import { activeToolPolicyForRun, runForToolCall, runTarget } from '../../agentRun/queries';
 import { Conversation, Message, PartOf } from '../../chat/components';
 import { spawnToolResponseMessage, ToolResultMessageBundle } from '../../chat/bundles';
-import { ConversationModeSelection, Mode, ToolPolicy } from '../../mode/components';
+import { ConversationWorkflowSelection, Workflow, ToolPolicy } from '../../workflow/components';
 import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
 import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolStateData } from '../components';
 import { ToolEventType } from '../events';
@@ -42,11 +42,11 @@ const SettledToolCallsQuery = defineQuery({
     Agent,
     AgentConversationLink,
     Conversation,
-    ConversationModeSelection,
-    Mode,
+    ConversationWorkflowSelection,
+    Workflow,
     ToolPolicy,
     ToolPolicyScopeLink,
-    RunModeLink,
+    RunWorkflowLink,
     RunToolPolicyLink
   ],
   write: [ToolState],

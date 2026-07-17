@@ -2,8 +2,8 @@ import { SWITCH_WORK_ENVIRONMENT_TOOL_NAME, TRANSFER_TOOL_NAME } from '../../../
 import type { ToolSchema } from '../llm/contracts';
 import type { ToolSchemaContributor } from '../tools/schemaContributors';
 import { Agent } from '../agent/components';
-import { AgentRun, AgentRunTargetLink, RunModeLink } from '../agentRun/components';
-import { ConversationModeSelection, Mode } from '../mode/components';
+import { AgentRun, AgentRunTargetLink, RunWorkflowLink } from '../agentRun/components';
+import { ConversationWorkflowSelection, Workflow } from '../workflow/components';
 import { Conversation } from '../chat/components';
 import { ConversationProjectLink, ProjectContext } from '../project/components';
 import {
@@ -24,10 +24,10 @@ export const workEnvironmentToolSchemaContributor: ToolSchemaContributor = {
       Agent,
       AgentRun,
       AgentRunTargetLink,
-      RunModeLink,
+      RunWorkflowLink,
       Conversation,
-      ConversationModeSelection,
-      Mode,
+      ConversationWorkflowSelection,
+      Workflow,
       WorkEnvironment,
       WorkEnvironmentPolicy,
       WorkEnvironmentPolicyScopeLink,

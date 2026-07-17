@@ -4,7 +4,7 @@ import type { ConfigScopeKind } from '../../../../../shared/protocol';
 import { readEvents } from '../../../events';
 import { Conversation } from '../../chat/components';
 import { AgentRun } from '../../agentRun/components';
-import { Mode, ModelProfile, ModelProfileScopeLink, SystemPrompt, SystemPromptScopeLink } from '../../mode/components';
+import { Workflow, ModelProfile, ModelProfileScopeLink, SystemPrompt, SystemPromptScopeLink } from '../../workflow/components';
 import { ToolPolicyScopeLink } from '../../tools/components';
 import { WorkEnvironmentPolicyScopeLink } from '../../workEnvironment/components';
 import { Agent, AgentConversationLink, AgentKind, AgentStatus, ConversationAgentSelection } from '../components';
@@ -23,7 +23,7 @@ export const AgentCrudSystem = defineSystem({
       || readEvents(ctx, AgentEventType.ModelProfileScopeClear).length > 0;
   },
   access: {
-    reads: { components: [Agent, AgentKind, AgentStatus, Conversation, ConversationAgentSelection, AgentConversationLink, Mode, AgentRun, SystemPrompt, SystemPromptScopeLink, ModelProfile, ModelProfileScopeLink, ToolPolicyScopeLink, WorkEnvironmentPolicyScopeLink] },
+    reads: { components: [Agent, AgentKind, AgentStatus, Conversation, ConversationAgentSelection, AgentConversationLink, Workflow, AgentRun, SystemPrompt, SystemPromptScopeLink, ModelProfile, ModelProfileScopeLink, ToolPolicyScopeLink, WorkEnvironmentPolicyScopeLink] },
     writes: { components: [Agent, AgentKind, AgentStatus, ConversationAgentSelection, AgentConversationLink, SystemPrompt, SystemPromptScopeLink, ModelProfile, ModelProfileScopeLink, ToolPolicyScopeLink, WorkEnvironmentPolicyScopeLink], mutationMode: 'update' },
     events: { read: [AgentEventType.Create, AgentEventType.Update, AgentEventType.Delete, AgentEventType.ConversationSelect, AgentEventType.SystemPromptScopeSet, AgentEventType.SystemPromptScopeClear, AgentEventType.ModelProfileScopeSet, AgentEventType.ModelProfileScopeClear] }
   },
@@ -140,7 +140,7 @@ export const AgentCrudSystem = defineSystem({
   }
 });
 
-type ScopeData = Partial<{ agent: Entity; conversation: Entity; mode: Entity; run: Entity }>;
+type ScopeData = Partial<{ agent: Entity; conversation: Entity; workflow: Entity; run: Entity }>;
 type ScopeResult = { ok: true; scopeId?: string; data: ScopeData } | { ok: false };
 
 function resolveScope(world: WorldReader, scopeKind: ConfigScopeKind, rawScopeId: string | undefined): ScopeResult {
@@ -157,10 +157,10 @@ function resolveScope(world: WorldReader, scopeKind: ConfigScopeKind, rawScopeId
       const conversation = findByRecordId(world, Conversation, scopeId);
       return { ok: true, scopeId, data: conversation !== undefined ? { conversation } : {} };
     }
-    case 'mode': {
+    case 'workflow': {
       if (!scopeId) return { ok: false };
-      const mode = findByRecordId(world, Mode, scopeId);
-      return { ok: true, scopeId, data: mode !== undefined ? { mode } : {} };
+      const workflow = findByRecordId(world, Workflow, scopeId);
+      return { ok: true, scopeId, data: workflow !== undefined ? { workflow } : {} };
     }
     case 'run': {
       if (!scopeId) return { ok: false };

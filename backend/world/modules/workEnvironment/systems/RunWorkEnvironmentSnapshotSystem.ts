@@ -2,7 +2,7 @@ import { defineSystem } from '../../../../ecs/types';
 import { Agent } from '../../agent/components';
 import { AgentRun, AgentRunTargetLink } from '../../agentRun/components';
 import { Conversation } from '../../chat/components';
-import { Mode } from '../../mode/components';
+import { Workflow } from '../../workflow/components';
 import { ConversationProjectLink, ProjectContext } from '../../project/components';
 import { ConversationWorkEnvironmentLink, RunWorkEnvironmentLink, WorkEnvironment, WorkEnvironmentPolicy, WorkEnvironmentPolicyScopeLink } from '../components';
 import { WorkEnvironmentBundle, selectRunWorkEnvironment } from '../bundles';
@@ -20,7 +20,7 @@ export const RunWorkEnvironmentSnapshotSystem = defineSystem({
     });
   },
   access: {
-    reads: { components: [Agent, AgentRun, AgentRunTargetLink, Conversation, Mode, WorkEnvironment, WorkEnvironmentPolicy, WorkEnvironmentPolicyScopeLink, ConversationWorkEnvironmentLink, RunWorkEnvironmentLink, ConversationProjectLink, ProjectContext] },
+    reads: { components: [Agent, AgentRun, AgentRunTargetLink, Conversation, Workflow, WorkEnvironment, WorkEnvironmentPolicy, WorkEnvironmentPolicyScopeLink, ConversationWorkEnvironmentLink, RunWorkEnvironmentLink, ConversationProjectLink, ProjectContext] },
     bundles: [WorkEnvironmentBundle]
   },
   run({ world, cmd }) {

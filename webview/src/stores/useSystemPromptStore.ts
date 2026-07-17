@@ -68,7 +68,7 @@ export const useSystemPromptStore = defineStore('systemPrompt', {
         case 'global':
           return [];
         case 'agent':
-        case 'mode':
+        case 'workflow':
           pushLocal('global');
           return prompts;
         case 'conversation': {
@@ -77,8 +77,8 @@ export const useSystemPromptStore = defineStore('systemPrompt', {
           if (!conversationId) return prompts;
           const agentId = activeAgentIdForConversation(conversationId);
           if (agentId) pushLocal('agent', agentId);
-          const modeId = activeModeIdForConversation(conversationId);
-          if (modeId) pushLocal('mode', modeId);
+          const workflowId = activeWorkflowIdForConversation(conversationId);
+          if (workflowId) pushLocal('workflow', workflowId);
           return prompts;
         }
         case 'run': {
@@ -87,8 +87,8 @@ export const useSystemPromptStore = defineStore('systemPrompt', {
           if (!runId) return prompts;
           const target = clientState.agentRunTargetLinks.find((link) => link.runId === runId && link.role === 'executor');
           if (target?.agentId) pushLocal('agent', target.agentId);
-          const runMode = clientState.runModeLinks.find((link) => link.runId === runId && link.role === 'active')?.modeId;
-          if (runMode) pushLocal('mode', runMode);
+          const runWorkflowId = clientState.runWorkflowLinks.find((link) => link.runId === runId && link.role === 'active')?.workflowId;
+          if (runWorkflowId) pushLocal('workflow', runWorkflowId);
           if (target?.conversationId) pushLocal('conversation', target.conversationId);
           return prompts;
         }
@@ -152,8 +152,8 @@ function activeAgentIdForConversation(conversationId: string): string | undefine
   return selection?.agentId ?? fallbackLink?.agentId;
 }
 
-function activeModeIdForConversation(conversationId: string): string | undefined {
+function activeWorkflowIdForConversation(conversationId: string): string | undefined {
   const clientState = useClientStateStore();
-  const selection = latest(clientState.conversationModeSelections.filter((item) => item.conversationId === conversationId && item.role === 'active'));
-  return selection?.scopeKind === 'mode' ? selection.modeId : undefined;
+  const selection = latest(clientState.conversationWorkflowSelections.filter((item) => item.conversationId === conversationId && item.role === 'active'));
+  return selection?.scopeKind === 'workflow' ? selection.workflowId : undefined;
 }

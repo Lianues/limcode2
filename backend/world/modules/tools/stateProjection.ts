@@ -4,13 +4,13 @@ import { Agent } from '../agent/components';
 import {
   AgentRun,
   AgentRunTargetLink,
-  RunModeLink,
+  RunWorkflowLink,
   RunToolPolicyLink,
   ToolCallRunLink
 } from '../agentRun/components';
 import { activeToolPolicyForRun, runForToolCall } from '../agentRun/queries';
 import { Conversation, Message, PartOf } from '../chat/components';
-import { ConversationModeSelection, Mode, ToolPolicy } from '../mode/components';
+import { ConversationWorkflowSelection, Workflow, ToolPolicy } from '../workflow/components';
 import { McpToolSourcesKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey } from './resources';
 import { toolSchedulingDecision } from './scheduling';
 import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolPolicyScopeLinkData, type ToolStateData } from './components';
@@ -19,7 +19,7 @@ import { isYoloToolPolicy } from './policy';
 export const toolsRuntimeStateProjectionReads: AccessDeclaration = {
   components: [
     Agent,
-    Mode,
+    Workflow,
     AgentRun,
     Conversation,
     Message,
@@ -27,9 +27,9 @@ export const toolsRuntimeStateProjectionReads: AccessDeclaration = {
     ToolPolicy,
     AgentRunTargetLink,
     ToolCallRunLink,
-    RunModeLink,
+    RunWorkflowLink,
     RunToolPolicyLink,
-    ConversationModeSelection,
+    ConversationWorkflowSelection,
     ToolCall,
     ToolState,
     ToolCallEvent,
@@ -261,8 +261,8 @@ function resolveScopeId(world: WorldReader, link: ToolPolicyScopeLinkData): stri
       return link.conversation !== undefined ? world.get(link.conversation, Conversation)?.id : undefined;
     case 'agent':
       return link.agent !== undefined ? world.get(link.agent, Agent)?.id : undefined;
-    case 'mode':
-      return link.mode !== undefined ? world.get(link.mode, Mode)?.id : undefined;
+    case 'workflow':
+      return link.workflow !== undefined ? world.get(link.workflow, Workflow)?.id : undefined;
     case 'run':
       return link.run !== undefined ? world.get(link.run, AgentRun)?.id : undefined;
     case 'agentSystem':

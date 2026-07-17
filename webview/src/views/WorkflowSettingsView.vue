@@ -1,21 +1,21 @@
 <script setup lang="ts">
-import ModeSettingsPanel from '@webview/components/settings/ModeSettingsPanel.vue';
+import WorkflowSettingsPanel from '@webview/components/settings/WorkflowSettingsPanel.vue';
 </script>
 
 <template>
-  <div class="mode-settings-view">
+  <div class="workflow-settings-view">
     <header class="view-header">
-      <span class="view-title">LimCode 工作流设置</span>
-      <span class="view-hint">配置内置工作流、用户工作流，以及工作流级工具策略。</span>
+      <span class="view-title">LimCode 工作流编辑</span>
+      <span class="view-hint">查看和编辑内置工作流、用户工作流的原始数据。</span>
     </header>
     <div class="view-body">
-      <ModeSettingsPanel />
+      <WorkflowSettingsPanel />
     </div>
   </div>
 </template>
 
 <style scoped>
-.mode-settings-view {
+.workflow-settings-view {
   display: flex;
   flex-direction: column;
   height: 100%;

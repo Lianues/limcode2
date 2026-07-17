@@ -190,7 +190,7 @@ export function upsertWorkEnvironmentPolicyScopeLink(
     scopeKind: WorkEnvironmentPolicyScopeKind;
     scopeId?: string;
     policy: Entity;
-    data: Partial<{ conversation: Entity; agent: Entity; mode: Entity; run: Entity; agentSystemId: string }>;
+    data: Partial<{ conversation: Entity; agent: Entity; workflow: Entity; run: Entity; agentSystemId: string }>;
   }
 ): Entity {
   const now = Date.now();

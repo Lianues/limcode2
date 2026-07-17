@@ -240,8 +240,8 @@ function openGlobalSettings(): void {
   postSidebarMessage({ type: SIDEBAR_MESSAGE.openGlobalSettings });
 }
 
-function openModeSettings(): void {
-  postSidebarMessage({ type: SIDEBAR_MESSAGE.openModeSettings });
+function openWorkflowSettings(): void {
+  postSidebarMessage({ type: SIDEBAR_MESSAGE.openWorkflowSettings });
 }
 
 function openAgentSettings(): void {
@@ -737,13 +737,13 @@ function historyNodeStyle(node: VisibleHistoryTreeNode): Record<string, string> 
             </span>
           </button>
 
-          <button type="button" class="settings-nav-card" @click="openModeSettings">
+          <button type="button" class="settings-nav-card" @click="openWorkflowSettings">
             <span class="settings-nav-icon" aria-hidden="true">
               <IconListDetails class="settings-gear-icon" stroke="2" />
             </span>
             <span class="settings-nav-main">
-              <span class="settings-nav-title">工作流设置</span>
-              <span class="settings-nav-desc">内置工作流、用户工作流与工作流级工具策略。</span>
+              <span class="settings-nav-title">工作流编辑</span>
+              <span class="settings-nav-desc">查看和编辑内置工作流、用户工作流的原始数据。</span>
             </span>
             <span class="settings-nav-trail">
               打开

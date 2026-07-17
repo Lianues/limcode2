@@ -13,7 +13,7 @@ const {
 } = require('../dist/extension/backend/world/modules/agentRun/components.js');
 const { AgentRunLifecycleSystem } = require('../dist/extension/backend/world/modules/agentRun/systems/AgentRunLifecycleSystem.js');
 const { Conversation, Message, PartOf } = require('../dist/extension/backend/world/modules/chat/components.js');
-const { ToolPolicy } = require('../dist/extension/backend/world/modules/mode/components.js');
+const { ToolPolicy } = require('../dist/extension/backend/world/modules/workflow/components.js');
 const { ToolCall, ToolResultConsumed, ToolState } = require('../dist/extension/backend/world/modules/tools/components.js');
 const { ToolDefinitionsKey } = require('../dist/extension/backend/world/modules/tools/resources.js');
 const { ToolDispatchSystem } = require('../dist/extension/backend/world/modules/tools/systems/ToolDispatchSystem.js');

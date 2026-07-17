@@ -2,26 +2,26 @@ import { defineComponent, type Entity } from '../../../ecs/types';
 import type {
   ConfigScopeBindingRole,
   ConfigScopeKind,
-  ConversationModeScopeKind,
-  ConversationModeSelectionRole,
+  ConversationWorkflowScopeKind,
+  ConversationWorkflowSelectionRole,
   LlmProviderKind,
-  ModeIconKey,
-  ModeSource,
+  WorkflowIconKey,
+  WorkflowSource,
   ToolPolicyPresetKind,
   ToolPolicySourceConfigRecord,
   ToolPolicyToolConfigRecord
 } from '../../../../shared/protocol';
 
-export interface ModeData {
+export interface WorkflowData {
   id: string;
   name: string;
   description?: string;
-  source: ModeSource;
-  icon?: ModeIconKey;
+  source: WorkflowSource;
+  icon?: WorkflowIconKey;
   createdAt: number;
   updatedAt: number;
 }
-export const Mode = defineComponent<ModeData>('Mode');
+export const Workflow = defineComponent<WorkflowData>('Workflow');
 
 export interface ToolPolicyData {
   id: string;
@@ -46,7 +46,7 @@ export interface SystemPromptScopeLinkData {
   scopeId?: string;
   systemPrompt: Entity;
   agent?: Entity;
-  mode?: Entity;
+  workflow?: Entity;
   conversation?: Entity;
   run?: Entity;
   role: ConfigScopeBindingRole;
@@ -71,7 +71,7 @@ export interface ModelProfileScopeLinkData {
   scopeId?: string;
   modelProfile: Entity;
   agent?: Entity;
-  mode?: Entity;
+  workflow?: Entity;
   conversation?: Entity;
   run?: Entity;
   role: ConfigScopeBindingRole;
@@ -80,13 +80,13 @@ export interface ModelProfileScopeLinkData {
 }
 export const ModelProfileScopeLink = defineComponent<ModelProfileScopeLinkData>('ModelProfileScopeLink');
 
-export interface ConversationModeSelectionData {
+export interface ConversationWorkflowSelectionData {
   id: string;
   conversation: Entity;
-  scopeKind: ConversationModeScopeKind;
-  mode?: Entity;
-  role: ConversationModeSelectionRole;
+  scopeKind: ConversationWorkflowScopeKind;
+  workflow?: Entity;
+  role: ConversationWorkflowSelectionRole;
   createdAt: number;
   updatedAt: number;
 }
-export const ConversationModeSelection = defineComponent<ConversationModeSelectionData>('ConversationModeSelection');
+export const ConversationWorkflowSelection = defineComponent<ConversationWorkflowSelectionData>('ConversationWorkflowSelection');

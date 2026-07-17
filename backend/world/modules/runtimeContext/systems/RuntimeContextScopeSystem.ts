@@ -5,7 +5,7 @@ import { readEvents } from '../../../events';
 import { Agent } from '../../agent/components';
 import { AgentRun } from '../../agentRun/components';
 import { Conversation } from '../../chat/components';
-import { Mode } from '../../mode/components';
+import { Workflow } from '../../workflow/components';
 import { DEFAULT_RUNTIME_CONTEXT_TEMPLATE } from '../placeholders';
 import { RuntimeContext, RuntimeContextScopeLink } from '../components';
 import { defaultRuntimeContextName, runtimeContextIdForScope, runtimeContextScopeLinkId } from '../bundles';
@@ -20,7 +20,7 @@ export const RuntimeContextScopeSystem = defineSystem({
       || !hasGlobalRuntimeContext(ctx.world);
   },
   access: {
-    reads: { components: [Agent, Conversation, Mode, AgentRun, RuntimeContext, RuntimeContextScopeLink] },
+    reads: { components: [Agent, Conversation, Workflow, AgentRun, RuntimeContext, RuntimeContextScopeLink] },
     writes: { components: [RuntimeContext, RuntimeContextScopeLink], mutationMode: 'update' },
     events: { read: [RuntimeContextEventType.ScopeSet, RuntimeContextEventType.ScopeClear] }
   },
@@ -64,7 +64,7 @@ export const RuntimeContextScopeSystem = defineSystem({
   }
 });
 
-type ScopeData = Partial<{ agent: Entity; conversation: Entity; mode: Entity; run: Entity }>;
+type ScopeData = Partial<{ agent: Entity; conversation: Entity; workflow: Entity; run: Entity }>;
 type ScopeResult = { ok: true; scopeId?: string; data: ScopeData } | { ok: false };
 
 function resolveScope(world: WorldReader, scopeKind: ConfigScopeKind, rawScopeId: string | undefined): ScopeResult {
@@ -81,10 +81,10 @@ function resolveScope(world: WorldReader, scopeKind: ConfigScopeKind, rawScopeId
       const conversation = findByRecordId(world, Conversation, scopeId);
       return { ok: true, scopeId, data: conversation !== undefined ? { conversation } : {} };
     }
-    case 'mode': {
+    case 'workflow': {
       if (!scopeId) return { ok: false };
-      const mode = findByRecordId(world, Mode, scopeId);
-      return { ok: true, scopeId, data: mode !== undefined ? { mode } : {} };
+      const workflow = findByRecordId(world, Workflow, scopeId);
+      return { ok: true, scopeId, data: workflow !== undefined ? { workflow } : {} };
     }
     case 'run': {
       if (!scopeId) return { ok: false };

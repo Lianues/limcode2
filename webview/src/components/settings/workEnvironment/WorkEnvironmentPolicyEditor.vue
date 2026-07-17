@@ -54,7 +54,7 @@ const policyEnabled = computed(() => effectivePolicy.value?.enabled === true);
 const sourceLabel = computed(() => {
   if (props.scopeKind === 'global') return '全局默认策略';
   if (hasLocalOverride.value) return '当前作用域覆盖';
-  if (resolution.value.inheritedFrom === 'mode') return '继承当前工作流策略';
+  if (resolution.value.inheritedFrom === 'workflow') return '继承当前工作流策略';
   if (resolution.value.inheritedFrom === 'global') return '继承全局默认策略';
   return '默认策略';
 });

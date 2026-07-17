@@ -27,7 +27,7 @@ function openPanelOptions(value: unknown): MainPanelOptions {
   const options: MainPanelOptions = {};
   if (typeof record.conversationId === 'string' && record.conversationId.trim()) options.conversationId = record.conversationId.trim();
   if (typeof record.title === 'string' && record.title.trim()) options.title = record.title.trim();
-  if (record.kind === 'chat' || record.kind === 'globalSettings' || record.kind === 'modeSettings' || record.kind === 'agentSettings') options.kind = record.kind;
+  if (record.kind === 'chat' || record.kind === 'globalSettings' || record.kind === 'workflowSettings' || record.kind === 'agentSettings') options.kind = record.kind;
   if (typeof record.reuse === 'boolean') options.reuse = record.reuse;
   return options;
 }

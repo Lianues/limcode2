@@ -14,14 +14,14 @@ import { activeToolPolicyForRun, runForToolCall } from '../world/modules/agentRu
 import { activeWorkEnvironmentForRun, pathAccessibleWorkEnvironmentsForRun, toPublicWorkEnvironmentRecord } from '../world/modules/workEnvironment/queries';
 import { allowOutsideProjectPathsFromConfig } from '../world/modules/tools/definitions/filePathPolicy';
 import { SkillEventType } from '../world/modules/skill/events';
-import { ModeEventType } from '../world/modules/mode/events';
+import { WorkflowEventType } from '../world/modules/workflow/events';
 import { WorkEnvironmentEventType } from '../world/modules/workEnvironment/events';
 import { CheckpointEventType } from '../world/modules/checkpoint/events';
 import { AgentEventType } from '../world/modules/agent/events';
 import { CompressionEventType } from '../world/modules/compression/events';
 import { RuntimeContextEventType } from '../world/modules/runtimeContext/events';
 import { Checkpoint, ShadowRepository } from '../world/modules/checkpoint/components';
-import { ModelProfile, ModelProfileScopeLink, type ModelProfileScopeLinkData } from '../world/modules/mode/components';
+import { ModelProfile, ModelProfileScopeLink, type ModelProfileScopeLinkData } from '../world/modules/workflow/components';
 import {
   BridgeMessageType,
   GLOBAL_CLIENT_STATE_STREAM_ID,
@@ -336,24 +336,24 @@ export class WebviewMessageRouter {
         this.deps.world.enqueue({ type: AgentEventType.ModelProfileScopeClear, payload: message.payload });
         this.deps.requestSnapshot();
         break;
-      case BridgeMessageType.ModeCreate:
+      case BridgeMessageType.WorkflowCreate:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: ModeEventType.Create, payload: message.payload });
+        this.deps.world.enqueue({ type: WorkflowEventType.Create, payload: message.payload });
         this.deps.requestSnapshot();
         break;
-      case BridgeMessageType.ModeUpdate:
+      case BridgeMessageType.WorkflowUpdate:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: ModeEventType.Update, payload: message.payload });
+        this.deps.world.enqueue({ type: WorkflowEventType.Update, payload: message.payload });
         this.deps.requestSnapshot();
         break;
-      case BridgeMessageType.ModeDelete:
+      case BridgeMessageType.WorkflowDelete:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: ModeEventType.Delete, payload: message.payload });
+        this.deps.world.enqueue({ type: WorkflowEventType.Delete, payload: message.payload });
         this.deps.requestSnapshot();
         break;
-      case BridgeMessageType.ConversationModeSelect:
+      case BridgeMessageType.ConversationWorkflowSelect:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: ModeEventType.ConversationSelect, payload: message.payload });
+        this.deps.world.enqueue({ type: WorkflowEventType.ConversationSelect, payload: message.payload });
         this.deps.requestSnapshot(message.payload.conversationId);
         this.deps.requestSnapshot();
         break;

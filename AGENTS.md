@@ -423,7 +423,7 @@ docs/global-settings-data-integration.md
 2. 不要为了全局设置页里的 CRUD 新建独立 BridgeMessageType / Bridge / 顶层 storage root。
 3. 如果全局设置下有多个可复用配置页，每个配置仍可作为独立 record 存在，但应放在 settingsRootUri 对应 section 下，通过 index + records 管理。
 4. 当前激活 id / 默认选择这类状态应单独作为 settings section 保存，不要塞进每个配置 record。
-5. 如果某配置未来要被 Agent / Mode / Conversation 复用，应通过 Link/关系数据引用配置 id，不要把配置对象嵌入主体对象。
+5. 如果某配置未来要被 Agent / Workflow / Conversation 复用，应通过 Link/关系数据引用配置 id，不要把配置对象嵌入主体对象。
 ```
 
 ## 6. 默认初始化准则

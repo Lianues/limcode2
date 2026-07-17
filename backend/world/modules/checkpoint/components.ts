@@ -20,7 +20,7 @@ export interface CheckpointPolicyScopeLinkData {
   checkpointPolicy: Entity;
   conversation?: Entity;
   agent?: Entity;
-  mode?: Entity;
+  workflow?: Entity;
   run?: Entity;
   role: ConfigScopeBindingRole;
   createdAt: number;

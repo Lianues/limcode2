@@ -6,7 +6,7 @@ import {
   AgentBlueprintsKey,
   type BuiltinAgentDefinition,
   type BuiltinAgentRegistry,
-  type BuiltinModeDefinition
+  type BuiltinWorkflowDefinition
 } from '../../agent/blueprints';
 import { AgentFromBlueprintBundle, linkAgentToConversation, selectAgentForConversation, spawnAgentRuntimeMirror } from '../../agent/bundles';
 import { Conversation, ConversationBranchLink, ConversationOriginLink, ConversationReuseLink, InFlight, Message, MessageRevision, PartOf } from '../../chat/components';
@@ -23,12 +23,12 @@ import {
 } from '../../chat/bundles';
 import { conversationMessages } from '../../chat/queries';
 import {
-  ConversationModeSelection,
-  Mode,
+  ConversationWorkflowSelection,
+  Workflow,
   ToolPolicy,
   type ToolPolicyData
-} from '../../mode/components';
-import { ModeBundle, selectGlobalModeForConversation } from '../../mode/bundles';
+} from '../../workflow/components';
+import { WorkflowBundle, selectDefaultWorkflowForConversation } from '../../workflow/bundles';
 import {
   AgentRun,
   AgentRunSourceLink,
@@ -43,7 +43,7 @@ import {
   RunDeliveryPolicyLink,
   RunEditPolicy,
   RunEditPolicyLink,
-  RunModeLink,
+  RunWorkflowLink,
   RunToolPolicyLink,
   ToolCallRunLink
 } from '../../agentRun/components';
@@ -146,8 +146,8 @@ const QueuedToolCallsQuery = defineQuery({
     MessageRevision,
     Agent,
     AgentConversationLink,
-    ConversationModeSelection,
-    Mode,
+    ConversationWorkflowSelection,
+    Workflow,
     ToolPolicy,
     ToolPolicyScopeLink,
     AgentRun,
@@ -185,7 +185,7 @@ export const ToolDispatchSystem = defineSystem({
     queries: [QueuedToolCallsQuery],
     writes: { components: [CheckpointBarrier] },
     resources: { read: [AgentBlueprintsKey, ToolSchemasKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey] },
-    bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentAnswerBundle, AgentFromBlueprintBundle, ModeBundle, ConversationProjectLinkBundle, WorkEnvironmentBundle],
+    bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentAnswerBundle, AgentFromBlueprintBundle, WorkflowBundle, ConversationProjectLinkBundle, WorkEnvironmentBundle],
     events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested, ToolEventType.ExecutionCancelRequested, ToolEventType.ChangeApplyRequested, ToolEventType.ChangeRejectRequested], emit: [CheckpointEventType.Requested, AgentRunEventType.Cancel, AgentRunEventType.Promote] },
     effects: { emit: ['tool.run', 'tool.change.apply', 'tool.abort'] }
   },
@@ -1175,12 +1175,12 @@ interface RunEditPolicyBlueprint {
   onNewUserMessageWhileRunning: NewMessageWhileRunningBehavior;
 }
 
-function resolveTargetModeBlueprint(modes: Record<string, BuiltinModeDefinition>, modeId: string | undefined): BuiltinModeDefinition | undefined {
-  if (!modeId) return undefined;
-  return modes[modeId] ?? Object.values(modes).find((mode) => mode.id === modeId || modeId.endsWith(`:mode:${mode.id}`));
+function resolveTargetModeBlueprint(workflows: Record<string, BuiltinWorkflowDefinition>, workflowId: string | undefined): BuiltinWorkflowDefinition | undefined {
+  if (!workflowId) return undefined;
+  return workflows[workflowId] ?? Object.values(workflows).find((mode) => mode.id === workflowId || workflowId.endsWith(`:mode:${mode.id}`));
 }
 
-function resolveRunAgentPolicyDefaults(_definition: BuiltinAgentDefinition, _mode: BuiltinModeDefinition | undefined): ResolvedRunAgentPolicyDefaults {
+function resolveRunAgentPolicyDefaults(_definition: BuiltinAgentDefinition, _mode: BuiltinWorkflowDefinition | undefined): ResolvedRunAgentPolicyDefaults {
   return {
     conversationPolicy: { mode: 'new_conversation', visibility: 'collapsed' },
     contextPolicy: { historyMode: 'full' },
@@ -1640,7 +1640,7 @@ function initializeCreatedRunAgentConversation(
 ): void {
   linkAgentToConversation(cmd, { agent: input.targetAgent, conversation, role: 'default' });
   selectAgentForConversation(cmd, { agent: input.targetAgent, conversation, conversationId, agentId: input.targetAgentId });
-  selectGlobalModeForConversation(cmd, conversation, conversationId);
+  selectDefaultWorkflowForConversation(cmd, conversation, conversationId);
   inheritPrimaryProjectFromSourceConversation(world, cmd, input.sourceConversation, conversation);
 }
 

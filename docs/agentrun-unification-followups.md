@@ -228,7 +228,7 @@ npm run check
 
 ```ts
 mode: {
-  modeId?: string;
+  workflowId?: string;
   systemPromptId?: string;
   modelProfileId?: string;
   toolPolicyId?: string;
@@ -241,7 +241,7 @@ mode: {
 
 当前 runtime 已实现的 run override：
 
-- `modeId`
+- `workflowId`
 - `systemPromptId`
 - `modelProfileId`
 - `toolPolicyId`
@@ -749,7 +749,7 @@ backend/capabilities/vscodeStorage/clientStateStore.ts
 
 现在会使用这些 root：
 agents/
-agent-modes/
+agent-workflows/
 tool-policies/
 approval-policies/
 system-prompts/
@@ -867,7 +867,7 @@ backend/world/clientSync/systems/ClientSyncSystem.ts
 
 现在 ClientSyncSystem 会调用各 contributor 的 diff：
 agentClientSyncContributor.diff
-modeClientSyncContributor.diff
+workflowClientSyncContributor.diff
 chatClientSyncContributor.diff
 toolsClientSyncContributor.diff
 agentRunClientSyncContributor.diff
@@ -881,7 +881,7 @@ runConversationPolicy.upsert/remove
 runContextPolicy.upsert/remove
 runDeliveryPolicy.upsert/remove
 runEditPolicy.upsert/remove
-runModeLink.upsert/remove
+runWorkflowLink.upsert/remove
 runSystemPromptLink.upsert/remove
 runModelProfileLink.upsert/remove
 runToolPolicyLink.upsert/remove
@@ -904,7 +904,7 @@ runConversationPolicies
 runContextPolicies
 runDeliveryPolicies
 runEditPolicies
-runModeLinks
+runWorkflowLinks
 runSystemPromptLinks
 runModelProfileLinks
 runToolPolicyLinks
@@ -941,7 +941,7 @@ runConversationPolicies
 runContextPolicies
 runDeliveryPolicies
 runEditPolicies
-runModeLinks
+runWorkflowLinks
 runSystemPromptLinks
 runModelProfileLinks
 runToolPolicyLinks
@@ -966,7 +966,7 @@ runConversationPolicy.*
 runContextPolicy.*
 runDeliveryPolicy.*
 runEditPolicy.*
-runModeLink.*
+runWorkflowLink.*
 runSystemPromptLink.*
 runModelProfileLink.*
 runToolPolicyLink.*
@@ -1121,7 +1121,7 @@ status = 'running'
 retryOfRunId = oldRun.id
 attempt = oldRun.attempt + 1
 - 复制旧 run 的 active overrides：
-RunModeLink
+RunWorkflowLink
 RunSystemPromptLink
 RunModelProfileLink
 RunToolPolicyLink

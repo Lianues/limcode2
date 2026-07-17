@@ -16,7 +16,7 @@ export function spawnRuntimeContext(cmd: CommandSink, input: { id: string; name:
 
 export function linkRuntimeContextToScope(
   cmd: CommandSink,
-  input: { scopeKind: ConfigScopeKind; scopeId?: string; runtimeContext: Entity; agent?: Entity; mode?: Entity; conversation?: Entity; run?: Entity; order?: number }
+  input: { scopeKind: ConfigScopeKind; scopeId?: string; runtimeContext: Entity; agent?: Entity; workflow?: Entity; conversation?: Entity; run?: Entity; order?: number }
 ): Entity {
   const entity = cmd.spawn();
   const now = Date.now();
@@ -26,7 +26,7 @@ export function linkRuntimeContextToScope(
     ...(input.scopeId ? { scopeId: input.scopeId } : {}),
     runtimeContext: input.runtimeContext,
     ...(input.agent !== undefined ? { agent: input.agent } : {}),
-    ...(input.mode !== undefined ? { mode: input.mode } : {}),
+    ...(input.workflow !== undefined ? { workflow: input.workflow } : {}),
     ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
     ...(input.run !== undefined ? { run: input.run } : {}),
     role: 'active',

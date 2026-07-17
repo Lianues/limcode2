@@ -9,7 +9,7 @@ import {
   agentPlugin,
   chatPlugin,
   commonPlugin,
-  modePlugin,
+  workflowPlugin,
   agentRunPlugin,
   agentAnswerPlugin,
   checkpointPlugin,
@@ -55,7 +55,7 @@ import {
   RunDeliveryPolicyLink,
   RunEditPolicy,
   RunEditPolicyLink,
-  RunModeLink,
+  RunWorkflowLink,
   RunModelProfileLink,
   RunSystemPromptLink,
   RunToolPolicyLink,
@@ -64,8 +64,8 @@ import {
 import { AgentRunEventType } from '../world/modules/agentRun/events';
 import { setConversationProject } from '../world/modules/project/bundles';
 import { ConversationProjectLink, ProjectContext } from '../world/modules/project/components';
-import { upsertGlobalModeSelection } from '../world/modules/mode/bundles';
-import { ConversationModeSelection, ModelProfile, ModelProfileScopeLink, type ModelProfileScopeLinkData } from '../world/modules/mode/components';
+import { upsertDefaultWorkflowSelection } from '../world/modules/workflow/bundles';
+import { ConversationWorkflowSelection, ModelProfile, ModelProfileScopeLink, type ModelProfileScopeLinkData } from '../world/modules/workflow/components';
 import { ToolCall, ToolCallEvent } from '../world/modules/tools/components';
 import { WorkEnvironmentEventType, workEnvironmentIdFromUri } from '../world/modules/workEnvironment';
 import type { LocalWorkEnvironmentCandidate } from '../world/modules/workEnvironment';
@@ -246,7 +246,7 @@ export class BackendApplication {
 
     installWorldPlugins(
       { world: this.world, scheduler: this.scheduler },
-      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), modePlugin(), projectPlugin(), workEnvironmentPlugin(), runtimeContextPlugin(), checkpointPlugin(), compressionPlugin(), llmPlugin(), agentAnswerPlugin(), toolsPlugin({ toolSchemas, toolDefinitions, toolRuntimeDefinitions: this.env.tools.registry }), skillPlugin(), rulesPlugin(), chatPlugin(), agentRunPlugin()]
+      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), workflowPlugin(), projectPlugin(), workEnvironmentPlugin(), runtimeContextPlugin(), checkpointPlugin(), compressionPlugin(), llmPlugin(), agentAnswerPlugin(), toolsPlugin({ toolSchemas, toolDefinitions, toolRuntimeDefinitions: this.env.tools.registry }), skillPlugin(), rulesPlugin(), chatPlugin(), agentRunPlugin()]
     );
     registerClientSyncSystems(this.scheduler);
 
@@ -305,7 +305,7 @@ export class BackendApplication {
       updatedAt: now
     });
 
-    upsertGlobalModeSelection(this.world, conversation, conversationId);
+    upsertDefaultWorkflowSelection(this.world, conversation, conversationId);
 
     const projectFolder = this.resolveProjectFolderForNewConversation(options.projectFolderUri);
     if (projectFolder) setConversationProject(this.world, { conversation, uri: projectFolder.uri, name: projectFolder.name });
@@ -451,7 +451,7 @@ export class BackendApplication {
       updatedAt: now
     });
 
-    upsertGlobalModeSelection(this.world, conversation, normalizedConversationId);
+    upsertDefaultWorkflowSelection(this.world, conversation, normalizedConversationId);
     void this.upsertConversationHistoryEntry(normalizedConversationId);
     this.requestSnapshot();
     this.requestSnapshot(normalizedConversationId);
@@ -1005,7 +1005,7 @@ export class BackendApplication {
   private spawnPreHydrationConversation(conversationId: string): Entity {
     const conversation = this.world.spawn();
     this.world.add(conversation, Conversation, { id: conversationId, visibility: 'visible' });
-    upsertGlobalModeSelection(this.world, conversation, conversationId);
+    upsertDefaultWorkflowSelection(this.world, conversation, conversationId);
     return conversation;
   }
 
@@ -1573,8 +1573,8 @@ export class BackendApplication {
       if (selection?.conversation === conversation) entities.add(entity);
     }
 
-    for (const entity of this.world.query(ConversationModeSelection)) {
-      const selection = this.world.get(entity, ConversationModeSelection);
+    for (const entity of this.world.query(ConversationWorkflowSelection)) {
+      const selection = this.world.get(entity, ConversationWorkflowSelection);
       if (selection?.conversation === conversation) entities.add(entity);
     }
 
@@ -1801,7 +1801,7 @@ export class BackendApplication {
     for (const entity of this.world.query(RunDeliveryPolicy)) if (runPolicies.has(entity)) entities.add(entity);
     for (const entity of this.world.query(RunEditPolicy)) if (runPolicies.has(entity)) entities.add(entity);
 
-    for (const entity of this.world.query(RunModeLink)) if (runs.has(this.world.get(entity, RunModeLink)?.run ?? -1)) entities.add(entity);
+    for (const entity of this.world.query(RunWorkflowLink)) if (runs.has(this.world.get(entity, RunWorkflowLink)?.run ?? -1)) entities.add(entity);
     for (const entity of this.world.query(RunSystemPromptLink)) if (runs.has(this.world.get(entity, RunSystemPromptLink)?.run ?? -1)) entities.add(entity);
     for (const entity of this.world.query(RunModelProfileLink)) if (runs.has(this.world.get(entity, RunModelProfileLink)?.run ?? -1)) entities.add(entity);
     for (const entity of this.world.query(RunToolPolicyLink)) if (runs.has(this.world.get(entity, RunToolPolicyLink)?.run ?? -1)) entities.add(entity);
@@ -2043,10 +2043,10 @@ function shouldDeferUntilHydrated(message: WebviewToExtensionMessage): boolean {
     case 'agentRun.retry':
     case 'agentRun.regenerate':
     case 'agentRun.markStale':
-    case 'mode.create':
-    case 'mode.update':
-    case 'mode.delete':
-    case 'conversation.mode.select':
+    case 'workflow.create':
+    case 'workflow.update':
+    case 'workflow.delete':
+    case 'conversation.workflow.select':
     case 'conversation.project.set':
     case 'workEnvironment.select':
     case 'workEnvironment.upsert':
@@ -2075,10 +2075,10 @@ function shouldDeferUntilDeferredSkeleton(message: WebviewToExtensionMessage): b
     case 'runtimeContext.snapshot.clear':
     case 'modelProfile.scope.set':
     case 'modelProfile.scope.clear':
-    case 'mode.create':
-    case 'mode.update':
-    case 'mode.delete':
-    case 'conversation.mode.select':
+    case 'workflow.create':
+    case 'workflow.update':
+    case 'workflow.delete':
+    case 'conversation.workflow.select':
     case 'toolPolicy.scope.set':
     case 'toolPolicy.scope.clear':
     case 'skillPolicy.scope.set':

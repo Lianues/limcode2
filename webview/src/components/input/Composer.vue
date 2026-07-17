@@ -8,7 +8,7 @@ import { useConversationTimelineStore } from '@webview/stores/useConversationTim
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
 import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
-import { GLOBAL_MODE_OPTION_ID, useModeStore } from '@webview/stores/useModeStore';
+import { DEFAULT_WORKFLOW_OPTION_ID, useWorkflowStore } from '@webview/stores/useWorkflowStore';
 import { useWorkEnvironmentStore } from '@webview/stores/useWorkEnvironmentStore';
 import { useAgentStore } from '@webview/stores/useAgentStore';
 import { useModelProfileStore } from '@webview/stores/useModelProfileStore';
@@ -41,7 +41,7 @@ const clientState = useClientStateStore();
 const conversationTimeline = useConversationTimelineStore();
 const globalSettings = useGlobalSettingsStore();
 const conversationSettings = useConversationSettingsStore();
-const modeStore = useModeStore();
+const workflowStore = useWorkflowStore();
 const agentStore = useAgentStore();
 const modelProfileStore = useModelProfileStore();
 const workEnvironmentStore = useWorkEnvironmentStore();
@@ -108,17 +108,17 @@ const workEnvironmentOptions = computed<SettingsDropdownOption[]>(() =>
       icon: IconFolder
     }))
 );
-const modeOptions = computed<SettingsDropdownOption[]>(() => [
+const workflowOptions = computed<SettingsDropdownOption[]>(() => [
   {
-    value: GLOBAL_MODE_OPTION_ID,
+    value: DEFAULT_WORKFLOW_OPTION_ID,
     label: '默认',
     description: '使用全局默认策略',
     icon: IconWorld
   },
-  ...modeStore.modes.map((mode) => ({
-    value: mode.id,
-    label: mode.name,
-    description: mode.description || (mode.source === 'builtin' ? '内置工作流' : '用户工作流'),
+  ...workflowStore.workflows.map((workflow) => ({
+    value: workflow.id,
+    label: workflow.name,
+    description: workflow.description || (workflow.source === 'builtin' ? '内置工作流' : '用户工作流'),
     icon: IconListDetails
   }))
 ]);
@@ -135,9 +135,9 @@ const activeAgentId = computed({
   get: () => activeConversationAgent.value?.id ?? agentOptions.value[0]?.value ?? '',
   set: (agentId: string) => selectAgent(agentId)
 });
-const activeModeId = computed({
-  get: () => modeStore.activeModeIdForConversation(clientState.currentConversationId),
-  set: (modeId: string) => selectMode(modeId)
+const activeWorkflowId = computed({
+  get: () => workflowStore.activeWorkflowIdForConversation(clientState.currentConversationId),
+  set: (workflowId: string) => selectWorkflow(workflowId)
 });
 const activeChannelId = computed({
   get: () => {
@@ -475,14 +475,14 @@ function selectAgent(agentId: string): void {
   agentStore.selectAgent(conversationId, agentId);
 }
 
-function selectMode(modeId: string): void {
+function selectWorkflow(workflowId: string): void {
   const conversationId = clientState.currentConversationId;
   if (!conversationId) return;
-  if (modeId === GLOBAL_MODE_OPTION_ID) {
-    modeStore.selectGlobal(conversationId);
+  if (workflowId === DEFAULT_WORKFLOW_OPTION_ID) {
+    workflowStore.selectDefault(conversationId);
     return;
   }
-  modeStore.selectMode(conversationId, modeId);
+  workflowStore.selectWorkflow(conversationId, workflowId);
 }
 
 function selectWorkEnvironment(workEnvironmentId: string): void {
@@ -691,7 +691,7 @@ function middleEllipsis(value: string, maxLength: number): string {
     </div>
 
     <div class="composer-zone composer-zone-bottom" aria-label="输入框下方功能区">
-      <div v-if="agentOptions.length || modeOptions.length || channelOptions.length || workEnvironmentOptions.length" class="composer-meta">
+      <div v-if="agentOptions.length || workflowOptions.length || channelOptions.length || workEnvironmentOptions.length" class="composer-meta">
         <template v-if="agentOptions.length">
           <SettingsDropdown
             v-model="activeAgentId"
@@ -705,11 +705,11 @@ function middleEllipsis(value: string, maxLength: number): string {
             @open="onAgentDropdownOpen"
           />
         </template>
-        <template v-if="modeOptions.length">
+        <template v-if="workflowOptions.length">
           <SettingsDropdown
-            v-model="activeModeId"
-            class="composer-meta-dropdown composer-mode-dropdown"
-            :options="modeOptions"
+            v-model="activeWorkflowId"
+            class="composer-meta-dropdown composer-workflow-dropdown"
+            :options="workflowOptions"
             title="切换工作流"
             searchable
             search-placeholder="筛选工作流..."
@@ -1098,7 +1098,7 @@ function middleEllipsis(value: string, maxLength: number): string {
   --lc-dropdown-offset-y: 4px;
 }
 
-.composer-mode-dropdown {
+.composer-workflow-dropdown {
   width: min(120px, 18vw);
   min-width: 100px;
 }

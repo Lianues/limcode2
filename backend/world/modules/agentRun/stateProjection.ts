@@ -16,7 +16,7 @@ import type {
   RunDeliveryPolicyRecord,
   RunEditPolicyLinkRecord,
   RunEditPolicyRecord,
-  RunModeLinkRecord,
+  RunWorkflowLinkRecord,
   RunModelProfileLinkRecord,
   RunSystemPromptLinkRecord,
   RunToolPolicyLinkRecord,
@@ -25,7 +25,7 @@ import type {
 import type { AccessDeclaration, WorldReader } from '../../../ecs/types';
 import { Agent } from '../agent/components';
 import { Conversation, Message, MessageRevision } from '../chat/components';
-import { Mode, ModelProfile, SystemPrompt, ToolPolicy } from '../mode/components';
+import { Workflow, ModelProfile, SystemPrompt, ToolPolicy } from '../workflow/components';
 import { ToolCall } from '../tools/components';
 import {
   AgentRun,
@@ -44,7 +44,7 @@ import {
   RunDeliveryPolicyLink,
   RunEditPolicy,
   RunEditPolicyLink,
-  RunModeLink,
+  RunWorkflowLink,
   RunModelProfileLink,
   RunSystemPromptLink,
   RunToolPolicyLink,
@@ -58,7 +58,7 @@ export const agentRunStateProjectionReads: AccessDeclaration = {
     Message,
     MessageRevision,
     ToolCall,
-    Mode,
+    Workflow,
     ToolPolicy,
     SystemPrompt,
     ModelProfile,
@@ -74,7 +74,7 @@ export const agentRunStateProjectionReads: AccessDeclaration = {
     RunContextPolicy,
     RunDeliveryPolicy,
     RunEditPolicy,
-    RunModeLink,
+    RunWorkflowLink,
     RunSystemPromptLink,
     RunModelProfileLink,
     RunToolPolicyLink,
@@ -104,7 +104,7 @@ export function projectAgentRunState(world: WorldReader): Partial<ClientState> {
     runContextPolicies: world.query(RunContextPolicy).map((entity): RunContextPolicyRecord => ({ ...world.get(entity, RunContextPolicy)! })),
     runDeliveryPolicies: world.query(RunDeliveryPolicy).map((entity) => buildDeliveryPolicyRecord(world, entity)).filter(isDefined),
     runEditPolicies: world.query(RunEditPolicy).map((entity): RunEditPolicyRecord => ({ ...world.get(entity, RunEditPolicy)! })),
-    runModeLinks: world.query(RunModeLink).map((entity) => buildRunModeLinkRecord(world, entity)).filter(isDefined),
+    runWorkflowLinks: world.query(RunWorkflowLink).map((entity) => buildRunWorkflowLinkRecord(world, entity)).filter(isDefined),
     runSystemPromptLinks: world.query(RunSystemPromptLink).map((entity) => buildRunSystemPromptLinkRecord(world, entity)).filter(isDefined),
     runModelProfileLinks: world.query(RunModelProfileLink).map((entity) => buildRunModelProfileLinkRecord(world, entity)).filter(isDefined),
     runToolPolicyLinks: world.query(RunToolPolicyLink).map((entity) => buildRunToolPolicyLinkRecord(world, entity)).filter(isDefined),
@@ -201,13 +201,13 @@ function buildDeliveryPolicyRecord(world: WorldReader, entity: number): RunDeliv
   };
 }
 
-function buildRunModeLinkRecord(world: WorldReader, entity: number): RunModeLinkRecord | undefined {
-  const link = world.get(entity, RunModeLink);
+function buildRunWorkflowLinkRecord(world: WorldReader, entity: number): RunWorkflowLinkRecord | undefined {
+  const link = world.get(entity, RunWorkflowLink);
   if (!link) return undefined;
   const run = world.get(link.run, AgentRun);
-  const mode = world.get(link.mode, Mode);
+  const mode = world.get(link.workflow, Workflow);
   if (!run || !mode) return undefined;
-  return { id: link.id, runId: run.id, modeId: mode.id, role: link.role };
+  return { id: link.id, runId: run.id, workflowId: mode.id, role: link.role };
 }
 
 function buildRunSystemPromptLinkRecord(world: WorldReader, entity: number): RunSystemPromptLinkRecord | undefined {

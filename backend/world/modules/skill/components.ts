@@ -15,7 +15,7 @@ export interface SkillPolicyScopeLinkData {
   skillPolicy: Entity;
   conversation?: Entity;
   agent?: Entity;
-  mode?: Entity;
+  workflow?: Entity;
   run?: Entity;
   agentSystemId?: string;
   role: PolicyBindingRole;

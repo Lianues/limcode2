@@ -3,9 +3,9 @@ import type { ConfigScopeKind, ToolPolicyPresetKind, ToolPolicyScopeKind, ToolPo
 import { Agent, AgentConversationLink, AgentKind, ConversationAgentSelection, type ConversationAgentSelectionData } from '../agent/components';
 import { agentTypeEntityForRuntimeAgent } from '../agent/identity';
 import {
-  ConversationModeSelection,
-  type ConversationModeSelectionData,
-  Mode,
+  ConversationWorkflowSelection,
+  type ConversationWorkflowSelectionData,
+  Workflow,
   ModelProfile,
   ModelProfileScopeLink,
   type ModelProfileScopeLinkData,
@@ -16,7 +16,7 @@ import {
   type ModelProfileData,
   type SystemPromptData,
   type ToolPolicyData
-} from '../mode/components';
+} from '../workflow/components';
 import { Conversation, Message, PartOf } from '../chat/components';
 import { ToolCall } from '../tools/components';
 import { ToolPolicyScopeLink, type ToolPolicyScopeLinkData } from '../tools/components';
@@ -33,7 +33,7 @@ import {
   RunEditPolicy,
   RunEditPolicyLink,
   RunModelProfileLink,
-  RunModeLink,
+  RunWorkflowLink,
   RunSystemPromptLink,
   RunToolPolicyLink,
   ToolCallRunLink,
@@ -210,44 +210,44 @@ export function runFinalModelText(world: WorldReader, run: Entity): string {
   return last?.content.parts.map((part) => 'text' in part && part.thought !== true ? part.text : '').join('').trim() ?? '';
 }
 
-export function activeModeForRun(world: WorldReader, run: Entity): Entity | undefined {
-  const runMode = world
-    .query(RunModeLink)
-    .map((entity) => world.get(entity, RunModeLink))
-    .find((candidate) => candidate?.run === run && candidate.role === 'active')?.mode;
-  if (runMode !== undefined) return runMode;
+export function activeWorkflowForRun(world: WorldReader, run: Entity): Entity | undefined {
+  const runWorkflow = world
+    .query(RunWorkflowLink)
+    .map((entity) => world.get(entity, RunWorkflowLink))
+    .find((candidate) => candidate?.run === run && candidate.role === 'active')?.workflow;
+  if (runWorkflow !== undefined) return runWorkflow;
 
   const target = runTarget(world, run);
   if (!target) return undefined;
-  const conversationSelection = activeModeSelectionForConversation(world, target.conversation);
+  const conversationSelection = activeWorkflowSelectionForConversation(world, target.conversation);
   if (conversationSelection?.scopeKind === 'global') return undefined;
-  if (conversationSelection?.scopeKind === 'mode') return conversationSelection.mode;
+  if (conversationSelection?.scopeKind === 'workflow') return conversationSelection.workflow;
   return undefined;
 }
 
-export function activeModeSelectionForConversation(world: WorldReader, conversation: Entity): { scopeKind: 'global' } | { scopeKind: 'mode'; mode: Entity } | undefined {
-  let selected: { entity: Entity; data: ConversationModeSelectionData } | undefined;
-  for (const entity of world.query(ConversationModeSelection)) {
-    const data = world.get(entity, ConversationModeSelection);
+export function activeWorkflowSelectionForConversation(world: WorldReader, conversation: Entity): { scopeKind: 'global' } | { scopeKind: 'workflow'; workflow: Entity } | undefined {
+  let selected: { entity: Entity; data: ConversationWorkflowSelectionData } | undefined;
+  for (const entity of world.query(ConversationWorkflowSelection)) {
+    const data = world.get(entity, ConversationWorkflowSelection);
     if (!data || data.role !== 'active' || data.conversation !== conversation) continue;
     if (!selected || isNewerRunPolicyLink(entity, data, selected.entity, selected.data)) selected = { entity, data };
   }
   if (!selected) return undefined;
   if (selected.data.scopeKind === 'global') return { scopeKind: 'global' };
-  return selected.data.mode !== undefined ? { scopeKind: 'mode', mode: selected.data.mode } : undefined;
+  return selected.data.workflow !== undefined ? { scopeKind: 'workflow', workflow: selected.data.workflow } : undefined;
 }
 
-export function activeModeForAgent(_world: WorldReader, _agent: Entity): Entity | undefined {
+export function activeWorkflowForAgent(_world: WorldReader, _agent: Entity): Entity | undefined {
   return undefined;
 }
 
 export function systemPromptsForRun(world: WorldReader, run: Entity): SystemPromptData[] {
   const target = runTarget(world, run);
-  const mode = activeModeForRun(world, run);
+  const workflow = activeWorkflowForRun(world, run);
   const scopes: ScopeEntity[] = [
     { kind: 'global' },
     ...(target ? [{ kind: 'agent' as const, entity: agentTypeEntityForRuntimeAgent(world, target.agent) }] : []),
-    ...(mode !== undefined ? [{ kind: 'mode' as const, entity: mode }] : []),
+    ...(workflow !== undefined ? [{ kind: 'workflow' as const, entity: workflow }] : []),
     ...(target ? [{ kind: 'conversation' as const, entity: target.conversation }] : []),
     { kind: 'run', entity: run }
   ];
@@ -287,11 +287,11 @@ export function activeModelProfileForRun(world: WorldReader, run: Entity): Model
   if (runLink) return world.get(runLink.modelProfile, ModelProfile);
 
   const target = runTarget(world, run);
-  const mode = activeModeForRun(world, run);
+  const workflow = activeWorkflowForRun(world, run);
   const scopes: ScopeEntity[] = [
     { kind: 'run', entity: run },
     ...(target ? [{ kind: 'conversation' as const, entity: target.conversation }] : []),
-    ...(mode !== undefined ? [{ kind: 'mode' as const, entity: mode }] : []),
+    ...(workflow !== undefined ? [{ kind: 'workflow' as const, entity: workflow }] : []),
     ...(target ? [{ kind: 'agent' as const, entity: agentTypeEntityForRuntimeAgent(world, target.agent) }] : []),
     { kind: 'global' }
   ];
@@ -305,13 +305,13 @@ export function activeModelProfileForRun(world: WorldReader, run: Entity): Model
 
 export function activeToolPolicyForRun(world: WorldReader, run: Entity): ToolPolicyData | undefined {
   const target = runTarget(world, run);
-  const mode = activeModeForRun(world, run);
+  const workflow = activeWorkflowForRun(world, run);
   const policies: ToolPolicyData[] = [];
   const push = (policy: ToolPolicyData | undefined): void => { if (policy) policies.push(policy); };
 
   push(activeToolPolicyForScopeEntity(world, 'global'));
   if (target) push(activeToolPolicyForScopeEntity(world, 'agent', agentTypeEntityForRuntimeAgent(world, target.agent)));
-  if (mode !== undefined) push(activeToolPolicyForScopeEntity(world, 'mode', mode));
+  if (workflow !== undefined) push(activeToolPolicyForScopeEntity(world, 'workflow', workflow));
   if (target) push(activeToolPolicyForScopeEntity(world, 'conversation', target.conversation));
   push(activeToolPolicyForScopeEntity(world, 'run', run));
 
@@ -399,13 +399,13 @@ function activeModelProfileLinkForScope(world: WorldReader, scope: ScopeEntity):
   return selected?.link;
 }
 
-function matchesConfigScope(world: WorldReader, link: { scopeKind: ConfigScopeKind; scopeId?: string; agent?: Entity; mode?: Entity; conversation?: Entity; run?: Entity }, scope: ScopeEntity): boolean {
+function matchesConfigScope(world: WorldReader, link: { scopeKind: ConfigScopeKind; scopeId?: string; agent?: Entity; workflow?: Entity; conversation?: Entity; run?: Entity }, scope: ScopeEntity): boolean {
   if (link.scopeKind !== scope.kind) return false;
   if (scope.kind === 'global') return true;
   if (scope.entity === undefined) return false;
   switch (scope.kind) {
     case 'agent': return link.agent === scope.entity || link.scopeId === world.get(scope.entity, Agent)?.id;
-    case 'mode': return link.mode === scope.entity || link.scopeId === world.get(scope.entity, Mode)?.id;
+    case 'workflow': return link.workflow === scope.entity || link.scopeId === world.get(scope.entity, Workflow)?.id;
     case 'conversation': return link.conversation === scope.entity || link.scopeId === world.get(scope.entity, Conversation)?.id;
     case 'run': return link.run === scope.entity || link.scopeId === world.get(scope.entity, AgentRun)?.id;
   }
@@ -440,7 +440,7 @@ function matchesToolPolicyScope(
     switch (scopeKind) {
       case 'conversation': return link.conversation === scopeEntity || link.scopeId === world.get(scopeEntity, Conversation)?.id;
       case 'agent': return link.agent === scopeEntity || link.scopeId === world.get(scopeEntity, Agent)?.id;
-      case 'mode': return link.mode === scopeEntity || link.scopeId === world.get(scopeEntity, Mode)?.id;
+      case 'workflow': return link.workflow === scopeEntity || link.scopeId === world.get(scopeEntity, Workflow)?.id;
       case 'run': return link.run === scopeEntity || link.scopeId === world.get(scopeEntity, AgentRun)?.id;
     }
   }
@@ -452,7 +452,7 @@ function entityForToolPolicyScope(world: WorldReader, scopeKind: ToolPolicyScope
   switch (scopeKind) {
     case 'conversation': return findRecordEntity(world, Conversation, scopeId);
     case 'agent': return findRecordEntity(world, Agent, scopeId);
-    case 'mode': return findRecordEntity(world, Mode, scopeId);
+    case 'workflow': return findRecordEntity(world, Workflow, scopeId);
     case 'run': return findRecordEntity(world, AgentRun, scopeId);
     case 'global':
     case 'agentSystem':

@@ -380,11 +380,11 @@ export interface RuntimePaths {
   agentsRootPath: string;
   agentsIndexUri: vscode.Uri;
   agentsIndexPath: string;
-  /** Mode 数据根目录：<dataRoot>/modes */
-  modesRootUri: vscode.Uri;
-  modesRootPath: string;
-  modesIndexUri: vscode.Uri;
-  modesIndexPath: string;
+  /** Workflow 数据根目录：<dataRoot>/workflows */
+  workflowsRootUri: vscode.Uri;
+  workflowsRootPath: string;
+  workflowsIndexUri: vscode.Uri;
+  workflowsIndexPath: string;
   /** ToolPolicy 数据根目录：<dataRoot>/tool-policies */
   toolPoliciesRootUri: vscode.Uri;
   toolPoliciesRootPath: string;
@@ -552,11 +552,11 @@ export interface RuntimePaths {
   linksRootPath: string;
   linksIndexUri: vscode.Uri;
   linksIndexPath: string;
-  /** Conversation 的当前模式选择数据根目录：<dataRoot>/conversation-mode-selections */
-  conversationModeSelectionsRootUri: vscode.Uri;
-  conversationModeSelectionsRootPath: string;
-  conversationModeSelectionsIndexUri: vscode.Uri;
-  conversationModeSelectionsIndexPath: string;
+  /** Conversation 的当前工作流选择数据根目录：<dataRoot>/conversation-workflow-selections */
+  conversationWorkflowSelectionsRootUri: vscode.Uri;
+  conversationWorkflowSelectionsRootPath: string;
+  conversationWorkflowSelectionsIndexUri: vscode.Uri;
+  conversationWorkflowSelectionsIndexPath: string;
   /** Conversation 的当前 Agent 选择数据根目录：<dataRoot>/conversation-agent-selections */
   conversationAgentSelectionsRootUri: vscode.Uri;
   conversationAgentSelectionsRootPath: string;

@@ -1,14 +1,14 @@
 import { estimateTokenCount } from 'tokenx';
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
 import {
-  ConversationModeSelection,
-  Mode,
+  ConversationWorkflowSelection,
+  Workflow,
   ModelProfileScopeLink,
   ModelProfile,
   SystemPromptScopeLink,
   SystemPrompt,
   ToolPolicy
-} from '../../mode/components';
+} from '../../workflow/components';
 import { Agent } from '../../agent/components';
 import {
   AgentRunInputRevision,
@@ -18,7 +18,7 @@ import {
   RunContextPolicy,
   RunContextPolicyLink,
   RunModelProfileLink,
-  RunModeLink,
+  RunWorkflowLink,
   RunSystemPromptLink,
   RunToolPolicyLink
 } from '../../agentRun/components';
@@ -84,12 +84,12 @@ const LlmContextLookupComponents = [
   AgentRunTargetLink,
   RunContextPolicy,
   RunContextPolicyLink,
-  RunModeLink,
+  RunWorkflowLink,
   RunSystemPromptLink,
   RunModelProfileLink,
   RunToolPolicyLink,
-  ConversationModeSelection,
-  Mode,
+  ConversationWorkflowSelection,
+  Workflow,
   Agent,
   SystemPromptScopeLink,
   ModelProfileScopeLink,

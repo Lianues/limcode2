@@ -2,9 +2,9 @@ import type { Entity, WorldReader } from '../../../ecs/types';
 import { Agent } from '../agent/components';
 import { agentTypeEntityForRuntimeAgent } from '../agent/identity';
 import { AgentRun } from '../agentRun/components';
-import { activeAgentForConversation, activeModeForRun, activeModeSelectionForConversation, runTarget } from '../agentRun/queries';
+import { activeAgentForConversation, activeWorkflowForRun, activeWorkflowSelectionForConversation, runTarget } from '../agentRun/queries';
 import { Conversation } from '../chat/components';
-import { Mode } from '../mode/components';
+import { Workflow } from '../workflow/components';
 import {
   ConversationRuntimeContextSnapshotLink,
   RuntimeContext,
@@ -16,7 +16,7 @@ import {
   type RuntimeContextSnapshotData
 } from './components';
 
-interface ScopeEntity { kind: 'global' | 'agent' | 'mode' | 'conversation' | 'run'; entity?: Entity }
+interface ScopeEntity { kind: 'global' | 'agent' | 'workflow' | 'conversation' | 'run'; entity?: Entity }
 
 export interface ResolvedRuntimeContextSnapshot {
   entity: Entity;
@@ -25,12 +25,12 @@ export interface ResolvedRuntimeContextSnapshot {
 
 export function runtimeContextsForRun(world: WorldReader, run: Entity, conversation?: Entity): RuntimeContextData[] {
   const target = runTarget(world, run);
-  const mode = activeModeForRun(world, run);
+  const workflow = activeWorkflowForRun(world, run);
   const targetConversation = conversation ?? target?.conversation;
   const scopes: ScopeEntity[] = [
     { kind: 'global' },
     ...(target ? [{ kind: 'agent' as const, entity: agentTypeEntityForRuntimeAgent(world, target.agent) }] : []),
-    ...(mode !== undefined ? [{ kind: 'mode' as const, entity: mode }] : []),
+    ...(workflow !== undefined ? [{ kind: 'workflow' as const, entity: workflow }] : []),
     ...(targetConversation !== undefined ? [{ kind: 'conversation' as const, entity: targetConversation }] : []),
     { kind: 'run', entity: run }
   ];
@@ -47,12 +47,12 @@ export function runtimeContextsForRun(world: WorldReader, run: Entity, conversat
 
 export function runtimeContextsForConversation(world: WorldReader, conversation: Entity): RuntimeContextData[] {
   const agent = activeAgentForConversation(world, conversation);
-  const modeSelection = activeModeSelectionForConversation(world, conversation);
-  const mode = modeSelection?.scopeKind === 'mode' ? modeSelection.mode : undefined;
+  const workflowSelection = activeWorkflowSelectionForConversation(world, conversation);
+  const workflow = workflowSelection?.scopeKind === 'workflow' ? workflowSelection.workflow : undefined;
   const scopes: ScopeEntity[] = [
     { kind: 'global' },
     ...(agent !== undefined ? [{ kind: 'agent' as const, entity: agentTypeEntityForRuntimeAgent(world, agent) }] : []),
-    ...(mode !== undefined ? [{ kind: 'mode' as const, entity: mode }] : []),
+    ...(workflow !== undefined ? [{ kind: 'workflow' as const, entity: workflow }] : []),
     { kind: 'conversation', entity: conversation }
   ];
 
@@ -127,7 +127,7 @@ function matchesRuntimeContextScope(world: WorldReader, link: RuntimeContextScop
   if (scope.entity === undefined) return false;
   switch (scope.kind) {
     case 'agent': return link.agent === scope.entity || (!!link.scopeId && world.get(scope.entity, Agent)?.id === link.scopeId);
-    case 'mode': return link.mode === scope.entity || (!!link.scopeId && world.get(scope.entity, Mode)?.id === link.scopeId);
+    case 'workflow': return link.workflow === scope.entity || (!!link.scopeId && world.get(scope.entity, Workflow)?.id === link.scopeId);
     case 'conversation': return link.conversation === scope.entity || (!!link.scopeId && world.get(scope.entity, Conversation)?.id === link.scopeId);
     case 'run': return link.run === scope.entity || (!!link.scopeId && world.get(scope.entity, AgentRun)?.id === link.scopeId);
   }

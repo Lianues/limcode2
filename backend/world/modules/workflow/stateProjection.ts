@@ -1,7 +1,7 @@
 import type {
   ClientState,
-  ConversationModeSelectionRecord,
-  ModeRecord,
+  ConversationWorkflowSelectionRecord,
+  WorkflowRecord,
   ModelProfileRecord,
   ModelProfileScopeLinkRecord,
   SystemPromptRecord,
@@ -13,8 +13,8 @@ import { Agent } from '../agent/components';
 import { AgentRun } from '../agentRun/components';
 import { Conversation } from '../chat/components';
 import {
-  ConversationModeSelection,
-  Mode,
+  ConversationWorkflowSelection,
+  Workflow,
   ModelProfile,
   ModelProfileScopeLink,
   SystemPrompt,
@@ -22,23 +22,23 @@ import {
   ToolPolicy
 } from './components';
 
-export const modeStateProjectionReads: AccessDeclaration = {
+export const workflowStateProjectionReads: AccessDeclaration = {
   components: [
     Agent,
     AgentRun,
     Conversation,
-    Mode,
+    Workflow,
     ToolPolicy,
     SystemPrompt,
     SystemPromptScopeLink,
     ModelProfile,
     ModelProfileScopeLink,
-    ConversationModeSelection
+    ConversationWorkflowSelection
   ]
 };
 
-export function projectModeState(world: WorldReader): Partial<ClientState> {
-  const modes: ModeRecord[] = world.query(Mode).map((entity) => ({ ...world.get(entity, Mode)! }));
+export function projectWorkflowState(world: WorldReader): Partial<ClientState> {
+  const workflows: WorkflowRecord[] = world.query(Workflow).map((entity) => ({ ...world.get(entity, Workflow)! }));
   const toolPolicies: ToolPolicyRecord[] = world.query(ToolPolicy).map((entity) => ({ ...world.get(entity, ToolPolicy)! }));
   const systemPrompts: SystemPromptRecord[] = world.query(SystemPrompt).map((entity) => ({ ...world.get(entity, SystemPrompt)! }));
   const modelProfiles: ModelProfileRecord[] = world.query(ModelProfile).map((entity) => ({ ...world.get(entity, ModelProfile)! }));
@@ -53,19 +53,19 @@ export function projectModeState(world: WorldReader): Partial<ClientState> {
     .map((entity) => buildModelProfileScopeLinkRecord(world, entity))
     .filter((item): item is ModelProfileScopeLinkRecord => item !== undefined);
 
-  const conversationModeSelections: ConversationModeSelectionRecord[] = world
-    .query(ConversationModeSelection)
-    .map((entity) => buildConversationModeSelectionRecord(world, entity))
-    .filter((item): item is ConversationModeSelectionRecord => item !== undefined);
+  const conversationWorkflowSelections: ConversationWorkflowSelectionRecord[] = world
+    .query(ConversationWorkflowSelection)
+    .map((entity) => buildConversationWorkflowSelectionRecord(world, entity))
+    .filter((item): item is ConversationWorkflowSelectionRecord => item !== undefined);
 
   return {
-    modes,
+    workflows,
     toolPolicies,
     systemPrompts,
     systemPromptScopeLinks,
     modelProfiles,
     modelProfileScopeLinks,
-    conversationModeSelections
+    conversationWorkflowSelections
   };
 }
 
@@ -106,32 +106,32 @@ function buildModelProfileScopeLinkRecord(world: WorldReader, entity: number): M
   };
 }
 
-function buildConversationModeSelectionRecord(world: WorldReader, entity: number): ConversationModeSelectionRecord | undefined {
-  const selection = world.get(entity, ConversationModeSelection);
+function buildConversationWorkflowSelectionRecord(world: WorldReader, entity: number): ConversationWorkflowSelectionRecord | undefined {
+  const selection = world.get(entity, ConversationWorkflowSelection);
   if (!selection) return undefined;
   const conversation = world.get(selection.conversation, Conversation);
   if (!conversation) return undefined;
-  const mode = selection.mode !== undefined ? world.get(selection.mode, Mode) : undefined;
-  if (selection.scopeKind === 'mode' && !mode) return undefined;
+  const workflow = selection.workflow !== undefined ? world.get(selection.workflow, Workflow) : undefined;
+  if (selection.scopeKind === 'workflow' && !workflow) return undefined;
   return {
     id: selection.id,
     conversationId: conversation.id,
     scopeKind: selection.scopeKind,
-    ...(mode ? { modeId: mode.id } : {}),
+    ...(workflow ? { workflowId: workflow.id } : {}),
     role: selection.role,
     createdAt: selection.createdAt,
     updatedAt: selection.updatedAt
   };
 }
 
-type ScopeLink = { scopeKind: string; scopeId?: string; agent?: number; mode?: number; conversation?: number; run?: number };
+type ScopeLink = { scopeKind: string; scopeId?: string; agent?: number; workflow?: number; conversation?: number; run?: number };
 
 function scopeIdForLink(world: WorldReader, link: ScopeLink): string | undefined {
   if (link.scopeKind === 'global') return undefined;
   if (link.scopeId) return link.scopeId;
   switch (link.scopeKind) {
     case 'agent': return link.agent !== undefined ? world.get(link.agent, Agent)?.id : undefined;
-    case 'mode': return link.mode !== undefined ? world.get(link.mode, Mode)?.id : undefined;
+    case 'workflow': return link.workflow !== undefined ? world.get(link.workflow, Workflow)?.id : undefined;
     case 'conversation': return link.conversation !== undefined ? world.get(link.conversation, Conversation)?.id : undefined;
     case 'run': return link.run !== undefined ? world.get(link.run, AgentRun)?.id : undefined;
     default: return undefined;

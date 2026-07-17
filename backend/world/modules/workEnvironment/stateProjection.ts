@@ -10,7 +10,7 @@ import type { AccessDeclaration, WorldReader } from '../../../ecs/types';
 import { Agent } from '../agent/components';
 import { AgentRun } from '../agentRun/components';
 import { Conversation } from '../chat/components';
-import { Mode } from '../mode/components';
+import { Workflow } from '../workflow/components';
 import {
   ConversationWorkEnvironmentLink,
   RunWorkEnvironmentLink,
@@ -30,7 +30,7 @@ export const workEnvironmentStateProjectionReads: AccessDeclaration = {
     RunWorkEnvironmentLink,
     Conversation,
     Agent,
-    Mode,
+    Workflow,
     AgentRun
   ]
 };
@@ -118,7 +118,7 @@ function scopeIdForLink(world: WorldReader, link: WorkEnvironmentPolicyScopeLink
   switch (link.scopeKind) {
     case 'conversation': return link.conversation !== undefined ? world.get(link.conversation, Conversation)?.id : undefined;
     case 'agent': return link.agent !== undefined ? world.get(link.agent, Agent)?.id : undefined;
-    case 'mode': return link.mode !== undefined ? world.get(link.mode, Mode)?.id : undefined;
+    case 'workflow': return link.workflow !== undefined ? world.get(link.workflow, Workflow)?.id : undefined;
     case 'run': return link.run !== undefined ? world.get(link.run, AgentRun)?.id : undefined;
     case 'agentSystem': return link.agentSystemId;
   }

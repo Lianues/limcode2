@@ -2,7 +2,7 @@ import { defineBundle, type CommandSink, type Entity, type WorldReader } from '.
 import { Agent } from '../agent/components';
 import { AgentRun } from '../agentRun/components';
 import { Conversation } from '../chat/components';
-import { Mode } from '../mode/components';
+import { Workflow } from '../workflow/components';
 import { ProjectContext } from '../project/components';
 import {
   Checkpoint,
@@ -50,7 +50,7 @@ export function upsertCheckpointPolicyScopeLink(
     scopeKind: CheckpointPolicyScopeKind;
     scopeId?: string;
     policy: Entity;
-    data: Partial<{ conversation: Entity; agent: Entity; mode: Entity; run: Entity }>;
+    data: Partial<{ conversation: Entity; agent: Entity; workflow: Entity; run: Entity }>;
   }
 ): Entity {
   const now = Date.now();
@@ -213,7 +213,7 @@ function scopeIdForLink(world: WorldReader, link: CheckpointPolicyScopeLinkData)
   switch (link.scopeKind) {
     case 'conversation': return link.conversation !== undefined ? world.get(link.conversation, Conversation)?.id : undefined;
     case 'agent': return link.agent !== undefined ? world.get(link.agent, Agent)?.id : undefined;
-    case 'mode': return link.mode !== undefined ? world.get(link.mode, Mode)?.id : undefined;
+    case 'workflow': return link.workflow !== undefined ? world.get(link.workflow, Workflow)?.id : undefined;
     case 'run': return link.run !== undefined ? world.get(link.run, AgentRun)?.id : undefined;
   }
 }

@@ -14,7 +14,7 @@ const SIDEBAR_ENTRY_VIEW_ID = 'limcode-entry-view';
 const OPEN_CONVERSATION_MESSAGE = 'openConversation';
 const NEW_CONVERSATION_MESSAGE = 'newConversation';
 const OPEN_GLOBAL_SETTINGS_MESSAGE = 'openGlobalSettings';
-const OPEN_MODE_SETTINGS_MESSAGE = 'openModeSettings';
+const OPEN_WORKFLOW_SETTINGS_MESSAGE = 'openWorkflowSettings';
 const OPEN_AGENT_SETTINGS_MESSAGE = 'openAgentSettings';
 const HISTORY_PAGE_GET_MESSAGE = 'sidebar.historyPage.get';
 const SIDEBAR_STATE_MESSAGE = 'sidebar.state';
@@ -109,8 +109,8 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
-      if (message.type === OPEN_MODE_SETTINGS_MESSAGE) {
-        MainPanel.createOrShow(this.extensionUri, this.backendApp, { kind: 'modeSettings', reuse: true });
+      if (message.type === OPEN_WORKFLOW_SETTINGS_MESSAGE) {
+        MainPanel.createOrShow(this.extensionUri, this.backendApp, { kind: 'workflowSettings', reuse: true });
         return;
       }
 

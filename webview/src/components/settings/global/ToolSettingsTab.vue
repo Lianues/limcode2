@@ -14,7 +14,7 @@ const { loading: toolLoading, text: toolLoadingText } = useSettingsLoadingText('
           工具
           <SettingsLoadingInline :show="toolLoading" :text="toolLoadingText" />
         </h2>
-        <p>工具定义由后端注册表只读提供；这里配置全局默认工具策略，聊天、Agent、Mode、Run 等作用域可在后续面板中继承或覆盖。</p>
+        <p>工具定义由后端注册表只读提供；这里配置全局默认工具策略，聊天、Agent、Workflow、Run 等作用域可在后续面板中继承或覆盖。</p>
       </div>
     </header>
 

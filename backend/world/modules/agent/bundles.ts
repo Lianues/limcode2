@@ -9,17 +9,17 @@ import {
   ConversationAgentSelection
 } from './components';
 import {
-  ConversationModeSelection,
-  Mode,
+  ConversationWorkflowSelection,
+  Workflow,
   ModelProfile,
   ModelProfileScopeLink,
   SystemPrompt,
   SystemPromptScopeLink,
   ToolPolicy
-} from '../mode/components';
-import { selectGlobalModeForConversation } from '../mode/bundles';
+} from '../workflow/components';
+import { selectDefaultWorkflowForConversation } from '../workflow/bundles';
 import { ToolPolicyScopeLink } from '../tools/components';
-import type { BuiltinAgentDefinition, BuiltinModeDefinition } from './blueprints';
+import type { BuiltinAgentDefinition, BuiltinWorkflowDefinition } from './blueprints';
 import type { AgentSource, ConfigScopeKind, ToolPolicyScopeKind } from '../../../../shared/protocol';
 
 export const AgentFromBlueprintBundle = defineBundle({
@@ -28,7 +28,7 @@ export const AgentFromBlueprintBundle = defineBundle({
     Agent,
     AgentKind,
     AgentStatus,
-    Mode,
+    Workflow,
     ToolPolicy,
     SystemPrompt,
     SystemPromptScopeLink,
@@ -37,7 +37,7 @@ export const AgentFromBlueprintBundle = defineBundle({
     ToolPolicyScopeLink,
     Conversation,
     ConversationOriginLink,
-    ConversationModeSelection,
+    ConversationWorkflowSelection,
     AgentConversationLink,
     ConversationAgentSelection,
     Message,
@@ -123,40 +123,49 @@ export function spawnAgentRuntimeMirror(cmd: CommandSink, input: SpawnAgentRunti
   return agent;
 }
 
-export function spawnModeFromDefinition(cmd: CommandSink, definition: BuiltinModeDefinition): Entity {
+export function spawnWorkflowFromDefinition(cmd: CommandSink, definition: BuiltinWorkflowDefinition): Entity {
   const now = Date.now();
-  const mode = cmd.spawn();
-  cmd.add(mode, Mode, {
+  const workflow = cmd.spawn();
+  cmd.add(workflow, Workflow, {
     id: definition.id,
     name: definition.name,
     ...(definition.description ? { description: definition.description } : {}),
     source: 'builtin',
-    icon: 'list-details',
+    icon: definition.icon ?? 'list-details',
     createdAt: now,
     updatedAt: now
   });
 
+  if (definition.systemPrompt?.trim()) {
+    const prompt = spawnSystemPrompt(cmd, {
+      id: `system-prompt:workflow:${definition.id}`,
+      name: `${definition.name} Prompt`,
+      text: definition.systemPrompt
+    });
+    linkSystemPromptToScope(cmd, { scopeKind: 'workflow', scopeId: definition.id, workflow, systemPrompt: prompt });
+  }
+
   if (definition.toolPolicy) {
     const policy = spawnToolPolicy(cmd, {
-      id: `tool-policy:mode:${definition.id}`,
+      id: `tool-policy:workflow:${definition.id}`,
       name: definition.toolPolicy.name ?? `${definition.name} Tools`,
       allowedTools: definition.toolPolicy.allowedTools,
       toolConfigs: definition.toolPolicy.toolConfigs
     });
-    linkToolPolicyToScope(cmd, { scopeKind: 'mode', scopeId: definition.id, mode, toolPolicy: policy });
+    linkToolPolicyToScope(cmd, { scopeKind: 'workflow', scopeId: definition.id, workflow, toolPolicy: policy });
   }
 
   if (definition.model) {
     const profile = spawnModelProfile(cmd, {
-      id: `model-profile:mode:${definition.id}`,
+      id: `model-profile:workflow:${definition.id}`,
       name: definition.model.name ?? `${definition.name} Model`,
       provider: definition.model.provider,
       model: definition.model.model
     });
-    linkModelProfileToScope(cmd, { scopeKind: 'mode', scopeId: definition.id, mode, modelProfile: profile });
+    linkModelProfileToScope(cmd, { scopeKind: 'workflow', scopeId: definition.id, workflow, modelProfile: profile });
   }
 
-  return mode;
+  return workflow;
 }
 
 export function spawnAgentFromBlueprint(cmd: CommandSink, input: SpawnAgentWithConversationInput): SpawnAgentWithConversationResult {
@@ -165,7 +174,7 @@ export function spawnAgentFromBlueprint(cmd: CommandSink, input: SpawnAgentWithC
   spawnConversationOriginLink(cmd, { conversation, originKind: 'user', sourceKind: 'user' });
   const link = linkAgentToConversation(cmd, { agent, conversation, role: 'default' });
   const selection = selectAgentForConversation(cmd, { agent, conversation, conversationId: input.conversationId, agentId: input.agentId ?? input.definition.id });
-  selectGlobalModeForConversation(cmd, conversation, input.conversationId);
+  selectDefaultWorkflowForConversation(cmd, conversation, input.conversationId);
 
   if (input.initialMessage?.trim()) {
     spawnUserMessage(cmd, conversation, input.initialMessage.trim());
@@ -239,7 +248,7 @@ export function spawnToolPolicy(cmd: CommandSink, input: { id: string; name: str
 
 export function linkSystemPromptToScope(
   cmd: CommandSink,
-  input: { scopeKind: ConfigScopeKind; scopeId?: string; systemPrompt: Entity; agent?: Entity; mode?: Entity; conversation?: Entity; run?: Entity; order?: number }
+  input: { scopeKind: ConfigScopeKind; scopeId?: string; systemPrompt: Entity; agent?: Entity; workflow?: Entity; conversation?: Entity; run?: Entity; order?: number }
 ): Entity {
   const entity = cmd.spawn();
   const now = Date.now();
@@ -249,7 +258,7 @@ export function linkSystemPromptToScope(
     ...(input.scopeId ? { scopeId: input.scopeId } : {}),
     systemPrompt: input.systemPrompt,
     ...(input.agent !== undefined ? { agent: input.agent } : {}),
-    ...(input.mode !== undefined ? { mode: input.mode } : {}),
+    ...(input.workflow !== undefined ? { workflow: input.workflow } : {}),
     ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
     ...(input.run !== undefined ? { run: input.run } : {}),
     role: 'active',
@@ -262,7 +271,7 @@ export function linkSystemPromptToScope(
 
 export function linkModelProfileToScope(
   cmd: CommandSink,
-  input: { scopeKind: ConfigScopeKind; scopeId?: string; modelProfile: Entity; agent?: Entity; mode?: Entity; conversation?: Entity; run?: Entity }
+  input: { scopeKind: ConfigScopeKind; scopeId?: string; modelProfile: Entity; agent?: Entity; workflow?: Entity; conversation?: Entity; run?: Entity }
 ): Entity {
   const entity = cmd.spawn();
   const now = Date.now();
@@ -272,7 +281,7 @@ export function linkModelProfileToScope(
     ...(input.scopeId ? { scopeId: input.scopeId } : {}),
     modelProfile: input.modelProfile,
     ...(input.agent !== undefined ? { agent: input.agent } : {}),
-    ...(input.mode !== undefined ? { mode: input.mode } : {}),
+    ...(input.workflow !== undefined ? { workflow: input.workflow } : {}),
     ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
     ...(input.run !== undefined ? { run: input.run } : {}),
     role: 'active',
@@ -284,7 +293,7 @@ export function linkModelProfileToScope(
 
 export function linkToolPolicyToScope(
   cmd: CommandSink,
-  input: { scopeKind: ToolPolicyScopeKind; scopeId?: string; toolPolicy: Entity; agent?: Entity; mode?: Entity; conversation?: Entity; run?: Entity }
+  input: { scopeKind: ToolPolicyScopeKind; scopeId?: string; toolPolicy: Entity; agent?: Entity; workflow?: Entity; conversation?: Entity; run?: Entity }
 ): Entity {
   const entity = cmd.spawn();
   const now = Date.now();
@@ -294,7 +303,7 @@ export function linkToolPolicyToScope(
     ...(input.scopeId ? { scopeId: input.scopeId } : {}),
     toolPolicy: input.toolPolicy,
     ...(input.agent !== undefined ? { agent: input.agent } : {}),
-    ...(input.mode !== undefined ? { mode: input.mode } : {}),
+    ...(input.workflow !== undefined ? { workflow: input.workflow } : {}),
     ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
     ...(input.run !== undefined ? { run: input.run } : {}),
     role: 'active',
@@ -308,6 +317,6 @@ export function hasAgentId(world: WorldReader, id: string): boolean {
   return world.query(Agent).some((entity) => world.get(entity, Agent)?.id === id);
 }
 
-export function hasModeId(world: WorldReader, id: string): boolean {
-  return world.query(Mode).some((entity) => world.get(entity, Mode)?.id === id);
+export function hasWorkflowId(world: WorldReader, id: string): boolean {
+  return world.query(Workflow).some((entity) => world.get(entity, Workflow)?.id === id);
 }

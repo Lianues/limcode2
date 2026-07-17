@@ -3,7 +3,7 @@ import { readEvents } from '../../../events';
 import { Agent } from '../../agent/components';
 import { AgentRun } from '../../agentRun/components';
 import { Conversation } from '../../chat/components';
-import { Mode } from '../../mode/components';
+import { Workflow } from '../../workflow/components';
 import { WorkEnvironmentEventType } from '../events';
 import { ConversationWorkEnvironmentLink, WorkEnvironment, WorkEnvironmentPolicy, WorkEnvironmentPolicyScopeLink } from '../components';
 import { WorkEnvironmentBundle, findWorkEnvironmentById, selectConversationWorkEnvironment } from '../bundles';
@@ -15,7 +15,7 @@ export const ConversationWorkEnvironmentSelectionSystem = defineSystem({
     return readEvents(ctx, WorkEnvironmentEventType.ConversationSelectRequested).length > 0;
   },
   access: {
-    reads: { components: [Conversation, Agent, AgentRun, Mode, WorkEnvironment, WorkEnvironmentPolicy, WorkEnvironmentPolicyScopeLink, ConversationWorkEnvironmentLink] },
+    reads: { components: [Conversation, Agent, AgentRun, Workflow, WorkEnvironment, WorkEnvironmentPolicy, WorkEnvironmentPolicyScopeLink, ConversationWorkEnvironmentLink] },
     bundles: [WorkEnvironmentBundle],
     events: { read: [WorkEnvironmentEventType.ConversationSelectRequested] }
   },

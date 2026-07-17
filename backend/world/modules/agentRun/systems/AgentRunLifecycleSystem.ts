@@ -23,7 +23,7 @@ import {
   RunDeliveryPolicy,
   RunDeliveryPolicyLink,
   RunEditPolicyLink,
-  RunModeLink,
+  RunWorkflowLink,
   RunModelProfileLink,
   RunSystemPromptLink,
   RunToolPolicyLink,
@@ -57,7 +57,7 @@ const LifecycleRunsQuery = defineQuery({
     ToolResultConsumed,
     ToolCallRunLink,
     InFlight,
-    RunModeLink,
+    RunWorkflowLink,
     RunSystemPromptLink,
     RunModelProfileLink,
     RunToolPolicyLink,
@@ -693,7 +693,7 @@ function failOpenToolCalls(world: WorldReader, cmd: CommandSink, run: Entity, ba
 
 function cloneRunOverrides(world: WorldReader, cmd: CommandSink, sourceRun: Entity, targetRun: Entity): void {
   const now = Date.now();
-  cloneRunModeLinks(world, cmd, sourceRun, targetRun, now);
+  cloneRunWorkflowLinks(world, cmd, sourceRun, targetRun, now);
   cloneRunEntityLinks(world, cmd, sourceRun, targetRun, RunSystemPromptLink, 'systemPrompt', 'run-system-prompt-clone', now);
   cloneRunEntityLinks(world, cmd, sourceRun, targetRun, RunModelProfileLink, 'modelProfile', 'run-model-profile-clone', now);
   cloneRunEntityLinks(world, cmd, sourceRun, targetRun, RunToolPolicyLink, 'toolPolicy', 'run-tool-policy-clone', now);
@@ -703,12 +703,12 @@ function cloneRunOverrides(world: WorldReader, cmd: CommandSink, sourceRun: Enti
   cloneRunPolicyLinks(world, cmd, sourceRun, targetRun, RunEditPolicyLink, 'run-edit-policy-clone', now);
 }
 
-function cloneRunModeLinks(world: WorldReader, cmd: CommandSink, sourceRun: Entity, targetRun: Entity, now: number): void {
-  for (const entity of world.query(RunModeLink)) {
-    const link = world.get(entity, RunModeLink);
+function cloneRunWorkflowLinks(world: WorldReader, cmd: CommandSink, sourceRun: Entity, targetRun: Entity, now: number): void {
+  for (const entity of world.query(RunWorkflowLink)) {
+    const link = world.get(entity, RunWorkflowLink);
     if (!link || link.run !== sourceRun || link.role !== 'active') continue;
     const clone = cmd.spawn();
-    cmd.add(clone, RunModeLink, { id: `run-mode-clone:${targetRun}:${clone}`, run: targetRun, mode: link.mode, role: 'active', createdAt: now, updatedAt: now });
+    cmd.add(clone, RunWorkflowLink, { id: `run-workflow-clone:${targetRun}:${clone}`, run: targetRun, workflow: link.workflow, role: 'active', createdAt: now, updatedAt: now });
   }
 }
 

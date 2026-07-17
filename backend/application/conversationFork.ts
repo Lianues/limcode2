@@ -19,10 +19,10 @@ import {
 } from '../world/modules/chat/components';
 import { rememberHydratedMessageSeq } from '../world/modules/chat/bundles';
 import {
-  ConversationModeSelection,
-  Mode,
-  type ConversationModeSelectionData
-} from '../world/modules/mode/components';
+  ConversationWorkflowSelection,
+  Workflow,
+  type ConversationWorkflowSelectionData
+} from '../world/modules/workflow/components';
 import { ConversationProjectLink } from '../world/modules/project/components';
 import { ToolCall, ToolCallEvent, ToolState } from '../world/modules/tools/components';
 import { ConversationWorkEnvironmentLink } from '../world/modules/workEnvironment/components';
@@ -92,7 +92,7 @@ export function forkConversationInWorld(world: World, input: ForkConversationInW
   cloneMessageRevisions(world, messagesToCopy, messageMap);
   cloneToolSnapshots(world, messageMap, now);
   cloneAgentRelations(world, conversation, targetConversationId, agentContext, now);
-  cloneModeSelection(world, sourceConversation, conversation, targetConversationId, now);
+  cloneWorkflowSelection(world, sourceConversation, conversation, targetConversationId, now);
   cloneProjectLinks(world, sourceConversation, conversation, now);
   cloneWorkEnvironmentLinks(world, sourceConversation, conversation, now);
 
@@ -333,28 +333,28 @@ function cloneAgentRelations(
   });
 }
 
-function cloneModeSelection(world: World, sourceConversation: Entity, targetConversation: Entity, targetConversationId: string, now: number): void {
-  const selected = world.query(ConversationModeSelection)
-    .map((entity) => ({ entity, data: world.get(entity, ConversationModeSelection) }))
-    .filter((item): item is { entity: Entity; data: ConversationModeSelectionData } =>
+function cloneWorkflowSelection(world: World, sourceConversation: Entity, targetConversation: Entity, targetConversationId: string, now: number): void {
+  const selected = world.query(ConversationWorkflowSelection)
+    .map((entity) => ({ entity, data: world.get(entity, ConversationWorkflowSelection) }))
+    .filter((item): item is { entity: Entity; data: ConversationWorkflowSelectionData } =>
       item.data !== undefined && item.data.conversation === sourceConversation && item.data.role === 'active'
     )
     .sort((left, right) => right.data.updatedAt - left.data.updatedAt || right.entity - left.entity)[0];
   if (!selected) return;
-  const selectedMode = selected.data.scopeKind === 'mode'
-    && selected.data.mode !== undefined
-    && world.has(selected.data.mode, Mode)
-    ? selected.data.mode
+  const selectedWorkflow = selected.data.scopeKind === 'workflow'
+    && selected.data.workflow !== undefined
+    && world.has(selected.data.workflow, Workflow)
+    ? selected.data.workflow
     : undefined;
-  const modeId = selectedMode !== undefined ? world.get(selectedMode, Mode)?.id : undefined;
+  const workflowId = selectedWorkflow !== undefined ? world.get(selectedWorkflow, Workflow)?.id : undefined;
   const entity = world.spawn();
-  world.add(entity, ConversationModeSelection, {
-    id: selectedMode !== undefined && modeId
-      ? `conversation-mode:mode:${targetConversationId}:${modeId}`
-      : `conversation-mode:global:${targetConversationId}`,
+  world.add(entity, ConversationWorkflowSelection, {
+    id: selectedWorkflow !== undefined && workflowId
+      ? `conversation-workflow:workflow:${targetConversationId}:${workflowId}`
+      : `conversation-workflow:global:${targetConversationId}`,
     conversation: targetConversation,
-    scopeKind: selectedMode !== undefined ? 'mode' : 'global',
-    ...(selectedMode !== undefined ? { mode: selectedMode } : {}),
+    scopeKind: selectedWorkflow !== undefined ? 'workflow' : 'global',
+    ...(selectedWorkflow !== undefined ? { workflow: selectedWorkflow } : {}),
     role: 'active',
     createdAt: now,
     updatedAt: now

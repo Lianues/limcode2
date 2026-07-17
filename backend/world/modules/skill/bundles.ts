@@ -24,7 +24,7 @@ export function spawnSkillPolicy(
 
 export function linkSkillPolicyToScope(
   cmd: CommandSink,
-  input: { scopeKind: SkillPolicyScopeKind; scopeId?: string; skillPolicy: Entity; agent?: Entity; mode?: Entity; conversation?: Entity; run?: Entity }
+  input: { scopeKind: SkillPolicyScopeKind; scopeId?: string; skillPolicy: Entity; agent?: Entity; workflow?: Entity; conversation?: Entity; run?: Entity }
 ): Entity {
   const entity = cmd.spawn();
   const now = Date.now();
@@ -34,7 +34,7 @@ export function linkSkillPolicyToScope(
     ...(input.scopeId ? { scopeId: input.scopeId } : {}),
     skillPolicy: input.skillPolicy,
     ...(input.agent !== undefined ? { agent: input.agent } : {}),
-    ...(input.mode !== undefined ? { mode: input.mode } : {}),
+    ...(input.workflow !== undefined ? { workflow: input.workflow } : {}),
     ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
     ...(input.run !== undefined ? { run: input.run } : {}),
     role: 'active',

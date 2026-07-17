@@ -1,5 +1,5 @@
 import { defineResource } from '../../../ecs/types';
-import type { LlmProviderKind, ToolPolicyToolConfigRecord } from '../../../../shared/protocol';
+import type { LlmProviderKind, ToolPolicyToolConfigRecord, WorkflowIconKey } from '../../../../shared/protocol';
 import {
   DELETE_TOOL_NAME,
   EDIT_TOOL_NAME,
@@ -37,10 +37,11 @@ export interface BuiltinAgentDefinition {
   toolPolicy: BuiltinToolPolicyDefinition;
 }
 
-export interface BuiltinModeDefinition {
+export interface BuiltinWorkflowDefinition {
   id: string;
   name: string;
   description?: string;
+  icon?: WorkflowIconKey;
   systemPrompt?: string;
   model?: BuiltinModelProfileDefinition;
   toolPolicy?: BuiltinToolPolicyDefinition;
@@ -48,7 +49,7 @@ export interface BuiltinModeDefinition {
 
 export interface BuiltinAgentRegistry {
   agents: Record<string, BuiltinAgentDefinition>;
-  modes: Record<string, BuiltinModeDefinition>;
+  workflows: Record<string, BuiltinWorkflowDefinition>;
 }
 
 export const AgentBlueprintsKey = defineResource<BuiltinAgentRegistry>('AgentBlueprints');
@@ -58,7 +59,7 @@ export const DEFAULT_SYSTEM_PROMPT = 'You are LimCode, a concise and helpful AI 
 export const DEFAULT_INTEGRATED_SYSTEM_PROMPT = [
   'You are {{$agent.name}}, a concise and helpful AI coding assistant running inside VS Code.',
   '{{$agent.description}}',
-  '{{$mode.description}}',
+  '{{$workflow.description}}',
   'Follow the active agent profile, active workflow, user instructions, and project rules. Reply in the user\'s language unless asked otherwise.'
 ].join('\n\n');
 
@@ -102,7 +103,7 @@ export function createDefaultAgentBlueprints(): BuiltinAgentRegistry {
         toolPolicy: { name: 'Reviewer Agent Tools', allowedTools: READONLY_TOOLS, toolConfigs: DEFAULT_TOOL_CONFIGS }
       }
     },
-    modes: {
+    workflows: {
       plan: {
         id: 'builtin:plan',
         name: 'Plan',

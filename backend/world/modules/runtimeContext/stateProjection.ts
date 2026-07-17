@@ -10,7 +10,7 @@ import type { AccessDeclaration, WorldReader } from '../../../ecs/types';
 import { Agent } from '../agent/components';
 import { AgentRun } from '../agentRun/components';
 import { Conversation } from '../chat/components';
-import { Mode } from '../mode/components';
+import { Workflow } from '../workflow/components';
 import {
   ConversationRuntimeContextSnapshotLink,
   RuntimeContext,
@@ -21,7 +21,7 @@ import {
 import { PromptPlaceholdersKey } from './resources';
 
 export const runtimeContextStateProjectionReads: AccessDeclaration = {
-  components: [Agent, AgentRun, Conversation, Mode, RuntimeContext, RuntimeContextScopeLink, RuntimeContextSnapshot, ConversationRuntimeContextSnapshotLink, RunRuntimeContextSnapshotLink],
+  components: [Agent, AgentRun, Conversation, Workflow, RuntimeContext, RuntimeContextScopeLink, RuntimeContextSnapshot, ConversationRuntimeContextSnapshotLink, RunRuntimeContextSnapshotLink],
   resources: [PromptPlaceholdersKey]
 };
 
@@ -96,14 +96,14 @@ function buildRunSnapshotLinkRecord(world: WorldReader, entity: number): RunRunt
   return { id: link.id, runId: run.id, runtimeContextSnapshotId: snapshot.id, role: link.role, createdAt: link.createdAt, updatedAt: link.updatedAt };
 }
 
-type ScopeLink = { scopeKind: string; scopeId?: string; agent?: number; mode?: number; conversation?: number; run?: number };
+type ScopeLink = { scopeKind: string; scopeId?: string; agent?: number; workflow?: number; conversation?: number; run?: number };
 
 function scopeIdForLink(world: WorldReader, link: ScopeLink): string | undefined {
   if (link.scopeKind === 'global') return undefined;
   if (link.scopeId) return link.scopeId;
   switch (link.scopeKind) {
     case 'agent': return link.agent !== undefined ? world.get(link.agent, Agent)?.id : undefined;
-    case 'mode': return link.mode !== undefined ? world.get(link.mode, Mode)?.id : undefined;
+    case 'workflow': return link.workflow !== undefined ? world.get(link.workflow, Workflow)?.id : undefined;
     case 'conversation': return link.conversation !== undefined ? world.get(link.conversation, Conversation)?.id : undefined;
     case 'run': return link.run !== undefined ? world.get(link.run, AgentRun)?.id : undefined;
     default: return undefined;

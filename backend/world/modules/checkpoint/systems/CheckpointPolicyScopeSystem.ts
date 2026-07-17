@@ -5,7 +5,7 @@ import { readEvents } from '../../../events';
 import { Agent } from '../../agent/components';
 import { AgentRun } from '../../agentRun/components';
 import { Conversation } from '../../chat/components';
-import { Mode } from '../../mode/components';
+import { Workflow } from '../../workflow/components';
 import { CheckpointPolicy, CheckpointPolicyScopeLink } from '../components';
 import { CheckpointEventType } from '../events';
 import {
@@ -24,7 +24,7 @@ export const CheckpointPolicyScopeSystem = defineSystem({
       || readEvents(ctx, CheckpointEventType.PolicyScopeClearRequested).length > 0;
   },
   access: {
-    reads: { components: [Agent, AgentRun, Conversation, Mode, CheckpointPolicy, CheckpointPolicyScopeLink] },
+    reads: { components: [Agent, AgentRun, Conversation, Workflow, CheckpointPolicy, CheckpointPolicyScopeLink] },
     bundles: [CheckpointBundle],
     events: { read: [CheckpointEventType.PolicyScopeSetRequested, CheckpointEventType.PolicyScopeClearRequested] }
   },
@@ -62,7 +62,7 @@ export const CheckpointPolicyScopeSystem = defineSystem({
 interface ResolvedScope {
   ok: true;
   scopeId?: string;
-  data: Partial<{ conversation: Entity; agent: Entity; mode: Entity; run: Entity }>;
+  data: Partial<{ conversation: Entity; agent: Entity; workflow: Entity; run: Entity }>;
 }
 
 type ScopeResult = ResolvedScope | { ok: false };
@@ -82,10 +82,10 @@ function resolveScope(world: WorldReader, scopeKind: CheckpointPolicyScopeKind, 
       const agent = findByRecordId(world, Agent, scopeId);
       return { ok: true, scopeId, data: agent !== undefined ? { agent } : {} };
     }
-    case 'mode': {
+    case 'workflow': {
       if (!scopeId) return { ok: false };
-      const mode = findByRecordId(world, Mode, scopeId);
-      return { ok: true, scopeId, data: mode !== undefined ? { mode } : {} };
+      const workflow = findByRecordId(world, Workflow, scopeId);
+      return { ok: true, scopeId, data: workflow !== undefined ? { workflow } : {} };
     }
     case 'run': {
       if (!scopeId) return { ok: false };
@@ -100,7 +100,7 @@ function defaultPolicyName(scopeKind: CheckpointPolicyScopeKind): string {
     case 'global': return '全局默认存档点策略';
     case 'conversation': return '对话存档点策略';
     case 'agent': return 'Agent 存档点策略';
-    case 'mode': return '工作流存档点策略';
+    case 'workflow': return '工作流存档点策略';
     case 'run': return '运行存档点策略';
   }
 }

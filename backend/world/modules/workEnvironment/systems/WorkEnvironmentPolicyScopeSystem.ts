@@ -3,7 +3,7 @@ import { readEvents } from '../../../events';
 import { Agent } from '../../agent/components';
 import { AgentRun } from '../../agentRun/components';
 import { Conversation } from '../../chat/components';
-import { Mode } from '../../mode/components';
+import { Workflow } from '../../workflow/components';
 import { WorkEnvironment, WorkEnvironmentPolicy, WorkEnvironmentPolicyScopeLink } from '../components';
 import { WorkEnvironmentEventType } from '../events';
 import {
@@ -22,7 +22,7 @@ export const WorkEnvironmentPolicyScopeSystem = defineSystem({
       || readEvents(ctx, WorkEnvironmentEventType.PolicyScopeClearRequested).length > 0;
   },
   access: {
-    reads: { components: [Agent, AgentRun, Conversation, Mode, WorkEnvironment, WorkEnvironmentPolicy, WorkEnvironmentPolicyScopeLink] },
+    reads: { components: [Agent, AgentRun, Conversation, Workflow, WorkEnvironment, WorkEnvironmentPolicy, WorkEnvironmentPolicyScopeLink] },
     bundles: [WorkEnvironmentBundle],
     events: { read: [WorkEnvironmentEventType.PolicyScopeSetRequested, WorkEnvironmentEventType.PolicyScopeClearRequested] }
   },
@@ -59,7 +59,7 @@ export const WorkEnvironmentPolicyScopeSystem = defineSystem({
 interface ResolvedScope {
   ok: true;
   scopeId?: string;
-  data: Partial<{ conversation: Entity; agent: Entity; mode: Entity; run: Entity; agentSystemId: string }>;
+  data: Partial<{ conversation: Entity; agent: Entity; workflow: Entity; run: Entity; agentSystemId: string }>;
 }
 
 type ScopeResult = ResolvedScope | { ok: false };
@@ -79,10 +79,10 @@ function resolveScope(world: WorldReader, scopeKind: WorkEnvironmentPolicyScopeK
       const agent = findByRecordId(world, Agent, scopeId);
       return { ok: true, scopeId, data: agent !== undefined ? { agent } : {} };
     }
-    case 'mode': {
+    case 'workflow': {
       if (!scopeId) return { ok: false };
-      const mode = findByRecordId(world, Mode, scopeId);
-      return { ok: true, scopeId, data: mode !== undefined ? { mode } : {} };
+      const workflow = findByRecordId(world, Workflow, scopeId);
+      return { ok: true, scopeId, data: workflow !== undefined ? { workflow } : {} };
     }
     case 'run': {
       if (!scopeId) return { ok: false };
@@ -116,7 +116,7 @@ function defaultPolicyName(scopeKind: WorkEnvironmentPolicyScopeKind): string {
     case 'conversation': return '对话工作环境策略';
     case 'agent': return 'Agent 工作环境策略';
     case 'agentSystem': return '多 Agent 系统工作环境策略';
-    case 'mode': return '工作流工作环境策略';
+    case 'workflow': return '工作流工作环境策略';
     case 'run': return '运行工作环境策略';
   }
 }

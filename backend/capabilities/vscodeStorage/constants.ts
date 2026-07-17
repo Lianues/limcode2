@@ -3,7 +3,7 @@ export const INDEX_FILE = 'index.json';
 export const RECORDS_DIR = 'records';
 
 export const AGENTS_ROOT_DIR = 'agents';
-export const MODES_ROOT_DIR = 'modes';
+export const WORKFLOWS_ROOT_DIR = 'workflows';
 export const TOOL_POLICIES_ROOT_DIR = 'tool-policies';
 export const TOOL_POLICY_SCOPE_LINKS_ROOT_DIR = 'tool-policy-scope-links';
 export const SKILL_POLICIES_ROOT_DIR = 'skill-policies';
@@ -18,7 +18,7 @@ export const RUNTIME_CONTEXT_SNAPSHOTS_ROOT_DIR = 'runtime-context-snapshots';
 export const CONVERSATION_RUNTIME_CONTEXT_SNAPSHOT_LINKS_ROOT_DIR = 'conversation-runtime-context-snapshot-links';
 export const RUN_RUNTIME_CONTEXT_SNAPSHOT_LINKS_ROOT_DIR = 'run-runtime-context-snapshot-links';
 export const MODEL_PROFILE_SCOPE_LINKS_ROOT_DIR = 'model-profile-scope-links';
-export const CONVERSATION_MODE_SELECTIONS_ROOT_DIR = 'conversation-mode-selections';
+export const CONVERSATION_WORKFLOW_SELECTIONS_ROOT_DIR = 'conversation-workflow-selections';
 export const CONVERSATION_AGENT_SELECTIONS_ROOT_DIR = 'conversation-agent-selections';
 export const CONVERSATIONS_ROOT_DIR = 'conversations';
 export const CONVERSATION_HISTORY_ROOT_DIR = 'conversation-history';
@@ -55,7 +55,7 @@ export const COMPRESSION_LLM_INVOCATIONS_ROOT_DIR = 'compression-llm-invocations
  */
 export const REGISTERED_STORAGE_ROOT_DIRS = [
   AGENTS_ROOT_DIR,
-  MODES_ROOT_DIR,
+  WORKFLOWS_ROOT_DIR,
   TOOL_POLICIES_ROOT_DIR,
   TOOL_POLICY_SCOPE_LINKS_ROOT_DIR,
   SKILL_POLICIES_ROOT_DIR,
@@ -70,7 +70,7 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
   CONVERSATION_RUNTIME_CONTEXT_SNAPSHOT_LINKS_ROOT_DIR,
   RUN_RUNTIME_CONTEXT_SNAPSHOT_LINKS_ROOT_DIR,
   MODEL_PROFILE_SCOPE_LINKS_ROOT_DIR,
-  CONVERSATION_MODE_SELECTIONS_ROOT_DIR,
+  CONVERSATION_WORKFLOW_SELECTIONS_ROOT_DIR,
   CONVERSATION_AGENT_SELECTIONS_ROOT_DIR,
   CONVERSATIONS_ROOT_DIR,
   CONVERSATION_HISTORY_ROOT_DIR,

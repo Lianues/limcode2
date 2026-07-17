@@ -154,15 +154,15 @@ export interface RunEditPolicyData {
 }
 export const RunEditPolicy = defineComponent<RunEditPolicyData>('RunEditPolicy');
 
-export interface RunModeLinkData {
+export interface RunWorkflowLinkData {
   id: string;
   run: Entity;
-  mode: Entity;
+  workflow: Entity;
   role: PolicyBindingRole;
   createdAt: number;
   updatedAt: number;
 }
-export const RunModeLink = defineComponent<RunModeLinkData>('RunModeLink');
+export const RunWorkflowLink = defineComponent<RunWorkflowLinkData>('RunWorkflowLink');
 
 export interface RunSystemPromptLinkData {
   id: string;

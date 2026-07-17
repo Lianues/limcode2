@@ -18,12 +18,12 @@ import {
 } from '@shared/workEnvironmentCatalog';
 import { bridge, BridgeMessageType } from '@webview/transport';
 import { useClientStateStore } from './useClientStateStore';
-import { GLOBAL_MODE_OPTION_ID, useModeStore } from './useModeStore';
+import { DEFAULT_WORKFLOW_OPTION_ID, useWorkflowStore } from './useWorkflowStore';
 
 export interface WorkEnvironmentPolicyResolution {
   policy?: WorkEnvironmentPolicyRecord;
   link?: WorkEnvironmentPolicyScopeLinkRecord;
-  inheritedFrom?: WorkEnvironmentPolicyScopeKind | 'mode' | 'fallback';
+  inheritedFrom?: WorkEnvironmentPolicyScopeKind | 'workflow' | 'fallback';
 }
 
 function scopeIdFor(scopeKind: WorkEnvironmentPolicyScopeKind, scopeId?: string): string | undefined {
@@ -52,7 +52,7 @@ function defaultPolicyName(scopeKind: WorkEnvironmentPolicyScopeKind): string {
     case 'conversation': return '对话工作环境策略';
     case 'agent': return 'Agent 工作环境策略';
     case 'agentSystem': return '多 Agent 系统工作环境策略';
-    case 'mode': return '工作流工作环境策略';
+    case 'workflow': return '工作流工作环境策略';
     case 'run': return '运行工作环境策略';
   }
 }
@@ -132,11 +132,11 @@ export const useWorkEnvironmentStore = defineStore('workEnvironment', {
     },
     effectivePolicyForConversation(conversationId: string): WorkEnvironmentPolicyResolution {
       if (!conversationId) return this.effectivePolicyFor('global');
-      const modeStore = useModeStore();
-      const activeModeId = modeStore.activeModeIdForConversation(conversationId);
-      if (activeModeId && activeModeId !== GLOBAL_MODE_OPTION_ID) {
-        const modePolicy = this.localPolicyFor('mode', activeModeId);
-        if (modePolicy.policy) return { ...modePolicy, inheritedFrom: 'mode' };
+      const workflowStore = useWorkflowStore();
+      const activeWorkflowId = workflowStore.activeWorkflowIdForConversation(conversationId);
+      if (activeWorkflowId && activeWorkflowId !== DEFAULT_WORKFLOW_OPTION_ID) {
+        const workflowPolicy = this.localPolicyFor('workflow', activeWorkflowId);
+        if (workflowPolicy.policy) return { ...workflowPolicy, inheritedFrom: 'workflow' };
       }
       const local = this.localPolicyFor('conversation', conversationId);
       if (local.policy) return local;

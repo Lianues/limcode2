@@ -1,16 +1,16 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
-import { AgentBlueprintsKey, DEFAULT_INTEGRATED_SYSTEM_PROMPT, type BuiltinAgentRegistry } from '../blueprints';
+import { AgentBlueprintsKey, DEFAULT_INTEGRATED_SYSTEM_PROMPT } from '../blueprints';
 import {
   AgentFromBlueprintBundle,
   hasAgentId,
-  hasModeId,
+  hasWorkflowId,
   linkSystemPromptToScope,
   spawnAgentFromBlueprint,
   spawnAgentProfileFromBlueprint,
-  spawnModeFromDefinition,
+  spawnWorkflowFromDefinition,
   spawnSystemPrompt
 } from '../bundles';
-import { SystemPrompt, SystemPromptScopeLink, type SystemPromptScopeLinkData } from '../../mode/components';
+import { SystemPrompt, SystemPromptScopeLink, type SystemPromptScopeLinkData } from '../../workflow/components';
 import { AgentSpawnRequest } from '../requests';
 import type { ConfigScopeKind } from '../../../../../shared/protocol';
 
@@ -33,9 +33,8 @@ export const AgentSpawnSystem = defineSystem({
     if (!registry) return false;
     return world.query(AgentSpawnRequest).length > 0
       || !hasActiveSystemPromptForScope(world, 'global')
-      || Object.values(registry.modes).some((mode) => !hasModeId(world, mode.id))
-      || Object.values(registry.agents).some((agent) => !hasAgentId(world, agent.id))
-      || hasBuiltinScopedPromptDefault(world, registry);
+      || Object.values(registry.workflows).some((workflow) => !hasWorkflowId(world, workflow.id))
+      || Object.values(registry.agents).some((agent) => !hasAgentId(world, agent.id));
   },
   access: {
     queries: [SpawnRequestsQuery],
@@ -47,8 +46,8 @@ export const AgentSpawnSystem = defineSystem({
     const registry = world.getResource(AgentBlueprintsKey);
     ensureIntegratedGlobalSystemPrompt(world, cmd);
 
-    for (const mode of Object.values(registry.modes)) {
-      if (!hasModeId(world, mode.id)) spawnModeFromDefinition(cmd, mode);
+    for (const workflow of Object.values(registry.workflows)) {
+      if (!hasWorkflowId(world, workflow.id)) spawnWorkflowFromDefinition(cmd, workflow);
     }
 
     const requests = world.query(AgentSpawnRequest);
@@ -82,8 +81,6 @@ export const AgentSpawnSystem = defineSystem({
       cmd.despawn(entity);
     }
 
-    removeBuiltinScopedPromptDefaults(world, cmd, registry);
-
     if (requests.length > 0) return;
 
     for (const definition of Object.values(registry.agents)) {
@@ -102,36 +99,6 @@ function ensureIntegratedGlobalSystemPrompt(world: WorldReader, cmd: CommandSink
   linkSystemPromptToScope(cmd, { scopeKind: 'global', systemPrompt: prompt });
 }
 
-function removeBuiltinScopedPromptDefaults(world: WorldReader, cmd: CommandSink, registry: BuiltinAgentRegistry): void {
-  for (const definition of Object.values(registry.agents)) {
-    removeScopedPromptIfText(world, cmd, 'agent', definition.id, definition.systemPrompt);
-  }
-  for (const definition of Object.values(registry.modes)) {
-    if (definition.systemPrompt?.trim()) removeScopedPromptIfText(world, cmd, 'mode', definition.id, definition.systemPrompt);
-  }
-}
-
-function hasBuiltinScopedPromptDefault(world: WorldReader, registry: BuiltinAgentRegistry): boolean {
-  return Object.values(registry.agents).some((definition) => hasScopedPromptWithText(world, 'agent', definition.id, definition.systemPrompt))
-    || Object.values(registry.modes).some((definition) => !!definition.systemPrompt?.trim() && hasScopedPromptWithText(world, 'mode', definition.id, definition.systemPrompt));
-}
-
-function hasScopedPromptWithText(world: WorldReader, scopeKind: ConfigScopeKind, scopeId: string | undefined, text: string): boolean {
-  const expected = normalizePromptText(text);
-  if (!expected) return false;
-  return scopedPromptLinks(world, scopeKind, scopeId).some(({ link }) => normalizePromptText(world.get(link.systemPrompt, SystemPrompt)?.text) === expected);
-}
-
-function removeScopedPromptIfText(world: WorldReader, cmd: CommandSink, scopeKind: ConfigScopeKind, scopeId: string | undefined, text: string): void {
-  const expected = normalizePromptText(text);
-  if (!expected) return;
-  for (const { entity, link } of scopedPromptLinks(world, scopeKind, scopeId)) {
-    const prompt = world.get(link.systemPrompt, SystemPrompt);
-    if (normalizePromptText(prompt?.text) !== expected) continue;
-    cmd.despawn(entity);
-  }
-}
-
 function hasActiveSystemPromptForScope(world: WorldReader, scopeKind: ConfigScopeKind, scopeId?: string): boolean {
   return scopedPromptLinks(world, scopeKind, scopeId).some(({ link }) => !!world.get(link.systemPrompt, SystemPrompt)?.text.trim());
 }
@@ -148,8 +115,4 @@ function scopedPromptLinks(world: WorldReader, scopeKind: ConfigScopeKind, scope
     if (link.scopeId === scopeId) links.push({ entity, link });
   }
   return links;
-}
-
-function normalizePromptText(value: string | undefined): string {
-  return value?.replace(/\r\n/g, '\n').trim() ?? '';
 }

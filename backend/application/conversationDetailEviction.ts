@@ -28,7 +28,7 @@ import {
   RunDeliveryPolicyLink,
   RunEditPolicy,
   RunEditPolicyLink,
-  RunModeLink,
+  RunWorkflowLink,
   RunModelProfileLink,
   RunSystemPromptLink,
   RunToolPolicyLink,
@@ -49,7 +49,7 @@ import {
   RunCompressionBlockLink
 } from '../world/modules/compression/components';
 import { LlmInvocation, MessageLlmInvocationLink, RunLlmInvocationLink } from '../world/modules/llm/components';
-import { ModelProfileScopeLink, SystemPromptScopeLink } from '../world/modules/mode/components';
+import { ModelProfileScopeLink, SystemPromptScopeLink } from '../world/modules/workflow/components';
 import { RuntimeContextScopeLink, RunRuntimeContextSnapshotLink } from '../world/modules/runtimeContext/components';
 import { SkillPolicyScopeLink } from '../world/modules/skill/components';
 import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolState } from '../world/modules/tools/components';
@@ -273,7 +273,7 @@ function collectDetailEntities(world: World, graph: ConversationDetailGraph): Se
   addMatching(world, MessageRunLink, entities, (link) => graph.runs.has(link.run) || graph.messages.has(link.message));
   addMatching(world, ToolCallRunLink, entities, (link) => graph.runs.has(link.run) || graph.toolCalls.has(link.toolCall));
   addMatching(world, AgentRunInputRevision, entities, (input) => graph.runs.has(input.run));
-  addMatching(world, RunModeLink, entities, (link) => graph.runs.has(link.run));
+  addMatching(world, RunWorkflowLink, entities, (link) => graph.runs.has(link.run));
   addMatching(world, RunSystemPromptLink, entities, (link) => graph.runs.has(link.run));
   addMatching(world, RunModelProfileLink, entities, (link) => graph.runs.has(link.run));
   addMatching(world, RunToolPolicyLink, entities, (link) => graph.runs.has(link.run));

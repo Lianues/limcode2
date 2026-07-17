@@ -44,7 +44,7 @@ export interface ToolPolicyScopeLinkData {
   toolPolicy: Entity;
   conversation?: Entity;
   agent?: Entity;
-  mode?: Entity;
+  workflow?: Entity;
   run?: Entity;
   agentSystemId?: string;
   role: PolicyBindingRole;

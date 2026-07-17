@@ -51,7 +51,7 @@ export interface WorkEnvironmentPolicyScopeLinkData {
   policy: Entity;
   conversation?: Entity;
   agent?: Entity;
-  mode?: Entity;
+  workflow?: Entity;
   run?: Entity;
   agentSystemId?: string;
   role: WorkEnvironmentLinkRole;

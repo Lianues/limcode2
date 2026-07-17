@@ -13,7 +13,7 @@ import type {
   ConversationCheckpointRepositoryLinkRecord,
   ConversationBranchLinkRecord,
   ConversationAgentSelectionRecord,
-  ConversationModeSelectionRecord,
+  ConversationWorkflowSelectionRecord,
   ConversationProjectLinkRecord,
   ConversationRecord,
   ConversationRunDetailRecord,
@@ -26,7 +26,7 @@ import type {
   MessageCurrentRevisionLinkRecord,
   MessageRecord,
   MessageRevisionRecord,
-  ModeRecord,
+  WorkflowRecord,
   ModelProfileRecord,
   ModelProfileScopeLinkRecord,
   ProjectContextRecord,
@@ -137,7 +137,7 @@ const RUN_HISTORY_TABLE_KEYS = [
   'runContextPolicies',
   'runDeliveryPolicies',
   'runEditPolicies',
-  'runModeLinks',
+  'runWorkflowLinks',
   'runSystemPromptLinks',
   'runModelProfileLinks',
   'runToolPolicyLinks',
@@ -187,7 +187,7 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths, opt
 async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientState): Promise<void> {
   const [
     agents,
-    modes,
+    workflows,
     toolPolicies,
     toolPolicyScopeLinks,
     skillPolicies,
@@ -201,7 +201,7 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
     runRuntimeContextSnapshotLinks,
     modelProfiles,
     modelProfileScopeLinks,
-    conversationModeSelections,
+    conversationWorkflowSelections,
     conversations,
     conversationReuseLinks,
     conversationBranchLinks,
@@ -213,7 +213,7 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
     agentAnswerTargetLinks
   ] = await Promise.all([
     loadSkeletonRecords<AgentRecord>('agents', [paths.agentsRootUri, paths.agentsIndexUri], 'agent'),
-    loadSkeletonRecords<ModeRecord>('modes', [paths.modesRootUri, paths.modesIndexUri], 'mode'),
+    loadSkeletonRecords<WorkflowRecord>('workflows', [paths.workflowsRootUri, paths.workflowsIndexUri], 'workflow'),
     loadSkeletonRecords<ToolPolicyRecord>('toolPolicies', [paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri], 'toolPolicy'),
     loadSkeletonRecords<ToolPolicyScopeLinkRecord>('toolPolicyScopeLinks', [paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri], 'link'),
     loadSkeletonRecords<SkillPolicyRecord>('skillPolicies', [paths.skillPoliciesRootUri, paths.skillPoliciesIndexUri], 'skillPolicy'),
@@ -227,7 +227,7 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
     loadSkeletonRecords<RunRuntimeContextSnapshotLinkRecord>('runRuntimeContextSnapshotLinks', [paths.runRuntimeContextSnapshotLinksRootUri, paths.runRuntimeContextSnapshotLinksIndexUri], 'link'),
     loadSkeletonRecords<ModelProfileRecord>('modelProfiles', [paths.modelProfilesRootUri, paths.modelProfilesIndexUri], 'modelProfile'),
     loadSkeletonRecords<ModelProfileScopeLinkRecord>('modelProfileScopeLinks', [paths.modelProfileScopeLinksRootUri, paths.modelProfileScopeLinksIndexUri], 'link'),
-    loadSkeletonRecords<ConversationModeSelectionRecord>('conversationModeSelections', [paths.conversationModeSelectionsRootUri, paths.conversationModeSelectionsIndexUri], 'selection'),
+    loadSkeletonRecords<ConversationWorkflowSelectionRecord>('conversationWorkflowSelections', [paths.conversationWorkflowSelectionsRootUri, paths.conversationWorkflowSelectionsIndexUri], 'selection'),
     loadSkeletonRecords<ConversationRecord>('conversations', [paths.conversationsRootUri, paths.conversationsIndexUri], 'conversation'),
     loadSkeletonRecords<ConversationReuseLinkRecord>('conversationReuseLinks', subStore(paths.conversationsRootUri, CONVERSATION_REUSE_LINKS_DIR), 'link'),
     loadSkeletonRecords<ConversationBranchLinkRecord>('conversationBranchLinks', subStore(paths.conversationsRootUri, CONVERSATION_BRANCH_LINKS_DIR), 'link'),
@@ -240,7 +240,7 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
   ]);
 
   state.agents = agents;
-  state.modes = modes;
+  state.workflows = workflows;
   state.toolPolicies = toolPolicies;
   state.toolPolicyScopeLinks = toolPolicyScopeLinks;
   state.skillPolicies = skillPolicies;
@@ -254,7 +254,7 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
   state.runRuntimeContextSnapshotLinks = runRuntimeContextSnapshotLinks;
   state.modelProfiles = modelProfiles;
   state.modelProfileScopeLinks = modelProfileScopeLinks;
-  state.conversationModeSelections = conversationModeSelections;
+  state.conversationWorkflowSelections = conversationWorkflowSelections;
   state.conversations = conversations;
   state.conversationReuseLinks = conversationReuseLinks;
   state.conversationBranchLinks = conversationBranchLinks;
@@ -459,7 +459,7 @@ async function loadConversationRunHistoryForMessagesFromStores(paths: StoragePat
 export async function saveClientStateSkeletonToStores(paths: StoragePaths, state: ClientState): Promise<void> {
   const results = await Promise.allSettled([
     saveRecords(paths.agentsRootUri, paths.agentsIndexUri, state.agents, 'agent', (record) => record.name || record.id),
-    saveRecords(paths.modesRootUri, paths.modesIndexUri, state.modes, 'mode', (record) => record.name || record.id),
+    saveRecords(paths.workflowsRootUri, paths.workflowsIndexUri, state.workflows, 'workflow', (record) => record.name || record.id),
     saveRecords(paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri, state.toolPolicies, 'toolPolicy', (record) => record.name || record.id),
     saveRecords(paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri, state.toolPolicyScopeLinks, 'link'),
     saveRecords(paths.skillPoliciesRootUri, paths.skillPoliciesIndexUri, state.skillPolicies, 'skillPolicy', (record) => record.name || record.id),
@@ -473,7 +473,7 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
     saveRecords(paths.runRuntimeContextSnapshotLinksRootUri, paths.runRuntimeContextSnapshotLinksIndexUri, state.runRuntimeContextSnapshotLinks, 'link'),
     saveRecords(paths.modelProfilesRootUri, paths.modelProfilesIndexUri, state.modelProfiles, 'modelProfile', (record) => record.name || record.id),
     saveRecords(paths.modelProfileScopeLinksRootUri, paths.modelProfileScopeLinksIndexUri, state.modelProfileScopeLinks, 'link'),
-    saveRecords(paths.conversationModeSelectionsRootUri, paths.conversationModeSelectionsIndexUri, state.conversationModeSelections, 'selection'),
+    saveRecords(paths.conversationWorkflowSelectionsRootUri, paths.conversationWorkflowSelectionsIndexUri, state.conversationWorkflowSelections, 'selection'),
     saveRecords(paths.conversationsRootUri, paths.conversationsIndexUri, state.conversations, 'conversation', (record) => record.title || record.id),
     saveRecords(...subStore(paths.conversationsRootUri, CONVERSATION_REUSE_LINKS_DIR), state.conversationReuseLinks, 'link'),
     saveRecords(...subStore(paths.conversationsRootUri, CONVERSATION_BRANCH_LINKS_DIR), state.conversationBranchLinks, 'link'),
@@ -638,7 +638,7 @@ export function conversationRunHistorySlice(state: ClientState, conversationId: 
   detail.runContextPolicies = state.runContextPolicies.filter((policy) => policyIds.contextPolicyIds.has(policy.id));
   detail.runDeliveryPolicies = state.runDeliveryPolicies.filter((policy) => policyIds.deliveryPolicyIds.has(policy.id));
   detail.runEditPolicies = state.runEditPolicies.filter((policy) => policyIds.editPolicyIds.has(policy.id));
-  detail.runModeLinks = state.runModeLinks.filter((link) => runIds.has(link.runId));
+  detail.runWorkflowLinks = state.runWorkflowLinks.filter((link) => runIds.has(link.runId));
   detail.runSystemPromptLinks = state.runSystemPromptLinks.filter((link) => runIds.has(link.runId));
   detail.runModelProfileLinks = state.runModelProfileLinks.filter((link) => runIds.has(link.runId));
   detail.runToolPolicyLinks = state.runToolPolicyLinks.filter((link) => runIds.has(link.runId));
@@ -711,7 +711,7 @@ function copyRunHistoryTables(target: ClientState, source: ClientState): void {
   target.runContextPolicies = source.runContextPolicies;
   target.runDeliveryPolicies = source.runDeliveryPolicies;
   target.runEditPolicies = source.runEditPolicies;
-  target.runModeLinks = source.runModeLinks;
+  target.runWorkflowLinks = source.runWorkflowLinks;
   target.runSystemPromptLinks = source.runSystemPromptLinks;
   target.runModelProfileLinks = source.runModelProfileLinks;
   target.runToolPolicyLinks = source.runToolPolicyLinks;
@@ -787,7 +787,7 @@ function runDetailSlice(state: ClientState, runId: string): ClientState {
   detail.agentRunTargetLinks = state.agentRunTargetLinks.filter((link) => link.runId === runId);
   detail.messageRunLinks = state.messageRunLinks.filter((link) => link.runId === runId);
   detail.toolCallRunLinks = state.toolCallRunLinks.filter((link) => link.runId === runId);
-  detail.runModeLinks = state.runModeLinks.filter((link) => link.runId === runId);
+  detail.runWorkflowLinks = state.runWorkflowLinks.filter((link) => link.runId === runId);
   detail.runSystemPromptLinks = state.runSystemPromptLinks.filter((link) => link.runId === runId);
   detail.runModelProfileLinks = state.runModelProfileLinks.filter((link) => link.runId === runId);
   detail.runToolPolicyLinks = state.runToolPolicyLinks.filter((link) => link.runId === runId);

@@ -18,9 +18,9 @@ const {
 } = require('../dist/extension/backend/world/modules/chat/components.js');
 const { spawnUserMessage } = require('../dist/extension/backend/world/modules/chat/bundles.js');
 const {
-  ConversationModeSelection,
-  Mode
-} = require('../dist/extension/backend/world/modules/mode/components.js');
+  ConversationWorkflowSelection,
+  Workflow
+} = require('../dist/extension/backend/world/modules/workflow/components.js');
 const {
   ConversationProjectLink,
   ProjectContext
@@ -108,14 +108,14 @@ test('fork 对话只复制目标楼层及之前的消息，并创建独立关系
     updatedAt: 1
   });
 
-  const mode = world.spawn();
-  world.add(mode, Mode, { id: 'mode-plan', name: 'Plan', source: 'user', createdAt: 1, updatedAt: 1 });
-  const modeSelection = world.spawn();
-  world.add(modeSelection, ConversationModeSelection, {
-    id: 'mode-selection-source',
+  const workflow = world.spawn();
+  world.add(workflow, Workflow, { id: 'workflow-plan', name: 'Plan', source: 'user', createdAt: 1, updatedAt: 1 });
+  const workflowSelection = world.spawn();
+  world.add(workflowSelection, ConversationWorkflowSelection, {
+    id: 'workflow-selection-source',
     conversation: source,
-    scopeKind: 'mode',
-    mode,
+    scopeKind: 'workflow',
+    workflow,
     role: 'active',
     createdAt: 1,
     updatedAt: 1
@@ -262,11 +262,11 @@ test('fork 对话只复制目标楼层及之前的消息，并创建独立关系
     .find((selection) => selection.conversation === result.conversation);
   assert.equal(targetSelection.agent, agent);
 
-  const targetMode = world.query(ConversationModeSelection)
-    .map((entity) => world.get(entity, ConversationModeSelection))
+  const targetWorkflow = world.query(ConversationWorkflowSelection)
+    .map((entity) => world.get(entity, ConversationWorkflowSelection))
     .find((selection) => selection.conversation === result.conversation);
-  assert.equal(targetMode.scopeKind, 'mode');
-  assert.equal(targetMode.mode, mode);
+  assert.equal(targetWorkflow.scopeKind, 'workflow');
+  assert.equal(targetWorkflow.workflow, workflow);
   assert.equal(world.query(ConversationProjectLink).filter((entity) => world.get(entity, ConversationProjectLink).conversation === result.conversation).length, 1);
   assert.equal(world.query(ConversationWorkEnvironmentLink).filter((entity) => world.get(entity, ConversationWorkEnvironmentLink).conversation === result.conversation).length, 1);
 

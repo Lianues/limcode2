@@ -5,7 +5,7 @@ import { readEvents } from '../../../events';
 import { Agent } from '../../agent/components';
 import { AgentRun, AgentRunTargetLink } from '../../agentRun/components';
 import { Conversation, InFlight, LlmRequest } from '../../chat/components';
-import { ConversationModeSelection, Mode } from '../../mode/components';
+import { ConversationWorkflowSelection, Workflow } from '../../workflow/components';
 import { ConversationProjectLink, ProjectContext } from '../../project/components';
 import {
   ConversationWorkEnvironmentLink,
@@ -42,8 +42,8 @@ export const RuntimeContextSnapshotSystem = defineSystem({
         AgentRun,
         AgentRunTargetLink,
         Conversation,
-        ConversationModeSelection,
-        Mode,
+        ConversationWorkflowSelection,
+        Workflow,
         ConversationProjectLink,
         ProjectContext,
         WorkEnvironment,

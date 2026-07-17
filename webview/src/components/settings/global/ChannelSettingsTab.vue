@@ -392,7 +392,7 @@ function cancelDelete(): void {
             :text="channelLoadingText"
           />
         </div>
-        <p>配置全局范围内可复用的 LLM 渠道。后续 Agent、Mode 或其他对象可通过关系数据复用这些配置。</p>
+        <p>配置全局范围内可复用的 LLM 渠道。后续 Agent、Workflow 或其他对象可通过关系数据复用这些配置。</p>
       </div>
     </header>
 

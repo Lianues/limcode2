@@ -14,7 +14,7 @@ export interface RuntimeContextScopeLinkData {
   scopeId?: string;
   runtimeContext: Entity;
   agent?: Entity;
-  mode?: Entity;
+  workflow?: Entity;
   conversation?: Entity;
   run?: Entity;
   role: ConfigScopeBindingRole;

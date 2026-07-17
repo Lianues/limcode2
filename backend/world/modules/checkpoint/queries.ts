@@ -6,9 +6,9 @@ import type {
 import { Agent } from '../agent/components';
 import { agentTypeEntityForRuntimeAgent } from '../agent/identity';
 import { AgentRun, AgentRunTargetLink } from '../agentRun/components';
-import { activeModeForRun, activeModeSelectionForConversation, runTarget } from '../agentRun/queries';
+import { activeWorkflowForRun, activeWorkflowSelectionForConversation, runTarget } from '../agentRun/queries';
 import { Conversation } from '../chat/components';
-import { Mode } from '../mode/components';
+import { Workflow } from '../workflow/components';
 import { CheckpointPolicy, CheckpointPolicyScopeLink, type CheckpointPolicyScopeLinkData } from './components';
 import { DEFAULT_CHECKPOINT_TRIGGERS, normalizeCheckpointPolicy } from './policy';
 
@@ -26,10 +26,10 @@ export function effectiveCheckpointPolicyForRequest(
   if (input.run !== undefined) {
     const runLocal = localCheckpointPolicyForScopeEntity(world, 'run', input.run);
     if (runLocal.policy) return runLocal as CheckpointPolicyResolution;
-    const mode = activeModeForRun(world, input.run);
-    if (mode !== undefined) {
-      const modePolicy = localCheckpointPolicyForScopeEntity(world, 'mode', mode);
-      if (modePolicy.policy) return { ...modePolicy, inheritedFrom: 'mode' } as CheckpointPolicyResolution;
+    const workflow = activeWorkflowForRun(world, input.run);
+    if (workflow !== undefined) {
+      const workflowPolicy = localCheckpointPolicyForScopeEntity(world, 'workflow', workflow);
+      if (workflowPolicy.policy) return { ...workflowPolicy, inheritedFrom: 'workflow' } as CheckpointPolicyResolution;
     }
     const target = runTarget(world, input.run);
     if (target) {
@@ -40,10 +40,10 @@ export function effectiveCheckpointPolicyForRequest(
     }
   }
 
-  const selectedMode = activeModeSelectionForConversation(world, input.conversation);
-  if (selectedMode?.scopeKind === 'mode') {
-    const modePolicy = localCheckpointPolicyForScopeEntity(world, 'mode', selectedMode.mode);
-    if (modePolicy.policy) return { ...modePolicy, inheritedFrom: 'mode' } as CheckpointPolicyResolution;
+  const selectedWorkflow = activeWorkflowSelectionForConversation(world, input.conversation);
+  if (selectedWorkflow?.scopeKind === 'workflow') {
+    const workflowPolicy = localCheckpointPolicyForScopeEntity(world, 'workflow', selectedWorkflow.workflow);
+    if (workflowPolicy.policy) return { ...workflowPolicy, inheritedFrom: 'workflow' } as CheckpointPolicyResolution;
   }
 
   const local = localCheckpointPolicyForScopeEntity(world, 'conversation', input.conversation);
@@ -93,7 +93,7 @@ function scopeIdForLink(world: WorldReader, link: CheckpointPolicyScopeLinkData)
   switch (link.scopeKind) {
     case 'conversation': return link.conversation !== undefined ? world.get(link.conversation, Conversation)?.id : undefined;
     case 'agent': return link.agent !== undefined ? world.get(link.agent, Agent)?.id : undefined;
-    case 'mode': return link.mode !== undefined ? world.get(link.mode, Mode)?.id : undefined;
+    case 'workflow': return link.workflow !== undefined ? world.get(link.workflow, Workflow)?.id : undefined;
     case 'run': return link.run !== undefined ? world.get(link.run, AgentRun)?.id : undefined;
   }
 }
@@ -103,7 +103,7 @@ function recordIdForScopeEntity(world: WorldReader, scopeKind: CheckpointPolicyS
     case 'global': return undefined;
     case 'conversation': return world.get(entity, Conversation)?.id;
     case 'agent': return world.get(entity, Agent)?.id;
-    case 'mode': return world.get(entity, Mode)?.id;
+    case 'workflow': return world.get(entity, Workflow)?.id;
     case 'run': return world.get(entity, AgentRun)?.id;
   }
 }

@@ -365,7 +365,7 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
   const runPolicyIds = collectRunPolicyIds(state, runIds);
   const conversationProjectLinks = state.conversationProjectLinks.filter((link) => link.conversationId === conversationId);
   const projectContextIds = new Set(conversationProjectLinks.map((link) => link.projectContextId));
-  const conversationModeSelections = state.conversationModeSelections.filter((selection) => selection.conversationId === conversationId);
+  const conversationWorkflowSelections = state.conversationWorkflowSelections.filter((selection) => selection.conversationId === conversationId);
   const checkpointTimelineAnchors = state.checkpointTimelineAnchors.filter((anchor) => anchor.conversationId === conversationId && messageIds.has(anchor.floorMessageId));
   const checkpointIds = new Set(checkpointTimelineAnchors.map((anchor) => anchor.checkpointId));
   const checkpoints = state.checkpoints.filter((checkpoint) => checkpointIds.has(checkpoint.id));
@@ -409,7 +409,7 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
     conversationCheckpointRepositoryLinks,
     checkpoints,
     checkpointTimelineAnchors,
-    conversationModeSelections,
+    conversationWorkflowSelections,
     messages,
     messageRevisions: state.messageRevisions.filter((revision) => messageIds.has(revision.messageId)),
     messageCurrentRevisionLinks: state.messageCurrentRevisionLinks.filter((link) => messageIds.has(link.messageId)),
@@ -435,7 +435,7 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
     runContextPolicies: state.runContextPolicies.filter((policy) => runPolicyIds.contextPolicyIds.has(policy.id)),
     runDeliveryPolicies: state.runDeliveryPolicies.filter((policy) => runPolicyIds.deliveryPolicyIds.has(policy.id)),
     runEditPolicies: state.runEditPolicies.filter((policy) => runPolicyIds.editPolicyIds.has(policy.id)),
-    runModeLinks: state.runModeLinks.filter((link) => runIds.has(link.runId)),
+    runWorkflowLinks: state.runWorkflowLinks.filter((link) => runIds.has(link.runId)),
     runSystemPromptLinks: state.runSystemPromptLinks.filter((link) => runIds.has(link.runId)),
     runModelProfileLinks: state.runModelProfileLinks.filter((link) => runIds.has(link.runId)),
     runToolPolicyLinks: state.runToolPolicyLinks.filter((link) => runIds.has(link.runId)),

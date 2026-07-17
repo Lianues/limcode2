@@ -11,7 +11,7 @@ import type { AccessDeclaration, WorldReader } from '../../../ecs/types';
 import { Agent } from '../agent/components';
 import { AgentRun } from '../agentRun/components';
 import { Conversation, Message } from '../chat/components';
-import { Mode } from '../mode/components';
+import { Workflow } from '../workflow/components';
 import { ProjectContext } from '../project/components';
 import { ToolCall } from '../tools/components';
 import {
@@ -29,7 +29,7 @@ export const checkpointStateProjectionReads: AccessDeclaration = {
     Agent,
     AgentRun,
     Conversation,
-    Mode,
+    Workflow,
     ProjectContext,
     CheckpointPolicy,
     CheckpointPolicyScopeLink,
@@ -160,7 +160,7 @@ function scopeIdForLink(world: WorldReader, link: CheckpointPolicyScopeLinkData)
   switch (link.scopeKind) {
     case 'conversation': return link.conversation !== undefined ? world.get(link.conversation, Conversation)?.id : undefined;
     case 'agent': return link.agent !== undefined ? world.get(link.agent, Agent)?.id : undefined;
-    case 'mode': return link.mode !== undefined ? world.get(link.mode, Mode)?.id : undefined;
+    case 'workflow': return link.workflow !== undefined ? world.get(link.workflow, Workflow)?.id : undefined;
     case 'run': return link.run !== undefined ? world.get(link.run, AgentRun)?.id : undefined;
   }
 }

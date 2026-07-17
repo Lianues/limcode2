@@ -6,12 +6,12 @@ import {
   CONVERSATION_HISTORY_ROOT_DIR,
   ATTACHMENTS_ROOT_DIR,
   CONVERSATION_AGENT_SELECTIONS_ROOT_DIR,
-  CONVERSATION_MODE_SELECTIONS_ROOT_DIR,
+  CONVERSATION_WORKFLOW_SELECTIONS_ROOT_DIR,
   CONVERSATIONS_ROOT_DIR,
   CONVERSATION_PROJECT_LINKS_ROOT_DIR,
   INDEX_FILE,
   LLM_SETTINGS_FILE,
-  MODES_ROOT_DIR,
+  WORKFLOWS_ROOT_DIR,
   MODEL_PROFILE_SCOPE_LINKS_ROOT_DIR,
   MODEL_PROFILES_ROOT_DIR,
   RUNTIME_CONTEXTS_ROOT_DIR,
@@ -54,8 +54,8 @@ import {
 export interface VscodeStorageUris {
   agentsRootUri: vscode.Uri;
   agentsIndexUri: vscode.Uri;
-  modesRootUri: vscode.Uri;
-  modesIndexUri: vscode.Uri;
+  workflowsRootUri: vscode.Uri;
+  workflowsIndexUri: vscode.Uri;
   toolPoliciesRootUri: vscode.Uri;
   toolPoliciesIndexUri: vscode.Uri;
   toolPolicyScopeLinksRootUri: vscode.Uri;
@@ -127,8 +127,8 @@ export interface VscodeStorageUris {
   systemPromptScopeLinksIndexUri: vscode.Uri;
   modelProfileScopeLinksRootUri: vscode.Uri;
   modelProfileScopeLinksIndexUri: vscode.Uri;
-  conversationModeSelectionsRootUri: vscode.Uri;
-  conversationModeSelectionsIndexUri: vscode.Uri;
+  conversationWorkflowSelectionsRootUri: vscode.Uri;
+  conversationWorkflowSelectionsIndexUri: vscode.Uri;
   conversationAgentSelectionsRootUri: vscode.Uri;
   conversationAgentSelectionsIndexUri: vscode.Uri;
   runHistoryRootUri: vscode.Uri;
@@ -152,7 +152,7 @@ function root(globalStorageUri: vscode.Uri, dir: string): { rootUri: vscode.Uri;
 
 export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimePaths & VscodeStorageUris {
   const agents = root(globalStorageUri, AGENTS_ROOT_DIR);
-  const modes = root(globalStorageUri, MODES_ROOT_DIR);
+  const workflows = root(globalStorageUri, WORKFLOWS_ROOT_DIR);
   const toolPolicies = root(globalStorageUri, TOOL_POLICIES_ROOT_DIR);
   const toolPolicyScopeLinks = root(globalStorageUri, TOOL_POLICY_SCOPE_LINKS_ROOT_DIR);
   const skillPolicies = root(globalStorageUri, SKILL_POLICIES_ROOT_DIR);
@@ -189,7 +189,7 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const links = root(globalStorageUri, AGENT_CONVERSATION_LINKS_ROOT_DIR);
   const systemPromptScopeLinks = root(globalStorageUri, SYSTEM_PROMPT_SCOPE_LINKS_ROOT_DIR);
   const modelProfileScopeLinks = root(globalStorageUri, MODEL_PROFILE_SCOPE_LINKS_ROOT_DIR);
-  const conversationModeSelections = root(globalStorageUri, CONVERSATION_MODE_SELECTIONS_ROOT_DIR);
+  const conversationWorkflowSelections = root(globalStorageUri, CONVERSATION_WORKFLOW_SELECTIONS_ROOT_DIR);
   const conversationAgentSelections = root(globalStorageUri, CONVERSATION_AGENT_SELECTIONS_ROOT_DIR);
   const runHistory = root(globalStorageUri, RUN_HISTORY_ROOT_DIR);
   const agentAnswers = root(globalStorageUri, AGENT_ANSWERS_ROOT_DIR);
@@ -206,10 +206,10 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     agentsRootPath: agents.rootUri.fsPath,
     agentsIndexUri: agents.indexUri,
     agentsIndexPath: agents.indexUri.fsPath,
-    modesRootUri: modes.rootUri,
-    modesRootPath: modes.rootUri.fsPath,
-    modesIndexUri: modes.indexUri,
-    modesIndexPath: modes.indexUri.fsPath,
+    workflowsRootUri: workflows.rootUri,
+    workflowsRootPath: workflows.rootUri.fsPath,
+    workflowsIndexUri: workflows.indexUri,
+    workflowsIndexPath: workflows.indexUri.fsPath,
     toolPoliciesRootUri: toolPolicies.rootUri,
     toolPoliciesRootPath: toolPolicies.rootUri.fsPath,
     toolPoliciesIndexUri: toolPolicies.indexUri,
@@ -352,10 +352,10 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     modelProfileScopeLinksRootPath: modelProfileScopeLinks.rootUri.fsPath,
     modelProfileScopeLinksIndexUri: modelProfileScopeLinks.indexUri,
     modelProfileScopeLinksIndexPath: modelProfileScopeLinks.indexUri.fsPath,
-    conversationModeSelectionsRootUri: conversationModeSelections.rootUri,
-    conversationModeSelectionsRootPath: conversationModeSelections.rootUri.fsPath,
-    conversationModeSelectionsIndexUri: conversationModeSelections.indexUri,
-    conversationModeSelectionsIndexPath: conversationModeSelections.indexUri.fsPath,
+    conversationWorkflowSelectionsRootUri: conversationWorkflowSelections.rootUri,
+    conversationWorkflowSelectionsRootPath: conversationWorkflowSelections.rootUri.fsPath,
+    conversationWorkflowSelectionsIndexUri: conversationWorkflowSelections.indexUri,
+    conversationWorkflowSelectionsIndexPath: conversationWorkflowSelections.indexUri.fsPath,
     conversationAgentSelectionsRootUri: conversationAgentSelections.rootUri,
     conversationAgentSelectionsRootPath: conversationAgentSelections.rootUri.fsPath,
     conversationAgentSelectionsIndexUri: conversationAgentSelections.indexUri,

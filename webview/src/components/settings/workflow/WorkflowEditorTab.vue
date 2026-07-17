@@ -2,13 +2,25 @@
 import { computed, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { IconPlus, IconTrash, IconDeviceFloppy, IconRefresh, IconListDetails } from '@tabler/icons-vue';
-import type { WorkflowIconKey, WorkflowRecord } from '@shared/protocol';
+import type {
+  PlanReviewPolicyRecord,
+  PlanReviewPolicyScopeLinkRecord,
+  SystemPromptRecord,
+  SystemPromptScopeLinkRecord,
+  ToolPolicyRecord,
+  ToolPolicyScopeLinkRecord,
+  WorkflowIconKey,
+  WorkflowRecord
+} from '@shared/protocol';
 import { useWorkflowStore, workflowRecordToPlain } from '@webview/stores/useWorkflowStore';
+import { useClientStateStore } from '@webview/stores/useClientStateStore';
+import { bridge, BridgeMessageType } from '@webview/transport';
 import AdvancedScrollbar from '../../navigation/AdvancedScrollbar.vue';
 import ConfirmPanel from '../../ui/ConfirmPanel.vue';
 import InputPanel from '../../ui/InputPanel.vue';
 
 const workflowStore = useWorkflowStore();
+const clientState = useClientStateStore();
 const { workflows } = storeToRefs(workflowStore);
 
 const selectedWorkflowId = ref('');
@@ -19,9 +31,19 @@ const createPanelOpen = ref(false);
 const deleteConfirmOpen = ref(false);
 const workflowListScroller = ref<HTMLElement | null>(null);
 
+interface WorkflowRawData {
+  workflow: WorkflowRecord;
+  planReviewPolicyLinks: PlanReviewPolicyScopeLinkRecord[];
+  planReviewPolicies: PlanReviewPolicyRecord[];
+  toolPolicyLinks: ToolPolicyScopeLinkRecord[];
+  toolPolicies: ToolPolicyRecord[];
+  systemPromptLinks: SystemPromptScopeLinkRecord[];
+  systemPrompts: SystemPromptRecord[];
+}
+
 const selectedWorkflow = computed(() => workflows.value.find((workflow) => workflow.id === selectedWorkflowId.value) ?? workflows.value[0]);
-const selectedPlainWorkflow = computed(() => selectedWorkflow.value ? workflowRecordToPlain(selectedWorkflow.value) : undefined);
-const isDirty = computed(() => selectedPlainWorkflow.value !== undefined && rawText.value !== stringifyWorkflow(selectedPlainWorkflow.value));
+const selectedRawData = computed(() => selectedWorkflow.value ? workflowRawDataFor(selectedWorkflow.value) : undefined);
+const isDirty = computed(() => selectedRawData.value !== undefined && rawText.value !== stringifyWorkflowRawData(selectedRawData.value));
 const canDeleteSelected = computed(() => !!selectedWorkflow.value && selectedWorkflow.value.source === 'user');
 
 watch(
@@ -40,27 +62,65 @@ watch(
 );
 
 watch(
-  selectedPlainWorkflow,
-  (workflow) => {
+  selectedRawData,
+  (workflowData) => {
     rawError.value = '';
     rawStatus.value = '';
-    rawText.value = workflow ? stringifyWorkflow(workflow) : '';
+    rawText.value = workflowData ? stringifyWorkflowRawData(workflowData) : '';
   },
   { immediate: true }
 );
 
-function stringifyWorkflow(workflow: WorkflowRecord): string {
-  return JSON.stringify(workflow, null, 2);
+function stringifyWorkflowRawData(data: WorkflowRawData): string {
+  return JSON.stringify(data, null, 2);
+}
+
+function workflowRawDataFor(workflow: WorkflowRecord): WorkflowRawData {
+  const plainWorkflow = workflowRecordToPlain(workflow);
+  const planReviewPolicyLinks = clientState.planReviewPolicyScopeLinks
+    .filter((link) => link.scopeKind === 'workflow' && link.scopeId === workflow.id)
+    .map((link) => ({ ...link }));
+  const planReviewPolicyIds = new Set(planReviewPolicyLinks.map((link) => link.planReviewPolicyId));
+  const planReviewPolicies = clientState.planReviewPolicies
+    .filter((policy) => planReviewPolicyIds.has(policy.id))
+    .map((policy) => ({ ...policy, requireForToolRiskLevels: [...policy.requireForToolRiskLevels] }));
+
+  const toolPolicyLinks = clientState.toolPolicyScopeLinks
+    .filter((link) => link.scopeKind === 'workflow' && link.scopeId === workflow.id)
+    .map((link) => ({ ...link }));
+  const toolPolicyIds = new Set(toolPolicyLinks.map((link) => link.toolPolicyId));
+  const toolPolicies = clientState.toolPolicies
+    .filter((policy) => toolPolicyIds.has(policy.id))
+    .map((policy) => clonePlain(policy));
+
+  const systemPromptLinks = clientState.systemPromptScopeLinks
+    .filter((link) => link.scopeKind === 'workflow' && link.scopeId === workflow.id)
+    .sort((left, right) => (left.order ?? 0) - (right.order ?? 0) || left.createdAt - right.createdAt || left.id.localeCompare(right.id))
+    .map((link) => ({ ...link }));
+  const systemPromptIds = new Set(systemPromptLinks.map((link) => link.systemPromptId));
+  const systemPrompts = clientState.systemPrompts
+    .filter((prompt) => systemPromptIds.has(prompt.id))
+    .map((prompt) => ({ ...prompt }));
+
+  return {
+    workflow: plainWorkflow,
+    planReviewPolicyLinks,
+    planReviewPolicies,
+    toolPolicyLinks,
+    toolPolicies,
+    systemPromptLinks,
+    systemPrompts
+  };
 }
 
 function selectWorkflow(workflowId: string): void {
   selectedWorkflowId.value = workflowId;
 }
 
-function parseWorkflowJson(): WorkflowRecord | undefined {
+function parseWorkflowJson(): WorkflowRawData | undefined {
   rawError.value = '';
   rawStatus.value = '';
-  const current = selectedPlainWorkflow.value;
+  const current = selectedRawData.value;
   if (!current) {
     rawError.value = '请先选择一个工作流。';
     return undefined;
@@ -74,59 +134,199 @@ function parseWorkflowJson(): WorkflowRecord | undefined {
     return undefined;
   }
 
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+  if (!isRecord(value)) {
     rawError.value = '工作流原始数据必须是 JSON object。';
     return undefined;
   }
 
-  const record = value as Partial<WorkflowRecord>;
-  if (record.id !== current.id) {
-    rawError.value = '暂不支持通过原始数据修改工作流 id。';
-    return undefined;
-  }
-  if (record.source !== current.source) {
-    rawError.value = '暂不支持通过原始数据修改工作流 source。';
-    return undefined;
-  }
-  if (typeof record.name !== 'string' || !record.name.trim()) {
-    rawError.value = 'name 必须是非空字符串。';
-    return undefined;
-  }
-  if (record.description !== undefined && typeof record.description !== 'string') {
-    rawError.value = 'description 必须是字符串或省略。';
-    return undefined;
-  }
-  if (record.icon !== undefined && record.icon !== 'list-details') {
-    rawError.value = 'icon 当前只支持 "list-details"。';
-    return undefined;
-  }
-  if (typeof record.createdAt !== 'number' || typeof record.updatedAt !== 'number') {
-    rawError.value = 'createdAt / updatedAt 必须是 number。';
-    return undefined;
-  }
+  const workflow = parseWorkflowRecord(value.workflow, current.workflow);
+  if (!workflow) return undefined;
+  const planReviewPolicyLinks = parseArray<PlanReviewPolicyScopeLinkRecord>(value.planReviewPolicyLinks, 'planReviewPolicyLinks');
+  const planReviewPolicies = parseArray<PlanReviewPolicyRecord>(value.planReviewPolicies, 'planReviewPolicies');
+  const toolPolicyLinks = parseArray<ToolPolicyScopeLinkRecord>(value.toolPolicyLinks, 'toolPolicyLinks');
+  const toolPolicies = parseArray<ToolPolicyRecord>(value.toolPolicies, 'toolPolicies');
+  const systemPromptLinks = parseArray<SystemPromptScopeLinkRecord>(value.systemPromptLinks, 'systemPromptLinks');
+  const systemPrompts = parseArray<SystemPromptRecord>(value.systemPrompts, 'systemPrompts');
+  if (!planReviewPolicyLinks || !planReviewPolicies || !toolPolicyLinks || !toolPolicies || !systemPromptLinks || !systemPrompts) return undefined;
+
+  const planPolicy = planReviewPolicies[0];
+  if (planPolicy && !isValidPlanReviewPolicy(planPolicy)) return undefined;
+  const toolPolicy = toolPolicies[0];
+  if (toolPolicy && !isValidToolPolicy(toolPolicy)) return undefined;
+  const systemPrompt = systemPrompts[0];
+  if (systemPrompt && !isValidSystemPrompt(systemPrompt)) return undefined;
 
   return {
-    ...current,
-    name: record.name,
-    ...(record.description?.trim() ? { description: record.description } : {}),
-    source: current.source,
-    icon: (record.icon ?? current.icon) as WorkflowIconKey | undefined,
-    createdAt: current.createdAt,
-    updatedAt: current.updatedAt
+    workflow,
+    planReviewPolicyLinks: planReviewPolicyLinks.map((link) => ({ ...link })),
+    planReviewPolicies: planReviewPolicies.map((policy) => clonePlain(policy)),
+    toolPolicyLinks: toolPolicyLinks.map((link) => ({ ...link })),
+    toolPolicies: toolPolicies.map((policy) => clonePlain(policy)),
+    systemPromptLinks: systemPromptLinks.map((link) => ({ ...link })),
+    systemPrompts: systemPrompts.map((prompt) => ({ ...prompt }))
   };
 }
 
 function saveRawWorkflow(): void {
   const parsed = parseWorkflowJson();
   if (!parsed) return;
-  workflowStore.saveWorkflowRaw(parsed);
-  rawStatus.value = '已提交保存。';
+  const previous = selectedRawData.value;
+  workflowStore.saveWorkflowRaw(parsed.workflow);
+  saveWorkflowPlanReviewPolicy(parsed, previous);
+  saveWorkflowToolPolicy(parsed, previous);
+  saveWorkflowSystemPrompt(parsed, previous);
+  rawStatus.value = '已提交保存工作流及关联策略。';
 }
 
 function resetRawWorkflow(): void {
   rawError.value = '';
   rawStatus.value = '';
-  if (selectedPlainWorkflow.value) rawText.value = stringifyWorkflow(selectedPlainWorkflow.value);
+  if (selectedRawData.value) rawText.value = stringifyWorkflowRawData(selectedRawData.value);
+}
+
+function parseWorkflowRecord(value: unknown, current: WorkflowRecord): WorkflowRecord | undefined {
+  if (!isRecord(value)) {
+    rawError.value = 'workflow 必须是 JSON object。';
+    return undefined;
+  }
+  const record = value as Partial<WorkflowRecord>;
+  if (record.id !== current.id) {
+    rawError.value = '暂不支持通过原始数据修改 workflow.id。';
+    return undefined;
+  }
+  if (record.source !== current.source) {
+    rawError.value = '暂不支持通过原始数据修改 workflow.source。';
+    return undefined;
+  }
+  if (typeof record.name !== 'string' || !record.name.trim()) {
+    rawError.value = 'workflow.name 必须是非空字符串。';
+    return undefined;
+  }
+  if (record.description !== undefined && typeof record.description !== 'string') {
+    rawError.value = 'workflow.description 必须是字符串或省略。';
+    return undefined;
+  }
+  if (record.icon !== undefined && record.icon !== 'list-details') {
+    rawError.value = 'workflow.icon 当前只支持 "list-details"。';
+    return undefined;
+  }
+  if (typeof record.createdAt !== 'number' || typeof record.updatedAt !== 'number') {
+    rawError.value = 'workflow.createdAt / workflow.updatedAt 必须是 number。';
+    return undefined;
+  }
+  return {
+    id: current.id,
+    name: record.name,
+    ...(record.description?.trim() ? { description: record.description } : {}),
+    source: current.source,
+    ...(record.icon ? { icon: record.icon as WorkflowIconKey } : {}),
+    createdAt: current.createdAt,
+    updatedAt: current.updatedAt
+  };
+}
+
+function parseArray<T>(value: unknown, label: string): T[] | undefined {
+  if (!Array.isArray(value)) {
+    rawError.value = `${label} 必须是数组。`;
+    return undefined;
+  }
+  return value as T[];
+}
+
+function isValidPlanReviewPolicy(policy: PlanReviewPolicyRecord): boolean {
+  if (typeof policy.id !== 'string' || !policy.id.trim()) return setRawError('planReviewPolicies[0].id 必须是非空字符串。');
+  if (policy.mode !== 'off' && policy.mode !== 'before_mutation') return setRawError('planReviewPolicies[0].mode 只能是 off 或 before_mutation。');
+  if (typeof policy.allowReadonlyBeforeApproval !== 'boolean') return setRawError('planReviewPolicies[0].allowReadonlyBeforeApproval 必须是 boolean。');
+  if (!Array.isArray(policy.requireForToolRiskLevels) || !policy.requireForToolRiskLevels.every((level) => level === 'write' || level === 'command' || level === 'agent')) {
+    return setRawError('planReviewPolicies[0].requireForToolRiskLevels 只能包含 write / command / agent。');
+  }
+  return true;
+}
+
+function isValidToolPolicy(policy: ToolPolicyRecord): boolean {
+  if (typeof policy.id !== 'string' || !policy.id.trim()) return setRawError('toolPolicies[0].id 必须是非空字符串。');
+  if (typeof policy.name !== 'string' || !policy.name.trim()) return setRawError('toolPolicies[0].name 必须是非空字符串。');
+  if (!Array.isArray(policy.allowedTools) || !policy.allowedTools.every((tool) => typeof tool === 'string' && tool.trim())) {
+    return setRawError('toolPolicies[0].allowedTools 必须是非空字符串数组。');
+  }
+  if (policy.preset !== undefined && policy.preset !== 'inherit' && policy.preset !== 'custom' && policy.preset !== 'yolo') {
+    return setRawError('toolPolicies[0].preset 只能是 inherit / custom / yolo。');
+  }
+  return true;
+}
+
+function isValidSystemPrompt(prompt: SystemPromptRecord): boolean {
+  if (typeof prompt.id !== 'string' || !prompt.id.trim()) return setRawError('systemPrompts[0].id 必须是非空字符串。');
+  if (typeof prompt.name !== 'string' || !prompt.name.trim()) return setRawError('systemPrompts[0].name 必须是非空字符串。');
+  if (typeof prompt.text !== 'string' || !prompt.text.trim()) return setRawError('systemPrompts[0].text 必须是非空字符串。');
+  return true;
+}
+
+function saveWorkflowPlanReviewPolicy(parsed: WorkflowRawData, previous: WorkflowRawData | undefined): void {
+  const policy = parsed.planReviewPolicies[0];
+  if (policy) {
+    bridge.request(BridgeMessageType.PlanReviewPolicyScopeSet, {
+      scopeKind: 'workflow',
+      scopeId: parsed.workflow.id,
+      mode: policy.mode,
+      allowReadonlyBeforeApproval: policy.allowReadonlyBeforeApproval,
+      requireForToolRiskLevels: [...policy.requireForToolRiskLevels]
+    });
+    return;
+  }
+  if ((previous?.planReviewPolicyLinks.length ?? 0) > 0) {
+    bridge.request(BridgeMessageType.PlanReviewPolicyScopeClear, { scopeKind: 'workflow', scopeId: parsed.workflow.id });
+  }
+}
+
+function saveWorkflowToolPolicy(parsed: WorkflowRawData, previous: WorkflowRawData | undefined): void {
+  const policy = parsed.toolPolicies[0];
+  if (policy) {
+    bridge.request(BridgeMessageType.ToolPolicyScopeSet, {
+      scopeKind: 'workflow',
+      scopeId: parsed.workflow.id,
+      name: policy.name,
+      allowedTools: [...policy.allowedTools],
+      ...(policy.preset ? { preset: policy.preset } : {}),
+      ...(policy.toolConfigs ? { toolConfigs: clonePlain(policy.toolConfigs) } : {}),
+      ...(policy.sourceConfigs ? { sourceConfigs: clonePlain(policy.sourceConfigs) } : {})
+    });
+    return;
+  }
+  if ((previous?.toolPolicyLinks.length ?? 0) > 0) {
+    bridge.request(BridgeMessageType.ToolPolicyScopeClear, { scopeKind: 'workflow', scopeId: parsed.workflow.id });
+  }
+}
+
+function saveWorkflowSystemPrompt(parsed: WorkflowRawData, previous: WorkflowRawData | undefined): void {
+  const prompt = parsed.systemPrompts[0];
+  const link = parsed.systemPromptLinks.find((item) => item.systemPromptId === prompt?.id) ?? parsed.systemPromptLinks[0];
+  if (prompt) {
+    bridge.request(BridgeMessageType.SystemPromptScopeSet, {
+      scopeKind: 'workflow',
+      scopeId: parsed.workflow.id,
+      name: prompt.name,
+      text: prompt.text,
+      ...(link?.order !== undefined ? { order: link.order } : {})
+    });
+    return;
+  }
+  if ((previous?.systemPromptLinks.length ?? 0) > 0) {
+    bridge.request(BridgeMessageType.SystemPromptScopeClear, { scopeKind: 'workflow', scopeId: parsed.workflow.id });
+  }
+}
+
+function setRawError(message: string): false {
+  rawError.value = message;
+  return false;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function clonePlain<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function openCreatePanel(): void {
@@ -157,7 +357,7 @@ function confirmDeleteWorkflow(): void {
       <div>
         <p class="settings-kicker">Workflow</p>
         <h2>工作流编辑</h2>
-        <p>暂时不做可视化表单；这里直接显示每个工作流的原始数据，方便后续扩展 Plan / Review / Read Only 等工作流。</p>
+        <p>暂时不做可视化表单；这里直接显示工作流及其 Prompt / ToolPolicy / PlanReviewPolicy 关联原始数据，方便后续扩展 Plan / Review / Read Only 等工作流。</p>
       </div>
       <button type="button" class="workflow-action-button" @click="openCreatePanel">
         <IconPlus :size="15" stroke="2.2" />
@@ -219,7 +419,7 @@ function confirmDeleteWorkflow(): void {
           ></textarea>
           <p v-if="rawError" class="workflow-error">{{ rawError }}</p>
           <p v-else-if="rawStatus || workflowStore.status" class="workflow-status">{{ rawStatus || workflowStore.status }}</p>
-          <p v-else class="workflow-help">当前原始编辑只允许修改 name / description / icon；id、source、createdAt、updatedAt 由系统维护。</p>
+          <p v-else class="workflow-help">可编辑 workflow.name / description / icon，以及首个 planReviewPolicies / toolPolicies / systemPrompts 记录；各类 id、scope link 与时间字段由系统维护。</p>
         </template>
         <div v-else class="workflow-empty">暂无工作流。</div>
       </main>

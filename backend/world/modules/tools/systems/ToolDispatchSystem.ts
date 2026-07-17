@@ -186,7 +186,7 @@ const QueuedToolCallsQuery = defineQuery({
     LlmInvocation,
     RunLlmInvocationLink
   ],
-  write: [ToolState, AgentRun, AgentAnswer, RunDeliveryPolicy],
+  write: [ToolState, AgentRun, AgentAnswer, RunDeliveryPolicy, PlanProposal],
   remove: [InFlight],
   add: [InFlight],
   mutationMode: 'update',
@@ -219,6 +219,7 @@ export const ToolDispatchSystem = defineSystem({
       if (!call || !state) continue;
       const reason = request.reason?.trim() || undefined;
       if (interruptToolCall(cmd, entity, call, state, { reason, emitAbort: call.name !== ASK_USER_TOOL_NAME && call.name !== SUBMIT_PLAN_TOOL_NAME })) {
+        rejectPendingSubmitPlanProposal(world, cmd, call);
         cancelSynchronousRunAgentChild(cmd, call, state, reason);
         handled.add(entity);
       }
@@ -344,6 +345,20 @@ type AuthorizationResult =
 
 function isSettledOrRunning(state: ToolStateData): boolean {
   return state.status === 'awaiting_user_input' || state.status === 'executing' || state.status === 'success' || state.status === 'warning' || state.status === 'error';
+}
+
+function rejectPendingSubmitPlanProposal(world: WorldReader, cmd: CommandSink, call: ToolCallData): void {
+  if (call.name !== SUBMIT_PLAN_TOOL_NAME) return;
+  const proposalId = `plan-proposal:${call.id}`;
+  const proposalEntity = world.query(PlanProposal).find((entity) => world.get(entity, PlanProposal)?.id === proposalId);
+  if (proposalEntity === undefined) return;
+  const proposal = world.get(proposalEntity, PlanProposal);
+  if (!proposal || proposal.status !== 'pending') return;
+  cmd.add(proposalEntity, PlanProposal, {
+    ...proposal,
+    status: 'rejected',
+    updatedAt: Date.now()
+  });
 }
 
 function authorizeRunToolExecution(world: WorldReader, toolCall: Entity, call: ToolCallData): AuthorizationResult {

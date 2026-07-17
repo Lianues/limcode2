@@ -524,6 +524,18 @@ export class WebviewMessageRouter {
         this.deps.world.enqueue({ type: WorkEnvironmentEventType.PolicyScopeClearRequested, payload: message.payload });
         this.deps.requestSnapshot();
         break;
+      case BridgeMessageType.PlanReviewPolicyScopeSet:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: PlanReviewEventType.PolicyScopeSetRequested, payload: message.payload });
+        this.deps.requestSnapshot();
+        this.deps.requestPersist?.('planReviewPolicy.scope.set');
+        break;
+      case BridgeMessageType.PlanReviewPolicyScopeClear:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: PlanReviewEventType.PolicyScopeClearRequested, payload: message.payload });
+        this.deps.requestSnapshot();
+        this.deps.requestPersist?.('planReviewPolicy.scope.clear');
+        break;
       case BridgeMessageType.CheckpointPolicyScopeSet:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: CheckpointEventType.PolicyScopeSetRequested, payload: message.payload });

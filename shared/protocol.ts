@@ -171,6 +171,8 @@ export enum BridgeMessageType {
   WorkEnvironmentImportFromVscode = 'workEnvironment.importFromVscode',
   WorkEnvironmentPolicyScopeSet = 'workEnvironmentPolicy.scope.set',
   WorkEnvironmentPolicyScopeClear = 'workEnvironmentPolicy.scope.clear',
+  PlanReviewPolicyScopeSet = 'planReviewPolicy.scope.set',
+  PlanReviewPolicyScopeClear = 'planReviewPolicy.scope.clear',
   CheckpointPolicyScopeSet = 'checkpointPolicy.scope.set',
   CheckpointPolicyScopeClear = 'checkpointPolicy.scope.clear',
   CheckpointGitStatusGet = 'checkpoint.gitStatus.get',
@@ -2212,6 +2214,17 @@ export interface CheckpointPolicyScopeClearPayload {
   scopeKind: CheckpointPolicyScopeKind;
   scopeId?: string;
 }
+export interface PlanReviewPolicyScopeSetPayload {
+  scopeKind: PlanReviewPolicyScopeKind;
+  scopeId?: string;
+  mode: PlanReviewMode;
+  allowReadonlyBeforeApproval?: boolean;
+  requireForToolRiskLevels?: PlanReviewRequiredToolRiskLevel[];
+}
+export interface PlanReviewPolicyScopeClearPayload {
+  scopeKind: PlanReviewPolicyScopeKind;
+  scopeId?: string;
+}
 export interface SystemPromptScopeSetPayload {
   scopeKind: ConfigScopeKind;
   scopeId?: string;
@@ -2726,6 +2739,8 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.SkillCatalogRefresh, SkillCatalogRefreshPayload>
   | BridgeEnvelope<BridgeMessageType.RulesFileSave, RulesFileSavePayload>
   | BridgeEnvelope<BridgeMessageType.RulesCatalogRefresh, RulesCatalogRefreshPayload>
+  | BridgeEnvelope<BridgeMessageType.PlanReviewPolicyScopeSet, PlanReviewPolicyScopeSetPayload>
+  | BridgeEnvelope<BridgeMessageType.PlanReviewPolicyScopeClear, PlanReviewPolicyScopeClearPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointPolicyScopeSet, CheckpointPolicyScopeSetPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointPolicyScopeClear, CheckpointPolicyScopeClearPayload>
   | BridgeEnvelope<BridgeMessageType.ToolExecutionApprove, ToolDecisionPayload>

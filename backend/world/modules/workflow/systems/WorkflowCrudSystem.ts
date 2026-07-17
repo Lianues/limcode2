@@ -2,6 +2,7 @@ import { defineSystem, type Entity, type WorldReader } from '../../../../ecs/typ
 import { createMessageId } from '../../../../../shared/protocol';
 import { readEvents } from '../../../events';
 import { ToolPolicyScopeLink } from '../../tools/components';
+import { PlanReviewPolicyScopeLink } from '../../plan/components';
 import { ConversationWorkflowSelection, Workflow, ModelProfileScopeLink, SystemPromptScopeLink } from '../components';
 import { WorkflowEventType } from '../events';
 
@@ -13,8 +14,8 @@ export const WorkflowCrudSystem = defineSystem({
       || readEvents(ctx, WorkflowEventType.Delete).length > 0;
   },
   access: {
-    reads: { components: [Workflow, ConversationWorkflowSelection, ToolPolicyScopeLink, SystemPromptScopeLink, ModelProfileScopeLink] },
-    writes: { components: [Workflow, ConversationWorkflowSelection, ToolPolicyScopeLink, SystemPromptScopeLink, ModelProfileScopeLink], mutationMode: 'update' },
+    reads: { components: [Workflow, ConversationWorkflowSelection, ToolPolicyScopeLink, PlanReviewPolicyScopeLink, SystemPromptScopeLink, ModelProfileScopeLink] },
+    writes: { components: [Workflow, ConversationWorkflowSelection, ToolPolicyScopeLink, PlanReviewPolicyScopeLink, SystemPromptScopeLink, ModelProfileScopeLink], mutationMode: 'update' },
     events: { read: [WorkflowEventType.Create, WorkflowEventType.Update, WorkflowEventType.Delete] }
   },
   run(ctx) {
@@ -57,6 +58,7 @@ export const WorkflowCrudSystem = defineSystem({
       if (!current || current.source === 'builtin') continue;
       for (const entity of relatedSelectionEntities(world, target)) cmd.despawn(entity);
       for (const entity of relatedToolPolicyScopeLinkEntities(world, current.id, target)) cmd.despawn(entity);
+      for (const entity of relatedPlanReviewPolicyScopeLinkEntities(world, current.id, target)) cmd.despawn(entity);
       for (const entity of relatedSystemPromptScopeLinkEntities(world, current.id, target)) cmd.despawn(entity);
       for (const entity of relatedModelProfileScopeLinkEntities(world, current.id, target)) cmd.despawn(entity);
       cmd.despawn(target);
@@ -75,6 +77,13 @@ function relatedSelectionEntities(world: WorldReader, workflow: Entity): Entity[
 function relatedToolPolicyScopeLinkEntities(world: WorldReader, workflowId: string, workflow: Entity): Entity[] {
   return world.query(ToolPolicyScopeLink).filter((entity) => {
     const link = world.get(entity, ToolPolicyScopeLink);
+    return !!link && link.scopeKind === 'workflow' && (link.workflow === workflow || link.scopeId === workflowId);
+  });
+}
+
+function relatedPlanReviewPolicyScopeLinkEntities(world: WorldReader, workflowId: string, workflow: Entity): Entity[] {
+  return world.query(PlanReviewPolicyScopeLink).filter((entity) => {
+    const link = world.get(entity, PlanReviewPolicyScopeLink);
     return !!link && link.scopeKind === 'workflow' && (link.workflow === workflow || link.scopeId === workflowId);
   });
 }

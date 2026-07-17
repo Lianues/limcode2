@@ -2030,6 +2030,8 @@ function shouldDeferUntilHydrated(message: WebviewToExtensionMessage): boolean {
     case 'toolPolicy.scope.clear':
     case 'skillPolicy.scope.set':
     case 'skillPolicy.scope.clear':
+    case 'planReviewPolicy.scope.set':
+    case 'planReviewPolicy.scope.clear':
     case 'checkpointPolicy.scope.set':
     case 'checkpointPolicy.scope.clear':
     case 'tool.execution.approve':
@@ -2090,6 +2092,8 @@ function shouldDeferUntilDeferredSkeleton(message: WebviewToExtensionMessage): b
     case 'workEnvironment.importFromVscode':
     case 'workEnvironmentPolicy.scope.set':
     case 'workEnvironmentPolicy.scope.clear':
+    case 'planReviewPolicy.scope.set':
+    case 'planReviewPolicy.scope.clear':
     case 'checkpointPolicy.scope.set':
     case 'checkpointPolicy.scope.clear':
       return true;

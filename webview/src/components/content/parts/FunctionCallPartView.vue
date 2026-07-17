@@ -22,7 +22,7 @@ import ContentBlockSection from '../ContentBlockSection.vue';
 import CollapsibleContentBlock from '../CollapsibleContentBlock.vue';
 import ToolDiffView from '../toolDisplay/ToolDiffView.vue';
 import TextPartView from './TextPartView.vue';
-import type { ToolHeaderAction } from '../toolDisplay/types';
+import type { ToolDisplaySection, ToolHeaderAction } from '../toolDisplay/types';
 
 const props = defineProps<{
   part: FunctionCallPart;
@@ -45,6 +45,7 @@ const conversationTimeline = useConversationTimelineStore();
 const expanded = ref(false);
 const userChangedExpanded = ref(false);
 const autoOpenedActionIds = ref<Set<string>>(new Set());
+const expandedPlanSectionKeys = ref<Set<string>>(new Set());
 const autoApplyCountdown = ref<number | undefined>(undefined);
 let autoApplyTimer: ReturnType<typeof setTimeout> | undefined;
 let autoApplyCountdownTimer: ReturnType<typeof setInterval> | undefined;
@@ -217,6 +218,10 @@ onBeforeUnmount(() => {
   clearAutoApplyTimers();
 });
 
+watch(() => toolCall.value?.id, () => {
+  expandedPlanSectionKeys.value = new Set();
+});
+
 function isCommandTool(toolName: string): boolean {
   return toolName === 'shell' || toolName === 'bash';
 }
@@ -290,6 +295,27 @@ function clearAutoApplyTimers(): void {
 function setExpanded(value: boolean): void {
   userChangedExpanded.value = true;
   expanded.value = value;
+}
+
+function planSectionKey(section: ToolDisplaySection): string | undefined {
+  if (!section.planProposal) return undefined;
+  return section.planProposal.toolCall?.id
+    ?? section.planProposal.proposalId
+    ?? `${section.title}:${section.planProposal.request.plan}`;
+}
+
+function isPlanSectionExpanded(section: ToolDisplaySection): boolean {
+  const key = planSectionKey(section);
+  return !!key && expandedPlanSectionKeys.value.has(key);
+}
+
+function updatePlanSectionExpanded(section: ToolDisplaySection, value: boolean): void {
+  const key = planSectionKey(section);
+  if (!key) return;
+  const next = new Set(expandedPlanSectionKeys.value);
+  if (value) next.add(key);
+  else next.delete(key);
+  expandedPlanSectionKeys.value = next;
 }
 
 function invokeHeaderAction(action: ToolHeaderAction): void {
@@ -470,6 +496,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
         :kind="section.kind"
         :title="section.title"
         :text="section.markdown ? undefined : section.text"
+        :unbounded="isPlanSectionExpanded(section)"
       >
         <TextPartView v-if="section.markdown && section.text !== undefined" class="tool-display-markdown" :text="section.text" markdown />
         <ToolDiffView v-if="section.diff" :diff="section.diff" />
@@ -499,6 +526,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
           :request="section.planProposal.request"
           :proposal-id="section.planProposal.proposalId"
           :tool-call="section.planProposal.toolCall"
+          @panel-expanded-change="updatePlanSectionExpanded(section, $event)"
         />
       </ContentBlockSection>
       <ContentBlockSection
@@ -507,6 +535,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
         :kind="section.kind"
         :title="section.title"
         :text="section.markdown ? undefined : section.text"
+        :unbounded="isPlanSectionExpanded(section)"
       >
         <TextPartView v-if="section.markdown && section.text !== undefined" class="tool-display-markdown" :text="section.text" markdown />
         <ToolDiffView v-if="section.diff" :diff="section.diff" />
@@ -536,6 +565,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
           :request="section.planProposal.request"
           :proposal-id="section.planProposal.proposalId"
           :tool-call="section.planProposal.toolCall"
+          @panel-expanded-change="updatePlanSectionExpanded(section, $event)"
         />
       </ContentBlockSection>
       <p v-if="toolCall?.error" class="part-card-error">{{ toolCall.error }}</p>

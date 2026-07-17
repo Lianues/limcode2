@@ -27,7 +27,9 @@ function openPanelOptions(value: unknown): MainPanelOptions {
   const options: MainPanelOptions = {};
   if (typeof record.conversationId === 'string' && record.conversationId.trim()) options.conversationId = record.conversationId.trim();
   if (typeof record.title === 'string' && record.title.trim()) options.title = record.title.trim();
-  if (record.kind === 'chat' || record.kind === 'globalSettings' || record.kind === 'workflowSettings' || record.kind === 'agentSettings') options.kind = record.kind;
+  if (record.kind === 'chat' || record.kind === 'globalSettings' || record.kind === 'workflowSettings' || record.kind === 'agentSettings' || record.kind === 'planDetail') options.kind = record.kind;
+  if (typeof record.toolCallId === 'string' && record.toolCallId.trim()) options.toolCallId = record.toolCallId.trim();
+  if (typeof record.planProposalId === 'string' && record.planProposalId.trim()) options.planProposalId = record.planProposalId.trim();
   if (typeof record.reuse === 'boolean') options.reuse = record.reuse;
   return options;
 }

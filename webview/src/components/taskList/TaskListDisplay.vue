@@ -16,11 +16,13 @@ const props = withDefaults(defineProps<{
   density?: TaskListDisplayDensity;
   showDescription?: boolean;
   showChange?: boolean;
+  wrap?: boolean;
   emptyText?: string;
 }>(), {
   density: 'normal',
   showDescription: true,
   showChange: false,
+  wrap: false,
   emptyText: '当前没有任务。'
 });
 
@@ -67,7 +69,7 @@ function showActiveForm(item: TaskListDisplayItem): boolean {
 </script>
 
 <template>
-  <div class="task-list-display" :class="[`density-${props.density}`]">
+  <div class="task-list-display" :class="[`density-${props.density}`, { 'is-wrap': props.wrap }]">
     <p v-if="!items.length" class="task-list-empty">{{ emptyText }}</p>
     <ul v-else class="task-list-items">
       <li
@@ -191,6 +193,19 @@ function showActiveForm(item: TaskListDisplayItem): boolean {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
+}
+
+.task-list-display.is-wrap .task-list-item-line {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.task-list-display.is-wrap .task-list-item-title {
+  flex: 1 1 100%;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  line-height: 1.5;
 }
 
 .task-list-item.status-completed .task-list-item-title,

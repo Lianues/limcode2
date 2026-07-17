@@ -4,6 +4,7 @@ import {
   createMessageId,
   type BridgeClientId,
   type OpenConversationPanelRecord,
+  type PlanProposalOpenPayload,
   type WebviewClientMeta,
   type WebviewToExtensionMessage
 } from '../../shared/protocol';
@@ -14,11 +15,13 @@ import type { BackendApplication } from '../../backend/application/BackendApplic
 export interface MainPanelOptions {
   conversationId?: string;
   title?: string;
-  kind?: 'chat' | 'globalSettings' | 'workflowSettings' | 'agentSettings';
+  kind?: 'chat' | 'globalSettings' | 'workflowSettings' | 'agentSettings' | 'planDetail';
+  toolCallId?: string;
+  planProposalId?: string;
   reuse?: boolean;
 }
 
-type MainPanelKind = 'chat' | 'globalSettings' | 'workflowSettings' | 'agentSettings';
+type MainPanelKind = 'chat' | 'globalSettings' | 'workflowSettings' | 'agentSettings' | 'planDetail';
 
 const PANEL_TAB_TITLE_MAX_DISPLAY_UNITS = 20;
 const PANEL_TAB_TITLE_ELLIPSIS = '...';
@@ -37,6 +40,8 @@ export class MainPanel {
   private readonly clientId: BridgeClientId;
   private readonly kind: MainPanelKind;
   private readonly conversationId?: string;
+  private readonly toolCallId?: string;
+  private readonly planProposalId?: string;
   private readonly disposables: vscode.Disposable[] = [];
 
   public static registerSerializer(context: vscode.ExtensionContext, backendApp: BackendApplication): void {
@@ -109,14 +114,18 @@ export class MainPanel {
     this.panelId = createMessageId();
     this.kind = panelKind(options);
     this.conversationId = options.conversationId;
+    this.toolCallId = options.toolCallId;
+    this.planProposalId = options.planProposalId;
 
     this.refreshTitle(options.title);
     this.panel.webview.options = MainPanel.webviewPanelOptions(this.extensionUri);
     this.clientId = this.backendApp.attachWebview(panel.webview, {
-      kind: this.kind === 'globalSettings' ? 'globalSettings' : this.kind === 'workflowSettings' ? 'workflowSettings' : this.kind === 'agentSettings' ? 'agentSettings' : 'mainPanel',
+      kind: this.kind === 'globalSettings' ? 'globalSettings' : this.kind === 'workflowSettings' ? 'workflowSettings' : this.kind === 'agentSettings' ? 'agentSettings' : this.kind === 'planDetail' ? 'planDetail' : 'mainPanel',
       panelId: this.panelId,
       title: this.panel.title,
-      conversationId: this.conversationId
+      conversationId: this.conversationId,
+      ...(this.toolCallId ? { toolCallId: this.toolCallId } : {}),
+      ...(this.planProposalId ? { planProposalId: this.planProposalId } : {})
     });
 
     this.panel.webview.html = getWebviewHtml(this.panel.webview, this.extensionUri);
@@ -139,6 +148,10 @@ export class MainPanel {
         }
         if (message.type === BridgeMessageType.ConversationFork && message.payload) {
           this.forkConversationFromPanel(message.payload.sourceConversationId, message.payload.messageId);
+          return;
+        }
+        if (message.type === BridgeMessageType.PlanProposalOpen && message.payload) {
+          this.openPlanProposalFromPanel(message.payload);
           return;
         }
         this.backendApp.handleWebviewMessage(this.clientId, message);
@@ -170,6 +183,18 @@ export class MainPanel {
       .catch((error) => console.warn('[LimCode] Failed to create panel conversation.', error));
   }
 
+  private openPlanProposalFromPanel(payload: PlanProposalOpenPayload): void {
+    const conversationId = payload.conversationId?.trim() || this.conversationId;
+    MainPanel.createOrShow(this.extensionUri, this.backendApp, {
+      kind: 'planDetail',
+      ...(conversationId ? { conversationId } : {}),
+      ...(payload.toolCallId?.trim() ? { toolCallId: payload.toolCallId.trim() } : {}),
+      ...(payload.planProposalId?.trim() ? { planProposalId: payload.planProposalId.trim() } : {}),
+      ...(payload.title?.trim() ? { title: payload.title.trim() } : {}),
+      reuse: true
+    });
+  }
+
   private forkConversationFromPanel(sourceConversationId: string, messageId: string): void {
     void this.backendApp
       .forkConversation(sourceConversationId, messageId)
@@ -187,11 +212,27 @@ export class MainPanel {
     const kind = panelKind(options);
     if (kind !== this.kind) return false;
     if (kind === 'globalSettings' || kind === 'workflowSettings' || kind === 'agentSettings') return true;
+    if (kind === 'planDetail') {
+      return (options.conversationId ?? '') === (this.conversationId ?? '')
+        && (options.toolCallId ?? '') === (this.toolCallId ?? '')
+        && (options.planProposalId ?? '') === (this.planProposalId ?? '');
+    }
     return (options.conversationId ?? '') === (this.conversationId ?? '');
   }
 
   private refreshTitle(title?: string): void {
     this.panel.title = panelTitle({ kind: this.kind, conversationId: this.conversationId, title }, this.backendApp);
+  }
+
+  private panelWebviewMeta(): WebviewClientMeta {
+    return {
+      kind: this.kind === 'globalSettings' ? 'globalSettings' : this.kind === 'workflowSettings' ? 'workflowSettings' : this.kind === 'agentSettings' ? 'agentSettings' : this.kind === 'planDetail' ? 'planDetail' : 'mainPanel',
+      panelId: this.panelId,
+      title: this.panel.title,
+      conversationId: this.conversationId,
+      ...(this.toolCallId ? { toolCallId: this.toolCallId } : {}),
+      ...(this.planProposalId ? { planProposalId: this.planProposalId } : {})
+    };
   }
 
   private refreshTitleFromOutgoingMessage(message: WebviewToExtensionMessage): void {
@@ -236,6 +277,7 @@ export class MainPanel {
 }
 
 function panelKind(options: MainPanelOptions): MainPanelKind {
+  if (options.kind === 'planDetail') return 'planDetail';
   if (options.kind === 'agentSettings') return 'agentSettings';
   if (options.kind === 'workflowSettings') return 'workflowSettings';
   return options.kind === 'globalSettings' ? 'globalSettings' : 'chat';
@@ -245,6 +287,7 @@ function panelTitle(options: MainPanelOptions, backendApp: BackendApplication): 
   if (options.kind === 'globalSettings') return 'LimCode 设置';
   if (options.kind === 'workflowSettings') return 'LimCode 工作流编辑';
   if (options.kind === 'agentSettings') return 'LimCode Agent 设置';
+  if (options.kind === 'planDetail') return panelTabTitle(options.title?.trim() || 'Plan 详情');
   if (!options.conversationId) return panelTabTitle('LimCode');
   const title = options.title
     ? displayConversationTitle({ id: options.conversationId, title: options.title })
@@ -272,6 +315,7 @@ function optionsFromSerializedState(state: unknown, fallbackTitle: string): Main
     serializedKind === 'agentSettings' ||
     meta?.kind === 'agentSettings' ||
     fallbackTitle === 'LimCode Agent 设置';
+  const isPlanDetail = serializedKind === 'planDetail' || meta?.kind === 'planDetail';
 
   if (isGlobalSettings) {
     return { kind: 'globalSettings', reuse: true };
@@ -281,6 +325,16 @@ function optionsFromSerializedState(state: unknown, fallbackTitle: string): Main
   }
   if (isAgentSettings) {
     return { kind: 'agentSettings', reuse: true };
+  }
+  if (isPlanDetail) {
+    return {
+      kind: 'planDetail',
+      conversationId: meta?.conversationId,
+      toolCallId: meta?.toolCallId,
+      planProposalId: meta?.planProposalId,
+      title: meta?.title,
+      reuse: true
+    };
   }
 
   const conversationId =
@@ -301,7 +355,7 @@ function metaFromState(value: unknown): WebviewClientMeta | undefined {
   if (!record) return undefined;
 
   const kind = stringValue(record.kind);
-  if (kind !== 'mainPanel' && kind !== 'globalSettings' && kind !== 'workflowSettings' && kind !== 'agentSettings' && kind !== 'sidebar' && kind !== 'unknown') {
+  if (kind !== 'mainPanel' && kind !== 'globalSettings' && kind !== 'workflowSettings' && kind !== 'agentSettings' && kind !== 'planDetail' && kind !== 'sidebar' && kind !== 'unknown') {
     return undefined;
   }
 
@@ -309,9 +363,13 @@ function metaFromState(value: unknown): WebviewClientMeta | undefined {
   const panelId = stringValue(record.panelId);
   const title = stringValue(record.title);
   const conversationId = stringValue(record.conversationId);
+  const toolCallId = stringValue(record.toolCallId);
+  const planProposalId = stringValue(record.planProposalId);
   if (panelId) meta.panelId = panelId;
   if (title) meta.title = title;
   if (conversationId) meta.conversationId = conversationId;
+  if (toolCallId) meta.toolCallId = toolCallId;
+  if (planProposalId) meta.planProposalId = planProposalId;
   return meta;
 }
 

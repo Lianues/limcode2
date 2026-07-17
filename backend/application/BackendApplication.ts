@@ -180,7 +180,8 @@ export class BackendApplication {
     this.env.mcp.setStateChangeListener(() => this.syncMcpRuntimeResources());
     this.persistence = new ClientStatePersistence(this.world, this.env.storage, {
       renderLoadedConversationIds: () => this.persistableRenderDetailConversationIds(),
-      runHistoryLoadedConversationIds: () => this.runHistoryLoadedConversationDetails
+      runHistoryLoadedConversationIds: () => this.runHistoryLoadedConversationDetails,
+      isConversationHistorySummaryComplete: (conversationId) => this.isConversationHistorySummaryComplete(conversationId)
     });
     this.globalSettingsBridge = new GlobalSettingsBridge({
       storage: this.env.storage,
@@ -594,7 +595,6 @@ export class BackendApplication {
     }
     if (page.state.messages.length > 0) await hydrateConversationDetail(this.world, page.state, conversationId);
     this.conversationTailLoaded.add(conversationId);
-    this.coldConversationHistoryEntries.delete(conversationId);
   }
 
   public ensureConversationDetailLoaded(conversationId: string): Promise<void> {
@@ -679,7 +679,7 @@ export class BackendApplication {
   private mergeLiveConversationHistoryPage(page: ConversationHistoryPageRecord, scope: ConversationHistoryScope): ConversationHistoryPageRecord {
     const entriesById = new Map(page.entries.map((entry) => [entry.id, entry]));
     const liveEntries = this.getConversationHistoryEntries()
-      .filter((entry) => this.isConversationHistorySummaryLoaded(entry.id) && (historyEntryMatchesScope(entry, scope) || entriesById.has(entry.id)));
+      .filter((entry) => this.isConversationHistorySummaryComplete(entry.id) && (historyEntryMatchesScope(entry, scope) || entriesById.has(entry.id)));
     if (liveEntries.length === 0) return page;
 
     const isFirstPage = page.pageInfo.pageIndex === 0;
@@ -722,16 +722,8 @@ export class BackendApplication {
     return [...ids].filter((conversationId) => this.findConversationEntity(conversationId) !== undefined);
   }
 
-  private isConversationHistorySummaryLoaded(conversationId: string): boolean {
-    return this.renderLoadedConversationDetails.has(conversationId)
-      || this.conversationTailLoaded.has(conversationId)
-      || this.conversationHasHydratedMessages(conversationId);
-  }
-
-  private conversationHasHydratedMessages(conversationId: string): boolean {
-    const conversation = this.findConversationEntity(conversationId);
-    if (conversation === undefined) return false;
-    return this.world.query(Message, PartOf).some((entity) => this.world.get(entity, PartOf)?.parent === conversation);
+  private isConversationHistorySummaryComplete(conversationId: string): boolean {
+    return this.renderLoadedConversationDetails.has(conversationId);
   }
 
   private collectConversationOriginLinksById(): Map<string, ConversationOriginLinkRecord> {
@@ -748,7 +740,7 @@ export class BackendApplication {
     const projected = this.getConversationHistoryEntries().find((candidate) => candidate.id === conversationId);
     if (!projected) return;
     const retained = this.coldConversationHistoryEntries.get(conversationId);
-    const entry = retained && !this.isConversationHistorySummaryLoaded(conversationId)
+    const entry = retained && !this.isConversationHistorySummaryComplete(conversationId)
       ? {
           ...retained,
           ...projected,
@@ -822,6 +814,8 @@ export class BackendApplication {
     if (conversationId) {
       this.syncOpenConversationPanelPresence(conversationId);
       if (!this.hasOpenConversationPanel(conversationId)) this.rememberRecentlyClosedConversation(conversationId);
+      void this.persistence.persistImmediately({ forceConversationId: conversationId })
+        .catch((error) => console.warn(`[LimCode] Failed to persist conversation "${conversationId}" after panel detach.`, error));
     }
   }
 
@@ -1995,7 +1989,7 @@ function isPassFlushEffect(effect: WorldEffect): boolean {
 }
 
 function mainPanelConversationId(meta: WebviewClientMeta): string | undefined {
-  if (meta.kind !== 'mainPanel') return undefined;
+  if (meta.kind !== 'mainPanel' && meta.kind !== 'planDetail') return undefined;
   return meta.conversationId?.trim() || DEFAULT_CONVERSATION_ID;
 }
 

@@ -248,10 +248,10 @@ export function useBridgeBootstrap(): void {
     watch(
       () => clientState.currentConversationId,
       (conversationId) => {
-        if (session.viewKind !== 'chat' || !conversationId) return;
+        if ((session.viewKind !== 'chat' && session.viewKind !== 'planDetail') || !conversationId) return;
         conversationTimeline.setCurrentConversation(conversationId);
         ensureConversationStream(conversationId);
-        if (conversationTimeline.ensureTimeline(conversationId).pageInfo === undefined) {
+        if (session.viewKind === 'chat' && conversationTimeline.ensureTimeline(conversationId).pageInfo === undefined) {
           conversationTimeline.requestInitial(conversationId);
         }
         conversationSettings.request(conversationId);

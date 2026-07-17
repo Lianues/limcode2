@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
-import { IconClipboardList, IconCircleCheck, IconCircleX, IconPencilMinus } from '@tabler/icons-vue';
+import { IconArrowsMaximize, IconArrowsMinimize, IconClipboardList, IconCircleCheck, IconCircleX, IconPencilMinus } from '@tabler/icons-vue';
 import { submitPlanOutputFromResult } from '@shared/planReview';
 import type { PlanProposalRecord, PlanProposalStatus, SubmitPlanToolRequestRecord, ToolCallRecord } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
@@ -10,10 +10,17 @@ import TextPartView from '@webview/components/content/parts/TextPartView.vue';
 import TaskListDisplay from '@webview/components/taskList/TaskListDisplay.vue';
 import { taskListDisplayItemsFromOperation } from '@webview/components/taskList/taskListModel';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   request: SubmitPlanToolRequestRecord;
   proposalId?: string;
   toolCall?: ToolCallRecord;
+  layout?: 'embedded' | 'full';
+}>(), {
+  layout: 'embedded'
+});
+
+const emit = defineEmits<{
+  (event: 'panel-expanded-change', value: boolean): void;
 }>();
 
 const MAX_PLAN_FEEDBACK_LENGTH = 4_000;
@@ -23,6 +30,8 @@ const submitting = ref<undefined | 'approve' | 'changes' | 'reject'>(undefined);
 const changeFeedbackOpen = ref(false);
 const changeFeedbackText = ref('');
 const changeFeedbackInput = ref<HTMLTextAreaElement | null>(null);
+const planScroller = ref<HTMLElement | null>(null);
+const panelExpanded = ref(false);
 const output = computed(() => submitPlanOutputFromResult(props.toolCall?.result));
 const proposal = computed<PlanProposalRecord | undefined>(() => {
   const id = props.proposalId ?? output.value?.proposalId;
@@ -35,6 +44,15 @@ const planBody = computed(() => props.request.plan || proposal.value?.body || ''
 const taskListOperation = computed(() => props.request.taskList ?? proposal.value?.taskList);
 const taskListItems = computed(() => taskListOperation.value ? taskListDisplayItemsFromOperation(taskListOperation.value) : []);
 const taskListTitle = computed(() => taskListOperation.value?.mode === 'update' ? '任务清单更新' : '任务清单');
+const canTogglePanelExpanded = computed(() => props.layout === 'embedded');
+const scrollRefreshKey = computed(() => [
+  planBody.value.length,
+  taskListItems.value.map((item) => `${item.key}:${item.status}:${item.title}:${item.description ?? ''}`).join('|'),
+  changeFeedbackOpen.value ? changeFeedbackText.value : '',
+  userMessage.value ?? '',
+  props.layout,
+  panelExpanded.value ? 'expanded' : 'normal'
+].join('::'));
 const statusLabel = computed(() => {
   if (submitting.value === 'approve') return '正在批准 Plan';
   if (submitting.value === 'changes') return '正在提交修改要求';
@@ -65,6 +83,8 @@ watch(
     submitting.value = undefined;
     changeFeedbackOpen.value = false;
     changeFeedbackText.value = '';
+    panelExpanded.value = false;
+    emit('panel-expanded-change', false);
   }
 );
 
@@ -98,6 +118,12 @@ function openChangeFeedback(): void {
   if (!pending.value || submitting.value) return;
   changeFeedbackOpen.value = true;
   void nextTick(() => changeFeedbackInput.value?.focus());
+}
+
+function togglePanelExpanded(): void {
+  if (!canTogglePanelExpanded.value) return;
+  panelExpanded.value = !panelExpanded.value;
+  emit('panel-expanded-change', panelExpanded.value);
 }
 
 function updateChangeFeedback(event: Event): void {
@@ -140,54 +166,76 @@ function localizedUserMessage(message: string | undefined): string | undefined {
 </script>
 
 <template>
-  <section class="plan-proposal" :class="[`tone-${statusTone}`, { 'is-pending': pending }]" :aria-label="statusLabel">
+  <section class="plan-proposal" :class="[`tone-${statusTone}`, `layout-${props.layout}`, { 'is-pending': pending, 'is-panel-expanded': panelExpanded }]" :aria-label="statusLabel">
     <header class="plan-proposal-heading">
       <IconClipboardList class="plan-proposal-heading-icon" stroke="2" aria-hidden="true" />
       <span class="plan-proposal-heading-main">Plan</span>
+      <button
+        v-if="canTogglePanelExpanded"
+        type="button"
+        class="plan-panel-expand-button"
+        :aria-pressed="panelExpanded"
+        :title="panelExpanded ? '收起聊天面板内的完整 Plan 视图' : '在聊天面板内完整展开 Plan 内容'"
+        @click="togglePanelExpanded"
+      >
+        <component :is="panelExpanded ? IconArrowsMinimize : IconArrowsMaximize" class="plan-panel-expand-icon" stroke="2" aria-hidden="true" />
+        <span>{{ panelExpanded ? '收起' : '展开' }}</span>
+      </button>
       <span class="plan-proposal-status">{{ statusLabel }}</span>
     </header>
 
-    <div class="plan-proposal-body">
-      <TextPartView :text="planBody" markdown />
-    </div>
+    <div class="plan-proposal-scroll-shell">
+      <div ref="planScroller" class="plan-proposal-scroll">
+        <div class="plan-proposal-body">
+          <TextPartView :text="planBody" markdown />
+        </div>
 
-    <section v-if="taskListItems.length" class="plan-proposal-task-list">
-      <h4>{{ taskListTitle }}</h4>
-      <TaskListDisplay
-        :items="taskListItems"
-        density="normal"
-        :show-change="taskListOperation?.mode === 'update'"
-        empty-text="Plan 未提供任务清单。"
-      />
-    </section>
+        <section v-if="taskListItems.length" class="plan-proposal-task-list">
+          <h4>{{ taskListTitle }}</h4>
+          <TaskListDisplay
+            :items="taskListItems"
+            density="normal"
+            :show-change="taskListOperation?.mode === 'update'"
+            :wrap="props.layout === 'full'"
+            empty-text="Plan 未提供任务清单。"
+          />
+        </section>
 
-    <p v-if="userMessage && !pending" class="plan-proposal-message">{{ userMessage }}</p>
+        <p v-if="userMessage && !pending" class="plan-proposal-message">{{ userMessage }}</p>
 
-    <div v-if="pending && changeFeedbackOpen" class="plan-feedback">
-      <label class="plan-feedback-label" :for="feedbackInputId">修改要求</label>
-      <div class="plan-feedback-input-shell">
-        <textarea
-          :id="feedbackInputId"
-          ref="changeFeedbackInput"
-          class="plan-feedback-input"
-          :value="changeFeedbackText"
-          :disabled="!!submitting"
-          rows="3"
-          :maxlength="MAX_PLAN_FEEDBACK_LENGTH"
-          placeholder="说明希望 AI 如何修改 Plan；留空则仅告知 AI 需要重新调整。Ctrl/Cmd + Enter 提交"
-          aria-label="Plan 修改要求"
-          @input="updateChangeFeedback"
-          @keydown.ctrl.enter.prevent="submitChangeFeedback"
-          @keydown.meta.enter.prevent="submitChangeFeedback"
-        ></textarea>
-        <AdvancedScrollbar
-          class="plan-feedback-scrollbar"
-          :scroller="changeFeedbackInput"
-          :refresh-key="changeFeedbackText"
-          variant="minimal"
-        />
+        <div v-if="pending && changeFeedbackOpen" class="plan-feedback">
+          <label class="plan-feedback-label" :for="feedbackInputId">修改要求</label>
+          <div class="plan-feedback-input-shell">
+            <textarea
+              :id="feedbackInputId"
+              ref="changeFeedbackInput"
+              class="plan-feedback-input"
+              :value="changeFeedbackText"
+              :disabled="!!submitting"
+              rows="3"
+              :maxlength="MAX_PLAN_FEEDBACK_LENGTH"
+              placeholder="说明希望 AI 如何修改 Plan；留空则仅告知 AI 需要重新调整。Ctrl/Cmd + Enter 提交"
+              aria-label="Plan 修改要求"
+              @input="updateChangeFeedback"
+              @keydown.ctrl.enter.prevent="submitChangeFeedback"
+              @keydown.meta.enter.prevent="submitChangeFeedback"
+            ></textarea>
+            <AdvancedScrollbar
+              class="plan-feedback-scrollbar"
+              :scroller="changeFeedbackInput"
+              :refresh-key="changeFeedbackText"
+              variant="minimal"
+            />
+          </div>
+          <p class="plan-feedback-hint">反馈会作为工具结果回传给 AI，AI 应根据反馈重新提交 Plan。</p>
+        </div>
       </div>
-      <p class="plan-feedback-hint">反馈会作为工具结果回传给 AI，AI 应根据反馈重新提交 Plan。</p>
+      <AdvancedScrollbar
+        class="plan-proposal-scrollbar"
+        :scroller="planScroller"
+        :refresh-key="scrollRefreshKey"
+        variant="minimal"
+      />
     </div>
 
     <footer v-if="pending" class="plan-proposal-actions">
@@ -210,11 +258,25 @@ function localizedUserMessage(message: string | undefined): string | undefined {
 <style scoped>
 .plan-proposal {
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
   color: var(--vscode-foreground);
   font-size: var(--font-size-sm);
+}
+
+.plan-proposal.layout-embedded {
+  max-height: min(62vh, 520px);
+}
+
+.plan-proposal.layout-embedded.is-panel-expanded {
+  max-height: none;
+}
+
+.plan-proposal.layout-full {
+  height: 100%;
+  max-height: none;
 }
 
 .plan-proposal-heading {
@@ -240,6 +302,41 @@ function localizedUserMessage(message: string | undefined): string | undefined {
   font-weight: 600;
 }
 
+.plan-panel-expand-button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 23px;
+  padding: 2px 7px;
+  border: 1px solid var(--vscode-panel-border);
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+
+.plan-panel-expand-button:hover,
+.plan-panel-expand-button:focus-visible {
+  color: var(--vscode-foreground);
+  border-color: color-mix(in srgb, var(--vscode-foreground) 28%, var(--vscode-panel-border));
+  background: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%);
+  outline: none;
+}
+
+.plan-panel-expand-button[aria-pressed="true"] {
+  color: var(--vscode-foreground);
+  border-color: color-mix(in srgb, var(--vscode-foreground) 34%, var(--vscode-panel-border));
+  background: color-mix(in srgb, var(--vscode-editor-background) 82%, var(--vscode-foreground) 18%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+}
+
+.plan-panel-expand-icon {
+  width: 13px;
+  height: 13px;
+}
+
 .plan-proposal-status {
   flex: 0 0 auto;
   padding: 2px 7px;
@@ -263,10 +360,70 @@ function localizedUserMessage(message: string | undefined): string | undefined {
   color: var(--vscode-errorForeground, #f48771);
 }
 
+.plan-proposal-scroll-shell {
+  position: relative;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.plan-proposal-scroll {
+  min-height: 0;
+  max-height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+  scrollbar-width: none;
+  padding-right: 0;
+}
+
+.plan-proposal-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.plan-proposal-scrollbar {
+  position: absolute;
+  top: 4px;
+  right: 2px;
+  bottom: 4px;
+}
+
+.plan-proposal.layout-embedded.is-panel-expanded .plan-proposal-scroll-shell {
+  overflow: visible;
+}
+
+.plan-proposal.layout-embedded.is-panel-expanded .plan-proposal-scroll {
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+}
+
+.plan-proposal.layout-embedded.is-panel-expanded .plan-proposal-scrollbar {
+  display: none;
+}
+
 .plan-proposal-body {
   padding: 10px;
   border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 78%, var(--vscode-foreground) 22%);
   background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground) 6%);
+}
+
+.plan-proposal.layout-full {
+  gap: 14px;
+  font-size: var(--font-size-md, 13px);
+}
+
+.plan-proposal.layout-full .plan-proposal-heading-main {
+  font-size: 16px;
+}
+
+.plan-proposal.layout-full .plan-proposal-body,
+.plan-proposal.layout-full .plan-proposal-task-list,
+.plan-proposal.layout-full .plan-feedback {
+  padding: 14px;
 }
 
 .plan-proposal-task-list {
@@ -350,10 +507,22 @@ function localizedUserMessage(message: string | undefined): string | undefined {
 }
 
 .plan-proposal-actions {
+  flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
+  margin-top: 0;
+  padding: 9px 0 0;
+  border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 82%, transparent);
+  background: var(--vscode-editor-background);
+  z-index: 2;
+}
+
+.plan-proposal.layout-embedded .plan-proposal-actions,
+.plan-proposal.layout-full .plan-proposal-actions {
+  position: sticky;
+  bottom: 0;
 }
 
 .plan-action {

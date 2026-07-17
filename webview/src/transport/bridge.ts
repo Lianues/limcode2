@@ -125,5 +125,7 @@ function sameMeta(left: WebviewClientMeta | undefined, right: WebviewClientMeta)
   return left?.kind === right.kind &&
     left?.panelId === right.panelId &&
     left?.title === right.title &&
-    left?.conversationId === right.conversationId;
+    left?.conversationId === right.conversationId &&
+    left?.toolCallId === right.toolCallId &&
+    left?.planProposalId === right.planProposalId;
 }

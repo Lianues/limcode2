@@ -13,10 +13,12 @@ export type BridgeScope =
   | { kind: 'settings'; level: 'global' | 'conversation' | 'agent' | 'workflow'; id?: string };
 
 export interface WebviewClientMeta {
-  kind: 'mainPanel' | 'globalSettings' | 'workflowSettings' | 'agentSettings' | 'sidebar' | 'unknown';
+  kind: 'mainPanel' | 'globalSettings' | 'workflowSettings' | 'agentSettings' | 'planDetail' | 'sidebar' | 'unknown';
   panelId?: string;
   title?: string;
   conversationId?: string;
+  toolCallId?: string;
+  planProposalId?: string;
 }
 
 export const GLOBAL_CLIENT_STATE_STREAM_ID = 'global:state';
@@ -129,6 +131,7 @@ export enum BridgeMessageType {
   PlanProposalApprove = 'planProposal.approve',
   PlanProposalRequestChanges = 'planProposal.requestChanges',
   PlanProposalReject = 'planProposal.reject',
+  PlanProposalOpen = 'planProposal.open',
   CheckpointDiffOpen = 'checkpoint.diff.open',
   AttachmentOpen = 'attachment.open',
   AttachmentReload = 'attachment.reload',
@@ -2163,6 +2166,12 @@ export interface PlanProposalDecisionPayload {
   conversationId?: string;
   message?: string;
 }
+export interface PlanProposalOpenPayload {
+  conversationId?: string;
+  toolCallId?: string;
+  planProposalId?: string;
+  title?: string;
+}
 export interface ToolDiffOpenPayload {
   toolCallId: string;
   conversationId?: string;
@@ -2747,6 +2756,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.PlanProposalApprove, PlanProposalDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.PlanProposalRequestChanges, PlanProposalDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.PlanProposalReject, PlanProposalDecisionPayload>
+  | BridgeEnvelope<BridgeMessageType.PlanProposalOpen, PlanProposalOpenPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointDiffOpen, CheckpointDiffOpenPayload>
   | BridgeEnvelope<BridgeMessageType.AttachmentOpen, AttachmentOpenPayload>
   | BridgeEnvelope<BridgeMessageType.AttachmentReload, AttachmentReloadPayload>

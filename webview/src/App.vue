@@ -33,6 +33,7 @@ const ChatView = asyncView(() => import('@webview/views/ChatView.vue'));
 const GlobalSettingsView = asyncView(() => import('@webview/views/GlobalSettingsView.vue'));
 const WorkflowSettingsView = asyncView(() => import('@webview/views/WorkflowSettingsView.vue'));
 const AgentSettingsView = asyncView(() => import('@webview/views/AgentSettingsView.vue'));
+const PlanDetailView = asyncView(() => import('@webview/views/PlanDetailView.vue'));
 
 // 必须先完成 bridge 握手，再加载具体业务视图；否则 ChatView/设置页的重组件初始化会阻塞 bridge.ready。
 useBridgeBootstrap();
@@ -43,6 +44,7 @@ const activeView = computed<Component | null>(() => {
   if (session.isGlobalSettings) return GlobalSettingsView;
   if (session.isWorkflowSettings) return WorkflowSettingsView;
   if (session.isAgentSettings) return AgentSettingsView;
+  if (session.isPlanDetail) return PlanDetailView;
   return ChatView;
 });
 </script>

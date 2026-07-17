@@ -41,6 +41,14 @@ export interface ClientStatePersistenceOptions {
   renderLoadedConversationIds?: () => Iterable<string>;
   isConversationRunHistoryLoaded?: (conversationId: string) => boolean;
   runHistoryLoadedConversationIds?: () => Iterable<string>;
+  /**
+   * 历史摘要只能由完整聊天渲染详情生成。
+   *
+   * 仅加载尾部消息用于快速显示时，也需要允许增量保存消息块；但不能用这份
+   * partial state 覆盖 conversation-history，否则重启后会把长对话标题/预览/条数
+   * 降级成“新对话 / 暂无消息”或尾部工具响应。
+   */
+  isConversationHistorySummaryComplete?: (conversationId: string) => boolean;
 }
 
 interface PendingRunHistoryState {
@@ -200,7 +208,9 @@ export class ClientStatePersistence {
         if (!force && detailJson === this.lastPersistedRenderDetailJson.get(conversationId)) continue;
       }
       this.pendingRenderDetailStates.set(conversationId, state);
-      this.pendingHistoryStates.set(conversationId, state);
+      if (this.shouldPersistHistorySummary(conversationId)) {
+        this.pendingHistoryStates.set(conversationId, state);
+      }
     }
 
     const replaceRunHistoryIds = new Set(this.runHistoryLoadedConversationIds(state));
@@ -219,7 +229,9 @@ export class ClientStatePersistence {
   private collectForcedConversationState(state: ClientState, conversationId: string): void {
     if (this.renderLoadedConversationIds(state).includes(conversationId)) {
       this.pendingRenderDetailStates.set(conversationId, state);
-      this.pendingHistoryStates.set(conversationId, state);
+      if (this.shouldPersistHistorySummary(conversationId)) {
+        this.pendingHistoryStates.set(conversationId, state);
+      }
     }
 
     if (this.runHistoryLoadedConversationIds(state).includes(conversationId)) {
@@ -256,7 +268,13 @@ export class ClientStatePersistence {
     const existing = this.pendingRunHistoryStates.get(conversationId);
     if (existing?.mode === 'replace') return;
     this.pendingRunHistoryStates.set(conversationId, { state, mode });
-    this.pendingHistoryStates.set(conversationId, state);
+    if (this.shouldPersistHistorySummary(conversationId)) {
+      this.pendingHistoryStates.set(conversationId, state);
+    }
+  }
+
+  private shouldPersistHistorySummary(conversationId: string): boolean {
+    return this.options.isConversationHistorySummaryComplete?.(conversationId) ?? true;
   }
 
   private renderLoadedConversationIds(state: ClientState): string[] {

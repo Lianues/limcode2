@@ -9,13 +9,14 @@ withDefaults(
     kind?: 'input' | 'output';
     title?: string;
     text?: string;
+    unbounded?: boolean;
   }>(),
   { kind: 'input' }
 );
 </script>
 
 <template>
-  <section class="lc-content-block-section" :class="`is-${kind}`">
+  <section class="lc-content-block-section" :class="[`is-${kind}`, { 'is-unbounded': unbounded }]">
     <span v-if="title" class="lc-content-block-section-title">{{ title }}</span>
     <div class="lc-content-block-section-scroll-shell">
       <div ref="scroller" class="lc-content-block-section-scroll">
@@ -46,6 +47,10 @@ withDefaults(
   background: var(--lc-content-input-background);
 }
 
+.lc-content-block-section.is-unbounded {
+  overflow: visible;
+}
+
 .lc-content-block-section-title {
   flex: 0 0 auto;
   margin: 0 0 6px;
@@ -72,6 +77,20 @@ withDefaults(
   padding-right: 12px;
   scrollbar-width: none;
   box-sizing: border-box;
+}
+
+.lc-content-block-section.is-unbounded .lc-content-block-section-scroll-shell,
+.lc-content-block-section.is-unbounded .lc-content-block-section-scroll {
+  max-height: none;
+  overflow: visible;
+}
+
+.lc-content-block-section.is-unbounded .lc-content-block-section-scroll {
+  padding-right: 0;
+}
+
+.lc-content-block-section.is-unbounded :deep(.advanced-scrollbar.lc-content-block-section-scrollbar) {
+  display: none;
 }
 
 .lc-content-block-section-scroll::-webkit-scrollbar {

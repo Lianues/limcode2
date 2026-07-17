@@ -1074,6 +1074,8 @@ function resolveHydratedConfigScope(
       const run = scopeId ? maps.runs.get(scopeId) : undefined;
       return run === undefined ? { ok: false } : { ok: true, data: { run } };
     }
+    default:
+      return { ok: false };
   }
 }
 
@@ -1173,6 +1175,8 @@ function resolveHydratedToolPolicyScope(
     }
     case 'agentSystem':
       return scopeId ? { ok: true, data: { agentSystemId: scopeId } } : { ok: false };
+    default:
+      return { ok: false };
   }
 }
 
@@ -1233,6 +1237,8 @@ function resolveHydratedWorkEnvironmentPolicyScope(
     }
     case 'agentSystem':
       return scopeId ? { ok: true, data: { agentSystemId: scopeId } } : { ok: false };
+    default:
+      return { ok: false };
   }
 }
 

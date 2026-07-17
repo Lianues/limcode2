@@ -536,7 +536,6 @@ export interface LlmProviderConfigsRecord {
 
 export type LlmCompressionMethodKind = 'disabled' | 'openai_responses_compact' | 'llm_summary' | 'segmented_summary' | 'deterministic_summary' | 'manual_summary';
 export type LlmCompressionTriggerMode = 'manual' | 'token_threshold';
-export type LlmCompressionFallbackMode = 'use_summary' | 'use_raw_history' | 'block_and_ask' | 'auto_generate_summary';
 export type LlmCompressionThresholdUnit = 'percent' | 'tokens';
 
 export const DEFAULT_LLM_CONTEXT_WINDOW_TOKENS = 200_000;
@@ -610,8 +609,6 @@ export interface LlmCompressionConfigRecord {
   openaiResponsesCompact?: {
     providerConfigId?: string;
     model?: string;
-    createSummaryFallback?: boolean;
-    fallbackConfigId?: string;
   };
   llmSummary?: {
     providerConfigId?: string;
@@ -620,9 +617,6 @@ export interface LlmCompressionConfigRecord {
     userPrompt?: string;
     targetTokens?: number;
     generationConfig?: LlmGenerationConfigRecord;
-  };
-  fallbackPolicy: {
-    whenNativeUnavailable: LlmCompressionFallbackMode;
   };
   createdAt: number;
   updatedAt: number;
@@ -648,7 +642,6 @@ export function createDefaultLlmCompressionConfig(name = '默认压缩方法'): 
     llmSummary: {
       targetTokens: 2000
     },
-    fallbackPolicy: { whenNativeUnavailable: 'use_summary' },
     createdAt: now,
     updatedAt: now
   };

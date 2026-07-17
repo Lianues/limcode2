@@ -2,7 +2,6 @@ import * as vscode from 'vscode';
 import type {
   LlmCompressionConfigRecord,
   LlmCompressionConfigsRecord,
-  LlmCompressionFallbackMode,
   LlmCompressionMethodKind,
   LlmCompressionSettingsRecord,
   LlmCompressionThresholdUnit,
@@ -94,7 +93,6 @@ export function normalizeLlmCompressionConfig(input: Partial<LlmCompressionConfi
   const createdAt = finiteTimestamp(input?.createdAt, fallback.createdAt);
   const kind = isKnownKind(input?.kind) ? input.kind : fallback.kind;
   const trigger = normalizeTrigger(input?.trigger);
-  const fallbackPolicy = normalizeFallbackPolicy(input?.fallbackPolicy);
   return {
     id: stringOrDefault(input?.id, fallback.id),
     name: stringOrDefault(input?.name, fallback.name),
@@ -102,7 +100,6 @@ export function normalizeLlmCompressionConfig(input: Partial<LlmCompressionConfi
     trigger,
     ...(normalizeOpenAICompact(input?.openaiResponsesCompact) ? { openaiResponsesCompact: normalizeOpenAICompact(input?.openaiResponsesCompact) } : {}),
     ...(normalizeLlmSummary(input?.llmSummary) ? { llmSummary: normalizeLlmSummary(input?.llmSummary) } : {}),
-    fallbackPolicy,
     createdAt,
     updatedAt: finiteTimestamp(input?.updatedAt, createdAt)
   };
@@ -155,19 +152,11 @@ function normalizeTrigger(input: unknown): LlmCompressionConfigRecord['trigger']
   };
 }
 
-function normalizeFallbackPolicy(input: unknown): LlmCompressionConfigRecord['fallbackPolicy'] {
-  const record = isPlainObject(input) ? input : {};
-  const fallback: LlmCompressionFallbackMode = isKnownFallbackMode(record.whenNativeUnavailable) ? record.whenNativeUnavailable : 'use_summary';
-  return { whenNativeUnavailable: fallback };
-}
-
 function normalizeOpenAICompact(input: unknown): LlmCompressionConfigRecord['openaiResponsesCompact'] | undefined {
   if (!isPlainObject(input)) return undefined;
   return {
     ...(optionalString(input.providerConfigId) ? { providerConfigId: optionalString(input.providerConfigId) } : {}),
-    ...(optionalString(input.model) ? { model: optionalString(input.model) } : {}),
-    ...(typeof input.createSummaryFallback === 'boolean' ? { createSummaryFallback: input.createSummaryFallback } : {}),
-    ...(optionalString(input.fallbackConfigId) ? { fallbackConfigId: optionalString(input.fallbackConfigId) } : {})
+    ...(optionalString(input.model) ? { model: optionalString(input.model) } : {})
   };
 }
 
@@ -185,10 +174,6 @@ function normalizeLlmSummary(input: unknown): LlmCompressionConfigRecord['llmSum
 
 function isKnownKind(value: unknown): value is LlmCompressionMethodKind {
   return value === 'disabled' || value === 'openai_responses_compact' || value === 'llm_summary' || value === 'segmented_summary' || value === 'deterministic_summary' || value === 'manual_summary';
-}
-
-function isKnownFallbackMode(value: unknown): value is LlmCompressionFallbackMode {
-  return value === 'use_summary' || value === 'use_raw_history' || value === 'block_and_ask' || value === 'auto_generate_summary';
 }
 
 function isKnownThresholdUnit(value: unknown): value is LlmCompressionThresholdUnit {

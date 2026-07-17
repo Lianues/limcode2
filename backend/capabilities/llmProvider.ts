@@ -925,19 +925,13 @@ async function compactWithOpenAIResponses(
       hasUsage: compacted.usageMetadata !== undefined
     });
   } catch (error) {
-    logCompressionDebug('provider.compact.openaiResponses.throw', { ...compactRequestDebugInfo(request), error: errorDebugInfo(error), signalAborted: signal?.aborted === true });
-    if (!isRequestAbort(signal) && shouldFallbackOpenAICompactToSegmentedSummary(error, methodConfig)) {
-      const fallbackConfig = createSegmentedSummaryFallbackConfig(methodConfig);
-      const fallbackSegments = request.segments?.length ? request.segments : segmentContentsForSummaryFallback(request.contents);
-      logCompressionDebug('provider.compact.openaiResponses.fallbackSegmentedSummary', {
-        ...compactRequestDebugInfo(request),
-        reason: 'context_length_exceeded',
-        fallbackConfigId: fallbackConfig.id,
-        fallbackSegmentCount: fallbackSegments.length,
-        fallbackSegmentSizes: fallbackSegments.map((segment) => segment.length)
-      });
-      return compactWithSegmentedSummary({ ...request, segments: fallbackSegments }, fallbackConfig, options, signal);
-    }
+    logCompressionDebug('provider.compact.openaiResponses.throw', {
+      ...compactRequestDebugInfo(request),
+      error: errorDebugInfo(error),
+      signalAborted: signal?.aborted === true
+    });
+    // 压缩方法是用户明确选择的策略。OpenAI 原生压缩失败时必须保持该策略失败，
+    // 交给外层按同一方法重试，不能在单次尝试内偷偷切换为分段总结。
     throw error;
   }
 
@@ -951,54 +945,6 @@ async function compactWithOpenAIResponses(
     rawResponse: compacted.rawResponse,
     methodConfig
   };
-}
-
-function shouldFallbackOpenAICompactToSegmentedSummary(error: unknown, methodConfig: LlmCompressionConfigRecord): boolean {
-  if (!isContextLengthExceededError(error)) return false;
-  const mode = methodConfig.fallbackPolicy?.whenNativeUnavailable;
-  return mode !== 'use_raw_history' && mode !== 'block_and_ask';
-}
-
-function createSegmentedSummaryFallbackConfig(methodConfig: LlmCompressionConfigRecord): LlmCompressionConfigRecord {
-  const now = Date.now();
-  const { openaiResponsesCompact: _openaiResponsesCompact, ...rest } = methodConfig;
-  void _openaiResponsesCompact;
-  return {
-    ...rest,
-    id: `${methodConfig.id || 'openai-compact'}-segmented-fallback`,
-    name: `${methodConfig.name || 'OpenAI 原生压缩'}（分段总结 fallback）`,
-    kind: 'segmented_summary',
-    trigger: methodConfig.trigger ?? { mode: 'manual', preserveLatestMessages: 8 },
-    llmSummary: methodConfig.llmSummary ?? { targetTokens: 2000 },
-    fallbackPolicy: methodConfig.fallbackPolicy ?? { whenNativeUnavailable: 'use_summary' },
-    createdAt: methodConfig.createdAt ?? now,
-    updatedAt: now
-  };
-}
-
-const SUMMARY_FALLBACK_SEGMENT_MAX_CHARS = 24_000;
-const SUMMARY_FALLBACK_SEGMENT_MAX_CONTENTS = 80;
-
-function segmentContentsForSummaryFallback(contents: MessageContent[]): MessageContent[][] {
-  const segments: MessageContent[][] = [];
-  let current: MessageContent[] = [];
-  let currentChars = 0;
-
-  for (const content of contents) {
-    const renderedChars = Math.max(1, renderContentsForSummary([content]).length);
-    const shouldStartNext = current.length > 0
-      && (current.length >= SUMMARY_FALLBACK_SEGMENT_MAX_CONTENTS || currentChars + renderedChars > SUMMARY_FALLBACK_SEGMENT_MAX_CHARS);
-    if (shouldStartNext) {
-      segments.push(current);
-      current = [];
-      currentChars = 0;
-    }
-    current.push(content);
-    currentChars += renderedChars;
-  }
-
-  if (current.length > 0) segments.push(current);
-  return segments.length > 0 ? segments : [contents];
 }
 
 function isContextLengthExceededError(error: unknown): boolean {
@@ -1273,7 +1219,6 @@ function normalizeCompressionConfig(input: LlmCompressionConfigRecord | undefine
     trigger: input?.trigger ?? { mode: 'manual', preserveLatestMessages: 8 },
     ...(input?.openaiResponsesCompact ? { openaiResponsesCompact: input.openaiResponsesCompact } : {}),
     ...(input?.llmSummary ? { llmSummary: input.llmSummary } : {}),
-    fallbackPolicy: input?.fallbackPolicy ?? { whenNativeUnavailable: 'use_summary' },
     createdAt: input?.createdAt ?? now,
     updatedAt: input?.updatedAt ?? now
   };

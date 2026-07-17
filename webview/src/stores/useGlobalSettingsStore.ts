@@ -691,9 +691,7 @@ function toPlainCompressionConfig(config: LlmCompressionConfigRecord): LlmCompre
     ...(openaiResponsesCompact ? {
       openaiResponsesCompact: {
         ...(openaiResponsesCompact.providerConfigId ? { providerConfigId: openaiResponsesCompact.providerConfigId } : {}),
-        ...(openaiResponsesCompact.model ? { model: openaiResponsesCompact.model } : {}),
-        ...(typeof openaiResponsesCompact.createSummaryFallback === 'boolean' ? { createSummaryFallback: openaiResponsesCompact.createSummaryFallback } : {}),
-        ...(openaiResponsesCompact.fallbackConfigId ? { fallbackConfigId: openaiResponsesCompact.fallbackConfigId } : {})
+        ...(openaiResponsesCompact.model ? { model: openaiResponsesCompact.model } : {})
       }
     } : {}),
     ...(llmSummary ? {
@@ -706,7 +704,6 @@ function toPlainCompressionConfig(config: LlmCompressionConfigRecord): LlmCompre
         ...(generationConfig ? { generationConfig } : {})
       }
     } : {}),
-    fallbackPolicy: { whenNativeUnavailable: normalized.fallbackPolicy.whenNativeUnavailable },
     createdAt: normalized.createdAt,
     updatedAt: Date.now()
   };
@@ -1266,8 +1263,8 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       const config = this.ensureCompressionConfigForActiveProvider();
       if (!config) return;
       config.kind = kind;
-      if (kind === 'openai_responses_compact') {
-        config.openaiResponsesCompact = { ...(config.openaiResponsesCompact ?? {}), createSummaryFallback: false };
+      if (kind === 'openai_responses_compact' && !config.openaiResponsesCompact) {
+        config.openaiResponsesCompact = {};
       }
       if ((kind === 'llm_summary' || kind === 'segmented_summary') && !config.llmSummary) {
         config.llmSummary = createDefaultLlmCompressionConfig('临时').llmSummary;
@@ -1285,7 +1282,7 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
         else delete target.providerConfigId;
         return target;
       };
-      config.openaiResponsesCompact = applyProvider({ ...(config.openaiResponsesCompact ?? {}), createSummaryFallback: false });
+      config.openaiResponsesCompact = applyProvider({ ...(config.openaiResponsesCompact ?? {}) });
       config.llmSummary = applyProvider({ ...(config.llmSummary ?? createDefaultLlmCompressionConfig('临时').llmSummary ?? {}) });
       config.updatedAt = Date.now();
       this.queueLlmCompressionConfigsAutoSave();
@@ -1310,8 +1307,8 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       const config = this.ensureCompressionConfigForActiveModel(modelId);
       if (!config) return;
       config.kind = kind;
-      if (kind === 'openai_responses_compact') {
-        config.openaiResponsesCompact = { ...(config.openaiResponsesCompact ?? {}), createSummaryFallback: false };
+      if (kind === 'openai_responses_compact' && !config.openaiResponsesCompact) {
+        config.openaiResponsesCompact = {};
       }
       if ((kind === 'llm_summary' || kind === 'segmented_summary') && !config.llmSummary) {
         config.llmSummary = createDefaultLlmCompressionConfig('临时').llmSummary;
@@ -1329,7 +1326,7 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
         else delete target.providerConfigId;
         return target;
       };
-      config.openaiResponsesCompact = applyProvider({ ...(config.openaiResponsesCompact ?? {}), createSummaryFallback: false });
+      config.openaiResponsesCompact = applyProvider({ ...(config.openaiResponsesCompact ?? {}) });
       config.llmSummary = applyProvider({ ...(config.llmSummary ?? createDefaultLlmCompressionConfig('临时').llmSummary ?? {}) });
       config.updatedAt = Date.now();
       this.queueLlmCompressionConfigsAutoSave();

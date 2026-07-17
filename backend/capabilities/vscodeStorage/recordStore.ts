@@ -1,3 +1,5 @@
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { RECORDS_DIR, STORAGE_VERSION } from './constants';
 import { readJson, writeJson } from './json';
@@ -33,6 +35,9 @@ export interface SaveRecordStoreOptions {
 }
 
 const LOAD_RECORD_BATCH_SIZE = 32;
+const RECORD_STORE_LOCK_STALE_MS = 30 * 60_000;
+const RECORD_STORE_LOCK_WAIT_MS = 5 * 60_000;
+const recordStoreMutationQueues = new Map<string, Promise<void>>();
 
 export async function loadRecordStore<TRecord extends { id: string }, TKey extends string>(
   root: vscode.Uri,
@@ -110,6 +115,10 @@ export async function loadRecordStoreByIds<TRecord extends { id: string }, TKey 
 }
 
 
+export async function withRecordStoreTransaction<T>(lockUri: vscode.Uri, action: () => Promise<T>): Promise<T> {
+  return withRecordStoreMutationLock(lockUri, action);
+}
+
 export async function saveRecordStore<TRecord extends { id: string }, TKey extends string>(
   root: vscode.Uri,
   indexUri: vscode.Uri,
@@ -118,11 +127,23 @@ export async function saveRecordStore<TRecord extends { id: string }, TKey exten
   labelForRecord: (record: TRecord) => string = (record) => record.id,
   options: SaveRecordStoreOptions = {}
 ): Promise<void> {
+  return withRecordStoreMutationLock(indexUri, () => saveRecordStoreUnlocked(root, indexUri, records, recordKey, labelForRecord, options));
+}
+
+async function saveRecordStoreUnlocked<TRecord extends { id: string }, TKey extends string>(
+  root: vscode.Uri,
+  indexUri: vscode.Uri,
+  records: TRecord[],
+  recordKey: TKey,
+  labelForRecord: (record: TRecord) => string,
+  options: SaveRecordStoreOptions
+): Promise<void> {
   const savedAt = new Date().toISOString();
   const recordsRoot = vscode.Uri.joinPath(root, RECORDS_DIR);
   await vscode.workspace.fs.createDirectory(recordsRoot);
-  const previousIndex = await loadRecordsIndex(indexUri, true);
-  await preflightRecordStore<TRecord, TKey>(root, previousIndex, recordKey);
+  // 全量保存本身会重写所有 next records，因此不能让历史索引中的空/缺失文件永久阻断修复。
+  // 在 mutation lock 内复用旧文件名；若旧文件已丢失，下面的原子 writeJson 会直接重建。
+  const previousIndex = await loadRecordsIndex(indexUri, false);
   const previousRecords = previousIndex?.records ?? [];
   const previousById = new Map(previousRecords.map((record) => [record.id, record]));
 
@@ -161,12 +182,21 @@ export async function upsertRecordStoreRecords<TRecord extends { id: string }, T
   recordKey: TKey,
   labelForRecord: (record: TRecord) => string = (record) => record.id
 ): Promise<void> {
+  return withRecordStoreMutationLock(indexUri, () => upsertRecordStoreRecordsUnlocked(root, indexUri, records, recordKey, labelForRecord));
+}
+
+async function upsertRecordStoreRecordsUnlocked<TRecord extends { id: string }, TKey extends string>(
+  root: vscode.Uri,
+  indexUri: vscode.Uri,
+  records: TRecord[],
+  recordKey: TKey,
+  labelForRecord: (record: TRecord) => string
+): Promise<void> {
   const savedAt = new Date().toISOString();
   const recordsRoot = vscode.Uri.joinPath(root, RECORDS_DIR);
   await vscode.workspace.fs.createDirectory(recordsRoot);
-  const previousIndex = await loadRecordsIndex(indexUri, true);
-  await preflightRecordStore<TRecord, TKey>(root, previousIndex, recordKey);
-  const previousRecords = previousIndex?.records ?? [];
+  const previousIndex = await loadRecordsIndex(indexUri, false);
+  const previousRecords = await readableIndexRecords(root, previousIndex?.records ?? [], recordKey);
   const nextById = new Map(previousRecords.map((record) => [record.id, record]));
 
   for (const record of records) {
@@ -193,14 +223,23 @@ export async function removeRecordStoreRecord(
   id: string,
   recordKey: string
 ): Promise<void> {
-  const savedAt = new Date().toISOString();
-  const previousIndex = await loadRecordsIndex(indexUri, true);
-  if (!previousIndex) return;
-  await preflightRecordStore<{ id: string }, string>(root, previousIndex, recordKey);
+  return withRecordStoreMutationLock(indexUri, () => removeRecordStoreRecordUnlocked(root, indexUri, id, recordKey));
+}
 
-  const removed = previousIndex.records.find((record) => record.id === id);
-  const nextRecords = previousIndex.records.filter((record) => record.id !== id);
-  if (nextRecords.length === previousIndex.records.length) return;
+async function removeRecordStoreRecordUnlocked(
+  root: vscode.Uri,
+  indexUri: vscode.Uri,
+  id: string,
+  recordKey: string
+): Promise<void> {
+  const savedAt = new Date().toISOString();
+  const previousIndex = await loadRecordsIndex(indexUri, false);
+  if (!previousIndex) return;
+  const readableRecords = await readableIndexRecords(root, previousIndex.records, recordKey);
+
+  const removed = readableRecords.find((record) => record.id === id);
+  const nextRecords = readableRecords.filter((record) => record.id !== id);
+  if (!removed && nextRecords.length === previousIndex.records.length) return;
 
   // 删除也先提交索引，避免旧索引在短窗口内指向已删除文件。
   await writeJson(indexUri, {
@@ -279,13 +318,111 @@ async function deleteRecordFile(root: vscode.Uri, file: string): Promise<void> {
 }
 
 
-async function preflightRecordStore<TRecord extends { id: string }, TKey extends string>(
+async function withRecordStoreMutationLock<T>(indexUri: vscode.Uri, action: () => Promise<T>): Promise<T> {
+  const key = indexUri.toString(true);
+  const previous = recordStoreMutationQueues.get(key) ?? Promise.resolve();
+  let releaseTurn!: () => void;
+  const turn = new Promise<void>((resolve) => { releaseTurn = resolve; });
+  const queue = previous.catch(() => undefined).then(() => turn);
+  recordStoreMutationQueues.set(key, queue);
+
+  await previous.catch(() => undefined);
+  try {
+    return await withCrossProcessRecordStoreLock(indexUri, action);
+  } finally {
+    releaseTurn();
+    if (recordStoreMutationQueues.get(key) === queue) recordStoreMutationQueues.delete(key);
+  }
+}
+
+async function withCrossProcessRecordStoreLock<T>(indexUri: vscode.Uri, action: () => Promise<T>): Promise<T> {
+  if (indexUri.scheme !== 'file') return action();
+
+  const lockPath = `${indexUri.fsPath}.lock`;
+  await fs.mkdir(path.dirname(lockPath), { recursive: true });
+  const deadline = Date.now() + RECORD_STORE_LOCK_WAIT_MS;
+  let handle: fs.FileHandle | undefined;
+
+  while (!handle) {
+    try {
+      const candidate = await fs.open(lockPath, 'wx');
+      try {
+        await candidate.writeFile(JSON.stringify({ pid: process.pid, createdAt: Date.now(), indexPath: indexUri.fsPath }), 'utf8');
+        handle = candidate;
+      } catch (error) {
+        await candidate.close().catch(() => undefined);
+        await fs.rm(lockPath, { force: true }).catch(() => undefined);
+        throw error;
+      }
+    } catch (error) {
+      if (!isAlreadyExistsError(error)) throw error;
+      if (await removeStaleRecordStoreLock(lockPath)) continue;
+      if (Date.now() >= deadline) throw new Error(`Timed out waiting for record store lock: ${indexUri.fsPath}`);
+      await delay(25);
+    }
+  }
+
+  try {
+    return await action();
+  } finally {
+    await handle.close().catch(() => undefined);
+    await fs.rm(lockPath, { force: true }).catch(() => undefined);
+  }
+}
+
+async function removeStaleRecordStoreLock(lockPath: string): Promise<boolean> {
+  try {
+    const [raw, stat] = await Promise.all([
+      fs.readFile(lockPath, 'utf8').catch(() => ''),
+      fs.stat(lockPath)
+    ]);
+    const metadata = parseRecordStoreLockMetadata(raw);
+    const pid = typeof metadata?.pid === 'number' && Number.isInteger(metadata.pid) ? metadata.pid : undefined;
+    if (pid !== undefined && processIsAlive(pid)) return false;
+    const createdAt = typeof metadata?.createdAt === 'number' && Number.isFinite(metadata.createdAt) ? metadata.createdAt : stat.mtimeMs;
+    if (Date.now() - createdAt < RECORD_STORE_LOCK_STALE_MS && pid === undefined) return false;
+    await fs.rm(lockPath, { force: true });
+    return true;
+  } catch (error) {
+    if (isFileNotFound(error)) return true;
+    return false;
+  }
+}
+
+function parseRecordStoreLockMetadata(raw: string): { pid?: unknown; createdAt?: unknown } | undefined {
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw) as { pid?: unknown; createdAt?: unknown };
+  } catch {
+    return undefined;
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as { code?: unknown }).code === 'EPERM';
+  }
+}
+
+function isAlreadyExistsError(error: unknown): boolean {
+  return (error as { code?: unknown }).code === 'EEXIST';
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function readableIndexRecords<TRecord extends { id: string }, TKey extends string>(
   root: vscode.Uri,
-  index: RecordsIndexFile | undefined,
+  records: RecordIndexRecord[],
   recordKey: TKey
-): Promise<void> {
-  if (!index || index.records.length === 0) return;
-  await loadRecordFilesInBatches<TRecord, TKey>(root, index.records, recordKey, true);
+): Promise<RecordIndexRecord[]> {
+  if (records.length === 0) return [];
+  const loaded = await loadRecordFilesInBatches<TRecord, TKey>(root, records, recordKey);
+  return records.filter((record, index) => loaded[index]?.id === record.id);
 }
 
 async function loadRecordsIndex(indexUri: vscode.Uri, strict: boolean): Promise<RecordsIndexFile | undefined> {

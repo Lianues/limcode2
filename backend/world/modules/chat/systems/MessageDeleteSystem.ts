@@ -107,8 +107,7 @@ function deleteMessages(world: WorldReader, cmd: CommandSink, deletedMessages: S
   const deletedCheckpointAnchors = checkpointAnchorsForMessages(world, deletedMessages);
   const deletedCheckpoints = checkpointsOrphanedByDeletedAnchors(world, deletedCheckpointAnchors);
   const affectedRuns = runsAffectedByDeletion(world, deletedMessages, deletedRevisions, deletedToolCalls);
-  const compressionMatches = compressionBlockSourceMatchesForDeletion(world, deletedMessages);
-  const affectedCompressionBlocks = collectDependentCompressionBlocks(world, new Set(compressionMatches.map((match) => match.block)));
+  const affectedCompressionBlocks = collectDependentCompressionBlocks(world, compressionBlocksAffectedByDeletion(world, deletedMessages));
   // 被删除消息下的 ToolCall 会在本次删除中 despawn，因此只需要尽力中断外部运行时，
   // 不再补 ToolCallEvent，避免新事件的 PartOf 指向随后被删除的 ToolCall。
   abortDeletedOpenToolCalls(world, cmd, deletedToolCalls);
@@ -166,32 +165,28 @@ function deleteMessages(world: WorldReader, cmd: CommandSink, deletedMessages: S
   for (const entity of entitiesToDespawn) cmd.despawn(entity);
 }
 
-interface CompressionDeletionMatch {
-  block: Entity;
-  sourceMessageId: string;
-  role?: string;
-  order?: number;
-}
-
-function compressionBlockSourceMatchesForDeletion(world: WorldReader, deletedMessages: ReadonlySet<Entity>): CompressionDeletionMatch[] {
-  const matches: CompressionDeletionMatch[] = [];
-  const seen = new Set<string>();
-  const deletedMessageIds = new Set(
-    [...deletedMessages]
-      .map((entity) => world.get(entity, Message)?.id)
-      .filter((id): id is string => !!id)
-  );
-  for (const entity of world.query(CompressionBlockSourceLink)) {
-    const link = world.get(entity, CompressionBlockSourceLink);
-    if (!link || link.sourceKind !== 'message') continue;
-    const sourceDeleted = (link.source !== undefined && deletedMessages.has(link.source)) || deletedMessageIds.has(link.sourceId);
-    if (!sourceDeleted) continue;
-    const key = `${link.block}:${link.sourceId}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    matches.push({ block: link.block, sourceMessageId: link.sourceId, role: link.role, order: link.order });
+function compressionBlocksAffectedByDeletion(world: WorldReader, deletedMessages: ReadonlySet<Entity>): Set<Entity> {
+  const deleteStartSeqByConversation = new Map<Entity, number>();
+  for (const messageEntity of deletedMessages) {
+    const message = world.get(messageEntity, Message);
+    const conversation = world.get(messageEntity, PartOf)?.parent;
+    if (!message || conversation === undefined) continue;
+    const previous = deleteStartSeqByConversation.get(conversation);
+    if (previous === undefined || message.seq < previous) deleteStartSeqByConversation.set(conversation, message.seq);
   }
-  return matches;
+
+  const affected = new Set<Entity>();
+  for (const blockEntity of world.query(CompressionBlock)) {
+    const block = world.get(blockEntity, CompressionBlock);
+    if (!block) continue;
+    const deleteStartSeq = deleteStartSeqByConversation.get(block.conversation);
+    const sourceEndSeq = block.endSeq ?? block.anchorSeq;
+    if (deleteStartSeq === undefined || sourceEndSeq === undefined) continue;
+    // 压缩块属于它实际总结的来源区间，而不属于后来触发压缩的 model 占位消息。
+    // 删除发生在来源结束点之后时必须保留该块；只有删除边界进入来源区间时才级联删除。
+    if (sourceEndSeq >= deleteStartSeq) affected.add(blockEntity);
+  }
+  return affected;
 }
 
 function deleteCompressionBlocksCascade(world: WorldReader, cmd: CommandSink, initial: ReadonlySet<Entity>): void {

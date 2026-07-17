@@ -3,7 +3,7 @@ import type { ClientState, CompressionBlockLlmInvocationLinkRecord, CompressionB
 import { createEmptyClientState } from '../../../shared/clientStateSchema';
 import { INDEX_FILE } from './constants';
 import type { StoragePaths } from './clientStateStore';
-import { loadRecordStoreWithDiagnostics, saveRecordStore, type RecordStoreDiagnosticsResult } from './recordStore';
+import { loadRecordStoreWithDiagnostics, saveRecordStore, withRecordStoreTransaction, type RecordStoreDiagnosticsResult } from './recordStore';
 
 const CONVERSATIONS_DIR = 'conversations';
 export interface LoadConversationCompressionDetailOptions {
@@ -87,6 +87,10 @@ export async function loadConversationCompressionDetail(
 }
 
 export async function saveConversationCompressionDetail(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
+  return withRecordStoreTransaction(compressionTransactionUri(paths, conversationId), () => saveConversationCompressionDetailUnlocked(paths, conversationId, state));
+}
+
+async function saveConversationCompressionDetailUnlocked(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
   const blocks = state.compressionBlocks.filter((block) => block.conversationId === conversationId);
   const blockIds = new Set(blocks.map((block) => block.id));
   let links = state.compressionBlockSourceLinks.filter((link) => blockIds.has(link.blockId));
@@ -139,6 +143,10 @@ function normalizeLoadedLlmInvocation(record: LlmInvocationRecord, now: number):
     error: record.error ?? 'LLM 调用已中断，未收到完成事件。',
     completedAt: record.completedAt ?? now
   };
+}
+
+function compressionTransactionUri(paths: StoragePaths, conversationId: string): vscode.Uri {
+  return vscode.Uri.joinPath(conversationScopedRoot(paths.compressionBlocksRootUri, conversationId), '.compression-store-transaction');
 }
 
 function conversationScopedRoot(root: vscode.Uri, conversationId: string): vscode.Uri {

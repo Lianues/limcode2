@@ -17,7 +17,7 @@ function resolveValue<T>(value: MaybeReactive<T> | undefined): T | undefined {
 export function settingsScopeLabel(scopeKind: string | undefined): string {
   switch (scopeKind) {
     case 'agent': return 'Agent ';
-    case 'mode': return '模式';
+    case 'mode': return '工作流';
     case 'conversation': return '对话';
     case 'run': return '运行';
     case 'agentSystem': return '多 Agent 系统';

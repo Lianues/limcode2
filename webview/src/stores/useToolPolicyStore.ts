@@ -61,7 +61,7 @@ function defaultPolicyName(scopeKind: ToolPolicyScopeKind): string {
     case 'conversation': return '对话工具策略';
     case 'agent': return 'Agent 工具策略';
     case 'agentSystem': return '多 Agent 系统工具策略';
-    case 'mode': return '模式工具策略';
+    case 'mode': return '工作流工具策略';
     case 'run': return '运行工具策略';
   }
 }

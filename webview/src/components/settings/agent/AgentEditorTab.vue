@@ -47,7 +47,7 @@ function confirmDelete(): void { const agent = activeAgent.value; deleteOpen.val
           Agent
           <SettingsLoadingInline :show="agentLoading" :text="agentLoadingText" />
         </h2>
-        <p>Agent 是角色层（who）：人格 Prompt、能力上限和默认模型。Mode 是独立的交互模式层（how）。</p>
+        <p>Agent 是角色和能力主体（who）：人格 Prompt、能力上限和默认模型。Workflow 是本次运行方式（how），可临时叠加计划、审查、只读等工作流策略。</p>
       </div>
     </header>
 
@@ -77,10 +77,10 @@ function confirmDelete(): void { const agent = activeAgent.value; deleteOpen.val
       <div class="agent-description" contenteditable="plaintext-only" data-placeholder="描述这个 Agent 的用途" @blur="updateDescription">{{ activeAgent.description ?? '' }}</div>
     </label>
 
-    <SystemPromptScopeEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 人格 Prompt" description="按 global → agent → mode → conversation → run 顺序拼接。这里定义这个 Agent 的角色人格。" />
+    <SystemPromptScopeEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 人格 Prompt" description="按 global → agent → workflow → conversation → run 顺序拼接。这里定义这个 Agent 的角色人格。" />
     <RuntimeContextScopeEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 运行时上下文模板" description="用于生成运行时快照的 Agent 级模板；变量只在快照生成或刷新时替换一次。" />
-    <ModelProfileScopeEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 默认模型" description="当 conversation/mode/run 没有更近覆盖时使用。" />
-    <ToolPolicyEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 工具能力上限" description="Agent 的工具策略作为能力上限，Mode/Conversation/Run 只能继续收窄，不能放大。" />
+    <ModelProfileScopeEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 默认模型" description="当 conversation/workflow/run 没有更近覆盖时使用。" />
+    <ToolPolicyEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 工具能力上限" description="Agent 的工具策略作为能力上限，Workflow/Conversation/Run 只能继续收窄，不能放大。" />
     <SkillPolicyEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 技能策略" description="限制这个 Agent 可使用的技能；未配置时继承全局技能策略。" />
     <WorkEnvironmentPolicyEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 工作环境策略" description="限制这个 Agent 可使用的工作环境。" />
     <CheckpointPolicyEditor v-if="activeAgent" scope-kind="agent" :scope-id="activeAgent.id" title="Agent 存档点策略" description="限制这个 Agent 触发存档点的时机和 shadow 仓库过滤规则。" />

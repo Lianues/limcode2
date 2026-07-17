@@ -5,8 +5,8 @@ import ModeSettingsPanel from '@webview/components/settings/ModeSettingsPanel.vu
 <template>
   <div class="mode-settings-view">
     <header class="view-header">
-      <span class="view-title">LimCode 模式设置</span>
-      <span class="view-hint">配置内置模式、用户模式，以及模式级工具策略。</span>
+      <span class="view-title">LimCode 工作流设置</span>
+      <span class="view-hint">配置内置工作流、用户工作流，以及工作流级工具策略。</span>
     </header>
     <div class="view-body">
       <ModeSettingsPanel />

@@ -100,7 +100,7 @@ function defaultPolicyName(scopeKind: CheckpointPolicyScopeKind): string {
     case 'global': return '全局默认存档点策略';
     case 'conversation': return '对话存档点策略';
     case 'agent': return 'Agent 存档点策略';
-    case 'mode': return '模式存档点策略';
+    case 'mode': return '工作流存档点策略';
     case 'run': return '运行存档点策略';
   }
 }

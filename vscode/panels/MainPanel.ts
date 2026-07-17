@@ -243,7 +243,7 @@ function panelKind(options: MainPanelOptions): MainPanelKind {
 
 function panelTitle(options: MainPanelOptions, backendApp: BackendApplication): string {
   if (options.kind === 'globalSettings') return 'LimCode 设置';
-  if (options.kind === 'modeSettings') return 'LimCode 模式设置';
+  if (options.kind === 'modeSettings') return 'LimCode 工作流设置';
   if (options.kind === 'agentSettings') return 'LimCode Agent 设置';
   if (!options.conversationId) return panelTabTitle('LimCode');
   const title = options.title
@@ -267,7 +267,7 @@ function optionsFromSerializedState(state: unknown, fallbackTitle: string): Main
   const isModeSettings =
     serializedKind === 'modeSettings' ||
     meta?.kind === 'modeSettings' ||
-    fallbackTitle === 'LimCode 模式设置';
+    fallbackTitle === 'LimCode 工作流设置';
   const isAgentSettings =
     serializedKind === 'agentSettings' ||
     meta?.kind === 'agentSettings' ||

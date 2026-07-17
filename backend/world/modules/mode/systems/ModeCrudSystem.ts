@@ -21,7 +21,7 @@ export const ModeCrudSystem = defineSystem({
     const { world, cmd } = ctx;
 
     for (const payload of readEvents(ctx, ModeEventType.Create)) {
-      const name = normalizeName(payload.name, '新模式');
+      const name = normalizeName(payload.name, '新工作流');
       const now = Date.now();
       const entity = cmd.spawn();
       const id = `mode:${createMessageId()}`;

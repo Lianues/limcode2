@@ -23,8 +23,8 @@ import {
 export const SYSTEM_PROMPT_PLACEHOLDERS: PromptPlaceholderRecord[] = [
   { id: 'system:agent.name', token: '{{$agent.name}}', label: 'Agent 名称', description: '当前 Run 执行 Agent 的名称。', target: 'systemPrompt', order: 10 },
   { id: 'system:agent.description', token: '{{$agent.description}}', label: 'Agent 描述', description: '当前 Run 执行 Agent 的描述。', target: 'systemPrompt', order: 20 },
-  { id: 'system:mode.name', token: '{{$mode.name}}', label: 'Mode 名称', description: '当前 Run 选中的模式名称；未选择模式时为空。', target: 'systemPrompt', order: 30 },
-  { id: 'system:mode.description', token: '{{$mode.description}}', label: 'Mode 描述', description: '当前 Run 选中模式的描述；未选择模式时为空。', target: 'systemPrompt', order: 40 }
+  { id: 'system:mode.name', token: '{{$mode.name}}', label: 'Workflow 名称', description: '当前 Run 选中的工作流名称；未选择工作流时为空。', target: 'systemPrompt', order: 30 },
+  { id: 'system:mode.description', token: '{{$mode.description}}', label: 'Workflow 描述', description: '当前 Run 选中工作流的描述；未选择工作流时为空。', target: 'systemPrompt', order: 40 }
 ];
 
 export const RUNTIME_CONTEXT_PLACEHOLDERS: PromptPlaceholderRecord[] = [

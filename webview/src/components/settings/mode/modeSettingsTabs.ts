@@ -15,8 +15,8 @@ export interface ModeSettingsTabDefinition {
 export const MODE_SETTINGS_TABS: readonly ModeSettingsTabDefinition[] = [
   {
     key: 'mode-editor',
-    label: '模式编辑',
-    description: '模式与工具策略',
+    label: '工作流编辑',
+    description: '工作流与工具策略',
     icon: IconListDetails,
     component: ModeEditorTab
   }

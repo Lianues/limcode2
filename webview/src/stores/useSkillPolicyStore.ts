@@ -43,7 +43,7 @@ function defaultPolicyName(scopeKind: SkillPolicyScopeKind): string {
     case 'conversation': return '对话技能策略';
     case 'agent': return 'Agent 技能策略';
     case 'agentSystem': return '多 Agent 系统技能策略';
-    case 'mode': return '模式技能策略';
+    case 'mode': return '工作流技能策略';
     case 'run': return '运行技能策略';
   }
 }

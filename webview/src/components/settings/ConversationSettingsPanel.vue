@@ -46,7 +46,7 @@ function reload(): void {
       scope-kind="conversation"
       :scope-id="settings.common.conversationId"
       title="对话系统提示词"
-      description="仅影响当前对话，会在 global / agent / mode 之后拼接。"
+      description="仅影响当前对话，会在 global / agent / workflow 之后拼接。"
     />
 
     <RuntimeContextScopeEditor

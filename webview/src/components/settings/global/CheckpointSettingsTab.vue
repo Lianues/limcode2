@@ -42,7 +42,7 @@ onMounted(() => {
     <CheckpointPolicyEditor
       scope-kind="global"
       title="全局默认存档点策略"
-      description="未配置对话、Agent 或模式覆盖时使用。shadow 仓库保存在插件数据目录中，不修改真实项目。"
+      description="未配置对话、Agent 或工作流覆盖时使用。shadow 仓库保存在插件数据目录中，不修改真实项目。"
     />
 
     <ShadowRepositoryManager />

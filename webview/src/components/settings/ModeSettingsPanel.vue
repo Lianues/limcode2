@@ -7,7 +7,7 @@ import { DEFAULT_MODE_SETTINGS_TAB, MODE_SETTINGS_TABS } from './mode/modeSettin
   <SettingsScopeLayout
     :tabs="MODE_SETTINGS_TABS"
     :default-tab="DEFAULT_MODE_SETTINGS_TAB"
-    settings-label="模式设置"
+    settings-label="工作流设置"
   />
 </template>
 

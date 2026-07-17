@@ -742,8 +742,8 @@ function historyNodeStyle(node: VisibleHistoryTreeNode): Record<string, string> 
               <IconListDetails class="settings-gear-icon" stroke="2" />
             </span>
             <span class="settings-nav-main">
-              <span class="settings-nav-title">模式设置</span>
-              <span class="settings-nav-desc">内置模式、用户模式与模式级工具策略。</span>
+              <span class="settings-nav-title">工作流设置</span>
+              <span class="settings-nav-desc">内置工作流、用户工作流与工作流级工具策略。</span>
             </span>
             <span class="settings-nav-trail">
               打开

@@ -27,7 +27,7 @@ function modeLabel(mode: ModeRecord): string {
   return mode.name.trim() || mode.id;
 }
 
-function normalizeName(name: string, fallback = '新模式'): string {
+function normalizeName(name: string, fallback = '新工作流'): string {
   return name.trim().replace(/\s+/g, ' ') || fallback;
 }
 
@@ -80,7 +80,7 @@ export const useModeStore = defineStore('mode', {
     },
     createMode(name: string, description?: string): void {
       const normalizedName = normalizeName(name);
-      this.status = '正在创建模式...';
+      this.status = '正在创建工作流...';
       bridge.request(BridgeMessageType.ModeCreate, {
         name: normalizedName,
         ...(normalizeDescription(description) ? { description: normalizeDescription(description) } : {})
@@ -93,7 +93,7 @@ export const useModeStore = defineStore('mode', {
       const nextName = normalizeName(name, mode.name);
       mode.name = nextName;
       mode.updatedAt = Date.now();
-      this.status = '正在重命名模式...';
+      this.status = '正在重命名工作流...';
       bridge.request(BridgeMessageType.ModeUpdate, { modeId, name: nextName });
     },
     updateModeDescription(modeId: string, description: string): void {
@@ -104,7 +104,7 @@ export const useModeStore = defineStore('mode', {
       if (nextDescription) mode.description = nextDescription;
       else delete mode.description;
       mode.updatedAt = Date.now();
-      this.status = '正在更新模式描述...';
+      this.status = '正在更新工作流描述...';
       bridge.request(BridgeMessageType.ModeUpdate, { modeId, description: nextDescription ?? '' });
     },
     deleteMode(modeId: string): void {
@@ -113,7 +113,7 @@ export const useModeStore = defineStore('mode', {
       if (!mode || mode.source === 'builtin') return;
       clientState.modes = clientState.modes.filter((candidate) => candidate.id !== modeId);
       clientState.conversationModeSelections = clientState.conversationModeSelections.filter((selection) => selection.modeId !== modeId);
-      this.status = '正在删除模式...';
+      this.status = '正在删除工作流...';
       bridge.request(BridgeMessageType.ModeDelete, { modeId });
     },
     applyOptimisticSelection(payload: { conversationId: string; scopeKind: 'global' } | { conversationId: string; scopeKind: 'mode'; modeId: string }): void {
@@ -135,7 +135,7 @@ export const useModeStore = defineStore('mode', {
         (candidate) => !(candidate.conversationId === payload.conversationId && candidate.role === 'active')
       );
       upsertById(clientState.conversationModeSelections, selection);
-      this.status = payload.scopeKind === 'global' ? '已切换到 Global' : '已切换模式';
+      this.status = payload.scopeKind === 'global' ? '已切换到默认工作流' : '已切换工作流';
     },
     createLocalModeRecord(name: string): ModeRecord {
       const now = Date.now();

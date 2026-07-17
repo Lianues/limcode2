@@ -18,7 +18,7 @@ import ModelProfileScopeEditor from '@webview/components/settings/config/ModelPr
 import { useSettingsLoadingText } from '@webview/composables/useSettingsLoading';
 
 const modeStore = useModeStore();
-const { loading: modeLoading, text: modeLoadingText } = useSettingsLoadingText('模式配置');
+const { loading: modeLoading, text: modeLoadingText } = useSettingsLoadingText('工作流配置');
 const activeModeId = ref('');
 const createOpen = ref(false);
 const renameOpen = ref(false);
@@ -29,20 +29,20 @@ const modeOptions = computed<SettingsDropdownOption[]>(() =>
   modeStore.modes.map((mode) => ({
     value: mode.id,
     label: mode.name,
-    description: mode.description || (mode.source === 'builtin' ? '内置模式' : '用户模式'),
+    description: mode.description || (mode.source === 'builtin' ? '内置工作流' : '用户工作流'),
     icon: IconListDetails
   }))
 );
 const activeMode = computed<ModeRecord | undefined>(() => modeStore.modes.find((mode) => mode.id === activeModeId.value));
 const canDeleteActiveMode = computed(() => !!activeMode.value && activeMode.value.source !== 'builtin');
-const activeModeKindLabel = computed(() => activeMode.value?.source === 'builtin' ? '内置模式' : '用户模式');
+const activeModeKindLabel = computed(() => activeMode.value?.source === 'builtin' ? '内置工作流' : '用户工作流');
 const deleteConfirmActions: ConfirmPanelAction[] = [
   { key: 'cancel', label: '取消', variant: 'secondary' },
   { key: 'confirm', label: '删除' }
 ];
 const deleteDescriptionHtml = computed(() => {
-  const name = escapeHtml(activeMode.value?.name ?? '这个模式');
-  return `确定删除「${name}」吗？关联的对话模式选择和模式级工具策略也会被清理，此操作<strong>无法撤销</strong>。`;
+  const name = escapeHtml(activeMode.value?.name ?? '这个工作流');
+  return `确定删除「${name}」吗？关联的对话工作流选择和工作流级工具策略也会被清理，此操作<strong>无法撤销</strong>。`;
 });
 
 watch(
@@ -104,39 +104,39 @@ function escapeHtml(value: string): string {
 </script>
 
 <template>
-  <section class="global-settings-tab-section" aria-label="模式编辑">
+  <section class="global-settings-tab-section" aria-label="工作流编辑">
     <header class="global-settings-section-header">
       <div>
         <h2>
-          模式
+          工作流
           <SettingsLoadingInline :show="modeLoading" :text="modeLoadingText" />
         </h2>
-        <p>管理内置模式和用户自定义模式。Global 是聊天里的合成选项，表示使用全局工具策略，不在这里作为模式编辑。</p>
+        <p>管理内置工作流和用户自定义工作流。默认是聊天里的合成选项，表示使用全局工具策略，不在这里作为工作流编辑。</p>
       </div>
     </header>
 
     <div class="mode-editor-content">
       <div class="channel-config-picker">
         <label class="global-settings-field channel-config-select">
-          <span>模式页</span>
+          <span>工作流页</span>
           <SettingsDropdown
             v-model="activeModeId"
             :options="modeOptions"
-            title="切换模式页"
-            empty-text="暂无模式。"
+            title="切换工作流页"
+            empty-text="暂无工作流。"
             searchable
-            search-placeholder="筛选模式..."
+            search-placeholder="筛选工作流..."
           />
         </label>
 
-        <div class="channel-config-actions" aria-label="模式操作">
-          <button type="button" class="icon-action" aria-label="新建模式" @click="openCreate">
+        <div class="channel-config-actions" aria-label="工作流操作">
+          <button type="button" class="icon-action" aria-label="新建工作流" @click="openCreate">
             <IconPlus stroke="2" aria-hidden="true" />
           </button>
-          <button type="button" class="icon-action" aria-label="重命名模式" :disabled="!activeMode" @click="openRename">
+          <button type="button" class="icon-action" aria-label="重命名工作流" :disabled="!activeMode" @click="openRename">
             <IconPencil stroke="2" aria-hidden="true" />
           </button>
-          <button type="button" class="icon-action" aria-label="删除模式" :disabled="!canDeleteActiveMode" @click="openDeleteConfirm">
+          <button type="button" class="icon-action" aria-label="删除工作流" :disabled="!canDeleteActiveMode" @click="openDeleteConfirm">
             <IconTrash stroke="2" aria-hidden="true" />
           </button>
         </div>
@@ -152,7 +152,7 @@ function escapeHtml(value: string): string {
       </div>
 
       <label v-if="activeMode" class="global-settings-field global-settings-field-wide mode-description-field">
-        <span>模式描述</span>
+        <span>工作流描述</span>
         <div class="mode-description-shell">
           <div
             :key="activeMode.id"
@@ -161,7 +161,7 @@ function escapeHtml(value: string): string {
             contenteditable="plaintext-only"
             role="textbox"
             aria-multiline="true"
-            data-placeholder="描述这个模式的用途"
+            data-placeholder="描述这个工作流的用途"
             @blur="updateDescription"
           >{{ activeMode.description ?? '' }}</div>
           <AdvancedScrollbar :scroller="modeDescriptionScroller" :refresh-key="activeMode.id" variant="minimal" />
@@ -172,68 +172,68 @@ function escapeHtml(value: string): string {
         v-if="activeMode"
         scope-kind="mode"
         :scope-id="activeMode.id"
-        title="模式行为 Prompt"
-        description="按 global → agent → mode → conversation → run 顺序拼接。这里定义这个模式的行为段。"
+        title="工作流行为 Prompt"
+        description="按 global → agent → workflow → conversation → run 顺序拼接。这里定义这个工作流的行为段。"
       />
 
       <ModelProfileScopeEditor
         v-if="activeMode"
         scope-kind="mode"
         :scope-id="activeMode.id"
-        title="模式模型覆盖"
-        description="当这个模式被选中时，优先覆盖 Agent 默认模型；Run/Conversation 仍可覆盖它。"
+        title="工作流模型覆盖"
+        description="当这个工作流被选中时，优先覆盖 Agent 默认模型；Run/Conversation 仍可覆盖它。"
       />
 
       <RuntimeContextScopeEditor
         v-if="activeMode"
         scope-kind="mode"
         :scope-id="activeMode.id"
-        title="模式运行时上下文模板"
-        description="用于生成运行时快照的模式级模板；变量只在快照生成或刷新时替换一次。"
+        title="工作流运行时上下文模板"
+        description="用于生成运行时快照的工作流级模板；变量只在快照生成或刷新时替换一次。"
       />
 
       <WorkEnvironmentPolicyEditor
         v-if="activeMode"
         scope-kind="mode"
         :scope-id="activeMode.id"
-        title="模式工作环境策略"
-        description="这个模式启用时会优先使用这里的工作环境策略；未配置时继承全局策略。"
+        title="工作流工作环境策略"
+        description="这个工作流启用时会优先使用这里的工作环境策略；未配置时继承全局策略。"
       />
 
       <ToolPolicyEditor
         v-if="activeMode"
         scope-kind="mode"
         :scope-id="activeMode.id"
-        title="模式工具策略"
-        description="这个模式启用时会优先使用这里的工具策略；未配置时继承全局策略。"
+        title="工作流工具策略"
+        description="这个工作流启用时会优先使用这里的工具策略；未配置时继承全局策略。"
       />
 
       <SkillPolicyEditor
         v-if="activeMode"
         scope-kind="mode"
         :scope-id="activeMode.id"
-        title="模式技能策略"
-        description="这个模式启用时会优先使用这里的技能策略；未配置时继承全局策略。"
+        title="工作流技能策略"
+        description="这个工作流启用时会优先使用这里的技能策略；未配置时继承全局策略。"
       />
 
       <CheckpointPolicyEditor
         v-if="activeMode"
         scope-kind="mode"
         :scope-id="activeMode.id"
-        title="模式存档点策略"
-        description="这个模式启用时会优先使用这里的存档点策略；未配置时继承全局策略。"
+        title="工作流存档点策略"
+        description="这个工作流启用时会优先使用这里的存档点策略；未配置时继承全局策略。"
       />
 
-      <div v-else class="global-settings-empty">等待后端返回模式列表...</div>
+      <div v-else class="global-settings-empty">等待后端返回工作流列表...</div>
 
       <p class="global-settings-status">{{ modeStore.status }}</p>
     </div>
 
     <InputPanel
       :open="createOpen"
-      title="新建模式"
-      description="输入模式名称。创建后可在这里配置该模式的工具策略。"
-      label="模式名称"
+      title="新建工作流"
+      description="输入工作流名称。创建后可在这里配置该工作流的工具策略。"
+      label="工作流名称"
       placeholder="例如：Research"
       confirm-label="创建"
       @confirm="confirmCreate"
@@ -242,11 +242,11 @@ function escapeHtml(value: string): string {
 
     <InputPanel
       :open="renameOpen"
-      title="重命名模式"
-      description="输入新的模式名称。"
-      label="模式名称"
+      title="重命名工作流"
+      description="输入新的工作流名称。"
+      label="工作流名称"
       :initial-value="activeMode?.name ?? ''"
-      placeholder="输入新的模式名称"
+      placeholder="输入新的工作流名称"
       confirm-label="保存"
       @confirm="confirmRename"
       @cancel="cancelRename"
@@ -254,7 +254,7 @@ function escapeHtml(value: string): string {
 
     <ConfirmPanel
       :open="deleteConfirmOpen"
-      title="删除模式？"
+      title="删除工作流？"
       :description-html="deleteDescriptionHtml"
       :actions="deleteConfirmActions"
       @confirm="confirmDelete"

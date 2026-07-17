@@ -28,7 +28,7 @@ export interface ClientStateStoreState extends ClientState {
   currentConversationId: string;
 }
 
-/** 当前对话的模型 / 模式概要，供标签头展示。 */
+/** 当前对话的模型 / 工作流概要，供标签头展示。 */
 export interface CurrentModelSummary {
   agentName?: string;
   modeName?: string;

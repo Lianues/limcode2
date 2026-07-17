@@ -111,14 +111,14 @@ const workEnvironmentOptions = computed<SettingsDropdownOption[]>(() =>
 const modeOptions = computed<SettingsDropdownOption[]>(() => [
   {
     value: GLOBAL_MODE_OPTION_ID,
-    label: 'Global',
-    description: '使用全局策略',
+    label: '默认',
+    description: '使用全局默认策略',
     icon: IconWorld
   },
   ...modeStore.modes.map((mode) => ({
     value: mode.id,
     label: mode.name,
-    description: mode.description || (mode.source === 'builtin' ? '内置模式' : '用户模式'),
+    description: mode.description || (mode.source === 'builtin' ? '内置工作流' : '用户工作流'),
     icon: IconListDetails
   }))
 ]);
@@ -710,9 +710,9 @@ function middleEllipsis(value: string, maxLength: number): string {
             v-model="activeModeId"
             class="composer-meta-dropdown composer-mode-dropdown"
             :options="modeOptions"
-            title="切换对话模式"
+            title="切换工作流"
             searchable
-            search-placeholder="筛选模式..."
+            search-placeholder="筛选工作流..."
             :close-signal="modeDropdownCloseSignal"
             :max-height="220"
             @open="onModeDropdownOpen"

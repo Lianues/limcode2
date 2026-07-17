@@ -22,7 +22,7 @@ const { loading: promptLoading, text: promptLoadingText } = useSettingsLoadingTe
     <SystemPromptScopeEditor
       scope-kind="global"
       title="全局系统提示词"
-      description="所有 Agent / Mode / Conversation 都会继承这里的稳定规则。可插入 Agent / Mode 这类稳定占位符。"
+      description="所有 Agent / Workflow / Conversation 都会继承这里的稳定规则。可插入 Agent / Workflow 这类稳定占位符。"
     />
 
     <RuntimeContextScopeEditor

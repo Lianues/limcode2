@@ -82,6 +82,7 @@ export interface WebviewMessageRouterDeps {
   isHydrated: () => boolean;
   requestSnapshot: (conversationId?: string) => void;
   requestPersist?: (reason: string) => void;
+  flushPersistence?: (reason: string) => Promise<void>;
   ensureConversationDetailLoaded: (conversationId: string) => Promise<void>;
   ensureConversationTailLoaded: (conversationId: string) => Promise<void>;
   getProjectFolderCandidates: () => ProjectFolderCandidateRecord[];
@@ -708,18 +709,54 @@ export class WebviewMessageRouter {
 
   private async handleMessageDeleteFrom(payload: MessageDeleteFromPayload): Promise<void> {
     try {
-      await this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'between', startMessageId: payload.messageId, endMessageId: payload.messageId }, () => undefined);
-      await this.deps.storage.truncateConversationTimeline({ conversationId: payload.conversationId, anchorMessageId: payload.messageId, keepAnchor: false });
-      this.deps.world.enqueue({ type: ChatEventType.DeleteFrom, payload });
+      await this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'between', startMessageId: payload.messageId, endMessageId: payload.messageId, contextBeforeChunks: 1 }, () => undefined);
+      const deletePayload = this.normalizeDeleteFromPayload(payload);
+      await this.deps.flushPersistence?.('before-message-delete-truncate');
+      await this.deps.storage.truncateConversationTimeline({ conversationId: deletePayload.conversationId, anchorMessageId: deletePayload.messageId, keepAnchor: false });
+      this.deps.world.enqueue({ type: ChatEventType.DeleteFrom, payload: deletePayload });
     } catch (error) {
       console.warn('[LimCode] Failed to truncate conversation before deleting messages.', error);
     }
+  }
+
+  private normalizeDeleteFromPayload(payload: MessageDeleteFromPayload): MessageDeleteFromPayload {
+    const boundaryMessageId = this.functionCallBoundaryForToolResponse(payload.conversationId, payload.messageId);
+    return boundaryMessageId && boundaryMessageId !== payload.messageId ? { ...payload, messageId: boundaryMessageId } : payload;
+  }
+
+  private functionCallBoundaryForToolResponse(conversationId: string, messageId: string): string | undefined {
+    const conversation = this.deps.world.query(Conversation).find((entity) => this.deps.world.get(entity, Conversation)?.id === conversationId);
+    if (conversation === undefined) return undefined;
+    const messages = this.deps.world
+      .query(Message, PartOf)
+      .filter((entity) => this.deps.world.get(entity, PartOf)?.parent === conversation)
+      .sort((left, right) => (this.deps.world.get(left, Message)?.seq ?? 0) - (this.deps.world.get(right, Message)?.seq ?? 0));
+    const index = messages.findIndex((entity) => this.deps.world.get(entity, Message)?.id === messageId);
+    if (index < 0) return undefined;
+    const message = this.deps.world.get(messages[index], Message);
+    const response = message?.content.parts.find(isFunctionResponsePart);
+    if (!response || !isFunctionResponsePart(response)) return undefined;
+    const responseId = response.id?.trim();
+    const responseName = response.functionResponse.name;
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      const candidate = this.deps.world.get(messages[cursor], Message);
+      if (!candidate) continue;
+      const matched = candidate.content.parts.some((part) => {
+        if (!isFunctionCallPart(part)) return false;
+        if (responseId && part.id?.trim() === responseId) return true;
+        return !responseId && part.functionCall.name === responseName;
+      });
+      if (matched) return candidate.id;
+      if (candidate.role === 'user' && !candidate.content.parts.some(isFunctionResponsePart)) break;
+    }
+    return undefined;
   }
 
   private async handleMessageEdit(payload: MessageEditPayload): Promise<void> {
     try {
       await this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'between', startMessageId: payload.messageId, endMessageId: payload.messageId, contextBeforeChunks: 1 }, () => undefined);
       if (payload.deleteFollowing) {
+        await this.deps.flushPersistence?.('before-message-edit-truncate');
         await this.deps.storage.truncateConversationTimeline({ conversationId: payload.conversationId, anchorMessageId: payload.messageId, keepAnchor: true });
       }
       this.deps.world.enqueue({ type: ChatEventType.Edit, payload });
@@ -731,6 +768,7 @@ export class WebviewMessageRouter {
   private async handleMessageRetryFrom(payload: MessageRetryFromPayload): Promise<void> {
     try {
       await this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'between', startMessageId: payload.messageId, endMessageId: payload.messageId, contextBeforeChunks: 1 }, () => undefined);
+      await this.deps.flushPersistence?.('before-message-retry-truncate');
       await this.deps.storage.truncateConversationTimeline({ conversationId: payload.conversationId, anchorMessageId: payload.messageId, keepAnchor: false });
       this.deps.world.enqueue({ type: ChatEventType.RetryFrom, payload });
     } catch (error) {

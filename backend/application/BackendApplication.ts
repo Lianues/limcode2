@@ -211,6 +211,7 @@ export class BackendApplication {
       isHydrated: () => this.hydrated,
       requestSnapshot: (conversationId) => this.requestSnapshot(conversationId),
       requestPersist: (reason) => this.requestPersistSoon(reason),
+      flushPersistence: (_reason) => this.persistence.persistImmediately({ ensurePersisted: true, throwOnError: true }),
       ensureConversationDetailLoaded: (conversationId) => this.ensureConversationDetailLoaded(conversationId),
       ensureConversationTailLoaded: (conversationId) => this.ensureConversationTailLoaded(conversationId),
       getProjectFolderCandidates: () => this.getProjectFolderCandidates(),
@@ -593,7 +594,14 @@ export class BackendApplication {
     if (page.state.messages.length > 0 && this.findConversationEntity(conversationId) === undefined) {
       this.spawnPreHydrationConversation(conversationId);
     }
-    if (page.state.messages.length > 0) await hydrateConversationDetail(this.world, page.state, conversationId);
+    if (page.state.messages.length > 0) {
+      const backfilled = backfillMissingToolResponsesForStatelessLoad(page.state, conversationId);
+      await hydrateConversationDetail(this.world, backfilled.state, conversationId);
+      if (backfilled.addedCount > 0) {
+        this.requestSnapshot(conversationId);
+        this.persistence.queuePersist();
+      }
+    }
     this.conversationTailLoaded.add(conversationId);
   }
 
@@ -627,10 +635,12 @@ export class BackendApplication {
       return;
     }
 
-    const existingBefore = this.findConversationEntity(conversationId);
-    const statelessLoad = existingBefore !== undefined;
     const storedDetail = await this.env.storage.loadConversationDetail(conversationId, { includeRunHistory: false });
-    const backfilled = storedDetail && statelessLoad
+    // 历史 timeline 可能因为截断/重试/增量持久化交错留下“ToolCall 终态存在，但
+    // Message.content 中缺少 functionResponse”的不一致记录。无论是冷加载还是无状态
+    // 加载，都先用已保存的 toolCalls 结果补齐消息层响应，避免后续压缩/模型上下文被
+    // 半截 functionCall 卡住。
+    const backfilled = storedDetail
       ? backfillMissingToolResponsesForStatelessLoad(storedDetail, conversationId)
       : { state: storedDetail, addedCount: 0 };
     const detail = backfilled.state;

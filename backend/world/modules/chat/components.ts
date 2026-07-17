@@ -3,6 +3,7 @@ import type {
   AgentRunSourceKind,
   ConversationBranchKind,
   ConversationOriginKind,
+  LlmCompressionMethodKind,
   LlmUsageMetadataRecord,
   MessageContent,
   MessageRevisionReason,
@@ -97,6 +98,14 @@ export interface LlmRequestData {
   invocation?: Entity;
 }
 export const LlmRequest = defineComponent<LlmRequestData>('LlmRequest');
+
+export interface LlmRequestPreDispatchCompressionAttemptData {
+  anchorMessageId: string;
+  anchorSeq: number;
+  methodKind: LlmCompressionMethodKind;
+  requestedAt: number;
+}
+export const LlmRequestPreDispatchCompressionAttempt = defineComponent<LlmRequestPreDispatchCompressionAttemptData>('LlmRequestPreDispatchCompressionAttempt');
 
 export interface InFlightData {
   kind: 'llm' | 'tool';

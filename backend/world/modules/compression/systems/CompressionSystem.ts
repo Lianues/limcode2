@@ -9,7 +9,8 @@ import type { LlmCompactDonePayload, LlmCompactErrorPayload, LlmRetryPayload } f
 import { LlmInvocation } from '../../llm/components';
 import { CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSourceLink, CompressionContextVariant, RunCompressionBlockLink, type CompressionBlockData } from '../components';
 import { CompressionEventType } from '../events';
-import { ToolCall, ToolState } from '../../tools/components';
+import { ToolCall, ToolResultConsumed, ToolState } from '../../tools/components';
+import { isTerminalToolStatus } from '../../tools/state';
 import type { CompressionBlockRecord, ContentPart, MessageContent, MessageRecord, ToolCallRecord } from '../../../../../shared/protocol';
 import { isFileDataPart, isFunctionCallPart, isFunctionResponsePart, isInlineDataPart, isProviderContextPart, isTextPart, isVisibleTextPart } from '../../../../../shared/protocol';
 import { buildTaskListTimeline, formatTaskListSnapshotForContext } from '../../../../../shared/taskListProjection';
@@ -28,7 +29,7 @@ const COMPRESSION_WRITE_COMPONENTS = [
   LlmInvocation,
   CompressionBlockLlmInvocationLink
 ] as const;
-const COMPRESSION_READ_COMPONENTS = [...COMPRESSION_WRITE_COMPONENTS, ToolCall, ToolState] as const;
+const COMPRESSION_READ_COMPONENTS = [...COMPRESSION_WRITE_COMPONENTS, ToolCall, ToolState, ToolResultConsumed] as const;
 
 export const CompressionSystem = defineSystem({
   name: 'CompressionSystem',
@@ -915,34 +916,63 @@ function messageContentsForEntities(world: WorldReader, entities: Entity[]): Mes
     .filter((content): content is MessageContent => !!content);
 }
 
+interface PendingFunctionCall {
+  id?: string;
+  name: string;
+  message: Entity;
+}
+
 function hasUnresolvedFunctionCallsInEntities(world: WorldReader, entities: Entity[]): boolean {
-  const pendingCallIds = new Set<string>();
-  const pendingCallNames = new Map<string, number>();
+  const pendingCallIds = new Map<string, PendingFunctionCall>();
+  const pendingCallNames = new Map<string, PendingFunctionCall[]>();
   for (const entity of entities) {
     const content = world.get(entity, Message)?.content;
     if (!content) continue;
     for (const part of content.parts) {
       if (isFunctionCallPart(part)) {
         const callId = part.id?.trim();
+        const pending: PendingFunctionCall = { ...(callId ? { id: callId } : {}), name: part.functionCall.name, message: entity };
         if (callId) {
-          pendingCallIds.add(callId);
+          pendingCallIds.set(callId, pending);
         } else {
-          pendingCallNames.set(part.functionCall.name, (pendingCallNames.get(part.functionCall.name) ?? 0) + 1);
+          const calls = pendingCallNames.get(part.functionCall.name) ?? [];
+          calls.push(pending);
+          pendingCallNames.set(part.functionCall.name, calls);
         }
         continue;
       }
       if (!isFunctionResponsePart(part)) continue;
       const callId = part.id?.trim();
-      if (callId) {
-        pendingCallIds.delete(callId);
-      } else {
-        const nextCount = (pendingCallNames.get(part.functionResponse.name) ?? 0) - 1;
-        if (nextCount > 0) pendingCallNames.set(part.functionResponse.name, nextCount);
-        else pendingCallNames.delete(part.functionResponse.name);
-      }
+      if (callId && pendingCallIds.delete(callId)) continue;
+      const pendingByName = pendingCallNames.get(part.functionResponse.name);
+      if (!pendingByName?.length) continue;
+      pendingByName.shift();
+      if (pendingByName.length === 0) pendingCallNames.delete(part.functionResponse.name);
     }
   }
-  return pendingCallIds.size > 0 || pendingCallNames.size > 0;
+
+  const pendingCalls = [
+    ...pendingCallIds.values(),
+    ...[...pendingCallNames.values()].flat()
+  ];
+  return pendingCalls.some((call) => isActiveUnresolvedFunctionCall(world, call));
+}
+
+function isActiveUnresolvedFunctionCall(world: WorldReader, call: PendingFunctionCall): boolean {
+  const toolCall = findToolCallForFunctionCall(world, call);
+  if (toolCall === undefined) return false;
+  const state = world.get(toolCall, ToolState);
+  if (!state) return false;
+  return !isTerminalToolStatus(state.status) || !world.has(toolCall, ToolResultConsumed);
+}
+
+function findToolCallForFunctionCall(world: WorldReader, call: PendingFunctionCall): Entity | undefined {
+  return world.query(ToolCall, ToolState).find((entity) => {
+    const data = world.get(entity, ToolCall);
+    if (!data || data.name !== call.name) return false;
+    if (call.id && (data.id === call.id || data.functionCallId === call.id)) return true;
+    return world.get(entity, PartOf)?.parent === call.message;
+  });
 }
 
 function estimateContentsTokens(contents: MessageContent[]): number {

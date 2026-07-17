@@ -36,7 +36,7 @@ import {
 } from '../../runtimeContext/components';
 import { compressionThresholdTokens } from '../../llm/usage';
 import { PROMPT_CONTEXT_PLACEHOLDER_READS, renderSystemPromptTemplate } from '../../runtimeContext/placeholders';
-import { Conversation, InFlight, LlmRequest, Message, MessageCurrentRevisionLink, PartOf, type LlmRequestData } from '../components';
+import { Conversation, InFlight, LlmRequest, LlmRequestPreDispatchCompressionAttempt, Message, MessageCurrentRevisionLink, PartOf, type LlmRequestData } from '../components';
 import {
   isFileDataPart,
   isFunctionCallPart,
@@ -103,6 +103,7 @@ const LlmContextLookupComponents = [
   CompressionBlock,
   CompressionContextVariant,
   RunCompressionBlockLink,
+  LlmRequestPreDispatchCompressionAttempt,
   RuntimeContextSnapshot,
   ConversationRuntimeContextSnapshotLink,
   RunRuntimeContextSnapshotLink,
@@ -127,7 +128,7 @@ export const LlmDispatchSystem = defineSystem({
   access: {
     queries: [PendingLlmRequestsQuery],
     reads: { components: LlmContextLookupComponents },
-    writes: { components: [RunCompressionBlockLink, CheckpointBarrier] },
+    writes: { components: [RunCompressionBlockLink, CheckpointBarrier, LlmRequestPreDispatchCompressionAttempt] },
     bundles: [AgentRunBundle],
     resources: { read: [ToolSchemasKey, ToolDefinitionsKey, ...(TOOL_SCHEMA_CONTRIBUTOR_READS.resources ?? [])] },
     events: { emit: [CompressionEventType.Create] },
@@ -158,7 +159,7 @@ export const LlmDispatchSystem = defineSystem({
       recordInputRevisions(world, cmd, contextInput.run, selectRunContextMessageEntities(world, contextInput));
       const llmRequest = buildLlmStartRequestForRun(world, { run: data.run, conversation: data.conversation, modelMessage: data.modelMessage, invocation: data.invocation, requestId: data.id, tools: allTools });
       if (!llmRequest) continue;
-      if (maybeEnqueuePreDispatchCompression(world, cmd, data, llmRequest)) continue;
+      if (maybeEnqueuePreDispatchCompression(world, cmd, request, data, llmRequest)) continue;
       recordCompressionContextLink(world, cmd, data.run, data.conversation, llmRequest.settingsSnapshot);
 
       cmd.effect({
@@ -264,6 +265,7 @@ interface PreDispatchCompressionRisk {
 function maybeEnqueuePreDispatchCompression(
   world: WorldReader,
   cmd: CommandSink,
+  request: Entity,
   data: LlmRequestData,
   llmRequest: LlmStartRequest
 ): boolean {
@@ -279,12 +281,23 @@ function maybeEnqueuePreDispatchCompression(
   const currentBoundarySeq = selectedBlock?.endSeq ?? selectedBlock?.anchorSeq ?? 0;
   if (anchor.seq <= currentBoundarySeq) return false;
 
+  // 预派发压缩只是一次“尽量缩短上下文”的门禁，不能无限阻塞真正的 LLM 请求。
+  // 如果 CompressionSystem 因未闭合工具调用/无增量/流式消息等原因没有生成 CompressionBlock，
+  // 下一轮调度会重新回到这里；此时应直接放行主请求，而不是重复 enqueue 同一个 compression.create。
+  if (world.has(request, LlmRequestPreDispatchCompressionAttempt)) return false;
+
   const risk = preDispatchCompressionRisk(world, data, llmRequest, currentBoundarySeq, settings);
   if (!risk.shouldCompress) return false;
 
   const existingAnchorBlock = latestCompressionBlockForAnchor(world, data.conversation, anchor.id, methodKind);
   if (existingAnchorBlock) return false;
 
+  cmd.add(request, LlmRequestPreDispatchCompressionAttempt, {
+    anchorMessageId: anchor.id,
+    anchorSeq: anchor.seq,
+    methodKind,
+    requestedAt: Date.now()
+  });
   cmd.enqueue({
     type: CompressionEventType.Create,
     payload: {

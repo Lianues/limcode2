@@ -594,10 +594,8 @@ function executeSubmitPlanTool(
   const proposalId = `plan-proposal:${call.id}`;
   const proposal = upsertPlanProposal(world, cmd, {
     id: proposalId,
-    ...(request.title ? { title: request.title } : {}),
     body: request.plan,
-    ...(request.risks && request.risks.length > 0 ? { risks: request.risks } : {}),
-    ...(request.files && request.files.length > 0 ? { files: request.files } : {}),
+    ...(request.taskList ? { taskList: request.taskList } : {}),
     status: 'pending'
   });
   linkPlanProposalToRun(world, cmd, {

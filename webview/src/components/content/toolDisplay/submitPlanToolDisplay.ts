@@ -4,8 +4,7 @@ import type { ToolDisplayResolver } from './types';
 
 export const submitPlanToolDisplay: ToolDisplayResolver = (context) => {
   const request = submitPlanRequestFromArgs(context.args)
-    ?? submitPlanRequestFromArgs(context.toolCall?.args)
-    ?? requestFromResult(context.toolCall?.result);
+    ?? submitPlanRequestFromArgs(context.toolCall?.args);
   if (!request) return undefined;
 
   const proposalId = proposalIdFromProgress(context.toolCall?.progress)
@@ -25,17 +24,6 @@ export const submitPlanToolDisplay: ToolDisplayResolver = (context) => {
     outputSections: []
   };
 };
-
-function requestFromResult(value: unknown) {
-  const output = submitPlanOutputFromResult(value);
-  if (!output) return undefined;
-  return {
-    ...(output.title ? { title: output.title } : {}),
-    plan: output.plan,
-    ...(output.risks && output.risks.length > 0 ? { risks: output.risks } : {}),
-    ...(output.files && output.files.length > 0 ? { files: output.files } : {})
-  };
-}
 
 function proposalIdFromProgress(value: unknown): string | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;

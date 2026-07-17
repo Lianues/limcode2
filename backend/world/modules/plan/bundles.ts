@@ -3,7 +3,8 @@ import type {
   PlanProposalRecord,
   PlanReviewPolicyRecord,
   PlanReviewPolicyScopeKind,
-  PlanReviewRequiredToolRiskLevel
+  PlanReviewRequiredToolRiskLevel,
+  TaskListToolOperationRecord
 } from '../../../../shared/protocol';
 import {
   PlanProposal,
@@ -100,10 +101,8 @@ export function upsertPlanProposal(
   const now = Date.now();
   const next: PlanProposalData = {
     id: input.id,
-    ...(input.title ? { title: input.title } : {}),
     body: input.body,
-    ...(input.risks && input.risks.length > 0 ? { risks: [...input.risks] } : {}),
-    ...(input.files && input.files.length > 0 ? { files: [...input.files] } : {}),
+    ...(input.taskList ? { taskList: cloneTaskListOperation(input.taskList) } : {}),
     status: input.status,
     createdAt: previous?.createdAt ?? input.createdAt ?? now,
     updatedAt: input.updatedAt ?? now
@@ -139,6 +138,19 @@ export function linkPlanProposalToRun(
     updatedAt: now
   });
   return entity;
+}
+
+function cloneTaskListOperation(operation: TaskListToolOperationRecord): TaskListToolOperationRecord {
+  return {
+    kind: 'task_list.operation',
+    mode: operation.mode,
+    items: operation.items.map((item) => ({
+      title: item.title,
+      ...(item.description ? { description: item.description } : {}),
+      ...(item.status ? { status: item.status } : {}),
+      ...(item.delete ? { delete: true } : {})
+    }))
+  };
 }
 
 export function findPlanReviewPolicyById(world: WorldReader, id: string): Entity | undefined {

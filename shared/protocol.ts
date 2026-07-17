@@ -461,10 +461,8 @@ export interface AskUserToolOutputRecord {
 }
 
 export interface SubmitPlanToolRequestRecord {
-  title?: string;
   plan: string;
-  risks?: string[];
-  files?: string[];
+  taskList?: TaskListToolOperationRecord;
 }
 
 export type SubmitPlanDecisionStatus = 'approved' | 'change_requested' | 'rejected';
@@ -473,10 +471,6 @@ export interface SubmitPlanToolOutputRecord {
   kind: 'submit_plan.result';
   proposalId: string;
   status: SubmitPlanDecisionStatus;
-  title?: string;
-  plan: string;
-  risks?: string[];
-  files?: string[];
   userMessage?: string;
 }
 
@@ -886,10 +880,8 @@ export interface PlanReviewPolicyScopeLinkRecord {
 
 export interface PlanProposalRecord {
   id: string;
-  title?: string;
   body: string;
-  risks?: string[];
-  files?: string[];
+  taskList?: TaskListToolOperationRecord;
   status: PlanProposalStatus;
   createdAt: number;
   updatedAt: number;

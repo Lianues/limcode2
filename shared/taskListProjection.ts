@@ -2,6 +2,7 @@ import {
   isFunctionCallPart,
   TASK_LIST_ITEM_STATUSES,
   TASK_LIST_TOOL_NAME,
+  SUBMIT_PLAN_TOOL_NAME,
   type MessageRecord,
   type TaskListItemStatus,
   type TaskListToolItemRecord,
@@ -154,12 +155,19 @@ export function taskListOperationFromToolCall(
   toolCall: ToolCallRecord | undefined,
   options: { allowArgsFallback?: boolean } = {}
 ): TaskListToolOperationRecord | undefined {
-  if (!toolCall || toolCall.name !== TASK_LIST_TOOL_NAME) return undefined;
+  if (!toolCall) return undefined;
 
-  const resultOperation = taskListOperationFromToolResult(toolCall.result);
-  if (resultOperation) return resultOperation;
+  if (toolCall.name === TASK_LIST_TOOL_NAME) {
+    const resultOperation = taskListOperationFromToolResult(toolCall.result);
+    if (resultOperation) return resultOperation;
+    if (options.allowArgsFallback) return taskListOperationFromArgsJson(toolCall.args);
+    return undefined;
+  }
 
-  if (options.allowArgsFallback) return taskListOperationFromArgsJson(toolCall.args);
+  if (toolCall.name === SUBMIT_PLAN_TOOL_NAME) {
+    return taskListOperationFromSubmitPlanToolCall(toolCall);
+  }
+
   return undefined;
 }
 
@@ -225,7 +233,7 @@ export function sortedTaskListToolCalls(
   const messageById = new Map(messages.map((message) => [message.id, message]));
   return toolCalls
     .filter((toolCall) => {
-      if (toolCall.name !== TASK_LIST_TOOL_NAME) return false;
+      if (toolCall.name !== TASK_LIST_TOOL_NAME && toolCall.name !== SUBMIT_PLAN_TOOL_NAME) return false;
       const message = messageById.get(toolCall.messageId);
       return message?.conversationId === conversationId;
     })
@@ -263,7 +271,9 @@ function functionCallPartIndex(message: MessageRecord | undefined, toolCall: Too
 function isAppliedTaskListToolCall(toolCall: ToolCallRecord): boolean {
   if (toolCall.status !== 'success' && toolCall.status !== 'warning') return false;
   const result = asRecord(toolCall.result);
-  return result?.ok !== false;
+  if (result?.ok === false) return false;
+  if (toolCall.name === SUBMIT_PLAN_TOOL_NAME) return !!taskListOperationFromSubmitPlanToolCall(toolCall);
+  return true;
 }
 
 function taskListOperationFromToolResult(result: unknown): TaskListToolOperationRecord | undefined {
@@ -279,6 +289,16 @@ function taskListOperationFromToolResult(result: unknown): TaskListToolOperation
     return normalizeOperation(outputRecord);
   }
   return undefined;
+}
+
+function taskListOperationFromSubmitPlanToolCall(toolCall: ToolCallRecord): TaskListToolOperationRecord | undefined {
+  const resultRecord = asRecord(toolCall.result);
+  const output = resultRecord && 'output' in resultRecord ? resultRecord.output : toolCall.result;
+  const outputRecord = asRecord(output);
+  if (!outputRecord || outputRecord.kind !== 'submit_plan.result' || outputRecord.status !== 'approved') return undefined;
+
+  const args = asRecord(parseJson(toolCall.args));
+  return normalizeOperation(args?.taskList);
 }
 
 function taskListOperationFromArgsJson(argsJson: string): TaskListToolOperationRecord | undefined {

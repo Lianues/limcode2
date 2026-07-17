@@ -1,4 +1,5 @@
 import { askUserOutputFromResult } from '../../../../shared/askUser';
+import { submitPlanOutputFromResult } from '../../../../shared/planReview';
 import {
   ASK_USER_TOOL_NAME,
   DELETE_TOOL_NAME,
@@ -6,6 +7,7 @@ import {
   READ_TOOL_NAME,
   READ_AGENT_ANSWER_TOOL_NAME,
   SUBMIT_AGENT_ANSWER_TOOL_NAME,
+  SUBMIT_PLAN_TOOL_NAME,
   SWITCH_WORK_ENVIRONMENT_TOOL_NAME,
   TASK_LIST_TOOL_NAME,
   TRANSFER_TOOL_NAME,
@@ -44,6 +46,8 @@ export function simplifyToolResponseForModel(toolName: string, status: ToolCallS
       return isError ? errorResponse(value) : { ok: true };
     case ASK_USER_TOOL_NAME:
       return isError ? errorResponse(value) : simplifyAskUserResponse(value);
+    case SUBMIT_PLAN_TOOL_NAME:
+      return simplifySubmitPlanResponse(value);
     case SWITCH_WORK_ENVIRONMENT_TOOL_NAME:
       return isError ? errorResponse(value) : simplifySwitchWorkEnvironmentResponse(value);
     case 'run_agent':
@@ -161,6 +165,15 @@ function simplifyAskUserResponse(value: unknown): JsonRecord {
   return output.multiple
     ? { answers }
     : { answer: answers[0] };
+}
+
+function simplifySubmitPlanResponse(value: unknown): JsonRecord {
+  const output = submitPlanOutputFromResult(value);
+  if (!output) return simplifyGenericSuccess(value);
+  return pickDefined({
+    status: output.status,
+    userMessage: output.userMessage
+  });
 }
 
 function simplifySwitchWorkEnvironmentResponse(value: unknown): JsonRecord {

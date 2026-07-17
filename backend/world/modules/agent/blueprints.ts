@@ -111,7 +111,7 @@ export function createDefaultAgentBlueprints(): BuiltinAgentRegistry {
         id: 'builtin:plan',
         name: 'Plan',
         description: 'Plan first: analyze requirements, identify risks, and decompose tasks before implementation.',
-        systemPrompt: 'Plan first. Before any file edit, write, delete, non-readonly command, or child agent task, call submit_plan with a concise implementation plan and wait for user approval. If the user requests changes, revise and submit the plan again. Only proceed with mutating tools after approval.',
+        systemPrompt: 'Plan first. Before any file edit, write, delete, non-readonly command, or child agent task, call submit_plan with plan as the full implementation plan and wait for user approval. When useful, include taskList using the same { mode, items } shape as update_task_list so approval seeds the visible task list. If the user requests changes, revise and submit the plan again. Only proceed with mutating tools after approval.',
         planReviewPolicy: {
           mode: 'before_mutation',
           allowReadonlyBeforeApproval: true,

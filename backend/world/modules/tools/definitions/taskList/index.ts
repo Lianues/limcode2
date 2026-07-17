@@ -16,8 +16,9 @@ interface TaskListToolArgs {
   items?: unknown;
 }
 
-const ITEM_SCHEMA: Record<string, unknown> = {
+export const TASK_LIST_ITEM_SCHEMA: Record<string, unknown> = {
   type: 'object',
+  additionalProperties: false,
   properties: {
     title: {
       type: 'string',
@@ -38,6 +39,25 @@ const ITEM_SCHEMA: Record<string, unknown> = {
   },
   required: ['title']
 };
+
+export const TASK_LIST_OPERATION_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    mode: {
+      type: 'string',
+      enum: ['rewrite', 'update'],
+      description: 'rewrite = replace the full task list; update = apply incremental changes to the task list.'
+    },
+    items: {
+      type: 'array',
+      items: TASK_LIST_ITEM_SCHEMA,
+      description: 'Task entries. In rewrite mode this is the full list; in update mode these are the changed entries.'
+    }
+  },
+  required: ['mode', 'items']
+};
+
 
 export const taskListToolModule = defineToolDefinitionModule({
   id: TASK_LIST_TOOL_NAME,
@@ -62,22 +82,7 @@ Usage rules:
 - When a new, clearly separate user task / new plan / new phase comes up, use rewrite so unrelated tasks are not mixed into one list.
 - When continuing the same batch of work, use update and only submit the entries that changed.
 - This is not the final reply text; the frontend renders the task list dynamically from the tool calls in the current conversation.`,
-    parameters: {
-      type: 'object',
-      properties: {
-        mode: {
-          type: 'string',
-          enum: ['rewrite', 'update'],
-          description: 'rewrite = replace the full task list; update = apply incremental changes to the task list.'
-        },
-        items: {
-          type: 'array',
-          items: ITEM_SCHEMA,
-          description: 'Task entries. In rewrite mode this is the full list; in update mode these are the changed entries.'
-        }
-      },
-      required: ['mode', 'items']
-    },
+    parameters: TASK_LIST_OPERATION_SCHEMA,
     metadata: {
       category: 'general',
       scope: 'task',

@@ -7,6 +7,8 @@ import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { bridge, BridgeMessageType } from '@webview/transport';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import TextPartView from '@webview/components/content/parts/TextPartView.vue';
+import TaskListDisplay from '@webview/components/taskList/TaskListDisplay.vue';
+import { taskListDisplayItemsFromOperation } from '@webview/components/taskList/taskListModel';
 
 const props = defineProps<{
   request: SubmitPlanToolRequestRecord;
@@ -29,10 +31,10 @@ const proposal = computed<PlanProposalRecord | undefined>(() => {
 });
 const status = computed<PlanProposalStatus>(() => output.value?.status ?? proposal.value?.status ?? (props.toolCall?.status === 'awaiting_user_input' ? 'pending' : 'pending'));
 const pending = computed(() => props.toolCall?.status === 'awaiting_user_input' && status.value === 'pending');
-const title = computed(() => props.request.title ?? proposal.value?.title ?? output.value?.title ?? 'Plan');
-const planBody = computed(() => props.request.plan || proposal.value?.body || output.value?.plan || '');
-const risks = computed(() => props.request.risks ?? proposal.value?.risks ?? output.value?.risks ?? []);
-const files = computed(() => props.request.files ?? proposal.value?.files ?? output.value?.files ?? []);
+const planBody = computed(() => props.request.plan || proposal.value?.body || '');
+const taskListOperation = computed(() => props.request.taskList ?? proposal.value?.taskList);
+const taskListItems = computed(() => taskListOperation.value ? taskListDisplayItemsFromOperation(taskListOperation.value) : []);
+const taskListTitle = computed(() => taskListOperation.value?.mode === 'update' ? '任务清单更新' : '任务清单');
 const statusLabel = computed(() => {
   if (submitting.value === 'approve') return '正在批准 Plan';
   if (submitting.value === 'changes') return '正在提交修改要求';
@@ -54,7 +56,7 @@ const statusTone = computed(() => {
     default: return 'pending';
   }
 });
-const userMessage = computed(() => output.value?.userMessage);
+const userMessage = computed(() => localizedUserMessage(output.value?.userMessage));
 const feedbackInputId = computed(() => `plan-feedback-input-${props.toolCall?.id ?? props.proposalId ?? 'current'}`);
 
 watch(
@@ -82,12 +84,13 @@ function decide(kind: 'approve' | 'changes' | 'reject', message = defaultMessage
   const toolCallId = props.toolCall?.id;
   const planProposalId = props.proposalId ?? output.value?.proposalId;
   if (!toolCallId || !planProposalId || !pending.value || submitting.value) return;
+  const userMessage = message.trim() || defaultMessageForDecision(kind);
   submitting.value = kind;
   bridge.request(messageTypeForDecision(kind), {
     toolCallId,
     planProposalId,
     ...(clientState.currentConversationId ? { conversationId: clientState.currentConversationId } : {}),
-    message
+    message: userMessage
   });
 }
 
@@ -107,8 +110,7 @@ function submitChangeFeedback(): void {
     openChangeFeedback();
     return;
   }
-  const feedback = changeFeedbackText.value.trim();
-  decide('changes', feedback || defaultMessageForDecision('changes'));
+  decide('changes', changeFeedbackText.value.trim() || defaultMessageForDecision('changes'));
 }
 
 function messageTypeForDecision(kind: 'approve' | 'changes' | 'reject'):
@@ -121,17 +123,27 @@ function messageTypeForDecision(kind: 'approve' | 'changes' | 'reject'):
 }
 
 function defaultMessageForDecision(kind: 'approve' | 'changes' | 'reject'): string {
-  if (kind === 'approve') return '用户已批准 Plan，可以继续执行。';
-  if (kind === 'changes') return '用户要求修改 Plan。请根据反馈调整后重新提交 Plan。';
-  return '用户拒绝 Plan。';
+  if (kind === 'approve') return 'User approved the plan. Continue with the approved plan.';
+  if (kind === 'changes') return 'User requested changes to the plan. Revise the plan and submit it again.';
+  return 'User rejected the plan.';
 }
+
+function localizedUserMessage(message: string | undefined): string | undefined {
+  const text = message?.trim();
+  if (!text) return undefined;
+  if (text === defaultMessageForDecision('approve')) return '用户已批准 Plan，可以继续执行。';
+  if (text === defaultMessageForDecision('changes')) return '用户要求修改 Plan，请调整后重新提交。';
+  if (text === defaultMessageForDecision('reject')) return '用户已拒绝 Plan。';
+  return text;
+}
+
 </script>
 
 <template>
   <section class="plan-proposal" :class="[`tone-${statusTone}`, { 'is-pending': pending }]" :aria-label="statusLabel">
     <header class="plan-proposal-heading">
       <IconClipboardList class="plan-proposal-heading-icon" stroke="2" aria-hidden="true" />
-      <span class="plan-proposal-heading-main">{{ title }}</span>
+      <span class="plan-proposal-heading-main">Plan</span>
       <span class="plan-proposal-status">{{ statusLabel }}</span>
     </header>
 
@@ -139,20 +151,15 @@ function defaultMessageForDecision(kind: 'approve' | 'changes' | 'reject'): stri
       <TextPartView :text="planBody" markdown />
     </div>
 
-    <div v-if="risks.length || files.length" class="plan-proposal-meta-grid">
-      <section v-if="risks.length" class="plan-proposal-meta-block">
-        <h4>风险 / 注意点</h4>
-        <ul>
-          <li v-for="(risk, index) in risks" :key="`risk-${index}-${risk}`">{{ risk }}</li>
-        </ul>
-      </section>
-      <section v-if="files.length" class="plan-proposal-meta-block">
-        <h4>涉及文件 / 区域</h4>
-        <ul>
-          <li v-for="(file, index) in files" :key="`file-${index}-${file}`">{{ file }}</li>
-        </ul>
-      </section>
-    </div>
+    <section v-if="taskListItems.length" class="plan-proposal-task-list">
+      <h4>{{ taskListTitle }}</h4>
+      <TaskListDisplay
+        :items="taskListItems"
+        density="normal"
+        :show-change="taskListOperation?.mode === 'update'"
+        empty-text="Plan 未提供任务清单。"
+      />
+    </section>
 
     <p v-if="userMessage && !pending" class="plan-proposal-message">{{ userMessage }}</p>
 
@@ -262,33 +269,18 @@ function defaultMessageForDecision(kind: 'approve' | 'changes' | 'reject'): stri
   background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground) 6%);
 }
 
-.plan-proposal-meta-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.plan-proposal-meta-block {
+.plan-proposal-task-list {
   min-width: 0;
   border: 1px solid var(--vscode-panel-border);
   padding: 8px;
   background: color-mix(in srgb, var(--vscode-editor-background) 96%, var(--vscode-foreground) 4%);
 }
 
-.plan-proposal-meta-block h4 {
-  margin: 0 0 6px;
+.plan-proposal-task-list h4 {
+  margin: 0 0 8px;
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-xs);
   font-weight: 600;
-}
-
-.plan-proposal-meta-block ul {
-  margin: 0;
-  padding-left: 18px;
-}
-
-.plan-proposal-meta-block li + li {
-  margin-top: 4px;
 }
 
 .plan-proposal-message {
@@ -404,9 +396,4 @@ function defaultMessageForDecision(kind: 'approve' | 'changes' | 'reject'): stri
   height: 15px;
 }
 
-@media (max-width: 640px) {
-  .plan-proposal-meta-grid {
-    grid-template-columns: 1fr;
-  }
-}
 </style>

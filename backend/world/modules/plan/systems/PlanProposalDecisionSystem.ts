@@ -1,13 +1,13 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
-import { createSubmitPlanToolOutput, normalizeSubmitPlanToolRequest } from '../../../../../shared/planReview';
+import { createSubmitPlanToolOutput } from '../../../../../shared/planReview';
 import { SUBMIT_PLAN_TOOL_NAME, type PlanProposalStatus, type SubmitPlanDecisionStatus } from '../../../../../shared/protocol';
 import { readEvents } from '../../../events';
 import { runForToolCall, toolCallEntityById } from '../../agentRun/queries';
 import { InFlight } from '../../chat/components';
 import { ToolCallEventBundle, spawnToolCallEvent } from '../../tools/bundles';
-import { ToolCall, ToolState, type ToolCallData } from '../../tools/components';
+import { ToolCall, ToolState } from '../../tools/components';
 import { transitionToolState } from '../../tools/state';
-import { PlanProposal, RunPlanProposalLink, type PlanProposalData } from '../components';
+import { PlanProposal, RunPlanProposalLink } from '../components';
 import { PlanReviewEventType } from '../events';
 import { PlanReviewBundle } from '../bundles';
 
@@ -75,12 +75,10 @@ function completePlanDecision(
   const now = Date.now();
   const durationMs = Math.max(0, now - call.createdAt);
   const message = normalizedDecisionMessage(status, userMessage);
-  const request = requestFromCallOrProposal(call, proposal);
   const output = createSubmitPlanToolOutput({
     proposalId: proposal.id,
     status,
-    request,
-    ...(message ? { userMessage: message } : {})
+    userMessage: message
   });
 
   cmd.add(proposalEntity, PlanProposal, {
@@ -123,19 +121,6 @@ function completePlanDecision(
   });
 }
 
-function requestFromCallOrProposal(call: ToolCallData, proposal: PlanProposalData) {
-  try {
-    return normalizeSubmitPlanToolRequest(call.argsJson);
-  } catch {
-    return {
-      ...(proposal.title ? { title: proposal.title } : {}),
-      plan: proposal.body,
-      ...(proposal.risks && proposal.risks.length > 0 ? { risks: [...proposal.risks] } : {}),
-      ...(proposal.files && proposal.files.length > 0 ? { files: [...proposal.files] } : {})
-    };
-  }
-}
-
 function proposalBelongsToToolRun(world: WorldReader, toolCall: Entity, planProposal: Entity): boolean {
   const run = runForToolCall(world, toolCall);
   if (run === undefined) return false;
@@ -154,7 +139,7 @@ function findPlanProposalById(world: WorldReader, id: string): Entity | undefine
 function normalizedDecisionMessage(status: SubmitPlanDecisionStatus, value: string | undefined): string | undefined {
   const text = value?.trim();
   if (text) return text;
-  if (status === 'approved') return '用户已批准 Plan，可以继续执行。';
-  if (status === 'change_requested') return '用户要求修改 Plan。请根据反馈调整并重新提交 Plan。';
-  return '用户拒绝 Plan。';
+  if (status === 'approved') return 'User approved the plan. Continue with the approved plan.';
+  if (status === 'change_requested') return 'User requested changes to the plan. Revise the plan and submit it again.';
+  return 'User rejected the plan.';
 }

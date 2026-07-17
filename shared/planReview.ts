@@ -1,29 +1,24 @@
+import { taskListOperationFromArgs } from './taskListProjection';
 import type {
   PlanProposalStatus,
   SubmitPlanDecisionStatus,
   SubmitPlanToolOutputRecord,
-  SubmitPlanToolRequestRecord
+  SubmitPlanToolRequestRecord,
+  TaskListToolOperationRecord
 } from './protocol';
 
-export const SUBMIT_PLAN_MAX_TITLE_LENGTH = 200;
 export const SUBMIT_PLAN_MAX_BODY_LENGTH = 40_000;
-export const SUBMIT_PLAN_MAX_LIST_ITEMS = 40;
-export const SUBMIT_PLAN_MAX_LIST_ITEM_LENGTH = 500;
 
 export function normalizeSubmitPlanToolRequest(value: unknown): SubmitPlanToolRequestRecord {
   const record = asRecord(parseJsonValue(value));
   if (!record) throw new Error('submit_plan arguments must be an object');
 
   const plan = requiredText(record.plan, 'plan', SUBMIT_PLAN_MAX_BODY_LENGTH);
-  const title = optionalLimitedText(record.title, 'title', SUBMIT_PLAN_MAX_TITLE_LENGTH);
-  const risks = optionalStringList(record.risks, 'risks');
-  const files = optionalStringList(record.files, 'files');
+  const taskList = optionalTaskList(record.taskList);
 
   return {
-    ...(title ? { title } : {}),
     plan,
-    ...(risks.length > 0 ? { risks } : {}),
-    ...(files.length > 0 ? { files } : {})
+    ...(taskList ? { taskList } : {})
   };
 }
 
@@ -38,7 +33,6 @@ export function submitPlanRequestFromArgs(value: unknown): SubmitPlanToolRequest
 export function createSubmitPlanToolOutput(input: {
   proposalId: string;
   status: SubmitPlanDecisionStatus;
-  request: SubmitPlanToolRequestRecord;
   userMessage?: string;
 }): SubmitPlanToolOutputRecord {
   const userMessage = input.userMessage?.trim();
@@ -46,10 +40,6 @@ export function createSubmitPlanToolOutput(input: {
     kind: 'submit_plan.result',
     proposalId: input.proposalId,
     status: input.status,
-    ...(input.request.title ? { title: input.request.title } : {}),
-    plan: input.request.plan,
-    ...(input.request.risks && input.request.risks.length > 0 ? { risks: [...input.request.risks] } : {}),
-    ...(input.request.files && input.request.files.length > 0 ? { files: [...input.request.files] } : {}),
     ...(userMessage ? { userMessage } : {})
   };
 }
@@ -61,20 +51,12 @@ export function submitPlanOutputFromResult(value: unknown): SubmitPlanToolOutput
   if (!output || output.kind !== 'submit_plan.result') return undefined;
   if (typeof output.proposalId !== 'string' || !output.proposalId.trim()) return undefined;
   if (!isSubmitPlanDecisionStatus(output.status)) return undefined;
-  if (typeof output.plan !== 'string' || !output.plan.trim()) return undefined;
 
-  const title = optionalText(output.title);
-  const risks = outputStringList(output.risks);
-  const files = outputStringList(output.files);
   const userMessage = optionalText(output.userMessage);
   return {
     kind: 'submit_plan.result',
     proposalId: output.proposalId.trim(),
     status: output.status,
-    ...(title ? { title } : {}),
-    plan: output.plan.trim(),
-    ...(risks.length > 0 ? { risks } : {}),
-    ...(files.length > 0 ? { files } : {}),
     ...(userMessage ? { userMessage } : {})
   };
 }
@@ -88,33 +70,24 @@ function isSubmitPlanDecisionStatus(value: unknown): value is SubmitPlanDecision
   return value === 'approved' || value === 'change_requested' || value === 'rejected';
 }
 
-function optionalStringList(value: unknown, label: string): string[] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value)) throw new Error(`${label} must be an array of strings`);
-  if (value.length > SUBMIT_PLAN_MAX_LIST_ITEMS) throw new Error(`${label} must not exceed ${SUBMIT_PLAN_MAX_LIST_ITEMS} items`);
-  const result: string[] = [];
-  const seen = new Set<string>();
-  for (const [index, item] of value.entries()) {
-    const text = requiredText(item, `${label}[${index}]`, SUBMIT_PLAN_MAX_LIST_ITEM_LENGTH);
-    if (seen.has(text)) continue;
-    seen.add(text);
-    result.push(text);
-  }
-  return result;
+function optionalTaskList(value: unknown): TaskListToolOperationRecord | undefined {
+  if (value === undefined) return undefined;
+  const operation = taskListOperationFromArgs(value);
+  if (!operation) throw new Error('taskList must use the same shape as update_task_list: { mode, items }');
+  return cloneTaskListOperation(operation);
 }
 
-function outputStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const result: string[] = [];
-  const seen = new Set<string>();
-  for (const item of value) {
-    if (typeof item !== 'string') continue;
-    const text = item.trim();
-    if (!text || seen.has(text)) continue;
-    seen.add(text);
-    result.push(text);
-  }
-  return result;
+function cloneTaskListOperation(operation: TaskListToolOperationRecord): TaskListToolOperationRecord {
+  return {
+    kind: 'task_list.operation',
+    mode: operation.mode,
+    items: operation.items.map((item) => ({
+      title: item.title,
+      ...(item.description ? { description: item.description } : {}),
+      ...(item.status ? { status: item.status } : {}),
+      ...(item.delete ? { delete: true } : {})
+    }))
+  };
 }
 
 function parseJsonValue(value: unknown): unknown {
@@ -138,15 +111,6 @@ function requiredText(value: unknown, label: string, maxLength: number): string 
   if (typeof value !== 'string') throw new Error(`${label} must be a non-empty string`);
   const text = value.trim();
   if (!text) throw new Error(`${label} must be a non-empty string`);
-  if (text.length > maxLength) throw new Error(`${label} must not exceed ${maxLength} characters`);
-  return text;
-}
-
-function optionalLimitedText(value: unknown, label: string, maxLength: number): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string') throw new Error(`${label} must be a string`);
-  const text = value.trim();
-  if (!text) return undefined;
   if (text.length > maxLength) throw new Error(`${label} must not exceed ${maxLength} characters`);
   return text;
 }

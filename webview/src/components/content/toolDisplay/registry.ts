@@ -21,6 +21,7 @@ import {
   READ_TOOL_NAME,
   SKILLS_TOOL_NAME,
   SUBMIT_AGENT_ANSWER_TOOL_NAME,
+  SUBMIT_PLAN_TOOL_NAME,
   SWITCH_WORK_ENVIRONMENT_TOOL_NAME,
   TASK_LIST_TOOL_NAME,
   TRANSFER_TOOL_NAME,
@@ -33,6 +34,7 @@ import { readFileToolDisplay } from './readFileToolDisplay';
 import { runAgentToolDisplay } from './runAgentToolDisplay';
 import { skillsToolDisplay } from './skillsToolDisplay';
 import { shellToolDisplay } from './shellToolDisplay';
+import { submitPlanToolDisplay } from './submitPlanToolDisplay';
 import { switchWorkEnvironmentToolDisplay } from './switchWorkEnvironmentToolDisplay';
 import { taskListToolDisplay } from './taskListToolDisplay';
 import { transferFilesToolDisplay } from './transferFilesToolDisplay';
@@ -41,6 +43,7 @@ import type { ToolDisplayContext, ToolDisplayResolver, ToolDisplayResult, ToolDi
 const TOOL_DISPLAY_RESOLVERS: Record<string, ToolDisplayResolver> = {
   [TASK_LIST_TOOL_NAME]: taskListToolDisplay,
   [ASK_USER_TOOL_NAME]: askUserToolDisplay,
+  [SUBMIT_PLAN_TOOL_NAME]: submitPlanToolDisplay,
   [READ_TOOL_NAME]: readFileToolDisplay,
   [EDIT_TOOL_NAME]: editToolDisplay,
   [WRITE_TOOL_NAME]: writeToolDisplay,
@@ -58,6 +61,7 @@ const TOOL_DISPLAY_RESOLVERS: Record<string, ToolDisplayResolver> = {
 const TOOL_HEADER_ICONS: Record<string, Component> = {
   [TASK_LIST_TOOL_NAME]: IconPlaylistAdd,
   [ASK_USER_TOOL_NAME]: IconMessageQuestion,
+  [SUBMIT_PLAN_TOOL_NAME]: IconPlaylistAdd,
   [READ_TOOL_NAME]: IconFileDescription,
   [EDIT_TOOL_NAME]: IconPencil,
   [WRITE_TOOL_NAME]: IconWriting,

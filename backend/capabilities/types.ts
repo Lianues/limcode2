@@ -385,6 +385,16 @@ export interface RuntimePaths {
   workflowsRootPath: string;
   workflowsIndexUri: vscode.Uri;
   workflowsIndexPath: string;
+  /** PlanReviewPolicy 数据根目录：<dataRoot>/plan-review-policies */
+  planReviewPoliciesRootUri: vscode.Uri;
+  planReviewPoliciesRootPath: string;
+  planReviewPoliciesIndexUri: vscode.Uri;
+  planReviewPoliciesIndexPath: string;
+  /** PlanReviewPolicy 与各作用域的关系数据根目录：<dataRoot>/plan-review-policy-scope-links */
+  planReviewPolicyScopeLinksRootUri: vscode.Uri;
+  planReviewPolicyScopeLinksRootPath: string;
+  planReviewPolicyScopeLinksIndexUri: vscode.Uri;
+  planReviewPolicyScopeLinksIndexPath: string;
   /** ToolPolicy 数据根目录：<dataRoot>/tool-policies */
   toolPoliciesRootUri: vscode.Uri;
   toolPoliciesRootPath: string;

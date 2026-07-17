@@ -274,7 +274,8 @@ const agentRunsTable: ClientSyncOverrides = {
     { table: 'runEditPolicyLinks', foreignKey: 'runId' },
     { table: 'runWorkEnvironmentLinks', foreignKey: 'runId' },
     { table: 'agentRunInputRevisions', foreignKey: 'runId' },
-    { table: 'runCompressionBlockLinks', foreignKey: 'runId' }
+    { table: 'runCompressionBlockLinks', foreignKey: 'runId' },
+    { table: 'runPlanProposalLinks', foreignKey: 'runId' }
   ],
   scope: {
     kind: 'conversationAnyOf',
@@ -298,7 +299,8 @@ export const CLIENT_STATE_TABLES = {
       { table: 'systemPromptScopeLinks', foreignKey: 'scopeId' },
       { table: 'modelProfileScopeLinks', foreignKey: 'scopeId' },
       { table: 'runtimeContextScopeLinks', foreignKey: 'scopeId' },
-      { table: 'workEnvironmentPolicyScopeLinks', foreignKey: 'scopeId' }
+      { table: 'workEnvironmentPolicyScopeLinks', foreignKey: 'scopeId' },
+      { table: 'planReviewPolicyScopeLinks', foreignKey: 'scopeId' }
     ]
   }),
   toolDefinitions: upsertRemoveTable('toolDefinition', 'toolDefinition'),
@@ -311,9 +313,22 @@ export const CLIENT_STATE_TABLES = {
       { table: 'systemPromptScopeLinks', foreignKey: 'scopeId' },
       { table: 'modelProfileScopeLinks', foreignKey: 'scopeId' },
       { table: 'runtimeContextScopeLinks', foreignKey: 'scopeId' },
-      { table: 'workEnvironmentPolicyScopeLinks', foreignKey: 'scopeId' }
+      { table: 'workEnvironmentPolicyScopeLinks', foreignKey: 'scopeId' },
+      { table: 'planReviewPolicyScopeLinks', foreignKey: 'scopeId' }
     ]
   }),
+  planReviewPolicies: upsertRemoveTable('planReviewPolicy', 'policy', {
+    cascadeRemove: [{ table: 'planReviewPolicyScopeLinks', foreignKey: 'planReviewPolicyId' }],
+    globalSnapshot: true
+  }),
+  planReviewPolicyScopeLinks: upsertRemoveTable('planReviewPolicyScopeLink', 'link', { globalSnapshot: true }),
+  planProposals: upsertRemoveTable('planProposal', 'proposal', {
+    cascadeRemove: [{ table: 'runPlanProposalLinks', foreignKey: 'planProposalId' }],
+    orderBy: [{ field: 'createdAt' }, { field: 'id' }],
+    globalSnapshot: false,
+    scope: { kind: 'conversationReverseVia', table: 'runPlanProposalLinks', localField: 'id', foreignField: 'planProposalId' }
+  }),
+  runPlanProposalLinks: upsertRemoveTable('runPlanProposalLink', 'link', { scope: { kind: 'conversationVia', table: 'agentRuns', localField: 'runId', foreignField: 'id' } }),
   toolPolicies: upsertRemoveTable('toolPolicy', 'toolPolicy'),
   toolPolicyScopeLinks: upsertRemoveTable('toolPolicyScopeLink', 'link'),
   skillDefinitions: upsertRemoveTable('skillDefinition', 'skillDefinition'),
@@ -356,6 +371,7 @@ export const CLIENT_STATE_TABLES = {
       { table: 'systemPromptScopeLinks', foreignKey: 'scopeId' },
       { table: 'modelProfileScopeLinks', foreignKey: 'scopeId' },
       { table: 'runtimeContextScopeLinks', foreignKey: 'scopeId' },
+      { table: 'planReviewPolicyScopeLinks', foreignKey: 'scopeId' },
       { table: 'conversationRuntimeContextSnapshotLinks', foreignKey: 'conversationId' },
       { table: 'messages', foreignKey: 'conversationId', cascade: true },
       { table: 'compressionBlocks', foreignKey: 'conversationId', cascade: true }

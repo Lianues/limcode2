@@ -62,6 +62,9 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
     case BridgeMessageType.ToolResultSubmit:
     case BridgeMessageType.ToolResultReject:
     case BridgeMessageType.AskUserAnswerSubmit:
+    case BridgeMessageType.PlanProposalApprove:
+    case BridgeMessageType.PlanProposalRequestChanges:
+    case BridgeMessageType.PlanProposalReject:
     case BridgeMessageType.CheckpointDiffOpen:
     case BridgeMessageType.AttachmentOpen:
       return 'command';

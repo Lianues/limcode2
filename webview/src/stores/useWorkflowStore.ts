@@ -8,7 +8,6 @@ import { bridge, BridgeMessageType } from '@webview/transport';
 import { useClientStateStore } from './useClientStateStore';
 
 export const DEFAULT_WORKFLOW_OPTION_ID = 'global';
-export const BUILTIN_PLAN_WORKFLOW_ID = 'builtin:plan';
 
 function upsertById<T extends { id: string }>(list: T[], record: T): void {
   const index = list.findIndex((candidate) => candidate.id === record.id);
@@ -62,9 +61,6 @@ export const useWorkflowStore = defineStore('workflow', {
     },
     editableWorkflows(): WorkflowRecord[] {
       return this.workflows;
-    },
-    planWorkflow(): WorkflowRecord | undefined {
-      return this.workflows.find((workflow) => workflow.id === BUILTIN_PLAN_WORKFLOW_ID);
     }
   },
   actions: {

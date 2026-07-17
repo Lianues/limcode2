@@ -6,6 +6,7 @@ import { deleteToolModule } from './delete';
 import { editToolModule } from './edit';
 import { readFileToolModule } from './readFile';
 import { runAgentToolModule } from './runAgent';
+import { submitPlanToolModule } from './submitPlan';
 import { switchWorkEnvironmentToolModule } from './switchWorkEnvironment';
 import { taskListToolModule } from './taskList';
 import { transferFilesToolModule } from './transferFiles';
@@ -15,6 +16,7 @@ import type { ToolDefinitionContext, ToolDefinitionModule } from './types';
 
 export * from './types';
 export { askUserTool, askUserToolModule } from './askUser';
+export { submitPlanTool, submitPlanToolModule } from './submitPlan';
 export { readAgentAnswerTool, readAgentAnswerToolModule, submitAgentAnswerTool, submitAgentAnswerToolModule } from './agentAnswer';
 export { commandToolModule, createCommandTool } from './command';
 export { deleteToolModule, deleteTool } from './delete';
@@ -30,6 +32,7 @@ export { skillsToolModule, skillsTool } from './skills';
 const BUILTIN_TOOL_MODULES: readonly ToolDefinitionModule[] = [
   taskListToolModule,
   askUserToolModule,
+  submitPlanToolModule,
   switchWorkEnvironmentToolModule,
   transferFilesToolModule,
   readFileToolModule,

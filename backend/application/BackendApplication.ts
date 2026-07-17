@@ -10,6 +10,7 @@ import {
   chatPlugin,
   commonPlugin,
   workflowPlugin,
+  planReviewPlugin,
   agentRunPlugin,
   agentAnswerPlugin,
   checkpointPlugin,
@@ -246,7 +247,7 @@ export class BackendApplication {
 
     installWorldPlugins(
       { world: this.world, scheduler: this.scheduler },
-      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), workflowPlugin(), projectPlugin(), workEnvironmentPlugin(), runtimeContextPlugin(), checkpointPlugin(), compressionPlugin(), llmPlugin(), agentAnswerPlugin(), toolsPlugin({ toolSchemas, toolDefinitions, toolRuntimeDefinitions: this.env.tools.registry }), skillPlugin(), rulesPlugin(), chatPlugin(), agentRunPlugin()]
+      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), workflowPlugin(), planReviewPlugin(), projectPlugin(), workEnvironmentPlugin(), runtimeContextPlugin(), checkpointPlugin(), compressionPlugin(), llmPlugin(), agentAnswerPlugin(), toolsPlugin({ toolSchemas, toolDefinitions, toolRuntimeDefinitions: this.env.tools.registry }), skillPlugin(), rulesPlugin(), chatPlugin(), agentRunPlugin()]
     );
     registerClientSyncSystems(this.scheduler);
 

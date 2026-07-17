@@ -12,6 +12,8 @@ import {
   INDEX_FILE,
   LLM_SETTINGS_FILE,
   WORKFLOWS_ROOT_DIR,
+  PLAN_REVIEW_POLICIES_ROOT_DIR,
+  PLAN_REVIEW_POLICY_SCOPE_LINKS_ROOT_DIR,
   MODEL_PROFILE_SCOPE_LINKS_ROOT_DIR,
   MODEL_PROFILES_ROOT_DIR,
   RUNTIME_CONTEXTS_ROOT_DIR,
@@ -56,6 +58,10 @@ export interface VscodeStorageUris {
   agentsIndexUri: vscode.Uri;
   workflowsRootUri: vscode.Uri;
   workflowsIndexUri: vscode.Uri;
+  planReviewPoliciesRootUri: vscode.Uri;
+  planReviewPoliciesIndexUri: vscode.Uri;
+  planReviewPolicyScopeLinksRootUri: vscode.Uri;
+  planReviewPolicyScopeLinksIndexUri: vscode.Uri;
   toolPoliciesRootUri: vscode.Uri;
   toolPoliciesIndexUri: vscode.Uri;
   toolPolicyScopeLinksRootUri: vscode.Uri;
@@ -153,6 +159,8 @@ function root(globalStorageUri: vscode.Uri, dir: string): { rootUri: vscode.Uri;
 export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimePaths & VscodeStorageUris {
   const agents = root(globalStorageUri, AGENTS_ROOT_DIR);
   const workflows = root(globalStorageUri, WORKFLOWS_ROOT_DIR);
+  const planReviewPolicies = root(globalStorageUri, PLAN_REVIEW_POLICIES_ROOT_DIR);
+  const planReviewPolicyScopeLinks = root(globalStorageUri, PLAN_REVIEW_POLICY_SCOPE_LINKS_ROOT_DIR);
   const toolPolicies = root(globalStorageUri, TOOL_POLICIES_ROOT_DIR);
   const toolPolicyScopeLinks = root(globalStorageUri, TOOL_POLICY_SCOPE_LINKS_ROOT_DIR);
   const skillPolicies = root(globalStorageUri, SKILL_POLICIES_ROOT_DIR);
@@ -210,6 +218,14 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     workflowsRootPath: workflows.rootUri.fsPath,
     workflowsIndexUri: workflows.indexUri,
     workflowsIndexPath: workflows.indexUri.fsPath,
+    planReviewPoliciesRootUri: planReviewPolicies.rootUri,
+    planReviewPoliciesRootPath: planReviewPolicies.rootUri.fsPath,
+    planReviewPoliciesIndexUri: planReviewPolicies.indexUri,
+    planReviewPoliciesIndexPath: planReviewPolicies.indexUri.fsPath,
+    planReviewPolicyScopeLinksRootUri: planReviewPolicyScopeLinks.rootUri,
+    planReviewPolicyScopeLinksRootPath: planReviewPolicyScopeLinks.rootUri.fsPath,
+    planReviewPolicyScopeLinksIndexUri: planReviewPolicyScopeLinks.indexUri,
+    planReviewPolicyScopeLinksIndexPath: planReviewPolicyScopeLinks.indexUri.fsPath,
     toolPoliciesRootUri: toolPolicies.rootUri,
     toolPoliciesRootPath: toolPolicies.rootUri.fsPath,
     toolPoliciesIndexUri: toolPolicies.indexUri,

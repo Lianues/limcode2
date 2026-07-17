@@ -19,6 +19,8 @@ import {
 } from '../workflow/components';
 import { selectDefaultWorkflowForConversation } from '../workflow/bundles';
 import { ToolPolicyScopeLink } from '../tools/components';
+import { PlanReviewPolicy, PlanReviewPolicyScopeLink } from '../plan/components';
+import { normalizePlanReviewPolicy } from '../plan/bundles';
 import type { BuiltinAgentDefinition, BuiltinWorkflowDefinition } from './blueprints';
 import type { AgentSource, ConfigScopeKind, ToolPolicyScopeKind } from '../../../../shared/protocol';
 
@@ -35,6 +37,8 @@ export const AgentFromBlueprintBundle = defineBundle({
     ModelProfile,
     ModelProfileScopeLink,
     ToolPolicyScopeLink,
+    PlanReviewPolicy,
+    PlanReviewPolicyScopeLink,
     Conversation,
     ConversationOriginLink,
     ConversationWorkflowSelection,
@@ -165,6 +169,18 @@ export function spawnWorkflowFromDefinition(cmd: CommandSink, definition: Builti
     linkModelProfileToScope(cmd, { scopeKind: 'workflow', scopeId: definition.id, workflow, modelProfile: profile });
   }
 
+  if (definition.planReviewPolicy) {
+    const policy = spawnPlanReviewPolicy(cmd, {
+      id: definition.planReviewPolicy.id ?? `plan-review-policy:workflow:${definition.id}`,
+      ...definition.planReviewPolicy
+    });
+    linkPlanReviewPolicyToWorkflow(cmd, {
+      scopeId: definition.id,
+      workflow,
+      planReviewPolicy: policy
+    });
+  }
+
   return workflow;
 }
 
@@ -242,6 +258,31 @@ export function spawnToolPolicy(cmd: CommandSink, input: { id: string; name: str
     name: input.name,
     allowedTools: input.allowedTools,
     ...(input.toolConfigs ? { toolConfigs: input.toolConfigs as never } : {})
+  });
+  return entity;
+}
+
+export function spawnPlanReviewPolicy(cmd: CommandSink, input: Parameters<typeof normalizePlanReviewPolicy>[0]): Entity {
+  const entity = cmd.spawn();
+  cmd.add(entity, PlanReviewPolicy, normalizePlanReviewPolicy(input));
+  return entity;
+}
+
+export function linkPlanReviewPolicyToWorkflow(
+  cmd: CommandSink,
+  input: { scopeId: string; workflow: Entity; planReviewPolicy: Entity }
+): Entity {
+  const entity = cmd.spawn();
+  const now = Date.now();
+  cmd.add(entity, PlanReviewPolicyScopeLink, {
+    id: `plan-review-policy-scope:workflow:${input.scopeId}`,
+    scopeKind: 'workflow',
+    scopeId: input.scopeId,
+    workflow: input.workflow,
+    planReviewPolicy: input.planReviewPolicy,
+    role: 'active',
+    createdAt: now,
+    updatedAt: now
   });
   return entity;
 }

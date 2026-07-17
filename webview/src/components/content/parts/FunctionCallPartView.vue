@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { IconTool, IconPlayerStop } from '@tabler/icons-vue';
+import { SUBMIT_PLAN_TOOL_NAME } from '@shared/protocol';
+import { submitPlanOutputFromResult } from '@shared/planReview';
 import type {
   FunctionCallPart,
   ToolCallEventRecord,
@@ -12,6 +14,7 @@ import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { bridge, BridgeMessageType } from '@webview/transport';
 import AskUserContent from '@webview/components/askUser/AskUserContent.vue';
+import PlanProposalContent from '@webview/components/plan/PlanProposalContent.vue';
 import TaskListDisplay from '@webview/components/taskList/TaskListDisplay.vue';
 import { resolveToolDisplay } from '../toolDisplay/registry';
 import { parseShellArgs, parseShellResultOutput } from '../toolDisplay/shellToolModel';
@@ -308,6 +311,13 @@ function labelForToolCall(call: ToolCallRecord): string {
   if (call.status === 'awaiting_approval' && isExecutionApprovedProgress(call.progress)) {
     return isWaitingForPreviousProgress(call.progress) ? '已批准，等待前序批次' : '已批准，等待执行';
   }
+  if (call.name === SUBMIT_PLAN_TOOL_NAME) {
+    const planOutput = submitPlanOutputFromResult(call.result);
+    if (call.status === 'awaiting_user_input') return '等待审批 Plan';
+    if (planOutput?.status === 'approved') return 'Plan 已批准';
+    if (planOutput?.status === 'change_requested') return '要求修改 Plan';
+    if (planOutput?.status === 'rejected') return 'Plan 已拒绝';
+  }
   if (call.status === 'error' && isInterruptedResult(call.result)) {
     return '已被用户中断';
   }
@@ -483,6 +493,13 @@ function isInternalApprovalProgress(progress: unknown): boolean {
           :tool-call="section.askUser.toolCall"
           placement="tool-detail"
         />
+        <PlanProposalContent
+          v-if="section.planProposal"
+          class="tool-display-plan-proposal"
+          :request="section.planProposal.request"
+          :proposal-id="section.planProposal.proposalId"
+          :tool-call="section.planProposal.toolCall"
+        />
       </ContentBlockSection>
       <ContentBlockSection
         v-for="(section, index) in outputSections"
@@ -512,6 +529,13 @@ function isInternalApprovalProgress(progress: unknown): boolean {
           :request="section.askUser.request"
           :tool-call="section.askUser.toolCall"
           placement="tool-detail"
+        />
+        <PlanProposalContent
+          v-if="section.planProposal"
+          class="tool-display-plan-proposal"
+          :request="section.planProposal.request"
+          :proposal-id="section.planProposal.proposalId"
+          :tool-call="section.planProposal.toolCall"
         />
       </ContentBlockSection>
       <p v-if="toolCall?.error" class="part-card-error">{{ toolCall.error }}</p>

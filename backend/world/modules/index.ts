@@ -3,6 +3,7 @@ export * from './agent';
 export * from './agentRun';
 export * from './agentAnswer';
 export * from './workflow';
+export * from './plan';
 export * from './chat';
 export * from './project';
 export * from './workEnvironment';

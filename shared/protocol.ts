@@ -126,6 +126,9 @@ export enum BridgeMessageType {
   ToolResultSubmit = 'tool.result.submit',
   ToolResultReject = 'tool.result.reject',
   AskUserAnswerSubmit = 'askUser.answer.submit',
+  PlanProposalApprove = 'planProposal.approve',
+  PlanProposalRequestChanges = 'planProposal.requestChanges',
+  PlanProposalReject = 'planProposal.reject',
   CheckpointDiffOpen = 'checkpoint.diff.open',
   AttachmentOpen = 'attachment.open',
   AttachmentReload = 'attachment.reload',
@@ -381,6 +384,7 @@ export interface ToolDefinitionSourceRecord {
 
 export const TASK_LIST_TOOL_NAME = 'update_task_list';
 export const ASK_USER_TOOL_NAME = 'ask_user';
+export const SUBMIT_PLAN_TOOL_NAME = 'submit_plan';
 export const SWITCH_WORK_ENVIRONMENT_TOOL_NAME = 'switch_work_environment';
 export const TRANSFER_TOOL_NAME = 'transfer';
 export const READ_TOOL_NAME = 'read';
@@ -452,6 +456,26 @@ export interface AskUserToolOutputRecord {
   multiple: boolean;
   selectedOptions: AskUserOptionRecord[];
   customText?: string;
+}
+
+export interface SubmitPlanToolRequestRecord {
+  title?: string;
+  plan: string;
+  risks?: string[];
+  files?: string[];
+}
+
+export type SubmitPlanDecisionStatus = 'approved' | 'change_requested' | 'rejected';
+
+export interface SubmitPlanToolOutputRecord {
+  kind: 'submit_plan.result';
+  proposalId: string;
+  status: SubmitPlanDecisionStatus;
+  title?: string;
+  plan: string;
+  risks?: string[];
+  files?: string[];
+  userMessage?: string;
 }
 
 export type LlmProviderKind = 'openai-compatible' | 'openai-responses' | 'claude' | 'gemini' | 'deepseek';
@@ -824,12 +848,56 @@ export type ConfigScopeBindingRole = 'active';
 export type WorkflowSource = 'builtin' | 'user';
 export type WorkflowIconKey = 'list-details';
 
+export type PlanReviewMode = 'off' | 'before_mutation';
+export type PlanReviewRequiredToolRiskLevel = 'write' | 'command' | 'agent';
+export type PlanReviewPolicyScopeKind = ConfigScopeKind;
+export type PlanProposalStatus = 'pending' | 'approved' | 'change_requested' | 'rejected';
+
 export interface WorkflowRecord {
   id: string;
   name: string;
   description?: string;
   source: WorkflowSource;
   icon?: WorkflowIconKey;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface PlanReviewPolicyRecord {
+  id: string;
+  mode: PlanReviewMode;
+  allowReadonlyBeforeApproval: boolean;
+  requireForToolRiskLevels: PlanReviewRequiredToolRiskLevel[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface PlanReviewPolicyScopeLinkRecord {
+  id: string;
+  scopeKind: PlanReviewPolicyScopeKind;
+  scopeId?: string;
+  planReviewPolicyId: string;
+  role: ConfigScopeBindingRole;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface PlanProposalRecord {
+  id: string;
+  title?: string;
+  body: string;
+  risks?: string[];
+  files?: string[];
+  status: PlanProposalStatus;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RunPlanProposalLinkRecord {
+  id: string;
+  runId: string;
+  planProposalId: string;
+  role: ConfigScopeBindingRole;
   createdAt: number;
   updatedAt: number;
 }
@@ -1885,6 +1953,10 @@ export interface ClientStateRecordByTable {
   toolDefinitions: ToolDefinitionRecord;
   mcpToolSources: McpToolSourceRecord;
   workflows: WorkflowRecord;
+  planReviewPolicies: PlanReviewPolicyRecord;
+  planReviewPolicyScopeLinks: PlanReviewPolicyScopeLinkRecord;
+  planProposals: PlanProposalRecord;
+  runPlanProposalLinks: RunPlanProposalLinkRecord;
   toolPolicies: ToolPolicyRecord;
   toolPolicyScopeLinks: ToolPolicyScopeLinkRecord;
   skillDefinitions: SkillDefinitionRecord;
@@ -2090,6 +2162,12 @@ export interface ToolDecisionPayload {
 export interface AskUserAnswerSubmitPayload {
   toolCallId: string;
   answer: AskUserAnswerRecord;
+}
+export interface PlanProposalDecisionPayload {
+  toolCallId: string;
+  planProposalId: string;
+  conversationId?: string;
+  message?: string;
 }
 export interface ToolDiffOpenPayload {
   toolCallId: string;
@@ -2659,6 +2737,9 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ToolResultSubmit, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ToolResultReject, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.AskUserAnswerSubmit, AskUserAnswerSubmitPayload>
+  | BridgeEnvelope<BridgeMessageType.PlanProposalApprove, PlanProposalDecisionPayload>
+  | BridgeEnvelope<BridgeMessageType.PlanProposalRequestChanges, PlanProposalDecisionPayload>
+  | BridgeEnvelope<BridgeMessageType.PlanProposalReject, PlanProposalDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointDiffOpen, CheckpointDiffOpenPayload>
   | BridgeEnvelope<BridgeMessageType.AttachmentOpen, AttachmentOpenPayload>
   | BridgeEnvelope<BridgeMessageType.AttachmentReload, AttachmentReloadPayload>

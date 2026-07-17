@@ -27,6 +27,8 @@ import type {
   MessageRecord,
   MessageRevisionRecord,
   WorkflowRecord,
+  PlanReviewPolicyRecord,
+  PlanReviewPolicyScopeLinkRecord,
   ModelProfileRecord,
   ModelProfileScopeLinkRecord,
   ProjectContextRecord,
@@ -151,7 +153,9 @@ const RUN_HISTORY_TABLE_KEYS = [
   'messageLlmInvocationLinks',
   'runWorkEnvironmentLinks',
   'agentRunInputRevisions',
-  'runCompressionBlockLinks'
+  'runCompressionBlockLinks',
+  'planProposals',
+  'runPlanProposalLinks'
 ] as const;
 
 const RUN_DETAIL_TABLE_KEYS = [
@@ -188,6 +192,8 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
   const [
     agents,
     workflows,
+    planReviewPolicies,
+    planReviewPolicyScopeLinks,
     toolPolicies,
     toolPolicyScopeLinks,
     skillPolicies,
@@ -214,6 +220,8 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
   ] = await Promise.all([
     loadSkeletonRecords<AgentRecord>('agents', [paths.agentsRootUri, paths.agentsIndexUri], 'agent'),
     loadSkeletonRecords<WorkflowRecord>('workflows', [paths.workflowsRootUri, paths.workflowsIndexUri], 'workflow'),
+    loadSkeletonRecords<PlanReviewPolicyRecord>('planReviewPolicies', [paths.planReviewPoliciesRootUri, paths.planReviewPoliciesIndexUri], 'policy'),
+    loadSkeletonRecords<PlanReviewPolicyScopeLinkRecord>('planReviewPolicyScopeLinks', [paths.planReviewPolicyScopeLinksRootUri, paths.planReviewPolicyScopeLinksIndexUri], 'link'),
     loadSkeletonRecords<ToolPolicyRecord>('toolPolicies', [paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri], 'toolPolicy'),
     loadSkeletonRecords<ToolPolicyScopeLinkRecord>('toolPolicyScopeLinks', [paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri], 'link'),
     loadSkeletonRecords<SkillPolicyRecord>('skillPolicies', [paths.skillPoliciesRootUri, paths.skillPoliciesIndexUri], 'skillPolicy'),
@@ -241,6 +249,8 @@ async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientStat
 
   state.agents = agents;
   state.workflows = workflows;
+  state.planReviewPolicies = planReviewPolicies;
+  state.planReviewPolicyScopeLinks = planReviewPolicyScopeLinks;
   state.toolPolicies = toolPolicies;
   state.toolPolicyScopeLinks = toolPolicyScopeLinks;
   state.skillPolicies = skillPolicies;
@@ -460,6 +470,8 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
   const results = await Promise.allSettled([
     saveRecords(paths.agentsRootUri, paths.agentsIndexUri, state.agents, 'agent', (record) => record.name || record.id),
     saveRecords(paths.workflowsRootUri, paths.workflowsIndexUri, state.workflows, 'workflow', (record) => record.name || record.id),
+    saveRecords(paths.planReviewPoliciesRootUri, paths.planReviewPoliciesIndexUri, state.planReviewPolicies, 'policy', (record) => record.id),
+    saveRecords(paths.planReviewPolicyScopeLinksRootUri, paths.planReviewPolicyScopeLinksIndexUri, state.planReviewPolicyScopeLinks, 'link'),
     saveRecords(paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri, state.toolPolicies, 'toolPolicy', (record) => record.name || record.id),
     saveRecords(paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri, state.toolPolicyScopeLinks, 'link'),
     saveRecords(paths.skillPoliciesRootUri, paths.skillPoliciesIndexUri, state.skillPolicies, 'skillPolicy', (record) => record.name || record.id),
@@ -658,6 +670,9 @@ export function conversationRunHistorySlice(state: ClientState, conversationId: 
   detail.runWorkEnvironmentLinks = state.runWorkEnvironmentLinks.filter((link) => runIds.has(link.runId));
   detail.agentRunInputRevisions = state.agentRunInputRevisions.filter((input) => runIds.has(input.runId) || input.conversationId === conversationId || revisionIds.has(input.revisionId));
   detail.runCompressionBlockLinks = state.runCompressionBlockLinks.filter((link) => runIds.has(link.runId));
+  detail.runPlanProposalLinks = state.runPlanProposalLinks.filter((link) => runIds.has(link.runId));
+  const planProposalIds = new Set(detail.runPlanProposalLinks.map((link) => link.planProposalId));
+  detail.planProposals = state.planProposals.filter((proposal) => planProposalIds.has(proposal.id));
   return detail;
 }
 
@@ -726,6 +741,8 @@ function copyRunHistoryTables(target: ClientState, source: ClientState): void {
   target.runWorkEnvironmentLinks = source.runWorkEnvironmentLinks;
   target.agentRunInputRevisions = source.agentRunInputRevisions;
   target.runCompressionBlockLinks = source.runCompressionBlockLinks;
+  target.planProposals = source.planProposals;
+  target.runPlanProposalLinks = source.runPlanProposalLinks;
 }
 
 function copyCompressionTables(target: ClientState, source: ClientState): void {
@@ -799,6 +816,9 @@ function runDetailSlice(state: ClientState, runId: string): ClientState {
   detail.runWorkEnvironmentLinks = state.runWorkEnvironmentLinks.filter((link) => link.runId === runId);
   detail.agentRunInputRevisions = state.agentRunInputRevisions.filter((input) => input.runId === runId);
   detail.runCompressionBlockLinks = state.runCompressionBlockLinks.filter((link) => link.runId === runId);
+  detail.runPlanProposalLinks = state.runPlanProposalLinks.filter((link) => link.runId === runId);
+  const planProposalIds = new Set(detail.runPlanProposalLinks.map((link) => link.planProposalId));
+  detail.planProposals = state.planProposals.filter((proposal) => planProposalIds.has(proposal.id));
 
   const conversationPolicyIds = new Set(detail.runConversationPolicyLinks.map((link) => link.policyId));
   const contextPolicyIds = new Set(detail.runContextPolicyLinks.map((link) => link.policyId));

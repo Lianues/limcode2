@@ -30,6 +30,7 @@ import {
 import { ConversationProjectLink, ProjectContext } from '../world/modules/project/components';
 import { ToolCall, ToolCallEvent, ToolPolicyScopeLink, ToolResultConsumed, ToolState } from '../world/modules/tools/components';
 import { isTerminalToolStatus } from '../world/modules/tools/state';
+import { PlanProposal, PlanReviewPolicy, PlanReviewPolicyScopeLink, RunPlanProposalLink } from '../world/modules/plan/components';
 import { SkillPolicy, SkillPolicyScopeLink } from '../world/modules/skill/components';
 import {
   ConversationWorkEnvironmentLink,
@@ -122,6 +123,7 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState, opt
   }
 
   const workflowEntities = hydrateRecordsUnique(world, state.workflows, Workflow);
+  const planReviewPolicyEntities = hydrateRecordsUnique(world, state.planReviewPolicies, PlanReviewPolicy);
   const toolPolicyEntities = hydrateRecordsUnique(world, state.toolPolicies, ToolPolicy);
   const skillPolicyEntities = hydrateRecordsUnique(world, state.skillPolicies, SkillPolicy);
   const systemPromptEntities = hydrateRecordsUnique(world, state.systemPrompts, SystemPrompt);
@@ -132,6 +134,7 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState, opt
   hydrateSystemPromptScopeLinks(world, state, { agents: agentEntities, conversations: new Map(), workflows: workflowEntities, runs: new Map(), prompts: systemPromptEntities });
   hydrateRuntimeContextScopeLinks(world, state, { agents: agentEntities, conversations: new Map(), workflows: workflowEntities, runs: new Map(), runtimeContexts: runtimeContextEntities });
   hydrateModelProfileScopeLinks(world, state, { agents: agentEntities, conversations: new Map(), workflows: workflowEntities, runs: new Map(), profiles: modelProfileEntities });
+  hydratePlanReviewPolicyScopeLinks(world, state, { agents: agentEntities, conversations: new Map(), workflows: workflowEntities, runs: new Map(), policies: planReviewPolicyEntities });
 
   for (const conversation of conversations) {
     const existing = conversationEntities.get(conversation.id);
@@ -196,6 +199,7 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState, opt
 
   hydrateWorkEnvironmentPolicyScopeLinks(world, state, { conversations: conversationEntities, workflows: workflowEntities, agents: agentEntities, runs: new Map(), policies: workEnvironmentPolicyEntities });
   hydrateCheckpointPolicyScopeLinks(world, state, { conversations: conversationEntities, workflows: workflowEntities, agents: agentEntities, runs: new Map(), policies: checkpointPolicyEntities });
+  hydratePlanReviewPolicyScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, workflows: workflowEntities, runs: new Map(), policies: planReviewPolicyEntities });
   hydrateCheckpointRecords(world, state, { conversations: conversationEntities, projectContexts: projectContextEntities, shadowRepositories: shadowRepositoryEntities, messages: new Map(), runs: new Map(), toolCalls: new Map() });
 
   const agentConversationLinkIds = existingIds(world, AgentConversationLink);
@@ -276,6 +280,8 @@ export async function hydrateConversationDetail(world: World, state: ClientState
   const workEnvironmentEntities = existingRecords(world, WorkEnvironment);
   const workEnvironmentPolicyEntities = existingRecords(world, WorkEnvironmentPolicy);
   const checkpointPolicyEntities = hydrateRecordsUnique(world, state.checkpointPolicies ?? [], CheckpointPolicy);
+  const planReviewPolicyEntities = hydrateRecordsUnique(world, state.planReviewPolicies ?? [], PlanReviewPolicy);
+  const planProposalEntities = hydrateRecordsUnique(world, state.planProposals ?? [], PlanProposal);
   const shadowRepositoryEntities = hydrateRecordsUnique(world, state.shadowRepositories ?? [], ShadowRepository);
   const runtimeContextEntities = existingRecords(world, RuntimeContext);
   const runtimeContextSnapshotEntities = existingRecords(world, RuntimeContextSnapshot);
@@ -404,12 +410,14 @@ export async function hydrateConversationDetail(world: World, state: ClientState
   for (const link of state.runContextPolicyLinks ?? []) spawnRunLink(world, runEntities, contextPolicyEntities, link, RunContextPolicyLink, 'run', 'policy');
   for (const link of state.runDeliveryPolicyLinks ?? []) spawnRunLink(world, runEntities, deliveryPolicyEntities, link, RunDeliveryPolicyLink, 'run', 'policy');
   for (const link of state.runEditPolicyLinks ?? []) spawnRunLink(world, runEntities, editPolicyEntities, link, RunEditPolicyLink, 'run', 'policy');
+  for (const link of state.runPlanProposalLinks ?? []) spawnRunLink(world, runEntities, planProposalEntities, link, RunPlanProposalLink, 'run', 'planProposal');
   for (const link of state.runWorkEnvironmentLinks ?? []) spawnRunLink(world, runEntities, workEnvironmentEntities, link, RunWorkEnvironmentLink, 'run', 'workEnvironment');
   for (const link of state.runRuntimeContextSnapshotLinks ?? []) spawnRunLink(world, runEntities, runtimeContextSnapshotEntities, link, RunRuntimeContextSnapshotLink, 'run', 'snapshot');
   for (const link of state.runLlmInvocationLinks ?? []) spawnRunLink(world, runEntities, llmInvocationEntities, link, RunLlmInvocationLink, 'run', 'invocation');
   for (const link of state.messageLlmInvocationLinks ?? []) spawnRunLink(world, messageEntities, llmInvocationEntities, link, MessageLlmInvocationLink, 'message', 'invocation');
   hydrateWorkEnvironmentPolicyScopeLinks(world, state, { conversations: conversationEntities, workflows: workflowEntities, agents: agentEntities, runs: runEntities, policies: workEnvironmentPolicyEntities });
   hydrateCheckpointPolicyScopeLinks(world, state, { conversations: conversationEntities, workflows: workflowEntities, agents: agentEntities, runs: runEntities, policies: checkpointPolicyEntities });
+  hydratePlanReviewPolicyScopeLinks(world, state, { agents: agentEntities, conversations: conversationEntities, workflows: workflowEntities, runs: runEntities, policies: planReviewPolicyEntities });
   hydrateCheckpointRecords(world, state, { conversations: conversationEntities, projectContexts: projectContextEntities, shadowRepositories: shadowRepositoryEntities, messages: messageEntities, runs: runEntities, toolCalls: toolCallEntities });
 
 
@@ -1256,6 +1264,42 @@ function hydrateCheckpointPolicyScopeLinks(world: World, state: ClientState, map
       scopeKind: record.scopeKind,
       ...(record.scopeId ? { scopeId: record.scopeId } : {}),
       checkpointPolicy,
+      ...scope.data,
+      role: record.role,
+      createdAt: record.createdAt || Date.now(),
+      updatedAt: record.updatedAt || record.createdAt || Date.now()
+    });
+  }
+}
+
+interface PlanReviewPolicyScopeHydrationMaps {
+  agents: Map<string, Entity>;
+  conversations: Map<string, Entity>;
+  workflows: Map<string, Entity>;
+  runs: Map<string, Entity>;
+  policies: Map<string, Entity>;
+}
+
+function hydratePlanReviewPolicyScopeLinks(world: World, state: ClientState, maps: PlanReviewPolicyScopeHydrationMaps): void {
+  const existing = existingIds(world, PlanReviewPolicyScopeLink);
+  for (const record of state.planReviewPolicyScopeLinks ?? []) {
+    if (existing.has(record.id)) continue;
+    const planReviewPolicy = maps.policies.get(record.planReviewPolicyId);
+    if (planReviewPolicy === undefined) continue;
+    const scope = resolveHydratedConfigScope(record.scopeKind, record.scopeId, {
+      agents: maps.agents,
+      conversations: maps.conversations,
+      workflows: maps.workflows,
+      runs: maps.runs
+    });
+    if (!scope.ok) continue;
+    const entity = world.spawn();
+    existing.add(record.id);
+    world.add(entity, PlanReviewPolicyScopeLink, {
+      id: record.id,
+      scopeKind: record.scopeKind,
+      ...(record.scopeId ? { scopeId: record.scopeId } : {}),
+      planReviewPolicy,
       ...scope.data,
       role: record.role,
       createdAt: record.createdAt || Date.now(),

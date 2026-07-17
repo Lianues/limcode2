@@ -1,11 +1,13 @@
 import { defineResource } from '../../../ecs/types';
-import type { LlmProviderKind, ToolPolicyToolConfigRecord, WorkflowIconKey } from '../../../../shared/protocol';
+import type { LlmProviderKind, PlanReviewPolicyRecord, ToolPolicyToolConfigRecord, WorkflowIconKey } from '../../../../shared/protocol';
 import {
+  ASK_USER_TOOL_NAME,
   DELETE_TOOL_NAME,
   EDIT_TOOL_NAME,
   READ_TOOL_NAME,
   READ_AGENT_ANSWER_TOOL_NAME,
   SKILLS_TOOL_NAME,
+  SUBMIT_PLAN_TOOL_NAME,
   SWITCH_WORK_ENVIRONMENT_TOOL_NAME,
   SUBMIT_AGENT_ANSWER_TOOL_NAME,
   TASK_LIST_TOOL_NAME,
@@ -45,6 +47,7 @@ export interface BuiltinWorkflowDefinition {
   systemPrompt?: string;
   model?: BuiltinModelProfileDefinition;
   toolPolicy?: BuiltinToolPolicyDefinition;
+  planReviewPolicy?: Omit<PlanReviewPolicyRecord, 'id' | 'createdAt' | 'updatedAt'> & { id?: string };
 }
 
 export interface BuiltinAgentRegistry {
@@ -63,8 +66,8 @@ export const DEFAULT_INTEGRATED_SYSTEM_PROMPT = [
   'Follow the active agent profile, active workflow, user instructions, and project rules. Reply in the user\'s language unless asked otherwise.'
 ].join('\n\n');
 
-const DEFAULT_TOOLS = [TASK_LIST_TOOL_NAME, SWITCH_WORK_ENVIRONMENT_TOOL_NAME, TRANSFER_TOOL_NAME, READ_TOOL_NAME, EDIT_TOOL_NAME, WRITE_TOOL_NAME, DELETE_TOOL_NAME, 'shell', 'bash', 'run_agent', SKILLS_TOOL_NAME, SUBMIT_AGENT_ANSWER_TOOL_NAME, READ_AGENT_ANSWER_TOOL_NAME];
-const READONLY_TOOLS = [TASK_LIST_TOOL_NAME, SWITCH_WORK_ENVIRONMENT_TOOL_NAME, READ_TOOL_NAME, 'shell', 'bash', SKILLS_TOOL_NAME, SUBMIT_AGENT_ANSWER_TOOL_NAME, READ_AGENT_ANSWER_TOOL_NAME];
+const DEFAULT_TOOLS = [TASK_LIST_TOOL_NAME, ASK_USER_TOOL_NAME, SUBMIT_PLAN_TOOL_NAME, SWITCH_WORK_ENVIRONMENT_TOOL_NAME, TRANSFER_TOOL_NAME, READ_TOOL_NAME, EDIT_TOOL_NAME, WRITE_TOOL_NAME, DELETE_TOOL_NAME, 'shell', 'bash', 'run_agent', SKILLS_TOOL_NAME, SUBMIT_AGENT_ANSWER_TOOL_NAME, READ_AGENT_ANSWER_TOOL_NAME];
+const READONLY_TOOLS = [TASK_LIST_TOOL_NAME, ASK_USER_TOOL_NAME, SUBMIT_PLAN_TOOL_NAME, SWITCH_WORK_ENVIRONMENT_TOOL_NAME, READ_TOOL_NAME, 'shell', 'bash', SKILLS_TOOL_NAME, SUBMIT_AGENT_ANSWER_TOOL_NAME, READ_AGENT_ANSWER_TOOL_NAME];
 const DEFAULT_TOOL_CONFIGS: Record<string, ToolPolicyToolConfigRecord> = {};
 
 export function createDefaultAgentBlueprints(): BuiltinAgentRegistry {
@@ -108,7 +111,12 @@ export function createDefaultAgentBlueprints(): BuiltinAgentRegistry {
         id: 'builtin:plan',
         name: 'Plan',
         description: 'Plan first: analyze requirements, identify risks, and decompose tasks before implementation.',
-        systemPrompt: 'Plan first. Analyze requirements, identify risks, and present a concise implementation plan before making large changes.'
+        systemPrompt: 'Plan first. Before any file edit, write, delete, non-readonly command, or child agent task, call submit_plan with a concise implementation plan and wait for user approval. If the user requests changes, revise and submit the plan again. Only proceed with mutating tools after approval.',
+        planReviewPolicy: {
+          mode: 'before_mutation',
+          allowReadonlyBeforeApproval: true,
+          requireForToolRiskLevels: ['write', 'command', 'agent']
+        }
       },
       review: {
         id: 'builtin:review',

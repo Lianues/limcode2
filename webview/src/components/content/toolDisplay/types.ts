@@ -4,6 +4,7 @@ import type {
   AgentRunTargetLinkRecord,
   AskUserToolRequestRecord,
   CheckpointRecord,
+  SubmitPlanToolRequestRecord,
   CheckpointTimelineAnchorRecord,
   MessageRecord,
   ShadowRepositoryRecord,
@@ -41,6 +42,7 @@ export interface ToolDisplaySection {
   diff?: ToolDisplayDiff;
   taskList?: ToolDisplayTaskList;
   askUser?: ToolDisplayAskUser;
+  planProposal?: ToolDisplayPlanProposal;
 }
 
 export interface ToolDisplayTaskList {
@@ -51,6 +53,12 @@ export interface ToolDisplayTaskList {
 
 export interface ToolDisplayAskUser {
   request: AskUserToolRequestRecord;
+  toolCall?: ToolCallRecord;
+}
+
+export interface ToolDisplayPlanProposal {
+  request: SubmitPlanToolRequestRecord;
+  proposalId?: string;
   toolCall?: ToolCallRecord;
 }
 

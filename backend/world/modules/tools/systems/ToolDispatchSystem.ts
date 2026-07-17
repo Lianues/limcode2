@@ -101,6 +101,7 @@ import { effectiveCheckpointPolicyForRequest } from '../../checkpoint/queries';
 import { effectiveCheckpointToolTriggerConfig } from '../../checkpoint/policy';
 import { isReadonlyCommandCall } from '../definitions/command';
 import { normalizeAskUserToolRequest } from '../../../../../shared/askUser';
+import { normalizeSubmitPlanToolRequest } from '../../../../../shared/planReview';
 import { allowOutsideProjectPathsFromConfig } from '../definitions/filePathPolicy';
 import { DEFAULT_RUN_AGENT_TYPE, RUN_AGENT_TOOL_NAME } from '../definitions/runAgent';
 import {
@@ -112,6 +113,10 @@ import {
 import {
   createMessageId,
   ASK_USER_TOOL_NAME,
+  SUBMIT_PLAN_TOOL_NAME,
+  EDIT_TOOL_NAME,
+  WRITE_TOOL_NAME,
+  DELETE_TOOL_NAME,
   SWITCH_WORK_ENVIRONMENT_TOOL_NAME,
   TRANSFER_TOOL_NAME,
   READ_AGENT_ANSWER_TOOL_NAME,
@@ -125,10 +130,15 @@ import {
   type MessageContent,
   type NewMessageWhileRunningBehavior,
   type SourceEditBehavior,
+  type PlanReviewRequiredToolRiskLevel,
   type ToolConfigRecord,
+  type ToolRiskLevel,
   type TranscriptInclusion
 } from '../../../../../shared/protocol';
 import type { FsPendingFileChangeProposal } from '../../../../capabilities/types';
+import { PlanProposal, PlanReviewPolicy, PlanReviewPolicyScopeLink, RunPlanProposalLink } from '../../plan/components';
+import { PlanReviewBundle, linkPlanProposalToRun, upsertPlanProposal } from '../../plan/bundles';
+import { effectivePlanReviewPolicyForRun, hasApprovedPlanForRun, planReviewRequiresRiskLevel } from '../../plan/queries';
 
 const QueuedToolCallsQuery = defineQuery({
   name: 'QueuedToolCalls',
@@ -150,6 +160,10 @@ const QueuedToolCallsQuery = defineQuery({
     Workflow,
     ToolPolicy,
     ToolPolicyScopeLink,
+    PlanReviewPolicy,
+    PlanReviewPolicyScopeLink,
+    PlanProposal,
+    RunPlanProposalLink,
     AgentRun,
     AgentRunSourceLink,
     ToolCallRunLink,
@@ -185,7 +199,7 @@ export const ToolDispatchSystem = defineSystem({
     queries: [QueuedToolCallsQuery],
     writes: { components: [CheckpointBarrier] },
     resources: { read: [AgentBlueprintsKey, ToolSchemasKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey] },
-    bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentAnswerBundle, AgentFromBlueprintBundle, WorkflowBundle, ConversationProjectLinkBundle, WorkEnvironmentBundle],
+    bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentAnswerBundle, AgentFromBlueprintBundle, WorkflowBundle, ConversationProjectLinkBundle, WorkEnvironmentBundle, PlanReviewBundle],
     events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested, ToolEventType.ExecutionCancelRequested, ToolEventType.ChangeApplyRequested, ToolEventType.ChangeRejectRequested], emit: [CheckpointEventType.Requested, AgentRunEventType.Cancel, AgentRunEventType.Promote] },
     effects: { emit: ['tool.run', 'tool.change.apply', 'tool.abort'] }
   },
@@ -204,7 +218,7 @@ export const ToolDispatchSystem = defineSystem({
       const state = world.get(entity, ToolState);
       if (!call || !state) continue;
       const reason = request.reason?.trim() || undefined;
-      if (interruptToolCall(cmd, entity, call, state, { reason, emitAbort: call.name !== ASK_USER_TOOL_NAME })) {
+      if (interruptToolCall(cmd, entity, call, state, { reason, emitAbort: call.name !== ASK_USER_TOOL_NAME && call.name !== SUBMIT_PLAN_TOOL_NAME })) {
         cancelSynchronousRunAgentChild(cmd, call, state, reason);
         handled.add(entity);
       }
@@ -231,6 +245,11 @@ export const ToolDispatchSystem = defineSystem({
       const authorization = authorizeRunToolExecution(world, entity, call);
       if (!authorization.ok) {
         rejectToolCall(cmd, entity, call, state, authorization.reason);
+        continue;
+      }
+      const planGate = authorizePlanReviewForTool(world, call, authorization);
+      if (!planGate.ok) {
+        rejectToolCall(cmd, entity, call, state, planGate.reason);
         continue;
       }
       const proposal = pendingFileChangeProposal(state.result);
@@ -266,6 +285,11 @@ export const ToolDispatchSystem = defineSystem({
         continue;
       }
       if (!isRunReadyForToolExecution(authorization)) continue;
+      const planGate = authorizePlanReviewForTool(world, call, authorization);
+      if (!planGate.ok) {
+        rejectToolCall(cmd, entity, call, state, planGate.reason);
+        continue;
+      }
       if (!isInActiveExecutionBatch(world, authorization.run, entity)) {
         markExecutionApproved(cmd, entity, call, state, authorization, true);
         continue;
@@ -295,6 +319,12 @@ export const ToolDispatchSystem = defineSystem({
       }
       if (!isRunReadyForToolExecution(authorization)) continue;
       if (!isInActiveExecutionBatch(world, authorization.run, entity)) {
+        continue;
+      }
+
+      const planGate = authorizePlanReviewForTool(world, call, authorization);
+      if (!planGate.ok) {
+        rejectToolCall(cmd, entity, call, state, planGate.reason);
         continue;
       }
 
@@ -349,10 +379,51 @@ function isRunReadyForToolExecution(authorization: Extract<AuthorizationResult, 
   return authorization.runStatus === 'waiting_tool';
 }
 
+type PlanReviewGateResult = { ok: true } | { ok: false; reason: string };
+
+function authorizePlanReviewForTool(world: WorldReader, call: ToolCallData, authorization: Extract<AuthorizationResult, { ok: true }>): PlanReviewGateResult {
+  if (call.name === SUBMIT_PLAN_TOOL_NAME) return { ok: true };
+  const resolution = effectivePlanReviewPolicyForRun(world, authorization.run);
+  const policy = resolution.policy;
+  if (policy.mode !== 'before_mutation') return { ok: true };
+
+  const riskLevel = planReviewRiskLevelForTool(world, call);
+  if (riskLevel === 'read') {
+    if (policy.allowReadonlyBeforeApproval || hasApprovedPlanForRun(world, authorization.run)) return { ok: true };
+    return { ok: false, reason: '当前工作流要求 Plan 批准后才能继续执行工具。请先调用 submit_plan 并等待用户批准。' };
+  }
+
+  const requiredRiskLevel = toPlanReviewRequiredRiskLevel(riskLevel);
+  if (!requiredRiskLevel || !planReviewRequiresRiskLevel(policy, requiredRiskLevel)) return { ok: true };
+  if (hasApprovedPlanForRun(world, authorization.run)) return { ok: true };
+  return { ok: false, reason: '当前工作流要求先提交并批准 Plan。请先调用 submit_plan，等待用户批准后再执行会修改文件、运行非只读命令或启动子 Agent 的工具。' };
+}
+
+function planReviewRiskLevelForTool(world: WorldReader, call: ToolCallData): ToolRiskLevel {
+  if (call.name === EDIT_TOOL_NAME || call.name === WRITE_TOOL_NAME || call.name === DELETE_TOOL_NAME) return 'write';
+  if (isCommandToolName(call.name)) return isReadonlyCommandCall(parseToolCallArgs(call.argsJson)) ? 'read' : 'command';
+  if (isAgentRunTool(world, call.name)) return 'agent';
+  const definition = (world.tryGetResource(ToolDefinitionsKey) ?? []).find((tool) => tool.name === call.name);
+  if (definition?.metadata?.readonly === true) return 'read';
+  return definition?.metadata?.riskLevel ?? 'read';
+}
+
+function toPlanReviewRequiredRiskLevel(riskLevel: ToolRiskLevel): PlanReviewRequiredToolRiskLevel | undefined {
+  return riskLevel === 'write' || riskLevel === 'command' || riskLevel === 'agent' ? riskLevel : undefined;
+}
+
+function isCommandToolName(toolName: string): boolean {
+  return toolName === 'shell' || toolName === 'bash';
+}
+
 function dispatchToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {
   if (!isRunAgentInterruptCall(call) && awaitToolExecutionBeforeCheckpoint(world, cmd, entity, call, authorization)) return;
   if (call.name === ASK_USER_TOOL_NAME) {
     executeAskUserTool(cmd, entity, call, state);
+    return;
+  }
+  if (call.name === SUBMIT_PLAN_TOOL_NAME) {
+    executeSubmitPlanTool(world, cmd, entity, call, state, authorization);
     return;
   }
   if (call.name === SUBMIT_AGENT_ANSWER_TOOL_NAME) {
@@ -486,6 +557,53 @@ function executeAskUserTool(cmd: CommandSink, entity: Entity, call: ToolCallData
     at: now,
     elapsedMs: Math.max(0, now - call.createdAt),
     payload: { waitingFor: 'user_answer' }
+  });
+}
+
+function executeSubmitPlanTool(
+  world: WorldReader,
+  cmd: CommandSink,
+  entity: Entity,
+  call: ToolCallData,
+  state: ToolStateData,
+  authorization: Extract<AuthorizationResult, { ok: true }>
+): void {
+  let request;
+  try {
+    request = normalizeSubmitPlanToolRequest(call.argsJson);
+  } catch (error) {
+    rejectToolCall(cmd, entity, call, state, error instanceof Error ? error.message : String(error));
+    return;
+  }
+
+  const proposalId = `plan-proposal:${call.id}`;
+  const proposal = upsertPlanProposal(world, cmd, {
+    id: proposalId,
+    ...(request.title ? { title: request.title } : {}),
+    body: request.plan,
+    ...(request.risks && request.risks.length > 0 ? { risks: request.risks } : {}),
+    ...(request.files && request.files.length > 0 ? { files: request.files } : {}),
+    status: 'pending'
+  });
+  linkPlanProposalToRun(world, cmd, {
+    run: authorization.run,
+    runId: authorization.runId,
+    planProposal: proposal,
+    planProposalId: proposalId
+  });
+
+  const now = Date.now();
+  cmd.add(entity, ToolState, transitionToolState(state, 'awaiting_user_input', {
+    progress: { planProposalId: proposalId, waitingFor: 'plan_review' }
+  }, now));
+  spawnToolCallEvent(cmd, {
+    toolCall: entity,
+    toolCallId: call.id,
+    kind: 'state',
+    status: 'awaiting_user_input',
+    at: now,
+    elapsedMs: Math.max(0, now - call.createdAt),
+    payload: { waitingFor: 'plan_review', planProposalId: proposalId, runId: authorization.runId }
   });
 }
 
@@ -1740,6 +1858,12 @@ function dispatchApprovedAwaitingCalls(world: WorldReader, cmd: CommandSink, han
       continue;
     }
     if (!isRunReadyForToolExecution(authorization)) continue;
+    const planGate = authorizePlanReviewForTool(world, call, authorization);
+    if (!planGate.ok) {
+      rejectToolCall(cmd, entity, call, state, planGate.reason);
+      handled.add(entity);
+      continue;
+    }
     if (!isInActiveExecutionBatch(world, authorization.run, entity)) {
       continue;
     }
@@ -1770,6 +1894,12 @@ function autoApplyYoloAwaitingChanges(world: WorldReader, cmd: CommandSink, hand
       continue;
     }
     if (!isYoloToolPolicy(authorization.policy)) continue;
+    const planGate = authorizePlanReviewForTool(world, call, authorization);
+    if (!planGate.ok) {
+      rejectToolCall(cmd, entity, call, state, planGate.reason);
+      handled.add(entity);
+      continue;
+    }
     const proposal = pendingFileChangeProposal(state.result);
     if (!proposal) continue;
     applyPendingToolChange(world, cmd, entity, call, state, authorization, proposal);
@@ -1841,7 +1971,7 @@ function toolGateSettings(world: WorldReader, policy: ToolPolicyData, toolName: 
 }
 
 function requiresExecutionApproval(world: WorldReader, toolPolicy: ToolPolicyData, call: ToolCallData): boolean {
-  if (call.name === ASK_USER_TOOL_NAME || isRunAgentInterruptCall(call)) return false;
+  if (call.name === ASK_USER_TOOL_NAME || call.name === SUBMIT_PLAN_TOOL_NAME || isRunAgentInterruptCall(call)) return false;
   if (toolGateSettings(world, toolPolicy, call.name).autoApproveExecution !== false) return false;
   // 未开启"自动批准执行"时，若该工具开启了"只读命令自动跳过审批"且本次调用被标记为只读，则仍免审批。
   if (autoApprovesReadonlyCommand(world, toolPolicy, call)) return false;

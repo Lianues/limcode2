@@ -4,6 +4,8 @@ export const RECORDS_DIR = 'records';
 
 export const AGENTS_ROOT_DIR = 'agents';
 export const WORKFLOWS_ROOT_DIR = 'workflows';
+export const PLAN_REVIEW_POLICIES_ROOT_DIR = 'plan-review-policies';
+export const PLAN_REVIEW_POLICY_SCOPE_LINKS_ROOT_DIR = 'plan-review-policy-scope-links';
 export const TOOL_POLICIES_ROOT_DIR = 'tool-policies';
 export const TOOL_POLICY_SCOPE_LINKS_ROOT_DIR = 'tool-policy-scope-links';
 export const SKILL_POLICIES_ROOT_DIR = 'skill-policies';
@@ -56,6 +58,8 @@ export const COMPRESSION_LLM_INVOCATIONS_ROOT_DIR = 'compression-llm-invocations
 export const REGISTERED_STORAGE_ROOT_DIRS = [
   AGENTS_ROOT_DIR,
   WORKFLOWS_ROOT_DIR,
+  PLAN_REVIEW_POLICIES_ROOT_DIR,
+  PLAN_REVIEW_POLICY_SCOPE_LINKS_ROOT_DIR,
   TOOL_POLICIES_ROOT_DIR,
   TOOL_POLICY_SCOPE_LINKS_ROOT_DIR,
   SKILL_POLICIES_ROOT_DIR,

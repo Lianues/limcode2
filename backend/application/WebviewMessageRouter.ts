@@ -9,6 +9,7 @@ import { LlmInvocation, MessageLlmInvocationLink, RunLlmInvocationLink } from '.
 import { buildLlmStartRequestForRun } from '../world/modules/chat/systems/LlmDispatchSystem';
 import { CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSourceLink } from '../world/modules/compression/components';
 import { ToolEventType } from '../world/modules/tools/events';
+import { PlanReviewEventType } from '../world/modules/plan/events';
 import { ToolCall, ToolState } from '../world/modules/tools/components';
 import { activeToolPolicyForRun, runForToolCall } from '../world/modules/agentRun/queries';
 import { activeWorkEnvironmentForRun, pathAccessibleWorkEnvironmentsForRun, toPublicWorkEnvironmentRecord } from '../world/modules/workEnvironment/queries';
@@ -216,6 +217,18 @@ export class WebviewMessageRouter {
       case BridgeMessageType.AskUserAnswerSubmit:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: ToolEventType.AskUserAnswerSubmitted, payload: message.payload });
+        break;
+      case BridgeMessageType.PlanProposalApprove:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: PlanReviewEventType.ProposalApproveRequested, payload: message.payload });
+        break;
+      case BridgeMessageType.PlanProposalRequestChanges:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: PlanReviewEventType.ProposalChangesRequested, payload: message.payload });
+        break;
+      case BridgeMessageType.PlanProposalReject:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        this.deps.world.enqueue({ type: PlanReviewEventType.ProposalRejectRequested, payload: message.payload });
         break;
       case BridgeMessageType.AgentRunCancel:
         if (!this.deps.isHydrated() || !message.payload) return;

@@ -439,18 +439,13 @@ function agentTypeDescription(agent: AgentRecord): string {
 }
 
 .plan-proposal.layout-embedded {
-  max-height: min(62vh, 520px);
+  max-height: var(--lc-plan-proposal-max-height, min(62vh, 520px));
+  overflow: hidden;
 }
 
 .plan-proposal.layout-embedded.is-panel-expanded {
   height: auto;
   max-height: none;
-}
-
-.plan-proposal.layout-embedded.tool-display-plan-proposal.is-pending:not(.is-panel-expanded) {
-  height: var(--lc-content-block-section-max-height);
-  max-height: var(--lc-content-block-section-max-height);
-  overflow: hidden;
 }
 
 .plan-proposal.layout-full {

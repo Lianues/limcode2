@@ -496,7 +496,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
         :kind="section.kind"
         :title="section.title"
         :text="section.markdown ? undefined : section.text"
-        :unbounded="isPlanSectionExpanded(section)"
+        :unbounded="isPlanSectionExpanded(section) || !!section.planProposal"
         :class="{ 'is-plan-proposal-section': !!section.planProposal }"
       >
         <TextPartView v-if="section.markdown && section.text !== undefined" class="tool-display-markdown" :text="section.text" markdown />
@@ -536,7 +536,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
         :kind="section.kind"
         :title="section.title"
         :text="section.markdown ? undefined : section.text"
-        :unbounded="isPlanSectionExpanded(section)"
+        :unbounded="isPlanSectionExpanded(section) || !!section.planProposal"
         :class="{ 'is-plan-proposal-section': !!section.planProposal }"
       >
         <TextPartView v-if="section.markdown && section.text !== undefined" class="tool-display-markdown" :text="section.text" markdown />
@@ -853,6 +853,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
 
 .is-plan-proposal-section {
   --lc-content-block-section-max-height: min(68vh, 560px);
+  --lc-plan-proposal-max-height: min(68vh, 560px);
 }
 
 .part-card-details {

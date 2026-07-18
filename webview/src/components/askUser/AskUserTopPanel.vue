@@ -127,7 +127,6 @@ function selectQuestion(batch: PendingAskUserBatchView, index: number): void {
       class="ask-user-top-collapsible"
       aria-label="展开或收起待回答问题"
       kind="input"
-      icon-active
     >
       <template #icon>
         <IconMessageQuestion stroke="2" aria-hidden="true" />
@@ -197,7 +196,7 @@ function selectQuestion(batch: PendingAskUserBatchView, index: number): void {
 .ask-user-top-collapsible :deep(.lc-collapsible-summary) {
   min-height: 28px;
   padding: 2px var(--space-2);
-  border-radius: 4px;
+  border-radius: 0;
   background: var(--vscode-list-inactiveSelectionBackground, transparent);
 }
 

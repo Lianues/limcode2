@@ -251,10 +251,11 @@ function emptyDraft(): AskUserDraftState {
 }
 
 .ask-user-content.placement-composer {
-  border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 76%, var(--vscode-editorWarning-foreground, #cca700) 24%);
+  border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 82%, var(--vscode-foreground) 18%);
+  border-radius: 0;
   padding: 10px;
   background: color-mix(in srgb, var(--vscode-editor-background) 95%, var(--vscode-foreground) 5%);
-  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 72%, transparent);
+  box-shadow: none;
 }
 
 .ask-user-heading {
@@ -269,7 +270,7 @@ function emptyDraft(): AskUserDraftState {
   width: 16px;
   height: 16px;
   flex: 0 0 auto;
-  color: var(--vscode-editorWarning-foreground, #cca700);
+  color: var(--vscode-descriptionForeground);
 }
 
 .ask-user-heading-label {
@@ -307,17 +308,21 @@ function emptyDraft(): AskUserDraftState {
 }
 
 .ask-user-option {
+  appearance: none;
+  -webkit-appearance: none;
   width: 100%;
   min-width: 0;
   min-height: 36px;
   border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.28));
+  border-radius: 0;
   padding: 7px 9px;
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr);
-  align-items: start;
+  align-items: center;
   gap: 8px;
   color: var(--vscode-foreground);
   background: color-mix(in srgb, var(--vscode-editor-background) 97%, var(--vscode-foreground) 3%);
+  box-shadow: none;
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -333,7 +338,7 @@ function emptyDraft(): AskUserDraftState {
 .ask-user-option.is-selected {
   border-color: color-mix(in srgb, var(--vscode-foreground) 48%, var(--vscode-panel-border) 52%);
   background: color-mix(in srgb, var(--vscode-editor-background) 86%, var(--vscode-foreground) 14%);
-  box-shadow: inset 2px 0 0 var(--vscode-foreground);
+  box-shadow: none;
 }
 
 .ask-user-option:disabled {
@@ -346,13 +351,15 @@ function emptyDraft(): AskUserDraftState {
 }
 
 .ask-user-option-check {
-  margin-top: 1px;
+  align-self: center;
+  margin-top: 0;
 }
 
 .ask-user-option-marker {
+  align-self: center;
   width: 14px;
   height: 14px;
-  margin-top: 2px;
+  margin-top: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -416,6 +423,7 @@ function emptyDraft(): AskUserDraftState {
   max-height: 124px;
   resize: vertical;
   border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
+  border-radius: 0;
   padding: 8px 20px 8px 9px;
   color: var(--vscode-input-foreground, var(--vscode-foreground));
   background: var(--vscode-input-background, var(--vscode-editor-background));
@@ -442,7 +450,8 @@ function emptyDraft(): AskUserDraftState {
 
 .ask-user-custom-answer {
   margin: 5px 0 0;
-  border-left: 2px solid color-mix(in srgb, var(--vscode-foreground) 42%, transparent);
+  border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 82%, var(--vscode-foreground) 18%);
+  border-radius: 0;
   padding: 5px 8px;
   color: var(--vscode-foreground);
   background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-foreground) 8%);
@@ -466,8 +475,11 @@ function emptyDraft(): AskUserDraftState {
 }
 
 .ask-user-action {
+  appearance: none;
+  -webkit-appearance: none;
   min-height: 28px;
   border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
+  border-radius: 0;
   padding: 4px 10px;
   color: var(--vscode-foreground);
   background: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%);

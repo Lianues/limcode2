@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, useAttrs, watch } from 'vue';
-import { IconArrowsMaximize, IconArrowsMinimize, IconClipboardList, IconCircleCheck, IconCircleX, IconMessage2, IconMessagePlus, IconPencilMinus, IconRobot } from '@tabler/icons-vue';
+import { IconArrowsMaximize, IconArrowsMinimize, IconClipboardList, IconCircleCheck, IconCircleX, IconDownload, IconMessage2, IconMessagePlus, IconPencilMinus, IconRobot } from '@tabler/icons-vue';
+import { renderPlanMarkdown } from '@shared/planMarkdown';
 import { DELEGATED_PLAN_APPROVAL_MESSAGE, submitPlanOutputFromResult } from '@shared/planReview';
 import type { AgentRecord, PlanProposalRecord, PlanProposalStatus, SubmitPlanToolRequestRecord, ToolCallRecord } from '@shared/protocol';
 import { useAgentStore } from '@webview/stores/useAgentStore';
@@ -100,6 +101,13 @@ const dispatchPanelActions = computed<ConfirmPanelAction[]>(() => [
   { key: 'confirm', label: '分派执行', disabled: !selectedDispatchAgent.value }
 ]);
 const feedbackInputId = computed(() => `plan-feedback-input-${props.toolCall?.id ?? props.proposalId ?? 'current'}`);
+const exportMarkdown = computed(() => renderPlanMarkdown({
+  plan: planBody.value,
+  ...(taskListOperation.value ? { taskList: taskListOperation.value } : {}),
+  statusLabel: statusLabel.value,
+  taskListTitle: taskListTitle.value
+}));
+const exportSuggestedFileName = computed(() => `plan-${clientState.currentConversation?.title || props.proposalId || output.value?.proposalId || 'export'}.md`);
 
 watch(
   () => props.toolCall?.id ?? '',
@@ -245,6 +253,15 @@ function localizedUserMessage(message: string | undefined): string | undefined {
   return text;
 }
 
+function exportPlan(): void {
+  const markdown = exportMarkdown.value.trim();
+  if (!markdown) return;
+  bridge.request(BridgeMessageType.PlanProposalExport, {
+    suggestedFileName: exportSuggestedFileName.value,
+    markdown
+  });
+}
+
 function openDelegatedConversation(): void {
   const conversationId = delegatedExecution.value?.conversationId?.trim();
   if (!conversationId) return;
@@ -279,6 +296,10 @@ function agentTypeDescription(agent: AgentRecord): string {
         <span>{{ panelExpanded ? '收起' : '展开' }}</span>
       </button>
       <span class="plan-proposal-status">{{ statusLabel }}</span>
+      <button type="button" class="plan-export-button" aria-label="导出 Plan Markdown" @click="exportPlan">
+        <IconDownload class="plan-export-button-icon" stroke="2" aria-hidden="true" />
+        <span>导出</span>
+      </button>
     </header>
 
     <div class="plan-proposal-scroll-shell">
@@ -501,6 +522,48 @@ function agentTypeDescription(agent: AgentRecord): string {
   border: 1px solid var(--vscode-panel-border);
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-xs);
+}
+
+.plan-export-button {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 23px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 86%, var(--vscode-foreground) 14%);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--vscode-editor-background) 96%, var(--vscode-foreground) 4%);
+  box-shadow: none;
+  color: var(--vscode-descriptionForeground);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+
+.plan-export-button:hover,
+.plan-export-button:focus,
+.plan-export-button:focus-visible {
+  outline: none;
+  color: var(--vscode-foreground);
+  border-color: color-mix(in srgb, var(--vscode-panel-border) 52%, var(--vscode-foreground) 48%);
+  background: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-foreground) 9%, transparent);
+}
+
+.plan-export-button:active {
+  background: color-mix(in srgb, var(--vscode-editor-background) 82%, var(--vscode-foreground) 18%);
+}
+
+.plan-export-button::-moz-focus-inner {
+  border: 0;
+}
+
+.plan-export-button-icon {
+  width: 13px;
+  height: 13px;
 }
 
 .tone-approved .plan-proposal-status {

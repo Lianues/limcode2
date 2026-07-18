@@ -50,6 +50,7 @@ import {
   type FsStatGetPayload,
   type FsStatResultEntry,
   type ToolDiffOpenPayload,
+  type PlanProposalExportPayload,
   type ConversationTimelinePageRequest,
   type LlmInvocationSettingsSnapshotRecord,
   type MessageContent,
@@ -230,6 +231,14 @@ export class WebviewMessageRouter {
       case BridgeMessageType.PlanProposalReject:
         if (!this.deps.isHydrated() || !message.payload) return;
         this.deps.world.enqueue({ type: PlanReviewEventType.ProposalRejectRequested, payload: message.payload });
+        break;
+      case BridgeMessageType.PlanProposalExport:
+        if (!message.payload) return;
+        void this.handlePlanProposalExport(message.payload).catch((error) => {
+          const messageText = error instanceof Error ? error.message : '无法导出 Plan。';
+          this.postRequestError(clientId, message.type, messageText, message.id);
+          void vscode.window.showErrorMessage(`LimCode: ${messageText}`);
+        });
         break;
       case BridgeMessageType.AgentRunCancel:
         if (!this.deps.isHydrated() || !message.payload) return;
@@ -1345,6 +1354,31 @@ export class WebviewMessageRouter {
       .sort((left, right) => (right.link.updatedAt || right.link.createdAt) - (left.link.updatedAt || left.link.createdAt) || right.entity - left.entity)[0];
   }
 
+  private async handlePlanProposalExport(payload: PlanProposalExportPayload): Promise<void> {
+    const markdown = payload.markdown.trim();
+    if (!markdown) {
+      void vscode.window.showWarningMessage('LimCode: 没有可导出的 Plan 内容。');
+      return;
+    }
+
+    const fileName = safeMarkdownFileName(payload.suggestedFileName ?? 'plan.md');
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    const target = await vscode.window.showSaveDialog({
+      title: '导出 Plan Markdown',
+      saveLabel: '导出 Plan',
+      ...(workspaceFolder ? { defaultUri: vscode.Uri.joinPath(workspaceFolder.uri, fileName) } : {}),
+      filters: {
+        Markdown: ['md'],
+        'All Files': ['*']
+      }
+    });
+    if (!target) return;
+
+    await vscode.workspace.fs.writeFile(target, Buffer.from(ensureTrailingNewline(markdown), 'utf8'));
+    const targetPath = target.scheme === 'file' ? target.fsPath : target.toString(true);
+    void vscode.window.showInformationMessage(`LimCode: Plan 已导出到 ${targetPath}`);
+  }
+
   private postRequestError(clientId: BridgeClientId, requestType: string, message: string, correlationId?: string): void {
     this.deps.webview.post(clientId, {
       id: createMessageId(),
@@ -1358,6 +1392,22 @@ export class WebviewMessageRouter {
 
 function modelProfileIdForConversation(conversationId: string): string { return `model-profile:conversation:${conversationId}`; }
 function modelProfileScopeLinkIdForConversation(conversationId: string): string { return `model-profile-scope:conversation:${conversationId}`; }
+
+function safeMarkdownFileName(input: string): string {
+  const safe = input
+    .trim()
+    .replace(/[<>:"/\\|?*\x00-\x1f]+/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/^\.+$/, '')
+    .slice(0, 120)
+    .trim();
+  const base = safe || 'plan';
+  return base.toLowerCase().endsWith('.md') ? base : `${base}.md`;
+}
+
+function ensureTrailingNewline(input: string): string {
+  return input.endsWith('\n') ? input : `${input}\n`;
+}
 
 function renderContentsForSummary(contents: MessageContent[]): string {
   return contents.map((content, index) => `${index + 1}. ${content.role}: ${content.parts.map(renderSummaryPart).filter(Boolean).join('\n') || '[empty]'}`).join('\n\n');

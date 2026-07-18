@@ -102,6 +102,7 @@ import { effectiveCheckpointPolicyForRequest } from '../../checkpoint/queries';
 import { effectiveCheckpointToolTriggerConfig } from '../../checkpoint/policy';
 import { isReadonlyCommandCall } from '../definitions/command';
 import { normalizeAskUserToolRequest } from '../../../../../shared/askUser';
+import { renderPlanMarkdown } from '../../../../../shared/planMarkdown';
 import { DELEGATED_PLAN_APPROVAL_MESSAGE, normalizeSubmitPlanToolRequest } from '../../../../../shared/planReview';
 import { allowOutsideProjectPathsFromConfig } from '../definitions/filePathPolicy';
 import { DEFAULT_RUN_AGENT_TYPE, RUN_AGENT_TOOL_NAME } from '../definitions/runAgent';
@@ -719,18 +720,16 @@ function executeDelegatedSubmitPlanApproval(
 }
 
 function delegatedPlanPrompt(request: ReturnType<typeof normalizeSubmitPlanToolRequest>): string {
-  const taskList = request.taskList
-    ? JSON.stringify({ mode: request.taskList.mode, items: request.taskList.items }, null, 2)
-    : '未提供任务清单。';
+  const planMarkdown = renderPlanMarkdown({
+    plan: request.plan,
+    ...(request.taskList ? { taskList: request.taskList } : {}),
+    statusLabel: 'Plan 已批准'
+  });
   return [
     '[Approved Plan Delegation]',
     '用户已批准以下实施 Plan，并选择由你在新的 Agent 对话中负责执行。请独立完成实际落地，不要只复述或重新规划。',
     '',
-    '## 已批准的 Plan',
-    request.plan,
-    '',
-    '## 初始任务清单',
-    taskList,
+    planMarkdown,
     '',
     '## 执行要求',
     '1. 严格按照已批准 Plan 和任务清单推进；仅在确有必要时做最小调整。',

@@ -132,6 +132,7 @@ export enum BridgeMessageType {
   PlanProposalRequestChanges = 'planProposal.requestChanges',
   PlanProposalReject = 'planProposal.reject',
   PlanProposalOpen = 'planProposal.open',
+  PlanProposalExport = 'planProposal.export',
   CheckpointDiffOpen = 'checkpoint.diff.open',
   AttachmentOpen = 'attachment.open',
   AttachmentReload = 'attachment.reload',
@@ -2178,6 +2179,10 @@ export interface PlanProposalOpenPayload {
   planProposalId?: string;
   title?: string;
 }
+export interface PlanProposalExportPayload {
+  suggestedFileName?: string;
+  markdown: string;
+}
 export interface ToolDiffOpenPayload {
   toolCallId: string;
   conversationId?: string;
@@ -2763,6 +2768,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.PlanProposalRequestChanges, PlanProposalDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.PlanProposalReject, PlanProposalDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.PlanProposalOpen, PlanProposalOpenPayload>
+  | BridgeEnvelope<BridgeMessageType.PlanProposalExport, PlanProposalExportPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointDiffOpen, CheckpointDiffOpenPayload>
   | BridgeEnvelope<BridgeMessageType.AttachmentOpen, AttachmentOpenPayload>
   | BridgeEnvelope<BridgeMessageType.AttachmentReload, AttachmentReloadPayload>

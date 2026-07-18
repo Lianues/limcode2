@@ -13,7 +13,7 @@ import {
   isInlineDataPart,
   isTextPart
 } from '../../../../../shared/protocol';
-import { Agent } from '../../agent/components';
+import { Agent, AgentKind } from '../../agent/components';
 import { Conversation, InFlight, Message, PartOf, type MessageData } from '../../chat/components';
 import { spawnMessage, spawnUserMessage, UserMessageBundle } from '../../chat/bundles';
 import { conversationMessages } from '../../chat/queries';
@@ -33,18 +33,17 @@ import { activeDeliveryPolicyForRun, defaultAgentForConversation, isTerminalRunS
 import { CheckpointEventType } from '../../checkpoint/events';
 import { AgentAnswer } from '../../agentAnswer/components';
 import { agentAnswerById } from '../../agentAnswer/queries';
+import { createCompletedAgentAnswerModelResponse } from '../../agentAnswer/modelResponse';
 
 const MAX_SUMMARY_CHARS = 4_000;
 const MAX_RESULT_CHARS = 16_000;
 
 interface DeliveryEnvelope {
   ok: true;
-  status: 'completed';
   runId?: string;
-  agentId?: string;
+  agentType?: string;
   conversationId?: string;
   answerBridgeId?: string;
-  answerSubmitted?: boolean;
   title?: string;
   content: string;
 }
@@ -58,6 +57,7 @@ const DeliveringRunsQuery = defineQuery({
     AgentRunTargetLink,
     RunDeliveryPolicy,
     Agent,
+    AgentKind,
     Conversation,
     Message,
     MessageRunLink,
@@ -224,9 +224,9 @@ function buildDeliveryEnvelope(world: WorldReader, runEntity: Entity, includeTra
   const source = runSource(world, runEntity);
   const run = world.get(runEntity, AgentRun);
   const target = runTarget(world, runEntity);
-  const agent = target ? world.get(target.agent, Agent) : undefined;
+  const agentType = target ? world.get(target.agent, AgentKind)?.kind : undefined;
   const conversation = target ? world.get(target.conversation, Conversation) : undefined;
-  const targetIds = { ...(run?.id ? { runId: run.id } : {}), ...(agent?.id ? { agentId: agent.id } : {}), ...(conversation?.id ? { conversationId: conversation.id } : {}) };
+  const targetMetadata = { ...(run?.id ? { runId: run.id } : {}), ...(agentType ? { agentType } : {}), ...(conversation?.id ? { conversationId: conversation.id } : {}) };
   const answerBridgeId = source?.answerBridgeId?.trim();
   const submittedAnswerEntity = answerBridgeId ? agentAnswerById(world, answerBridgeId) : undefined;
   const submittedAnswer = submittedAnswerEntity !== undefined ? world.get(submittedAnswerEntity, AgentAnswer) : undefined;
@@ -235,9 +235,8 @@ function buildDeliveryEnvelope(world: WorldReader, runEntity: Entity, includeTra
   if (submittedAnswer) {
     return {
       ok: true,
-      status: 'completed',
-      ...targetIds,
-      ...(answerBridgeId ? { answerBridgeId, answerSubmitted: true } : {}),
+      ...targetMetadata,
+      ...(answerBridgeId ? { answerBridgeId } : {}),
       title: submittedAnswer.title,
       content: submittedAnswer.content
     };
@@ -245,9 +244,8 @@ function buildDeliveryEnvelope(world: WorldReader, runEntity: Entity, includeTra
 
   return {
     ok: true,
-    status: 'completed',
-    ...targetIds,
-    ...(answerBridgeId ? { answerBridgeId, answerSubmitted: false } : {}),
+    ...targetMetadata,
+    ...(answerBridgeId ? { answerBridgeId } : {}),
     content: fallback
   };
 }
@@ -334,25 +332,21 @@ function serializedReadAgentAnswerNotification(envelope: DeliveryEnvelope): stri
   return [
     '[Agent answer completed]',
     '后台 Agent 已完成回答。下面是等同于 read_agent_answer 工具响应的序列化文本，请把它当作该后台 Agent 返回给当前对话的结果：',
-    jsonString({
-      ok: true,
-      answerBridgeId: envelope.answerBridgeId,
-      ...(envelope.answerSubmitted !== undefined ? { answerSubmitted: envelope.answerSubmitted } : {}),
-      ...(envelope.runId ? { runId: envelope.runId } : {}),
-      ...(envelope.agentId ? { agentId: envelope.agentId } : {}),
-      ...(envelope.conversationId ? { conversationId: envelope.conversationId } : {}),
+    jsonString(createCompletedAgentAnswerModelResponse({
+      ...(envelope.answerBridgeId ? { answerBridgeId: envelope.answerBridgeId } : {}),
+      ...(envelope.agentType ? { agentType: envelope.agentType } : {}),
       ...(envelope.title ? { title: envelope.title } : {}),
       content: envelope.content
-    })
+    }))
   ].join('\n\n');
 }
 
 function deliveryXml(root: 'task-notification' | 'agent-run-delivery', envelope: DeliveryEnvelope): string {
   return [
     `<${root}>`,
-    `<status>${escapeXml(envelope.status)}</status>`,
+    '<ok>true</ok>',
     ...(envelope.answerBridgeId ? [`<answer-bridge-id>${escapeXml(envelope.answerBridgeId)}</answer-bridge-id>`] : []),
-    ...(envelope.answerSubmitted !== undefined ? [`<answer-submitted>${String(envelope.answerSubmitted)}</answer-submitted>`] : []),
+    ...(envelope.agentType ? [`<agent-type>${escapeXml(envelope.agentType)}</agent-type>`] : []),
     ...(envelope.title ? [`<title>${escapeXml(envelope.title)}</title>`] : []),
     `<content>${escapeXml(envelope.content)}</content>`,
     `</${root}>`

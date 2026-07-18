@@ -174,10 +174,7 @@ function simplifySubmitPlanResponse(value: unknown): JsonRecord {
     status: output.status,
     executionTarget: output.executionTarget,
     delegationStatus: output.delegationStatus,
-    agentId: output.agentId,
     agentType: output.agentType,
-    runId: output.runId,
-    conversationId: output.conversationId,
     answerBridgeId: output.answerBridgeId,
     userMessage: output.userMessage
   });
@@ -196,11 +193,9 @@ function simplifySwitchWorkEnvironmentResponse(value: unknown): JsonRecord {
 function simplifyRunAgentResponse(value: unknown): JsonRecord {
   const record = asRecord(value);
   if (!record) return simplifyGenericSuccess(value);
-  const status = stringValue(record.status);
-  if (status === 'async_launched') {
-    return withOkFallback(pickDefined({ answerBridgeId: stringValue(record.answerBridgeId) }), 'success');
-  }
   return withOkFallback(pickDefined({
+    status: stringValue(record.status),
+    agentType: stringValue(record.agentType),
     answerBridgeId: stringValue(record.answerBridgeId),
     title: stringValue(record.title),
     content: stringValue(record.content)
@@ -210,18 +205,21 @@ function simplifyRunAgentResponse(value: unknown): JsonRecord {
 function simplifyReadAgentAnswerResponse(value: unknown): JsonRecord {
   const record = asRecord(value);
   if (!record) return simplifyGenericSuccess(value);
-  // read_agent_answer 用内联 ok:false 表达 running / interrupted / not_found；这里保留 ok/status/agentId/error，
-  // 否则模型只会看到空的 { ok: true }，无法区分“子对话还在跑”“已中断可续”“answerBridgeId 不存在”。
-  if (record.ok === false) {
+  // read_agent_answer 用 status 区分 running / interrupted / not_found；这些不是 completed 的重复状态，
+  // 必须连同 bridge/type/error 保留，避免上游 Agent 把“仍在运行”误判为完成。
+  const status = stringValue(record.status);
+  if (record.ok === false || status === 'running' || status === 'interrupted' || status === 'not_found') {
     return pickDefined({
       ok: false,
-      status: stringValue(record.status),
+      status,
       answerBridgeId: stringValue(record.answerBridgeId),
-      agentId: stringValue(record.agentId),
+      agentType: stringValue(record.agentType),
       error: stringValue(record.error)
     });
   }
   return withOkFallback(pickDefined({
+    answerBridgeId: stringValue(record.answerBridgeId),
+    agentType: stringValue(record.agentType),
     title: stringValue(record.title),
     content: stringValue(record.content)
   }), 'success');

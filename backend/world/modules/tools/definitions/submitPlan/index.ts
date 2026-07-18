@@ -19,7 +19,7 @@ export const submitPlanTool: ToolDefinition = {
 
 Use this tool when the active workflow requires plan approval, or when a task involves non-trivial file edits, commands, or child agents. The plan field is the user-facing plan body. If useful, include taskList using the same shape as update_task_list so the approved plan can seed the conversation task list. After calling submit_plan, wait for the user's decision. If the user requests changes, revise the plan and call submit_plan again.
 
-Approval can execute in the current conversation or delegate the approved Plan to a new child Agent conversation. When executionTarget is current_conversation, continue with the approved plan as usual. When executionTarget is new_conversation, the result includes agentId, runId, conversationId, and answerBridgeId; the child Agent is already executing the Plan in the background, so do not duplicate that work. Tell the user the Plan has been dispatched and wait for submit_agent_answer notification, or use read_agent_answer/run_agent with the returned answerBridgeId when needed.`,
+Approval can execute in the current conversation or delegate the approved Plan to a new child Agent conversation. When executionTarget is current_conversation, continue with the approved plan as usual. When executionTarget is new_conversation, the model-facing result includes the selected agentType and answerBridgeId; the child Agent is already executing the Plan in the background, so do not duplicate that work. Tell the user the Plan has been dispatched and wait for submit_agent_answer notification, or use read_agent_answer/run_agent with the returned answerBridgeId when needed.`,
     parameters: {
       type: 'object',
       additionalProperties: false,

@@ -64,6 +64,7 @@ import {
 import { AgentAnswerBundle, spawnAgentAnswer } from '../../agentAnswer/bundles';
 import { AgentAnswer, AgentAnswerSubmissionLink, AgentAnswerTargetLink } from '../../agentAnswer/components';
 import { agentAnswerById } from '../../agentAnswer/queries';
+import { createCompletedAgentAnswerModelResponse } from '../../agentAnswer/modelResponse';
 import { LlmInvocation, RunLlmInvocationLink } from '../../llm/components';
 import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
 import { ToolCall, ToolPolicyScopeLink, ToolResultConsumed, ToolState, type ToolCallData, type ToolStateData } from '../components';
@@ -1017,34 +1018,15 @@ function serializedSubmittedAgentAnswerNotification(
 
 function submittedAgentAnswerResult(
   world: WorldReader,
-  input: { answerBridgeId: string; title: string; content: string; submitterRun: Entity; submitterRunId: string; submitterTarget?: { agent: Entity; conversation: Entity } }
-): {
-  ok: true;
-  status: 'completed';
-  answerSubmitted: true;
-  answerBridgeId: string;
-  runId: string;
-  agentId?: string;
-  agentType?: string;
-  conversationId?: string;
-  title: string;
-  content: string;
-} {
-  const agentId = input.submitterTarget?.agent !== undefined ? world.get(input.submitterTarget.agent, Agent)?.id : undefined;
+  input: { answerBridgeId: string; title: string; content: string; submitterTarget?: { agent: Entity; conversation: Entity } }
+): ReturnType<typeof createCompletedAgentAnswerModelResponse> {
   const agentType = input.submitterTarget?.agent !== undefined ? world.get(input.submitterTarget.agent, AgentKind)?.kind : undefined;
-  const conversationId = input.submitterTarget?.conversation !== undefined ? world.get(input.submitterTarget.conversation, Conversation)?.id : undefined;
-  return {
-    ok: true,
-    status: 'completed',
-    answerSubmitted: true,
+  return createCompletedAgentAnswerModelResponse({
     answerBridgeId: input.answerBridgeId,
-    runId: input.submitterRunId,
-    ...(agentId ? { agentId } : {}),
     ...(agentType ? { agentType } : {}),
-    ...(conversationId ? { conversationId } : {}),
     title: input.title,
     content: input.content
-  };
+  });
 }
 
 
@@ -1072,26 +1054,24 @@ function executeReadAgentAnswerTool(world: WorldReader, cmd: CommandSink, entity
     //   not_found   —— 该 answerBridgeId 完全没有对应子对话。
     const child = conversationForAnswerBridgeId(world, answerBridgeId);
     if (child?.hasActiveRun) {
-      const agentId = child.agent !== undefined ? world.get(child.agent, Agent)?.id : undefined;
+      const agentType = child.agent !== undefined ? world.get(child.agent, AgentKind)?.kind : undefined;
       completeInlineToolCallSuccess(cmd, entity, call, state, {
         ok: false,
         answerBridgeId,
         status: 'running',
-        ...(agentId ? { agentId } : {}),
+        ...(agentType ? { agentType } : {}),
         error: '对应 answerBridgeId 绑定的子 Agent 正在运行，尚未通过 submit_agent_answer 提交内容。请稍后重试 read_agent_answer，或等待其主动提交后的通知。'
       });
       return;
     }
     if (child) {
-      const agentId = child.agent !== undefined ? world.get(child.agent, Agent)?.id : undefined;
+      const agentType = child.agent !== undefined ? world.get(child.agent, AgentKind)?.kind : undefined;
       completeInlineToolCallSuccess(cmd, entity, call, state, {
         ok: false,
         answerBridgeId,
         status: 'interrupted',
-        ...(agentId ? { agentId } : {}),
-        error: agentId
-          ? `对应 answerBridgeId 绑定的子 Agent 已中断（没有在运行、也没有提交 answer）。请调用 run_agent({ answerBridgeId: "${answerBridgeId}", prompt, foregroundWaitMs }) 继续/追加同一个子对话；默认 submit_agent_answer 通道会继续沿用该 answerBridgeId。`
-          : `对应 answerBridgeId 绑定的子 Agent 已中断（没有在运行、也没有提交 answer）。请调用 run_agent({ answerBridgeId: "${answerBridgeId}", prompt, foregroundWaitMs }) 继续/追加同一个子对话。`
+        ...(agentType ? { agentType } : {}),
+        error: `对应 answerBridgeId 绑定的子 Agent 已中断（没有在运行、也没有提交 answer）。请调用 run_agent({ answerBridgeId: "${answerBridgeId}", prompt, foregroundWaitMs }) 继续/追加同一个子对话；默认 submit_agent_answer 通道会继续沿用该 answerBridgeId。`
       });
       return;
     }
@@ -1104,12 +1084,18 @@ function executeReadAgentAnswerTool(world: WorldReader, cmd: CommandSink, entity
     return;
   }
 
-  completeInlineToolCallSuccess(cmd, entity, call, state, {
-    ok: true,
+  const submission = world.query(AgentAnswerSubmissionLink)
+    .map((linkEntity) => world.get(linkEntity, AgentAnswerSubmissionLink))
+    .find((link) => link?.answer === answerEntity);
+  const agentType = submission?.submitterAgent !== undefined
+    ? world.get(submission.submitterAgent, AgentKind)?.kind
+    : undefined;
+  completeInlineToolCallSuccess(cmd, entity, call, state, createCompletedAgentAnswerModelResponse({
     answerBridgeId: answer.id,
+    ...(agentType ? { agentType } : {}),
     title: answer.title,
     content: answer.content
-  });
+  }));
 }
 
 function backgroundForegroundWaitElapsedRunAgentTools(world: WorldReader, cmd: CommandSink): void {

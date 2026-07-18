@@ -793,11 +793,13 @@ function agentTypeDescription(agent: AgentRecord): string {
 .plan-proposal-actions {
   flex: 0 0 auto;
   display: flex;
+  align-items: center;
+  align-content: center;
   justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
   margin-top: 0;
-  padding: 9px 0 0;
+  padding: 8px;
   border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 82%, transparent);
   background: var(--vscode-editor-background);
   z-index: 2;

@@ -1,15 +1,19 @@
-import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
-import { createSubmitPlanToolOutput } from '../../../../../shared/planReview';
-import { SUBMIT_PLAN_TOOL_NAME, type PlanProposalStatus, type SubmitPlanDecisionStatus } from '../../../../../shared/protocol';
+import { defineQuery, defineSystem, type Entity, type WorldReader } from '../../../../ecs/types';
+import { SUBMIT_PLAN_TOOL_NAME } from '../../../../../shared/protocol';
 import { readEvents } from '../../../events';
-import { runForToolCall, toolCallEntityById } from '../../agentRun/queries';
-import { InFlight } from '../../chat/components';
-import { ToolCallEventBundle, spawnToolCallEvent } from '../../tools/bundles';
+import { AgentRunTargetLink, ToolCallRunLink } from '../../agentRun/components';
+import { runForToolCall, runTarget, toolCallEntityById } from '../../agentRun/queries';
+import { Conversation, InFlight } from '../../chat/components';
+import { ChatEventType } from '../../chat/events';
+import { OpenConversationPanelIdsKey } from '../../chat/resources';
+import { ToolCallEventBundle } from '../../tools/bundles';
 import { ToolCall, ToolState } from '../../tools/components';
-import { transitionToolState } from '../../tools/state';
 import { PlanProposal, RunPlanProposalLink } from '../components';
+import { completePlanDecision, findPlanProposalById, proposalBelongsToRun } from '../decision';
 import { PlanReviewEventType } from '../events';
 import { PlanReviewBundle } from '../bundles';
+
+export const BACKGROUND_SUBMIT_PLAN_AUTO_APPROVAL_MESSAGE = '当前会话标签页未打开，已根据后台策略自动批准 Plan，请继续执行。';
 
 const PlanDecisionLookupQuery = defineQuery({
   name: 'PlanDecisionLookup',
@@ -26,120 +30,105 @@ export const PlanProposalDecisionSystem = defineSystem({
   shouldRun(ctx) {
     return readEvents(ctx, PlanReviewEventType.ProposalApproveRequested).length > 0
       || readEvents(ctx, PlanReviewEventType.ProposalChangesRequested).length > 0
-      || readEvents(ctx, PlanReviewEventType.ProposalRejectRequested).length > 0;
+      || readEvents(ctx, PlanReviewEventType.ProposalRejectRequested).length > 0
+      || readEvents(ctx, ChatEventType.ConversationPanelPresenceChanged).length > 0
+      || ctx.world.query(ToolCall, ToolState).some((entity) => isAwaitingBackgroundSubmitPlanCall(ctx.world, entity));
   },
   access: {
     queries: [PlanDecisionLookupQuery],
+    reads: {
+      components: [ToolCallRunLink, AgentRunTargetLink, Conversation],
+      resources: [OpenConversationPanelIdsKey]
+    },
     bundles: [ToolCallEventBundle, PlanReviewBundle],
     events: {
       read: [
         PlanReviewEventType.ProposalApproveRequested,
         PlanReviewEventType.ProposalChangesRequested,
-        PlanReviewEventType.ProposalRejectRequested
+        PlanReviewEventType.ProposalRejectRequested,
+        ChatEventType.ConversationPanelPresenceChanged
       ]
     }
   },
   run(ctx) {
     const { world, cmd } = ctx;
+    const handled = new Set<Entity>();
+
+    // 显式用户决定优先；若决定与面板关闭恰好发生在同一 tick，不用后台策略覆盖用户选择。
     for (const payload of readEvents(ctx, PlanReviewEventType.ProposalApproveRequested)) {
-      completePlanDecision(world, cmd, payload.toolCallId, payload.planProposalId, 'approved', payload.message);
+      if (payload.executionTarget === 'new_conversation') continue;
+      const toolCall = toolCallEntityById(world, payload.toolCallId);
+      if (toolCall === undefined || handled.has(toolCall)) continue;
+      if (completePlanDecision(
+        world,
+        cmd,
+        toolCall,
+        payload.planProposalId,
+        'approved',
+        payload.message,
+        { executionTarget: 'current_conversation' }
+      )) handled.add(toolCall);
     }
     for (const payload of readEvents(ctx, PlanReviewEventType.ProposalChangesRequested)) {
-      completePlanDecision(world, cmd, payload.toolCallId, payload.planProposalId, 'change_requested', payload.message);
+      const toolCall = toolCallEntityById(world, payload.toolCallId);
+      if (toolCall === undefined || handled.has(toolCall)) continue;
+      if (completePlanDecision(world, cmd, toolCall, payload.planProposalId, 'change_requested', payload.message)) handled.add(toolCall);
     }
     for (const payload of readEvents(ctx, PlanReviewEventType.ProposalRejectRequested)) {
-      completePlanDecision(world, cmd, payload.toolCallId, payload.planProposalId, 'rejected', payload.message);
+      const toolCall = toolCallEntityById(world, payload.toolCallId);
+      if (toolCall === undefined || handled.has(toolCall)) continue;
+      if (completePlanDecision(world, cmd, toolCall, payload.planProposalId, 'rejected', payload.message)) handled.add(toolCall);
+    }
+
+    for (const toolCall of world.query(ToolCall, ToolState)) {
+      if (handled.has(toolCall)) continue;
+      const pending = backgroundSubmitPlanApprovalForCall(world, toolCall);
+      if (!pending) continue;
+      if (completePlanDecision(
+        world,
+        cmd,
+        toolCall,
+        pending.planProposalId,
+        'approved',
+        BACKGROUND_SUBMIT_PLAN_AUTO_APPROVAL_MESSAGE,
+        { executionTarget: 'current_conversation' }
+      )) {
+        handled.add(toolCall);
+      }
     }
   }
 });
 
-function completePlanDecision(
-  world: WorldReader,
-  cmd: CommandSink,
-  toolCallId: string,
-  planProposalId: string,
-  status: SubmitPlanDecisionStatus,
-  userMessage: string | undefined
-): void {
-  const toolCall = toolCallEntityById(world, toolCallId);
-  const proposalEntity = findPlanProposalById(world, planProposalId);
-  if (toolCall === undefined || proposalEntity === undefined) return;
+export function isAwaitingBackgroundSubmitPlanCall(world: WorldReader, toolCall: Entity): boolean {
+  return backgroundSubmitPlanApprovalForCall(world, toolCall) !== undefined;
+}
 
+function backgroundSubmitPlanApprovalForCall(
+  world: WorldReader,
+  toolCall: Entity
+): { planProposalId: string } | undefined {
   const call = world.get(toolCall, ToolCall);
   const state = world.get(toolCall, ToolState);
-  const proposal = world.get(proposalEntity, PlanProposal);
-  if (!call || !state || !proposal || call.name !== SUBMIT_PLAN_TOOL_NAME || state.status !== 'awaiting_user_input') return;
-  if (!proposalBelongsToToolRun(world, toolCall, proposalEntity)) return;
-  if (proposal.status !== 'pending') return;
+  if (!call || !state || call.name !== SUBMIT_PLAN_TOOL_NAME || state.status !== 'awaiting_user_input') return undefined;
 
-  const now = Date.now();
-  const durationMs = Math.max(0, now - call.createdAt);
-  const message = normalizedDecisionMessage(status, userMessage);
-  const output = createSubmitPlanToolOutput({
-    proposalId: proposal.id,
-    status,
-    userMessage: message
-  });
+  const progress = state.progress && typeof state.progress === 'object' && !Array.isArray(state.progress)
+    ? state.progress as Record<string, unknown>
+    : undefined;
+  const planProposalId = typeof progress?.planProposalId === 'string' ? progress.planProposalId.trim() : '';
+  if (progress?.waitingFor !== 'plan_review' || !planProposalId) return undefined;
 
-  cmd.add(proposalEntity, PlanProposal, {
-    ...proposal,
-    status: status as PlanProposalStatus,
-    updatedAt: now
-  });
-
-  if (status === 'rejected') {
-    const reason = message || '用户拒绝 Plan。';
-    const result = { ok: false, output, denied: true, reason };
-    cmd.add(toolCall, ToolState, transitionToolState(state, 'error', { error: reason, result, durationMs }, now));
-    cmd.remove(toolCall, InFlight);
-    spawnToolCallEvent(cmd, {
-      toolCall,
-      toolCallId: call.id,
-      kind: 'failed',
-      status: 'error',
-      at: now,
-      elapsedMs: durationMs,
-      durationMs,
-      payload: output,
-      error: reason
-    });
-    return;
-  }
-
-  const result = { ok: true, output };
-  cmd.add(toolCall, ToolState, transitionToolState(state, 'success', { result, durationMs }, now));
-  cmd.remove(toolCall, InFlight);
-  spawnToolCallEvent(cmd, {
-    toolCall,
-    toolCallId: call.id,
-    kind: 'completed',
-    status: 'success',
-    at: now,
-    elapsedMs: durationMs,
-    durationMs,
-    payload: output
-  });
-}
-
-function proposalBelongsToToolRun(world: WorldReader, toolCall: Entity, planProposal: Entity): boolean {
   const run = runForToolCall(world, toolCall);
-  if (run === undefined) return false;
-  return world.query(RunPlanProposalLink).some((entity) => {
-    const link = world.get(entity, RunPlanProposalLink);
-    return !!link && link.run === run && link.planProposal === planProposal && link.role === 'active';
-  });
-}
+  const proposalEntity = findPlanProposalById(world, planProposalId);
+  const proposal = proposalEntity === undefined ? undefined : world.get(proposalEntity, PlanProposal);
+  if (run === undefined || proposalEntity === undefined || proposal?.status !== 'pending') return undefined;
+  if (!proposalBelongsToRun(world, run, proposalEntity)) return undefined;
 
-function findPlanProposalById(world: WorldReader, id: string): Entity | undefined {
-  const normalized = id.trim();
-  if (!normalized) return undefined;
-  return world.query(PlanProposal).find((entity) => world.get(entity, PlanProposal)?.id === normalized);
-}
-
-function normalizedDecisionMessage(status: SubmitPlanDecisionStatus, value: string | undefined): string | undefined {
-  const text = value?.trim();
-  if (text) return text;
-  if (status === 'approved') return 'User approved the plan. Continue with the approved plan.';
-  if (status === 'change_requested') return 'User requested changes to the plan. Revise the plan and submit it again.';
-  return 'User rejected the plan.';
+  const openConversationIds = world.tryGetResource(OpenConversationPanelIdsKey);
+  if (!openConversationIds) return undefined;
+  // 主/子 Agent 统一按自己的目标 conversation 标签页判定；来源/父对话不代替该 Agent 审批。
+  const target = runTarget(world, run);
+  if (!target) return undefined;
+  const conversationId = world.get(target.conversation, Conversation)?.id;
+  if (!conversationId || openConversationIds.includes(conversationId)) return undefined;
+  return { planProposalId };
 }

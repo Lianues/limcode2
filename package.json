@@ -71,6 +71,7 @@
     "typecheck:webview": "vue-tsc -p tsconfig.webview.json --noEmit",
     "test:conversation-history": "npm run compile && node --test tests/conversationHistoryTree.test.cjs",
     "test:ask-user": "npm run compile && node --test tests/askUserTool.test.cjs",
+    "test:plan-review-attention": "npm run compile && node --test tests/planReviewAttention.test.cjs",
     "test:run-agent-interrupt": "npm run compile && node --test tests/runAgentInterrupt.test.cjs",
     "check": "npm run compile && npm run typecheck:webview",
     "vscode:prepublish": "npm run build",

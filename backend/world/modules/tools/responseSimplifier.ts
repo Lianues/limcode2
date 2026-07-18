@@ -172,6 +172,13 @@ function simplifySubmitPlanResponse(value: unknown): JsonRecord {
   if (!output) return simplifyGenericSuccess(value);
   return pickDefined({
     status: output.status,
+    executionTarget: output.executionTarget,
+    delegationStatus: output.delegationStatus,
+    agentId: output.agentId,
+    agentType: output.agentType,
+    runId: output.runId,
+    conversationId: output.conversationId,
+    answerBridgeId: output.answerBridgeId,
     userMessage: output.userMessage
   });
 }

@@ -25,10 +25,12 @@ interface RunAgentPayloadLike {
   conversationId?: string;
   answerBridgeId?: string;
   status?: string;
+  executionTarget?: string;
 }
 
 interface RunAgentArgsLike {
   prompt?: string;
+  plan?: string;
   foregroundWaitMs?: number;
   agent?: {
     id?: string;
@@ -68,6 +70,7 @@ interface AgentRunTooltipDivider {
 type AgentRunTooltipItem = AgentRunTooltipRow | AgentRunTooltipDivider;
 
 const RUN_AGENT_TOOL_NAME = 'run_agent';
+const SUBMIT_PLAN_TOOL_NAME = 'submit_plan';
 const DEFAULT_RUN_AGENT_TYPE = 'worker';
 const TERMINAL_RUN_STATUSES = new Set<AgentRunStatus>(['completed', 'failed', 'cancelled', 'stale']);
 const TERMINAL_TOOL_STATUSES = new Set<ToolCallStatus>(['success', 'warning', 'error']);
@@ -151,7 +154,7 @@ function onDocumentPointerDown(event: PointerEvent): void {
 function buildEntries(): AgentPanelEntry[] {
   const timelineState = conversationTimeline.currentTimeline.state;
   const calls = timelineState.toolCalls
-    .filter((call) => call.name === RUN_AGENT_TOOL_NAME)
+    .filter((call) => call.name === RUN_AGENT_TOOL_NAME || isDelegatedPlanToolCall(call))
     .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt || left.id.localeCompare(right.id));
 
   const runsById = recordMap<AgentRunRecord>([...clientState.agentRuns, ...timelineState.agentRuns]);
@@ -214,7 +217,7 @@ function buildEntry(
   const statusTone = run ? runStatusTone(run.status, !!answer) : toolStatusTone(call.status, !!answer);
   const agentId = toolData.agentId || target?.agentId;
   const conversationId = toolData.conversationId || target?.conversationId;
-  const prompt = args.prompt?.trim() ?? '';
+  const prompt = args.prompt?.trim() || args.plan?.trim() || '';
   const targetLabel = args.agent?.id?.trim()
     || args.agent?.type?.trim()
     || toolData.agentType
@@ -254,8 +257,15 @@ function readRunAgentPayload(value: unknown): RunAgentPayloadLike | undefined {
     agentType: stringField(candidate, 'agentType'),
     conversationId: stringField(candidate, 'conversationId'),
     answerBridgeId: stringField(candidate, 'answerBridgeId'),
-    status: stringField(candidate, 'status')
+    status: stringField(candidate, 'status'),
+    executionTarget: stringField(candidate, 'executionTarget')
   };
+}
+
+function isDelegatedPlanToolCall(call: ToolCallRecord): boolean {
+  if (call.name !== SUBMIT_PLAN_TOOL_NAME) return false;
+  const payload = readRunAgentPayload(call.result);
+  return payload?.executionTarget === 'new_conversation' && !!payload.answerBridgeId;
 }
 
 function selectDisplayRun(runIds: Array<string | undefined>, runsById: Map<string, AgentRunRecord>): AgentRunRecord | undefined {

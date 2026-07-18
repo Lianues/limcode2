@@ -207,9 +207,9 @@ function proposalIdFromToolCall(call: ToolCallRecord | undefined): string | unde
 }
 
 .plan-detail-content {
-  width: min(100%, 980px);
+  width: 100%;
   height: 100%;
-  margin: 0 auto;
+  margin: 0;
 }
 
 .plan-detail-empty {

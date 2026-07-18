@@ -497,6 +497,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
         :title="section.title"
         :text="section.markdown ? undefined : section.text"
         :unbounded="isPlanSectionExpanded(section)"
+        :class="{ 'is-plan-proposal-section': !!section.planProposal }"
       >
         <TextPartView v-if="section.markdown && section.text !== undefined" class="tool-display-markdown" :text="section.text" markdown />
         <ToolDiffView v-if="section.diff" :diff="section.diff" />
@@ -536,6 +537,7 @@ function isInternalApprovalProgress(progress: unknown): boolean {
         :title="section.title"
         :text="section.markdown ? undefined : section.text"
         :unbounded="isPlanSectionExpanded(section)"
+        :class="{ 'is-plan-proposal-section': !!section.planProposal }"
       >
         <TextPartView v-if="section.markdown && section.text !== undefined" class="tool-display-markdown" :text="section.text" markdown />
         <ToolDiffView v-if="section.diff" :diff="section.diff" />
@@ -847,6 +849,10 @@ function isInternalApprovalProgress(progress: unknown): boolean {
 
 .tool-display-task-list {
   color: var(--vscode-foreground);
+}
+
+.is-plan-proposal-section {
+  --lc-content-block-section-max-height: min(68vh, 560px);
 }
 
 .part-card-details {

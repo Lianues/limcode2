@@ -469,12 +469,21 @@ export interface SubmitPlanToolRequestRecord {
 }
 
 export type SubmitPlanDecisionStatus = 'approved' | 'change_requested' | 'rejected';
+export type SubmitPlanExecutionTarget = 'current_conversation' | 'new_conversation';
+export type SubmitPlanDelegationStatus = 'backgrounded';
 
 export interface SubmitPlanToolOutputRecord {
   kind: 'submit_plan.result';
   proposalId: string;
   status: SubmitPlanDecisionStatus;
   userMessage?: string;
+  executionTarget?: SubmitPlanExecutionTarget;
+  delegationStatus?: SubmitPlanDelegationStatus;
+  agentId?: string;
+  agentType?: string;
+  runId?: string;
+  conversationId?: string;
+  answerBridgeId?: string;
 }
 
 export type LlmProviderKind = 'openai-compatible' | 'openai-responses' | 'claude' | 'gemini' | 'deepseek';
@@ -2159,6 +2168,10 @@ export interface PlanProposalDecisionPayload {
   conversationId?: string;
   message?: string;
 }
+export type PlanProposalApprovalPayload = PlanProposalDecisionPayload & (
+  | { executionTarget: 'current_conversation'; agentType?: never }
+  | { executionTarget: 'new_conversation'; agentType: string }
+);
 export interface PlanProposalOpenPayload {
   conversationId?: string;
   toolCallId?: string;
@@ -2746,7 +2759,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.ToolResultSubmit, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.ToolResultReject, ToolDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.AskUserAnswerSubmit, AskUserAnswerSubmitPayload>
-  | BridgeEnvelope<BridgeMessageType.PlanProposalApprove, PlanProposalDecisionPayload>
+  | BridgeEnvelope<BridgeMessageType.PlanProposalApprove, PlanProposalApprovalPayload>
   | BridgeEnvelope<BridgeMessageType.PlanProposalRequestChanges, PlanProposalDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.PlanProposalReject, PlanProposalDecisionPayload>
   | BridgeEnvelope<BridgeMessageType.PlanProposalOpen, PlanProposalOpenPayload>

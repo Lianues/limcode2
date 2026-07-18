@@ -70,6 +70,9 @@ function onAction(action: ConfirmPanelAction): void {
           <p v-if="descriptionHtml" class="confirm-panel-desc" v-html="descriptionHtml"></p>
           <p v-else-if="description" class="confirm-panel-desc">{{ description }}</p>
         </header>
+        <div v-if="$slots.default" class="confirm-panel-content">
+          <slot />
+        </div>
         <footer class="confirm-panel-actions">
           <button
             v-for="action in panelActions"
@@ -155,6 +158,11 @@ function onAction(action: ConfirmPanelAction): void {
 .confirm-panel-desc :deep(strong) {
   color: var(--vscode-foreground);
   font-weight: 700;
+}
+
+.confirm-panel-content {
+  min-width: 0;
+  margin-top: var(--space-3);
 }
 
 .confirm-panel-actions {

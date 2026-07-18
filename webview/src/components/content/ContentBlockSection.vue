@@ -74,7 +74,7 @@ withDefaults(
   min-height: 0;
   max-height: var(--lc-content-block-section-max-height);
   overflow: auto;
-  padding-right: 12px;
+  padding-right: 0;
   scrollbar-width: none;
   box-sizing: border-box;
 }
@@ -83,10 +83,6 @@ withDefaults(
 .lc-content-block-section.is-unbounded .lc-content-block-section-scroll {
   max-height: none;
   overflow: visible;
-}
-
-.lc-content-block-section.is-unbounded .lc-content-block-section-scroll {
-  padding-right: 0;
 }
 
 .lc-content-block-section.is-unbounded :deep(.advanced-scrollbar.lc-content-block-section-scrollbar) {

@@ -115,9 +115,11 @@ import { RulesCatalogKey } from '../world/modules/rules/resources';
 import { conversationDetailEvictionBlocker, evictConversationDetail } from './conversationDetailEviction';
 import { forkConversationInWorld } from './conversationFork';
 import { AskUserAttentionTracker, askUserAttentionMessage, collectPendingAskUserAttention } from './askUserAttention';
+import { ConversationAttentionTracker, type ConversationAttentionRequest } from './conversationAttention';
+import { PlanReviewAttentionTracker, collectPendingPlanReviewAttention, planReviewAttentionMessage } from './planReviewAttention';
 
 const MAX_WARM_CLOSED_CONVERSATIONS = 3;
-const ASK_USER_NOTIFICATION_ACTION = '打开标签页';
+const USER_ATTENTION_NOTIFICATION_ACTION = '打开标签页';
 const OPEN_PANEL_COMMAND = 'limcode.openPanel';
 
 export interface CreateConversationOptions {
@@ -146,6 +148,7 @@ export class BackendApplication {
   private readonly webviewClients = new WebviewClientRegistry();
   private readonly webviewRouter: WebviewMessageRouter;
   private readonly askUserAttentionTracker = new AskUserAttentionTracker();
+  private readonly planReviewAttentionTracker = new PlanReviewAttentionTracker();
   private hydrated = false;
   private resolveHydrated: () => void = () => undefined;
   private readonly hydratedReady = new Promise<void>((resolve) => { this.resolveHydrated = resolve; });
@@ -237,7 +240,7 @@ export class BackendApplication {
       },
       afterTick: () => {
         flushEffects(this.outbox, this.env, (event) => this.world.enqueue(event), this.effectHandlers);
-        this.notifyPendingAskUserAttention();
+        this.notifyPendingUserAttention();
         this.persistence.queuePersist();
         this.conversationHistoryChangedEmitter.fire();
         this.processConversationDetailEvictions();
@@ -829,14 +832,30 @@ export class BackendApplication {
     }
   }
 
-  private notifyPendingAskUserAttention(): void {
-    const requests = this.askUserAttentionTracker.takeNew(collectPendingAskUserAttention(this.world));
-    for (const request of requests) {
+  private notifyPendingUserAttention(): void {
+    this.notifyPendingConversationAttention(
+      this.askUserAttentionTracker,
+      collectPendingAskUserAttention(this.world),
+      askUserAttentionMessage
+    );
+    this.notifyPendingConversationAttention(
+      this.planReviewAttentionTracker,
+      collectPendingPlanReviewAttention(this.world),
+      planReviewAttentionMessage
+    );
+  }
+
+  private notifyPendingConversationAttention<TRequest extends ConversationAttentionRequest & { conversationTitle?: string }>(
+    tracker: ConversationAttentionTracker<TRequest>,
+    requests: readonly TRequest[],
+    createMessage: (request: TRequest) => string
+  ): void {
+    for (const request of tracker.takeNew(requests)) {
       void vscode.window.showInformationMessage(
-        askUserAttentionMessage(request),
-        ASK_USER_NOTIFICATION_ACTION
+        createMessage(request),
+        USER_ATTENTION_NOTIFICATION_ACTION
       ).then((selection) => {
-        if (selection !== ASK_USER_NOTIFICATION_ACTION) return undefined;
+        if (selection !== USER_ATTENTION_NOTIFICATION_ACTION) return undefined;
         return vscode.commands.executeCommand(OPEN_PANEL_COMMAND, {
           conversationId: request.conversationId,
           ...(request.conversationTitle ? { title: request.conversationTitle } : {}),

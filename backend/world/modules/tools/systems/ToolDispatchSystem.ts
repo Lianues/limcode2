@@ -101,7 +101,7 @@ import { effectiveCheckpointPolicyForRequest } from '../../checkpoint/queries';
 import { effectiveCheckpointToolTriggerConfig } from '../../checkpoint/policy';
 import { isReadonlyCommandCall } from '../definitions/command';
 import { normalizeAskUserToolRequest } from '../../../../../shared/askUser';
-import { normalizeSubmitPlanToolRequest } from '../../../../../shared/planReview';
+import { DELEGATED_PLAN_APPROVAL_MESSAGE, normalizeSubmitPlanToolRequest } from '../../../../../shared/planReview';
 import { allowOutsideProjectPathsFromConfig } from '../definitions/filePathPolicy';
 import { DEFAULT_RUN_AGENT_TYPE, RUN_AGENT_TOOL_NAME } from '../definitions/runAgent';
 import {
@@ -121,6 +121,7 @@ import {
   TRANSFER_TOOL_NAME,
   READ_AGENT_ANSWER_TOOL_NAME,
   SUBMIT_AGENT_ANSWER_TOOL_NAME,
+  type AgentRunKind,
   type AgentRunStatus,
   type ContextHistoryMode,
   type ConversationPolicyMode,
@@ -138,6 +139,8 @@ import {
 import type { FsPendingFileChangeProposal } from '../../../../capabilities/types';
 import { PlanProposal, PlanReviewPolicy, PlanReviewPolicyScopeLink, RunPlanProposalLink } from '../../plan/components';
 import { PlanReviewBundle, linkPlanProposalToRun, upsertPlanProposal } from '../../plan/bundles';
+import { completePlanDecision, findPlanProposalById, isPendingPlanDecision } from '../../plan/decision';
+import { PlanReviewEventType } from '../../plan/events';
 import { effectivePlanReviewPolicyForRun, hasApprovedPlanForRun, planReviewRequiresRiskLevel } from '../../plan/queries';
 
 const QueuedToolCallsQuery = defineQuery({
@@ -200,7 +203,17 @@ export const ToolDispatchSystem = defineSystem({
     writes: { components: [CheckpointBarrier] },
     resources: { read: [AgentBlueprintsKey, ToolSchemasKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey] },
     bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentAnswerBundle, AgentFromBlueprintBundle, WorkflowBundle, ConversationProjectLinkBundle, WorkEnvironmentBundle, PlanReviewBundle],
-    events: { read: [ToolEventType.ExecutionApproveRequested, ToolEventType.ExecutionRejectRequested, ToolEventType.ExecutionCancelRequested, ToolEventType.ChangeApplyRequested, ToolEventType.ChangeRejectRequested], emit: [CheckpointEventType.Requested, AgentRunEventType.Cancel, AgentRunEventType.Promote] },
+    events: {
+      read: [
+        ToolEventType.ExecutionApproveRequested,
+        ToolEventType.ExecutionRejectRequested,
+        ToolEventType.ExecutionCancelRequested,
+        ToolEventType.ChangeApplyRequested,
+        ToolEventType.ChangeRejectRequested,
+        PlanReviewEventType.ProposalApproveRequested
+      ],
+      emit: [CheckpointEventType.Requested, AgentRunEventType.Cancel, AgentRunEventType.Promote]
+    },
     effects: { emit: ['tool.run', 'tool.change.apply', 'tool.abort'] }
   },
   run(ctx) {
@@ -208,6 +221,19 @@ export const ToolDispatchSystem = defineSystem({
     backgroundForegroundWaitElapsedRunAgentTools(world, cmd);
 
     const handled = new Set<Entity>();
+
+    // “新开对话执行”的 Plan 批准由这里复用 run_agent 的子 Agent 启动链路；
+    // PlanProposalDecisionSystem 只处理 current_conversation，避免同一批准完成两次。
+    for (const request of readEvents(ctx, PlanReviewEventType.ProposalApproveRequested)) {
+      if (request.executionTarget !== 'new_conversation') continue;
+      const entity = toolCallEntityById(world, request.toolCallId);
+      if (entity === undefined || handled.has(entity)) continue;
+      const call = world.get(entity, ToolCall);
+      const state = world.get(entity, ToolState);
+      if (!call || !state || call.name !== SUBMIT_PLAN_TOOL_NAME || state.status !== 'awaiting_user_input') continue;
+      handled.add(entity);
+      executeDelegatedSubmitPlanApproval(world, cmd, entity, call, request.planProposalId, request.agentType);
+    }
 
     // 用户对单个工具调用点“中断”：非终态即标记为“被用户中断执行”，并对在途运行时工具尽力 emit tool.abort。
     // run 仍存活，ToolResultSystem 会把该结果正常回传模型，同批其它工具不受影响。
@@ -618,6 +644,99 @@ function executeSubmitPlanTool(
     elapsedMs: Math.max(0, now - call.createdAt),
     payload: { waitingFor: 'plan_review', planProposalId: proposalId, runId: authorization.runId }
   });
+}
+
+function executeDelegatedSubmitPlanApproval(
+  world: WorldReader,
+  cmd: CommandSink,
+  entity: Entity,
+  call: ToolCallData,
+  planProposalId: string,
+  requestedAgentType: string
+): void {
+  const proposalEntity = findPlanProposalById(world, planProposalId);
+  if (proposalEntity === undefined || !isPendingPlanDecision(world, entity, proposalEntity)) return;
+
+  const fail = (reason: string): void => {
+    completePlanDecision(world, cmd, entity, planProposalId, 'rejected', `Plan 分派失败：${reason}`);
+  };
+
+  let request: ReturnType<typeof normalizeSubmitPlanToolRequest>;
+  try {
+    request = normalizeSubmitPlanToolRequest(call.argsJson);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    return;
+  }
+
+  const sourceRun = runForToolCall(world, entity);
+  const sourceRunData = sourceRun === undefined ? undefined : world.get(sourceRun, AgentRun);
+  if (sourceRun === undefined || !sourceRunData) {
+    fail('submit_plan 没有关联可用的父 AgentRun。');
+    return;
+  }
+
+  const agentType = requestedAgentType.trim();
+  if (!agentType) {
+    fail('没有选择执行 Agent 类型。');
+    return;
+  }
+
+  const launched = launchChildAgentRun(world, cmd, {
+    sourceRun,
+    sourceRunId: sourceRunData.id,
+    sourceToolCall: entity,
+    sourceToolCallId: call.id,
+    prompt: delegatedPlanPrompt(request),
+    requestedKind: agentType,
+    foregroundWaitMs: 0,
+    runKind: 'delegated'
+  });
+  if (!launched.ok) {
+    fail(launched.reason);
+    return;
+  }
+
+  const progress = launched.value.progress;
+  completePlanDecision(
+    world,
+    cmd,
+    entity,
+    planProposalId,
+    'approved',
+    DELEGATED_PLAN_APPROVAL_MESSAGE,
+    {
+      executionTarget: 'new_conversation',
+      delegationStatus: 'backgrounded',
+      agentId: progress.agentId,
+      agentType: progress.agentType,
+      runId: progress.runId,
+      conversationId: progress.conversationId,
+      answerBridgeId: progress.answerBridgeId
+    }
+  );
+}
+
+function delegatedPlanPrompt(request: ReturnType<typeof normalizeSubmitPlanToolRequest>): string {
+  const taskList = request.taskList
+    ? JSON.stringify({ mode: request.taskList.mode, items: request.taskList.items }, null, 2)
+    : '未提供任务清单。';
+  return [
+    '[Approved Plan Delegation]',
+    '用户已批准以下实施 Plan，并选择由你在新的 Agent 对话中负责执行。请独立完成实际落地，不要只复述或重新规划。',
+    '',
+    '## 已批准的 Plan',
+    request.plan,
+    '',
+    '## 初始任务清单',
+    taskList,
+    '',
+    '## 执行要求',
+    '1. 严格按照已批准 Plan 和任务清单推进；仅在确有必要时做最小调整。',
+    '2. 如果提供了任务清单，先使用 update_task_list 将其同步到当前子对话，并在执行过程中持续更新状态。',
+    '3. 完成实现后运行适当验证，清楚记录结果、剩余风险和任何未完成事项。',
+    '4. 完成或需要向来源 Agent 返回阶段性结论时，必须调用 submit_agent_answer({ title, content })；不要只依赖普通自然语言回复。'
+  ].join('\n');
 }
 
 function settingsSnapshotForRun(world: WorldReader, run: Entity): LlmInvocationSettingsSnapshotRecord | undefined {
@@ -1567,16 +1686,72 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     return;
   }
 
-  const parentTarget = runTarget(world, authorization.run);
-  if (!parentTarget) {
-    rejectToolCall(cmd, entity, call, state, '无法解析父 AgentRun 目标。');
+  const launched = launchChildAgentRun(world, cmd, {
+    sourceRun: authorization.run,
+    sourceRunId: authorization.runId,
+    sourceToolCall: entity,
+    sourceToolCallId: call.id,
+    prompt,
+    requestedAnswerBridgeId: args.answerBridgeId?.trim(),
+    requestedAgentId: args.agent?.id?.trim(),
+    requestedKind: args.agent?.type?.trim() || DEFAULT_RUN_AGENT_TYPE,
+    foregroundWaitMs: foregroundWait.value,
+    runKind: 'tool_invoked'
+  });
+  if (!launched.ok) {
+    rejectToolCall(cmd, entity, call, state, launched.reason);
     return;
   }
 
-  const requestedAnswerBridgeId = args.answerBridgeId?.trim();
-  const requestedAgentId = args.agent?.id?.trim();
-  const requestedKind = args.agent?.type?.trim() || DEFAULT_RUN_AGENT_TYPE;
+  const { progress, deliveryMode, background } = launched.value;
+  const now = progress.startedAt ?? Date.now();
+  if (background) {
+    completeRunAgentToolAsBackground(cmd, entity, call, state, progress, 'background_immediately');
+    return;
+  }
+
+  cmd.add(entity, ToolState, transitionToolState(state, 'executing', { progress }, now));
+  spawnToolCallEvent(cmd, {
+    toolCall: entity,
+    toolCallId: call.id,
+    kind: 'started',
+    status: 'executing',
+    at: now,
+    elapsedMs: Math.max(0, now - call.createdAt),
+    payload: { ...progress, deliveryMode }
+  });
+  cmd.add(entity, InFlight, { kind: 'tool', startedAt: now });
+}
+
+interface LaunchChildAgentRunInput {
+  sourceRun: Entity;
+  sourceRunId: string;
+  sourceToolCall: Entity;
+  sourceToolCallId: string;
+  prompt: string;
+  requestedAnswerBridgeId?: string;
+  requestedAgentId?: string;
+  requestedKind: string;
+  foregroundWaitMs: number;
+  runKind: AgentRunKind;
+}
+
+interface LaunchChildAgentRunValue {
+  progress: RunAgentToolProgress;
+  deliveryMode: DeliveryMode;
+  background: boolean;
+}
+
+function launchChildAgentRun(
+  world: WorldReader,
+  cmd: CommandSink,
+  input: LaunchChildAgentRunInput
+): { ok: true; value: LaunchChildAgentRunValue } | { ok: false; reason: string } {
+  const parentTarget = runTarget(world, input.sourceRun);
+  if (!parentTarget) return { ok: false, reason: '无法解析父 AgentRun 目标。' };
+
   const blueprints = world.getResource(AgentBlueprintsKey);
+  const requestedAnswerBridgeId = input.requestedAnswerBridgeId?.trim();
   const resolvedTarget = requestedAnswerBridgeId
     ? resolveRunAgentTargetByAnswerBridge(world, cmd, {
       blueprints,
@@ -1584,23 +1759,17 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     })
     : resolveRunAgentTarget(world, cmd, {
       blueprints,
-      requestedAgentId,
-      requestedKind,
+      requestedAgentId: input.requestedAgentId?.trim(),
+      requestedKind: input.requestedKind,
       sourceConversation: parentTarget.conversation,
-      toolCallEntity: entity,
-      prompt
+      toolCallEntity: input.sourceToolCall,
+      prompt: input.prompt
     });
-  if (!resolvedTarget.ok) {
-    rejectToolCall(cmd, entity, call, state, resolvedTarget.reason);
-    return;
-  }
+  if (!resolvedTarget.ok) return resolvedTarget;
 
   const { targetAgent, targetAgentId, targetAgentType, definition, resolved } = resolvedTarget.value;
   const policyDefaults = resolveRunAgentPolicyDefaults(definition, undefined);
-  if (!resolved.ok) {
-    rejectToolCall(cmd, entity, call, state, resolved.reason);
-    return;
-  }
+  if (!resolved.ok) return resolved;
 
   if (resolved.value.created) {
     const sourceConversation = world.get(parentTarget.conversation, Conversation);
@@ -1613,22 +1782,22 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
       ...(sourceAgent?.id ? { sourceAgentId: sourceAgent.id } : {}),
       sourceConversation: parentTarget.conversation,
       ...(sourceConversation?.id ? { sourceConversationId: sourceConversation.id } : {}),
-      sourceToolCall: entity,
-      sourceToolCallId: call.id,
-      sourceRun: authorization.run,
-      sourceRunId: authorization.runId
+      sourceToolCall: input.sourceToolCall,
+      sourceToolCallId: input.sourceToolCallId,
+      sourceRun: input.sourceRun,
+      sourceRunId: input.sourceRunId
     });
   }
 
   const reusedAnswerBridgeId = requestedAnswerBridgeId || answerBridgeIdForConversation(world, resolved.value.conversation);
   const answerBridgeId = reusedAnswerBridgeId ?? `agent-answer:${createMessageId()}`;
-  const promptWithAnswerBridge = `${prompt}\n\n[Agent answer bridge]\n本次任务已${reusedAnswerBridgeId ? '沿用' : '分配'}默认 answerBridgeId：${answerBridgeId}。当你需要把阶段性结论或最终正文提交给来源 Agent 时，请调用 submit_agent_answer({ title, content })，未传 answerBridgeId 时会自动使用这个 answerBridgeId；即使本次 AgentRun 中断、重试或用户补充条件，只要继续在同一子对话中执行，默认值也应保持为这个 answerBridgeId；如果用户要求提交到其它 answerBridgeId，可显式传 submit_agent_answer({ answerBridgeId, title, content })。同一个 answerBridgeId 可以重复提交，每次提交都会通知来源 Agent。最终自然语言回复可以保持简短。`;
+  const promptWithAnswerBridge = `${input.prompt}\n\n[Agent answer bridge]\n本次任务已${reusedAnswerBridgeId ? '沿用' : '分配'}默认 answerBridgeId：${answerBridgeId}。当你需要把阶段性结论或最终正文提交给来源 Agent 时，请调用 submit_agent_answer({ title, content })，未传 answerBridgeId 时会自动使用这个 answerBridgeId；即使本次 AgentRun 中断、重试或用户补充条件，只要继续在同一子对话中执行，默认值也应保持为这个 answerBridgeId；如果用户要求提交到其它 answerBridgeId，可显式传 submit_agent_answer({ answerBridgeId, title, content })。同一个 answerBridgeId 可以重复提交，每次提交都会通知来源 Agent。最终自然语言回复可以保持简短。`;
   const forcePromoteContinuation = !!reusedAnswerBridgeId && conversationHasActiveRun(world, resolved.value.conversation);
   const queuedInputContent: MessageContent = { role: 'user', parts: [{ text: promptWithAnswerBridge }] };
   const inputMessage = forcePromoteContinuation
     ? undefined
     : spawnUserMessage(cmd, resolved.value.conversation, promptWithAnswerBridge);
-  const background = foregroundWait.value === 0;
+  const background = input.foregroundWaitMs === 0;
   const baseDeliveryPolicy: RunDeliveryPolicyBlueprint = {
     ...policyDefaults.deliveryPolicy,
     mode: background ? 'notification' : 'tool_response',
@@ -1637,21 +1806,21 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
   const deliveryMode = baseDeliveryPolicy.mode;
   const includeTranscript = baseDeliveryPolicy.includeTranscript;
   const childRun = spawnAgentRun(cmd, {
-    kind: 'tool_invoked',
+    kind: input.runKind,
     agent: targetAgent,
     conversation: resolved.value.conversation,
     sourceKind: 'toolCall',
     sourceAgent: parentTarget.agent,
     sourceConversation: parentTarget.conversation,
-    sourceToolCall: entity,
-    sourceRun: authorization.run,
+    sourceToolCall: input.sourceToolCall,
+    sourceRun: input.sourceRun,
     answerBridgeId,
     ...(inputMessage !== undefined ? { inputMessage } : {}),
     ...(forcePromoteContinuation ? { needsModel: false, queuedInputContent, queueHoldReason: 'manual' as const } : {}),
     deliveryMode,
     includeTranscript
   });
-  const inheritedWorkEnvironment = activeWorkEnvironmentForRun(world, authorization.run);
+  const inheritedWorkEnvironment = activeWorkEnvironmentForRun(world, input.sourceRun);
   if (inheritedWorkEnvironment) {
     selectConversationWorkEnvironment(world, cmd, resolved.value.conversation, inheritedWorkEnvironment.entity);
     selectRunWorkEnvironment(world, cmd, childRun, inheritedWorkEnvironment.entity);
@@ -1672,33 +1841,25 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
       payload: { runId: childRunId, conversationId: resolved.value.conversationId }
     });
   }
-  const now = Date.now();
-  const progress: RunAgentToolProgress = {
-    childRunId,
-    runId: childRunId,
-    agentId: targetAgentId,
-    agentType: targetAgentType,
-    conversationId: resolved.value.conversationId,
-    answerBridgeId,
-    foregroundWaitMs: foregroundWait.value,
-    startedAt: now
-  };
-  if (background) {
-    completeRunAgentToolAsBackground(cmd, entity, call, state, progress, 'background_immediately');
-    return;
-  }
 
-  cmd.add(entity, ToolState, transitionToolState(state, 'executing', { progress }, now));
-  spawnToolCallEvent(cmd, {
-    toolCall: entity,
-    toolCallId: call.id,
-    kind: 'started',
-    status: 'executing',
-    at: now,
-    elapsedMs: Math.max(0, now - call.createdAt),
-    payload: { ...progress, deliveryMode }
-  });
-  cmd.add(entity, InFlight, { kind: 'tool', startedAt: now });
+  const now = Date.now();
+  return {
+    ok: true,
+    value: {
+      background,
+      deliveryMode,
+      progress: {
+        childRunId,
+        runId: childRunId,
+        agentId: targetAgentId,
+        agentType: targetAgentType,
+        conversationId: resolved.value.conversationId,
+        answerBridgeId,
+        foregroundWaitMs: input.foregroundWaitMs,
+        startedAt: now
+      }
+    }
+  };
 }
 
 function resolveRunAgentConversation(

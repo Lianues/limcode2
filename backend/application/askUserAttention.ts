@@ -5,6 +5,7 @@ import { runForToolCall, runTarget } from '../world/modules/agentRun/queries';
 import { Conversation } from '../world/modules/chat/components';
 import { OpenConversationPanelIdsKey } from '../world/modules/chat/resources';
 import { ToolCall, ToolState } from '../world/modules/tools/components';
+import { ConversationAttentionTracker, compactAttentionText } from './conversationAttention';
 
 export interface PendingAskUserAttention {
   conversationId: string;
@@ -59,41 +60,16 @@ export function collectPendingAskUserAttention(world: WorldReader): PendingAskUs
   );
 }
 
-/** 同一标签页持续等待期间只通知一次；全部回答后，下一轮问题可以再次通知。 */
-export class AskUserAttentionTracker {
-  private activeConversationIds = new Set<string>();
-
-  public takeNew(requests: readonly PendingAskUserAttention[]): PendingAskUserAttention[] {
-    const pendingConversationIds = new Set(requests.map((request) => request.conversationId));
-    for (const conversationId of this.activeConversationIds) {
-      if (!pendingConversationIds.has(conversationId)) this.activeConversationIds.delete(conversationId);
-    }
-
-    const newlyPending: PendingAskUserAttention[] = [];
-    for (const request of requests) {
-      if (!this.activeConversationIds.has(request.conversationId)) newlyPending.push(request);
-      this.activeConversationIds.add(request.conversationId);
-    }
-    return newlyPending;
-  }
-
-  public clear(): void {
-    this.activeConversationIds.clear();
-  }
-}
+/** 保留原导出名称；实际去重逻辑与 Plan 审批提醒共用。 */
+export class AskUserAttentionTracker extends ConversationAttentionTracker<PendingAskUserAttention> {}
 
 export function askUserAttentionMessage(request: PendingAskUserAttention): string {
   const tabLabel = request.conversationTitle?.trim() || '当前对话';
   if (request.questionCount > 1) {
-    return `LimCode：标签页“${compactNotificationText(tabLabel, 36)}”有 ${request.questionCount} 个问题等待回答。`;
+    return `LimCode：标签页“${compactAttentionText(tabLabel, 36)}”有 ${request.questionCount} 个问题等待回答。`;
   }
   const question = request.firstQuestion?.trim();
   return question
-    ? `LimCode 需要你的回答：${compactNotificationText(question, 96)}`
-    : `LimCode：标签页“${compactNotificationText(tabLabel, 36)}”有问题等待回答。`;
-}
-
-function compactNotificationText(value: string, maxLength: number): string {
-  const text = value.replace(/\s+/g, ' ').trim();
-  return text.length > maxLength ? `${text.slice(0, Math.max(1, maxLength - 1))}…` : text;
+    ? `LimCode 需要你的回答：${compactAttentionText(question, 96)}`
+    : `LimCode：标签页“${compactAttentionText(tabLabel, 36)}”有问题等待回答。`;
 }

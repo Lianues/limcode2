@@ -1,14 +1,19 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
-import { IconArrowsMaximize, IconArrowsMinimize, IconClipboardList, IconCircleCheck, IconCircleX, IconPencilMinus } from '@tabler/icons-vue';
-import { submitPlanOutputFromResult } from '@shared/planReview';
-import type { PlanProposalRecord, PlanProposalStatus, SubmitPlanToolRequestRecord, ToolCallRecord } from '@shared/protocol';
+import { computed, nextTick, ref, useAttrs, watch } from 'vue';
+import { IconArrowsMaximize, IconArrowsMinimize, IconClipboardList, IconCircleCheck, IconCircleX, IconMessage2, IconMessagePlus, IconPencilMinus, IconRobot } from '@tabler/icons-vue';
+import { DELEGATED_PLAN_APPROVAL_MESSAGE, submitPlanOutputFromResult } from '@shared/planReview';
+import type { AgentRecord, PlanProposalRecord, PlanProposalStatus, SubmitPlanToolRequestRecord, ToolCallRecord } from '@shared/protocol';
+import { useAgentStore } from '@webview/stores/useAgentStore';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { bridge, BridgeMessageType } from '@webview/transport';
 import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import TextPartView from '@webview/components/content/parts/TextPartView.vue';
 import TaskListDisplay from '@webview/components/taskList/TaskListDisplay.vue';
 import { taskListDisplayItemsFromOperation } from '@webview/components/taskList/taskListModel';
+import ConfirmPanel, { type ConfirmPanelAction } from '@webview/components/ui/ConfirmPanel.vue';
+import SettingsDropdown, { type SettingsDropdownOption } from '@webview/components/settings/global/SettingsDropdown.vue';
+
+defineOptions({ inheritAttrs: false });
 
 const props = withDefaults(defineProps<{
   request: SubmitPlanToolRequestRecord;
@@ -25,9 +30,13 @@ const emit = defineEmits<{
 
 const MAX_PLAN_FEEDBACK_LENGTH = 4_000;
 
+const attrs = useAttrs();
 const clientState = useClientStateStore();
-const submitting = ref<undefined | 'approve' | 'changes' | 'reject'>(undefined);
+const agentStore = useAgentStore();
+const submitting = ref<undefined | 'approve-current' | 'approve-new' | 'changes' | 'reject'>(undefined);
 const changeFeedbackOpen = ref(false);
+const dispatchPanelOpen = ref(false);
+const selectedDispatchAgentType = ref('');
 const changeFeedbackText = ref('');
 const changeFeedbackInput = ref<HTMLTextAreaElement | null>(null);
 const planScroller = ref<HTMLElement | null>(null);
@@ -50,11 +59,14 @@ const scrollRefreshKey = computed(() => [
   taskListItems.value.map((item) => `${item.key}:${item.status}:${item.title}:${item.description ?? ''}`).join('|'),
   changeFeedbackOpen.value ? changeFeedbackText.value : '',
   userMessage.value ?? '',
+  pending.value ? 'pending' : 'settled',
+  submitting.value ?? '',
   props.layout,
   panelExpanded.value ? 'expanded' : 'normal'
 ].join('::'));
 const statusLabel = computed(() => {
-  if (submitting.value === 'approve') return '正在批准 Plan';
+  if (submitting.value === 'approve-current') return '正在批准 Plan';
+  if (submitting.value === 'approve-new') return '正在分派 Plan';
   if (submitting.value === 'changes') return '正在提交修改要求';
   if (submitting.value === 'reject') return '正在拒绝 Plan';
   if (props.toolCall?.status === 'error' && status.value === 'pending') return 'Plan 已取消';
@@ -75,6 +87,18 @@ const statusTone = computed(() => {
   }
 });
 const userMessage = computed(() => localizedUserMessage(output.value?.userMessage));
+const delegatedExecution = computed(() => output.value?.executionTarget === 'new_conversation' ? output.value : undefined);
+const dispatchAgentOptions = computed<SettingsDropdownOption[]>(() => agentStore.configurableAgents.map((agent) => ({
+  value: agent.id,
+  label: agent.name,
+  description: agent.description || agentTypeDescription(agent),
+  icon: IconRobot
+})));
+const selectedDispatchAgent = computed<AgentRecord | undefined>(() => agentStore.configurableAgents.find((agent) => agent.id === selectedDispatchAgentType.value));
+const dispatchPanelActions = computed<ConfirmPanelAction[]>(() => [
+  { key: 'cancel', label: '取消', variant: 'secondary' },
+  { key: 'confirm', label: '分派执行', disabled: !selectedDispatchAgent.value }
+]);
 const feedbackInputId = computed(() => `plan-feedback-input-${props.toolCall?.id ?? props.proposalId ?? 'current'}`);
 
 watch(
@@ -83,6 +107,8 @@ watch(
     submitting.value = undefined;
     changeFeedbackOpen.value = false;
     changeFeedbackText.value = '';
+    dispatchPanelOpen.value = false;
+    selectedDispatchAgentType.value = '';
     panelExpanded.value = false;
     emit('panel-expanded-change', false);
   }
@@ -95,12 +121,71 @@ watch(
       submitting.value = undefined;
       changeFeedbackOpen.value = false;
       changeFeedbackText.value = '';
+      dispatchPanelOpen.value = false;
     }
   },
   { immediate: true }
 );
 
-function decide(kind: 'approve' | 'changes' | 'reject', message = defaultMessageForDecision(kind)): void {
+function approveInCurrentConversation(): void {
+  submitApproval('current_conversation');
+}
+
+function openDispatchPanel(): void {
+  if (!pending.value || submitting.value) return;
+  const available = agentStore.configurableAgents;
+  const current = available.find((agent) => agent.id === selectedDispatchAgentType.value);
+  const preferred = current
+    ?? available.find((agent) => agent.id === 'worker')
+    ?? available.find((agent) => agent.kind === 'worker')
+    ?? available[0];
+  selectedDispatchAgentType.value = preferred?.id ?? '';
+  dispatchPanelOpen.value = true;
+}
+
+function closeDispatchPanel(): void {
+  if (submitting.value === 'approve-new') return;
+  dispatchPanelOpen.value = false;
+}
+
+function confirmDispatch(): void {
+  const agent = selectedDispatchAgent.value;
+  if (!agent) return;
+  dispatchPanelOpen.value = false;
+  submitApproval('new_conversation', agent.id);
+}
+
+function submitApproval(target: 'current_conversation' | 'new_conversation', agentType?: string): void {
+  const toolCallId = props.toolCall?.id;
+  const planProposalId = props.proposalId ?? output.value?.proposalId;
+  if (!toolCallId || !planProposalId || !pending.value || submitting.value) return;
+  const conversationId = clientState.currentConversationId.trim();
+  if (target === 'new_conversation') {
+    const normalizedAgentType = agentType?.trim();
+    if (!normalizedAgentType) return;
+    submitting.value = 'approve-new';
+    bridge.request(BridgeMessageType.PlanProposalApprove, {
+      toolCallId,
+      planProposalId,
+      ...(conversationId ? { conversationId } : {}),
+      message: DELEGATED_PLAN_APPROVAL_MESSAGE,
+      executionTarget: 'new_conversation',
+      agentType: normalizedAgentType
+    });
+    return;
+  }
+
+  submitting.value = 'approve-current';
+  bridge.request(BridgeMessageType.PlanProposalApprove, {
+    toolCallId,
+    planProposalId,
+    ...(conversationId ? { conversationId } : {}),
+    message: defaultMessageForDecision('approve'),
+    executionTarget: 'current_conversation'
+  });
+}
+
+function decide(kind: 'changes' | 'reject', message = defaultMessageForDecision(kind)): void {
   const toolCallId = props.toolCall?.id;
   const planProposalId = props.proposalId ?? output.value?.proposalId;
   if (!toolCallId || !planProposalId || !pending.value || submitting.value) return;
@@ -139,13 +224,10 @@ function submitChangeFeedback(): void {
   decide('changes', changeFeedbackText.value.trim() || defaultMessageForDecision('changes'));
 }
 
-function messageTypeForDecision(kind: 'approve' | 'changes' | 'reject'):
-  | BridgeMessageType.PlanProposalApprove
+function messageTypeForDecision(kind: 'changes' | 'reject'):
   | BridgeMessageType.PlanProposalRequestChanges
   | BridgeMessageType.PlanProposalReject {
-  if (kind === 'approve') return BridgeMessageType.PlanProposalApprove;
-  if (kind === 'changes') return BridgeMessageType.PlanProposalRequestChanges;
-  return BridgeMessageType.PlanProposalReject;
+  return kind === 'changes' ? BridgeMessageType.PlanProposalRequestChanges : BridgeMessageType.PlanProposalReject;
 }
 
 function defaultMessageForDecision(kind: 'approve' | 'changes' | 'reject'): string {
@@ -163,10 +245,25 @@ function localizedUserMessage(message: string | undefined): string | undefined {
   return text;
 }
 
+function openDelegatedConversation(): void {
+  const conversationId = delegatedExecution.value?.conversationId?.trim();
+  if (!conversationId) return;
+  bridge.request(BridgeMessageType.ConversationOpen, { conversationId });
+}
+
+function agentTypeDescription(agent: AgentRecord): string {
+  return agent.source === 'builtin' ? `内置 Agent · ${agent.kind}` : `用户 Agent · ${agent.kind}`;
+}
+
 </script>
 
 <template>
-  <section class="plan-proposal" :class="[`tone-${statusTone}`, `layout-${props.layout}`, { 'is-pending': pending, 'is-panel-expanded': panelExpanded }]" :aria-label="statusLabel">
+  <section
+    v-bind="attrs"
+    class="plan-proposal"
+    :class="[`tone-${statusTone}`, `layout-${props.layout}`, { 'is-pending': pending, 'is-panel-expanded': panelExpanded }]"
+    :aria-label="statusLabel"
+  >
     <header class="plan-proposal-heading">
       <IconClipboardList class="plan-proposal-heading-icon" stroke="2" aria-hidden="true" />
       <span class="plan-proposal-heading-main">Plan</span>
@@ -202,6 +299,27 @@ function localizedUserMessage(message: string | undefined): string | undefined {
         </section>
 
         <p v-if="userMessage && !pending" class="plan-proposal-message">{{ userMessage }}</p>
+
+        <section v-if="delegatedExecution && !pending" class="plan-delegation-result" aria-label="Plan 分派信息">
+          <header class="plan-delegation-heading">
+            <IconRobot stroke="2" aria-hidden="true" />
+            <span>已分派给 {{ delegatedExecution.agentType || delegatedExecution.agentId || 'Agent' }}</span>
+          </header>
+          <dl class="plan-delegation-metadata">
+            <div v-if="delegatedExecution.runId"><dt>Run ID</dt><dd>{{ delegatedExecution.runId }}</dd></div>
+            <div v-if="delegatedExecution.conversationId"><dt>Conversation ID</dt><dd>{{ delegatedExecution.conversationId }}</dd></div>
+            <div v-if="delegatedExecution.answerBridgeId"><dt>Answer Bridge ID</dt><dd>{{ delegatedExecution.answerBridgeId }}</dd></div>
+          </dl>
+          <button
+            v-if="delegatedExecution.conversationId"
+            type="button"
+            class="plan-open-delegated-conversation"
+            @click="openDelegatedConversation"
+          >
+            <IconMessage2 stroke="2" aria-hidden="true" />
+            <span>打开 Agent 对话</span>
+          </button>
+        </section>
 
         <div v-if="pending && changeFeedbackOpen" class="plan-feedback">
           <label class="plan-feedback-label" :for="feedbackInputId">修改要求</label>
@@ -247,12 +365,45 @@ function localizedUserMessage(message: string | undefined): string | undefined {
         <IconPencilMinus class="plan-action-icon" stroke="2" aria-hidden="true" />
         <span>{{ submitting === 'changes' ? '正在提交…' : changeFeedbackOpen ? '提交修改要求' : '要求修改' }}</span>
       </button>
-      <button type="button" class="plan-action primary" :disabled="!!submitting" @click="decide('approve')">
+      <button type="button" class="plan-action secondary" :disabled="!!submitting || !dispatchAgentOptions.length" @click="openDispatchPanel">
+        <IconMessagePlus class="plan-action-icon" stroke="2" aria-hidden="true" />
+        <span>{{ submitting === 'approve-new' ? '正在分派…' : '新开对话执行' }}</span>
+      </button>
+      <button type="button" class="plan-action primary" :disabled="!!submitting" @click="approveInCurrentConversation">
         <IconCircleCheck class="plan-action-icon" stroke="2" aria-hidden="true" />
-        <span>{{ submitting === 'approve' ? '正在批准…' : '批准' }}</span>
+        <span>{{ submitting === 'approve-current' ? '正在批准…' : '在当前对话中执行' }}</span>
       </button>
     </footer>
   </section>
+
+  <ConfirmPanel
+    :open="dispatchPanelOpen"
+    title="选择执行 Agent"
+    description="将创建所选 Agent 类型的临时镜像和独立对话，并在后台执行已批准的 Plan。"
+    :actions="dispatchPanelActions"
+    @cancel="closeDispatchPanel"
+    @confirm="confirmDispatch"
+  >
+    <label class="plan-dispatch-agent-field">
+      <span>Agent 类型</span>
+      <SettingsDropdown
+        v-model="selectedDispatchAgentType"
+        :options="dispatchAgentOptions"
+        title="选择执行 Agent"
+        placeholder="请选择 Agent"
+        searchable
+        search-placeholder="筛选 Agent..."
+        :max-height="240"
+      />
+    </label>
+    <div v-if="selectedDispatchAgent" class="plan-dispatch-agent-summary">
+      <IconRobot stroke="2" aria-hidden="true" />
+      <span>
+        <strong>{{ selectedDispatchAgent.name }}</strong>
+        <small>{{ selectedDispatchAgent.description || agentTypeDescription(selectedDispatchAgent) }}</small>
+      </span>
+    </div>
+  </ConfirmPanel>
 </template>
 
 <style scoped>
@@ -271,7 +422,14 @@ function localizedUserMessage(message: string | undefined): string | undefined {
 }
 
 .plan-proposal.layout-embedded.is-panel-expanded {
+  height: auto;
   max-height: none;
+}
+
+.plan-proposal.layout-embedded.tool-display-plan-proposal.is-pending:not(.is-panel-expanded) {
+  height: var(--lc-content-block-section-max-height);
+  max-height: var(--lc-content-block-section-max-height);
+  overflow: hidden;
 }
 
 .plan-proposal.layout-full {
@@ -445,6 +603,74 @@ function localizedUserMessage(message: string | undefined): string | undefined {
   color: var(--vscode-descriptionForeground);
 }
 
+.plan-delegation-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 34%, var(--vscode-panel-border));
+  background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground) 6%);
+}
+
+.plan-delegation-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 600;
+}
+
+.plan-delegation-heading svg,
+.plan-open-delegated-conversation svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.plan-delegation-metadata {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.plan-delegation-metadata > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.plan-delegation-metadata dt {
+  color: var(--vscode-descriptionForeground);
+}
+
+.plan-delegation-metadata dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--font-size-xs);
+}
+
+.plan-open-delegated-conversation {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 3px 8px;
+  border: 1px solid var(--vscode-panel-border);
+  color: var(--vscode-foreground);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.plan-open-delegated-conversation:hover,
+.plan-open-delegated-conversation:focus-visible {
+  outline: none;
+  background: color-mix(in srgb, var(--vscode-editor-background) 86%, var(--vscode-foreground) 14%);
+}
+
 .plan-feedback {
   display: flex;
   flex-direction: column;
@@ -519,40 +745,46 @@ function localizedUserMessage(message: string | undefined): string | undefined {
   z-index: 2;
 }
 
-.plan-proposal.layout-embedded .plan-proposal-actions,
-.plan-proposal.layout-full .plan-proposal-actions {
+.plan-proposal.layout-embedded .plan-proposal-actions {
   position: sticky;
   bottom: 0;
 }
 
 .plan-action {
+  appearance: none;
+  -webkit-appearance: none;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-height: 28px;
   padding: 4px 10px;
-  border: 1px solid var(--vscode-button-border, var(--vscode-panel-border));
-  background: var(--vscode-button-secondaryBackground, transparent);
-  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 82%, var(--vscode-foreground) 18%);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--vscode-editor-background) 96%, var(--vscode-foreground) 4%);
+  box-shadow: none;
+  color: var(--vscode-foreground);
   font: inherit;
   cursor: pointer;
 }
 
 .plan-action.primary {
-  background: color-mix(in srgb, var(--vscode-editor-background) 82%, var(--vscode-foreground) 18%);
-  color: var(--vscode-foreground);
-  border-color: color-mix(in srgb, var(--vscode-foreground) 34%, var(--vscode-panel-border));
+  border-color: color-mix(in srgb, var(--vscode-panel-border) 62%, var(--vscode-foreground) 38%);
+  background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-foreground) 10%);
+  font-weight: 600;
 }
 
 .plan-action:hover:not(:disabled),
+.plan-action:focus:not(:disabled),
 .plan-action:focus-visible:not(:disabled) {
-  border-color: color-mix(in srgb, var(--vscode-focusBorder) 42%, var(--vscode-panel-border));
-  background: color-mix(in srgb, var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground)) 72%, var(--vscode-editor-background) 28%);
+  outline: none;
+  border-color: color-mix(in srgb, var(--vscode-panel-border) 48%, var(--vscode-foreground) 52%);
+  background: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
 }
 
-.plan-action.primary:hover:not(:disabled),
-.plan-action.primary:focus-visible:not(:disabled) {
-  background: color-mix(in srgb, var(--vscode-editor-background) 72%, var(--vscode-foreground) 28%);
+.plan-action:active:not(:disabled) {
+  background: color-mix(in srgb, var(--vscode-editor-background) 82%, var(--vscode-foreground) 18%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
 }
 
 .plan-action:disabled {
@@ -560,9 +792,60 @@ function localizedUserMessage(message: string | undefined): string | undefined {
   opacity: 0.58;
 }
 
+.plan-action::-moz-focus-inner {
+  border: 0;
+}
+
 .plan-action-icon {
   width: 15px;
   height: 15px;
+}
+
+.plan-dispatch-agent-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  color: var(--vscode-descriptionForeground);
+}
+
+.plan-dispatch-agent-summary {
+  min-width: 0;
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: center;
+  border: 1px solid var(--vscode-panel-border);
+  background: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-foreground) 6%);
+}
+
+.plan-dispatch-agent-summary > svg {
+  width: 20px;
+  height: 20px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.plan-dispatch-agent-summary > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plan-dispatch-agent-summary strong,
+.plan-dispatch-agent-summary small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-dispatch-agent-summary strong {
+  color: var(--vscode-foreground);
+}
+
+.plan-dispatch-agent-summary small {
+  color: var(--vscode-descriptionForeground);
 }
 
 </style>

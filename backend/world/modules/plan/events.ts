@@ -1,4 +1,4 @@
-import type { PlanProposalDecisionPayload, PlanReviewPolicyScopeClearPayload, PlanReviewPolicyScopeSetPayload } from '../../../../shared/protocol';
+import type { PlanProposalApprovalPayload, PlanProposalDecisionPayload, PlanReviewPolicyScopeClearPayload, PlanReviewPolicyScopeSetPayload } from '../../../../shared/protocol';
 
 export const PlanReviewEventType = {
   PolicyScopeSetRequested: 'planReview:policyScopeSetRequested',
@@ -12,7 +12,7 @@ declare module '@backend/world/events' {
   interface WorldEventPayloadMap {
     'planReview:policyScopeSetRequested': PlanReviewPolicyScopeSetPayload;
     'planReview:policyScopeClearRequested': PlanReviewPolicyScopeClearPayload;
-    'planReview:proposalApproveRequested': PlanProposalDecisionPayload;
+    'planReview:proposalApproveRequested': PlanProposalApprovalPayload;
     'planReview:proposalChangesRequested': PlanProposalDecisionPayload;
     'planReview:proposalRejectRequested': PlanProposalDecisionPayload;
   }

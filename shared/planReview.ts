@@ -2,12 +2,15 @@ import { taskListOperationFromArgs } from './taskListProjection';
 import type {
   PlanProposalStatus,
   SubmitPlanDecisionStatus,
+  SubmitPlanDelegationStatus,
+  SubmitPlanExecutionTarget,
   SubmitPlanToolOutputRecord,
   SubmitPlanToolRequestRecord,
   TaskListToolOperationRecord
 } from './protocol';
 
 export const SUBMIT_PLAN_MAX_BODY_LENGTH = 40_000;
+export const DELEGATED_PLAN_APPROVAL_MESSAGE = 'Plan 已下发给 Agent 执行，请耐心等待。';
 
 export function normalizeSubmitPlanToolRequest(value: unknown): SubmitPlanToolRequestRecord {
   const record = asRecord(parseJsonValue(value));
@@ -34,13 +37,27 @@ export function createSubmitPlanToolOutput(input: {
   proposalId: string;
   status: SubmitPlanDecisionStatus;
   userMessage?: string;
+  executionTarget?: SubmitPlanExecutionTarget;
+  delegationStatus?: SubmitPlanDelegationStatus;
+  agentId?: string;
+  agentType?: string;
+  runId?: string;
+  conversationId?: string;
+  answerBridgeId?: string;
 }): SubmitPlanToolOutputRecord {
   const userMessage = input.userMessage?.trim();
   return {
     kind: 'submit_plan.result',
     proposalId: input.proposalId,
     status: input.status,
-    ...(userMessage ? { userMessage } : {})
+    ...(userMessage ? { userMessage } : {}),
+    ...(input.executionTarget ? { executionTarget: input.executionTarget } : {}),
+    ...(input.delegationStatus ? { delegationStatus: input.delegationStatus } : {}),
+    ...optionalOutputId('agentId', input.agentId),
+    ...optionalOutputId('agentType', input.agentType),
+    ...optionalOutputId('runId', input.runId),
+    ...optionalOutputId('conversationId', input.conversationId),
+    ...optionalOutputId('answerBridgeId', input.answerBridgeId)
   };
 }
 
@@ -53,11 +70,25 @@ export function submitPlanOutputFromResult(value: unknown): SubmitPlanToolOutput
   if (!isSubmitPlanDecisionStatus(output.status)) return undefined;
 
   const userMessage = optionalText(output.userMessage);
+  const executionTarget = isSubmitPlanExecutionTarget(output.executionTarget) ? output.executionTarget : undefined;
+  const delegationStatus = output.delegationStatus === 'backgrounded' ? output.delegationStatus : undefined;
+  const agentId = optionalText(output.agentId);
+  const agentType = optionalText(output.agentType);
+  const runId = optionalText(output.runId);
+  const conversationId = optionalText(output.conversationId);
+  const answerBridgeId = optionalText(output.answerBridgeId);
   return {
     kind: 'submit_plan.result',
     proposalId: output.proposalId.trim(),
     status: output.status,
-    ...(userMessage ? { userMessage } : {})
+    ...(userMessage ? { userMessage } : {}),
+    ...(executionTarget ? { executionTarget } : {}),
+    ...(delegationStatus ? { delegationStatus } : {}),
+    ...(agentId ? { agentId } : {}),
+    ...(agentType ? { agentType } : {}),
+    ...(runId ? { runId } : {}),
+    ...(conversationId ? { conversationId } : {}),
+    ...(answerBridgeId ? { answerBridgeId } : {})
   };
 }
 
@@ -68,6 +99,18 @@ export function planProposalStatusToDecision(status: PlanProposalStatus): Submit
 
 function isSubmitPlanDecisionStatus(value: unknown): value is SubmitPlanDecisionStatus {
   return value === 'approved' || value === 'change_requested' || value === 'rejected';
+}
+
+function isSubmitPlanExecutionTarget(value: unknown): value is SubmitPlanExecutionTarget {
+  return value === 'current_conversation' || value === 'new_conversation';
+}
+
+function optionalOutputId<TKey extends 'agentId' | 'agentType' | 'runId' | 'conversationId' | 'answerBridgeId'>(
+  key: TKey,
+  value: string | undefined
+): { [K in TKey]?: string } {
+  const id = value?.trim();
+  return id ? { [key]: id } as { [K in TKey]?: string } : {};
 }
 
 function optionalTaskList(value: unknown): TaskListToolOperationRecord | undefined {

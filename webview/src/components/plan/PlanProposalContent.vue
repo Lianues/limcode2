@@ -439,8 +439,9 @@ function agentTypeDescription(agent: AgentRecord): string {
 }
 
 .plan-proposal.layout-embedded {
-  max-height: var(--lc-plan-proposal-max-height, min(62vh, 520px));
-  overflow: hidden;
+  --plan-embedded-max-height: var(--lc-plan-proposal-max-height, min(62vh, 520px));
+  max-height: var(--plan-embedded-max-height);
+  overflow: visible;
 }
 
 .plan-proposal.layout-embedded.is-panel-expanded {
@@ -582,6 +583,16 @@ function agentTypeDescription(agent: AgentRecord): string {
   flex: 1 1 auto;
 }
 
+.plan-proposal.layout-embedded .plan-proposal-scroll-shell {
+  flex: 0 1 auto;
+  max-height: max(160px, calc(var(--plan-embedded-max-height) - 44px));
+  overflow: hidden;
+}
+
+.plan-proposal.layout-embedded.is-pending .plan-proposal-scroll-shell {
+  max-height: max(160px, calc(var(--plan-embedded-max-height) - 108px));
+}
+
 .plan-proposal-scroll {
   min-height: 0;
   max-height: 100%;
@@ -592,6 +603,10 @@ function agentTypeDescription(agent: AgentRecord): string {
   overflow: auto;
   scrollbar-width: none;
   padding-right: 0;
+}
+
+.plan-proposal.layout-embedded .plan-proposal-scroll {
+  max-height: inherit;
 }
 
 .plan-proposal-scroll::-webkit-scrollbar {
@@ -608,6 +623,7 @@ function agentTypeDescription(agent: AgentRecord): string {
 }
 
 .plan-proposal.layout-embedded.is-panel-expanded .plan-proposal-scroll-shell {
+  max-height: none;
   overflow: visible;
 }
 

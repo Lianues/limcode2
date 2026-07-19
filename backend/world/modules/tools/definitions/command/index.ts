@@ -1,5 +1,6 @@
 import type { CommandCapability, CommandOutputLimits } from '../../../../../capabilities/types';
 import type { ToolConfigRecord } from '../../../../../../shared/protocol';
+import { BackgroundCommandEventType } from '../../../backgroundCommand/events';
 import type { ToolDefinition } from '../../registry';
 import { defineToolDefinitionModule } from '../types';
 
@@ -23,37 +24,37 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
         properties: {
           explanation: {
             type: 'string',
-            description: '必填。用一句简体中文向用户概括本次要执行什么、为什么这样做（面向用户，而非罗列技术细节）。该说明会作为工具消息标题展示给用户。'
+            description: 'Required. Briefly explain to the user what this command will do and why. This text is shown as the tool-call title.'
           },
           mode: {
             type: 'string',
-            description: '操作模式，默认 execute。execute=执行新命令；output=获取某后台进程自上次读取以来的新增输出(需 processId)；kill=终止某后台进程(需 processId)。'
+            description: 'Operation mode. Defaults to execute. execute starts a new command; output reads accumulated output from a background process; kill terminates a background process. output/kill require a processId returned by an earlier execute result.'
           },
           command: {
             type: 'string',
             description: command.toolName === 'shell'
-              ? '要执行的 PowerShell 命令。多条命令用分号分隔。路径含空格时用双引号包裹。（mode=execute 时必填）'
-              : '要执行的 Bash/Shell 命令。多条命令建议用 && 连接。路径含空格时用双引号包裹。（mode=execute 时必填）'
+              ? 'PowerShell command to execute. Separate multiple commands with semicolons. Quote paths that contain spaces. Required when mode=execute.'
+              : 'Bash/Shell command to execute. Prefer joining multiple commands with &&. Quote paths that contain spaces. Required when mode=execute.'
           },
           cwd: {
             type: 'string',
-            description: '工作目录（相对于工作区根目录），默认为工作区根目录。仅 mode=execute 有效。'
+            description: 'Working directory relative to the workspace root. Defaults to the workspace root. Only used when mode=execute.'
           },
           foregroundWaitMs: {
             type: 'number',
-            description: '必填。前台等待预算（毫秒），不是命令超时/终止时间。mode=execute 时，命令启动后工具最多在当前响应中等待这么久：期间完成则同步返回结果；到点仍在运行则不杀进程，转入后台继续运行并返回 processId。设为 0 表示启动后立即转后台（适合长期服务、构建、打包等长任务）。'
+            description: 'Required for mode=execute. Foreground wait budget in milliseconds; this is not a command timeout. If the command is still running after this budget, it is moved to the background and the tool returns a generated processId. Use 0 to background immediately.'
           },
           processId: {
             type: 'string',
-            description: 'mode=output / mode=kill 时必填。目标后台进程的 id（由 execute 因前台等待预算用尽或 foregroundWaitMs=0 转后台时返回）。'
+            description: 'Do not provide this when mode=execute. The runtime generates and returns processId when an execute command is moved to the background. Required only for mode=output or mode=kill; copy it from a previous shell/bash result or background notification.'
           },
           readonly: {
             type: 'string',
-            description: '本次命令是否只读（不修改文件/系统/网络状态），"true" 表示只读。由你根据命令自行判断。只读命令在开启"只读命令自动跳过审批"时可免审批直接执行；其他命令仍按常规审批。'
+            description: 'Whether this command is read-only and does not modify files, system state, or network state. Use "true" for read-only commands; read-only commands may be auto-approved when the policy allows it.'
           },
           wait: {
             type: 'string',
-            description: '是否等待前面的工具执行完再执行。默认串行(等待)。传 "false" 表示不等待、与前面的工具并行执行。'
+            description: 'Whether to wait for previous tool calls before starting this one. Defaults to serial execution. Set to "false" to allow parallel execution.'
           }
         },
         required: ['explanation', 'foregroundWaitMs']
@@ -150,6 +151,30 @@ export function createCommandTool(command: CommandCapability): ToolDefinition {
             ...(event.delta !== undefined ? { delta: event.delta } : {}),
             ...(event.payload !== undefined ? { payload: event.payload } : {})
           });
+        },
+        onBackgroundExit(event) {
+          if (!ctx?.emitWorldEvent) return;
+          const output = event.result;
+          const processId = output.processId?.trim();
+          if (!processId) return;
+          ctx.emitWorldEvent({
+            type: BackgroundCommandEventType.Exited,
+            payload: {
+              processId,
+              toolName: command.toolName,
+              toolCallId: ctx.toolCallId,
+              ...(ctx.runId ? { runId: ctx.runId } : {}),
+              ...(ctx.conversationId ? { conversationId: ctx.conversationId } : {}),
+              command: output.command,
+              cwd: resolvedCommandCwd(args.cwd, ctx.workEnvironment?.rootPath),
+              status: output.status === 'killed' ? 'killed' : 'exited',
+              exitCode: output.exitCode,
+              killed: output.killed,
+              stdout: output.stdout,
+              stderr: output.stderr,
+              ...(output.droppedChars !== undefined ? { droppedChars: output.droppedChars } : {})
+            }
+          });
         }
       }, { workEnvironment: ctx?.workEnvironment, accessibleWorkEnvironments: ctx?.accessibleWorkEnvironments }, limits);
       // 转入后台(running)不算失败；否则以退出码判定。
@@ -169,6 +194,12 @@ type CommandToolArgs = {
   wait?: string;
   explanation?: string;
 };
+
+function resolvedCommandCwd(cwd: string | undefined, rootPath: string | undefined): string {
+  const explicit = cwd?.trim();
+  if (explicit) return explicit;
+  return rootPath?.trim() ?? '';
+}
 
 function summarizeCommandToolCall(rawArgs: unknown): string | undefined {
   const args = (rawArgs ?? {}) as CommandToolArgs;

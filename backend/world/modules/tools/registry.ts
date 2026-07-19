@@ -1,3 +1,4 @@
+import type { WorldEvent } from '../../../ecs/types';
 import type { CommandCapability, FsCapability, SkillCatalogCapability, StorageCapability, WorkEnvironmentRuntimeCapability } from '../../../capabilities/types';
 import type {
   ToolCallEventKind,
@@ -47,6 +48,8 @@ export interface ToolExecutionContext {
   /** 用户中断时触发；工具可将其透传给底层调用（如 MCP callTool、fetch）以尽力真中断。 */
   signal?: AbortSignal;
   emit(event: ToolRuntimeEvent): void;
+  /** 运行时工具的后台异步事件回灌入口；只发送纯数据 world event，不承载领域规则。 */
+  emitWorldEvent?(event: WorldEvent): void;
 }
 
 export interface ToolDeclaration {

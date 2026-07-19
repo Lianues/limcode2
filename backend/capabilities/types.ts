@@ -235,8 +235,15 @@ export interface CommandRunEvent {
   payload?: unknown;
 }
 
+export interface CommandBackgroundExitEvent {
+  kind: 'background.exit';
+  result: CommandRunResult;
+}
+
 export interface CommandRunObserver {
   onEvent?: (event: CommandRunEvent) => void;
+  /** 后台进程自然退出后的单次终态回调；不消费后台日志。 */
+  onBackgroundExit?: (event: CommandBackgroundExitEvent) => void;
 }
 
 export interface CommandRunArgs {

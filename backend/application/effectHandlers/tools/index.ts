@@ -38,7 +38,7 @@ export function registerToolEffectHandlers(registry: EffectHandlerRegistry): voi
     controllers.set(effect.toolCallId, controller);
 
     tool
-      .execute(args, { fs: env.fs, command: env.command, workEnvironment: env.workEnvironment, storage: env.storage, skills: env.skills }, { toolCallId: effect.toolCallId, runId: effect.runId, conversationId: effect.conversationId, config: effect.config, settingsSnapshot: effect.settingsSnapshot, workEnvironment: effect.workEnvironment, workEnvironments: effect.workEnvironments, accessibleWorkEnvironments: effect.accessibleWorkEnvironments, signal: controller.signal, emit: emitRuntimeEvent })
+      .execute(args, { fs: env.fs, command: env.command, workEnvironment: env.workEnvironment, storage: env.storage, skills: env.skills }, { toolCallId: effect.toolCallId, runId: effect.runId, conversationId: effect.conversationId, config: effect.config, settingsSnapshot: effect.settingsSnapshot, workEnvironment: effect.workEnvironment, workEnvironments: effect.workEnvironments, accessibleWorkEnvironments: effect.accessibleWorkEnvironments, signal: controller.signal, emit: emitRuntimeEvent, emitWorldEvent: emit })
       .then((result) => emitToolState(emit, toToolStatePayload(effect.toolCallId, result, Date.now() - startedAt)))
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);

@@ -48,7 +48,8 @@ import {
   ToolCallRunLink
 } from '../../agentRun/components';
 import { AgentRunEventType } from '../../agentRun/events';
-import { AgentRunBundle, spawnAgentRun, spawnMessageRunLink } from '../../agentRun/bundles';
+import { AgentRunBundle, spawnAgentRun } from '../../agentRun/bundles';
+import { spawnAgentRunNotification } from '../../agentRun/notificationDelivery';
 import {
   activeToolPolicyForRun,
   answerBridgeIdForConversation,
@@ -938,36 +939,15 @@ function notifyAgentAnswerSubmitted(
 
   const parentTarget = input.source?.sourceRun !== undefined ? runTarget(world, input.source.sourceRun) : undefined;
   const agent = input.source?.sourceAgent ?? parentTarget?.agent ?? defaultAgentForConversation(world, sourceConversation);
-  const text = serializedSubmittedAgentAnswerNotification(world, input);
-  if (agent === undefined) {
-    const message = spawnUserMessage(cmd, sourceConversation, text);
-    spawnMessageRunLink(cmd, { message, run: input.submitterRun, role: 'notification' });
-    return;
-  }
-
-  // 后台 answer 回流不能在主对话普通排队：主对话仍在响应时，创建瞬时 hold 的通知 Run，
-  // 再复用 Promote 先中断当前 Run、后物化 answer 通知，语义与队列“强制发送”一致。
-  const sourceConversationData = world.get(sourceConversation, Conversation);
-  const forcePromoteNotification = !!sourceConversationData && conversationHasActiveRun(world, sourceConversation);
-  const notificationRun = spawnAgentRun(cmd, {
-    kind: 'notification',
-    agent,
+  spawnAgentRunNotification(world, cmd, {
     conversation: sourceConversation,
+    ...(agent !== undefined ? { agent } : {}),
+    text: serializedSubmittedAgentAnswerNotification(world, input),
     sourceKind: 'agentRun',
     sourceRun: input.submitterRun,
     sourceConversation,
-    deliveryMode: 'direct_reply',
-    includeTranscript: 'full',
-    needsModel: false,
-    queuedInputContent: { role: 'user', parts: [{ text }] },
-    ...(forcePromoteNotification ? { queueHoldReason: 'manual' as const } : {})
+    promoteIfActive: true
   });
-  if (forcePromoteNotification) {
-    cmd.enqueue({
-      type: AgentRunEventType.Promote,
-      payload: { runId: `run${notificationRun}`, conversationId: sourceConversationData.id }
-    });
-  }
 }
 
 function completeSourceRunAgentToolWithSubmittedAnswer(

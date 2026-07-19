@@ -215,11 +215,11 @@ function detectCommandProfile(): CommandProfile {
       kind: 'powershell',
       toolName: 'shell',
       commandPrefix: PS_UTF8_PREFIX,
-      description: `在项目目录下通过 PowerShell 执行非交互命令(mode=execute)。返回 stdout、stderr 和退出码。
-前台等待行为：foregroundWaitMs 是工具响应的前台等待预算，不是命令超时/终止时间。命令在 foregroundWaitMs 毫秒内未结束时不会被终止，而是转入后台继续运行并返回 processId；foregroundWaitMs=0 表示启动后立即转后台。随后可用 mode=output 查看当前全部输出、mode=kill 终止。后台进程结束后日志会一直保留，直到你用 mode=output 读取一次(读取即清理)。
-安全拦截：内置仅拦截格式化磁盘/文件系统和直接删除根目录；其他命令可通过工具策略中的命令黑名单控制。
-命令规范：多条命令用分号 ; 分隔；路径含空格时用双引号；长输出建议加 | Select-Object -First N。
-编码规范：工具默认把 PowerShell 输入/输出设为 UTF-8；如读取非 UTF-8 文件，请在命令中显式指定 -Encoding。`
+      description: `Run a non-interactive PowerShell command in the project workspace. Returns stdout, stderr, and exitCode.
+Foreground wait behavior: foregroundWaitMs is the tool-response wait budget, not a command timeout. If the command is still running after foregroundWaitMs, it is moved to the background and the tool returns a generated processId; foregroundWaitMs=0 backgrounds immediately. Use mode=output with that processId to read accumulated output, or mode=kill to terminate it. When a background process exits naturally, the current Agent is notified automatically; logs are still retained until mode=output consumes them once.
+Safety: built-in protection only blocks disk/filesystem formatting and direct root deletion; additional commands can be denied by the tool policy deny list.
+Command syntax: separate multiple commands with semicolons ; quote paths that contain spaces; for long output, prefer piping to Select-Object -First N.
+Encoding: the tool configures PowerShell input/output as UTF-8 by default. When reading non-UTF-8 files, specify the encoding explicitly in the command.`
     };
   }
 
@@ -227,10 +227,10 @@ function detectCommandProfile(): CommandProfile {
     kind: 'bash',
     toolName: 'bash',
     executable: process.env.SHELL || '/bin/bash',
-    description: `在项目目录下通过 Bash/Shell 执行非交互命令(mode=execute)。返回 stdout、stderr 和退出码。
-前台等待行为：foregroundWaitMs 是工具响应的前台等待预算，不是命令超时/终止时间。命令在 foregroundWaitMs 毫秒内未结束时不会被终止，而是转入后台继续运行并返回 processId；foregroundWaitMs=0 表示启动后立即转后台。随后可用 mode=output 查看当前全部输出、mode=kill 终止。后台进程结束后日志会一直保留，直到你用 mode=output 读取一次(读取即清理)。
-安全拦截：内置仅拦截格式化磁盘/文件系统和直接删除根目录；其他命令可通过工具策略中的命令黑名单控制。
-命令规范：多条命令建议用 && 连接；路径含空格时用双引号；长输出建议加 | head -n N。`
+    description: `Run a non-interactive Bash/Shell command in the project workspace. Returns stdout, stderr, and exitCode.
+Foreground wait behavior: foregroundWaitMs is the tool-response wait budget, not a command timeout. If the command is still running after foregroundWaitMs, it is moved to the background and the tool returns a generated processId; foregroundWaitMs=0 backgrounds immediately. Use mode=output with that processId to read accumulated output, or mode=kill to terminate it. When a background process exits naturally, the current Agent is notified automatically; logs are still retained until mode=output consumes them once.
+Safety: built-in protection only blocks disk/filesystem formatting and direct root deletion; additional commands can be denied by the tool policy deny list.
+Command syntax: prefer joining multiple commands with &&; quote paths that contain spaces; for long output, prefer piping to head -n N.`
   };
 }
 
@@ -283,6 +283,7 @@ function executeCommand(profile: CommandProfile, registry: Map<string, Backgroun
     const startedAt = Date.now();
     let settled = false;
     let backgrounded = false;
+    let backgroundExitNotified = false;
     let handle: BackgroundProcessHandle | undefined;
 
     const child = spawn(commandExecutable(profile), commandArgs(profile, wrappedCommand), {
@@ -350,12 +351,23 @@ function executeCommand(profile: CommandProfile, registry: Map<string, Backgroun
       });
     };
 
+    const notifyBackgroundExit = (current: BackgroundProcessHandle): void => {
+      if (backgroundExitNotified || current.status === 'killed') return;
+      backgroundExitNotified = true;
+      try {
+        observer?.onBackgroundExit?.({ kind: 'background.exit', result: resultFromHandle(current, limits) });
+      } catch (error) {
+        console.warn('[LimCode] Command background exit observer failed:', error);
+      }
+    };
+
     const finalizeBackground = (exitCode: number): void => {
       if (!handle) return;
       handle.exitCode = exitCode;
       handle.exitedAt = Date.now();
       if (handle.status !== 'killed') handle.status = 'exited';
       persistHandle(handle, pathsProvider);
+      notifyBackgroundExit(handle);
     };
 
     child.stdout?.setEncoding('utf8');

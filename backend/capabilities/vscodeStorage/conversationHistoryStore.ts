@@ -1,3 +1,5 @@
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type {
   ConversationHistoryPageRecord,
@@ -49,6 +51,8 @@ interface ConversationHistoryPageFile {
 interface ConversationHistoryScopeProjection {
   entries: SidebarConversationHistoryEntry[];
   originLinks: ConversationOriginLinkRecord[];
+  /** 旧格式数据将被整体重写时为 true：清理页文件会删除仍可人工恢复的旧数据，本次写入应跳过清理。 */
+  supersededLegacy?: boolean;
 }
 
 interface ScopeFile {
@@ -78,12 +82,9 @@ export async function loadConversationHistoryPageFromStore(
   const page = pageRecord
     ? await readJson<ConversationHistoryPageFile>(vscode.Uri.joinPath(root, ...pageRecord.file.split('/')))
     : undefined;
-  const validPage = page?.schemaVersion === STORAGE_VERSION
-    && sameScope(page.scope, request.scope)
-    && Array.isArray(page.entries)
-    && Array.isArray(page.originLinks);
+  const validPage = isValidPageFile(page, request.scope);
   const entries = validPage ? page.entries : [];
-  const originLinks = validPage ? page.originLinks : [];
+  const originLinks = validPage ? page.originLinks ?? [] : [];
 
   return {
     scope: request.scope,
@@ -107,20 +108,26 @@ export async function upsertConversationHistoryEntryInStore(
   entry: SidebarConversationHistoryEntry,
   originLink?: ConversationOriginLinkRecord
 ): Promise<void> {
-  const scoped = entry.projectFolderUri
-    ? { kind: 'project' as const, folderUri: entry.projectFolderUri }
-    : { kind: 'unbound' as const };
-  const targetScopes: ConversationHistoryScope[] = [{ kind: 'all' }, scoped];
-  await Promise.all(targetScopes.map((scope) => upsertIntoScope(paths, scope, entry, originLink)));
-  await removeFromStaleScopes(paths, entry.id, targetScopes);
+  // 每个 scope 的投影都是“全量读 → 改 → 全量写”，且条目会跨 scope 迁移（removeFromStaleScopes），
+  // 因此整个复合操作必须串行，否则并发 upsert（如同时创建多个子 Agent 会话）会互相覆盖丢条目。
+  return withHistoryMutationLock(paths, async () => {
+    const scoped = entry.projectFolderUri
+      ? { kind: 'project' as const, folderUri: entry.projectFolderUri }
+      : { kind: 'unbound' as const };
+    const targetScopes: ConversationHistoryScope[] = [{ kind: 'all' }, scoped];
+    await Promise.all(targetScopes.map((scope) => upsertIntoScope(paths, scope, entry, originLink)));
+    await removeFromStaleScopes(paths, entry.id, targetScopes);
+  });
 }
 
 export async function removeConversationHistoryEntryFromStore(
   paths: StoragePaths,
   conversationId: string
 ): Promise<void> {
-  const scopes = await existingScopes(paths);
-  await Promise.all(scopes.map((scope) => removeFromScope(paths, scope, conversationId)));
+  return withHistoryMutationLock(paths, async () => {
+    const scopes = await existingScopes(paths);
+    await Promise.all(scopes.map((scope) => removeFromScope(paths, scope, conversationId)));
+  });
 }
 
 async function upsertIntoScope(
@@ -129,7 +136,7 @@ async function upsertIntoScope(
   entry: SidebarConversationHistoryEntry,
   originLink?: ConversationOriginLinkRecord
 ): Promise<void> {
-  const projection = await loadScopeProjection(paths, scope);
+  const projection = await loadScopeProjection(paths, scope, { strict: true });
   const index = projection.entries.findIndex((candidate) => candidate.id === entry.id);
   const nextEntry = { ...entry };
   if (index >= 0) projection.entries[index] = nextEntry;
@@ -145,7 +152,7 @@ async function removeFromScope(
   scope: ConversationHistoryScope,
   conversationId: string
 ): Promise<void> {
-  const projection = await loadScopeProjection(paths, scope);
+  const projection = await loadScopeProjection(paths, scope, { strict: true });
   const entries = projection.entries.filter((entry) => entry.id !== conversationId);
   const originLinks = projection.originLinks.filter((link) => link.conversationId !== conversationId);
   if (entries.length === projection.entries.length && originLinks.length === projection.originLinks.length) return;
@@ -164,29 +171,50 @@ async function removeFromStaleScopes(
 
 async function loadScopeProjection(
   paths: StoragePaths,
-  scope: ConversationHistoryScope
+  scope: ConversationHistoryScope,
+  options: { strict?: boolean } = {}
 ): Promise<ConversationHistoryScopeProjection> {
   const root = scopeRoot(paths, scope);
-  const index = await readJson<ConversationHistoryScopeIndexFile>(vscode.Uri.joinPath(root, INDEX_FILE));
-  if (!index || index.schemaVersion !== STORAGE_VERSION || !sameScope(index.scope, scope) || !Array.isArray(index.pages)) {
+  const indexUri = vscode.Uri.joinPath(root, INDEX_FILE);
+  const index = await readJson<ConversationHistoryScopeIndexFile>(indexUri, { throwOnError: options.strict });
+  // 文件不存在（新 scope）或旧版本格式（既有行为：下次写入时整体重写为新格式）都视为空投影。
+  if (!index) {
+    return { entries: [], originLinks: [] };
+  }
+  if (index.schemaVersion !== STORAGE_VERSION) {
+    return { entries: [], originLinks: [], supersededLegacy: true };
+  }
+  if (!sameScope(index.scope, scope) || !Array.isArray(index.pages)) {
+    // 当前版本但结构损坏：写路径必须中止，绝不能基于残缺投影回写并抹掉磁盘上完好的数据。
+    if (options.strict) throw new Error(`Conversation history index is invalid: ${indexUri.fsPath}`);
     return { entries: [], originLinks: [] };
   }
 
   const entries: SidebarConversationHistoryEntry[] = [];
   const originLinks: ConversationOriginLinkRecord[] = [];
   for (const page of index.pages) {
-    const file = await readJson<ConversationHistoryPageFile>(vscode.Uri.joinPath(root, ...page.file.split('/')));
-    if (
-      file?.schemaVersion === STORAGE_VERSION
-      && sameScope(file.scope, scope)
-      && Array.isArray(file.entries)
-      && Array.isArray(file.originLinks)
-    ) {
+    const fileUri = vscode.Uri.joinPath(root, ...page.file.split('/'));
+    const file = await readJson<ConversationHistoryPageFile>(fileUri, { throwOnError: options.strict });
+    if (isValidPageFile(file, scope)) {
       entries.push(...file.entries);
-      originLinks.push(...file.originLinks);
+      originLinks.push(...file.originLinks ?? []);
+    } else if (options.strict) {
+      throw new Error(`Indexed conversation history page is missing or invalid: ${fileUri.fsPath}`);
     }
   }
   return { entries, originLinks };
+}
+
+// 同 schemaVersion 内的旧页文件可能没有 originLinks 字段（后加的），按空链接处理而非判为损坏；
+// 下次重写时会被补回，数据自愈。
+function isValidPageFile(
+  file: ConversationHistoryPageFile | undefined,
+  scope: ConversationHistoryScope
+): file is ConversationHistoryPageFile {
+  return file?.schemaVersion === STORAGE_VERSION
+    && sameScope(file.scope, scope)
+    && Array.isArray(file.entries)
+    && (file.originLinks === undefined || Array.isArray(file.originLinks));
 }
 
 async function writeScopeProjection(
@@ -244,6 +272,39 @@ async function writeScopeProjection(
     total: entries.length,
     pages
   } satisfies ConversationHistoryScopeIndexFile);
+
+  // 先发布新索引，再清理不再被引用的旧页文件；读取者只会看到“旧索引 + 完整旧页”或“新索引 + 完整新页”。
+  // 旧格式数据被整体重写时跳过清理：未被同名覆盖的旧页仍可用于人工恢复。
+  if (!projection.supersededLegacy) {
+    const referencedFiles = new Set(pages.map((page) => page.file));
+    const existingPages = await listPageFiles(root);
+    await Promise.all(existingPages
+      .filter((file) => !referencedFiles.has(file))
+      .map((file) => deletePageFile(root, file)));
+  }
+}
+
+async function listPageFiles(root: vscode.Uri): Promise<string[]> {
+  const pagesRoot = vscode.Uri.joinPath(root, PAGES_DIR);
+  try {
+    const entries = await vscode.workspace.fs.readDirectory(pagesRoot);
+    return entries
+      .filter(([, type]) => type === vscode.FileType.File)
+      .map(([name]) => `${PAGES_DIR}/${name}`)
+      .filter((file) => file.toLowerCase().endsWith('.json'))
+      .sort();
+  } catch (error) {
+    if (isFileNotFound(error)) return [];
+    throw error;
+  }
+}
+
+async function deletePageFile(root: vscode.Uri, file: string): Promise<void> {
+  try {
+    await vscode.workspace.fs.delete(vscode.Uri.joinPath(root, ...file.split('/')));
+  } catch (error) {
+    if (!isFileNotFound(error)) console.warn(`[LimCode] Failed to prune conversation history page: ${file}`, error);
+  }
 }
 
 async function existingScopes(paths: StoragePaths): Promise<ConversationHistoryScope[]> {
@@ -324,6 +385,111 @@ function shortHash(value: string): string {
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(36).padStart(7, '0');
+}
+
+// 与 recordStore.ts 相同的二级变更锁：进程内 promise 队列 + 跨进程 lockfile。
+// all scope 被所有 VS Code 窗口共享，多窗口同时写同一 globalStorage 时也需要互斥。
+const HISTORY_LOCK_STALE_MS = 30 * 60_000;
+const HISTORY_LOCK_WAIT_MS = 5 * 60_000;
+const HISTORY_LOCK_FILE = 'mutation.lock';
+const historyMutationQueues = new Map<string, Promise<void>>();
+
+async function withHistoryMutationLock<T>(paths: StoragePaths, action: () => Promise<T>): Promise<T> {
+  // 注意：action 内不得再次调用本模块的公开写入口（upsert/removeConversationHistoryEntry…），否则会等待自己的 turn 造成自死锁。
+  const key = paths.conversationHistoryRootUri.toString(true);
+  const previous = historyMutationQueues.get(key) ?? Promise.resolve();
+  let releaseTurn!: () => void;
+  const turn = new Promise<void>((resolve) => { releaseTurn = resolve; });
+  const queue = previous.catch(() => undefined).then(() => turn);
+  historyMutationQueues.set(key, queue);
+
+  await previous.catch(() => undefined);
+  try {
+    return await withCrossProcessHistoryLock(paths.conversationHistoryRootUri, action);
+  } finally {
+    releaseTurn();
+    if (historyMutationQueues.get(key) === queue) historyMutationQueues.delete(key);
+  }
+}
+
+async function withCrossProcessHistoryLock<T>(rootUri: vscode.Uri, action: () => Promise<T>): Promise<T> {
+  if (rootUri.scheme !== 'file') return action();
+
+  const lockPath = path.join(rootUri.fsPath, HISTORY_LOCK_FILE);
+  await fs.mkdir(path.dirname(lockPath), { recursive: true });
+  const deadline = Date.now() + HISTORY_LOCK_WAIT_MS;
+  let handle: fs.FileHandle | undefined;
+
+  while (!handle) {
+    try {
+      const candidate = await fs.open(lockPath, 'wx');
+      try {
+        await candidate.writeFile(JSON.stringify({ pid: process.pid, createdAt: Date.now() }), 'utf8');
+        handle = candidate;
+      } catch (error) {
+        await candidate.close().catch(() => undefined);
+        await fs.rm(lockPath, { force: true }).catch(() => undefined);
+        throw error;
+      }
+    } catch (error) {
+      if (!isAlreadyExistsError(error)) throw error;
+      if (await removeStaleHistoryLock(lockPath)) continue;
+      if (Date.now() >= deadline) throw new Error(`Timed out waiting for conversation history lock: ${rootUri.fsPath}`);
+      await delay(25);
+    }
+  }
+
+  try {
+    return await action();
+  } finally {
+    await handle.close().catch(() => undefined);
+    await fs.rm(lockPath, { force: true }).catch(() => undefined);
+  }
+}
+
+async function removeStaleHistoryLock(lockPath: string): Promise<boolean> {
+  try {
+    const [raw, stat] = await Promise.all([
+      fs.readFile(lockPath, 'utf8').catch(() => ''),
+      fs.stat(lockPath)
+    ]);
+    const metadata = parseHistoryLockMetadata(raw);
+    const pid = typeof metadata?.pid === 'number' && Number.isInteger(metadata.pid) ? metadata.pid : undefined;
+    if (pid !== undefined && processIsAlive(pid)) return false;
+    const createdAt = typeof metadata?.createdAt === 'number' && Number.isFinite(metadata.createdAt) ? metadata.createdAt : stat.mtimeMs;
+    if (Date.now() - createdAt < HISTORY_LOCK_STALE_MS && pid === undefined) return false;
+    await fs.rm(lockPath, { force: true });
+    return true;
+  } catch (error) {
+    if (isFileNotFound(error)) return true;
+    return false;
+  }
+}
+
+function parseHistoryLockMetadata(raw: string): { pid?: unknown; createdAt?: unknown } | undefined {
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw) as { pid?: unknown; createdAt?: unknown };
+  } catch {
+    return undefined;
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as { code?: unknown }).code === 'EPERM';
+  }
+}
+
+function isAlreadyExistsError(error: unknown): boolean {
+  return (error as { code?: unknown }).code === 'EEXIST';
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 interface FileSystemLikeError {

@@ -71,6 +71,7 @@
     "build": "npm run compile && npm run build:webview",
     "typecheck:webview": "vue-tsc -p tsconfig.webview.json --noEmit",
     "test:conversation-history": "npm run compile && node --test tests/conversationHistoryTree.test.cjs",
+    "test:conversation-history-store": "npm run compile && node --test tests/conversationHistoryStoreConcurrency.test.cjs",
     "test:ask-user": "npm run compile && node --test tests/askUserTool.test.cjs",
     "test:agent-answer-response": "npm run compile && node --test tests/agentAnswerResponse.test.cjs",
     "test:plan-review-attention": "npm run compile && node --test tests/planReviewAttention.test.cjs",

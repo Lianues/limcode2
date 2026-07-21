@@ -472,7 +472,8 @@ export class BackendApplication {
     });
 
     upsertDefaultWorkflowSelection(this.world, conversation, normalizedConversationId);
-    void this.upsertConversationHistoryEntry(normalizedConversationId);
+    void this.upsertConversationHistoryEntry(normalizedConversationId)
+      .catch((error) => console.warn('[LimCode] Failed to persist conversation history entry.', error));
     this.requestSnapshot();
     this.requestSnapshot(normalizedConversationId);
     this.persistence.queuePersist();
@@ -486,7 +487,8 @@ export class BackendApplication {
     if (!conversation) return false;
 
     this.world.add(entity, Conversation, { ...conversation, title: normalizeConversationTitle(title) });
-    void this.upsertConversationHistoryEntry(conversationId);
+    void this.upsertConversationHistoryEntry(conversationId)
+      .catch((error) => console.warn('[LimCode] Failed to persist conversation history entry.', error));
     this.requestSnapshot();
     this.requestSnapshot(conversationId);
     return true;
@@ -565,7 +567,8 @@ export class BackendApplication {
       uri,
       name: input.name ?? candidate?.name ?? projectFolderNameFromUri(uri)
     });
-    void this.upsertConversationHistoryEntry(input.conversationId);
+    void this.upsertConversationHistoryEntry(input.conversationId)
+      .catch((error) => console.warn('[LimCode] Failed to persist conversation history entry.', error));
     this.requestSnapshot();
     this.requestSnapshot(input.conversationId);
     return true;

@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import * as unifiedLlmProvider from 'unified-llm-provider';
 import { createProxyFetch } from './proxyFetch';
 import { LlmEventType } from '../world/modules/llm/events';
 import type {
@@ -2113,8 +2114,7 @@ async function resolveMaybe<T, TArg = void>(value: MaybeProvider<T, TArg>, arg?:
 }
 
 async function importUnifiedLlmProvider(): Promise<UnifiedModule> {
-  const dynamicImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<UnifiedModule>;
-  return dynamicImport('unified-llm-provider');
+  return unifiedLlmProvider;
 }
 function createAbortError(message: string): Error {
   const error = new Error(message);

@@ -13,12 +13,24 @@ scripts/**
 docs/**
 milestone/**
 remote-exec/**
+node_modules/**
+tests/**
+coverage/**
+.nyc_output/**
+*.vsix
 tsconfig*.json
 vite.config.ts
 *.map
+**/*.map
 .gitignore
 AGENTS.md
 README copy.md
-!dist/**
+dist/extension/backend/**
+dist/extension/shared/**
+dist/extension/vscode/commands/**
+dist/extension/vscode/panels/**
+dist/extension/vscode/views/**
+dist/extension/vscode/webview/**
+dist/extension/vscode/*.map
 !package.json
 !README.md

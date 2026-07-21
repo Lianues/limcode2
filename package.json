@@ -63,7 +63,8 @@
   },
   "scripts": {
     "clean:extension": "node -e \"require('fs').rmSync('dist/extension',{recursive:true,force:true})\"",
-    "compile": "npm run clean:extension && tsc -p tsconfig.json",
+    "bundle:extension": "node scripts/build-extension.mjs",
+    "compile": "npm run clean:extension && tsc -p tsconfig.json && npm run bundle:extension",
     "watch": "tsc -watch -p tsconfig.json",
     "build:webview": "vite build",
     "dev:webview": "vite --host 127.0.0.1 --port 31819 --strictPort",
@@ -86,6 +87,7 @@
     "@types/vscode": "^1.89.0",
     "@vitejs/plugin-vue": "^5.0.5",
     "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.21.5",
     "katex": "^0.17.0",
     "markdown-it": "^14.2.0",
     "markdown-it-texmath": "^1.0.0",

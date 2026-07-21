@@ -1,4 +1,5 @@
 import type { CommandSink, Entity, WorldReader } from '../../../ecs/types';
+import { createStableId } from '../../../utils/stableId';
 import { createMessageId, type MessageContent } from '../../../../shared/protocol';
 import { spawnCheckpointBarrier } from '../checkpoint/barriers';
 import { Checkpoint } from '../checkpoint/components';
@@ -16,15 +17,16 @@ export function materializeUserInputMessage(
 ): Entity {
   const isFirstMessage = conversationMessages(world, conversation).length === 0;
   const needsInitialCheckpoint = isFirstMessage && !hasInitialCheckpoint(world, conversation);
-  const message = spawnInputMessage(cmd, conversation, content);
+  const messageId = createStableId('msg');
+  const message = spawnInputMessage(cmd, conversation, content, messageId);
   if (needsInitialCheckpoint) requestInitialCheckpoint(cmd, conversationId);
-  requestUserMessageCheckpoints(cmd, conversationId, conversation, message);
+  requestUserMessageCheckpoints(cmd, conversationId, conversation, message, messageId);
   return message;
 }
 
-export function spawnInputMessage(cmd: CommandSink, conversation: Entity, content: MessageContent): Entity {
-  if (content.parts.length === 1 && 'text' in content.parts[0]) return spawnUserMessage(cmd, conversation, content.parts[0].text);
-  return spawnUserContentMessage(cmd, conversation, content);
+export function spawnInputMessage(cmd: CommandSink, conversation: Entity, content: MessageContent, messageId?: string): Entity {
+  if (content.parts.length === 1 && 'text' in content.parts[0]) return spawnUserMessage(cmd, conversation, content.parts[0].text, messageId);
+  return spawnUserContentMessage(cmd, conversation, content, messageId);
 }
 
 function hasInitialCheckpoint(world: WorldReader, conversation: Entity): boolean {
@@ -41,8 +43,7 @@ function requestInitialCheckpoint(cmd: CommandSink, conversationId: string): voi
   });
 }
 
-function requestUserMessageCheckpoints(cmd: CommandSink, conversationId: string, conversation: Entity, floorMessage: Entity): void {
-  const floorMessageId = `m${floorMessage}`;
+function requestUserMessageCheckpoints(cmd: CommandSink, conversationId: string, conversation: Entity, floorMessage: Entity, floorMessageId: string): void {
   const beforeCheckpointId = createMessageId();
   spawnCheckpointBarrier(cmd, {
     checkpointId: beforeCheckpointId,

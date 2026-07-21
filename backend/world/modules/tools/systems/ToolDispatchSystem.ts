@@ -1,4 +1,5 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
+import { createStableId } from '../../../../utils/stableId';
 import { readEvents } from '../../../events';
 import { Agent, AgentConversationLink, AgentKind, type AgentData } from '../../agent/components';
 import { agentSelectorSlug, isTemporaryAgentEntity } from '../../agent/identity';
@@ -1561,7 +1562,7 @@ function availableAgentTypes(world: WorldReader, blueprints: BuiltinAgentRegistr
 
 function createRunAgentAgentId(world: WorldReader, kind: string): string {
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    const id = `agent-${agentSelectorSlug(kind)}-${createMessageId()}`;
+    const id = `agent-${agentSelectorSlug(kind)}-${createStableId('mirror')}`;
     if (findAgentById(world, id) === undefined) return id;
   }
   return `agent-${agentSelectorSlug(kind)}-${Date.now().toString(36)}`;
@@ -1755,7 +1756,7 @@ function launchChildAgentRun(
   }
 
   const reusedAnswerBridgeId = requestedAnswerBridgeId || answerBridgeIdForConversation(world, resolved.value.conversation);
-  const answerBridgeId = reusedAnswerBridgeId ?? `agent-answer:${createMessageId()}`;
+  const answerBridgeId = reusedAnswerBridgeId ?? createStableId('agent-answer');
   const promptWithAnswerBridge = `${input.prompt}\n\n[Agent answer bridge]\n本次任务已${reusedAnswerBridgeId ? '沿用' : '分配'}默认 answerBridgeId：${answerBridgeId}。当你需要把阶段性结论或最终正文提交给来源 Agent 时，请调用 submit_agent_answer({ title, content })，未传 answerBridgeId 时会自动使用这个 answerBridgeId；即使本次 AgentRun 中断、重试或用户补充条件，只要继续在同一子对话中执行，默认值也应保持为这个 answerBridgeId；如果用户要求提交到其它 answerBridgeId，可显式传 submit_agent_answer({ answerBridgeId, title, content })。同一个 answerBridgeId 可以重复提交，每次提交都会通知来源 Agent。最终自然语言回复可以保持简短。`;
   const forcePromoteContinuation = !!reusedAnswerBridgeId && conversationHasActiveRun(world, resolved.value.conversation);
   const queuedInputContent: MessageContent = { role: 'user', parts: [{ text: promptWithAnswerBridge }] };
@@ -1770,7 +1771,9 @@ function launchChildAgentRun(
   };
   const deliveryMode = baseDeliveryPolicy.mode;
   const includeTranscript = baseDeliveryPolicy.includeTranscript;
+  const childRunId = createStableId('run');
   const childRun = spawnAgentRun(cmd, {
+    id: childRunId,
     kind: input.runKind,
     agent: targetAgent,
     conversation: resolved.value.conversation,
@@ -1795,7 +1798,6 @@ function launchChildAgentRun(
   applyRunDeliveryPolicy(cmd, childRun, baseDeliveryPolicy);
   applyRunEditPolicy(cmd, childRun, policyDefaults.editPolicy);
 
-  const childRunId = `run${childRun}`;
   if (forcePromoteContinuation) {
     // 与队列面板的“中断当前请求并发送队列”保持同一语义：续发内容先保持为
     // 暂停且未物化的排队输入，由 Promote 终止旧 Run、解除瞬时 hold 后再插入消息并启动新 Run。
@@ -1858,7 +1860,7 @@ function resolveRunAgentConversation(
     }
   }
 
-  const conversationId = `conversation-${slug(input.targetAgentId)}-${input.toolCallEntity}`;
+  const conversationId = createStableId(`conversation-${slug(input.targetAgentId)}`);
   const conversation = spawnConversation(cmd, {
     id: conversationId,
     title: `${input.kind}: ${input.prompt.slice(0, 40)}`,
@@ -1910,7 +1912,7 @@ function inheritPrimaryProjectFromSourceConversation(world: WorldReader, cmd: Co
   const now = Date.now();
   const entity = cmd.spawn();
   cmd.add(entity, ConversationProjectLink, {
-    id: `cpl-${entity}`,
+    id: createStableId('cpl'),
     conversation: targetConversation,
     projectContext: sourceLink.projectContext,
     role: 'primary',
@@ -1935,7 +1937,7 @@ function slug(value: string): string {
 function applyRunConversationPolicy(cmd: CommandSink, run: Entity, resolved: ResolvedConversation): void {
   const policy = cmd.spawn();
   cmd.add(policy, RunConversationPolicy, {
-    id: `run-conversation-policy:${run}`,
+    id: createStableId('run-conversation-policy'),
     mode: resolved.policyMode,
     conversationId: resolved.explicitConversationId,
     reuseKey: resolved.reuseKey,
@@ -1944,34 +1946,34 @@ function applyRunConversationPolicy(cmd: CommandSink, run: Entity, resolved: Res
   });
   const link = cmd.spawn();
   const now = Date.now();
-  cmd.add(link, RunConversationPolicyLink, { id: `run-conversation-policy-link:${run}`, run, policy, role: 'active', createdAt: now, updatedAt: now });
+  cmd.add(link, RunConversationPolicyLink, { id: createStableId('run-conversation-policy-link'), run, policy, role: 'active', createdAt: now, updatedAt: now });
 }
 
 function applyRunContextPolicy(cmd: CommandSink, run: Entity, contextPolicy: RunContextPolicyBlueprint): void {
   const policy = cmd.spawn();
   cmd.add(policy, RunContextPolicy, {
-    id: `run-context-policy:${run}`,
+    id: createStableId('run-context-policy'),
     ...contextPolicy
   });
   const link = cmd.spawn();
   const now = Date.now();
-  cmd.add(link, RunContextPolicyLink, { id: `run-context-policy-link:${run}`, run, policy, role: 'active', createdAt: now, updatedAt: now });
+  cmd.add(link, RunContextPolicyLink, { id: createStableId('run-context-policy-link'), run, policy, role: 'active', createdAt: now, updatedAt: now });
 }
 
 function applyRunDeliveryPolicy(cmd: CommandSink, run: Entity, deliveryPolicy: RunDeliveryPolicyBlueprint): void {
   const policy = cmd.spawn();
-  cmd.add(policy, RunDeliveryPolicy, { id: `run-delivery-policy:${run}`, ...deliveryPolicy });
+  cmd.add(policy, RunDeliveryPolicy, { id: createStableId('run-delivery-policy'), ...deliveryPolicy });
   const link = cmd.spawn();
   const now = Date.now();
-  cmd.add(link, RunDeliveryPolicyLink, { id: `run-delivery-policy-link:${run}`, run, policy, role: 'active', createdAt: now, updatedAt: now });
+  cmd.add(link, RunDeliveryPolicyLink, { id: createStableId('run-delivery-policy-link'), run, policy, role: 'active', createdAt: now, updatedAt: now });
 }
 
 function applyRunEditPolicy(cmd: CommandSink, run: Entity, editPolicy: RunEditPolicyBlueprint): void {
   const policy = cmd.spawn();
-  cmd.add(policy, RunEditPolicy, { id: `run-edit-policy:${run}`, ...editPolicy });
+  cmd.add(policy, RunEditPolicy, { id: createStableId('run-edit-policy'), ...editPolicy });
   const link = cmd.spawn();
   const now = Date.now();
-  cmd.add(link, RunEditPolicyLink, { id: `run-edit-policy-link:${run}`, run, policy, role: 'active', createdAt: now, updatedAt: now });
+  cmd.add(link, RunEditPolicyLink, { id: createStableId('run-edit-policy-link'), run, policy, role: 'active', createdAt: now, updatedAt: now });
 }
 
 function dispatchApprovedAwaitingCalls(world: WorldReader, cmd: CommandSink, handled: Set<Entity>): void {
@@ -2073,7 +2075,9 @@ function markExecutionApproved(
 }
 
 function findAgentById(world: WorldReader, id: string): Entity | undefined {
-  return world.query(Agent).find((agent) => world.get(agent, Agent)?.id === id);
+  const matches = world.query(Agent).filter((agent) => world.get(agent, Agent)?.id === id);
+  if (matches.length > 1) throw new Error(`Duplicate Agent id: ${id}`);
+  return matches[0];
 }
 
 function findAgentByKind(world: WorldReader, kind: string): Entity | undefined {
@@ -2081,7 +2085,9 @@ function findAgentByKind(world: WorldReader, kind: string): Entity | undefined {
 }
 
 function findAgentRunById(world: WorldReader, id: string): Entity | undefined {
-  return world.query(AgentRun).find((run) => world.get(run, AgentRun)?.id === id);
+  const matches = world.query(AgentRun).filter((run) => world.get(run, AgentRun)?.id === id);
+  if (matches.length > 1) throw new Error(`Duplicate AgentRun id: ${id}`);
+  return matches[0];
 }
 
 function isAgentRunTool(world: WorldReader, toolName: string): boolean {

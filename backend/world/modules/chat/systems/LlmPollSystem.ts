@@ -181,7 +181,9 @@ function updateFor(updates: Map<string, PendingRequestUpdate>, requestId: string
 }
 
 function requestOf(world: WorldReader, requestId: string): Entity | undefined {
-  return world.query(LlmRequest).find((request) => world.get(request, LlmRequest)?.id === requestId);
+  const matches = world.query(LlmRequest).filter((request) => world.get(request, LlmRequest)?.id === requestId);
+  if (matches.length > 1) throw new Error(`Duplicate LlmRequest id: ${requestId}`);
+  return matches[0];
 }
 
 function maybeEnqueueAutoCompression(
@@ -291,11 +293,19 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
   if (request === undefined) return emptyApplyResult();
 
   const requestData = world.get(request, LlmRequest);
-  if (!requestData) return emptyApplyResult();
+  if (!requestData || requestData.id !== requestId) return emptyApplyResult();
 
   const modelMessage = requestData.modelMessage;
   const current = world.get(modelMessage, Message);
   if (!current) return emptyApplyResult();
+  const invocation = requestData.invocation !== undefined ? world.get(requestData.invocation, LlmInvocation) : undefined;
+  if (requestData.invocation !== undefined && (!invocation || invocation.requestId !== requestId)) return emptyApplyResult();
+  const run = world.get(requestData.run, AgentRun);
+  if (!run) return emptyApplyResult();
+  if (isTerminalPollRunStatus(run.status)) {
+    if (hasTerminalOperation(update)) cleanupCancelledRequest(world, cmd, request, modelMessage, current, requestData.invocation);
+    return { fastPatchBatches: [], requireFullSync: hasTerminalOperation(update) };
+  }
 
   if (isRunCancelledOrStale(world, requestData.run)) {
     if (hasTerminalOperation(update)) cleanupCancelledRequest(world, cmd, request, modelMessage, current, requestData.invocation);
@@ -303,7 +313,7 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
   }
 
   let next = current;
-  let nextInvocation = requestData.invocation !== undefined ? world.get(requestData.invocation, LlmInvocation) : undefined;
+  let nextInvocation = invocation;
   const existingFunctionCallIds = new Set(
     next.content.parts
       .filter(isFunctionCallPart)
@@ -368,18 +378,18 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
       case 'toolCall':
         sawToolCall = true;
         for (const rawCall of operation.payload.calls) {
-          const toolCallId = normalizeToolCallId(requestId, rawCall, spawnedOrSeenCallIds.size);
-          if (spawnedOrSeenCallIds.has(toolCallId)) continue;
-          spawnedOrSeenCallIds.add(toolCallId);
+          const functionCallId = normalizeFunctionCallId(requestId, rawCall, spawnedOrSeenCallIds.size);
+          if (spawnedOrSeenCallIds.has(functionCallId)) continue;
+          spawnedOrSeenCallIds.add(functionCallId);
 
-          if (!existingFunctionCallIds.has(toolCallId)) {
-            next = appendFunctionCallPart(next, { id: toolCallId, name: rawCall.name, argsJson: rawCall.argsJson, thoughtSignature: rawCall.thoughtSignature });
-            existingFunctionCallIds.add(toolCallId);
+          if (!existingFunctionCallIds.has(functionCallId)) {
+            next = appendFunctionCallPart(next, { id: functionCallId, name: rawCall.name, argsJson: rawCall.argsJson, thoughtSignature: rawCall.thoughtSignature });
+            existingFunctionCallIds.add(functionCallId);
             fastPatchSafe = false;
           }
 
-          if (!toolCallExists(world, toolCallId)) {
-            const toolCall = spawnToolCall(cmd, { modelMessage, id: toolCallId, name: rawCall.name, argsJson: rawCall.argsJson });
+          if (!toolCallExistsForFunctionCall(world, functionCallId)) {
+            const toolCall = spawnToolCall(cmd, { modelMessage, functionCallId, name: rawCall.name, argsJson: rawCall.argsJson });
             spawnToolCallRunLink(cmd, { toolCall, run: requestData.run });
           }
         }
@@ -427,7 +437,7 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
     cmd.remove(modelMessage, Streaming);
     cmd.despawn(request);
     const run = world.get(requestData.run, AgentRun);
-    if (run) {
+    if (run && !isTerminalPollRunStatus(run.status)) {
       const now = Date.now();
       const waitsForTool = sawToolCall || next.content.parts.some(isFunctionCallPart);
       const nextStatus = errorMessage ? 'failed' : waitsForTool ? 'waiting_tool' : 'delivering';
@@ -702,7 +712,7 @@ function appendTextToMessageWithPatch(message: MessageData, delta: string): { me
   };
 }
 
-function normalizeToolCallId(
+function normalizeFunctionCallId(
   requestId: string,
   call: { id?: string; name: string; argsJson: string; thoughtSignature?: string },
   fallbackIndex: number
@@ -710,8 +720,15 @@ function normalizeToolCallId(
   return call.id || `tool-${requestId}-${call.name}-${shortHash(call.argsJson)}-${fallbackIndex}`;
 }
 
-function toolCallExists(world: WorldReader, toolCallId: string): boolean {
-  return world.query(ToolCall).some((entity) => world.get(entity, ToolCall)?.id === toolCallId);
+function toolCallExistsForFunctionCall(world: WorldReader, functionCallId: string): boolean {
+  let found: Entity | undefined;
+  for (const entity of world.query(ToolCall)) {
+    const call = world.get(entity, ToolCall);
+    if (!call || (call.id !== functionCallId && call.functionCallId !== functionCallId)) continue;
+    if (found !== undefined) throw new Error(`Duplicate ToolCall functionCallId: ${functionCallId}`);
+    found = entity;
+  }
+  return found !== undefined;
 }
 
 function shortHash(input: string): string {
@@ -725,6 +742,10 @@ function shortHash(input: string): string {
 function isRunCancelledOrStale(world: WorldReader, run: Entity): boolean {
   const data = world.get(run, AgentRun);
   return data?.status === 'cancelled' || data?.status === 'stale' || data?.status === 'paused';
+}
+
+function isTerminalPollRunStatus(status: string | undefined): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'stale';
 }
 
 function hasTerminalOperation(update: PendingRequestUpdate): boolean {

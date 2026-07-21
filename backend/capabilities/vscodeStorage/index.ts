@@ -11,7 +11,7 @@ import type {
   LlmSettingsRecord,
   McpServersSettingsRecord
 } from '../../../shared/protocol';
-import type { StorageCapability } from '../types';
+import type { DeleteConversationDataResult, StorageCapability } from '../types';
 import { loadGlobalSettingsFile, writeGlobalSettingsFile } from './globalSettings';
 import { loadLlmProviderConfigsSettings, saveLlmProviderConfigsSettings } from './llmProviderConfigs';
 import { loadLlmCompressionConfigsSettings, normalizeLlmCompressionSettings, saveLlmCompressionConfigsSettings } from './llmCompressionConfigs';
@@ -28,6 +28,7 @@ import { createVscodeStoragePaths } from './paths';
 import { readJson, writeJson } from './json';
 import {
   appendToolCallEventRecord,
+  deleteConversationDataFromStores,
   loadClientStateSkeletonFromStores,
   loadConversationDetailFromStores,
   loadConversationRunDetailFromStores,
@@ -153,6 +154,14 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     async removeConversationHistoryEntry(conversationId) {
       const paths = getPaths();
       await removeConversationHistoryEntryFromStore(paths, conversationId);
+    },
+    async deleteConversationData(conversationId) {
+      const paths = getPaths();
+      const result: DeleteConversationDataResult = await deleteConversationDataFromStores(paths, conversationId);
+      await collectDeleteStep(result, () => removeConversationHistoryEntryFromStore(paths, conversationId), `history:${conversationId}`);
+      await collectDeleteStep(result, () => vscode.workspace.fs.delete(conversationSettingsUri(paths, conversationId, 'common'), { useTrash: false }), conversationSettingsUri(paths, conversationId, 'common').fsPath, true);
+      await collectDeleteStep(result, () => vscode.workspace.fs.delete(conversationSettingsUri(paths, conversationId, 'llm'), { useTrash: false }), conversationSettingsUri(paths, conversationId, 'llm').fsPath, true);
+      return { ...result, ok: result.errors.length === 0 };
     },
     async saveMessageSnapshot(conversationId, message) {
       const paths = getPaths();
@@ -324,6 +333,21 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       return { conversationId, section, settings: normalized, filePath: uri.fsPath };
     }
   };
+}
+
+async function collectDeleteStep(result: DeleteConversationDataResult, step: () => Thenable<void> | Promise<void>, label: string, ignoreNotFound = false): Promise<void> {
+  try {
+    await step();
+    result.deletedPaths.push(label);
+  } catch (error) {
+    if (ignoreNotFound && isFileNotFoundError(error)) return;
+    result.errors.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function isFileNotFoundError(error: unknown): boolean {
+  const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
+  return code === 'FileNotFound' || code === 'ENOENT';
 }
 
 function conversationSettingsUri(paths: StoragePaths, conversationId: string, section: string): vscode.Uri {

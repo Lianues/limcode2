@@ -1,4 +1,5 @@
 import type { CommandSink, Entity, WorldReader } from '../../../ecs/types';
+import { createStableId } from '../../../utils/stableId';
 import type { AgentRunSourceKind, MessageContent } from '../../../../shared/protocol';
 import { Conversation } from '../chat/components';
 import { spawnUserMessage } from '../chat/bundles';
@@ -43,7 +44,9 @@ export function spawnAgentRunNotification(world: WorldReader, cmd: CommandSink, 
     && conversationHasActiveRun(world, input.conversation);
   const queuedInputContent: MessageContent = { role: 'user', parts: [{ text }] };
 
+  const notificationRunId = createStableId('run');
   const notificationRun = spawnAgentRun(cmd, {
+    id: notificationRunId,
     kind: 'notification',
     agent,
     conversation: input.conversation,
@@ -63,7 +66,7 @@ export function spawnAgentRunNotification(world: WorldReader, cmd: CommandSink, 
   if (forcePromoteNotification && conversation) {
     cmd.enqueue({
       type: AgentRunEventType.Promote,
-      payload: { runId: `run${notificationRun}`, conversationId: conversation.id }
+      payload: { runId: notificationRunId, conversationId: conversation.id }
     });
   }
 

@@ -80,6 +80,8 @@ export enum BridgeMessageType {
   WorkspaceInfo = 'workspace.info',
   ShowInfo = 'vscode.showInfo',
   Error = 'bridge.error',
+  OperationResult = 'operation.result',
+
   ChatSend = 'chat.send',
   ChatAbort = 'chat.abort',
   ConversationOpen = 'conversation.open',
@@ -2154,6 +2156,13 @@ export interface QueueInputUpdatePayload {
   text?: string;
   content?: MessageContent;
 }
+export interface OperationResult {
+  ok: boolean;
+  operation: string;
+  targetId?: string;
+  code?: 'not_found' | 'duplicate_id' | 'invalid_state' | 'storage_failed' | 'already_terminal';
+  message?: string;
+}
 export interface ToolDecisionPayload {
   toolCallId: string;
   conversationId?: string;
@@ -2813,6 +2822,7 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.Pong, { text: string; receivedAt: number }>
   | BridgeEnvelope<BridgeMessageType.WorkspaceInfo, WorkspaceInfo>
   | BridgeEnvelope<BridgeMessageType.Error, { requestType?: string; message: string }>
+  | BridgeEnvelope<BridgeMessageType.OperationResult, OperationResult>
   | BridgeEnvelope<BridgeMessageType.ClientSnapshot, ClientSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ClientPatch, ClientPatchPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationTimelinePageSnapshot, ConversationTimelinePageRecord>

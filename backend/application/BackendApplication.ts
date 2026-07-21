@@ -118,6 +118,8 @@ import { forkConversationInWorld } from './conversationFork';
 import { AskUserAttentionTracker, askUserAttentionMessage, collectPendingAskUserAttention } from './askUserAttention';
 import { ConversationAttentionTracker, type ConversationAttentionRequest } from './conversationAttention';
 import { PlanReviewAttentionTracker, collectPendingPlanReviewAttention, planReviewAttentionMessage } from './planReviewAttention';
+import { createStableId } from '../utils/stableId';
+import { findUniqueById } from '../utils/uniqueIds';
 
 const MAX_WARM_CLOSED_CONVERSATIONS = 3;
 const USER_ATTENTION_NOTIFICATION_ACTION = '打开标签页';
@@ -131,6 +133,16 @@ export interface SetConversationProjectFolderInput {
   conversationId: string;
   folderUri: string;
   name?: string;
+}
+
+export interface DeleteConversationOperationResult {
+  ok: boolean;
+  operation: 'conversation.delete';
+  targetId: string;
+  code?: 'not_found' | 'invalid_state' | 'storage_failed';
+  message?: string;
+  deletedPaths?: string[];
+  errors?: string[];
 }
 
 /**
@@ -171,6 +183,7 @@ export class BackendApplication {
   private readonly recentClosedConversationIds: string[] = [];
   /** 冷卸载后仅保留历史列表摘要，避免重命名等轻量更新把预览误写为空。 */
   private readonly coldConversationHistoryEntries = new Map<string, SidebarConversationHistoryEntry>();
+  private readonly deletedConversationIds = new Set<string>();
   private readonly conversationEvictionGeneration = new Map<string, number>();
   private conversationEvictionInFlight: string | undefined;
   private readonly conversationHistoryChangedEmitter = new vscode.EventEmitter<void>();
@@ -283,7 +296,7 @@ export class BackendApplication {
     const now = Date.now();
     const origin = this.world.spawn();
     this.world.add(origin, ConversationOriginLink, {
-      id: `col${origin}`,
+      id: createStableId('col'),
       conversation,
       originKind: 'user',
       sourceKind: 'user',
@@ -293,7 +306,7 @@ export class BackendApplication {
 
     const link = this.world.spawn();
     this.world.add(link, AgentConversationLink, {
-      id: `acl${link}`,
+      id: createStableId('acl'),
       agent,
       conversation,
       role: 'default',
@@ -411,7 +424,7 @@ export class BackendApplication {
 
   public ensureConversationPlaceholder(conversationId: string, title?: string): boolean {
     const normalizedConversationId = conversationId.trim();
-    if (!normalizedConversationId) return false;
+    if (!normalizedConversationId || this.deletedConversationIds.has(normalizedConversationId)) return false;
     const existing = this.findConversationEntity(normalizedConversationId);
     if (existing !== undefined) {
       const current = this.world.get(existing, Conversation);
@@ -436,7 +449,7 @@ export class BackendApplication {
 
     const origin = this.world.spawn();
     this.world.add(origin, ConversationOriginLink, {
-      id: `col${origin}`,
+      id: createStableId('col'),
       conversation,
       originKind: 'user',
       sourceKind: 'user',
@@ -479,28 +492,46 @@ export class BackendApplication {
     return true;
   }
 
-  public deleteConversation(conversationId: string): boolean {
-    const entity = this.findConversationEntity(conversationId);
-    if (entity === undefined) return false;
+  public async deleteConversation(conversationId: string): Promise<DeleteConversationOperationResult> {
+    const normalizedConversationId = conversationId.trim();
+    if (!normalizedConversationId) {
+      return { ok: false, operation: 'conversation.delete', targetId: conversationId, code: 'invalid_state', message: 'conversationId 为空。' };
+    }
 
-    const cascade = this.collectConversationCascadeEntities(entity, conversationId);
-    for (const target of cascade) {
-      const request = this.world.get(target, LlmRequest);
-      if (request?.id) this.env.llm.abort(request.id);
+    const entity = this.findConversationEntity(normalizedConversationId);
+    this.deletedConversationIds.add(normalizedConversationId);
+    if (entity !== undefined) {
+      const cascade = this.collectConversationCascadeEntities(entity, normalizedConversationId);
+      for (const target of cascade) {
+        const request = this.world.get(target, LlmRequest);
+        if (request?.id) this.env.llm.abort(request.id);
+      }
+      for (const target of cascade) {
+        this.world.despawn(target);
+      }
     }
-    for (const target of cascade) {
-      this.world.despawn(target);
-    }
-    this.renderLoadedConversationDetails.delete(conversationId);
-    this.runHistoryLoadedConversationDetails.delete(conversationId);
-    this.conversationTailLoaded.delete(conversationId);
-    this.coldConversationHistoryEntries.delete(conversationId);
-    this.removeRecentClosedConversation(conversationId);
-    this.bumpConversationEvictionGeneration(conversationId);
-    void this.env.storage.removeConversationHistoryEntry(conversationId);
+
+    this.renderLoadedConversationDetails.delete(normalizedConversationId);
+    this.runHistoryLoadedConversationDetails.delete(normalizedConversationId);
+    this.conversationTailLoaded.delete(normalizedConversationId);
+    this.conversationTailLoadInFlight.delete(normalizedConversationId);
+    this.conversationDetailLoadInFlight.delete(normalizedConversationId);
+    this.coldConversationHistoryEntries.delete(normalizedConversationId);
+    this.removeRecentClosedConversation(normalizedConversationId);
+    this.bumpConversationEvictionGeneration(normalizedConversationId);
+
+    const storageResult = await this.env.storage.deleteConversationData(normalizedConversationId);
     this.requestSnapshot();
-    this.requestSnapshot(conversationId);
-    return true;
+    this.requestSnapshot(normalizedConversationId);
+    this.conversationHistoryChangedEmitter.fire();
+    return {
+      ok: storageResult.ok,
+      operation: 'conversation.delete',
+      targetId: normalizedConversationId,
+      ...(storageResult.ok ? {} : { code: 'storage_failed' as const, message: storageResult.errors.join('; ') || '删除对话底层数据失败。' }),
+      deletedPaths: storageResult.deletedPaths,
+      errors: storageResult.errors
+    };
   }
 
   public abortConversation(conversationId: string): boolean {
@@ -562,7 +593,7 @@ export class BackendApplication {
 
   public ensureConversationTailLoaded(conversationId: string): Promise<void> {
     const normalizedConversationId = conversationId.trim();
-    if (!normalizedConversationId || this.isConversationTailLoaded(normalizedConversationId)) return Promise.resolve();
+    if (!normalizedConversationId || this.deletedConversationIds.has(normalizedConversationId) || this.isConversationTailLoaded(normalizedConversationId)) return Promise.resolve();
 
     const existing = this.conversationTailLoadInFlight.get(normalizedConversationId);
     if (existing) return existing;
@@ -590,11 +621,13 @@ export class BackendApplication {
   }
 
   private async loadConversationTail(conversationId: string): Promise<void> {
+    if (this.deletedConversationIds.has(conversationId)) return;
     const page = await this.env.storage.loadConversationTimelinePage({
       conversationId,
       direction: 'initial',
       chunkCount: 1
     });
+    if (this.deletedConversationIds.has(conversationId)) return;
     if (page.state.messages.length > 0 && this.findConversationEntity(conversationId) === undefined) {
       this.spawnPreHydrationConversation(conversationId);
     }
@@ -611,7 +644,7 @@ export class BackendApplication {
 
   public ensureConversationDetailLoaded(conversationId: string): Promise<void> {
     const normalizedConversationId = conversationId.trim();
-    if (!normalizedConversationId) return Promise.resolve();
+    if (!normalizedConversationId || this.deletedConversationIds.has(normalizedConversationId)) return Promise.resolve();
     if (this.renderLoadedConversationDetails.has(normalizedConversationId)) {
       this.markConversationFullContextLoaded(normalizedConversationId);
       return Promise.resolve();
@@ -633,6 +666,7 @@ export class BackendApplication {
   }
 
   private async loadConversationDetail(conversationId: string): Promise<void> {
+    if (this.deletedConversationIds.has(conversationId)) return;
     if (!this.hydrated) await this.waitUntilHydrated();
     if (this.renderLoadedConversationDetails.has(conversationId)) {
       this.markConversationFullContextLoaded(conversationId);
@@ -640,6 +674,7 @@ export class BackendApplication {
     }
 
     const storedDetail = await this.env.storage.loadConversationDetail(conversationId, { includeRunHistory: false });
+    if (this.deletedConversationIds.has(conversationId)) return;
     // 历史 timeline 可能因为截断/重试/增量持久化交错留下“ToolCall 终态存在，但
     // Message.content 中缺少 functionResponse”的不一致记录。无论是冷加载还是无状态
     // 加载，都先用已保存的 toolCalls 结果补齐消息层响应，避免后续压缩/模型上下文被
@@ -680,7 +715,11 @@ export class BackendApplication {
   public async getConversationHistoryPage(input: { scopeKind: SidebarHistoryScopeKind; projectFolderUri?: string; cursor?: string; limit?: number }): Promise<ConversationHistoryPageRecord> {
     const scope = this.resolveHistoryScope(input.scopeKind, input.projectFolderUri);
     const page = await this.env.storage.loadConversationHistoryPage({ scope, cursor: input.cursor, limit: input.limit });
-    return this.mergeLiveConversationHistoryPage(page, scope);
+    return this.mergeLiveConversationHistoryPage({
+      ...page,
+      entries: page.entries.filter((entry) => !this.deletedConversationIds.has(entry.id)),
+      originLinks: page.originLinks.filter((link) => !this.deletedConversationIds.has(link.conversationId))
+    }, scope);
   }
 
   private resolveHistoryScope(scopeKind: SidebarHistoryScopeKind, projectFolderUri: string | undefined): ConversationHistoryScope {
@@ -693,7 +732,7 @@ export class BackendApplication {
   private mergeLiveConversationHistoryPage(page: ConversationHistoryPageRecord, scope: ConversationHistoryScope): ConversationHistoryPageRecord {
     const entriesById = new Map(page.entries.map((entry) => [entry.id, entry]));
     const liveEntries = this.getConversationHistoryEntries()
-      .filter((entry) => this.isConversationHistorySummaryComplete(entry.id) && (historyEntryMatchesScope(entry, scope) || entriesById.has(entry.id)));
+      .filter((entry) => !this.deletedConversationIds.has(entry.id) && this.isConversationHistorySummaryComplete(entry.id) && (historyEntryMatchesScope(entry, scope) || entriesById.has(entry.id)));
     if (liveEntries.length === 0) return page;
 
     const isFirstPage = page.pageInfo.pageIndex === 0;
@@ -733,7 +772,7 @@ export class BackendApplication {
   private persistableRenderDetailConversationIds(): string[] {
     const ids = new Set(this.renderLoadedConversationDetails);
     for (const conversationId of this.conversationTailLoaded) ids.add(conversationId);
-    return [...ids].filter((conversationId) => this.findConversationEntity(conversationId) !== undefined);
+    return [...ids].filter((conversationId) => !this.deletedConversationIds.has(conversationId) && this.findConversationEntity(conversationId) !== undefined);
   }
 
   private isConversationHistorySummaryComplete(conversationId: string): boolean {
@@ -882,6 +921,7 @@ export class BackendApplication {
   }
 
   private markConversationOpened(conversationId: string): void {
+    if (this.deletedConversationIds.has(conversationId)) return;
     this.removeRecentClosedConversation(conversationId);
     this.bumpConversationEvictionGeneration(conversationId);
   }
@@ -1028,6 +1068,7 @@ export class BackendApplication {
   }
 
   private spawnPreHydrationConversation(conversationId: string): Entity {
+    if (this.deletedConversationIds.has(conversationId)) throw new Error(`Conversation has been deleted: ${conversationId}`);
     const conversation = this.world.spawn();
     this.world.add(conversation, Conversation, { id: conversationId, visibility: 'visible' });
     upsertDefaultWorkflowSelection(this.world, conversation, conversationId);
@@ -1478,12 +1519,12 @@ export class BackendApplication {
 
 
   private findDefaultAgent(): Entity | undefined {
-    return this.world.query(Agent).find((entity) => this.world.get(entity, Agent)?.id === DEFAULT_AGENT_ID)
+    return findUniqueById(this.world, Agent, DEFAULT_AGENT_ID)
       ?? this.world.query(Agent)[0];
   }
 
   private findAgentEntity(agentId: string): Entity | undefined {
-    return this.world.query(Agent).find((entity) => this.world.get(entity, Agent)?.id === agentId);
+    return findUniqueById(this.world, Agent, agentId);
   }
 
   private activeSelectionForConversation(conversation: Entity): { entity: Entity; agent: Entity } | undefined {
@@ -1516,7 +1557,7 @@ export class BackendApplication {
   }
 
   private findConversationEntity(conversationId: string): Entity | undefined {
-    return this.world.query(Conversation).find((entity) => this.world.get(entity, Conversation)?.id === conversationId);
+    return findUniqueById(this.world, Conversation, conversationId);
   }
 
   private upsertConversationModelProfile(

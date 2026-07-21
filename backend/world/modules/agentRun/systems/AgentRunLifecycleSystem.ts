@@ -1,4 +1,5 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
+import { createStableId } from '../../../../utils/stableId';
 import { readEvents } from '../../../events';
 import { Conversation, InFlight, LlmRequest, Message, Streaming } from '../../chat/components';
 import { ToolCall, ToolResultConsumed, ToolState, type ToolCallData, type ToolStateData } from '../../tools/components';
@@ -395,7 +396,7 @@ function upsertQueueOrder(world: WorldReader, cmd: CommandSink, run: Entity, con
 
   const created = cmd.spawn();
   cmd.add(created, AgentRunQueueOrder, {
-    id: `arqo${created}`,
+    id: createStableId('arqo'),
     run,
     conversation,
     order,
@@ -486,7 +487,7 @@ function upsertQueueHold(world: WorldReader, cmd: CommandSink, run: Entity, conv
 
   const created = cmd.spawn();
   cmd.add(created, AgentRunQueueHold, {
-    id: `arqh${created}`,
+    id: createStableId('arqh'),
     run,
     conversation,
     reason,
@@ -650,10 +651,10 @@ function setRunDeliveryToNotification(world: WorldReader, cmd: CommandSink, run:
 
   const now = Date.now();
   const policyEntity = cmd.spawn();
-  cmd.add(policyEntity, RunDeliveryPolicy, { id: `run-interrupt-delivery:${run}:${policyEntity}`, mode: 'notification', includeTranscript: 'summary' });
+  cmd.add(policyEntity, RunDeliveryPolicy, { id: createStableId('run-interrupt-delivery'), mode: 'notification', includeTranscript: 'summary' });
   const policyLink = cmd.spawn();
   cmd.add(policyLink, RunDeliveryPolicyLink, {
-    id: `run-interrupt-delivery-link:${run}:${policyLink}`,
+    id: createStableId('run-interrupt-delivery-link'),
     run,
     policy: policyEntity,
     role: 'active',
@@ -708,7 +709,7 @@ function cloneRunWorkflowLinks(world: WorldReader, cmd: CommandSink, sourceRun: 
     const link = world.get(entity, RunWorkflowLink);
     if (!link || link.run !== sourceRun || link.role !== 'active') continue;
     const clone = cmd.spawn();
-    cmd.add(clone, RunWorkflowLink, { id: `run-workflow-clone:${targetRun}:${clone}`, run: targetRun, workflow: link.workflow, role: 'active', createdAt: now, updatedAt: now });
+    cmd.add(clone, RunWorkflowLink, { id: createStableId('run-workflow-clone'), run: targetRun, workflow: link.workflow, role: 'active', createdAt: now, updatedAt: now });
   }
 }
 
@@ -728,7 +729,7 @@ function cloneRunEntityLinks(
     const target = link[field] as Entity | undefined;
     if (target === undefined) continue;
     const clone = cmd.spawn();
-    cmd.add(clone, component as never, { id: `${idPrefix}:${targetRun}:${clone}`, run: targetRun, [field]: target, role: 'active', createdAt: now, updatedAt: now } as never);
+    cmd.add(clone, component as never, { id: createStableId(idPrefix), run: targetRun, [field]: target, role: 'active', createdAt: now, updatedAt: now } as never);
   }
 }
 
@@ -737,16 +738,20 @@ function cloneRunPolicyLinks(world: WorldReader, cmd: CommandSink, sourceRun: En
     const link = world.get(entity, component as never) as { run: Entity; policy: Entity; role: 'active' } | undefined;
     if (!link || link.run !== sourceRun || link.role !== 'active') continue;
     const clone = cmd.spawn();
-    cmd.add(clone, component as never, { id: `${idPrefix}:${targetRun}:${clone}`, run: targetRun, policy: link.policy, role: 'active', createdAt: now, updatedAt: now } as never);
+    cmd.add(clone, component as never, { id: createStableId(idPrefix), run: targetRun, policy: link.policy, role: 'active', createdAt: now, updatedAt: now } as never);
   }
 }
 
 function findRunById(world: WorldReader, runId: string): Entity | undefined {
-  return world.query(AgentRun).find((entity) => world.get(entity, AgentRun)?.id === runId);
+  const matches = world.query(AgentRun).filter((entity) => world.get(entity, AgentRun)?.id === runId);
+  if (matches.length > 1) throw new Error(`Duplicate AgentRun id: ${runId}`);
+  return matches[0];
 }
 
 function findConversationById(world: WorldReader, conversationId: string): Entity | undefined {
-  return world.query(Conversation).find((entity) => world.get(entity, Conversation)?.id === conversationId);
+  const matches = world.query(Conversation).filter((entity) => world.get(entity, Conversation)?.id === conversationId);
+  if (matches.length > 1) throw new Error(`Duplicate Conversation id: ${conversationId}`);
+  return matches[0];
 }
 
 function activeRunsForConversation(world: WorldReader, conversationId: string): Entity[] {

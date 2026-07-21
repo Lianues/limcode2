@@ -233,10 +233,10 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
   private deleteConversationFromSidebar(webview: vscode.Webview, conversationId: string): void {
     void this.backendApp
       .waitUntilHydrated()
-      .then(() => {
-        const deleted = this.backendApp.deleteConversation(conversationId);
-        if (!deleted) console.warn(`[LimCode] Sidebar delete target not found: ${conversationId}`);
-        else MainPanel.closePanelsByConversationId(conversationId);
+      .then(async () => {
+        const result = await this.backendApp.deleteConversation(conversationId);
+        if (!result.ok) console.warn(`[LimCode] Sidebar delete failed: ${conversationId}: ${result.message ?? result.code ?? 'unknown'}`);
+        MainPanel.closePanelsByConversationId(conversationId);
         this.postSidebarStateWhenReady(webview, this.lastScopeKind, this.lastCursor, undefined, this.lastProjectFolderUri);
       })
       .catch((error) => console.warn('[LimCode] Failed to delete sidebar conversation.', error));

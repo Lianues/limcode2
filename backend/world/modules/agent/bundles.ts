@@ -1,4 +1,5 @@
 import { defineBundle, type CommandSink, type Entity, type WorldReader } from '../../../ecs/types';
+import { createStableId } from '../../../utils/stableId';
 import { Conversation, ConversationOriginLink, PartOf, Message } from '../chat/components';
 import { spawnConversation, spawnConversationOriginLink, spawnUserMessage } from '../chat/bundles';
 import {
@@ -206,7 +207,7 @@ export function linkAgentToConversation(
   const link = cmd.spawn();
   const now = Date.now();
   cmd.add(link, AgentConversationLink, {
-    id: `acl${link}`,
+    id: createStableId('acl'),
     agent: input.agent,
     conversation: input.conversation,
     role: input.role ?? 'participant',

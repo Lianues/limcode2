@@ -1,4 +1,5 @@
 import { defineBundle, type CommandSink, type Entity, type WorldReader } from '../../../ecs/types';
+import { createStableId } from '../../../utils/stableId';
 import {
   ConversationWorkEnvironmentLink,
   RunWorkEnvironmentLink,
@@ -102,7 +103,7 @@ export function selectConversationWorkEnvironment(
 
   const entity = cmd.spawn();
   cmd.add(entity, ConversationWorkEnvironmentLink, {
-    id: `cwel${entity}`,
+    id: createStableId('cwel'),
     conversation,
     workEnvironment,
     role: 'active',
@@ -141,7 +142,7 @@ export function selectRunWorkEnvironment(
 
   const entity = cmd.spawn();
   cmd.add(entity, RunWorkEnvironmentLink, {
-    id: `rwel${entity}`,
+    id: createStableId('rwel'),
     run,
     workEnvironment,
     role: 'active',

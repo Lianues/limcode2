@@ -61,6 +61,7 @@ import {
 } from '../../agentRun/queries';
 import { buildRunContextContents, selectRunContextCompressionVariant, selectRunContextMessageEntities } from '../../agentRun/contextPolicy';
 import { AgentRunBundle } from '../../agentRun/bundles';
+import { createStableId } from '../../../../utils/stableId';
 import { conversationMessages } from '../queries';
 
 const PendingLlmRequestsQuery = defineQuery({
@@ -475,7 +476,7 @@ function recordCompressionContextLink(
   const entity = cmd.spawn();
   const now = Date.now();
   cmd.add(entity, RunCompressionBlockLink, {
-    id: `run-compression-${entity}`,
+    id: createStableId('run-compression'),
     run,
     block: selected.block,
     variant: selected.variant,
@@ -526,7 +527,7 @@ function recordInputRevisions(world: WorldReader, cmd: CommandSink, run: Entity,
     const conversation = world.get(message, PartOf)?.parent;
     if (revision === undefined || conversation === undefined || existingRevisionIds.has(revision)) continue;
     const entity = cmd.spawn();
-    cmd.add(entity, AgentRunInputRevision, { id: `arir${entity}`, run, conversation, revision });
+    cmd.add(entity, AgentRunInputRevision, { id: createStableId('arir'), run, conversation, revision });
     existingRevisionIds.add(revision);
   }
 }

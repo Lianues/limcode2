@@ -1,4 +1,5 @@
 import type { ComponentType, Entity, WorldReader } from '../../../ecs/types';
+import { findUniqueById } from '../../../utils/uniqueIds';
 import type { ConfigScopeKind, ToolPolicyPresetKind, ToolPolicyScopeKind, ToolPolicySourceConfigRecord, ToolPolicyToolConfigRecord } from '../../../../shared/protocol';
 import { Agent, AgentConversationLink, AgentKind, ConversationAgentSelection, type ConversationAgentSelectionData } from '../agent/components';
 import { agentTypeEntityForRuntimeAgent } from '../agent/identity';
@@ -67,11 +68,11 @@ function latestSelectionForConversation(world: WorldReader, conversation: Entity
 }
 
 export function findConversationById(world: WorldReader, conversationId: string): Entity | undefined {
-  return world.query(Conversation).find((entity) => world.get(entity, Conversation)?.id === conversationId);
+  return findUniqueById(world, Conversation, conversationId);
 }
 
 export function findAgentById(world: WorldReader, agentId: string): Entity | undefined {
-  return world.query(Agent).find((entity) => world.get(entity, Agent)?.id === agentId);
+  return findUniqueById(world, Agent, agentId);
 }
 
 export function findAgentByKind(world: WorldReader, kind: string): Entity | undefined {
@@ -154,13 +155,31 @@ export function answerBridgeSourcesForConversation(world: WorldReader, conversat
 }
 
 export function latestAnswerBridgeSourceById(world: WorldReader, answerBridgeId: string): AgentRunSourceLinkData | undefined {
+  const sources = answerBridgeSourcesById(world, answerBridgeId);
+  if (sources.length === 0) return undefined;
+  assertSingleAnswerBridgeConversation(world, answerBridgeId, sources);
+  return sources.sort(compareAnswerBridgeSourcesByNewest)[0];
+}
+
+function answerBridgeSourcesById(world: WorldReader, answerBridgeId: string): AgentRunSourceLinkData[] {
   const normalized = answerBridgeId.trim();
-  if (!normalized) return undefined;
+  if (!normalized) return [];
   return world
     .query(AgentRunSourceLink)
     .map((entity) => world.get(entity, AgentRunSourceLink))
-    .filter((candidate): candidate is AgentRunSourceLinkData => !!candidate && candidate.answerBridgeId?.trim() === normalized && world.has(candidate.run, AgentRun))
-    .sort(compareAnswerBridgeSourcesByNewest)[0];
+    .filter((candidate): candidate is AgentRunSourceLinkData => !!candidate && candidate.answerBridgeId?.trim() === normalized && world.has(candidate.run, AgentRun));
+}
+
+function assertSingleAnswerBridgeConversation(world: WorldReader, answerBridgeId: string, sources: readonly AgentRunSourceLinkData[]): void {
+  const conversationIds = new Map<Entity, string>();
+  for (const source of sources) {
+    const target = runTarget(world, source.run);
+    if (!target) continue;
+    conversationIds.set(target.conversation, world.get(target.conversation, Conversation)?.id ?? String(target.conversation));
+  }
+  if (conversationIds.size > 1) {
+    throw new Error(`Duplicate answerBridgeId binding across conversations: ${answerBridgeId} (${[...conversationIds.values()].join(', ')})`);
+  }
 }
 
 function compareAnswerBridgeSourcesByNewest(left: AgentRunSourceLinkData, right: AgentRunSourceLinkData): number {
@@ -192,7 +211,7 @@ export function runForToolCall(world: WorldReader, toolCall: Entity): Entity | u
 }
 
 export function toolCallEntityById(world: WorldReader, toolCallId: string): Entity | undefined {
-  return world.query(ToolCall).find((entity) => world.get(entity, ToolCall)?.id === toolCallId);
+  return findUniqueById(world, ToolCall, toolCallId);
 }
 
 export function messageConversation(world: WorldReader, message: Entity): Entity | undefined {
@@ -461,7 +480,7 @@ function entityForToolPolicyScope(world: WorldReader, scopeKind: ToolPolicyScope
 }
 
 function findRecordEntity<T extends { id: string }>(world: WorldReader, component: ComponentType<T>, id: string): Entity | undefined {
-  return world.query(component).find((entity) => world.get(entity, component)?.id === id);
+  return findUniqueById(world, component, id);
 }
 
 function intersectToolPolicies(policies: ToolPolicyData[], id: string): ToolPolicyData {

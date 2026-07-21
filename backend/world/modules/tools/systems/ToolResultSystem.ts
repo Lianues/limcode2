@@ -1,4 +1,6 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
+import { createStableId } from '../../../../utils/stableId';
+import { findUniqueById } from '../../../../utils/uniqueIds';
 import { Agent, AgentConversationLink } from '../../agent/components';
 import {
   AgentRun,
@@ -143,7 +145,9 @@ export const ToolResultSystem = defineSystem({
       const toolResponse = toolStateToResponse(state);
       const simplifiedResponse = simplifyToolResponseForModel(call.name, state.status, toolResponse);
       const inlineParts = inlinePartsFromToolResponse(toolResponse);
+      const responseMessageId = createStableId('msg');
       const responseMessage = spawnToolResponseMessage(cmd, {
+        id: responseMessageId,
         conversation: target.conversation,
         toolCallId: call.functionCallId ?? call.id,
         toolName: call.name,
@@ -160,7 +164,7 @@ export const ToolResultSystem = defineSystem({
         toolName: call.name,
         status: state.status,
         responseMessageEntity: responseMessage,
-        expectedResponseMessageId: `m${responseMessage}`,
+        expectedResponseMessageId: responseMessageId,
         partKinds: describeToolResponsePartKinds(call.functionCallId ?? call.id, call.name, simplifiedResponse, inlineParts)
       });
       spawnMessageRunLink(cmd, { message: responseMessage, run, role: 'tool_response' });
@@ -184,7 +188,7 @@ export const ToolResultSystem = defineSystem({
           conversationId: conversationData.id,
           run,
           runId: runData.id,
-          responseMessageId: `m${responseMessage}`,
+          responseMessageId,
           consumedThisPass
         });
       }
@@ -342,7 +346,8 @@ function hasResultSubmitDecision(state: ToolStateData): boolean {
 }
 
 function findToolCallById(world: WorldReader, toolCallId: string): Entity | undefined {
-  return world.query(ToolCall, ToolState).find((entity) => world.get(entity, ToolCall)?.id === toolCallId);
+  const entity = findUniqueById(world, ToolCall, toolCallId);
+  return entity !== undefined && world.has(entity, ToolState) ? entity : undefined;
 }
 
 function hasPendingToolWork(world: WorldReader, run: Entity, consumedThisPass: ReadonlySet<Entity>): boolean {

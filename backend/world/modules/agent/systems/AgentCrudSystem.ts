@@ -1,5 +1,6 @@
 import { defineSystem, type ComponentType, type Entity, type WorldReader } from '../../../../ecs/types';
-import { createMessageId } from '../../../../../shared/protocol';
+import { createStableId } from '../../../../utils/stableId';
+import { findUniqueById } from '../../../../utils/uniqueIds';
 import type { ConfigScopeKind } from '../../../../../shared/protocol';
 import { readEvents } from '../../../events';
 import { Conversation } from '../../chat/components';
@@ -32,7 +33,7 @@ export const AgentCrudSystem = defineSystem({
 
     for (const payload of readEvents(ctx, AgentEventType.Create)) {
       const name = normalizeName(payload.name, '新 Agent');
-      const id = `agent:${createMessageId()}`;
+      const id = createStableId('agent');
       const entity = cmd.spawn();
       cmd.add(entity, Agent, { id, name, ...(normalizeText(payload.description) ? { description: normalizeText(payload.description) } : {}), source: 'user' });
       cmd.add(entity, AgentKind, { kind: normalizeKind(payload.kind, 'custom') });
@@ -201,7 +202,7 @@ function ensureAgentConversationLink(world: WorldReader, cmd: { spawn(): Entity;
   if (exists) return;
   const now = Date.now();
   const entity = cmd.spawn();
-  cmd.add(entity, AgentConversationLink, { id: `acl${entity}`, agent, conversation, role: 'participant', createdAt: now, updatedAt: now });
+  cmd.add(entity, AgentConversationLink, { id: createStableId('acl'), agent, conversation, role: 'participant', createdAt: now, updatedAt: now });
 }
 
 function latestSystemPromptScopeLink(world: WorldReader, scopeKind: ConfigScopeKind, scopeId: string | undefined) {
@@ -228,7 +229,7 @@ function scopeLinkEntities<T extends { scopeKind: ConfigScopeKind; scopeId?: str
 }
 
 function findByRecordId<T extends { id: string }>(world: WorldReader, component: ComponentType<T>, id: string): Entity | undefined {
-  return world.query(component).find((entity) => world.get(entity, component)?.id === id);
+  return findUniqueById(world, component, id);
 }
 
 function normalizeName(value: string | undefined, fallback: string): string { return value?.trim().replace(/\s+/g, ' ') || fallback; }

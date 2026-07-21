@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { Entity, World } from '../ecs/types';
+import { findUniqueById } from '../utils/uniqueIds';
 import type { CommandCapability, FsCapability, LlmCapability, StorageCapability, WebviewCapability, FsPendingFileChangeProposal } from '../capabilities/types';
 import { ChatEventType } from '../world/modules/chat/events';
 import { AgentRunEventType } from '../world/modules/agentRun/events';
@@ -57,6 +58,7 @@ import {
   type MessageDeleteFromPayload,
   type MessageEditPayload,
   type MessageRetryFromPayload,
+  type OperationResult,
   type LlmProviderModelsGetPayload,
   type ProjectFolderCandidateRecord,
   type RuleScope,
@@ -115,7 +117,12 @@ export class WebviewMessageRouter {
         break;
       case BridgeMessageType.ChatAbort:
         if (!this.deps.isHydrated() || !message.payload) return;
+        if (!this.conversationExists(message.payload.conversationId)) {
+          this.postOperationResult(clientId, { ok: false, operation: message.type, targetId: message.payload.conversationId, code: 'not_found', message: '找不到要停止的对话。' }, message.id);
+          return;
+        }
         this.deps.world.enqueue({ type: AgentRunEventType.CancelConversation, payload: { conversationId: message.payload.conversationId, reason: 'chat_abort' } });
+        this.postOperationResult(clientId, { ok: true, operation: message.type, targetId: message.payload.conversationId }, message.id);
         break;
       case BridgeMessageType.LlmRetryCancel:
         if (!this.deps.isHydrated() || !message.payload?.requestId) return;
@@ -133,7 +140,7 @@ export class WebviewMessageRouter {
         if (!this.deps.isHydrated() || !message.payload) return;
         {
           const payload = message.payload;
-          void this.handleMessageDeleteFrom(payload);
+          void this.handleMessageDeleteFrom(clientId, payload, message.id);
         }
         break;
       case BridgeMessageType.MessageRetryFrom:
@@ -141,7 +148,7 @@ export class WebviewMessageRouter {
         {
           const payload = message.payload;
           this.upsertConversationModelOverride(payload.conversationId, payload.model);
-          void this.handleMessageRetryFrom(payload);
+          void this.handleMessageRetryFrom(clientId, payload, message.id);
         }
         break;
       case BridgeMessageType.ToolPolicyScopeSet:
@@ -242,55 +249,60 @@ export class WebviewMessageRouter {
         break;
       case BridgeMessageType.AgentRunCancel:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: AgentRunEventType.Cancel, payload: message.payload });
+        this.enqueueRunOperation(clientId, message.type, AgentRunEventType.Cancel, message.payload, message.id, { rejectTerminal: true });
         break;
       case BridgeMessageType.AgentRunPause:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: AgentRunEventType.Pause, payload: message.payload });
+        this.enqueueRunOperation(clientId, message.type, AgentRunEventType.Pause, message.payload, message.id, { rejectTerminal: true });
         break;
       case BridgeMessageType.AgentRunResume:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: AgentRunEventType.Resume, payload: message.payload });
+        this.enqueueRunOperation(clientId, message.type, AgentRunEventType.Resume, message.payload, message.id);
         break;
       case BridgeMessageType.AgentRunRetry:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: AgentRunEventType.Retry, payload: message.payload });
+        this.enqueueRunOperation(clientId, message.type, AgentRunEventType.Retry, message.payload, message.id);
         break;
       case BridgeMessageType.AgentRunRegenerate:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: AgentRunEventType.Regenerate, payload: message.payload });
+        this.enqueueRunOperation(clientId, message.type, AgentRunEventType.Regenerate, message.payload, message.id);
         break;
       case BridgeMessageType.AgentRunMarkStale:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: AgentRunEventType.MarkStale, payload: message.payload });
+        this.enqueueRunOperation(clientId, message.type, AgentRunEventType.MarkStale, message.payload, message.id, { rejectTerminal: true });
         break;
       case BridgeMessageType.QueuePromote:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: AgentRunEventType.Promote, payload: message.payload });
+        this.enqueueRunOperation(clientId, message.type, AgentRunEventType.Promote, message.payload, message.id, { requireQueued: true });
         break;
       case BridgeMessageType.QueueRemove:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: AgentRunEventType.RemoveQueued, payload: message.payload });
+        this.enqueueRunOperation(clientId, message.type, AgentRunEventType.RemoveQueued, message.payload, message.id, { requireQueued: true });
         break;
       case BridgeMessageType.QueueReorder:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: AgentRunEventType.ReorderQueue, payload: message.payload });
+        this.enqueueQueueReorderOperation(clientId, message.type, message.payload, message.id);
         break;
       case BridgeMessageType.QueuePause:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: AgentRunEventType.PauseQueue, payload: message.payload });
+        this.enqueueRunOperation(clientId, message.type, AgentRunEventType.PauseQueue, message.payload, message.id, { requireQueued: true });
         break;
       case BridgeMessageType.QueueResume:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: AgentRunEventType.ResumeQueue, payload: message.payload });
+        this.enqueueRunOperation(clientId, message.type, AgentRunEventType.ResumeQueue, message.payload, message.id, { requireQueued: true });
         break;
       case BridgeMessageType.QueueResumeAll:
         if (!this.deps.isHydrated() || !message.payload) return;
+        if (!this.conversationExists(message.payload.conversationId)) {
+          this.postOperationResult(clientId, { ok: false, operation: message.type, targetId: message.payload.conversationId, code: 'not_found', message: '找不到队列所属对话。' }, message.id);
+          return;
+        }
         this.deps.world.enqueue({ type: AgentRunEventType.ResumeQueueConversation, payload: message.payload });
+        this.postOperationResult(clientId, { ok: true, operation: message.type, targetId: message.payload.conversationId }, message.id);
         break;
       case BridgeMessageType.QueueInputUpdate:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: AgentRunEventType.UpdateQueuedInput, payload: message.payload });
+        this.enqueueRunOperation(clientId, message.type, AgentRunEventType.UpdateQueuedInput, message.payload, message.id, { requireQueued: true });
         break;
       case BridgeMessageType.AgentCreate:
         if (!this.deps.isHydrated() || !message.payload) return;
@@ -622,6 +634,7 @@ export class WebviewMessageRouter {
       case BridgeMessageType.ShowInfo:
         if (message.payload?.message) void vscode.window.showInformationMessage(message.payload.message);
         break;
+
       case BridgeMessageType.FsStatGet:
         if (message.payload) void this.postFsStatResult(clientId, message.payload, message.id);
         break;
@@ -631,6 +644,93 @@ export class WebviewMessageRouter {
       default:
         break;
     }
+  }
+
+
+  private enqueueRunOperation(
+    clientId: BridgeClientId,
+    operation: string,
+    eventType: (typeof AgentRunEventType)[keyof typeof AgentRunEventType],
+    payload: { runId: string; conversationId?: string },
+    correlationId?: string,
+    options: { rejectTerminal?: boolean; requireQueued?: boolean } = {}
+  ): void {
+    let runEntity: Entity | undefined;
+    try {
+      runEntity = this.findRunEntity(payload.runId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '运行 ID 重复。';
+      this.postOperationResult(clientId, { ok: false, operation, targetId: payload.runId, code: 'duplicate_id', message }, correlationId);
+      return;
+    }
+    const run = runEntity !== undefined ? this.deps.world.get(runEntity, AgentRun) : undefined;
+    if (runEntity === undefined || !run) {
+      this.postOperationResult(clientId, { ok: false, operation, targetId: payload.runId, code: 'not_found', message: '找不到目标 AgentRun。' }, correlationId);
+      return;
+    }
+    if (options.rejectTerminal && isTerminalAgentRunStatus(run.status)) {
+      this.postOperationResult(clientId, { ok: false, operation, targetId: payload.runId, code: 'already_terminal', message: '目标 AgentRun 已是终态。' }, correlationId);
+      return;
+    }
+    if (options.requireQueued && run.status !== 'queued') {
+      this.postOperationResult(clientId, { ok: false, operation, targetId: payload.runId, code: 'invalid_state', message: '目标 AgentRun 不在队列中。' }, correlationId);
+      return;
+    }
+    if (payload.conversationId && !this.conversationExists(payload.conversationId)) {
+      this.postOperationResult(clientId, { ok: false, operation, targetId: payload.runId, code: 'not_found', message: '找不到目标对话。' }, correlationId);
+      return;
+    }
+    this.deps.world.enqueue({ type: eventType, payload });
+    this.postOperationResult(clientId, { ok: true, operation, targetId: payload.runId }, correlationId);
+  }
+
+  private enqueueQueueReorderOperation(
+    clientId: BridgeClientId,
+    operation: string,
+    payload: { conversationId: string; runIds: string[] },
+    correlationId?: string
+  ): void {
+    if (!this.conversationExists(payload.conversationId)) {
+      this.postOperationResult(clientId, { ok: false, operation, targetId: payload.conversationId, code: 'not_found', message: '找不到队列所属对话。' }, correlationId);
+      return;
+    }
+    for (const runId of payload.runIds) {
+      let runEntity: Entity | undefined;
+      try {
+        runEntity = this.findRunEntity(runId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '运行 ID 重复。';
+        this.postOperationResult(clientId, { ok: false, operation, targetId: runId, code: 'duplicate_id', message }, correlationId);
+        return;
+      }
+      const run = runEntity !== undefined ? this.deps.world.get(runEntity, AgentRun) : undefined;
+      if (!run) {
+        this.postOperationResult(clientId, { ok: false, operation, targetId: runId, code: 'not_found', message: '找不到队列中的 AgentRun。' }, correlationId);
+        return;
+      }
+      if (run.status !== 'queued') {
+        this.postOperationResult(clientId, { ok: false, operation, targetId: runId, code: 'invalid_state', message: '只能重排 queued 状态的 AgentRun。' }, correlationId);
+        return;
+      }
+    }
+    this.deps.world.enqueue({ type: AgentRunEventType.ReorderQueue, payload });
+    this.postOperationResult(clientId, { ok: true, operation, targetId: payload.conversationId }, correlationId);
+  }
+
+  private conversationExists(conversationId: string): boolean {
+    return findUniqueById(this.deps.world, Conversation, conversationId) !== undefined;
+  }
+
+  private messageExists(conversationId: string, messageId: string): boolean {
+    const conversation = findUniqueById(this.deps.world, Conversation, conversationId);
+    if (conversation === undefined) return false;
+    let found = false;
+    for (const entity of this.deps.world.query(Message, PartOf)) {
+      if (this.deps.world.get(entity, PartOf)?.parent !== conversation || this.deps.world.get(entity, Message)?.id !== messageId) continue;
+      if (found) throw new Error(`Duplicate Message id: ${messageId}`);
+      found = true;
+    }
+    return found;
   }
 
 
@@ -716,15 +816,22 @@ export class WebviewMessageRouter {
     action();
   }
 
-  private async handleMessageDeleteFrom(payload: MessageDeleteFromPayload): Promise<void> {
+  private async handleMessageDeleteFrom(clientId: BridgeClientId, payload: MessageDeleteFromPayload, correlationId?: string): Promise<void> {
     try {
       await this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'between', startMessageId: payload.messageId, endMessageId: payload.messageId, contextBeforeChunks: 1 }, () => undefined);
       const deletePayload = this.normalizeDeleteFromPayload(payload);
+      if (!this.messageExists(deletePayload.conversationId, deletePayload.messageId)) {
+        this.postOperationResult(clientId, { ok: false, operation: BridgeMessageType.MessageDeleteFrom, targetId: deletePayload.messageId, code: 'not_found', message: '找不到要删除的消息。' }, correlationId);
+        return;
+      }
       await this.deps.flushPersistence?.('before-message-delete-truncate');
       await this.deps.storage.truncateConversationTimeline({ conversationId: deletePayload.conversationId, anchorMessageId: deletePayload.messageId, keepAnchor: false });
       this.deps.world.enqueue({ type: ChatEventType.DeleteFrom, payload: deletePayload });
+      this.postOperationResult(clientId, { ok: true, operation: BridgeMessageType.MessageDeleteFrom, targetId: deletePayload.messageId }, correlationId);
     } catch (error) {
+      const message = error instanceof Error ? error.message : '删除消息前截断对话失败。';
       console.warn('[LimCode] Failed to truncate conversation before deleting messages.', error);
+      this.postOperationResult(clientId, { ok: false, operation: BridgeMessageType.MessageDeleteFrom, targetId: payload.messageId, code: 'storage_failed', message }, correlationId);
     }
   }
 
@@ -774,14 +881,21 @@ export class WebviewMessageRouter {
     }
   }
 
-  private async handleMessageRetryFrom(payload: MessageRetryFromPayload): Promise<void> {
+  private async handleMessageRetryFrom(clientId: BridgeClientId, payload: MessageRetryFromPayload, correlationId?: string): Promise<void> {
     try {
       await this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'between', startMessageId: payload.messageId, endMessageId: payload.messageId, contextBeforeChunks: 1 }, () => undefined);
+      if (!this.messageExists(payload.conversationId, payload.messageId)) {
+        this.postOperationResult(clientId, { ok: false, operation: BridgeMessageType.MessageRetryFrom, targetId: payload.messageId, code: 'not_found', message: '找不到要重试的消息。' }, correlationId);
+        return;
+      }
       await this.deps.flushPersistence?.('before-message-retry-truncate');
       await this.deps.storage.truncateConversationTimeline({ conversationId: payload.conversationId, anchorMessageId: payload.messageId, keepAnchor: false });
       this.deps.world.enqueue({ type: ChatEventType.RetryFrom, payload });
+      this.postOperationResult(clientId, { ok: true, operation: BridgeMessageType.MessageRetryFrom, targetId: payload.messageId }, correlationId);
     } catch (error) {
+      const message = error instanceof Error ? error.message : '重试消息前截断对话失败。';
       console.warn('[LimCode] Failed to truncate conversation before retrying message.', error);
+      this.postOperationResult(clientId, { ok: false, operation: BridgeMessageType.MessageRetryFrom, targetId: payload.messageId, code: 'storage_failed', message }, correlationId);
     }
   }
 
@@ -1237,7 +1351,7 @@ export class WebviewMessageRouter {
   }
 
   private findRunEntity(runId: string): number | undefined {
-    return this.deps.world.query(AgentRun).find((entity) => this.deps.world.get(entity, AgentRun)?.id === runId);
+    return findUniqueById(this.deps.world, AgentRun, runId);
   }
 
   private findInvocationForDryRun(input: { run: number; messageId?: string; invocationId?: string }): number | undefined {
@@ -1379,6 +1493,17 @@ export class WebviewMessageRouter {
     void vscode.window.showInformationMessage(`LimCode: Plan 已导出到 ${targetPath}`);
   }
 
+  private postOperationResult(clientId: BridgeClientId, result: OperationResult, correlationId?: string): void {
+    this.deps.webview.post(clientId, {
+      id: createMessageId(),
+      type: BridgeMessageType.OperationResult,
+      channel: 'command',
+      correlationId,
+      payload: result
+    });
+    if (!result.ok && result.message) this.postRequestError(clientId, result.operation, result.message, correlationId);
+  }
+
   private postRequestError(clientId: BridgeClientId, requestType: string, message: string, correlationId?: string): void {
     this.deps.webview.post(clientId, {
       id: createMessageId(),
@@ -1388,6 +1513,10 @@ export class WebviewMessageRouter {
       payload: { requestType, message }
     });
   }
+}
+
+function isTerminalAgentRunStatus(status: string): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'stale';
 }
 
 function modelProfileIdForConversation(conversationId: string): string { return `model-profile:conversation:${conversationId}`; }

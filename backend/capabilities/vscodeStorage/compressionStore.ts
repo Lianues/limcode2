@@ -4,6 +4,7 @@ import { createEmptyClientState } from '../../../shared/clientStateSchema';
 import { INDEX_FILE } from './constants';
 import type { StoragePaths } from './clientStateStore';
 import { loadRecordStoreWithDiagnostics, saveRecordStore, withRecordStoreTransaction, type RecordStoreDiagnosticsResult } from './recordStore';
+import { assertUniqueClientStateIds, assertUniqueRecords } from '../../utils/uniqueIds';
 
 const CONVERSATIONS_DIR = 'conversations';
 export interface LoadConversationCompressionDetailOptions {
@@ -83,10 +84,12 @@ export async function loadConversationCompressionDetail(
   state.llmInvocations = invocationDiag.records.filter((invocation) => invocationIds.has(invocation.id)).map((invocation) => normalizeLoadedLlmInvocation(invocation, now));
 
   const hasCompression = state.compressionBlocks.length || state.compressionBlockSourceLinks.length || state.compressionContextVariants.length || state.compressionBlockLlmInvocationLinks.length || state.llmInvocations.length;
+  assertUniqueClientStateIds(state, `compressionDetail:${conversationId}`);
   return hasCompression ? state : undefined;
 }
 
 export async function saveConversationCompressionDetail(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
+  assertUniqueClientStateIds(state, `saveCompressionDetail:${conversationId}:source`);
   return withRecordStoreTransaction(compressionTransactionUri(paths, conversationId), () => saveConversationCompressionDetailUnlocked(paths, conversationId, state));
 }
 
@@ -178,6 +181,8 @@ function groupBy<T>(items: readonly T[], keyOf: (item: T) => string): Map<string
 }
 
 function mergeRecordsById<TRecord extends { id: string }>(existing: readonly TRecord[], next: readonly TRecord[]): TRecord[] {
+  assertUniqueRecords(existing, 'compression.merge.existing');
+  assertUniqueRecords(next, 'compression.merge.next');
   const merged = new Map<string, TRecord>();
   for (const record of existing) merged.set(record.id, record);
   for (const record of next) merged.set(record.id, record);

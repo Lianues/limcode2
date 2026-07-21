@@ -1,4 +1,5 @@
 import { defineBundle, type CommandSink, type Entity } from '../../../ecs/types';
+import { createStableId } from '../../../utils/stableId';
 import type { LlmInvocationSettingsSnapshotRecord, LlmInvocationStatus } from '../../../../shared/protocol';
 import { LlmInvocation, MessageLlmInvocationLink, RunLlmInvocationLink } from './components';
 
@@ -6,6 +7,7 @@ export const LlmInvocationBundle = defineBundle({ name: 'LlmInvocationBundle', w
 export const MessageLlmInvocationLinkBundle = defineBundle({ name: 'MessageLlmInvocationLinkBundle', writes: [MessageLlmInvocationLink], mutationMode: 'create', spawns: true });
 
 export interface SpawnLlmInvocationInput {
+  id?: string;
   requestId?: string;
   status?: LlmInvocationStatus;
   settings?: LlmInvocationSettingsSnapshotRecord;
@@ -16,8 +18,8 @@ export function spawnLlmInvocation(cmd: CommandSink, input: SpawnLlmInvocationIn
   const entity = cmd.spawn();
   const createdAt = input.createdAt ?? Date.now();
   cmd.add(entity, LlmInvocation, {
-    id: `llmi${entity}`,
-    requestId: input.requestId ?? `req${entity}`,
+    id: input.id ?? createStableId('llmi'),
+    requestId: input.requestId ?? createStableId('llmreq'),
     status: input.status ?? 'resolving',
     ...(input.settings !== undefined ? { settings: input.settings } : {}),
     createdAt
@@ -30,7 +32,7 @@ export function spawnRunLlmInvocationLink(cmd: CommandSink, input: { run: Entity
   const now = Date.now();
   const createdAt = input.createdAt ?? now;
   cmd.add(entity, RunLlmInvocationLink, {
-    id: `rlil${entity}`,
+    id: createStableId('rlil'),
     run: input.run,
     invocation: input.invocation,
     role: input.role ?? 'primary',
@@ -45,7 +47,7 @@ export function spawnMessageLlmInvocationLink(cmd: CommandSink, input: { message
   const now = Date.now();
   const createdAt = input.createdAt ?? now;
   cmd.add(entity, MessageLlmInvocationLink, {
-    id: `mlil${entity}`,
+    id: createStableId('mlil'),
     message: input.message,
     invocation: input.invocation,
     role: input.role ?? 'modelOutput',

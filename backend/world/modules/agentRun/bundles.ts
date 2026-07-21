@@ -1,4 +1,5 @@
 import { defineBundle, type CommandSink, type Entity } from '../../../ecs/types';
+import { createStableId } from '../../../utils/stableId';
 import type { AgentRunKind, AgentRunQueueHoldReason, AgentRunSourceKind, DeliveryMode, MessageContent, TranscriptInclusion } from '../../../../shared/protocol';
 import {
   AgentRun,
@@ -48,6 +49,7 @@ export const AgentRunBundle = defineBundle({
 });
 
 export interface SpawnAgentRunInput {
+  id?: string;
   kind: AgentRunKind;
   agent: Entity;
   conversation: Entity;
@@ -73,7 +75,7 @@ export function spawnAgentRun(cmd: CommandSink, input: SpawnAgentRunInput): Enti
   const run = cmd.spawn();
   const now = Date.now();
   cmd.add(run, AgentRun, {
-    id: `run${run}`,
+    id: input.id ?? createStableId('run'),
     kind: input.kind,
     status: 'queued',
     createdAt: now,
@@ -87,7 +89,7 @@ export function spawnAgentRun(cmd: CommandSink, input: SpawnAgentRunInput): Enti
 
   const queueOrder = cmd.spawn();
   cmd.add(queueOrder, AgentRunQueueOrder, {
-    id: `arqo${queueOrder}`,
+    id: createStableId('arqo'),
     run,
     conversation: input.conversation,
     order: now,
@@ -98,7 +100,7 @@ export function spawnAgentRun(cmd: CommandSink, input: SpawnAgentRunInput): Enti
   if (input.queuedInputContent !== undefined) {
     const queuedInput = cmd.spawn();
     cmd.add(queuedInput, AgentRunQueuedInput, {
-      id: `arqi${queuedInput}`,
+      id: createStableId('arqi'),
       run,
       conversation: input.conversation,
       content: input.queuedInputContent,
@@ -110,7 +112,7 @@ export function spawnAgentRun(cmd: CommandSink, input: SpawnAgentRunInput): Enti
   if (input.queueHoldReason !== undefined) {
     const queueHold = cmd.spawn();
     cmd.add(queueHold, AgentRunQueueHold, {
-      id: `arqh${queueHold}`,
+      id: createStableId('arqh'),
       run,
       conversation: input.conversation,
       reason: input.queueHoldReason,
@@ -121,7 +123,7 @@ export function spawnAgentRun(cmd: CommandSink, input: SpawnAgentRunInput): Enti
 
   const source = cmd.spawn();
   cmd.add(source, AgentRunSourceLink, {
-    id: `ars${source}`,
+    id: createStableId('ars'),
     run,
     sourceKind: input.sourceKind,
     ...(input.sourceAgent !== undefined ? { sourceAgent: input.sourceAgent } : {}),
@@ -136,7 +138,7 @@ export function spawnAgentRun(cmd: CommandSink, input: SpawnAgentRunInput): Enti
 
   const target = cmd.spawn();
   cmd.add(target, AgentRunTargetLink, {
-    id: `art${target}`,
+    id: createStableId('art'),
     run,
     agent: input.agent,
     conversation: input.conversation,
@@ -156,14 +158,14 @@ export function spawnAgentRun(cmd: CommandSink, input: SpawnAgentRunInput): Enti
 export function spawnMessageRunLink(cmd: CommandSink, input: { message: Entity; run: Entity; role: 'input' | 'model' | 'tool_response' | 'notification' }): Entity {
   const entity = cmd.spawn();
   const now = Date.now();
-  cmd.add(entity, MessageRunLink, { id: `mrl${entity}`, message: input.message, run: input.run, role: input.role, createdAt: now, updatedAt: now });
+  cmd.add(entity, MessageRunLink, { id: createStableId('mrl'), message: input.message, run: input.run, role: input.role, createdAt: now, updatedAt: now });
   return entity;
 }
 
 export function spawnToolCallRunLink(cmd: CommandSink, input: { toolCall: Entity; run: Entity }): Entity {
   const entity = cmd.spawn();
   const now = Date.now();
-  cmd.add(entity, ToolCallRunLink, { id: `tcrl${entity}`, toolCall: input.toolCall, run: input.run, role: 'produced_by', createdAt: now, updatedAt: now });
+  cmd.add(entity, ToolCallRunLink, { id: createStableId('tcrl'), toolCall: input.toolCall, run: input.run, role: 'produced_by', createdAt: now, updatedAt: now });
   return entity;
 }
 
@@ -175,22 +177,22 @@ function spawnDefaultRunPolicies(cmd: CommandSink, run: Entity, deliveryMode: De
   const now = Date.now();
 
   const conversationPolicy = cmd.spawn();
-  cmd.add(conversationPolicy, RunConversationPolicy, { id: `rcp${conversationPolicy}`, mode: 'same_conversation', visibility: 'visible' });
+  cmd.add(conversationPolicy, RunConversationPolicy, { id: createStableId('rcp'), mode: 'same_conversation', visibility: 'visible' });
   const conversationPolicyLink = cmd.spawn();
-  cmd.add(conversationPolicyLink, RunConversationPolicyLink, { id: `rcpl${conversationPolicyLink}`, run, policy: conversationPolicy, role: 'active', createdAt: now, updatedAt: now });
+  cmd.add(conversationPolicyLink, RunConversationPolicyLink, { id: createStableId('rcpl'), run, policy: conversationPolicy, role: 'active', createdAt: now, updatedAt: now });
 
   const contextPolicy = cmd.spawn();
-  cmd.add(contextPolicy, RunContextPolicy, { id: `rctx${contextPolicy}`, historyMode: 'full' });
+  cmd.add(contextPolicy, RunContextPolicy, { id: createStableId('rctx'), historyMode: 'full' });
   const contextPolicyLink = cmd.spawn();
-  cmd.add(contextPolicyLink, RunContextPolicyLink, { id: `rctxl${contextPolicyLink}`, run, policy: contextPolicy, role: 'active', createdAt: now, updatedAt: now });
+  cmd.add(contextPolicyLink, RunContextPolicyLink, { id: createStableId('rctxl'), run, policy: contextPolicy, role: 'active', createdAt: now, updatedAt: now });
 
   const deliveryPolicy = cmd.spawn();
-  cmd.add(deliveryPolicy, RunDeliveryPolicy, { id: `rdp${deliveryPolicy}`, mode: deliveryMode, includeTranscript });
+  cmd.add(deliveryPolicy, RunDeliveryPolicy, { id: createStableId('rdp'), mode: deliveryMode, includeTranscript });
   const deliveryPolicyLink = cmd.spawn();
-  cmd.add(deliveryPolicyLink, RunDeliveryPolicyLink, { id: `rdpl${deliveryPolicyLink}`, run, policy: deliveryPolicy, role: 'active', createdAt: now, updatedAt: now });
+  cmd.add(deliveryPolicyLink, RunDeliveryPolicyLink, { id: createStableId('rdpl'), run, policy: deliveryPolicy, role: 'active', createdAt: now, updatedAt: now });
 
   const editPolicy = cmd.spawn();
-  cmd.add(editPolicy, RunEditPolicy, { id: `rep${editPolicy}`, onSourceEdited: 'mark_stale', onNewUserMessageWhileRunning: 'queue_next_run' });
+  cmd.add(editPolicy, RunEditPolicy, { id: createStableId('rep'), onSourceEdited: 'mark_stale', onNewUserMessageWhileRunning: 'queue_next_run' });
   const editPolicyLink = cmd.spawn();
-  cmd.add(editPolicyLink, RunEditPolicyLink, { id: `repl${editPolicyLink}`, run, policy: editPolicy, role: 'active', createdAt: now, updatedAt: now });
+  cmd.add(editPolicyLink, RunEditPolicyLink, { id: createStableId('repl'), run, policy: editPolicy, role: 'active', createdAt: now, updatedAt: now });
 }

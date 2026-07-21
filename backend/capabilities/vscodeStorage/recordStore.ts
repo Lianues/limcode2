@@ -68,7 +68,8 @@ export async function loadRecordStoreWithDiagnostics<TRecord extends { id: strin
   const records: TRecord[] = [];
   const seenIds = new Set<string>();
   for (const record of indexed) {
-    if (!record || seenIds.has(record.id)) continue;
+    if (!record) continue;
+    if (seenIds.has(record.id)) throw new Error(`Duplicate ${recordKey} id in record store: ${record.id}`);
     records.push(record);
     seenIds.add(record.id);
   }
@@ -78,7 +79,8 @@ export async function loadRecordStoreWithDiagnostics<TRecord extends { id: strin
   for (const file of recordFiles) {
     if (indexedFiles.has(file)) continue;
     const loaded = await loadRecordFile<TRecord, TKey>(root, file, recordKey);
-    if (!loaded || seenIds.has(loaded.id)) continue;
+    if (!loaded) continue;
+    if (seenIds.has(loaded.id)) throw new Error(`Duplicate ${recordKey} id in record store: ${loaded.id}`);
     records.push(loaded);
     seenIds.add(loaded.id);
     orphanIds.push(loaded.id);

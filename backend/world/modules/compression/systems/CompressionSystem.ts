@@ -14,6 +14,8 @@ import { isTerminalToolStatus } from '../../tools/state';
 import type { CompressionBlockRecord, ContentPart, MessageContent, MessageRecord, ToolCallRecord } from '../../../../../shared/protocol';
 import { isFileDataPart, isFunctionCallPart, isFunctionResponsePart, isInlineDataPart, isProviderContextPart, isTextPart, isVisibleTextPart } from '../../../../../shared/protocol';
 import { buildTaskListTimeline, formatTaskListSnapshotForContext } from '../../../../../shared/taskListProjection';
+import { createStableId } from '../../../../utils/stableId';
+import { findUniqueById } from '../../../../utils/uniqueIds';
 
 const COMPRESSION_WRITE_COMPONENTS = [
   Conversation,
@@ -232,7 +234,7 @@ function spawnCompressionBlock(
   const tokenCountBefore = estimateContentsTokens(requestContents);
 
   const block = cmd.spawn();
-  const blockId = `compression-block-${block}`;
+  const blockId = createStableId('compression-block');
   const compactRequestId = `compact-${blockId}`;
   debugAutoCompression('compression.spawnBlock', {
     blockId,
@@ -272,7 +274,7 @@ function spawnCompressionBlock(
     if (retained) {
       const retainedLink = cmd.spawn();
       cmd.add(retainedLink, CompressionBlockSourceLink, {
-        id: `compression-source-${retainedLink}`,
+        id: createStableId('compression-source'),
         block,
         source: selection.retainedBlock,
         sourceKind: 'compressionBlock',
@@ -291,7 +293,7 @@ function spawnCompressionBlock(
     const revision = currentRevisionForMessage(world, messageEntity);
     const link = cmd.spawn();
     cmd.add(link, CompressionBlockSourceLink, {
-      id: `compression-source-${link}`,
+      id: createStableId('compression-source'),
       block,
       source: messageEntity,
       sourceKind: 'message',
@@ -305,7 +307,7 @@ function spawnCompressionBlock(
   });
 
   const invocation = cmd.spawn();
-  const invocationId = `llmi${invocation}`;
+  const invocationId = createStableId('llmi');
   cmd.add(invocation, LlmInvocation, {
     id: invocationId,
     requestId: compactRequestId,
@@ -315,7 +317,7 @@ function spawnCompressionBlock(
   });
   const invocationLink = cmd.spawn();
   cmd.add(invocationLink, CompressionBlockLlmInvocationLink, {
-    id: `compression-invocation-${invocationLink}`,
+    id: createStableId('compression-invocation'),
     block,
     invocation,
     role: 'compact',
@@ -418,7 +420,7 @@ function completeCompressionBlock(world: WorldReader, cmd: CommandSink, payload:
   const nativeVariant = cmd.spawn();
   const isNative = methodKind === 'openai_responses_compact';
   cmd.add(nativeVariant, CompressionContextVariant, {
-    id: `compression-variant-${nativeVariant}`,
+    id: createStableId('compression-variant'),
     block: blockEntity,
     kind: isNative ? 'provider_native' : 'provider_neutral_summary',
     contents: compactedContents,
@@ -528,7 +530,7 @@ function updateCompressionBlock(world: WorldReader, cmd: CommandSink, payload: {
       cmd.add(existing, CompressionContextVariant, { ...variant, contents: payload.summaryContents, updatedAt: now });
     } else {
       const variant = cmd.spawn();
-      cmd.add(variant, CompressionContextVariant, { id: `compression-variant-${variant}`, block: blockEntity, kind: 'provider_neutral_summary', contents: payload.summaryContents, createdAt: now, updatedAt: now });
+      cmd.add(variant, CompressionContextVariant, { id: createStableId('compression-variant'), block: blockEntity, kind: 'provider_neutral_summary', contents: payload.summaryContents, createdAt: now, updatedAt: now });
     }
   }
 }
@@ -616,7 +618,7 @@ function prepareSegmentedSelection(
   const messages = allMessages.filter((entity) => !containsOnlyProviderContext(world.get(entity, Message)?.content));
   if (messages.length === 0) return undefined;
 
-  const endEntity = payload.endMessageId ? messages.find((entity) => world.get(entity, Message)?.id === payload.endMessageId) : undefined;
+  const endEntity = payload.endMessageId ? messageEntityByIdInList(world, messages, payload.endMessageId) : undefined;
   const endBoundarySeq = endEntity
     ? world.get(endEntity, Message)!.seq
     : world.get(messages[messages.length - 1], Message)!.seq;
@@ -903,11 +905,21 @@ function lastVisibleTextPartIndex(parts: ContentPart[]): number {
 }
 
 function findConversation(world: WorldReader, conversationId: string): Entity | undefined {
-  return world.query(Conversation).find((entity) => world.get(entity, Conversation)?.id === conversationId);
+  return findUniqueById(world, Conversation, conversationId);
 }
 
 function findBlock(world: WorldReader, blockId: string): Entity | undefined {
-  return world.query(CompressionBlock).find((entity) => world.get(entity, CompressionBlock)?.id === blockId);
+  return findUniqueById(world, CompressionBlock, blockId);
+}
+
+function messageEntityByIdInList(world: WorldReader, messages: readonly Entity[], messageId: string): Entity | undefined {
+  let found: Entity | undefined;
+  for (const entity of messages) {
+    if (world.get(entity, Message)?.id !== messageId) continue;
+    if (found !== undefined) throw new Error(`Duplicate Message id: ${messageId}`);
+    found = entity;
+  }
+  return found;
 }
 
 function messageContentsForEntities(world: WorldReader, entities: Entity[]): MessageContent[] {

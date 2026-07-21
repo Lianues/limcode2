@@ -1,4 +1,5 @@
 import { defineQuery, defineSystem } from '../../../../ecs/types';
+import { findUniqueById } from '../../../../utils/uniqueIds';
 import { readEvents } from '../../../events';
 import { InFlight } from '../../chat/components';
 import { ToolCallEventBundle, spawnToolCallEvent } from '../bundles';
@@ -32,8 +33,8 @@ export const ToolPollSystem = defineSystem({
     const { world, cmd } = ctx;
     const pendingStates = new Map<number, ToolStateData>();
     for (const payload of readEvents(ctx, ToolEventType.State)) {
-      const entity = world.query(ToolCall, ToolState).find((candidate) => world.get(candidate, ToolCall)?.id === payload.toolCallId);
-      if (entity === undefined) continue;
+      const entity = findUniqueById(world, ToolCall, payload.toolCallId);
+      if (entity === undefined || !world.has(entity, ToolState)) continue;
 
       const call = world.get(entity, ToolCall);
       const current = pendingStates.get(entity) ?? world.get(entity, ToolState);

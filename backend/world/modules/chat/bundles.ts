@@ -1,5 +1,6 @@
 import { estimateTokenCount } from 'tokenx';
 import { defineBundle, type CommandSink, type Entity } from '../../../ecs/types';
+import { createStableId } from '../../../utils/stableId';
 import type { ContentPart, ContentRole, InlineDataPart, LlmUsageMetadataRecord, MessageContent, MessageRevisionReason, MsgRole, MsgStatus } from '../../../../shared/protocol';
 import { isInlineDataPart } from '../../../../shared/protocol';
 import {
@@ -34,14 +35,14 @@ export function spawnConversation(cmd: CommandSink, input: { id: string; title?:
 export function spawnConversationReuseLink(cmd: CommandSink, input: { key: string; conversation: Entity; agent?: Entity }): Entity {
   const entity = cmd.spawn();
   const now = Date.now();
-  cmd.add(entity, ConversationReuseLink, { id: `crl${entity}`, key: input.key, conversation: input.conversation, ...(input.agent !== undefined ? { agent: input.agent } : {}), createdAt: now, updatedAt: now });
+  cmd.add(entity, ConversationReuseLink, { id: createStableId('crl'), key: input.key, conversation: input.conversation, ...(input.agent !== undefined ? { agent: input.agent } : {}), createdAt: now, updatedAt: now });
   return entity;
 }
 
 export function spawnConversationBranchLink(cmd: CommandSink, input: { sourceConversation: Entity; targetConversation: Entity; sourceRevision?: Entity; kind: 'fork' | 'branch_from_revision' }): Entity {
   const entity = cmd.spawn();
   const now = Date.now();
-  cmd.add(entity, ConversationBranchLink, { id: `cbl${entity}`, sourceConversation: input.sourceConversation, targetConversation: input.targetConversation, ...(input.sourceRevision !== undefined ? { sourceRevision: input.sourceRevision } : {}), kind: input.kind, createdAt: now, updatedAt: now });
+  cmd.add(entity, ConversationBranchLink, { id: createStableId('cbl'), sourceConversation: input.sourceConversation, targetConversation: input.targetConversation, ...(input.sourceRevision !== undefined ? { sourceRevision: input.sourceRevision } : {}), kind: input.kind, createdAt: now, updatedAt: now });
   return entity;
 }
 
@@ -52,7 +53,7 @@ export function spawnConversationOriginLink(
   const entity = cmd.spawn();
   const now = Date.now();
   cmd.add(entity, ConversationOriginLink, {
-    id: input.id ?? `col${entity}`,
+    id: input.id ?? createStableId('col'),
     conversation: input.conversation,
     originKind: input.originKind,
     ...(input.sourceKind !== undefined ? { sourceKind: input.sourceKind } : {}),
@@ -73,6 +74,7 @@ export function spawnConversationOriginLink(
 }
 
 export interface SpawnMessageInput {
+  id?: string;
   parent: Entity;
   role: MsgRole;
   model?: string;
@@ -91,7 +93,7 @@ export function spawnMessage(cmd: CommandSink, input: SpawnMessageInput): Entity
     parts: input.parts ?? []
   };
   cmd.add(entity, Message, {
-    id: `m${entity}`,
+    id: input.id ?? createStableId('msg'),
     role: input.role,
     ...(input.model !== undefined ? { model: input.model } : {}),
     content,
@@ -108,24 +110,24 @@ export function spawnMessage(cmd: CommandSink, input: SpawnMessageInput): Entity
 export function spawnMessageRevision(cmd: CommandSink, message: Entity, content: MessageContent, reason: MessageRevisionReason): Entity {
   const revision = cmd.spawn();
   cmd.add(revision, MessageRevision, {
-    id: `rev${revision}`,
+    id: createStableId('rev'),
     content,
     createdAt: Date.now(),
     reason
   });
   cmd.add(revision, PartOf, { parent: message });
   const link = cmd.spawn();
-  cmd.add(link, MessageCurrentRevisionLink, { id: `mcr${link}`, message, revision });
+  cmd.add(link, MessageCurrentRevisionLink, { id: createStableId('mcr'), message, revision });
   return revision;
 }
 
-export function spawnUserMessage(cmd: CommandSink, conversation: Entity, text: string): Entity {
-  return spawnMessage(cmd, { parent: conversation, role: 'user', parts: [{ text }], status: 'complete', usageMetadata: estimateUserInputUsage(text) });
+export function spawnUserMessage(cmd: CommandSink, conversation: Entity, text: string, id?: string): Entity {
+  return spawnMessage(cmd, { id, parent: conversation, role: 'user', parts: [{ text }], status: 'complete', usageMetadata: estimateUserInputUsage(text) });
 }
 
-export function spawnUserContentMessage(cmd: CommandSink, conversation: Entity, content: MessageContent): Entity {
+export function spawnUserContentMessage(cmd: CommandSink, conversation: Entity, content: MessageContent, id?: string): Entity {
   const usageMetadata = estimateUserContentUsage(content);
-  return spawnMessage(cmd, { parent: conversation, role: 'user', parts: content.parts, status: 'complete', usageMetadata });
+  return spawnMessage(cmd, { id, parent: conversation, role: 'user', parts: content.parts, status: 'complete', usageMetadata });
 }
 
 export function estimateUserInputUsage(text: string): LlmUsageMetadataRecord | undefined {
@@ -209,8 +211,8 @@ export function cloneMessageToConversation(cmd: CommandSink, conversation: Entit
   return spawnMessage(cmd, { parent: conversation, role: message.role, model: message.model, parts: overrideContent?.parts ?? message.content.parts, status: message.status === 'streaming' ? 'error' : message.status, usageMetadata: message.usageMetadata, revisionReason: 'created' });
 }
 
-export function spawnModelMessage(cmd: CommandSink, conversation: Entity, model?: string): Entity {
-  const entity = spawnMessage(cmd, { parent: conversation, role: 'model', model, parts: [], status: 'streaming' });
+export function spawnModelMessage(cmd: CommandSink, conversation: Entity, model?: string, id?: string): Entity {
+  const entity = spawnMessage(cmd, { id, parent: conversation, role: 'model', model, parts: [], status: 'streaming' });
   cmd.add(entity, Streaming, true);
   return entity;
 }
@@ -219,9 +221,10 @@ function contentRoleForMessage(role: MsgRole): ContentRole { return role; }
 
 export function spawnToolResponseMessage(
   cmd: CommandSink,
-  input: { conversation: Entity; toolCallId: string; toolName: string; status: 'success' | 'warning' | 'error'; response: unknown; parts?: Extract<ContentPart, { inlineData: unknown }>[]; durationMs?: number }
+  input: { conversation: Entity; toolCallId: string; toolName: string; status: 'success' | 'warning' | 'error'; response: unknown; parts?: Extract<ContentPart, { inlineData: unknown }>[]; durationMs?: number; id?: string }
 ): Entity {
   return spawnMessage(cmd, {
+    id: input.id,
     parent: input.conversation,
     role: 'user',
     parts: [{
@@ -233,14 +236,16 @@ export function spawnToolResponseMessage(
   });
 }
 
-export function spawnLlmRequest(cmd: CommandSink, input: { run: Entity; conversation: Entity; modelMessage: Entity; invocation?: Entity; requestId?: string }): Entity {
+export function spawnLlmRequest(cmd: CommandSink, input: { run: Entity; conversation: Entity; modelMessage: Entity; invocation?: Entity; requestId?: string; attempt?: number }): Entity {
   const entity = cmd.spawn();
   cmd.add(entity, LlmRequest, {
-    id: input.requestId ?? `req${entity}`,
+    id: input.requestId ?? createStableId('llmreq'),
     run: input.run,
     conversation: input.conversation,
     modelMessage: input.modelMessage,
-    ...(input.invocation !== undefined ? { invocation: input.invocation } : {})
+    ...(input.invocation !== undefined ? { invocation: input.invocation } : {}),
+    createdAt: Date.now(),
+    ...(input.attempt !== undefined ? { attempt: input.attempt } : {})
   });
   return entity;
 }

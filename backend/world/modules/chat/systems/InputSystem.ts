@@ -7,7 +7,7 @@ import { Agent, AgentConversationLink, ConversationAgentSelection } from '../../
 import { AgentRun, AgentRunNeedsModel, AgentRunSourceLink, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink } from '../../agentRun/components';
 import { AgentRunBundle, spawnAgentRun, spawnMessageRunLink } from '../../agentRun/bundles';
 import { cleanupRunLlmRequests } from '../../agentRun/llmRequestCleanup';
-import { answerBridgeIdForConversation, defaultAgentForConversation, effectiveEditPolicyForRun, findAgentById, runTarget } from '../../agentRun/queries';
+import { answerBridgeIdForConversation, defaultAgentForConversation, effectiveEditPolicyForRun, findAgentById, findConversationById, runTarget } from '../../agentRun/queries';
 import type { ChatSendPayload, MessageContent } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
 import { Checkpoint, CheckpointBarrier } from '../../checkpoint/components';
@@ -39,7 +39,7 @@ export const InputSystem = defineSystem({
   run(ctx) {
     const { world, cmd } = ctx;
     for (const payload of readEvents(ctx, ChatEventType.Send)) {
-      const conversation = findConversation(world, payload.conversationId);
+      const conversation = findConversationById(world, payload.conversationId);
       if (conversation === undefined) continue;
       handleSend(world, cmd, conversation, payload);
     }
@@ -163,8 +163,4 @@ function activeRunsForConversation(world: WorldReader, conversation: Entity): En
 
 function isTerminalRunStatus(status: string): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'stale';
-}
-
-function findConversation(world: WorldReader, conversationId: string): Entity | undefined {
-  return world.query(Conversation).find((entity) => world.get(entity, Conversation)?.id === conversationId);
 }

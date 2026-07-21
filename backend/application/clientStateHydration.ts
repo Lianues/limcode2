@@ -1,4 +1,4 @@
-import type { Entity, World } from '../ecs/types';
+import type { ComponentType, Entity, World } from '../ecs/types';
 import { Agent, AgentConversationLink, AgentKind, AgentStatus, ConversationAgentSelection } from '../world/modules/agent/components';
 import {
   ConversationWorkflowSelection,
@@ -89,6 +89,7 @@ import {
 } from '../world/modules/compression/components';
 import type { ClientState, MessageRecord, ToolCallEventRecord, ToolCallRecord } from '../../shared/protocol';
 import { createDefaultAgentRecord, DEFAULT_AGENT_NAME, DEFAULT_CONVERSATION_ID } from './defaults';
+import { assertUniqueClientStateIds, assertUniqueRecords, buildUniqueComponentIndex } from '../utils/uniqueIds';
 
 export interface HydrateClientStateSkeletonOptions {
   allowDefaults?: boolean;
@@ -99,6 +100,7 @@ export function hydrateClientStateSkeleton(world: World, state: ClientState, opt
   const allowDefaults = options.allowDefaults ?? true;
   const resetSeq = options.resetMessageSeq ?? true;
   if (resetSeq) resetMessageSeqState();
+  assertUniqueClientStateIds(state, 'hydrateClientStateSkeleton');
 
   const hasAnyState = hasClientStateRecords(state);
   if (!hasAnyState) return false;
@@ -266,6 +268,7 @@ function hasClientStateRecords(state: ClientState): boolean {
 }
 
 export async function hydrateConversationDetail(world: World, state: ClientState, conversationId: string): Promise<boolean> {
+  assertUniqueClientStateIds(state, `hydrateConversationDetail:${conversationId}`);
   const conversationEntities = existingRecords(world, Conversation);
   const conversation = conversationEntities.get(conversationId);
   if (conversation === undefined) return false;
@@ -334,7 +337,7 @@ export async function hydrateConversationDetail(world: World, state: ClientState
   }
 
   const existingRunIdsBeforeHydration = existingIds(world, AgentRun);
-  const runEntities = hydrateRecordsUnique(world, state.agentRuns ?? [], AgentRun);
+  const runEntities = hydrateAgentRunRecords(world, state.agentRuns ?? []);
   const agentAnswerEntities = hydrateRecordsUnique(world, state.agentAnswers ?? [], AgentAnswer);
   const llmInvocationEntities = hydrateLlmInvocationRecords(world, state.llmInvocations ?? []);
   const conversationPolicyEntities = hydrateRecordsUnique(world, state.runConversationPolicies, RunConversationPolicy);
@@ -686,36 +689,79 @@ function spawnHydratedToolCallEvent(world: World, toolCalls: Map<string, Entity>
   world.add(entity, PartOf, { parent: toolCall });
 }
 
-function hydrateRecords<T extends { id: string }>(world: World, records: T[] | undefined, component: { id: symbol }): Map<string, Entity> {
+function hydrateRecords<T extends { id: string }>(world: World, records: T[] | undefined, component: ComponentType<T>): Map<string, Entity> {
+  assertUniqueRecords(records, component.name);
   const entities = new Map<string, Entity>();
   for (const record of records ?? []) {
     const entity = world.spawn();
     entities.set(record.id, entity);
-    world.add(entity, component as never, record as never);
+    world.add(entity, component, record);
   }
   return entities;
 }
 
-function hydrateRecordsUnique<T extends { id: string }>(world: World, records: T[] | undefined, component: { id: symbol }): Map<string, Entity> {
+function hydrateRecordsUnique<T extends { id: string }>(world: World, records: T[] | undefined, component: ComponentType<T>): Map<string, Entity> {
+  assertUniqueRecords(records, component.name);
   const entities = existingRecords<T>(world, component);
   for (const record of records ?? []) {
-    if (entities.has(record.id)) continue;
+    const existing = entities.get(record.id);
+    if (existing !== undefined) {
+      world.add(existing, component, record);
+      continue;
+    }
     const entity = world.spawn();
     entities.set(record.id, entity);
-    world.add(entity, component as never, record as never);
+    world.add(entity, component, record);
   }
   return entities;
 }
 
 function hydrateLlmInvocationRecords(world: World, records: ClientState['llmInvocations'] | undefined): Map<string, Entity> {
+  assertUniqueRecords(records, LlmInvocation.name);
   const entities = existingRecords<ClientState['llmInvocations'][number]>(world, LlmInvocation);
   for (const record of records ?? []) {
-    if (entities.has(record.id)) continue;
+    const next = normalizeHydratedLlmInvocation(record);
+    const existing = entities.get(record.id);
+    if (existing !== undefined) {
+      world.add(existing, LlmInvocation, next);
+      continue;
+    }
     const entity = world.spawn();
     entities.set(record.id, entity);
-    world.add(entity, LlmInvocation, normalizeHydratedLlmInvocation(record));
+    world.add(entity, LlmInvocation, next);
   }
   return entities;
+}
+
+function hydrateAgentRunRecords(world: World, records: ClientState['agentRuns'] | undefined): Map<string, Entity> {
+  assertUniqueRecords(records, AgentRun.name);
+  const entities = existingRecords<ClientState['agentRuns'][number]>(world, AgentRun);
+  for (const record of records ?? []) {
+    const next = normalizeHydratedAgentRun(record);
+    const existing = entities.get(record.id);
+    if (existing !== undefined) {
+      world.add(existing, AgentRun, next);
+      continue;
+    }
+    const entity = world.spawn();
+    entities.set(record.id, entity);
+    world.add(entity, AgentRun, next);
+  }
+  return entities;
+}
+
+function normalizeHydratedAgentRun(record: ClientState['agentRuns'][number]): ClientState['agentRuns'][number] {
+  if (record.status === 'queued' || record.status === 'completed' || record.status === 'failed' || record.status === 'cancelled' || record.status === 'stale') return record;
+  const now = Date.now();
+  return {
+    ...record,
+    status: 'cancelled',
+    updatedAt: Math.max(record.updatedAt, now),
+    completedAt: record.completedAt ?? now,
+    endReason: record.endReason ?? 'cancelled_by_policy',
+    errorType: record.errorType ?? 'cancelled',
+    error: record.error ?? '扩展重启后未完成 AgentRun 已收敛为取消状态。'
+  };
 }
 
 function normalizeHydratedLlmInvocation(record: ClientState['llmInvocations'][number]): ClientState['llmInvocations'][number] {
@@ -741,16 +787,11 @@ function normalizeHydratedCompressionBlock(record: ClientState['compressionBlock
   };
 }
 
-function existingRecords<T extends { id: string }>(world: World, component: { id: symbol }): Map<string, Entity> {
-  const entities = new Map<string, Entity>();
-  for (const entity of world.query(component as never)) {
-    const record = world.get(entity, component as never) as T | undefined;
-    if (record?.id) entities.set(record.id, entity);
-  }
-  return entities;
+function existingRecords<T extends { id: string }>(world: World, component: ComponentType<T>): Map<string, Entity> {
+  return buildUniqueComponentIndex(world, component);
 }
 
-function existingIds<T extends { id: string }>(world: World, component: { id: symbol }): Set<string> {
+function existingIds<T extends { id: string }>(world: World, component: ComponentType<T>): Set<string> {
   return new Set([...existingRecords<T>(world, component).keys()]);
 }
 
@@ -1403,7 +1444,7 @@ function hydrateCheckpointRecords(world: World, state: ClientState, maps: Checkp
 }
 
 
-function spawnLink(world: World, left: Map<string, Entity>, right: Map<string, Entity>, record: any, component: { id: symbol }, leftKey: string, rightKey: string): void {
+function spawnLink(world: World, left: Map<string, Entity>, right: Map<string, Entity>, record: any, component: ComponentType<{ id: string }>, leftKey: string, rightKey: string): void {
   if (existingIds(world, component).has(record.id)) return;
   const leftId = record[`${leftKey}Id`] as string | undefined;
   const rightId = record[`${rightKey}Id`] as string | undefined;
@@ -1416,7 +1457,7 @@ function spawnLink(world: World, left: Map<string, Entity>, right: Map<string, E
   world.add(entity, component as never, { id: record.id, [leftKey]: leftEntity, [rightKey]: rightEntity, role: record.role, createdAt: now, updatedAt: now } as never);
 }
 
-function spawnRunLink(world: World, left: Map<string, Entity>, right: Map<string, Entity>, record: any, component: { id: symbol }, leftKey: string, rightKey: string): void {
+function spawnRunLink(world: World, left: Map<string, Entity>, right: Map<string, Entity>, record: any, component: ComponentType<{ id: string }>, leftKey: string, rightKey: string): void {
   if (existingIds(world, component).has(record.id)) return;
   const leftId = record[`${leftKey}Id`] as string | undefined;
   const rightId = record[`${rightKey}Id`] as string | undefined;

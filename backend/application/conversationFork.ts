@@ -31,6 +31,7 @@ import {
   isFunctionCallPart,
   isFunctionResponsePart
 } from '../../shared/protocol';
+import { createStableId } from '../utils/stableId';
 
 export interface ForkConversationInWorldInput {
   sourceConversationId: string;
@@ -99,7 +100,7 @@ export function forkConversationInWorld(world: World, input: ForkConversationInW
   const sourceRevision = currentRevisionForMessage(world, sourceMessage);
   const branch = world.spawn();
   world.add(branch, ConversationBranchLink, {
-    id: `cbl${branch}`,
+    id: createStableId('cbl'),
     sourceConversation,
     targetConversation: conversation,
     ...(sourceRevision !== undefined ? { sourceRevision } : {}),
@@ -110,7 +111,7 @@ export function forkConversationInWorld(world: World, input: ForkConversationInW
 
   const origin = world.spawn();
   world.add(origin, ConversationOriginLink, {
-    id: `col${origin}`,
+    id: createStableId('col'),
     conversation,
     originKind: 'user',
     sourceKind: 'user',
@@ -165,7 +166,7 @@ function cloneMessages(
     const targetStatus = source.status === 'streaming' ? 'error' : source.status;
     world.add(targetEntity, Message, {
       ...clonePlainData(source),
-      id: `m${targetEntity}`,
+      id: createStableId('msg'),
       content: clonePlainData(source.content),
       status: targetStatus,
       ...(source.status === 'streaming' && source.stopReason === undefined ? { stopReason: 'stale' as const } : {})
@@ -197,7 +198,7 @@ function cloneMessageRevisions(world: World, sourceMessages: readonly Entity[], 
     const targetRevision = world.spawn();
     world.add(targetRevision, MessageRevision, {
       ...clonePlainData(sourceRevision.data),
-      id: `rev${targetRevision}`,
+      id: createStableId('rev'),
       content: clonePlainData(sourceRevision.data.content)
     });
     world.add(targetRevision, PartOf, { parent: targetMessage });
@@ -218,7 +219,7 @@ function cloneMessageRevisions(world: World, sourceMessages: readonly Entity[], 
     if (targetRevision === undefined) {
       targetRevision = world.spawn();
       world.add(targetRevision, MessageRevision, {
-        id: `rev${targetRevision}`,
+        id: createStableId('rev'),
         content: clonePlainData(message.content),
         createdAt: message.createdAt,
         reason: 'created'
@@ -227,7 +228,7 @@ function cloneMessageRevisions(world: World, sourceMessages: readonly Entity[], 
     }
     const targetLink = world.spawn();
     world.add(targetLink, MessageCurrentRevisionLink, {
-      id: `mcr${targetLink}`,
+      id: createStableId('mcr'),
       message: targetMessage,
       revision: targetRevision
     });
@@ -244,7 +245,7 @@ function cloneToolSnapshots(world: World, messageMap: ReadonlyMap<Entity, Entity
     if (targetMessage === undefined || !call || !state) continue;
 
     const targetEntity = world.spawn();
-    const id = `tc${targetEntity}`;
+    const id = createStableId('tc');
     const sourceMessageData = sourceMessage !== undefined ? world.get(sourceMessage, Message) : undefined;
     world.add(targetEntity, ToolCall, {
       ...clonePlainData(call),
@@ -271,7 +272,7 @@ function cloneToolSnapshots(world: World, messageMap: ReadonlyMap<Entity, Entity
     const targetEvent = world.spawn();
     world.add(targetEvent, ToolCallEvent, {
       ...clonePlainData(event),
-      id: `tce${targetEvent}`,
+      id: createStableId('tce'),
       toolCallId: targetToolCall.id
     });
     world.add(targetEvent, PartOf, { parent: targetToolCall.entity });
@@ -300,7 +301,7 @@ function cloneAgentRelations(
     if (!world.has(source.agent, Agent)) continue;
     const targetLink = world.spawn();
     world.add(targetLink, AgentConversationLink, {
-      id: `acl${targetLink}`,
+      id: createStableId('acl'),
       agent: source.agent,
       conversation: targetConversation,
       role: source.role,
@@ -312,7 +313,7 @@ function cloneAgentRelations(
   if (!linkedAgents.has(context.selectedAgent)) {
     const targetLink = world.spawn();
     world.add(targetLink, AgentConversationLink, {
-      id: `acl${targetLink}`,
+      id: createStableId('acl'),
       agent: context.selectedAgent,
       conversation: targetConversation,
       role: 'default',
@@ -367,7 +368,7 @@ function cloneProjectLinks(world: World, sourceConversation: Entity, targetConve
     if (!source || source.conversation !== sourceConversation) continue;
     const target = world.spawn();
     world.add(target, ConversationProjectLink, {
-      id: `cpl-${target}`,
+      id: createStableId('cpl'),
       conversation: targetConversation,
       projectContext: source.projectContext,
       role: source.role,
@@ -383,7 +384,7 @@ function cloneWorkEnvironmentLinks(world: World, sourceConversation: Entity, tar
     if (!source || source.conversation !== sourceConversation) continue;
     const target = world.spawn();
     world.add(target, ConversationWorkEnvironmentLink, {
-      id: `cwel${target}`,
+      id: createStableId('cwel'),
       conversation: targetConversation,
       workEnvironment: source.workEnvironment,
       role: source.role,

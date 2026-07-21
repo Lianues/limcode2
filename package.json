@@ -74,6 +74,7 @@
     "test:agent-answer-response": "npm run compile && node --test tests/agentAnswerResponse.test.cjs",
     "test:plan-review-attention": "npm run compile && node --test tests/planReviewAttention.test.cjs",
     "test:run-agent-interrupt": "npm run compile && node --test tests/runAgentInterrupt.test.cjs",
+    "test:stable-ids": "npm run compile && node --test tests/stableIdsAndHydration.test.cjs",
     "check": "npm run compile && npm run typecheck:webview",
     "vscode:prepublish": "npm run build",
     "package:local": "vsce package --allow-missing-repository"

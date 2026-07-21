@@ -1,4 +1,5 @@
 import { defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
+import { findUniqueById } from '../../../../utils/uniqueIds';
 import { readEvents } from '../../../events';
 import { Agent, AgentConversationLink } from '../../agent/components';
 import {
@@ -75,7 +76,7 @@ export const MessageRetrySystem = defineSystem({
       if (conversation === undefined) continue;
 
       const messages = conversationMessages(world, conversation);
-      const startIndex = messages.findIndex((entity) => world.get(entity, Message)?.id === payload.messageId);
+      const startIndex = messageIndexById(world, messages, payload.messageId);
       if (startIndex < 0) continue;
 
       const modelMessage = messages[startIndex];
@@ -143,6 +144,17 @@ function previousUserMessage(world: WorldReader, messages: Entity[], startIndex:
   return undefined;
 }
 
+function messageIndexById(world: WorldReader, messages: readonly Entity[], messageId: string): number {
+  let index = -1;
+  for (let candidateIndex = 0; candidateIndex < messages.length; candidateIndex += 1) {
+    const entity = messages[candidateIndex]!;
+    if (world.get(entity, Message)?.id !== messageId) continue;
+    if (index >= 0) throw new Error(`Duplicate Message id: ${messageId}`);
+    index = candidateIndex;
+  }
+  return index;
+}
+
 function findConversation(world: WorldReader, conversationId: string): Entity | undefined {
-  return world.query(Conversation).find((entity) => world.get(entity, Conversation)?.id === conversationId);
+  return findUniqueById(world, Conversation, conversationId);
 }

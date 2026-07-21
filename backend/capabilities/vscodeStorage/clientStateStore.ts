@@ -56,7 +56,7 @@ import type {
 import { createEmptyClientState } from '../../../shared/clientStateSchema';
 import { INDEX_FILE, STORAGE_VERSION } from './constants';
 import { createVscodeStoragePaths } from './paths';
-import { loadRecordStore, saveRecordStore } from './recordStore';
+import { loadRecordStore, removeRecordStoreRecord, saveRecordStore } from './recordStore';
 import { readJson, writeJson } from './json';
 import { loadGlobalSettingsFile } from './globalSettings';
 import {
@@ -68,6 +68,8 @@ import {
   truncateConversationTimeline
 } from './conversationTimelineStore';
 import { loadConversationCompressionDetail, saveConversationCompressionDetail } from './compressionStore';
+import { assertUniqueClientStateIds, assertUniqueRecords } from '../../utils/uniqueIds';
+import type { DeleteConversationDataResult } from '../types';
 
 export type StoragePaths = ReturnType<typeof createVscodeStoragePaths>;
 
@@ -185,6 +187,7 @@ export async function loadClientStateSkeletonFromStores(paths: StoragePaths, opt
     await loadDeferredSkeletonRecords(paths, state);
   }
 
+  assertUniqueClientStateIds(state, `clientStateSkeleton:${profile}`);
   return hasAnyState(state) ? state : undefined;
 }
 
@@ -341,6 +344,7 @@ export async function loadConversationDetailFromStores(
 
   }
 
+  assertUniqueClientStateIds(state, `conversationDetail:${conversationId}`);
   return hasAnyState(state) ? state : undefined;
 }
 
@@ -351,6 +355,7 @@ export async function loadConversationTimelinePageFromStores(paths: StoragePaths
     copyCompressionTables(page.state, compression);
     pruneCompressionTablesToTimelinePage(page.state, page.pageInfo.startSeq, page.pageInfo.endSeq);
   }
+  assertUniqueClientStateIds(page.state, `conversationTimelinePage:${request.conversationId}`);
   return page;
 }
 
@@ -372,6 +377,7 @@ export async function loadConversationTimelineRangeFromStores(paths: StoragePath
     new Set(state.messages.map((message) => message.id))
   );
   if (runHistory) copyRunHistoryTables(state, runHistory);
+  assertUniqueClientStateIds(state, `conversationTimelineRange:${request.conversationId}`);
   return state;
 }
 
@@ -394,7 +400,8 @@ export async function loadConversationRunHistoryPageFromStores(paths: StoragePat
   const pageIndex = Math.min(requestedPageIndex, pageCount - 1);
   const pageRecord = index?.pages[pageIndex];
   const page = pageRecord ? await readRunHistoryPage(paths, request.conversationId, pageRecord.file) : undefined;
-  const runs = page?.runs ?? [];
+  const runs = (page?.runs ?? []).map(normalizeRestoredRunLikeRecord);
+  assertUniqueRecords(runs, `runHistoryPage:${request.conversationId}`);
 
   return {
     conversationId: request.conversationId,
@@ -466,7 +473,54 @@ async function loadConversationRunHistoryForMessagesFromStores(paths: StoragePat
   return state;
 }
 
+export async function deleteConversationDataFromStores(paths: StoragePaths, conversationId: string): Promise<DeleteConversationDataResult> {
+  const deletedPaths: string[] = [];
+  const errors: string[] = [];
+  const normalizedConversationId = conversationId.trim();
+  if (!normalizedConversationId) {
+    return { ok: false, conversationId, deletedPaths, errors: ['conversationId is empty'] };
+  }
+
+  const runIds = await collectRunIdsForDeletion(paths, normalizedConversationId, errors);
+
+  await tryDeleteUri(conversationDetailRoot(paths, normalizedConversationId), deletedPaths, errors, { recursive: true });
+  await tryDeleteUri(runHistoryRoot(paths, normalizedConversationId), deletedPaths, errors, { recursive: true });
+  for (const runId of runIds) {
+    await tryDeleteUri(runDetailUri(paths, runId), deletedPaths, errors);
+  }
+
+  for (const root of [
+    paths.compressionBlocksRootUri,
+    paths.compressionBlockSourceLinksRootUri,
+    paths.compressionContextVariantsRootUri,
+    paths.compressionBlockLlmInvocationLinksRootUri,
+    paths.compressionLlmInvocationsRootUri
+  ]) {
+    await tryDeleteUri(vscode.Uri.joinPath(root, 'conversations', safeShardName(normalizedConversationId)), deletedPaths, errors, { recursive: true });
+  }
+
+  await removeStoreRecord(paths.conversationsRootUri, paths.conversationsIndexUri, normalizedConversationId, 'conversation', deletedPaths, errors);
+  await pruneStoreRecords<ConversationReuseLinkRecord>(...subStore(paths.conversationsRootUri, CONVERSATION_REUSE_LINKS_DIR), 'link', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
+  await pruneStoreRecords<ConversationBranchLinkRecord>(...subStore(paths.conversationsRootUri, CONVERSATION_BRANCH_LINKS_DIR), 'link', (record) => record.sourceConversationId === normalizedConversationId || record.targetConversationId === normalizedConversationId, deletedPaths, errors);
+  await pruneStoreRecords<ConversationOriginLinkRecord>(...subStore(paths.conversationsRootUri, CONVERSATION_ORIGIN_LINKS_DIR), 'link', (record) => record.conversationId === normalizedConversationId || record.sourceConversationId === normalizedConversationId || runIds.has(record.sourceRunId ?? ''), deletedPaths, errors);
+  await pruneStoreRecords<AgentConversationLinkRecord>(paths.linksRootUri, paths.linksIndexUri, 'link', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
+  await pruneStoreRecords<ConversationAgentSelectionRecord>(paths.conversationAgentSelectionsRootUri, paths.conversationAgentSelectionsIndexUri, 'selection', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
+  await pruneStoreRecords<ConversationWorkflowSelectionRecord>(paths.conversationWorkflowSelectionsRootUri, paths.conversationWorkflowSelectionsIndexUri, 'selection', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
+  await pruneStoreRecords<ConversationProjectLinkRecord>(paths.conversationProjectLinksRootUri, paths.conversationProjectLinksIndexUri, 'link', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
+  await pruneStoreRecords<ConversationWorkEnvironmentLinkRecord>(paths.conversationWorkEnvironmentLinksRootUri, paths.conversationWorkEnvironmentLinksIndexUri, 'link', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
+  await pruneStoreRecords<ConversationRuntimeContextSnapshotLinkRecord>(paths.conversationRuntimeContextSnapshotLinksRootUri, paths.conversationRuntimeContextSnapshotLinksIndexUri, 'link', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
+  await pruneStoreRecords<ConversationCheckpointRepositoryLinkRecord>(paths.conversationCheckpointRepositoryLinksRootUri, paths.conversationCheckpointRepositoryLinksIndexUri, 'link', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
+
+  if (runIds.size > 0) {
+    await pruneStoreRecords<RunRuntimeContextSnapshotLinkRecord>(paths.runRuntimeContextSnapshotLinksRootUri, paths.runRuntimeContextSnapshotLinksIndexUri, 'link', (record) => runIds.has(record.runId), deletedPaths, errors);
+    await pruneStoreRecords<RunWorkEnvironmentLinkRecord>(paths.runWorkEnvironmentLinksRootUri, paths.runWorkEnvironmentLinksIndexUri, 'link', (record) => runIds.has(record.runId), deletedPaths, errors);
+  }
+
+  return { ok: errors.length === 0, conversationId: normalizedConversationId, deletedPaths, errors };
+}
+
 export async function saveClientStateSkeletonToStores(paths: StoragePaths, state: ClientState): Promise<void> {
+  assertUniqueClientStateIds(state, 'saveClientStateSkeleton');
   const results = await Promise.allSettled([
     saveRecords(paths.agentsRootUri, paths.agentsIndexUri, state.agents, 'agent', (record) => record.name || record.id),
     saveRecords(paths.workflowsRootUri, paths.workflowsIndexUri, state.workflows, 'workflow', (record) => record.name || record.id),
@@ -517,7 +571,9 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
 }
 
 export async function saveConversationRenderDetailToStores(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
+  assertUniqueClientStateIds(state, `saveConversationRenderDetail:${conversationId}:source`);
   const detail = conversationRenderDetailSlice(state, conversationId);
+  assertUniqueClientStateIds(detail, `saveConversationRenderDetail:${conversationId}:detail`);
   const compression = createEmptyClientState();
   copyCompressionTables(compression, detail);
   const incrementalSaved = await saveConversationTimelineRenderDetailIncremental(paths, conversationId, detail);
@@ -547,7 +603,9 @@ export async function saveConversationRunHistoryToStores(
   const settings = (await loadGlobalSettingsFile(paths.settingsRootUri, 'runHistory')).settings as RunHistorySettingsRecord;
   if (!settings.detailPersistenceEnabled) return;
 
+  assertUniqueClientStateIds(state, `saveConversationRunHistory:${conversationId}:source`);
   const detail = conversationRunHistorySlice(state, conversationId);
+  assertUniqueClientStateIds(detail, `saveConversationRunHistory:${conversationId}:detail`);
   if (options.mode === 'merge' && !hasRunHistoryRecords(detail)) return;
 
   const runDetails = detail.agentRuns.map((run) => conversationRunDetailRecord(state, conversationId, run.id)).filter(isDefined);
@@ -923,25 +981,36 @@ function conversationRunSummaryFromDetail(conversationId: string, detail: Client
 async function loadRunHistoryIndex(paths: StoragePaths, conversationId: string): Promise<ConversationRunHistoryIndexFile | undefined> {
   const index = await readJson<ConversationRunHistoryIndexFile>(vscode.Uri.joinPath(runHistoryRoot(paths, conversationId), INDEX_FILE));
   if (!index || index.schemaVersion !== STORAGE_VERSION || index.conversationId !== conversationId) return undefined;
-  return index;
+  assertUniqueRecords(index.runs, `runHistoryIndex:${conversationId}`);
+  return { ...index, runs: index.runs.map(normalizeRestoredRunLikeRecord) };
 }
 
 async function readRunHistoryPage(paths: StoragePaths, conversationId: string, file: string): Promise<ConversationRunHistoryPageFile | undefined> {
   const page = await readJson<ConversationRunHistoryPageFile>(vscode.Uri.joinPath(runHistoryRoot(paths, conversationId), ...file.split('/')));
   if (!page || page.schemaVersion !== STORAGE_VERSION || page.conversationId !== conversationId) return undefined;
-  return page;
+  assertUniqueRecords(page.runs, `runHistoryPage:${conversationId}:${file}`);
+  return { ...page, runs: page.runs.map(normalizeRestoredRunLikeRecord) };
 }
 
 async function loadRunDetail(paths: StoragePaths, conversationId: string, runId: string): Promise<ConversationRunDetailRecord | undefined> {
   const file = await readJson<RunHistoryDetailFile>(runDetailUri(paths, runId));
   if (!file || file.schemaVersion !== STORAGE_VERSION || file.runId !== runId) return undefined;
-  const summary = file.summaries.find((candidate) => candidate.conversationId === conversationId);
+  assertUniqueRecords(file.summaries, `runDetailSummaries:${runId}`);
+  assertUniqueClientStateIds(file.state, `runDetailState:${runId}`);
+  const state = { ...file.state, agentRuns: file.state.agentRuns.map(normalizeRestoredRunLikeRecord) };
+  const summaries = file.summaries.map(normalizeRestoredRunLikeRecord);
+  const summary = summaries.find((candidate) => candidate.conversationId === conversationId);
   if (!summary) return undefined;
-  return { conversationId, runId: file.runId, summary, state: file.state };
+  return { conversationId, runId: file.runId, summary, state };
 }
 
 async function writeRunDetail(paths: StoragePaths, record: ConversationRunDetailRecord): Promise<void> {
+  assertUniqueClientStateIds(record.state, `writeRunDetail:${record.runId}:record`);
   const existing = await readJson<RunHistoryDetailFile>(runDetailUri(paths, record.runId));
+  if (existing?.schemaVersion === STORAGE_VERSION && existing.runId === record.runId) {
+    assertUniqueRecords(existing.summaries, `writeRunDetail:${record.runId}:existingSummaries`);
+    assertUniqueClientStateIds(existing.state, `writeRunDetail:${record.runId}:existingState`);
+  }
   const state = createEmptyClientState();
   if (existing?.schemaVersion === STORAGE_VERSION && existing.runId === record.runId) {
     mergeClientStateTables(state, existing.state, RUN_DETAIL_TABLE_KEYS);
@@ -1014,7 +1083,12 @@ function mergeClientStateTables(target: ClientState, source: ClientState, keys: 
 }
 
 function upsertManyById<T extends StoreRecord>(left: T[], right: T[]): T[] {
-  return [...new Map([...left, ...right].map((item) => [item.id, item])).values()];
+  assertUniqueRecords(left, 'upsertManyById.left');
+  assertUniqueRecords(right, 'upsertManyById.right');
+  const byId = new Map<string, T>();
+  for (const item of left) byId.set(item.id, item);
+  for (const item of right) byId.set(item.id, item);
+  return [...byId.values()];
 }
 
 function normalizeRunHistoryPageSize(value: number | undefined): number {
@@ -1061,6 +1135,71 @@ async function loadRecords<TRecord extends StoreRecord>(root: vscode.Uri, indexU
   return (await loadRecordStore<TRecord, string>(root, indexUri, recordKey)) ?? [];
 }
 
+async function removeStoreRecord(
+  root: vscode.Uri,
+  indexUri: vscode.Uri,
+  id: string,
+  recordKey: StoreKey,
+  deletedPaths: string[],
+  errors: string[]
+): Promise<void> {
+  try {
+    await removeRecordStoreRecord(root, indexUri, id, recordKey);
+    deletedPaths.push(indexUri.fsPath);
+  } catch (error) {
+    errors.push(`remove ${recordKey}:${id}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function pruneStoreRecords<TRecord extends StoreRecord>(
+  root: vscode.Uri,
+  indexUri: vscode.Uri,
+  recordKey: StoreKey,
+  shouldDelete: (record: TRecord) => boolean,
+  deletedPaths: string[],
+  errors: string[]
+): Promise<void> {
+  try {
+    const records = await loadRecords<TRecord>(root, indexUri, recordKey);
+    const next = records.filter((record) => !shouldDelete(record));
+    if (next.length === records.length) return;
+    await saveRecordStore<TRecord, string>(root, indexUri, next, recordKey, (record) => record.id, { pruneMissing: true });
+    deletedPaths.push(indexUri.fsPath);
+  } catch (error) {
+    errors.push(`prune ${recordKey}:${indexUri.fsPath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function collectRunIdsForDeletion(paths: StoragePaths, conversationId: string, errors: string[]): Promise<Set<string>> {
+  try {
+    const index = await loadRunHistoryIndex(paths, conversationId);
+    return new Set(index?.runs.map((run) => run.id) ?? []);
+  } catch (error) {
+    errors.push(`load run history for delete:${conversationId}: ${error instanceof Error ? error.message : String(error)}`);
+    return new Set();
+  }
+}
+
+async function tryDeleteUri(
+  uri: vscode.Uri,
+  deletedPaths: string[],
+  errors: string[],
+  options: { recursive?: boolean } = {}
+): Promise<void> {
+  try {
+    await vscode.workspace.fs.delete(uri, { recursive: options.recursive ?? false, useTrash: false });
+    deletedPaths.push(uri.fsPath);
+  } catch (error) {
+    if (isFileNotFoundError(error)) return;
+    errors.push(`delete ${uri.fsPath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function isFileNotFoundError(error: unknown): boolean {
+  const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
+  return code === 'FileNotFound' || code === 'ENOENT';
+}
+
 async function loadSkeletonRecords<TRecord extends StoreRecord>(
   label: string,
   location: [vscode.Uri, vscode.Uri],
@@ -1100,6 +1239,8 @@ function runDetailUri(paths: StoragePaths, runId: string): vscode.Uri {
 }
 
 function mergeUniqueById<T extends StoreRecord>(left: T[], right: T[]): T[] {
+  assertUniqueRecords(left, 'mergeUniqueById.left');
+  assertUniqueRecords(right, 'mergeUniqueById.right');
   const byId = new Map<string, T>();
   for (const item of left) byId.set(item.id, item);
   for (const item of right) byId.set(item.id, item);
@@ -1113,6 +1254,20 @@ function upsertById<T extends StoreRecord>(items: T[], item: T): T[] {
   const next = [...items];
   next[index] = item;
   return next;
+}
+
+function normalizeRestoredRunLikeRecord<T extends { status: string; updatedAt: number; completedAt?: number; endReason?: string; errorType?: string; error?: string }>(record: T): T {
+  if (record.status === 'queued' || record.status === 'completed' || record.status === 'failed' || record.status === 'cancelled' || record.status === 'stale') return record;
+  const now = Date.now();
+  return {
+    ...record,
+    status: 'cancelled',
+    updatedAt: Math.max(record.updatedAt, now),
+    completedAt: record.completedAt ?? now,
+    endReason: record.endReason ?? 'cancelled_by_policy',
+    errorType: record.errorType ?? 'cancelled',
+    error: record.error ?? '扩展重启后未完成 AgentRun 已收敛为取消状态。'
+  };
 }
 
 function hasAnyState(state: ClientState): boolean {

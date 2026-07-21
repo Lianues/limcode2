@@ -1,4 +1,5 @@
 import { defineBundle, type Entity, type World } from '../../../ecs/types';
+import { createStableId } from '../../../utils/stableId';
 import { Conversation } from '../chat/components';
 import { ConversationProjectLink, ProjectContext } from './components';
 
@@ -62,7 +63,7 @@ export function setConversationProject(world: World, input: SetConversationProje
 
   const linkEntity = world.spawn();
   world.add(linkEntity, ConversationProjectLink, {
-    id: `cpl-${linkEntity}`,
+    id: createStableId('cpl'),
     conversation: input.conversation,
     projectContext,
     role: 'primary',

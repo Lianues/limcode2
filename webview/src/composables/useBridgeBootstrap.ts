@@ -243,6 +243,18 @@ export function useBridgeBootstrap(): void {
     })
   );
 
+  disposers.push(
+    bridge.on(BridgeMessageType.OperationResult, (message) => {
+      const result = message.payload;
+      if (!result || result.ok || !result.message) return;
+      if (result.operation.startsWith('agentRun.') || result.operation.startsWith('queue.')) {
+        runHistory.setError(result.message);
+      } else {
+        conversationTimeline.setError(clientState.currentConversationId, result.message);
+      }
+    })
+  );
+
   // 当前对话 id 变化（Hello 指定 / 全局快照默认回落）时：订阅该对话数据流 + 读取对话设置。
   disposers.push(
     watch(

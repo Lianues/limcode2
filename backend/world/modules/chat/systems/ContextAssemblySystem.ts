@@ -15,6 +15,7 @@ import { spawnCheckpointBarrier } from '../../checkpoint/barriers';
 import { Checkpoint, CheckpointBarrier } from '../../checkpoint/components';
 import { LlmInvocation, MessageLlmInvocationLink, RunLlmInvocationLink } from '../../llm/components';
 import { LlmInvocationBundle, MessageLlmInvocationLinkBundle, spawnLlmInvocation, spawnMessageLlmInvocationLink, spawnRunLlmInvocationLink } from '../../llm/bundles';
+import { createStableId } from '../../../../utils/stableId';
 import { createMessageId } from '../../../../../shared/protocol';
 
 const RunsNeedingModelQuery = defineQuery({
@@ -81,9 +82,9 @@ export const ContextAssemblySystem = defineSystem({
 
       drainQueuedInputsIntoRun(world, cmd, run, target.conversation);
 
-      const invocation = spawnLlmInvocation(cmd);
-      const invocationId = spawnedInvocationId(invocation);
-      const requestId = spawnedInvocationRequestId(invocation);
+      const invocationId = createStableId('llmi');
+      const requestId = createStableId('llmreq');
+      const invocation = spawnLlmInvocation(cmd, { id: invocationId, requestId });
       spawnRunLlmInvocationLink(cmd, { run, invocation });
       const conversation = world.get(target.conversation, Conversation);
       cmd.effect({
@@ -118,7 +119,7 @@ function materializeResolvedInvocation(world: WorldReader, cmd: CommandSink, pay
   const invocation = invocationEntityById(world, payload.invocationId);
   if (invocation === undefined) return;
   const current = world.get(invocation, LlmInvocation);
-  if (!current) return;
+  if (!current || current.requestId !== payload.requestId) return;
 
   const run = runForInvocation(world, invocation);
   if (run === undefined) return;
@@ -141,18 +142,19 @@ function materializeResolvedInvocation(world: WorldReader, cmd: CommandSink, pay
   });
 
   if (messageForInvocation(world, invocation) !== undefined) return;
-  const modelMessage = spawnModelMessage(cmd, target.conversation, payload.settings.displayModelName ?? payload.settings.modelName ?? payload.settings.modelId);
+  const modelMessageId = createStableId('msg');
+  const modelMessage = spawnModelMessage(cmd, target.conversation, payload.settings.displayModelName ?? payload.settings.modelName ?? payload.settings.modelId, modelMessageId);
   spawnMessageRunLink(cmd, { message: modelMessage, run, role: 'model' });
   spawnMessageLlmInvocationLink(cmd, { message: modelMessage, invocation });
-  const request = spawnLlmRequest(cmd, { run, conversation: target.conversation, modelMessage, invocation, requestId: payload.requestId });
-  requestLlmResponseBeforeCheckpoint(world, cmd, run, target.conversation, modelMessage, request, payload.requestId);
+  const request = spawnLlmRequest(cmd, { run, conversation: target.conversation, modelMessage, invocation, requestId: payload.requestId, attempt: runData?.attempt });
+  requestLlmResponseBeforeCheckpoint(world, cmd, run, target.conversation, modelMessage, modelMessageId, request, payload.requestId);
 }
 
 function materializeInvocationResolveError(world: WorldReader, cmd: CommandSink, payload: LlmInvocationResolveErrorPayload): void {
   const invocation = invocationEntityById(world, payload.invocationId);
   if (invocation === undefined) return;
   const current = world.get(invocation, LlmInvocation);
-  if (!current) return;
+  if (!current || current.requestId !== payload.requestId) return;
 
   cmd.add(invocation, LlmInvocation, {
     ...current,
@@ -194,6 +196,7 @@ function requestLlmResponseBeforeCheckpoint(
   run: Entity,
   conversation: Entity,
   modelMessage: Entity,
+  modelMessageId: string,
   llmRequest: Entity,
   llmRequestId: string
 ): void {
@@ -209,26 +212,14 @@ function requestLlmResponseBeforeCheckpoint(
     targetRun: run,
     targetRunId: runData.id,
     targetMessage: modelMessage,
-    targetMessageId: spawnedMessageId(modelMessage),
+    targetMessageId: modelMessageId,
     targetLlmRequest: llmRequest,
     targetLlmRequestId: llmRequestId
   });
   cmd.enqueue({
     type: CheckpointEventType.Requested,
-    payload: { checkpointId, conversationId: conversationData.id, runId: runData.id, floorMessageId: spawnedMessageId(modelMessage), anchorPosition: 'before', trigger: 'llm_response_before' }
+    payload: { checkpointId, conversationId: conversationData.id, runId: runData.id, floorMessageId: modelMessageId, anchorPosition: 'before', trigger: 'llm_response_before' }
   });
-}
-
-function spawnedMessageId(entity: Entity): string {
-  return `m${entity}`;
-}
-
-function spawnedInvocationId(entity: Entity): string {
-  return `llmi${entity}`;
-}
-
-function spawnedInvocationRequestId(entity: Entity): string {
-  return `req${entity}`;
 }
 
 function markRunRunning(world: WorldReader, cmd: CommandSink, run: Entity): void {
@@ -349,7 +340,9 @@ function targetForRun(world: WorldReader, run: Entity): { conversation: Entity }
 }
 
 function invocationEntityById(world: WorldReader, invocationId: string): Entity | undefined {
-  return world.query(LlmInvocation).find((entity) => world.get(entity, LlmInvocation)?.id === invocationId);
+  const matches = world.query(LlmInvocation).filter((entity) => world.get(entity, LlmInvocation)?.id === invocationId);
+  if (matches.length > 1) throw new Error(`Duplicate LlmInvocation id: ${invocationId}`);
+  return matches[0];
 }
 
 function runForInvocation(world: WorldReader, invocation: Entity): Entity | undefined {

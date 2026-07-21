@@ -1,4 +1,5 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
+import { findUniqueById } from '../../../../utils/uniqueIds';
 import { readEvents } from '../../../events';
 import { Agent, AgentConversationLink } from '../../agent/components';
 import { linkAgentToConversation, AgentFromBlueprintBundle } from '../../agent/bundles';
@@ -388,11 +389,17 @@ function currentRevisionLinksForMessage(world: WorldReader, message: Entity): En
 }
 
 function findConversation(world: WorldReader, conversationId: string): Entity | undefined {
-  return world.query(Conversation).find((entity) => world.get(entity, Conversation)?.id === conversationId);
+  return findUniqueById(world, Conversation, conversationId);
 }
 
 function findMessage(world: WorldReader, conversation: Entity, messageId: string): Entity | undefined {
-  return world.query(Message, PartOf).find((entity) => world.get(entity, PartOf)?.parent === conversation && world.get(entity, Message)?.id === messageId);
+  let found: Entity | undefined;
+  for (const entity of world.query(Message, PartOf)) {
+    if (world.get(entity, PartOf)?.parent !== conversation || world.get(entity, Message)?.id !== messageId) continue;
+    if (found !== undefined) throw new Error(`Duplicate Message id: ${messageId}`);
+    found = entity;
+  }
+  return found;
 }
 
 function isTerminalRunStatus(status: string): boolean {

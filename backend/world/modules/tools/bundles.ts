@@ -1,4 +1,5 @@
 import { defineBundle, type CommandSink, type Entity } from '../../../ecs/types';
+import { createStableId } from '../../../utils/stableId';
 import { PartOf } from '../chat/components';
 import { ToolCall, ToolCallEvent, ToolState } from './components';
 import { createToolState } from './state';
@@ -20,12 +21,12 @@ export interface SpawnToolCallEventInput {
   error?: string;
 }
 
-export function spawnToolCall(cmd: CommandSink, input: { modelMessage: Entity; id?: string; name: string; argsJson: string; initialStatus?: ToolCallStatus }): Entity {
+export function spawnToolCall(cmd: CommandSink, input: { modelMessage: Entity; id?: string; functionCallId?: string; name: string; argsJson: string; initialStatus?: ToolCallStatus }): Entity {
   const entity = cmd.spawn();
   const now = Date.now();
-  const id = input.id ?? `tc${entity}`;
+  const id = input.id ?? createStableId('tc');
   const status = input.initialStatus ?? 'queued';
-  cmd.add(entity, ToolCall, { id, functionCallId: id, name: input.name, argsJson: input.argsJson, createdAt: now });
+  cmd.add(entity, ToolCall, { id, functionCallId: input.functionCallId ?? id, name: input.name, argsJson: input.argsJson, createdAt: now });
   cmd.add(entity, PartOf, { parent: input.modelMessage });
   cmd.add(entity, ToolState, createToolState(status, now));
   spawnToolCallEvent(cmd, { toolCall: entity, toolCallId: id, kind: 'created', status, at: now, payload: { name: input.name, argsJson: input.argsJson } });
@@ -36,7 +37,7 @@ export function spawnToolCallEvent(cmd: CommandSink, input: SpawnToolCallEventIn
   const entity = cmd.spawn();
   const at = input.at ?? Date.now();
   cmd.add(entity, ToolCallEvent, {
-    id: `tce${entity}`,
+    id: createStableId('tce'),
     toolCallId: input.toolCallId,
     seq: entity,
     kind: input.kind,

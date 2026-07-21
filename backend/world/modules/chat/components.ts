@@ -96,6 +96,8 @@ export interface LlmRequestData {
   conversation: Entity;
   modelMessage: Entity;
   invocation?: Entity;
+  createdAt?: number;
+  attempt?: number;
 }
 export const LlmRequest = defineComponent<LlmRequestData>('LlmRequest');
 

@@ -23,6 +23,7 @@ import { createVscodeStoragePaths } from './paths';
 import { readJson, writeJson } from './json';
 import { BUILTIN_TIMELINE_PROJECTIONS, type ConversationTimelineChunkData, type TimelineProjectionSpec } from './timelineProjections';
 import { externalizeClientStateAttachments, markClientStateAttachmentsForClient } from './attachmentStore';
+import { assertUniqueRecords } from '../../utils/uniqueIds';
 
 export type StoragePaths = ReturnType<typeof createVscodeStoragePaths>;
 
@@ -884,7 +885,10 @@ function mergeIncrementalRenderDetailIntoChunk(chunk: ConversationTimelineChunkD
 }
 
 function upsertTimelineRecordsById<TRecord extends { id: string }>(existing: readonly TRecord[], next: readonly TRecord[]): TRecord[] {
-  const byId = new Map(existing.map((record) => [record.id, record]));
+  assertUniqueRecords(existing, 'conversationTimeline.existing');
+  assertUniqueRecords(next, 'conversationTimeline.next');
+  const byId = new Map<string, TRecord>();
+  for (const record of existing) byId.set(record.id, record);
   for (const record of next) byId.set(record.id, record);
   return [...byId.values()];
 }
@@ -1204,7 +1208,8 @@ function sortConversationTimelineDetail(state: ClientState): void {
 }
 
 function uniqueById<TRecord extends { id: string }>(records: TRecord[]): TRecord[] {
-  return [...new Map(records.map((record) => [record.id, record])).values()];
+  assertUniqueRecords(records, 'conversationTimeline.detail');
+  return records;
 }
 
 function compareMessagesBySeq(left: MessageRecord, right: MessageRecord): number {

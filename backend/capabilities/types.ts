@@ -615,6 +615,13 @@ export interface RuntimePaths {
 /** VS Code 存储能力：通过 workspace.fs/globalState 读写插件全局数据。 */
 export type ConversationRunHistorySaveMode = 'merge' | 'replace';
 
+export interface DeleteConversationDataResult {
+  ok: boolean;
+  conversationId: string;
+  deletedPaths: string[];
+  errors: string[];
+}
+
 export interface StorageCapability {
   /** 当前 active data root 派生出的路径；数据目录切换后 getter 会返回新路径。 */
   readonly paths: RuntimePaths;
@@ -655,6 +662,7 @@ export interface StorageCapability {
     originLink?: import('../../shared/protocol').ConversationOriginLinkRecord
   ): Promise<void>;
   removeConversationHistoryEntry(conversationId: string): Promise<void>;
+  deleteConversationData(conversationId: string): Promise<DeleteConversationDataResult>;
   saveMessageSnapshot(conversationId: string, message: import('../../shared/protocol').MessageRecord): Promise<void>;
   removeMessage(conversationId: string, messageId: string): Promise<void>;
   saveToolCallSnapshot(conversationId: string, toolCall: ToolCallRecord): Promise<void>;

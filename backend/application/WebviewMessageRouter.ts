@@ -40,6 +40,7 @@ import {
   isInlineDataPart,
   isProviderContextPart,
   isTextPart,
+  type BackgroundCommandKillPayload,
   type BackgroundCommandOutputGetPayload,
   type ChatModelOverrideRecord,
   type BridgeClientId,
@@ -641,6 +642,9 @@ export class WebviewMessageRouter {
       case BridgeMessageType.BackgroundCommandOutputGet:
         if (message.payload) this.postBackgroundCommandOutputResult(clientId, message.payload, message.id);
         break;
+      case BridgeMessageType.BackgroundCommandKill:
+        if (message.payload) this.postBackgroundCommandKillResult(clientId, message.payload, message.id);
+        break;
       default:
         break;
     }
@@ -786,6 +790,23 @@ export class WebviewMessageRouter {
       payload: { ...output, processId, consumed: consume && terminal }
     });
   }
+
+  private postBackgroundCommandKillResult(clientId: BridgeClientId, payload: BackgroundCommandKillPayload, correlationId: string): void {
+    const processId = payload.processId.trim();
+    if (!processId) {
+      this.postRequestError(clientId, BridgeMessageType.BackgroundCommandKill, '缺少后台命令 processId。', correlationId);
+      return;
+    }
+    const output = this.deps.command.kill(processId);
+    this.deps.webview.post(clientId, {
+      id: createMessageId(),
+      type: BridgeMessageType.BackgroundCommandOutputResult,
+      channel: 'state',
+      correlationId,
+      payload: { ...output, processId: output.processId?.trim() || processId, consumed: false }
+    });
+  }
+
   private async postFsStatResult(clientId: BridgeClientId, payload: FsStatGetPayload, correlationId: string): Promise<void> {
     const resolvedPaths = resolveDroppedPaths(payload.paths ?? []);
     const results = await Promise.all(resolvedPaths.map((path) => statPath(path)));

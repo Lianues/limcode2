@@ -198,6 +198,7 @@ export enum BridgeMessageType {
   FsStatGet = 'fs.stat.get',
   FsStatResult = 'fs.stat.result',
   BackgroundCommandOutputGet = 'backgroundCommand.output.get',
+  BackgroundCommandKill = 'backgroundCommand.kill',
   BackgroundCommandOutputResult = 'backgroundCommand.output.result'
 }
 
@@ -2700,6 +2701,10 @@ export interface BackgroundCommandOutputGetPayload {
   consume?: boolean;
 }
 
+export interface BackgroundCommandKillPayload {
+  processId: string;
+}
+
 export interface BackgroundCommandOutputResultPayload {
   processId: string;
   command: string;
@@ -2815,7 +2820,8 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.WorkEnvironmentPolicyScopeSet, WorkEnvironmentPolicyScopeSetPayload>
   | BridgeEnvelope<BridgeMessageType.WorkEnvironmentPolicyScopeClear, WorkEnvironmentPolicyScopeClearPayload>
   | BridgeEnvelope<BridgeMessageType.FsStatGet, FsStatGetPayload>
-  | BridgeEnvelope<BridgeMessageType.BackgroundCommandOutputGet, BackgroundCommandOutputGetPayload>;
+  | BridgeEnvelope<BridgeMessageType.BackgroundCommandOutputGet, BackgroundCommandOutputGetPayload>
+  | BridgeEnvelope<BridgeMessageType.BackgroundCommandKill, BackgroundCommandKillPayload>;
 
 export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.Hello, BridgeHelloPayload>

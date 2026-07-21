@@ -122,6 +122,7 @@ const rootRef = ref<HTMLElement | null>(null);
 const listScroller = ref<HTMLElement | null>(null);
 const detailScroller = ref<HTMLElement | null>(null);
 const runtimeOutputs = ref<Record<string, BackgroundCommandOutputResultPayload>>({});
+const pendingKillRequests = ref<Record<string, true>>({});
 const pendingOutputRequests = new Set<string>();
 let pollTimer: number | undefined;
 let stopOutputListener: (() => void) | undefined;
@@ -172,6 +173,11 @@ onMounted(() => {
     runtimeOutputs.value = { ...runtimeOutputs.value, [payload.processId]: payload };
     pendingOutputRequests.delete(payload.processId + ':peek');
     pendingOutputRequests.delete(payload.processId + ':consume');
+    if (pendingKillRequests.value[payload.processId]) {
+      const next = { ...pendingKillRequests.value };
+      delete next[payload.processId];
+      pendingKillRequests.value = next;
+    }
     if (payload.consumed === true) {
       markViewedTerminalOutputs([payload.processId]);
     }
@@ -197,14 +203,18 @@ function markVisibleTerminalEntriesViewed(): void {
   if (terminalEntries.length === 0) return;
   const terminalProcessIds = terminalEntries.map((entry) => entry.processId);
   markViewedTerminalOutputs(terminalProcessIds);
-  for (const processId of terminalProcessIds) requestOutput(processId, true);
+  for (const entry of terminalEntries) requestOutput(entry.processId, shouldConsumeCommandOutput(entry));
   if (selectedProcessId.value && viewedTerminalOutputs.value[selectedProcessId.value]) selectedProcessId.value = undefined;
 }
 
 function selectEntry(entry: CommandEntry): void {
   selectedProcessId.value = entry.processId;
-  requestOutput(entry.processId, true);
+  requestOutput(entry.processId, shouldConsumeCommandOutput(entry));
   void nextTick(() => detailScroller.value?.scrollTo({ top: 0 }));
+}
+
+function shouldConsumeCommandOutput(entry: CommandEntry): boolean {
+  return entry.killed !== true && entry.status !== 'killed';
 }
 
 function onDocumentPointerDown(event: PointerEvent): void {
@@ -245,7 +255,7 @@ function buildCommandEntries(): CommandEntry[] {
       statusLabel: statusLabel(draft.status, draft.running, draft.exitCode, draft.killed),
       statusTone: statusTone(draft.status, draft.running, draft.exitCode)
     }))
-    .filter((entry) => entry.killed !== true && !(viewedTerminalOutputs.value[entry.processId] && selectedProcessId.value !== entry.processId))
+    .filter((entry) => !(viewedTerminalOutputs.value[entry.processId] && selectedProcessId.value !== entry.processId))
     .sort((left, right) => right.updatedAt - left.updatedAt || right.startedAt - left.startedAt || left.processId.localeCompare(right.processId));
 }
 
@@ -329,6 +339,25 @@ function requestOutput(processId: string, consume = false): void {
   if (!processId || pendingOutputRequests.has(pendingKey)) return;
   pendingOutputRequests.add(pendingKey);
   bridge.request(BridgeMessageType.BackgroundCommandOutputGet, { processId, consume }, { channel: 'state' });
+}
+
+function canKillCommandEntry(entry: CommandEntry | undefined): boolean {
+  if (!entry) return false;
+  const processId = entry.processId.trim();
+  return !!processId && entry.statusTone === 'running' && !pendingKillRequests.value[processId];
+}
+
+function isKillingCommandEntry(entry: CommandEntry | undefined): boolean {
+  if (!entry) return false;
+  const processId = entry.processId.trim();
+  return !!processId && !!pendingKillRequests.value[processId];
+}
+
+function killCommandEntry(entry: CommandEntry | undefined): void {
+  if (!entry || !canKillCommandEntry(entry)) return;
+  const processId = entry.processId.trim();
+  pendingKillRequests.value = { ...pendingKillRequests.value, [processId]: true };
+  bridge.request(BridgeMessageType.BackgroundCommandKill, { processId });
 }
 
 function startPolling(): void {
@@ -424,9 +453,21 @@ function stringifyValue(value: unknown): string {
           <span>后台命令</span>
           <span>{{ panelSummary }}</span>
         </div>
-        <button type="button" class="background-command-close" aria-label="关闭后台命令面板" @click="closePanel">
-          <IconX stroke="2" aria-hidden="true" />
-        </button>
+        <div class="background-command-header-actions">
+          <button
+            v-if="canKillCommandEntry(selectedEntry) || isKillingCommandEntry(selectedEntry)"
+            type="button"
+            class="background-command-action-button"
+            :disabled="isKillingCommandEntry(selectedEntry)"
+            :aria-label="`终止后台命令 ${selectedEntry?.processId}`"
+            @click.stop="killCommandEntry(selectedEntry)"
+          >
+            {{ isKillingCommandEntry(selectedEntry) ? '终止中' : '终止' }}
+          </button>
+          <button type="button" class="background-command-close" aria-label="关闭后台命令面板" @click="closePanel">
+            <IconX stroke="2" aria-hidden="true" />
+          </button>
+        </div>
       </header>
 
       <div v-if="entries.length" class="background-command-body">
@@ -601,6 +642,40 @@ function stringifyValue(value: unknown): string {
 .background-command-title span:last-child {
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-xs);
+}
+
+.background-command-header-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.background-command-action-button {
+  height: 24px;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.32));
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%);
+  font-size: var(--font-size-xs);
+  line-height: 1;
+}
+
+.background-command-action-button:hover,
+.background-command-action-button:focus-visible {
+  border-color: var(--vscode-panel-border, rgba(128, 128, 128, 0.46));
+  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-editor-background) 82%, var(--vscode-foreground) 18%));
+  outline: none;
+}
+
+.background-command-action-button:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .background-command-close {

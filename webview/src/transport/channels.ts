@@ -71,6 +71,7 @@ export function channelForType(type: WebviewToExtensionMessage['type']): BridgeC
     case BridgeMessageType.PlanProposalExport:
     case BridgeMessageType.CheckpointDiffOpen:
     case BridgeMessageType.AttachmentOpen:
+    case BridgeMessageType.BackgroundCommandKill:
       return 'command';
     case BridgeMessageType.ClientResync:
     case BridgeMessageType.ConversationTimelinePageGet:

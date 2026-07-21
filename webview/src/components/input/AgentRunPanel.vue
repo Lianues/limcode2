@@ -144,6 +144,24 @@ function openConversationForEntry(entry: AgentPanelEntry | undefined): void {
   closePanel();
 }
 
+function canTerminateAgentEntry(entry: AgentPanelEntry | undefined): boolean {
+  if (!entry) return false;
+  return !!entry.runId?.trim() && entry.statusTone === 'running';
+}
+
+function terminateAgentEntry(entry: AgentPanelEntry | undefined): void {
+  if (!entry || !canTerminateAgentEntry(entry)) return;
+  const runId = entry.runId?.trim();
+  if (!runId) return;
+  const conversationId = entry.conversationId?.trim();
+  void bridge.request(BridgeMessageType.AgentRunCancel, {
+    runId,
+    ...(conversationId ? { conversationId } : {}),
+    reason: '用户从 Agent 面板终止子 AgentRun。',
+    cascadeChildAgents: true
+  });
+}
+
 function onDocumentPointerDown(event: PointerEvent): void {
   if (!open.value) return;
   const target = event.target;
@@ -554,9 +572,20 @@ function readAnswerPayload(entry: AgentPanelEntry): string {
           <span>Agent 面板</span>
           <span>{{ panelSummary }}</span>
         </div>
-        <button type="button" class="agent-run-close" aria-label="关闭 Agent 面板" @click="closePanel">
-          <IconX stroke="2" aria-hidden="true" />
-        </button>
+        <div class="agent-run-header-actions">
+          <button
+            v-if="canTerminateAgentEntry(selectedEntry)"
+            type="button"
+            class="agent-run-action-button"
+            :aria-label="`终止 AgentRun ${selectedEntry?.runId}`"
+            @click.stop="terminateAgentEntry(selectedEntry)"
+          >
+            终止
+          </button>
+          <button type="button" class="agent-run-close" aria-label="关闭 Agent 面板" @click="closePanel">
+            <IconX stroke="2" aria-hidden="true" />
+          </button>
+        </div>
       </header>
 
       <div v-if="entries.length" class="agent-run-body">
@@ -750,6 +779,35 @@ function readAnswerPayload(entry: AgentPanelEntry): string {
 .agent-run-title span:last-child {
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-xs);
+}
+
+.agent-run-header-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.agent-run-action-button {
+  height: 24px;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.32));
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--vscode-editor-background) 88%, var(--vscode-foreground) 12%);
+  font-size: var(--font-size-xs);
+  line-height: 1;
+}
+
+.agent-run-action-button:hover,
+.agent-run-action-button:focus-visible {
+  border-color: var(--vscode-panel-border, rgba(128, 128, 128, 0.46));
+  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-editor-background) 82%, var(--vscode-foreground) 18%));
+  outline: none;
 }
 
 .agent-run-close {

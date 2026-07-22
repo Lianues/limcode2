@@ -23,7 +23,8 @@ export interface MainPanelOptions {
 
 type MainPanelKind = 'chat' | 'globalSettings' | 'workflowSettings' | 'agentSettings' | 'planDetail';
 
-const PANEL_TAB_TITLE_MAX_DISPLAY_UNITS = 20;
+// VS Code fixed-width tabs need spare room for the icon and hover close action.
+const PANEL_TAB_TITLE_MAX_DISPLAY_UNITS = 14;
 const PANEL_TAB_TITLE_ELLIPSIS = '...';
 
 export class MainPanel {
@@ -102,6 +103,10 @@ export class MainPanel {
     };
   }
 
+  private static panelIconPath(extensionUri: vscode.Uri): vscode.Uri {
+    return vscode.Uri.joinPath(extensionUri, 'assets', 'icons', 'activity-bar-tab.svg');
+  }
+
   private constructor(
     panel: vscode.WebviewPanel,
     extensionUri: vscode.Uri,
@@ -117,6 +122,7 @@ export class MainPanel {
     this.toolCallId = options.toolCallId;
     this.planProposalId = options.planProposalId;
 
+    this.panel.iconPath = MainPanel.panelIconPath(this.extensionUri);
     this.refreshTitle(options.title);
     this.panel.webview.options = MainPanel.webviewPanelOptions(this.extensionUri);
     this.clientId = this.backendApp.attachWebview(panel.webview, {

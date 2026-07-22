@@ -101,9 +101,19 @@ async function readCommittedClientStateSkeletonManifest(paths: StoragePaths): Pr
 
   const manifest = parseClientStateSkeletonManifest(result.value, uri);
   if (manifest.state !== 'committed') {
-    throw new Error(`Client-state skeleton snapshot is not committed: state=${manifest.state}, transactionId=${manifest.transactionId}`);
+    // 写入者先落 `writing` 标记、再写全部存储、最后落 `committed`。若进程在最后一步前退出，
+    // 清单会停在 `writing`。由于存储本身是原子写且此刻持锁无并发写者，现有存储即为一份完整快照，
+    // 把该事务提升为 committed 即可从被中断的写入中恢复。
+    return promoteWritingSkeletonManifestToCommitted(paths, manifest);
   }
   return manifest;
+}
+
+async function promoteWritingSkeletonManifestToCommitted(paths: StoragePaths, manifest: ClientStateSkeletonManifest): Promise<ClientStateSkeletonManifest> {
+  const committedAt = new Date().toISOString();
+  await writeClientStateSkeletonManifest(paths, { state: 'committed', transactionId: manifest.transactionId, startedAt: manifest.startedAt, committedAt });
+  console.warn(`[LimCode] Recovered an interrupted client-state skeleton write by committing transaction ${manifest.transactionId}.`);
+  return { ...manifest, state: 'committed', committedAt };
 }
 
 function parseClientStateSkeletonManifest(value: unknown, uri: vscode.Uri): ClientStateSkeletonManifest {

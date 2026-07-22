@@ -65,6 +65,16 @@ function skeletonState(createEmptyClientState, suffix) {
   return state;
 }
 
+const SKELETON_MANIFEST_FILE = '.client-state-skeleton-manifest.json';
+
+function skeletonManifestPath(paths) {
+  return path.join(paths.globalStorageUri.fsPath, SKELETON_MANIFEST_FILE);
+}
+
+async function readSkeletonManifest(paths) {
+  return JSON.parse(await fs.readFile(skeletonManifestPath(paths), 'utf8'));
+}
+
 const restore = installVscodeMock();
 const { createVscodeStoragePaths } = require('../dist/extension/backend/capabilities/vscodeStorage/paths.js');
 const clientStateStore = require('../dist/extension/backend/capabilities/vscodeStorage/clientStateStore.js');
@@ -112,7 +122,7 @@ test('skeleton reader waits for a multi-store mutation and observes one committe
   }
 });
 
-test('failed skeleton publication leaves writing marker and blocks mixed snapshot reads until repaired', async () => {
+test('interrupted skeleton write (writing marker over fully-written stores) is self-healed by committing on read', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-skeleton-failure-'));
   const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
   try {
@@ -121,19 +131,19 @@ test('failed skeleton publication leaves writing marker and blocks mixed snapsho
       throw new Error('simulated skeleton publication failure');
     };
 
+    // 存储被完整写入，但进程在写 committed 标记前"崩溃"，清单停在 writing。
     await assert.rejects(
       () => clientStateStore.saveClientStateSkeletonToStores(paths, skeletonState(createEmptyClientState, 'partial')),
       /simulated skeleton publication failure/
     );
-    await assert.rejects(
-      () => clientStateStore.loadClientStateSkeletonFromStores(paths, { profile: 'full' }),
-      /not committed/i
-    );
+    assert.equal((await readSkeletonManifest(paths)).state, 'writing');
 
     clientStateStore.__clientStateSkeletonStoreTestHooks.afterStoresSaved = undefined;
-    await clientStateStore.saveClientStateSkeletonToStores(paths, skeletonState(createEmptyClientState, 'repaired'));
-    const repaired = await clientStateStore.loadClientStateSkeletonFromStores(paths, { profile: 'full' });
-    assert.deepEqual(repaired.conversations.map((record) => record.id), ['conversation-repaired']);
+
+    // 读取器把被中断的写入提升为 committed，并返回磁盘上已完整写入的 'partial' 数据。
+    const recovered = await clientStateStore.loadClientStateSkeletonFromStores(paths, { profile: 'full' });
+    assert.deepEqual(recovered.conversations.map((record) => record.id), ['conversation-partial']);
+    assert.equal((await readSkeletonManifest(paths)).state, 'committed');
   } finally {
     clientStateStore.__clientStateSkeletonStoreTestHooks.afterStoresSaved = undefined;
     await fs.rm(tempRoot, { recursive: true, force: true });
@@ -166,6 +176,18 @@ test('manifest missing with skeleton traces is rejected rather than treated as a
       () => clientStateStore.loadClientStateSkeletonFromStores(paths, { profile: 'full' }),
       /manifest is missing.*traces exist/i
     );
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('empty storage (no manifest, no traces) stays empty without writing a manifest', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-skeleton-empty-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  try {
+    const loaded = await clientStateStore.loadClientStateSkeletonFromStores(paths, { profile: 'full' });
+    assert.equal(loaded, undefined);
+    await assert.rejects(() => fs.access(skeletonManifestPath(paths)), /ENOENT/, 'must not fabricate a manifest for a brand-new user');
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }

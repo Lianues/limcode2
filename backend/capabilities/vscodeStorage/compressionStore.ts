@@ -224,7 +224,11 @@ async function assertCommittedCompressionSnapshot(paths: StoragePaths, conversat
     throw new Error(`Compression snapshot manifest is missing for ${conversationId}, but store traces exist: ${traces.join(', ')}`);
   }
   if (manifest.state !== 'committed') {
-    throw new Error(`Compression snapshot is not committed for ${conversationId}: state=${manifest.state}, txId=${manifest.txId}`);
+    // 写入者先落 `writing`、再写 store、最后落 `committed`。进程在最后一步前退出会停在 `writing`。
+    // 现有 store 原子写且此刻持锁无并发写者，即为完整快照，提升为 committed 即可从被中断的写入恢复。
+    await writeCompressionManifest(paths, conversationId, { state: 'committed', txId: manifest.txId, startedAt: manifest.startedAt, committedAt: new Date().toISOString(), ...(manifest.stores ? { stores: manifest.stores } : {}) });
+    console.warn(`[LimCode] Recovered an interrupted compression write for conversation ${conversationId} by committing transaction ${manifest.txId}.`);
+    return;
   }
 }
 

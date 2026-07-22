@@ -139,12 +139,12 @@ class ClientStateDbImpl implements ClientStateDb {
     for (const cascade of spec.cascadeRemove ?? []) {
       const childRecords = this.records(cascade.table);
       const childIds = childRecords
-        .filter((record) => cascadeForeignKeys(cascade).some((foreignKey) => record[foreignKey] === id))
+        .filter((record) => cascadeMatchesRecord(cascade, record, id))
         .map((record) => record.id);
 
       if ('cascade' in cascade && cascade.cascade) {
         for (const childId of childIds) this.removeRegisteredRecord(cascade.table, childId, visited);
-      } else if (removeWhere(childRecords, (record) => cascadeForeignKeys(cascade).some((foreignKey) => record[foreignKey] === id))) {
+      } else if (removeWhere(childRecords, (record) => cascadeMatchesRecord(cascade, record, id))) {
         this.invalidateIndex(cascade.table);
       }
     }
@@ -351,6 +351,11 @@ function setPathValue(root: unknown, path: readonly ClientStatePathKey[], value:
   const parent = getPathValue(root, path.slice(0, -1));
   if (parent === null || parent === undefined) return;
   (parent as Record<ClientStatePathKey, unknown>)[path[path.length - 1]] = value;
+}
+
+function cascadeMatchesRecord(cascade: { readonly foreignKey?: string; readonly foreignKeys?: readonly string[]; readonly scopeKind?: string }, record: ClientStateMutableRecord, id: string): boolean {
+  if (cascade.scopeKind !== undefined && record.scopeKind !== cascade.scopeKind) return false;
+  return cascadeForeignKeys(cascade).some((foreignKey) => record[foreignKey] === id);
 }
 
 function cascadeForeignKeys(cascade: { readonly foreignKey?: string; readonly foreignKeys?: readonly string[] }): readonly string[] {

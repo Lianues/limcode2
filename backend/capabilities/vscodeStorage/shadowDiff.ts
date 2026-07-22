@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { ShadowCheckpointDiffOpenRequest, ShadowCheckpointDiffOpenResult } from '../types';
 import type { StoragePaths } from './clientStateStore';
+import { withShadowWorktreeLock } from './shadowWorktreeLock';
 
 const SHADOW_DIFF_SCHEME = 'limcode-shadow';
 const EMPTY_DOCUMENT_COMMIT = '__limcode_empty__';
@@ -29,26 +30,31 @@ export async function openShadowCheckpointDiff(
   if (!filePath) return { status: 'failed', message: '文件路径为空，无法打开差异。' };
   if (!request.commitSha) return { status: 'failed', message: '该存档点没有可用于比较的 commit。' };
 
-  const worktreePath = path.join(paths.checkpointShadowWorktreesRootPath, request.shadowRepositoryStorageKey);
-  if (!(await exists(path.join(worktreePath, '.git')))) {
-    return { status: 'failed', message: 'shadow 仓库不存在或已被删除，无法打开差异。' };
+  try {
+    return await withShadowWorktreeLock(paths.checkpointShadowWorktreesRootPath, request.shadowRepositoryStorageKey, async ({ worktreePath }) => {
+      if (!(await exists(path.join(worktreePath, '.git')))) {
+        return { status: 'failed', message: 'shadow 仓库不存在或已被删除，无法打开差异。' };
+      }
+
+      const commitCheck = await runGit(worktreePath, ['cat-file', '-e', `${request.commitSha}^{commit}`], { allowExitCodes: [0, 128] });
+      if (commitCheck.exitCode !== 0) return { status: 'failed', message: '存档点对应的 commit 已不存在，无法打开差异。' };
+
+      const parentSha = await resolveParentCommit(worktreePath, request.commitSha);
+      const changed = await fileChangedInCommit(worktreePath, request.commitSha, parentSha, filePath);
+      if (!changed) return { status: 'failed', message: '该存档点没有记录此文件的变化。' };
+
+      ensureShadowDiffProviderRegistered();
+      const leftCommit = parentSha ?? EMPTY_DOCUMENT_COMMIT;
+      const leftUri = shadowDocumentUri(worktreePath, leftCommit, filePath);
+      const rightUri = shadowDocumentUri(worktreePath, request.commitSha, filePath);
+      const title = `${filePath}: ${shortSha(leftCommit)} ↔ ${shortSha(request.commitSha)}`;
+
+      await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, title, { preview: true });
+      return { status: 'opened', message: '已打开 VS Code 差异视图。' };
+    });
+  } catch (error) {
+    return { status: 'failed', message: `打开差异失败：${error instanceof Error ? error.message : String(error)}` };
   }
-
-  const commitCheck = await runGit(worktreePath, ['cat-file', '-e', `${request.commitSha}^{commit}`], { allowExitCodes: [0, 128] });
-  if (commitCheck.exitCode !== 0) return { status: 'failed', message: '存档点对应的 commit 已不存在，无法打开差异。' };
-
-  const parentSha = await resolveParentCommit(worktreePath, request.commitSha);
-  const changed = await fileChangedInCommit(worktreePath, request.commitSha, parentSha, filePath);
-  if (!changed) return { status: 'failed', message: '该存档点没有记录此文件的变化。' };
-
-  ensureShadowDiffProviderRegistered();
-  const leftCommit = parentSha ?? EMPTY_DOCUMENT_COMMIT;
-  const leftUri = shadowDocumentUri(worktreePath, leftCommit, filePath);
-  const rightUri = shadowDocumentUri(worktreePath, request.commitSha, filePath);
-  const title = `${filePath}: ${shortSha(leftCommit)} ↔ ${shortSha(request.commitSha)}`;
-
-  await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, title, { preview: true });
-  return { status: 'opened', message: '已打开 VS Code 差异视图。' };
 }
 
 function ensureShadowDiffProviderRegistered(): vscode.Disposable {

@@ -5,6 +5,8 @@ import { randomBytes } from 'node:crypto';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { CommandCapability, CommandOutputLimits, CommandRunArgs, CommandRunObserver, CommandRunResult, RuntimePaths, WorkEnvironmentCapabilityOptions } from './types';
+import { withSyncStorageResourceLock, type SyncStorageResourceLockOptions } from './vscodeStorage/syncStorageResourceLock';
+import { readJsonFileStrictSync, unlinkWithRetrySync, writeJsonFileAtomicSync } from './vscodeStorage/syncJson';
 import {
   WORK_ENVIRONMENT_CAPABILITY,
   isLocalFolderWorkEnvironment,
@@ -21,6 +23,16 @@ const DEFAULT_OUTPUT_LIMITS: CommandOutputLimits = { maxOutputLines: 100, maxOut
 const BACKGROUND_COMMAND_RECORDS_DIR = 'records';
 const BACKGROUND_COMMAND_STORAGE_VERSION = 1;
 const BACKGROUND_PERSIST_DEBOUNCE_MS = 250;
+const BACKGROUND_OWNER_HEARTBEAT_INTERVAL_MS = 1_000;
+const BACKGROUND_OWNER_HEARTBEAT_TIMEOUT_MS = 5_000;
+const BACKGROUND_COMMAND_LOCK_OPTIONS: SyncStorageResourceLockOptions = {
+  waitMs: 2_500,
+  staleMs: 30_000,
+  pollIntervalMs: 10,
+  invalidMetadataWaitMs: 50,
+  maxRetries: 8,
+  retryDelayMs: 10
+};
 const STREAM_EVENT_FLUSH_INTERVAL_MS = 100;
 const STREAM_EVENT_FLUSH_CHARS = 8 * 1024;
 const MAX_STREAM_EVENT_DELTA_CHARS = 16 * 1024;
@@ -48,7 +60,7 @@ interface CommandSafetyConfig {
   isDangerous?: (args: string[]) => boolean;
 }
 
-type BackgroundCommandPathsProvider = () => Pick<RuntimePaths, 'backgroundCommandsRootPath' | 'backgroundCommandsIndexPath'>;
+type BackgroundCommandPathsProvider = () => Pick<RuntimePaths, 'backgroundCommandsRootPath' | 'backgroundCommandsIndexPath'> | undefined;
 type ForegroundCommandControl = () => boolean;
 
 interface BackgroundCommandIndexRecord {
@@ -66,6 +78,9 @@ interface BackgroundCommandIndexFile {
 interface PersistedBackgroundProcessRecord {
   version: number;
   processId: string;
+  ownerInstanceId: string;
+  ownerPid: number;
+  heartbeatAt: number;
   kind: ShellKind;
   command: string;
   cwd: string;
@@ -81,9 +96,17 @@ interface PersistedBackgroundProcessRecord {
   exitedAt?: number;
 }
 
+interface BackgroundCommandOwner {
+  instanceId: string;
+  pid: number;
+}
+
 /** 一个转入后台运行的命令进程；进程结束后日志持久保留，直到被 output 读取或扩展退出才清理。 */
 interface BackgroundProcessHandle {
   processId: string;
+  ownerInstanceId: string;
+  ownerPid: number;
+  heartbeatAt: number;
   child: ChildProcess;
   kind: ShellKind;
   command: string;
@@ -95,26 +118,32 @@ interface BackgroundProcessHandle {
   startedAt: number;
   exitedAt?: number;
   persistTimer?: ReturnType<typeof setTimeout>;
+  heartbeatTimer?: ReturnType<typeof setInterval>;
   suppressPersist?: boolean;
+  persistDirty?: boolean;
 }
 
 export function createCommandCapability(capabilityOptions: { paths?: BackgroundCommandPathsProvider } = {}): CommandCapability {
   const profile = detectCommandProfile();
+  const owner: BackgroundCommandOwner = { instanceId: createCommandInstanceId(), pid: process.pid };
   const registry = new Map<string, BackgroundProcessHandle>();
   const archived = new Map<string, PersistedBackgroundProcessRecord>();
   const foregroundControls = new Map<string, ForegroundCommandControl>();
   let persistedLoaded = false;
   const ensurePersistedLoaded = (): void => {
-    if (persistedLoaded) return;
-    persistedLoaded = true;
-    loadPersistedBackgroundRecords(capabilityOptions.paths, archived);
+    if (!persistedLoaded) {
+      const loaded = loadPersistedBackgroundRecords(capabilityOptions.paths, archived, owner);
+      if (!loaded) return;
+      persistedLoaded = true;
+    }
+    flushDirtyPersistedHandles(registry, capabilityOptions.paths);
   };
   return {
     toolName: profile.toolName,
     description: profile.description,
     run(args, observer, options, limits) {
       ensurePersistedLoaded();
-      return runCommand(profile, registry, archived, foregroundControls, capabilityOptions.paths, args, observer, options, limits ?? DEFAULT_OUTPUT_LIMITS);
+      return runCommand(profile, owner, registry, archived, foregroundControls, capabilityOptions.paths, args, observer, options, limits ?? DEFAULT_OUTPUT_LIMITS);
     },
     backgroundForeground(executionId) {
       const control = foregroundControls.get(executionId);
@@ -122,11 +151,11 @@ export function createCommandCapability(capabilityOptions: { paths?: BackgroundC
     },
     readOutput(processId, limits, options) {
       ensurePersistedLoaded();
-      return readBackgroundOutput(registry, archived, capabilityOptions.paths, processId, limits ?? DEFAULT_OUTPUT_LIMITS, { consume: options?.consume !== false });
+      return readBackgroundOutput(registry, archived, capabilityOptions.paths, owner, processId, limits ?? DEFAULT_OUTPUT_LIMITS, { consume: options?.consume !== false });
     },
     kill(processId) {
       ensurePersistedLoaded();
-      return killBackgroundProcess(registry, archived, capabilityOptions.paths, processId);
+      return killBackgroundProcess(registry, archived, capabilityOptions.paths, owner, processId);
     },
     dispose() {
       ensurePersistedLoaded();
@@ -135,6 +164,10 @@ export function createCommandCapability(capabilityOptions: { paths?: BackgroundC
       disposeRegistry(registry, capabilityOptions.paths);
     }
   };
+}
+
+function createCommandInstanceId(): string {
+  return `cmd_${Date.now().toString(36)}_${randomBytes(8).toString('hex')}`;
 }
 
 function generateProcessId(registry: Map<string, BackgroundProcessHandle>, archived: Map<string, PersistedBackgroundProcessRecord>): string {
@@ -149,6 +182,7 @@ function readBackgroundOutput(
   registry: Map<string, BackgroundProcessHandle>,
   archived: Map<string, PersistedBackgroundProcessRecord>,
   pathsProvider: BackgroundCommandPathsProvider | undefined,
+  owner: BackgroundCommandOwner,
   processId: string,
   limits: CommandOutputLimits,
   options: { consume?: boolean } = { consume: true }
@@ -164,7 +198,7 @@ function readBackgroundOutput(
     return result;
   }
 
-  const record = archived.get(processId);
+  const record = refreshPersistedBackgroundRecord(pathsProvider, archived, processId, owner) ?? archived.get(processId);
   if (record) {
     const result = resultFromPersistedRecord(record, limits);
     if (record.status !== 'running' && options.consume !== false) deletePersistedBackgroundRecord(pathsProvider, archived, processId);
@@ -177,12 +211,14 @@ function killBackgroundProcess(
   registry: Map<string, BackgroundProcessHandle>,
   archived: Map<string, PersistedBackgroundProcessRecord>,
   pathsProvider: BackgroundCommandPathsProvider | undefined,
+  owner: BackgroundCommandOwner,
   processId: string
 ): CommandRunResult {
   const handle = registry.get(processId);
   if (!handle) {
-    const record = archived.get(processId);
+    const record = refreshPersistedBackgroundRecord(pathsProvider, archived, processId, owner) ?? archived.get(processId);
     if (record) {
+      if (isActiveExternalRunningRecord(record, owner)) return resultFromPersistedRecord(record, DEFAULT_OUTPUT_LIMITS);
       const result = resultFromPersistedRecord({ ...record, status: 'killed', killed: true, exitCode: record.exitCode ?? 1, updatedAt: Date.now(), exitedAt: Date.now() }, DEFAULT_OUTPUT_LIMITS);
       deletePersistedBackgroundRecord(pathsProvider, archived, processId);
       return result;
@@ -192,6 +228,7 @@ function killBackgroundProcess(
   if (handle.status === 'running') {
     handle.status = 'killed';
     handle.exitedAt = Date.now();
+    stopHandleHeartbeat(handle);
     handle.suppressPersist = true;
     killProcessTree(handle.child.pid, handle.kind);
   }
@@ -203,7 +240,10 @@ function disposeRegistry(registry: Map<string, BackgroundProcessHandle>, pathsPr
   for (const handle of registry.values()) {
     if (handle.status === 'running') {
       markAbnormalTermination(handle, '扩展关闭或重启后无法恢复后台进程，已标记为异常终止。');
+      stopHandleHeartbeat(handle);
       killProcessTree(handle.child.pid, handle.kind);
+    } else {
+      stopHandleHeartbeat(handle);
     }
     flushPersist(handle, pathsProvider);
   }
@@ -246,7 +286,7 @@ function resolvePowerShell(): string {
   return cachedPowerShell;
 }
 
-async function runCommand(profile: CommandProfile, registry: Map<string, BackgroundProcessHandle>, archived: Map<string, PersistedBackgroundProcessRecord>, foregroundControls: Map<string, ForegroundCommandControl>, pathsProvider: BackgroundCommandPathsProvider | undefined, args: CommandRunArgs, observer: CommandRunObserver | undefined, options: WorkEnvironmentCapabilityOptions = {}, limits: CommandOutputLimits = DEFAULT_OUTPUT_LIMITS): Promise<CommandRunResult> {
+async function runCommand(profile: CommandProfile, owner: BackgroundCommandOwner, registry: Map<string, BackgroundProcessHandle>, archived: Map<string, PersistedBackgroundProcessRecord>, foregroundControls: Map<string, ForegroundCommandControl>, pathsProvider: BackgroundCommandPathsProvider | undefined, args: CommandRunArgs, observer: CommandRunObserver | undefined, options: WorkEnvironmentCapabilityOptions = {}, limits: CommandOutputLimits = DEFAULT_OUTPUT_LIMITS): Promise<CommandRunResult> {
   const command = (args.command ?? '').trim();
   if (!command) return failedResult('', 'Missing required argument: command');
 
@@ -270,11 +310,11 @@ async function runCommand(profile: CommandProfile, registry: Map<string, Backgro
 
   const cwd = resolveWorkDir(args.cwd, options);
   const foregroundWaitMs = resolveForegroundWaitMs(args.foregroundWaitMs);
-  const raw = await executeCommand(profile, registry, archived, foregroundControls, pathsProvider, command, cwd, foregroundWaitMs, limits, observer, args.executionId);
+  const raw = await executeCommand(profile, owner, registry, archived, foregroundControls, pathsProvider, command, cwd, foregroundWaitMs, limits, observer, args.executionId);
   return annotateResult(profile.kind, raw);
 }
 
-function executeCommand(profile: CommandProfile, registry: Map<string, BackgroundProcessHandle>, archived: Map<string, PersistedBackgroundProcessRecord>, foregroundControls: Map<string, ForegroundCommandControl>, pathsProvider: BackgroundCommandPathsProvider | undefined, command: string, cwd: string, foregroundWaitMs: number, limits: CommandOutputLimits, observer?: CommandRunObserver, executionId?: string): Promise<CommandRunResult> {
+function executeCommand(profile: CommandProfile, owner: BackgroundCommandOwner, registry: Map<string, BackgroundProcessHandle>, archived: Map<string, PersistedBackgroundProcessRecord>, foregroundControls: Map<string, ForegroundCommandControl>, pathsProvider: BackgroundCommandPathsProvider | undefined, command: string, cwd: string, foregroundWaitMs: number, limits: CommandOutputLimits, observer?: CommandRunObserver, executionId?: string): Promise<CommandRunResult> {
   const wrappedCommand = `${profile.commandPrefix ?? ''}${command}`;
   return new Promise((resolve) => {
     const stdout = new AppendBuffer(BACKGROUND_MAX_CHARS);
@@ -310,9 +350,10 @@ function executeCommand(profile: CommandProfile, registry: Map<string, Backgroun
       streamEvents.flush();
       streamEvents = createStreamEventEmitter(undefined); // 停止向已终态的 toolCall 推流，仅写 buffer
       const processId = generateProcessId(registry, archived);
-      handle = { processId, child, kind: profile.kind, command, cwd, stdout, stderr, status: 'running', exitCode: null, startedAt };
+      handle = { processId, ownerInstanceId: owner.instanceId, ownerPid: owner.pid, heartbeatAt: Date.now(), child, kind: profile.kind, command, cwd, stdout, stderr, status: 'running', exitCode: null, startedAt };
       registry.set(processId, handle);
       persistHandle(handle, pathsProvider);
+      startHandleHeartbeat(handle, pathsProvider);
       // 返回截至转后台一刻的输出（全量快照；完整日志随进程继续累积，后续 output 可再全量读取）。
       const out = stdout.snapshot();
       const err = stderr.snapshot();
@@ -366,6 +407,7 @@ function executeCommand(profile: CommandProfile, registry: Map<string, Backgroun
       handle.exitCode = exitCode;
       handle.exitedAt = Date.now();
       if (handle.status !== 'killed') handle.status = 'exited';
+      stopHandleHeartbeat(handle);
       persistHandle(handle, pathsProvider);
       notifyBackgroundExit(handle);
     };
@@ -463,6 +505,25 @@ function schedulePersist(handle: BackgroundProcessHandle, pathsProvider: Backgro
   handle.persistTimer.unref?.();
 }
 
+function startHandleHeartbeat(handle: BackgroundProcessHandle, pathsProvider: BackgroundCommandPathsProvider | undefined): void {
+  if (handle.heartbeatTimer || handle.status !== 'running') return;
+  handle.heartbeatTimer = setInterval(() => {
+    if (handle.status !== 'running') {
+      stopHandleHeartbeat(handle);
+      return;
+    }
+    handle.heartbeatAt = Date.now();
+    persistHandle(handle, pathsProvider);
+  }, BACKGROUND_OWNER_HEARTBEAT_INTERVAL_MS);
+  handle.heartbeatTimer.unref?.();
+}
+
+function stopHandleHeartbeat(handle: BackgroundProcessHandle): void {
+  if (!handle.heartbeatTimer) return;
+  clearInterval(handle.heartbeatTimer);
+  handle.heartbeatTimer = undefined;
+}
+
 function flushPersist(handle: BackgroundProcessHandle, pathsProvider: BackgroundCommandPathsProvider | undefined): void {
   if (handle.persistTimer) {
     clearTimeout(handle.persistTimer);
@@ -473,15 +534,19 @@ function flushPersist(handle: BackgroundProcessHandle, pathsProvider: Background
 
 function persistHandle(handle: BackgroundProcessHandle, pathsProvider: BackgroundCommandPathsProvider | undefined): void {
   if (handle.suppressPersist) return;
-  savePersistedBackgroundRecord(pathsProvider, persistedRecordFromHandle(handle));
+  handle.persistDirty = !savePersistedBackgroundRecord(pathsProvider, persistedRecordFromHandle(handle));
 }
 
 function persistedRecordFromHandle(handle: BackgroundProcessHandle): PersistedBackgroundProcessRecord {
   const out = handle.stdout.snapshot();
   const err = handle.stderr.snapshot();
+  if (handle.status === 'running') handle.heartbeatAt = Date.now();
   return {
     version: BACKGROUND_COMMAND_STORAGE_VERSION,
     processId: handle.processId,
+    ownerInstanceId: handle.ownerInstanceId,
+    ownerPid: handle.ownerPid,
+    heartbeatAt: handle.heartbeatAt,
     kind: handle.kind,
     command: handle.command,
     cwd: handle.cwd,
@@ -505,76 +570,202 @@ function markAbnormalTermination(handle: BackgroundProcessHandle, reason: string
   handle.stderr.append(`${handle.stderr.snapshot().text ? '\n' : ''}[LimCode] ${reason}`);
 }
 
-function loadPersistedBackgroundRecords(pathsProvider: BackgroundCommandPathsProvider | undefined, archived: Map<string, PersistedBackgroundProcessRecord>): void {
+function loadPersistedBackgroundRecords(pathsProvider: BackgroundCommandPathsProvider | undefined, archived: Map<string, PersistedBackgroundProcessRecord>, owner: BackgroundCommandOwner): boolean {
   const locations = backgroundCommandStorageLocations(pathsProvider);
-  if (!locations) return;
-  const index = readBackgroundCommandIndex(locations.indexPath);
-  let changed = false;
-  for (const entry of index.records) {
-    const filePath = path.join(locations.recordsRootPath, entry.file);
-    const record = readJsonFile<PersistedBackgroundProcessRecord>(filePath);
-    if (!isPersistedBackgroundProcessRecord(record)) {
-      changed = true;
-      continue;
-    }
-    let next = record;
-    if (record.status === 'running') {
-      next = {
-        ...record,
-        status: 'exited',
-        exitCode: 1,
-        killed: false,
-        stderr: appendLine(record.stderr, '[LimCode] 扩展重启后无法恢复后台进程，已标记为异常终止。'),
-        updatedAt: Date.now(),
-        exitedAt: Date.now()
-      };
-      writeJsonFile(filePath, next);
-      changed = true;
-    }
-    entry.status = next.status;
-    entry.updatedAt = next.updatedAt;
-    archived.set(next.processId, next);
+  if (!locations) return false;
+  try {
+    return withBackgroundCommandIndexLock(locations.indexPath, () => {
+      const indexResult = readBackgroundCommandIndex(locations.indexPath);
+      if (indexResult.status === 'missing') return true;
+      if (indexResult.status !== 'ok') {
+        warnBackgroundCommandIndexReadFailure('load', indexResult);
+        return false;
+      }
+
+      const index = indexResult.index;
+      const nextRecords: BackgroundCommandIndexRecord[] = [];
+      let changed = false;
+      for (const entry of index.records) {
+        const filePath = path.join(locations.recordsRootPath, entry.file);
+        const recordResult = readJsonFileStrictSync<unknown>(filePath);
+        if (recordResult.status !== 'ok' || !isPersistedBackgroundProcessRecord(recordResult.value)) {
+          console.warn(`[LimCode] Ignoring invalid background command record: ${filePath}`);
+          changed = true;
+          continue;
+        }
+
+        const normalized = normalizePersistedBackgroundRecord(recordResult.value, owner);
+        const next = normalized.record;
+        if (normalized.changed) {
+          writeJsonFileAtomicSync(filePath, next);
+          changed = true;
+        }
+        const nextEntry = { ...entry, status: next.status, updatedAt: next.updatedAt };
+        nextRecords.push(nextEntry);
+        archived.set(next.processId, next);
+      }
+      if (changed) writeBackgroundCommandIndex(locations.indexPath, { version: BACKGROUND_COMMAND_STORAGE_VERSION, records: nextRecords });
+      return true;
+    });
+  } catch (error) {
+    console.warn('[LimCode] Failed to load persisted background command output:', error);
+    return false;
   }
-  if (changed) writeBackgroundCommandIndex(locations.indexPath, { version: BACKGROUND_COMMAND_STORAGE_VERSION, records: index.records.filter((entry) => archived.has(entry.processId)) });
 }
 
-function savePersistedBackgroundRecord(pathsProvider: BackgroundCommandPathsProvider | undefined, record: PersistedBackgroundProcessRecord): void {
+function refreshPersistedBackgroundRecord(
+  pathsProvider: BackgroundCommandPathsProvider | undefined,
+  archived: Map<string, PersistedBackgroundProcessRecord>,
+  processId: string,
+  owner: BackgroundCommandOwner
+): PersistedBackgroundProcessRecord | undefined {
   const locations = backgroundCommandStorageLocations(pathsProvider);
-  if (!locations) return;
+  if (!locations) return archived.get(processId);
   try {
-    fs.mkdirSync(locations.recordsRootPath, { recursive: true });
-    const index = readBackgroundCommandIndex(locations.indexPath);
-    let entry = index.records.find((candidate) => candidate.processId === record.processId);
-    if (!entry) {
-      entry = {
-        processId: record.processId,
-        file: `${formatTimestamp(record.startedAt)}-${safeFileName(record.processId)}.json`,
-        status: record.status,
-        updatedAt: record.updatedAt
-      };
-      index.records.push(entry);
-    } else {
-      entry.status = record.status;
-      entry.updatedAt = record.updatedAt;
-    }
-    writeJsonFile(path.join(locations.recordsRootPath, entry.file), record);
-    writeBackgroundCommandIndex(locations.indexPath, index);
+    return withBackgroundCommandIndexLock(locations.indexPath, () => {
+      const indexResult = readBackgroundCommandIndex(locations.indexPath);
+      if (indexResult.status === 'missing') {
+        archived.delete(processId);
+        return undefined;
+      }
+      if (indexResult.status !== 'ok') {
+        warnBackgroundCommandIndexReadFailure('refresh', indexResult);
+        return archived.get(processId);
+      }
+      const entry = indexResult.index.records.find((candidate) => candidate.processId === processId);
+      if (!entry) {
+        archived.delete(processId);
+        return undefined;
+      }
+      const filePath = path.join(locations.recordsRootPath, entry.file);
+      const recordResult = readJsonFileStrictSync<unknown>(filePath);
+      if (recordResult.status !== 'ok' || !isPersistedBackgroundProcessRecord(recordResult.value)) {
+        console.warn(`[LimCode] Ignoring invalid background command record while refreshing: ${filePath}`);
+        archived.delete(processId);
+        return undefined;
+      }
+      const normalized = normalizePersistedBackgroundRecord(recordResult.value, owner);
+      const next = normalized.record;
+      let indexChanged = false;
+      if (normalized.changed) writeJsonFileAtomicSync(filePath, next);
+      if (entry.status !== next.status || entry.updatedAt !== next.updatedAt) {
+        entry.status = next.status;
+        entry.updatedAt = next.updatedAt;
+        indexChanged = true;
+      }
+      if (indexChanged) writeBackgroundCommandIndex(locations.indexPath, indexResult.index);
+      archived.set(processId, next);
+      return next;
+    });
+  } catch (error) {
+    console.warn('[LimCode] Failed to refresh persisted background command output:', error);
+    return archived.get(processId);
+  }
+}
+
+function normalizePersistedBackgroundRecord(record: PersistedBackgroundProcessRecord, owner: BackgroundCommandOwner): { record: PersistedBackgroundProcessRecord; changed: boolean } {
+  if (record.status !== 'running') return { record, changed: false };
+  if (isActiveExternalRunningRecord(record, owner)) return { record, changed: false };
+  const now = Date.now();
+  return {
+    record: {
+      ...record,
+      status: 'exited',
+      exitCode: 1,
+      killed: false,
+      stderr: appendLine(record.stderr, '[LimCode] 后台命令持有者已停止或心跳超时，已标记为异常终止。'),
+      updatedAt: now,
+      exitedAt: now
+    },
+    changed: true
+  };
+}
+
+function isActiveExternalRunningRecord(record: PersistedBackgroundProcessRecord, owner: BackgroundCommandOwner): boolean {
+  if (record.status !== 'running') return false;
+  if (record.ownerInstanceId === owner.instanceId) return false;
+  if (Date.now() - record.heartbeatAt > BACKGROUND_OWNER_HEARTBEAT_TIMEOUT_MS) return false;
+  return isProcessAlive(record.ownerPid);
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === 'EPERM';
+  }
+}
+
+function flushDirtyPersistedHandles(registry: Map<string, BackgroundProcessHandle>, pathsProvider: BackgroundCommandPathsProvider | undefined): void {
+  for (const handle of registry.values()) {
+    if (handle.persistDirty && !handle.suppressPersist) persistHandle(handle, pathsProvider);
+  }
+}
+
+function savePersistedBackgroundRecord(pathsProvider: BackgroundCommandPathsProvider | undefined, record: PersistedBackgroundProcessRecord): boolean {
+  const locations = backgroundCommandStorageLocations(pathsProvider);
+  if (!locations) return false;
+  try {
+    return withBackgroundCommandIndexLock(locations.indexPath, () => {
+      fs.mkdirSync(locations.recordsRootPath, { recursive: true });
+      const indexResult = readBackgroundCommandIndex(locations.indexPath);
+      if (indexResult.status !== 'ok' && indexResult.status !== 'missing') {
+        warnBackgroundCommandIndexReadFailure('save', indexResult);
+        return false;
+      }
+      const index = indexResult.status === 'ok'
+        ? indexResult.index
+        : { version: BACKGROUND_COMMAND_STORAGE_VERSION, records: [] };
+      let entry = index.records.find((candidate) => candidate.processId === record.processId);
+      if (!entry) {
+        entry = {
+          processId: record.processId,
+          file: `${formatTimestamp(record.startedAt)}-${safeFileName(record.processId)}.json`,
+          status: record.status,
+          updatedAt: record.updatedAt
+        };
+        index.records.push(entry);
+      } else {
+        entry.status = record.status;
+        entry.updatedAt = record.updatedAt;
+      }
+      writeJsonFileAtomicSync(path.join(locations.recordsRootPath, entry.file), record);
+      writeBackgroundCommandIndex(locations.indexPath, index);
+      return true;
+    });
   } catch (error) {
     console.warn('[LimCode] Failed to persist background command output:', error);
+    return false;
   }
 }
 
 function deletePersistedBackgroundRecord(pathsProvider: BackgroundCommandPathsProvider | undefined, archived: Map<string, PersistedBackgroundProcessRecord>, processId: string): void {
-  archived.delete(processId);
   const locations = backgroundCommandStorageLocations(pathsProvider);
-  if (!locations) return;
+  if (!locations) {
+    archived.delete(processId);
+    return;
+  }
   try {
-    const index = readBackgroundCommandIndex(locations.indexPath);
-    const entry = index.records.find((candidate) => candidate.processId === processId);
-    if (entry) {
-      try { fs.unlinkSync(path.join(locations.recordsRootPath, entry.file)); } catch { /* ignore missing record */ }
-    }
-    writeBackgroundCommandIndex(locations.indexPath, { version: BACKGROUND_COMMAND_STORAGE_VERSION, records: index.records.filter((candidate) => candidate.processId !== processId) });
+    const deleted = withBackgroundCommandIndexLock(locations.indexPath, () => {
+      const indexResult = readBackgroundCommandIndex(locations.indexPath);
+      if (indexResult.status === 'missing') return true;
+      if (indexResult.status !== 'ok') {
+        warnBackgroundCommandIndexReadFailure('delete', indexResult);
+        return false;
+      }
+      const index = indexResult.index;
+      const entry = index.records.find((candidate) => candidate.processId === processId);
+      if (entry) unlinkWithRetrySync(path.join(locations.recordsRootPath, entry.file), true);
+      writeBackgroundCommandIndex(locations.indexPath, {
+        version: BACKGROUND_COMMAND_STORAGE_VERSION,
+        records: index.records.filter((candidate) => candidate.processId !== processId)
+      });
+      return true;
+    });
+    if (deleted) archived.delete(processId);
   } catch (error) {
     console.warn('[LimCode] Failed to delete background command output:', error);
   }
@@ -582,7 +773,7 @@ function deletePersistedBackgroundRecord(pathsProvider: BackgroundCommandPathsPr
 
 function backgroundCommandStorageLocations(pathsProvider: BackgroundCommandPathsProvider | undefined): { rootPath: string; indexPath: string; recordsRootPath: string } | undefined {
   const paths = pathsProvider?.();
-  if (!paths) return undefined;
+  if (!paths?.backgroundCommandsRootPath || !paths.backgroundCommandsIndexPath) return undefined;
   return {
     rootPath: paths.backgroundCommandsRootPath,
     indexPath: paths.backgroundCommandsIndexPath,
@@ -590,33 +781,52 @@ function backgroundCommandStorageLocations(pathsProvider: BackgroundCommandPaths
   };
 }
 
-function readBackgroundCommandIndex(indexPath: string): BackgroundCommandIndexFile {
-  const value = readJsonFile<BackgroundCommandIndexFile>(indexPath);
-  if (!value || !Array.isArray(value.records)) return { version: BACKGROUND_COMMAND_STORAGE_VERSION, records: [] };
-  return { version: BACKGROUND_COMMAND_STORAGE_VERSION, records: value.records.filter(isBackgroundCommandIndexRecord) };
+type BackgroundCommandIndexReadResult =
+  | { status: 'ok'; index: BackgroundCommandIndexFile }
+  | { status: 'missing'; path: string; error: unknown }
+  | { status: 'invalid'; path: string; error: unknown }
+  | { status: 'ioError'; path: string; error: unknown };
+
+function readBackgroundCommandIndex(indexPath: string): BackgroundCommandIndexReadResult {
+  const result = readJsonFileStrictSync<unknown>(indexPath);
+  if (result.status === 'missing' || result.status === 'invalid' || result.status === 'ioError') return result;
+  if (!isBackgroundCommandIndexFile(result.value)) {
+    return { status: 'invalid', path: indexPath, error: new Error(`Invalid background command index structure: ${indexPath}`) };
+  }
+  return { status: 'ok', index: { version: BACKGROUND_COMMAND_STORAGE_VERSION, records: result.value.records.map((entry) => ({ ...entry })) } };
 }
 
 function writeBackgroundCommandIndex(indexPath: string, index: BackgroundCommandIndexFile): void {
-  fs.mkdirSync(path.dirname(indexPath), { recursive: true });
-  writeJsonFile(indexPath, { version: BACKGROUND_COMMAND_STORAGE_VERSION, records: index.records });
+  writeJsonFileAtomicSync(indexPath, { version: BACKGROUND_COMMAND_STORAGE_VERSION, records: index.records });
 }
 
-function readJsonFile<T>(filePath: string): T | undefined {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8')) as T;
-  } catch {
-    return undefined;
-  }
+function withBackgroundCommandIndexLock<T>(indexPath: string, action: () => T): T {
+  return withSyncStorageResourceLock(indexPath, action, BACKGROUND_COMMAND_LOCK_OPTIONS);
 }
 
-function writeJsonFile(filePath: string, value: unknown): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+function warnBackgroundCommandIndexReadFailure(operation: string, result: Exclude<BackgroundCommandIndexReadResult, { status: 'ok' | 'missing' }>): void {
+  const reason = result.status === 'invalid' ? 'invalid JSON/schema' : 'I/O error';
+  console.warn(`[LimCode] Refusing to ${operation} background command index because it is ${reason}; existing data is preserved: ${result.path}`, result.error);
+}
+
+function isBackgroundCommandIndexFile(value: unknown): value is BackgroundCommandIndexFile {
+  const record = asRecord(value);
+  return !!record
+    && record.version === BACKGROUND_COMMAND_STORAGE_VERSION
+    && Array.isArray(record.records)
+    && record.records.every(isBackgroundCommandIndexRecord);
 }
 
 function isBackgroundCommandIndexRecord(value: unknown): value is BackgroundCommandIndexRecord {
   const record = asRecord(value);
-  return !!record && typeof record.processId === 'string' && typeof record.file === 'string' && isBackgroundStatus(record.status) && typeof record.updatedAt === 'number';
+  return !!record
+    && typeof record.processId === 'string'
+    && !!record.processId.trim()
+    && typeof record.file === 'string'
+    && !!record.file.trim()
+    && isBackgroundStatus(record.status)
+    && typeof record.updatedAt === 'number'
+    && Number.isFinite(record.updatedAt);
 }
 
 function isPersistedBackgroundProcessRecord(value: unknown): value is PersistedBackgroundProcessRecord {
@@ -624,6 +834,13 @@ function isPersistedBackgroundProcessRecord(value: unknown): value is PersistedB
   return !!record
     && record.version === BACKGROUND_COMMAND_STORAGE_VERSION
     && typeof record.processId === 'string'
+    && typeof record.ownerInstanceId === 'string'
+    && !!record.ownerInstanceId.trim()
+    && typeof record.ownerPid === 'number'
+    && Number.isSafeInteger(record.ownerPid)
+    && record.ownerPid > 0
+    && typeof record.heartbeatAt === 'number'
+    && Number.isFinite(record.heartbeatAt)
     && (record.kind === 'powershell' || record.kind === 'bash')
     && typeof record.command === 'string'
     && typeof record.cwd === 'string'

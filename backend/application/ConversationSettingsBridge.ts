@@ -37,21 +37,32 @@ export class ConversationSettingsBridge {
   public async postSnapshot(clientId: BridgeClientId, conversationId: string, section: ConversationSettingsSection, correlationId?: string): Promise<void> {
     const streamId = conversationSettingsStreamId(conversationId, section);
     this.deps.webview.subscribe(clientId, streamId);
-    const stored = await this.readSettings(conversationId, section);
-    await this.deps.afterRead?.(stored);
-    this.deps.webview.post(clientId, this.createSnapshotMessage(stored, correlationId));
+    try {
+      const stored = await this.readSettings(conversationId, section);
+      await this.deps.afterRead?.(stored);
+      this.deps.webview.post(clientId, this.createSnapshotMessage(stored, correlationId));
+    } catch (error) {
+      console.warn('[LimCode] Failed to load conversation settings:', error);
+      this.postSettingsError(BridgeMessageType.ConversationSettingsGet, conversationId, error, correlationId, clientId);
+    }
   }
 
-  public async update(payload: ConversationSettingsUpdatePayload | undefined, correlationId?: string): Promise<void> {
+  public async update(payload: ConversationSettingsUpdatePayload | undefined, correlationId?: string, requesterClientId?: BridgeClientId): Promise<void> {
     if (!payload) return;
-    const settings = normalizeConversationSettings(payload.section, payload.settings);
-    if (payload.section === 'common') this.applyCommonSettingsToWorld(settings as ConversationSettingsRecord);
+    const conversationId = conversationIdFromUpdatePayload(payload);
 
-    const stored = await this.deps.storage.saveConversationSettings(payload.section, settings);
-    this.deps.webview.broadcastToStream(conversationSettingsStreamId(stored.conversationId, stored.section), this.createSnapshotMessage(stored, correlationId));
-    this.deps.requestSnapshot();
-    this.deps.requestSnapshot(stored.conversationId);
-    await this.deps.afterUpdate?.(stored);
+    try {
+      const settings = normalizeConversationSettings(payload.section, payload.settings);
+      const stored = await this.deps.storage.saveConversationSettings(payload.section, settings);
+      if (payload.section === 'common') this.applyCommonSettingsToWorld(settings as ConversationSettingsRecord);
+      this.deps.webview.broadcastToStream(conversationSettingsStreamId(stored.conversationId, stored.section), this.createSnapshotMessage(stored, correlationId));
+      this.deps.requestSnapshot();
+      this.deps.requestSnapshot(stored.conversationId);
+      await this.deps.afterUpdate?.(stored);
+    } catch (error) {
+      console.warn('[LimCode] Failed to update conversation settings:', error);
+      this.postSettingsError(BridgeMessageType.ConversationSettingsUpdate, conversationId, error, correlationId, requesterClientId);
+    }
   }
 
   private async readSettings(conversationId: string, section: ConversationSettingsSection): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }> {
@@ -85,6 +96,29 @@ export class ConversationSettingsBridge {
     };
   }
 
+  private postSettingsError(
+    requestType: BridgeMessageType.ConversationSettingsGet | BridgeMessageType.ConversationSettingsUpdate,
+    conversationId: string,
+    error: unknown,
+    correlationId?: string,
+    clientId?: BridgeClientId
+  ): void {
+    const message = error instanceof Error ? error.message : String(error);
+    const envelope: ExtensionToWebviewMessage = {
+      id: createMessageId(),
+      type: BridgeMessageType.Error,
+      channel: 'settings',
+      scope: { kind: 'settings', level: 'conversation', id: conversationId },
+      correlationId,
+      payload: {
+        requestType,
+        message
+      }
+    };
+    if (clientId) this.deps.webview.post(clientId, envelope);
+    else this.deps.webview.broadcast(envelope);
+  }
+
   private applyCommonSettingsToWorld(settings: ConversationSettingsRecord): void {
     const conversationId = settings.conversationId;
     const entity = this.findConversation(conversationId);
@@ -96,6 +130,11 @@ export class ConversationSettingsBridge {
   private findConversation(conversationId: string): number | undefined {
     return this.deps.world.query(Conversation).find((entity) => this.deps.world.get(entity, Conversation)?.id === conversationId);
   }
+}
+
+function conversationIdFromUpdatePayload(payload: ConversationSettingsUpdatePayload): string {
+  const settings = payload.settings as Partial<ConversationSettingsRecord | ConversationLlmSettingsRecord> | undefined;
+  return typeof settings?.conversationId === 'string' ? settings.conversationId : '';
 }
 
 function normalizeConversationSettings(section: ConversationSettingsSection, settings: ConversationSettingsSectionValue): ConversationSettingsSectionValue {

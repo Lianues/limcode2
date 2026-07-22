@@ -14,6 +14,8 @@ import type {
   ConversationTimelinePageRequest,
   ConversationSettingsSection,
   ConversationSettingsSectionValue,
+  AttachmentAvailabilityStatus,
+  AttachmentOpenPayload,
   ExtensionToWebviewMessage,
   GlobalSettingsSection,
   GlobalSettingsSectionValue,
@@ -35,7 +37,8 @@ import type {
   RuleFileRecord,
   RuleScope,
   WebviewClientMeta,
-  WorkEnvironmentRecord
+  WorkEnvironmentRecord,
+  InlineDataPart
 } from '../../shared/protocol';
 import type { EditToolMode } from '../../shared/protocol';
 import type { TimelineProjectionContextRecord } from '../../shared/timelineProjection';
@@ -622,9 +625,16 @@ export interface DeleteConversationDataResult {
   errors: string[];
 }
 
+export interface ResolvedAttachmentForClientResult {
+  part: InlineDataPart;
+  status: AttachmentAvailabilityStatus;
+  error?: string;
+}
+
 export interface StorageCapability {
   /** 当前 active data root 派生出的路径；数据目录切换后 getter 会返回新路径。 */
   readonly paths: RuntimePaths;
+  isDataRootMutationActive?(): boolean;
   ensureReady(): Promise<void>;
   loadClientStateSkeleton(options?: { profile?: 'startup' | 'deferred' | 'full' }): Promise<ClientState | undefined>;
   loadConversationDetail(
@@ -667,6 +677,8 @@ export interface StorageCapability {
   removeMessage(conversationId: string, messageId: string): Promise<void>;
   saveToolCallSnapshot(conversationId: string, toolCall: ToolCallRecord): Promise<void>;
   appendToolCallEvent(conversationId: string, event: ToolCallEventRecord): Promise<void>;
+  resolveAttachmentForClient(input: AttachmentOpenPayload): Promise<ResolvedAttachmentForClientResult>;
+  materializeAttachmentFileUri(input: AttachmentOpenPayload): Promise<vscode.Uri | undefined>;
   detectSystemGit(): Promise<CheckpointGitStatusRecord>;
   createShadowCheckpoint(request: ShadowCheckpointCreateRequest): Promise<CheckpointRecord>;
   restoreShadowCheckpoint(request: CheckpointRestorePayload): Promise<ShadowCheckpointRestoreResult>;

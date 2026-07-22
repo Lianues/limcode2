@@ -1,4 +1,4 @@
-import type { ClientState, ClientStateTableKey, ContentPart, MsgStatus } from './protocol';
+import type { ClientState, ClientStateTableKey, ConfigScopeKind, ContentPart, MsgStatus } from './protocol';
 
 export type ClientStatePatchOperation = 'upsert' | 'append' | 'remove';
 export type ClientStatePatchMode = 'generic' | 'custom';
@@ -28,6 +28,8 @@ export interface ClientStateCascadeRemoveSpec {
   readonly table: ClientStateTableKey;
   readonly foreignKey?: string;
   readonly foreignKeys?: readonly string[];
+  /** foreignKey/foreignKeys 命中前必须同时满足的 scopeKind；用于 scopeId 这类跨领域外键避免误删。 */
+  readonly scopeKind?: ConfigScopeKind;
   /** true 时先按 child id 递归执行 child 表自己的 cascadeRemove，再删除 child 记录。 */
   readonly cascade?: boolean;
 }
@@ -219,6 +221,25 @@ const messageMutations = [
   })
 ] as const;
 
+export const CONVERSATION_SCOPE_LINK_TABLE_KEYS = [
+  'checkpointPolicyScopeLinks',
+  'workEnvironmentPolicyScopeLinks',
+  'systemPromptScopeLinks',
+  'modelProfileScopeLinks',
+  'runtimeContextScopeLinks',
+  'planReviewPolicyScopeLinks'
+] as const satisfies readonly ClientStateTableKey[];
+
+const CONVERSATION_SCOPE_CASCADE_REMOVE = CONVERSATION_SCOPE_LINK_TABLE_KEYS.map((table) => ({
+  table,
+  foreignKey: 'scopeId',
+  scopeKind: 'conversation' as const
+})) satisfies readonly ClientStateCascadeRemoveSpec[];
+
+export function isConversationScopeLinkRecord(record: { scopeKind?: unknown; scopeId?: unknown }, conversationId: string): boolean {
+  return record.scopeKind === 'conversation' && record.scopeId === conversationId;
+}
+
 const conversationScopedTable: ClientSyncOverrides = { globalSnapshot: false, scope: { kind: 'conversation', field: 'conversationId' } };
 const messageTable = {
   diff: 'custom' as const,
@@ -366,12 +387,7 @@ export const CLIENT_STATE_TABLES = {
       { table: 'conversationCheckpointRepositoryLinks', foreignKey: 'conversationId' },
       { table: 'checkpoints', foreignKey: 'conversationId' },
       { table: 'checkpointTimelineAnchors', foreignKey: 'conversationId' },
-      { table: 'checkpointPolicyScopeLinks', foreignKey: 'scopeId' },
-      { table: 'workEnvironmentPolicyScopeLinks', foreignKey: 'scopeId' },
-      { table: 'systemPromptScopeLinks', foreignKey: 'scopeId' },
-      { table: 'modelProfileScopeLinks', foreignKey: 'scopeId' },
-      { table: 'runtimeContextScopeLinks', foreignKey: 'scopeId' },
-      { table: 'planReviewPolicyScopeLinks', foreignKey: 'scopeId' },
+      ...CONVERSATION_SCOPE_CASCADE_REMOVE,
       { table: 'conversationRuntimeContextSnapshotLinks', foreignKey: 'conversationId' },
       { table: 'messages', foreignKey: 'conversationId', cascade: true },
       { table: 'compressionBlocks', foreignKey: 'conversationId', cascade: true }

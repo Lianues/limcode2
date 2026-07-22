@@ -66,10 +66,21 @@ import {
 import { AgentRunEventType } from '../world/modules/agentRun/events';
 import { setConversationProject } from '../world/modules/project/bundles';
 import { ConversationProjectLink, ProjectContext } from '../world/modules/project/components';
+import {
+  Checkpoint,
+  CheckpointBarrier,
+  CheckpointPolicyScopeLink,
+  CheckpointTimelineAnchor,
+  ConversationCheckpointRepositoryLink,
+  ShadowRepository
+} from '../world/modules/checkpoint/components';
 import { upsertDefaultWorkflowSelection } from '../world/modules/workflow/bundles';
-import { ConversationWorkflowSelection, ModelProfile, ModelProfileScopeLink, type ModelProfileScopeLinkData } from '../world/modules/workflow/components';
+import { ConversationWorkflowSelection, ModelProfile, ModelProfileScopeLink, SystemPromptScopeLink, type ModelProfileScopeLinkData } from '../world/modules/workflow/components';
 import { ToolCall, ToolCallEvent } from '../world/modules/tools/components';
 import { WorkEnvironmentEventType, workEnvironmentIdFromUri } from '../world/modules/workEnvironment';
+import { ConversationWorkEnvironmentLink, WorkEnvironmentPolicyScopeLink } from '../world/modules/workEnvironment/components';
+import { ConversationRuntimeContextSnapshotLink, RuntimeContextScopeLink } from '../world/modules/runtimeContext/components';
+import { PlanReviewPolicyScopeLink } from '../world/modules/plan/components';
 import type { LocalWorkEnvironmentCandidate } from '../world/modules/workEnvironment';
 import { clientSyncPlugin, registerClientSyncSystems } from '../world/clientSync';
 import { ClientSyncStateKey } from '../world/clientSync/resources';
@@ -243,8 +254,8 @@ export class BackendApplication {
     this.registerConversationContextEffectHandler();
     this.disposables.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
       this.syncWorkEnvironmentsFromWorkspaceFolders();
-      void this.syncSkillCatalogResource();
-      void this.syncRulesCatalogResource();
+      fireAndReport(this.syncSkillCatalogResource(), '[LimCode] Failed to refresh skill catalog after workspace folder change.');
+      fireAndReport(this.syncRulesCatalogResource(), '[LimCode] Failed to refresh rules catalog after workspace folder change.');
     }));
 
     this.scheduler = new Scheduler(this.world, {
@@ -500,40 +511,61 @@ export class BackendApplication {
       return { ok: false, operation: 'conversation.delete', targetId: conversationId, code: 'invalid_state', message: 'conversationId 为空。' };
     }
 
-    const entity = this.findConversationEntity(normalizedConversationId);
-    this.deletedConversationIds.add(normalizedConversationId);
-    if (entity !== undefined) {
-      const cascade = this.collectConversationCascadeEntities(entity, normalizedConversationId);
-      for (const target of cascade) {
-        const request = this.world.get(target, LlmRequest);
-        if (request?.id) this.env.llm.abort(request.id);
+    return this.persistence.withExclusiveMutationGate(async () => {
+      const errors: string[] = [];
+      try {
+        await this.persistence.persistImmediately({ force: true, throwOnError: true });
+      } catch (error) {
+        const message = `删除前持久化失败：${error instanceof Error ? error.message : String(error)}`;
+        return { ok: false, operation: 'conversation.delete', targetId: normalizedConversationId, code: 'storage_failed' as const, message, errors: [message] };
       }
-      for (const target of cascade) {
-        this.world.despawn(target);
+
+      const entity = this.findConversationEntity(normalizedConversationId);
+      this.deletedConversationIds.add(normalizedConversationId);
+      if (entity !== undefined) {
+        const cascade = this.collectConversationCascadeEntities(entity, normalizedConversationId);
+        for (const target of cascade) {
+          const request = this.world.get(target, LlmRequest);
+          if (request?.id) this.env.llm.abort(request.id);
+        }
+        for (const target of cascade) {
+          this.world.despawn(target);
+        }
       }
-    }
 
-    this.renderLoadedConversationDetails.delete(normalizedConversationId);
-    this.runHistoryLoadedConversationDetails.delete(normalizedConversationId);
-    this.conversationTailLoaded.delete(normalizedConversationId);
-    this.conversationTailLoadInFlight.delete(normalizedConversationId);
-    this.conversationDetailLoadInFlight.delete(normalizedConversationId);
-    this.coldConversationHistoryEntries.delete(normalizedConversationId);
-    this.removeRecentClosedConversation(normalizedConversationId);
-    this.bumpConversationEvictionGeneration(normalizedConversationId);
+      this.renderLoadedConversationDetails.delete(normalizedConversationId);
+      this.runHistoryLoadedConversationDetails.delete(normalizedConversationId);
+      this.conversationTailLoaded.delete(normalizedConversationId);
+      this.conversationTailLoadInFlight.delete(normalizedConversationId);
+      this.conversationDetailLoadInFlight.delete(normalizedConversationId);
+      this.conversationContextLoadInFlight.delete(normalizedConversationId);
+      this.coldConversationHistoryEntries.delete(normalizedConversationId);
+      this.removeRecentClosedConversation(normalizedConversationId);
+      this.bumpConversationEvictionGeneration(normalizedConversationId);
+      this.persistence.discardConversation(normalizedConversationId);
 
-    const storageResult = await this.env.storage.deleteConversationData(normalizedConversationId);
-    this.requestSnapshot();
-    this.requestSnapshot(normalizedConversationId);
-    this.conversationHistoryChangedEmitter.fire();
-    return {
-      ok: storageResult.ok,
-      operation: 'conversation.delete',
-      targetId: normalizedConversationId,
-      ...(storageResult.ok ? {} : { code: 'storage_failed' as const, message: storageResult.errors.join('; ') || '删除对话底层数据失败。' }),
-      deletedPaths: storageResult.deletedPaths,
-      errors: storageResult.errors
-    };
+      const storageResult = await this.env.storage.deleteConversationData(normalizedConversationId);
+      errors.push(...storageResult.errors);
+      this.requestSnapshot();
+      this.requestSnapshot(normalizedConversationId);
+      this.conversationHistoryChangedEmitter.fire();
+
+      try {
+        await this.persistence.persistImmediately({ force: true, throwOnError: true });
+      } catch (error) {
+        errors.push(`删除后持久化失败：${error instanceof Error ? error.message : String(error)}`);
+      }
+
+      const ok = storageResult.ok && errors.length === 0;
+      return {
+        ok,
+        operation: 'conversation.delete',
+        targetId: normalizedConversationId,
+        ...(ok ? {} : { code: 'storage_failed' as const, message: errors.join('; ') || '删除对话底层数据失败。' }),
+        deletedPaths: storageResult.deletedPaths,
+        errors
+      };
+    });
   }
 
   public abortConversation(conversationId: string): boolean {
@@ -693,7 +725,7 @@ export class BackendApplication {
 
     const hydrated = detail ? await hydrateConversationDetail(this.world, detail, conversationId) : false;
     if (detail && hydrated) this.primeConversationStreamState(conversationId, detail);
-    const loaded = hydrated || this.findConversationEntity(conversationId) !== undefined;
+    const loaded = detail !== undefined && (hydrated || this.findConversationEntity(conversationId) !== undefined);
     if (loaded) {
       this.renderLoadedConversationDetails.add(conversationId);
       this.coldConversationHistoryEntries.delete(conversationId);
@@ -1181,12 +1213,12 @@ export class BackendApplication {
       this.flushPendingSnapshots();
       this.flushPendingHydrationMessages();
       for (const section of GLOBAL_SETTINGS_SECTIONS) {
-        void this.globalSettingsBridge.postSnapshot(undefined, section);
+        fireAndReport(this.globalSettingsBridge.postSnapshot(undefined, section), `[LimCode] Failed to post global settings snapshot for ${section}.`);
       }
       this.startCheckpointShadowAutoCleanup();
-      void this.refreshMcpRuntime(true);
-      void this.syncSkillCatalogResource();
-      void this.syncRulesCatalogResource();
+      fireAndReport(this.refreshMcpRuntime(true), '[LimCode] Failed to refresh MCP runtime after hydration.');
+      fireAndReport(this.syncSkillCatalogResource(), '[LimCode] Failed to refresh skill catalog after hydration.');
+      fireAndReport(this.syncRulesCatalogResource(), '[LimCode] Failed to refresh rules catalog after hydration.');
       this.resolveHydrated();
     }
   }
@@ -1652,6 +1684,18 @@ export class BackendApplication {
       if (link?.conversation === conversation) entities.add(entity);
     }
 
+    for (const entity of this.world.query(ConversationWorkEnvironmentLink)) {
+      const link = this.world.get(entity, ConversationWorkEnvironmentLink);
+      if (link?.conversation === conversation) entities.add(entity);
+    }
+
+    for (const entity of this.world.query(ConversationRuntimeContextSnapshotLink)) {
+      const link = this.world.get(entity, ConversationRuntimeContextSnapshotLink);
+      if (link?.conversation === conversation) entities.add(entity);
+    }
+
+    this.collectConversationScopedConfigLinks(conversation, conversationId, entities);
+
     for (const entity of this.world.query(ConversationOriginLink)) {
       const link = this.world.get(entity, ConversationOriginLink);
       if (link?.conversation === conversation) entities.add(entity);
@@ -1670,8 +1714,133 @@ export class BackendApplication {
       }
     }
 
+    this.collectCheckpointCascadeEntities(conversation, conversationId, messages, toolCalls, runs, entities);
     this.collectRunOwnedEntities(runs, runPolicies, entities);
     return entities;
+  }
+
+  private collectConversationScopedConfigLinks(conversation: Entity, conversationId: string, entities: Set<Entity>): void {
+    for (const entity of this.world.query(CheckpointPolicyScopeLink)) {
+      const link = this.world.get(entity, CheckpointPolicyScopeLink);
+      if (link?.scopeKind === 'conversation' && (link.conversation === conversation || link.scopeId === conversationId)) entities.add(entity);
+    }
+    for (const entity of this.world.query(WorkEnvironmentPolicyScopeLink)) {
+      const link = this.world.get(entity, WorkEnvironmentPolicyScopeLink);
+      if (link?.scopeKind === 'conversation' && (link.conversation === conversation || link.scopeId === conversationId)) entities.add(entity);
+    }
+    for (const entity of this.world.query(SystemPromptScopeLink)) {
+      const link = this.world.get(entity, SystemPromptScopeLink);
+      if (link?.scopeKind === 'conversation' && (link.conversation === conversation || link.scopeId === conversationId)) entities.add(entity);
+    }
+    for (const entity of this.world.query(ModelProfileScopeLink)) {
+      const link = this.world.get(entity, ModelProfileScopeLink);
+      if (link?.scopeKind === 'conversation' && (link.conversation === conversation || link.scopeId === conversationId)) entities.add(entity);
+    }
+    for (const entity of this.world.query(RuntimeContextScopeLink)) {
+      const link = this.world.get(entity, RuntimeContextScopeLink);
+      if (link?.scopeKind === 'conversation' && (link.conversation === conversation || link.scopeId === conversationId)) entities.add(entity);
+    }
+    for (const entity of this.world.query(PlanReviewPolicyScopeLink)) {
+      const link = this.world.get(entity, PlanReviewPolicyScopeLink);
+      if (link?.scopeKind === 'conversation' && (link.conversation === conversation || link.scopeId === conversationId)) entities.add(entity);
+    }
+  }
+
+  private collectCheckpointCascadeEntities(
+    conversation: Entity,
+    conversationId: string,
+    messages: ReadonlySet<Entity>,
+    toolCalls: ReadonlySet<Entity>,
+    runs: ReadonlySet<Entity>,
+    entities: Set<Entity>
+  ): void {
+    const checkpoints = new Set<Entity>();
+    const checkpointIds = new Set<string>();
+    const shadowRepositoryCandidates = new Set<Entity>();
+
+    const addCheckpoint = (checkpointEntity: Entity | undefined): boolean => {
+      if (checkpointEntity === undefined || checkpoints.has(checkpointEntity)) return false;
+      const checkpoint = this.world.get(checkpointEntity, Checkpoint);
+      if (!checkpoint) return false;
+      checkpoints.add(checkpointEntity);
+      checkpointIds.add(checkpoint.id);
+      entities.add(checkpointEntity);
+      shadowRepositoryCandidates.add(checkpoint.shadowRepository);
+      return true;
+    };
+
+    for (const entity of this.world.query(Checkpoint)) {
+      const checkpoint = this.world.get(entity, Checkpoint);
+      if (checkpoint?.conversation === conversation) addCheckpoint(entity);
+    }
+
+    let checkpointCascadeChanged = true;
+    while (checkpointCascadeChanged) {
+      checkpointCascadeChanged = false;
+      for (const entity of this.world.query(CheckpointTimelineAnchor)) {
+        if (entities.has(entity)) continue;
+        const anchor = this.world.get(entity, CheckpointTimelineAnchor);
+        if (!anchor) continue;
+        const matches = anchor.conversation === conversation
+          || checkpoints.has(anchor.checkpoint)
+          || (anchor.floorMessage !== undefined && messages.has(anchor.floorMessage))
+          || (anchor.sourceRun !== undefined && runs.has(anchor.sourceRun))
+          || (anchor.sourceToolCall !== undefined && toolCalls.has(anchor.sourceToolCall));
+        if (!matches) continue;
+        entities.add(entity);
+        checkpointCascadeChanged = true;
+        if (addCheckpoint(anchor.checkpoint)) checkpointCascadeChanged = true;
+      }
+
+      for (const entity of this.world.query(CheckpointBarrier)) {
+        if (entities.has(entity)) continue;
+        const barrier = this.world.get(entity, CheckpointBarrier);
+        if (!barrier) continue;
+        const matches = barrier.conversation === conversation
+          || (barrier.checkpoint !== undefined && checkpoints.has(barrier.checkpoint))
+          || checkpointIds.has(barrier.checkpointId)
+          || (barrier.targetRun !== undefined && runs.has(barrier.targetRun))
+          || (barrier.targetToolCall !== undefined && toolCalls.has(barrier.targetToolCall))
+          || (barrier.targetMessage !== undefined && messages.has(barrier.targetMessage))
+          || (barrier.targetLlmRequest !== undefined && entities.has(barrier.targetLlmRequest));
+        if (!matches) continue;
+        entities.add(entity);
+        checkpointCascadeChanged = true;
+        if (barrier.checkpoint !== undefined && addCheckpoint(barrier.checkpoint)) checkpointCascadeChanged = true;
+      }
+    }
+
+    for (const entity of this.world.query(ConversationCheckpointRepositoryLink)) {
+      const link = this.world.get(entity, ConversationCheckpointRepositoryLink);
+      if (link?.conversation !== conversation) continue;
+      entities.add(entity);
+      shadowRepositoryCandidates.add(link.shadowRepository);
+    }
+
+    for (const entity of this.world.query(CheckpointPolicyScopeLink)) {
+      const link = this.world.get(entity, CheckpointPolicyScopeLink);
+      if (!link) continue;
+      if ((link.scopeKind === 'conversation' && (link.conversation === conversation || link.scopeId === conversationId))
+        || (link.scopeKind === 'run' && link.run !== undefined && runs.has(link.run))) {
+        entities.add(entity);
+      }
+    }
+
+    for (const repository of shadowRepositoryCandidates) {
+      if (!this.isShadowRepositoryReferencedOutsideCascade(repository, entities)) entities.add(repository);
+    }
+  }
+
+  private isShadowRepositoryReferencedOutsideCascade(repository: Entity, cascade: ReadonlySet<Entity>): boolean {
+    for (const entity of this.world.query(Checkpoint)) {
+      const checkpoint = this.world.get(entity, Checkpoint);
+      if (checkpoint?.shadowRepository === repository && !cascade.has(entity)) return true;
+    }
+    for (const entity of this.world.query(ConversationCheckpointRepositoryLink)) {
+      const link = this.world.get(entity, ConversationCheckpointRepositoryLink);
+      if (link?.shadowRepository === repository && !cascade.has(entity)) return true;
+    }
+    return false;
   }
 
   private collectMessagesForConversation(conversation: Entity): Set<Entity> {
@@ -2196,4 +2365,8 @@ function upsertClientStateRecord(list: Array<{ id: string }>, indexById: Map<str
   }
   indexById.set(record.id, list.length);
   list.push(next);
+}
+
+function fireAndReport(promise: Promise<unknown>, message: string): void {
+  void promise.catch((error) => console.warn(message, error));
 }

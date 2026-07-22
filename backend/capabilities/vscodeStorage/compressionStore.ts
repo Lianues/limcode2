@@ -1,12 +1,38 @@
+import { randomUUID } from 'node:crypto';
 import * as vscode from 'vscode';
 import type { ClientState, CompressionBlockLlmInvocationLinkRecord, CompressionBlockRecord, CompressionBlockSourceLinkRecord, CompressionContextVariantRecord, LlmInvocationRecord } from '../../../shared/protocol';
 import { createEmptyClientState } from '../../../shared/clientStateSchema';
-import { INDEX_FILE } from './constants';
+import { INDEX_FILE, STORAGE_VERSION } from './constants';
 import type { StoragePaths } from './clientStateStore';
 import { loadRecordStoreWithDiagnostics, saveRecordStore, withRecordStoreTransaction, type RecordStoreDiagnosticsResult } from './recordStore';
+import { readJsonStrict, writeJson } from './json';
 import { assertUniqueClientStateIds, assertUniqueRecords } from '../../utils/uniqueIds';
 
 const CONVERSATIONS_DIR = 'conversations';
+const COMPRESSION_MANIFEST_FILE = 'compression-manifest.json';
+const COMPRESSION_MANIFEST_KIND = 'conversationCompression.manifest';
+
+type CompressionStoreKey = 'blocks' | 'sourceLinks' | 'variants' | 'invocationLinks' | 'invocations';
+
+type CompressionManifestState = 'writing' | 'committed';
+
+interface CompressionStoreManifest {
+  kind: typeof COMPRESSION_MANIFEST_KIND;
+  schemaVersion: typeof STORAGE_VERSION;
+  conversationId: string;
+  state: CompressionManifestState;
+  txId: string;
+  startedAt: string;
+  committedAt?: string;
+  stores?: Partial<Record<CompressionStoreKey, { count: number }>>;
+}
+
+export interface CompressionStoreTestHooks {
+  afterManifestWrite?: (manifest: CompressionStoreManifest) => void | Promise<void>;
+  afterStoreSave?: (context: { conversationId: string; txId: string; store: CompressionStoreKey }) => void | Promise<void>;
+}
+
+export const __compressionStoreTestHooks: CompressionStoreTestHooks = {};
 export interface LoadConversationCompressionDetailOptions {
   /**
    * 首屏 timeline 只需要压缩块和摘要变体用于展示，不需要“压缩块 -> 源消息”的明细链接。
@@ -25,6 +51,15 @@ export async function loadConversationCompressionDetail(
   conversationId: string,
   options: LoadConversationCompressionDetailOptions = {}
 ): Promise<ClientState | undefined> {
+  return withRecordStoreTransaction(compressionTransactionUri(paths, conversationId), () => loadConversationCompressionDetailUnlocked(paths, conversationId, options));
+}
+
+async function loadConversationCompressionDetailUnlocked(
+  paths: StoragePaths,
+  conversationId: string,
+  options: LoadConversationCompressionDetailOptions = {}
+): Promise<ClientState | undefined> {
+  await assertCommittedCompressionSnapshot(paths, conversationId);
   const includeSourceLinks = options.includeSourceLinks ?? true;
   const recoverOrphanRecords = options.recoverOrphanRecords ?? options.knownMessageIds !== undefined;
   const state = createEmptyClientState();
@@ -94,6 +129,10 @@ export async function saveConversationCompressionDetail(paths: StoragePaths, con
 }
 
 async function saveConversationCompressionDetailUnlocked(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
+  const txId = randomUUID();
+  const startedAt = new Date().toISOString();
+  await writeCompressionManifest(paths, conversationId, { state: 'writing', txId, startedAt });
+
   const blocks = state.compressionBlocks.filter((block) => block.conversationId === conversationId);
   const blockIds = new Set(blocks.map((block) => block.id));
   let links = state.compressionBlockSourceLinks.filter((link) => blockIds.has(link.blockId));
@@ -118,13 +157,150 @@ async function saveConversationCompressionDetailUnlocked(paths: StoragePaths, co
   invocationIds = new Set(invocationLinks.map((link) => link.invocationId));
   invocations = mergeRecordsById(existingInvocations.records.filter((invocation) => invocationIds.has(invocation.id)), invocations.filter((invocation) => invocationIds.has(invocation.id)));
 
-  await Promise.all([
-    saveRecordStore(conversationScopedRoot(paths.compressionBlocksRootUri, conversationId), conversationScopedIndex(paths.compressionBlocksRootUri, conversationId), blocks, 'block', (record) => record.title || record.id, { pruneMissing: true }),
-    saveRecordStore(conversationScopedRoot(paths.compressionBlockSourceLinksRootUri, conversationId), conversationScopedIndex(paths.compressionBlockSourceLinksRootUri, conversationId), links, 'link', (record) => record.id, { pruneMissing: true }),
-    saveRecordStore(conversationScopedRoot(paths.compressionContextVariantsRootUri, conversationId), conversationScopedIndex(paths.compressionContextVariantsRootUri, conversationId), variants, 'variant', (record) => record.id, { pruneMissing: true }),
-    saveRecordStore(conversationScopedRoot(paths.compressionBlockLlmInvocationLinksRootUri, conversationId), conversationScopedIndex(paths.compressionBlockLlmInvocationLinksRootUri, conversationId), invocationLinks, 'link', (record) => record.id, { pruneMissing: true }),
-    saveRecordStore(conversationScopedRoot(paths.compressionLlmInvocationsRootUri, conversationId), conversationScopedIndex(paths.compressionLlmInvocationsRootUri, conversationId), invocations, 'invocation', (record) => record.id, { pruneMissing: true })
-  ]);
+  await saveCompressionRecordStore(paths.compressionBlocksRootUri, conversationId, blocks, 'block', 'blocks', txId, (record) => record.title || record.id);
+  await saveCompressionRecordStore(paths.compressionBlockSourceLinksRootUri, conversationId, links, 'link', 'sourceLinks', txId, (record) => record.id);
+  await saveCompressionRecordStore(paths.compressionContextVariantsRootUri, conversationId, variants, 'variant', 'variants', txId, (record) => record.id);
+  await saveCompressionRecordStore(paths.compressionBlockLlmInvocationLinksRootUri, conversationId, invocationLinks, 'link', 'invocationLinks', txId, (record) => record.id);
+  await saveCompressionRecordStore(paths.compressionLlmInvocationsRootUri, conversationId, invocations, 'invocation', 'invocations', txId, (record) => record.id);
+
+  await writeCompressionManifest(paths, conversationId, {
+    state: 'committed',
+    txId,
+    startedAt,
+    committedAt: new Date().toISOString(),
+    stores: {
+      blocks: { count: blocks.length },
+      sourceLinks: { count: links.length },
+      variants: { count: variants.length },
+      invocationLinks: { count: invocationLinks.length },
+      invocations: { count: invocations.length }
+    }
+  });
+}
+
+async function saveCompressionRecordStore<TRecord extends { id: string }, TKey extends string>(
+  root: vscode.Uri,
+  conversationId: string,
+  records: TRecord[],
+  recordKey: TKey,
+  store: CompressionStoreKey,
+  txId: string,
+  labelForRecord: (record: TRecord) => string
+): Promise<void> {
+  await saveRecordStore(conversationScopedRoot(root, conversationId), conversationScopedIndex(root, conversationId), records, recordKey, labelForRecord, { pruneMissing: true });
+  await __compressionStoreTestHooks.afterStoreSave?.({ conversationId, txId, store });
+}
+
+async function writeCompressionManifest(
+  paths: StoragePaths,
+  conversationId: string,
+  input: {
+    state: CompressionManifestState;
+    txId: string;
+    startedAt: string;
+    committedAt?: string;
+    stores?: Partial<Record<CompressionStoreKey, { count: number }>>;
+  }
+): Promise<void> {
+  const manifest: CompressionStoreManifest = {
+    kind: COMPRESSION_MANIFEST_KIND,
+    schemaVersion: STORAGE_VERSION,
+    conversationId,
+    state: input.state,
+    txId: input.txId,
+    startedAt: input.startedAt,
+    ...(input.committedAt ? { committedAt: input.committedAt } : {}),
+    ...(input.stores ? { stores: input.stores } : {})
+  };
+  await writeJson(compressionManifestUri(paths, conversationId), manifest);
+  await __compressionStoreTestHooks.afterManifestWrite?.(manifest);
+}
+
+async function assertCommittedCompressionSnapshot(paths: StoragePaths, conversationId: string): Promise<void> {
+  const manifest = await readCompressionManifest(paths, conversationId);
+  if (!manifest) {
+    const traces = await findCompressionStoreTraces(paths, conversationId);
+    if (traces.length === 0) return;
+    throw new Error(`Compression snapshot manifest is missing for ${conversationId}, but store traces exist: ${traces.join(', ')}`);
+  }
+  if (manifest.state !== 'committed') {
+    throw new Error(`Compression snapshot is not committed for ${conversationId}: state=${manifest.state}, txId=${manifest.txId}`);
+  }
+}
+
+async function readCompressionManifest(paths: StoragePaths, conversationId: string): Promise<CompressionStoreManifest | undefined> {
+  const uri = compressionManifestUri(paths, conversationId);
+  const result = await readJsonStrict<unknown>(uri);
+  if (result.status === 'missing') return undefined;
+  if (result.status === 'invalid') throw new Error(`Compression manifest JSON is invalid: ${uri.fsPath}`);
+  if (result.status === 'ioError') throw new Error(`Failed to read compression manifest: ${uri.fsPath}`);
+  return parseCompressionManifest(result.value, uri, conversationId);
+}
+
+function parseCompressionManifest(value: unknown, uri: vscode.Uri, conversationId: string): CompressionStoreManifest {
+  const manifest = value as Partial<CompressionStoreManifest> | undefined;
+  if (!manifest || typeof manifest !== 'object') throw new Error(`Compression manifest must be an object: ${uri.fsPath}`);
+  if (manifest.kind !== COMPRESSION_MANIFEST_KIND) throw new Error(`Compression manifest kind is invalid: ${uri.fsPath}`);
+  if (manifest.schemaVersion !== STORAGE_VERSION) throw new Error(`Unsupported compression manifest schema: ${uri.fsPath}`);
+  if (manifest.conversationId !== conversationId) throw new Error(`Compression manifest conversation mismatch: ${uri.fsPath}`);
+  if (manifest.state !== 'writing' && manifest.state !== 'committed') throw new Error(`Compression manifest state is invalid: ${uri.fsPath}`);
+  if (typeof manifest.txId !== 'string' || !manifest.txId.trim()) throw new Error(`Compression manifest txId is invalid: ${uri.fsPath}`);
+  if (typeof manifest.startedAt !== 'string' || !manifest.startedAt.trim()) throw new Error(`Compression manifest startedAt is invalid: ${uri.fsPath}`);
+  if (manifest.committedAt !== undefined && (typeof manifest.committedAt !== 'string' || !manifest.committedAt.trim())) throw new Error(`Compression manifest committedAt is invalid: ${uri.fsPath}`);
+  return {
+    kind: COMPRESSION_MANIFEST_KIND,
+    schemaVersion: STORAGE_VERSION,
+    conversationId,
+    state: manifest.state,
+    txId: manifest.txId,
+    startedAt: manifest.startedAt,
+    ...(manifest.committedAt ? { committedAt: manifest.committedAt } : {}),
+    ...(isCompressionManifestStores(manifest.stores) ? { stores: manifest.stores } : {})
+  };
+}
+
+function isCompressionManifestStores(value: unknown): value is Partial<Record<CompressionStoreKey, { count: number }>> {
+  if (value === undefined) return false;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.entries(value).every(([key, item]) => {
+    if (!['blocks', 'sourceLinks', 'variants', 'invocationLinks', 'invocations'].includes(key)) return false;
+    const count = (item as { count?: unknown } | undefined)?.count;
+    return typeof count === 'number' && Number.isSafeInteger(count) && count >= 0;
+  });
+}
+
+async function findCompressionStoreTraces(paths: StoragePaths, conversationId: string): Promise<string[]> {
+  const roots: Array<[CompressionStoreKey, vscode.Uri]> = [
+    ['blocks', paths.compressionBlocksRootUri],
+    ['sourceLinks', paths.compressionBlockSourceLinksRootUri],
+    ['variants', paths.compressionContextVariantsRootUri],
+    ['invocationLinks', paths.compressionBlockLlmInvocationLinksRootUri],
+    ['invocations', paths.compressionLlmInvocationsRootUri]
+  ];
+  const traces: string[] = [];
+  for (const [key, root] of roots) {
+    if (await compressionStoreHasTraces(conversationScopedRoot(root, conversationId))) traces.push(key);
+  }
+  return traces;
+}
+
+async function compressionStoreHasTraces(root: vscode.Uri): Promise<boolean> {
+  if (await uriExists(vscode.Uri.joinPath(root, INDEX_FILE))) return true;
+  try {
+    const entries = await vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(root, 'records'));
+    return entries.some(([name, type]) => type === vscode.FileType.File && name.toLowerCase().endsWith('.json'));
+  } catch {
+    return false;
+  }
+}
+
+async function uriExists(uri: vscode.Uri): Promise<boolean> {
+  const result = await readJsonStrict<unknown>(uri);
+  return result.status === 'ok' || result.status === 'invalid' || result.status === 'ioError';
+}
+
+function compressionManifestUri(paths: StoragePaths, conversationId: string): vscode.Uri {
+  return vscode.Uri.joinPath(conversationScopedRoot(paths.compressionBlocksRootUri, conversationId), COMPRESSION_MANIFEST_FILE);
 }
 
 function normalizeLoadedCompressionBlock(record: CompressionBlockRecord, now: number): CompressionBlockRecord {

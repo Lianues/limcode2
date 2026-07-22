@@ -66,7 +66,6 @@ import {
   type WebviewToExtensionMessage
 } from '../../shared/protocol';
 import { hydrateConversationDetail } from './clientStateHydration';
-import { materializeAttachmentFileUri, resolveAttachmentForClient } from '../capabilities/vscodeStorage/attachmentStore';
 
 import type { GlobalSettingsBridge } from './GlobalSettingsBridge';
 import type { ConversationSettingsBridge } from './ConversationSettingsBridge';
@@ -494,7 +493,7 @@ export class WebviewMessageRouter {
       case BridgeMessageType.ConversationSettingsUpdate:
         if (!message.payload) return;
         this.deps.webview.subscribe(clientId, conversationSettingsStreamId(message.payload.settings.conversationId ?? '', message.payload.section));
-        void this.deps.conversationSettingsBridge.update(message.payload, message.id);
+        void this.deps.conversationSettingsBridge.update(message.payload, message.id, clientId);
         break;
       case BridgeMessageType.ProjectFoldersGet:
         this.deps.webview.post(clientId, {
@@ -1313,7 +1312,7 @@ export class WebviewMessageRouter {
 
   private async handleAttachmentOpen(clientId: BridgeClientId, payload: AttachmentOpenPayload, correlationId?: string): Promise<void> {
     try {
-      const uri = await materializeAttachmentFileUri(this.deps.storage.paths, payload);
+      const uri = await this.deps.storage.materializeAttachmentFileUri(payload);
       if (!uri) {
         this.postRequestError(clientId, BridgeMessageType.AttachmentOpen, '无法找到附件文件。', correlationId);
         return;
@@ -1327,7 +1326,7 @@ export class WebviewMessageRouter {
   }
 
   private async postAttachmentReloadResult(clientId: BridgeClientId, payload: AttachmentReloadPayload, correlationId?: string): Promise<void> {
-    const result = await resolveAttachmentForClient(this.deps.storage.paths, payload);
+    const result = await this.deps.storage.resolveAttachmentForClient(payload);
     this.deps.webview.post(clientId, {
       id: createMessageId(),
       type: BridgeMessageType.AttachmentReloadResult,

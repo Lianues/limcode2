@@ -190,7 +190,7 @@ export function useBridgeBootstrap(): void {
 
   disposers.push(
     bridge.on(BridgeMessageType.ConversationSettingsSnapshot, (message) => {
-      if (message.payload) conversationSettings.applySnapshot(message.payload);
+      if (message.payload) conversationSettings.applySnapshot(message.payload, message.correlationId);
     })
   );
 
@@ -234,6 +234,14 @@ export function useBridgeBootstrap(): void {
         globalSettings.setError(message.payload.message, {
           requestType: message.payload.requestType,
           section: globalSettingsSectionFromScope(message.scope)
+        });
+      } else if (
+        message.payload?.requestType === BridgeMessageType.ConversationSettingsGet
+        || message.payload?.requestType === BridgeMessageType.ConversationSettingsUpdate
+      ) {
+        conversationSettings.setError(message.payload.message, {
+          requestType: message.payload.requestType,
+          correlationId: message.correlationId
         });
       } else if (message.payload?.requestType === BridgeMessageType.ConversationTimelinePageGet) {
         conversationTimeline.setError(clientState.currentConversationId, message.payload.message);

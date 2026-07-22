@@ -53,23 +53,37 @@ import type {
   WorkEnvironmentPolicyRecord,
   WorkEnvironmentPolicyScopeLinkRecord
 } from '../../../shared/protocol';
-import { createEmptyClientState } from '../../../shared/clientStateSchema';
+import { createEmptyClientState, isConversationScopeLinkRecord } from '../../../shared/clientStateSchema';
 import { INDEX_FILE, STORAGE_VERSION } from './constants';
 import { createVscodeStoragePaths } from './paths';
 import { loadRecordStore, removeRecordStoreRecord, saveRecordStore } from './recordStore';
-import { readJson, writeJson } from './json';
+import { isFileNotFoundError as isStorageFileNotFoundError, readJsonStrict, writeJson } from './json';
 import { loadGlobalSettingsFile } from './globalSettings';
 import {
   loadConversationTimelinePage,
   loadConversationTimelineRange,
   loadConversationTimelineDetail,
+  mergeConversationTimelineDetailIntoStore,
+  mutateConversationTimelineDetailInStore,
   saveConversationTimelineDetail,
   saveConversationTimelineRenderDetailIncremental,
   truncateConversationTimeline
 } from './conversationTimelineStore';
+import { withStorageResourceLock } from './storageResourceLock';
+import {
+  cleanupInactiveStorageGenerations,
+  createStorageGenerationLocation,
+  isSafeStorageGenerationId,
+  STORAGE_GENERATIONS_DIR
+} from './storageGeneration';
 import { loadConversationCompressionDetail, saveConversationCompressionDetail } from './compressionStore';
 import { assertUniqueClientStateIds, assertUniqueRecords } from '../../utils/uniqueIds';
 import type { DeleteConversationDataResult } from '../types';
+import { deleteShadowWorktreeDirectory } from './shadowWorktreeLock';
+import {
+  withClientStateSkeletonMutation,
+  withClientStateSkeletonReadTransaction
+} from './clientStateSkeletonTransaction';
 
 export type StoragePaths = ReturnType<typeof createVscodeStoragePaths>;
 
@@ -85,13 +99,21 @@ export interface SaveConversationRunHistoryOptions {
   mode: 'merge' | 'replace';
 }
 
+export interface ClientStateSkeletonStoreTestHooks {
+  afterStoresSaved?: () => void | Promise<void>;
+}
+
+export const __clientStateSkeletonStoreTestHooks: ClientStateSkeletonStoreTestHooks = {};
+
 type StoreKey = string;
 type StoreRecord = { id: string };
 
 
 interface ConversationRunHistoryIndexFile {
+  kind: 'conversationRunHistory.index';
   schemaVersion: typeof STORAGE_VERSION;
   savedAt: string;
+  generation: string;
   conversationId: string;
   pageSize: number;
   total: number;
@@ -100,6 +122,7 @@ interface ConversationRunHistoryIndexFile {
 }
 
 interface ConversationRunHistoryPageIndexRecord {
+  generation: string;
   file: string;
   count: number;
   newestUpdatedAt?: number;
@@ -107,19 +130,47 @@ interface ConversationRunHistoryPageIndexRecord {
 }
 
 interface ConversationRunHistoryPageFile {
+  kind: 'conversationRunHistory.page';
   schemaVersion: typeof STORAGE_VERSION;
   savedAt: string;
+  generation: string;
   conversationId: string;
   runs: ConversationRunSummaryRecord[];
 }
 
 interface RunHistoryDetailFile {
+  kind: 'runHistory.detail';
   schemaVersion: typeof STORAGE_VERSION;
   savedAt: string;
   runId: string;
   summaries: ConversationRunSummaryRecord[];
   state: ClientState;
 }
+
+interface ConversationRunHistoryIndexSnapshot {
+  index: ConversationRunHistoryIndexFile;
+  uri: vscode.Uri;
+}
+
+export interface RunHistoryStoreTestHookContext {
+  rootUri: vscode.Uri;
+  conversationId: string;
+  generation: string;
+}
+
+export interface RunHistoryStoreReadPageHookContext extends RunHistoryStoreTestHookContext {
+  pageFile: string;
+  attempt: number;
+}
+
+export interface RunHistoryStoreTestHooks {
+  /** 测试专用：conversation run-history pages 完整写入后、根 active index 原子发布前触发。 */
+  beforePublishConversationIndex?: (context: RunHistoryStoreTestHookContext) => void | Promise<void>;
+  /** 测试专用：reader 读取 index 后、读取 page 前触发，用于模拟 generation 被清理的竞态。 */
+  beforeReadConversationPage?: (context: RunHistoryStoreReadPageHookContext) => void | Promise<void>;
+}
+
+export const __runHistoryStoreTestHooks: RunHistoryStoreTestHooks = {};
 
 
 const CONVERSATION_REUSE_LINKS_DIR = 'reuse-links';
@@ -130,6 +181,7 @@ const RUN_HISTORY_CONVERSATIONS_DIR = 'conversations';
 const RUN_HISTORY_PAGES_DIR = 'pages';
 const RUN_HISTORY_RUNS_DIR = 'runs';
 const RUN_HISTORY_PAGE_SIZE = 20;
+const RUN_HISTORY_PAGE_READ_MAX_ATTEMPTS = 3;
 
 const RUN_HISTORY_TABLE_KEYS = [
   'agentRuns',
@@ -175,20 +227,35 @@ const RUN_DETAIL_TABLE_KEYS = [
   'llmInvocations'
 ] as const;
 
+export interface LoadedClientStateSkeletonSnapshot {
+  state: ClientState | undefined;
+  transactionId: string;
+}
+
 export async function loadClientStateSkeletonFromStores(paths: StoragePaths, options: LoadClientStateSkeletonOptions = {}): Promise<ClientState | undefined> {
-  const state = createEmptyClientState();
-  const profile = options.profile ?? 'full';
+  return (await loadClientStateSkeletonSnapshotFromStores(paths, options)).state;
+}
 
-  if (profile === 'startup' || profile === 'full') {
-    await loadStartupSkeletonRecords(paths, state);
-  }
+export async function loadClientStateSkeletonSnapshotFromStores(
+  paths: StoragePaths,
+  options: LoadClientStateSkeletonOptions = {},
+  expectedTransactionId?: string
+): Promise<LoadedClientStateSkeletonSnapshot> {
+  return withClientStateSkeletonReadTransaction(paths, async ({ transactionId }) => {
+    const state = createEmptyClientState();
+    const profile = options.profile ?? 'full';
 
-  if (profile === 'deferred' || profile === 'full') {
-    await loadDeferredSkeletonRecords(paths, state);
-  }
+    if (profile === 'startup' || profile === 'full') {
+      await loadStartupSkeletonRecords(paths, state);
+    }
 
-  assertUniqueClientStateIds(state, `clientStateSkeleton:${profile}`);
-  return hasAnyState(state) ? state : undefined;
+    if (profile === 'deferred' || profile === 'full') {
+      await loadDeferredSkeletonRecords(paths, state);
+    }
+
+    assertUniqueClientStateIds(state, `clientStateSkeleton:${profile}`);
+    return { state: hasAnyState(state) ? state : undefined, transactionId };
+  }, expectedTransactionId);
 }
 
 async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientState): Promise<void> {
@@ -331,21 +398,27 @@ export async function loadConversationDetailFromStores(
   options: LoadConversationDetailOptions = {}
 ): Promise<ClientState | undefined> {
   const includeRunHistory = options.includeRunHistory ?? false;
-  const state = (await loadConversationTimelineDetail(paths, conversationId)) ?? createEmptyClientState();
+  const timeline = await loadConversationTimelineDetail(paths, conversationId);
+  const state = timeline ?? createEmptyClientState();
+  let hasExplicitDetail = timeline !== undefined;
   const compression = await loadConversationCompressionDetail(paths, conversationId, {
     knownMessageIds: new Set(state.messages.map((message) => message.id))
   });
-  if (compression) copyCompressionTables(state, compression);
+  if (compression) {
+    copyCompressionTables(state, compression);
+    hasExplicitDetail = true;
+  }
 
   if (includeRunHistory) {
     const runHistory = await loadConversationRunHistoryFromStores(paths, conversationId);
-    if (runHistory) copyRunHistoryTables(state, runHistory);
-
-
+    if (runHistory) {
+      copyRunHistoryTables(state, runHistory);
+      hasExplicitDetail = true;
+    }
   }
 
   assertUniqueClientStateIds(state, `conversationDetail:${conversationId}`);
-  return hasAnyState(state) ? state : undefined;
+  return hasExplicitDetail || hasAnyState(state) ? state : undefined;
 }
 
 export async function loadConversationTimelinePageFromStores(paths: StoragePaths, request: ConversationTimelinePageRequest): Promise<ConversationTimelinePageRecord> {
@@ -392,29 +465,77 @@ export async function truncateConversationTimelineFromStores(paths: StoragePaths
 
 
 export async function loadConversationRunHistoryPageFromStores(paths: StoragePaths, request: { conversationId: string; cursor?: string; limit?: number }): Promise<ConversationRunHistoryPageRecord> {
-  const index = await loadRunHistoryIndex(paths, request.conversationId);
-  const pageSize = normalizeRunHistoryPageSize(index?.pageSize ?? request.limit);
   const requestedPageIndex = Math.max(0, Number.parseInt(request.cursor ?? '0', 10) || 0);
-  const total = index?.total ?? 0;
-  const pageCount = Math.max(1, Math.ceil(total / pageSize));
-  const pageIndex = Math.min(requestedPageIndex, pageCount - 1);
-  const pageRecord = index?.pages[pageIndex];
-  const page = pageRecord ? await readRunHistoryPage(paths, request.conversationId, pageRecord.file) : undefined;
-  const runs = (page?.runs ?? []).map(normalizeRestoredRunLikeRecord);
-  assertUniqueRecords(runs, `runHistoryPage:${request.conversationId}`);
+  let lastError: unknown;
 
+  for (let attempt = 1; attempt <= RUN_HISTORY_PAGE_READ_MAX_ATTEMPTS; attempt += 1) {
+    const index = await loadRunHistoryIndex(paths, request.conversationId);
+    const pageSize = normalizeRunHistoryPageSize(index?.pageSize ?? request.limit);
+    if (!index || index.total === 0) return emptyRunHistoryPage(request.conversationId, requestedPageIndex, pageSize);
+
+    const pageCount = Math.max(1, Math.ceil(index.total / pageSize));
+    const pageIndex = Math.min(requestedPageIndex, pageCount - 1);
+    const pageRecord = index.pages[pageIndex];
+    if (!pageRecord) {
+      console.warn(`[LimCode] Run history index has no page record for ${request.conversationId} page ${pageIndex}.`);
+      return emptyRunHistoryPage(request.conversationId, pageIndex, pageSize);
+    }
+
+    try {
+      await __runHistoryStoreTestHooks.beforeReadConversationPage?.({
+        rootUri: runHistoryRoot(paths, request.conversationId),
+        conversationId: request.conversationId,
+        generation: index.generation,
+        pageFile: pageRecord.file,
+        attempt
+      });
+      const page = await readRunHistoryPageStrict(runHistoryRoot(paths, request.conversationId), request.conversationId, pageRecord);
+      const confirmedIndex = await loadRunHistoryIndex(paths, request.conversationId);
+      if (confirmedIndex?.generation !== index.generation) {
+        lastError = new Error(`Run history generation changed while reading page: ${index.generation} -> ${confirmedIndex?.generation ?? 'missing'}`);
+        continue;
+      }
+
+      const runs = page.runs.map(normalizeRestoredRunLikeRecord);
+      assertUniqueRecords(runs, `runHistoryPage:${request.conversationId}`);
+      return {
+        conversationId: request.conversationId,
+        runs,
+        pageInfo: {
+          cursor: String(pageIndex),
+          ...(pageIndex > 0 ? { previousCursor: String(pageIndex - 1) } : {}),
+          ...(pageIndex + 1 < pageCount ? { nextCursor: String(pageIndex + 1) } : {}),
+          pageIndex,
+          pageSize,
+          total: index.total,
+          hasNext: pageIndex + 1 < pageCount,
+          hasPrevious: pageIndex > 0
+        }
+      };
+    } catch (error) {
+      lastError = error;
+      const latestIndex = await loadRunHistoryIndex(paths, request.conversationId);
+      if (latestIndex?.generation !== index.generation && attempt < RUN_HISTORY_PAGE_READ_MAX_ATTEMPTS) continue;
+      console.warn(`[LimCode] Failed to load stable run history page for ${request.conversationId}: ${pageRecord.file}`, error);
+      return emptyRunHistoryPage(request.conversationId, pageIndex, pageSize);
+    }
+  }
+
+  console.warn(`[LimCode] Failed to load stable run history page for ${request.conversationId} after retries:`, lastError);
+  return emptyRunHistoryPage(request.conversationId, requestedPageIndex, normalizeRunHistoryPageSize(request.limit));
+}
+
+function emptyRunHistoryPage(conversationId: string, pageIndex: number, pageSize: number): ConversationRunHistoryPageRecord {
   return {
-    conversationId: request.conversationId,
-    runs,
+    conversationId,
+    runs: [],
     pageInfo: {
-      cursor: String(pageIndex),
-      ...(pageIndex > 0 ? { previousCursor: String(pageIndex - 1) } : {}),
-      ...(pageIndex + 1 < pageCount ? { nextCursor: String(pageIndex + 1) } : {}),
-      pageIndex,
+      cursor: String(Math.max(0, pageIndex)),
+      pageIndex: Math.max(0, pageIndex),
       pageSize,
-      total,
-      hasNext: pageIndex + 1 < pageCount,
-      hasPrevious: pageIndex > 0
+      total: 0,
+      hasNext: false,
+      hasPrevious: false
     }
   };
 }
@@ -474,19 +595,27 @@ async function loadConversationRunHistoryForMessagesFromStores(paths: StoragePat
 }
 
 export async function deleteConversationDataFromStores(paths: StoragePaths, conversationId: string): Promise<DeleteConversationDataResult> {
-  const deletedPaths: string[] = [];
-  const errors: string[] = [];
   const normalizedConversationId = conversationId.trim();
   if (!normalizedConversationId) {
-    return { ok: false, conversationId, deletedPaths, errors: ['conversationId is empty'] };
+    return { ok: false, conversationId, deletedPaths: [], errors: ['conversationId is empty'] };
   }
+  return withClientStateSkeletonMutation(paths, async () => {
+    const result = await deleteConversationDataFromStoresUnlocked(paths, normalizedConversationId);
+    return { value: result, commit: result.ok };
+  });
+}
+
+async function deleteConversationDataFromStoresUnlocked(paths: StoragePaths, normalizedConversationId: string): Promise<DeleteConversationDataResult> {
+  const deletedPaths: string[] = [];
+  const errors: string[] = [];
 
   const runIds = await collectRunIdsForDeletion(paths, normalizedConversationId, errors);
+  const checkpointDeletion = await collectCheckpointDeletionPlan(paths, normalizedConversationId, errors);
 
   await tryDeleteUri(conversationDetailRoot(paths, normalizedConversationId), deletedPaths, errors, { recursive: true });
   await tryDeleteUri(runHistoryRoot(paths, normalizedConversationId), deletedPaths, errors, { recursive: true });
   for (const runId of runIds) {
-    await tryDeleteUri(runDetailUri(paths, runId), deletedPaths, errors);
+    await pruneRunDetailForConversation(paths, runId, normalizedConversationId, deletedPaths, errors);
   }
 
   for (const root of [
@@ -509,7 +638,19 @@ export async function deleteConversationDataFromStores(paths: StoragePaths, conv
   await pruneStoreRecords<ConversationProjectLinkRecord>(paths.conversationProjectLinksRootUri, paths.conversationProjectLinksIndexUri, 'link', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
   await pruneStoreRecords<ConversationWorkEnvironmentLinkRecord>(paths.conversationWorkEnvironmentLinksRootUri, paths.conversationWorkEnvironmentLinksIndexUri, 'link', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
   await pruneStoreRecords<ConversationRuntimeContextSnapshotLinkRecord>(paths.conversationRuntimeContextSnapshotLinksRootUri, paths.conversationRuntimeContextSnapshotLinksIndexUri, 'link', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
+  await pruneStoreRecords<CheckpointPolicyScopeLinkRecord>(paths.checkpointPolicyScopeLinksRootUri, paths.checkpointPolicyScopeLinksIndexUri, 'link', (record) => isConversationScopeLinkRecord(record, normalizedConversationId), deletedPaths, errors);
+  await pruneStoreRecords<WorkEnvironmentPolicyScopeLinkRecord>(paths.workEnvironmentPolicyScopeLinksRootUri, paths.workEnvironmentPolicyScopeLinksIndexUri, 'link', (record) => isConversationScopeLinkRecord(record, normalizedConversationId), deletedPaths, errors);
+  await pruneStoreRecords<SystemPromptScopeLinkRecord>(paths.systemPromptScopeLinksRootUri, paths.systemPromptScopeLinksIndexUri, 'link', (record) => isConversationScopeLinkRecord(record, normalizedConversationId), deletedPaths, errors);
+  await pruneStoreRecords<ModelProfileScopeLinkRecord>(paths.modelProfileScopeLinksRootUri, paths.modelProfileScopeLinksIndexUri, 'link', (record) => isConversationScopeLinkRecord(record, normalizedConversationId), deletedPaths, errors);
+  await pruneStoreRecords<RuntimeContextScopeLinkRecord>(paths.runtimeContextScopeLinksRootUri, paths.runtimeContextScopeLinksIndexUri, 'link', (record) => isConversationScopeLinkRecord(record, normalizedConversationId), deletedPaths, errors);
+  await pruneStoreRecords<PlanReviewPolicyScopeLinkRecord>(paths.planReviewPolicyScopeLinksRootUri, paths.planReviewPolicyScopeLinksIndexUri, 'link', (record) => isConversationScopeLinkRecord(record, normalizedConversationId), deletedPaths, errors);
   await pruneStoreRecords<ConversationCheckpointRepositoryLinkRecord>(paths.conversationCheckpointRepositoryLinksRootUri, paths.conversationCheckpointRepositoryLinksIndexUri, 'link', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
+  await pruneStoreRecords<CheckpointRecord>(paths.checkpointsRootUri, paths.checkpointsIndexUri, 'checkpoint', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
+  await pruneStoreRecords<CheckpointTimelineAnchorRecord>(paths.checkpointTimelineAnchorsRootUri, paths.checkpointTimelineAnchorsIndexUri, 'anchor', (record) => record.conversationId === normalizedConversationId || checkpointDeletion.checkpointIds.has(record.checkpointId), deletedPaths, errors);
+  if (checkpointDeletion.shadowRepositoryIds.size > 0) {
+    await pruneStoreRecords<ShadowRepositoryRecord>(paths.shadowRepositoriesRootUri, paths.shadowRepositoriesIndexUri, 'shadowRepository', (record) => checkpointDeletion.shadowRepositoryIds.has(record.id), deletedPaths, errors);
+    await deleteUnusedShadowWorktreeDirectories(paths, checkpointDeletion.storageKeys, deletedPaths, errors);
+  }
 
   if (runIds.size > 0) {
     await pruneStoreRecords<RunRuntimeContextSnapshotLinkRecord>(paths.runRuntimeContextSnapshotLinksRootUri, paths.runRuntimeContextSnapshotLinksIndexUri, 'link', (record) => runIds.has(record.runId), deletedPaths, errors);
@@ -520,6 +661,13 @@ export async function deleteConversationDataFromStores(paths: StoragePaths, conv
 }
 
 export async function saveClientStateSkeletonToStores(paths: StoragePaths, state: ClientState): Promise<void> {
+  return withClientStateSkeletonMutation(paths, async () => {
+    await saveClientStateSkeletonToStoresUnlocked(paths, state);
+    return { value: undefined, commit: true };
+  });
+}
+
+async function saveClientStateSkeletonToStoresUnlocked(paths: StoragePaths, state: ClientState): Promise<void> {
   assertUniqueClientStateIds(state, 'saveClientStateSkeleton');
   const results = await Promise.allSettled([
     saveRecords(paths.agentsRootUri, paths.agentsIndexUri, state.agents, 'agent', (record) => record.name || record.id),
@@ -568,6 +716,7 @@ export async function saveClientStateSkeletonToStores(paths: StoragePaths, state
     const details = failures.map((failure) => failure.reason instanceof Error ? failure.reason.message : String(failure.reason)).join('; ');
     throw new Error(`Failed to save ${failures.length} client state store(s): ${details}`);
   }
+  await __clientStateSkeletonStoreTestHooks.afterStoresSaved?.();
 }
 
 export async function saveConversationRenderDetailToStores(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
@@ -589,9 +738,7 @@ export async function saveConversationRenderDetailToStores(paths: StoragePaths, 
 }
 
 async function saveMergedConversationTimelineDetail(paths: StoragePaths, conversationId: string, detail: ClientState): Promise<void> {
-  const existingTimeline = await loadConversationTimelineDetail(paths, conversationId);
-  if (existingTimeline) mergeRenderDetailTables(existingTimeline, detail);
-  await saveConversationTimelineDetail(paths, conversationId, existingTimeline ?? detail);
+  await mergeConversationTimelineDetailIntoStore(paths, conversationId, detail);
 }
 
 export async function saveConversationRunHistoryToStores(
@@ -611,40 +758,38 @@ export async function saveConversationRunHistoryToStores(
   const runDetails = detail.agentRuns.map((run) => conversationRunDetailRecord(state, conversationId, run.id)).filter(isDefined);
   await Promise.all(runDetails.map((record) => writeRunDetail(paths, record)));
 
-  const previousIndex = options.mode === 'merge' ? await loadRunHistoryIndex(paths, conversationId) : undefined;
-  const previousRuns = options.mode === 'merge' ? previousIndex?.runs ?? [] : [];
-  const summaries = uniqueRunSummaries([...previousRuns, ...runDetails.map((record) => record.summary).filter(isDefined)])
+  const summaries = uniqueRunSummaries(runDetails.map((record) => record.summary).filter(isDefined))
     .sort(compareRunSummaries);
-  await writeRunHistoryIndexAndPages(paths, conversationId, summaries);
+  await writeRunHistoryIndexAndPages(paths, conversationId, summaries, options);
 }
 
 export async function saveMessageRecord(paths: StoragePaths, conversationId: string, message: MessageRecord): Promise<void> {
-  const detail = (await loadConversationTimelineDetail(paths, conversationId)) ?? createEmptyClientState();
-  detail.messages = upsertById(detail.messages, { ...message, conversationId });
-  await saveConversationTimelineDetail(paths, conversationId, detail);
+  await mutateConversationTimelineDetailInStore(paths, conversationId, (detail) => {
+    detail.messages = upsertById(detail.messages, { ...message, conversationId });
+  });
 }
 
 export async function removeMessageRecord(paths: StoragePaths, conversationId: string, messageId: string): Promise<void> {
-  const detail = (await loadConversationTimelineDetail(paths, conversationId)) ?? createEmptyClientState();
-  const toolCallIds = new Set(detail.toolCalls.filter((toolCall) => toolCall.messageId === messageId).map((toolCall) => toolCall.id));
-  detail.messages = detail.messages.filter((message) => message.id !== messageId);
-  detail.messageRevisions = detail.messageRevisions.filter((revision) => revision.messageId !== messageId);
-  detail.messageCurrentRevisionLinks = detail.messageCurrentRevisionLinks.filter((link) => link.messageId !== messageId);
-  detail.toolCalls = detail.toolCalls.filter((toolCall) => toolCall.messageId !== messageId);
-  detail.toolCallEvents = detail.toolCallEvents.filter((event) => !toolCallIds.has(event.toolCallId));
-  await saveConversationTimelineDetail(paths, conversationId, detail);
+  await mutateConversationTimelineDetailInStore(paths, conversationId, (detail) => {
+    const toolCallIds = new Set(detail.toolCalls.filter((toolCall) => toolCall.messageId === messageId).map((toolCall) => toolCall.id));
+    detail.messages = detail.messages.filter((message) => message.id !== messageId);
+    detail.messageRevisions = detail.messageRevisions.filter((revision) => revision.messageId !== messageId);
+    detail.messageCurrentRevisionLinks = detail.messageCurrentRevisionLinks.filter((link) => link.messageId !== messageId);
+    detail.toolCalls = detail.toolCalls.filter((toolCall) => toolCall.messageId !== messageId);
+    detail.toolCallEvents = detail.toolCallEvents.filter((event) => !toolCallIds.has(event.toolCallId));
+  });
 }
 
 export async function saveToolCallRecord(paths: StoragePaths, conversationId: string, toolCall: ToolCallRecord): Promise<void> {
-  const detail = (await loadConversationTimelineDetail(paths, conversationId)) ?? createEmptyClientState();
-  detail.toolCalls = upsertById(detail.toolCalls, toolCall);
-  await saveConversationTimelineDetail(paths, conversationId, detail);
+  await mutateConversationTimelineDetailInStore(paths, conversationId, (detail) => {
+    detail.toolCalls = upsertById(detail.toolCalls, toolCall);
+  });
 }
 
 export async function appendToolCallEventRecord(paths: StoragePaths, conversationId: string, event: ToolCallEventRecord): Promise<void> {
-  const detail = (await loadConversationTimelineDetail(paths, conversationId)) ?? createEmptyClientState();
-  detail.toolCallEvents = upsertById(detail.toolCallEvents, event);
-  await saveConversationTimelineDetail(paths, conversationId, detail);
+  await mutateConversationTimelineDetailInStore(paths, conversationId, (detail) => {
+    detail.toolCallEvents = upsertById(detail.toolCallEvents, event);
+  });
 }
 
 export function conversationRenderDetailSlice(state: ClientState, conversationId: string): ClientState {
@@ -979,62 +1124,123 @@ function conversationRunSummaryFromDetail(conversationId: string, detail: Client
 }
 
 async function loadRunHistoryIndex(paths: StoragePaths, conversationId: string): Promise<ConversationRunHistoryIndexFile | undefined> {
-  const index = await readJson<ConversationRunHistoryIndexFile>(vscode.Uri.joinPath(runHistoryRoot(paths, conversationId), INDEX_FILE));
-  if (!index || index.schemaVersion !== STORAGE_VERSION || index.conversationId !== conversationId) return undefined;
-  assertUniqueRecords(index.runs, `runHistoryIndex:${conversationId}`);
-  return { ...index, runs: index.runs.map(normalizeRestoredRunLikeRecord) };
+  const root = runHistoryRoot(paths, conversationId);
+  try {
+    return (await loadRunHistoryIndexStrict(root, conversationId, { allowMissing: true }))?.index;
+  } catch (error) {
+    console.warn(`[LimCode] Failed to load run history index for ${conversationId}:`, error);
+    return undefined;
+  }
 }
 
-async function readRunHistoryPage(paths: StoragePaths, conversationId: string, file: string): Promise<ConversationRunHistoryPageFile | undefined> {
-  const page = await readJson<ConversationRunHistoryPageFile>(vscode.Uri.joinPath(runHistoryRoot(paths, conversationId), ...file.split('/')));
-  if (!page || page.schemaVersion !== STORAGE_VERSION || page.conversationId !== conversationId) return undefined;
-  assertUniqueRecords(page.runs, `runHistoryPage:${conversationId}:${file}`);
-  return { ...page, runs: page.runs.map(normalizeRestoredRunLikeRecord) };
+async function loadRunHistoryIndexStrict(root: vscode.Uri, conversationId: string, options: { allowMissing: boolean; validatePages?: boolean }): Promise<ConversationRunHistoryIndexSnapshot | undefined> {
+  const indexUri = vscode.Uri.joinPath(root, INDEX_FILE);
+  const result = await readJsonStrict<unknown>(indexUri);
+  if (result.status === 'missing') {
+    const traces = await findExistingRunHistoryTraces(root);
+    if (traces.length > 0) throw new Error(`Run history index is missing but storage contains page traces: ${traces.join(', ')}`);
+    if (options.allowMissing) return undefined;
+    throw new Error(`Run history index is missing: ${indexUri.fsPath}`);
+  }
+  if (result.status === 'invalid') throw new Error(`Run history index JSON is invalid: ${indexUri.fsPath}`);
+  if (result.status === 'ioError') throw new Error(`Failed to read run history index: ${indexUri.fsPath}`);
+  const snapshot = parseRunHistoryIndex(result.value, indexUri, conversationId);
+  if (options.validatePages) await validateRunHistoryPagesForWrite(root, conversationId, snapshot.index);
+  return snapshot;
+}
+
+async function readRunHistoryPage(paths: StoragePaths, conversationId: string, pageRecord: ConversationRunHistoryPageIndexRecord): Promise<ConversationRunHistoryPageFile | undefined> {
+  const root = runHistoryRoot(paths, conversationId);
+  try {
+    return await readRunHistoryPageStrict(root, conversationId, pageRecord);
+  } catch (error) {
+    console.warn(`[LimCode] Failed to load run history page for ${conversationId}: ${pageRecord.file}`, error);
+    return undefined;
+  }
+}
+
+async function readRunHistoryPageStrict(root: vscode.Uri, conversationId: string, pageRecord: ConversationRunHistoryPageIndexRecord): Promise<ConversationRunHistoryPageFile> {
+  const uri = vscode.Uri.joinPath(root, ...pageRecord.file.split('/'));
+  const result = await readJsonStrict<unknown>(uri);
+  if (result.status === 'missing') throw new Error(`Indexed run history page is missing: ${uri.fsPath}`);
+  if (result.status === 'invalid') throw new Error(`Indexed run history page JSON is invalid: ${uri.fsPath}`);
+  if (result.status === 'ioError') throw new Error(`Failed to read indexed run history page: ${uri.fsPath}`);
+  return parseRunHistoryPage(result.value, uri, conversationId, pageRecord);
+}
+
+async function validateRunHistoryPagesForWrite(root: vscode.Uri, conversationId: string, index: ConversationRunHistoryIndexFile): Promise<void> {
+  const pages = await Promise.all(index.pages.map((pageRecord) => readRunHistoryPageStrict(root, conversationId, pageRecord)));
+  const runs = pages.flatMap((page) => page.runs);
+  if (runs.length !== index.runs.length) throw new Error(`Run history pages do not match index total: ${conversationId}`);
+  for (let runIndex = 0; runIndex < runs.length; runIndex += 1) {
+    if (runs[runIndex].id !== index.runs[runIndex].id || runs[runIndex].conversationId !== index.runs[runIndex].conversationId) {
+      throw new Error(`Run history page summary order does not match index: ${conversationId}`);
+    }
+  }
 }
 
 async function loadRunDetail(paths: StoragePaths, conversationId: string, runId: string): Promise<ConversationRunDetailRecord | undefined> {
-  const file = await readJson<RunHistoryDetailFile>(runDetailUri(paths, runId));
-  if (!file || file.schemaVersion !== STORAGE_VERSION || file.runId !== runId) return undefined;
-  assertUniqueRecords(file.summaries, `runDetailSummaries:${runId}`);
-  assertUniqueClientStateIds(file.state, `runDetailState:${runId}`);
-  const state = { ...file.state, agentRuns: file.state.agentRuns.map(normalizeRestoredRunLikeRecord) };
-  const summaries = file.summaries.map(normalizeRestoredRunLikeRecord);
-  const summary = summaries.find((candidate) => candidate.conversationId === conversationId);
-  if (!summary) return undefined;
-  return { conversationId, runId: file.runId, summary, state };
+  try {
+    const file = await readRunDetailFileStrict(runDetailUri(paths, runId), runId, { allowMissing: true });
+    if (!file) return undefined;
+    const summary = file.summaries.find((candidate) => candidate.conversationId === conversationId);
+    if (!summary) return undefined;
+    return { conversationId, runId: file.runId, summary, state: file.state };
+  } catch (error) {
+    console.warn(`[LimCode] Failed to load run detail for ${runId}:`, error);
+    return undefined;
+  }
 }
 
 async function writeRunDetail(paths: StoragePaths, record: ConversationRunDetailRecord): Promise<void> {
   assertUniqueClientStateIds(record.state, `writeRunDetail:${record.runId}:record`);
-  const existing = await readJson<RunHistoryDetailFile>(runDetailUri(paths, record.runId));
-  if (existing?.schemaVersion === STORAGE_VERSION && existing.runId === record.runId) {
-    assertUniqueRecords(existing.summaries, `writeRunDetail:${record.runId}:existingSummaries`);
-    assertUniqueClientStateIds(existing.state, `writeRunDetail:${record.runId}:existingState`);
-  }
-  const state = createEmptyClientState();
-  if (existing?.schemaVersion === STORAGE_VERSION && existing.runId === record.runId) {
-    mergeClientStateTables(state, existing.state, RUN_DETAIL_TABLE_KEYS);
-  }
-  mergeClientStateTables(state, record.state, RUN_DETAIL_TABLE_KEYS);
+  const uri = runDetailUri(paths, record.runId);
+  await withStorageResourceLock(uri, async () => {
+    const existing = await readRunDetailFileStrict(uri, record.runId, { allowMissing: true });
+    const state = createEmptyClientState();
+    if (existing) mergeClientStateTables(state, existing.state, RUN_DETAIL_TABLE_KEYS);
+    mergeClientStateTables(state, record.state, RUN_DETAIL_TABLE_KEYS);
 
-  const summaries = uniqueRunSummaries([
-    ...(existing?.schemaVersion === STORAGE_VERSION && existing.runId === record.runId ? existing.summaries : []),
-    record.summary
-  ].filter(isDefined)).sort(compareRunSummaries);
+    const summaries = uniqueRunSummaries([
+      ...(existing ? existing.summaries : []),
+      record.summary
+    ].filter(isDefined)).sort(compareRunSummaries);
 
-  await writeJson(runDetailUri(paths, record.runId), {
-    schemaVersion: STORAGE_VERSION,
-    savedAt: new Date().toISOString(),
-    runId: record.runId,
-    summaries,
-    state
-  } satisfies RunHistoryDetailFile);
+    await writeJson(uri, {
+      kind: 'runHistory.detail',
+      schemaVersion: STORAGE_VERSION,
+      savedAt: new Date().toISOString(),
+      runId: record.runId,
+      summaries,
+      state
+    } satisfies RunHistoryDetailFile);
+  });
 }
 
-async function writeRunHistoryIndexAndPages(paths: StoragePaths, conversationId: string, summaries: ConversationRunSummaryRecord[]): Promise<void> {
-  const savedAt = new Date().toISOString();
+async function writeRunHistoryIndexAndPages(
+  paths: StoragePaths,
+  conversationId: string,
+  incomingSummaries: ConversationRunSummaryRecord[],
+  options: SaveConversationRunHistoryOptions
+): Promise<void> {
   const root = runHistoryRoot(paths, conversationId);
-  const pagesRoot = vscode.Uri.joinPath(root, RUN_HISTORY_PAGES_DIR);
+  await withStorageResourceLock(root, async () => {
+    const previous = await loadRunHistoryIndexStrict(root, conversationId, { allowMissing: true, validatePages: true });
+    const previousRuns = options.mode === 'merge' ? previous?.index.runs ?? [] : [];
+    const summaries = uniqueRunSummaries([...previousRuns, ...incomingSummaries]).sort(compareRunSummaries);
+    await publishRunHistoryIndexAndPages(root, conversationId, summaries, previous?.index);
+  });
+}
+
+async function publishRunHistoryIndexAndPages(
+  root: vscode.Uri,
+  conversationId: string,
+  summaries: ConversationRunSummaryRecord[],
+  previousIndex: ConversationRunHistoryIndexFile | undefined
+): Promise<void> {
+  const savedAt = new Date().toISOString();
+  const generation = createStorageGenerationLocation(root);
+  const pagesRoot = vscode.Uri.joinPath(generation.rootUri, RUN_HISTORY_PAGES_DIR);
   await vscode.workspace.fs.createDirectory(pagesRoot);
 
   const pageSize = RUN_HISTORY_PAGE_SIZE;
@@ -1042,14 +1248,17 @@ async function writeRunHistoryIndexAndPages(paths: StoragePaths, conversationId:
   const pageCount = Math.ceil(summaries.length / pageSize);
   for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
     const runs = summaries.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize);
-    const file = `${RUN_HISTORY_PAGES_DIR}/${pageIndex.toString().padStart(6, '0')}.json`;
+    const file = runHistoryPageFile(generation.id, pageIndex);
     await writeJson(vscode.Uri.joinPath(root, ...file.split('/')), {
+      kind: 'conversationRunHistory.page',
       schemaVersion: STORAGE_VERSION,
       savedAt,
+      generation: generation.id,
       conversationId,
       runs
     } satisfies ConversationRunHistoryPageFile);
     pages.push({
+      generation: generation.id,
       file,
       count: runs.length,
       ...(runs[0]?.updatedAt !== undefined ? { newestUpdatedAt: runs[0].updatedAt } : {}),
@@ -1057,16 +1266,305 @@ async function writeRunHistoryIndexAndPages(paths: StoragePaths, conversationId:
     });
   }
 
-  await writeJson(vscode.Uri.joinPath(root, INDEX_FILE), {
+  const nextIndex: ConversationRunHistoryIndexFile = {
+    kind: 'conversationRunHistory.index',
     schemaVersion: STORAGE_VERSION,
     savedAt,
+    generation: generation.id,
     conversationId,
     pageSize,
     total: summaries.length,
     runs: summaries,
     pages
-  } satisfies ConversationRunHistoryIndexFile);
+  };
+  await __runHistoryStoreTestHooks.beforePublishConversationIndex?.({ rootUri: root, conversationId, generation: generation.id });
+  await writeJson(vscode.Uri.joinPath(root, INDEX_FILE), nextIndex);
+  await cleanupOldRunHistoryGenerationsAfterPublish(root, nextIndex, previousIndex);
 }
+
+async function readRunDetailFileStrict(uri: vscode.Uri, runId: string, options: { allowMissing: boolean }): Promise<RunHistoryDetailFile | undefined> {
+  const result = await readJsonStrict<unknown>(uri);
+  if (result.status === 'missing') {
+    if (options.allowMissing) return undefined;
+    throw new Error(`Run detail file is missing: ${uri.fsPath}`);
+  }
+  if (result.status === 'invalid') throw new Error(`Run detail JSON is invalid: ${uri.fsPath}`);
+  if (result.status === 'ioError') throw new Error(`Failed to read run detail: ${uri.fsPath}`);
+  return parseRunDetailFile(result.value, uri, runId);
+}
+
+function parseRunHistoryIndex(value: unknown, uri: vscode.Uri, conversationId: string): ConversationRunHistoryIndexSnapshot {
+  const index = value as Partial<ConversationRunHistoryIndexFile> | undefined;
+  if (!isPlainObject(index)) throw new Error(`Run history index must be an object: ${uri.fsPath}`);
+  if (!hasOnlyKeys(index, ['kind', 'schemaVersion', 'savedAt', 'generation', 'conversationId', 'pageSize', 'total', 'runs', 'pages'])) {
+    throw new Error(`Run history index has unknown fields: ${uri.fsPath}`);
+  }
+  if (index.kind !== 'conversationRunHistory.index') throw new Error(`Run history index kind is invalid: ${uri.fsPath}`);
+  if (index.schemaVersion !== STORAGE_VERSION) throw new Error(`Unsupported run history index schema: ${uri.fsPath}`);
+  if (typeof index.savedAt !== 'string' || !index.savedAt.trim()) throw new Error(`Run history index savedAt is invalid: ${uri.fsPath}`);
+  if (typeof index.generation !== 'string' || !isSafeStorageGenerationId(index.generation)) throw new Error(`Run history index generation is invalid: ${uri.fsPath}`);
+  if (index.conversationId !== conversationId) throw new Error(`Run history index conversation mismatch: ${uri.fsPath}`);
+  if (!isSafePositiveInteger(index.pageSize)) throw new Error(`Run history index pageSize is invalid: ${uri.fsPath}`);
+  if (!isSafeNonNegativeInteger(index.total)) throw new Error(`Run history index total is invalid: ${uri.fsPath}`);
+  if (!Array.isArray(index.runs) || !Array.isArray(index.pages)) throw new Error(`Run history index arrays are invalid: ${uri.fsPath}`);
+
+  const runs = index.runs.map((run) => parseRunSummary(run, uri, conversationId));
+  assertUniqueRecords(runs, `runHistoryIndex:${conversationId}`);
+  if (runs.length !== index.total) throw new Error(`Run history index total does not match runs: ${uri.fsPath}`);
+
+  const pages: ConversationRunHistoryPageIndexRecord[] = [];
+  let totalFromPages = 0;
+  for (let pageIndex = 0; pageIndex < index.pages.length; pageIndex += 1) {
+    const page = index.pages[pageIndex] as Partial<ConversationRunHistoryPageIndexRecord> | undefined;
+    if (!isPlainObject(page) || !hasOnlyKeys(page, ['generation', 'file', 'count', 'newestUpdatedAt', 'oldestUpdatedAt'])) {
+      throw new Error(`Run history page index is invalid: ${uri.fsPath}`);
+    }
+    if (page.generation !== index.generation || !isSafeStorageGenerationId(page.generation)) throw new Error(`Run history page index generation mismatch: ${uri.fsPath}`);
+    if (page.file !== runHistoryPageFile(index.generation, pageIndex)) throw new Error(`Run history page index file is invalid: ${uri.fsPath}`);
+    if (!isSafeNonNegativeInteger(page.count)) throw new Error(`Run history page index count is invalid: ${uri.fsPath}`);
+    if (!isOptionalFiniteNumber(page.newestUpdatedAt) || !isOptionalFiniteNumber(page.oldestUpdatedAt)) throw new Error(`Run history page index time range is invalid: ${uri.fsPath}`);
+    totalFromPages += page.count;
+    pages.push({
+      generation: page.generation,
+      file: page.file,
+      count: page.count,
+      ...(page.newestUpdatedAt !== undefined ? { newestUpdatedAt: page.newestUpdatedAt } : {}),
+      ...(page.oldestUpdatedAt !== undefined ? { oldestUpdatedAt: page.oldestUpdatedAt } : {})
+    });
+  }
+  if (totalFromPages !== runs.length) throw new Error(`Run history index total does not match page counts: ${uri.fsPath}`);
+
+  return {
+    uri,
+    index: {
+      kind: 'conversationRunHistory.index',
+      schemaVersion: STORAGE_VERSION,
+      savedAt: index.savedAt,
+      generation: index.generation,
+      conversationId,
+      pageSize: index.pageSize,
+      total: index.total,
+      runs,
+      pages
+    }
+  };
+}
+
+function parseRunHistoryPage(value: unknown, uri: vscode.Uri, conversationId: string, pageRecord: ConversationRunHistoryPageIndexRecord): ConversationRunHistoryPageFile {
+  const page = value as Partial<ConversationRunHistoryPageFile> | undefined;
+  if (!isPlainObject(page)) throw new Error(`Run history page must be an object: ${uri.fsPath}`);
+  if (!hasOnlyKeys(page, ['kind', 'schemaVersion', 'savedAt', 'generation', 'conversationId', 'runs'])) throw new Error(`Run history page has unknown fields: ${uri.fsPath}`);
+  if (page.kind !== 'conversationRunHistory.page') throw new Error(`Run history page kind is invalid: ${uri.fsPath}`);
+  if (page.schemaVersion !== STORAGE_VERSION) throw new Error(`Unsupported run history page schema: ${uri.fsPath}`);
+  if (typeof page.savedAt !== 'string' || !page.savedAt.trim()) throw new Error(`Run history page savedAt is invalid: ${uri.fsPath}`);
+  if (page.generation !== pageRecord.generation) throw new Error(`Run history page generation mismatch: ${uri.fsPath}`);
+  if (page.conversationId !== conversationId) throw new Error(`Run history page conversation mismatch: ${uri.fsPath}`);
+  if (!Array.isArray(page.runs)) throw new Error(`Run history page runs are invalid: ${uri.fsPath}`);
+  if (page.runs.length !== pageRecord.count) throw new Error(`Run history page count mismatch: ${uri.fsPath}`);
+  const runs = page.runs.map((run) => parseRunSummary(run, uri, conversationId));
+  assertUniqueRecords(runs, `runHistoryPage:${conversationId}:${pageRecord.file}`);
+  return {
+    kind: 'conversationRunHistory.page',
+    schemaVersion: STORAGE_VERSION,
+    savedAt: page.savedAt,
+    generation: pageRecord.generation,
+    conversationId,
+    runs
+  };
+}
+
+function parseRunDetailFile(value: unknown, uri: vscode.Uri, runId: string): RunHistoryDetailFile {
+  const file = value as Partial<RunHistoryDetailFile> | undefined;
+  if (!isPlainObject(file)) throw new Error(`Run detail file must be an object: ${uri.fsPath}`);
+  if (!hasOnlyKeys(file, ['kind', 'schemaVersion', 'savedAt', 'runId', 'summaries', 'state'])) throw new Error(`Run detail has unknown fields: ${uri.fsPath}`);
+  if (file.kind !== 'runHistory.detail') throw new Error(`Run detail kind is invalid: ${uri.fsPath}`);
+  if (file.schemaVersion !== STORAGE_VERSION) throw new Error(`Unsupported run detail schema: ${uri.fsPath}`);
+  if (typeof file.savedAt !== 'string' || !file.savedAt.trim()) throw new Error(`Run detail savedAt is invalid: ${uri.fsPath}`);
+  if (file.runId !== runId) throw new Error(`Run detail runId mismatch: ${uri.fsPath}`);
+  if (!Array.isArray(file.summaries)) throw new Error(`Run detail summaries are invalid: ${uri.fsPath}`);
+  if (!isPlainObject(file.state)) throw new Error(`Run detail state is invalid: ${uri.fsPath}`);
+  const summaries = file.summaries.map((summary) => parseRunSummary(summary, uri));
+  if (!summaries.every((summary) => summary.id === runId)) throw new Error(`Run detail summary runId mismatch: ${uri.fsPath}`);
+  assertUniqueRunSummaries(summaries, `runDetailSummaries:${runId}`);
+  const state = { ...(file.state as ClientState), agentRuns: ((file.state as ClientState).agentRuns ?? []).map(normalizeRestoredRunLikeRecord) };
+  assertUniqueClientStateIds(state, `runDetailState:${runId}`);
+  return {
+    kind: 'runHistory.detail',
+    schemaVersion: STORAGE_VERSION,
+    savedAt: file.savedAt,
+    runId,
+    summaries,
+    state
+  };
+}
+
+function parseRunSummary(value: unknown, uri: vscode.Uri, conversationId?: string): ConversationRunSummaryRecord {
+  const summary = value as Partial<ConversationRunSummaryRecord> | undefined;
+  if (!isPlainObject(summary)) throw new Error(`Run summary must be an object: ${uri.fsPath}`);
+  if (!hasOnlyKeys(summary, [
+    'id',
+    'conversationId',
+    'kind',
+    'status',
+    'createdAt',
+    'updatedAt',
+    'completedAt',
+    'endReason',
+    'errorType',
+    'error',
+    'retryOfRunId',
+    'attempt',
+    'sourceKind',
+    'sourceMessageId',
+    'sourceToolCallId',
+    'sourceRunId',
+    'targetAgentId',
+    'targetConversationId',
+    'inputMessageCount',
+    'outputMessageCount',
+    'inputMessageIds',
+    'outputMessageIds',
+    'toolCallIds',
+    'toolCallCount',
+    'inputPreview',
+    'outputPreview'
+  ])) {
+    throw new Error(`Run summary has unknown fields: ${uri.fsPath}`);
+  }
+  if (typeof summary.id !== 'string' || !summary.id.trim()) throw new Error(`Run summary id is invalid: ${uri.fsPath}`);
+  if (typeof summary.conversationId !== 'string' || !summary.conversationId.trim()) throw new Error(`Run summary conversationId is invalid: ${uri.fsPath}`);
+  if (conversationId !== undefined && summary.conversationId !== conversationId) throw new Error(`Run summary conversation mismatch: ${uri.fsPath}`);
+  if (typeof summary.kind !== 'string' || !summary.kind.trim()) throw new Error(`Run summary kind is invalid: ${uri.fsPath}`);
+  if (typeof summary.status !== 'string' || !summary.status.trim()) throw new Error(`Run summary status is invalid: ${uri.fsPath}`);
+  if (!isFiniteNumber(summary.createdAt) || !isFiniteNumber(summary.updatedAt)) throw new Error(`Run summary timestamps are invalid: ${uri.fsPath}`);
+  if (!isOptionalFiniteNumber(summary.completedAt) || !isOptionalSafeNonNegativeInteger(summary.attempt)) throw new Error(`Run summary optional numbers are invalid: ${uri.fsPath}`);
+  if (!isSafeNonNegativeInteger(summary.inputMessageCount) || !isSafeNonNegativeInteger(summary.outputMessageCount) || !isSafeNonNegativeInteger(summary.toolCallCount)) {
+    throw new Error(`Run summary counts are invalid: ${uri.fsPath}`);
+  }
+  if (!isOptionalString(summary.endReason) || !isOptionalString(summary.errorType) || !isOptionalString(summary.error) || !isOptionalString(summary.retryOfRunId)
+    || !isOptionalString(summary.sourceKind) || !isOptionalString(summary.sourceMessageId) || !isOptionalString(summary.sourceToolCallId) || !isOptionalString(summary.sourceRunId)
+    || !isOptionalString(summary.targetAgentId) || !isOptionalString(summary.targetConversationId) || !isOptionalString(summary.inputPreview) || !isOptionalString(summary.outputPreview)) {
+    throw new Error(`Run summary optional strings are invalid: ${uri.fsPath}`);
+  }
+  if (!isOptionalStringArray(summary.inputMessageIds) || !isOptionalStringArray(summary.outputMessageIds) || !isOptionalStringArray(summary.toolCallIds)) {
+    throw new Error(`Run summary id arrays are invalid: ${uri.fsPath}`);
+  }
+  return normalizeRestoredRunLikeRecord({
+    id: summary.id,
+    conversationId: summary.conversationId,
+    kind: summary.kind as ConversationRunSummaryRecord['kind'],
+    status: summary.status as ConversationRunSummaryRecord['status'],
+    createdAt: summary.createdAt,
+    updatedAt: summary.updatedAt,
+    ...(summary.completedAt !== undefined ? { completedAt: summary.completedAt } : {}),
+    ...(summary.endReason !== undefined ? { endReason: summary.endReason as ConversationRunSummaryRecord['endReason'] } : {}),
+    ...(summary.errorType !== undefined ? { errorType: summary.errorType as ConversationRunSummaryRecord['errorType'] } : {}),
+    ...(summary.error !== undefined ? { error: summary.error } : {}),
+    ...(summary.retryOfRunId !== undefined ? { retryOfRunId: summary.retryOfRunId } : {}),
+    ...(summary.attempt !== undefined ? { attempt: summary.attempt } : {}),
+    ...(summary.sourceKind !== undefined ? { sourceKind: summary.sourceKind as ConversationRunSummaryRecord['sourceKind'] } : {}),
+    ...(summary.sourceMessageId !== undefined ? { sourceMessageId: summary.sourceMessageId } : {}),
+    ...(summary.sourceToolCallId !== undefined ? { sourceToolCallId: summary.sourceToolCallId } : {}),
+    ...(summary.sourceRunId !== undefined ? { sourceRunId: summary.sourceRunId } : {}),
+    ...(summary.targetAgentId !== undefined ? { targetAgentId: summary.targetAgentId } : {}),
+    ...(summary.targetConversationId !== undefined ? { targetConversationId: summary.targetConversationId } : {}),
+    inputMessageCount: summary.inputMessageCount,
+    outputMessageCount: summary.outputMessageCount,
+    ...(summary.inputMessageIds !== undefined ? { inputMessageIds: [...summary.inputMessageIds] } : {}),
+    ...(summary.outputMessageIds !== undefined ? { outputMessageIds: [...summary.outputMessageIds] } : {}),
+    ...(summary.toolCallIds !== undefined ? { toolCallIds: [...summary.toolCallIds] } : {}),
+    toolCallCount: summary.toolCallCount,
+    ...(summary.inputPreview !== undefined ? { inputPreview: summary.inputPreview } : {}),
+    ...(summary.outputPreview !== undefined ? { outputPreview: summary.outputPreview } : {})
+  });
+}
+
+async function cleanupOldRunHistoryGenerationsAfterPublish(
+  root: vscode.Uri,
+  currentIndex: ConversationRunHistoryIndexFile,
+  previousIndex: ConversationRunHistoryIndexFile | undefined
+): Promise<void> {
+  try {
+    const retained = new Set<string>([
+      ...runHistoryGenerationsReferencedByIndex(currentIndex),
+      ...(previousIndex ? runHistoryGenerationsReferencedByIndex(previousIndex) : [])
+    ]);
+    const result = await cleanupInactiveStorageGenerations(root, retained);
+    for (const failure of result.failed) {
+      console.warn(`[LimCode] Failed to prune run history generation: ${failure.generation.id}`, failure.error);
+    }
+  } catch (error) {
+    console.warn('[LimCode] Failed to prune inactive run history generations:', error);
+  }
+}
+
+function runHistoryGenerationsReferencedByIndex(index: ConversationRunHistoryIndexFile): string[] {
+  const generations = new Set<string>();
+  if (isSafeStorageGenerationId(index.generation)) generations.add(index.generation);
+  for (const page of index.pages) if (isSafeStorageGenerationId(page.generation)) generations.add(page.generation);
+  return [...generations];
+}
+
+async function findExistingRunHistoryTraces(root: vscode.Uri): Promise<string[]> {
+  try {
+    const entries = await vscode.workspace.fs.readDirectory(root);
+    return entries.map(([name]) => name).filter((name) => name !== INDEX_FILE).sort();
+  } catch (error) {
+    if (isStorageFileNotFoundError(error)) return [];
+    throw error;
+  }
+}
+
+function runHistoryPageFile(generation: string, pageIndex: number): string {
+  return `${STORAGE_GENERATIONS_DIR}/${generation}/${RUN_HISTORY_PAGES_DIR}/${pageIndex.toString().padStart(6, '0')}.json`;
+}
+
+function assertUniqueRunSummaries(items: ConversationRunSummaryRecord[], label: string): void {
+  const seen = new Set<string>();
+  for (const item of items) {
+    const key = `${item.conversationId}:${item.id}`;
+    if (seen.has(key)) throw new Error(`Duplicate ${label} id: ${key}`);
+    seen.add(key);
+  }
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: readonly string[]): boolean {
+  const allowed = new Set(allowedKeys);
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isSafeNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isSafePositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
+function isOptionalSafeNonNegativeInteger(value: unknown): value is number | undefined {
+  return value === undefined || isSafeNonNegativeInteger(value);
+}
+
+function isOptionalFiniteNumber(value: unknown): value is number | undefined {
+  return value === undefined || isFiniteNumber(value);
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === 'string';
+}
+
+function isOptionalStringArray(value: unknown): value is string[] | undefined {
+  return value === undefined || (Array.isArray(value) && value.every((item) => typeof item === 'string' && item.length > 0));
+}
+
 
 function uniqueRunSummaries(items: ConversationRunSummaryRecord[]): ConversationRunSummaryRecord[] {
   return [...new Map(items.map((item) => [`${item.conversationId}:${item.id}`, item])).values()];
@@ -1170,10 +1668,205 @@ async function pruneStoreRecords<TRecord extends StoreRecord>(
   }
 }
 
+async function pruneRunDetailForConversation(
+  paths: StoragePaths,
+  runId: string,
+  conversationId: string,
+  deletedPaths: string[],
+  errors: string[]
+): Promise<void> {
+  const uri = runDetailUri(paths, runId);
+  try {
+    await withStorageResourceLock(uri, async () => {
+      const existing = await readRunDetailFileStrict(uri, runId, { allowMissing: true });
+      if (!existing) return;
+      const summaries = existing.summaries.filter((summary) => summary.conversationId !== conversationId);
+      if (summaries.length === existing.summaries.length) return;
+      if (summaries.length === 0) {
+        await vscode.workspace.fs.delete(uri, { recursive: false, useTrash: false });
+        deletedPaths.push(uri.fsPath);
+        return;
+      }
+      await writeJson(uri, {
+        kind: 'runHistory.detail',
+        schemaVersion: STORAGE_VERSION,
+        savedAt: new Date().toISOString(),
+        runId,
+        summaries,
+        state: scrubSharedRunDetailStateForConversation(existing.state, conversationId, summaries)
+      } satisfies RunHistoryDetailFile);
+      deletedPaths.push(uri.fsPath);
+    });
+  } catch (error) {
+    if (isStorageFileNotFoundError(error)) return;
+    errors.push(`prune run detail:${runId}:${conversationId}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function scrubSharedRunDetailStateForConversation(
+  state: ClientState,
+  conversationId: string,
+  remainingSummaries: readonly ConversationRunSummaryRecord[]
+): ClientState {
+  const remainingSummaryMessageIds = new Set(remainingSummaries.flatMap((summary) => [
+    ...(summary.inputMessageIds ?? []),
+    ...(summary.outputMessageIds ?? []),
+    ...(summary.sourceMessageId ? [summary.sourceMessageId] : [])
+  ]));
+  const removedMessageIds = new Set(state.messages.filter((message) => message.conversationId === conversationId).map((message) => message.id));
+  const removedRevisionIds = new Set(state.messageRevisions
+    .filter((revision) => revision.conversationId === conversationId || removedMessageIds.has(revision.messageId))
+    .map((revision) => revision.id));
+  const removedToolCallIds = new Set(state.toolCalls
+    .filter((toolCall) => removedMessageIds.has(toolCall.messageId))
+    .map((toolCall) => toolCall.id));
+  const removedCompressionBlockIds = new Set(state.compressionBlocks
+    .filter((block) => block.conversationId === conversationId)
+    .map((block) => block.id));
+
+  const nextAgentRunSourceLinks = state.agentRunSourceLinks.filter((link) =>
+    link.sourceConversationId !== conversationId
+    && !removedMessageIds.has(link.sourceMessageId ?? '')
+    && !removedToolCallIds.has(link.sourceToolCallId ?? '')
+  );
+  const nextAgentRunTargetLinks = state.agentRunTargetLinks.filter((link) => link.conversationId !== conversationId);
+  const nextMessageRunLinks = state.messageRunLinks.filter((link) => !removedMessageIds.has(link.messageId));
+  const nextToolCallRunLinks = state.toolCallRunLinks.filter((link) => !removedToolCallIds.has(link.toolCallId));
+  const nextAgentRunInputRevisions = state.agentRunInputRevisions.filter((input) =>
+    input.conversationId !== conversationId && !removedRevisionIds.has(input.revisionId)
+  );
+
+  const removedConversationPolicyIds = new Set(state.runConversationPolicies
+    .filter((policy) => policy.conversationId === conversationId || policy.branchFromConversationId === conversationId)
+    .map((policy) => policy.id));
+  const removedDeliveryPolicyIds = new Set(state.runDeliveryPolicies
+    .filter((policy) => policy.targetConversationId === conversationId || removedToolCallIds.has(policy.targetToolCallId ?? ''))
+    .map((policy) => policy.id));
+
+  const nextRunConversationPolicyLinks = state.runConversationPolicyLinks.filter((link) => !removedConversationPolicyIds.has(link.policyId));
+  const nextRunDeliveryPolicyLinks = state.runDeliveryPolicyLinks.filter((link) => !removedDeliveryPolicyIds.has(link.policyId));
+
+  const keptCompressionBlockIds = new Set(state.compressionBlocks
+    .filter((block) => !removedCompressionBlockIds.has(block.id))
+    .map((block) => block.id));
+  const nextCompressionBlockSourceLinks = state.compressionBlockSourceLinks.filter((link) =>
+    keptCompressionBlockIds.has(link.blockId)
+    && !removedMessageIds.has(link.sourceId)
+    && !removedRevisionIds.has(link.revisionId ?? '')
+  );
+  const nextCompressionContextVariants = state.compressionContextVariants.filter((variant) => keptCompressionBlockIds.has(variant.blockId));
+  const keptCompressionVariantIds = new Set(nextCompressionContextVariants.map((variant) => variant.id));
+  const nextRunCompressionBlockLinks = state.runCompressionBlockLinks.filter((link) =>
+    keptCompressionBlockIds.has(link.blockId)
+    && (link.variantId === undefined || keptCompressionVariantIds.has(link.variantId))
+  );
+  const nextCompressionBlockLlmInvocationLinks = state.compressionBlockLlmInvocationLinks.filter((link) => keptCompressionBlockIds.has(link.blockId));
+
+  const nextMessageLlmInvocationLinks = state.messageLlmInvocationLinks.filter((link) => !removedMessageIds.has(link.messageId));
+  const keptInvocationIds = new Set<string>();
+  for (const link of state.runLlmInvocationLinks) keptInvocationIds.add(link.invocationId);
+  for (const link of nextMessageLlmInvocationLinks) keptInvocationIds.add(link.invocationId);
+  for (const link of nextCompressionBlockLlmInvocationLinks) keptInvocationIds.add(link.invocationId);
+
+  const keptMessageIds = new Set(state.messages.filter((message) => !removedMessageIds.has(message.id)).map((message) => message.id));
+  for (const messageId of remainingSummaryMessageIds) {
+    if (!removedMessageIds.has(messageId)) keptMessageIds.add(messageId);
+  }
+  const keptRevisionIds = new Set(state.messageRevisions
+    .filter((revision) => !removedRevisionIds.has(revision.id) && keptMessageIds.has(revision.messageId))
+    .map((revision) => revision.id));
+  const keptToolCallIds = new Set(state.toolCalls
+    .filter((toolCall) => !removedToolCallIds.has(toolCall.id) && keptMessageIds.has(toolCall.messageId))
+    .map((toolCall) => toolCall.id));
+
+  return {
+    ...state,
+    conversations: state.conversations.filter((conversation) => conversation.id !== conversationId),
+    messages: state.messages.filter((message) => keptMessageIds.has(message.id)),
+    messageRevisions: state.messageRevisions.filter((revision) => keptRevisionIds.has(revision.id)),
+    messageCurrentRevisionLinks: state.messageCurrentRevisionLinks.filter((link) => keptMessageIds.has(link.messageId) && keptRevisionIds.has(link.revisionId)),
+    toolCalls: state.toolCalls.filter((toolCall) => keptToolCallIds.has(toolCall.id)),
+    toolCallEvents: state.toolCallEvents.filter((event) => keptToolCallIds.has(event.toolCallId)),
+    agentRunSourceLinks: nextAgentRunSourceLinks,
+    agentRunTargetLinks: nextAgentRunTargetLinks,
+    messageRunLinks: nextMessageRunLinks,
+    toolCallRunLinks: nextToolCallRunLinks,
+    agentRunInputRevisions: nextAgentRunInputRevisions,
+    runConversationPolicies: state.runConversationPolicies.filter((policy) => !removedConversationPolicyIds.has(policy.id)),
+    runDeliveryPolicies: state.runDeliveryPolicies.filter((policy) => !removedDeliveryPolicyIds.has(policy.id)),
+    runConversationPolicyLinks: nextRunConversationPolicyLinks,
+    runDeliveryPolicyLinks: nextRunDeliveryPolicyLinks,
+    compressionBlocks: state.compressionBlocks.filter((block) => keptCompressionBlockIds.has(block.id)),
+    compressionBlockSourceLinks: nextCompressionBlockSourceLinks,
+    compressionContextVariants: nextCompressionContextVariants,
+    runCompressionBlockLinks: nextRunCompressionBlockLinks,
+    compressionBlockLlmInvocationLinks: nextCompressionBlockLlmInvocationLinks,
+    messageLlmInvocationLinks: nextMessageLlmInvocationLinks,
+    llmInvocations: state.llmInvocations.filter((invocation) => keptInvocationIds.has(invocation.id))
+  };
+}
+
+
+interface CheckpointDeletionPlan {
+  checkpointIds: Set<string>;
+  shadowRepositoryIds: Set<string>;
+  storageKeys: Set<string>;
+}
+
+async function collectCheckpointDeletionPlan(paths: StoragePaths, conversationId: string, errors: string[]): Promise<CheckpointDeletionPlan> {
+  const empty = (): CheckpointDeletionPlan => ({ checkpointIds: new Set(), shadowRepositoryIds: new Set(), storageKeys: new Set() });
+  try {
+    const [checkpoints, repositoryLinks, shadowRepositories] = await Promise.all([
+      loadRecords<CheckpointRecord>(paths.checkpointsRootUri, paths.checkpointsIndexUri, 'checkpoint'),
+      loadRecords<ConversationCheckpointRepositoryLinkRecord>(paths.conversationCheckpointRepositoryLinksRootUri, paths.conversationCheckpointRepositoryLinksIndexUri, 'link'),
+      loadRecords<ShadowRepositoryRecord>(paths.shadowRepositoriesRootUri, paths.shadowRepositoriesIndexUri, 'shadowRepository')
+    ]);
+    const checkpointIds = new Set(checkpoints.filter((record) => record.conversationId === conversationId).map((record) => record.id));
+    const candidateRepositoryIds = new Set<string>();
+    for (const checkpoint of checkpoints) {
+      if (checkpoint.conversationId === conversationId) candidateRepositoryIds.add(checkpoint.shadowRepositoryId);
+    }
+    for (const link of repositoryLinks) {
+      if (link.conversationId === conversationId) candidateRepositoryIds.add(link.shadowRepositoryId);
+    }
+
+    const referencedAfterDelete = new Set<string>();
+    for (const checkpoint of checkpoints) {
+      if (checkpoint.conversationId !== conversationId) referencedAfterDelete.add(checkpoint.shadowRepositoryId);
+    }
+    for (const link of repositoryLinks) {
+      if (link.conversationId !== conversationId) referencedAfterDelete.add(link.shadowRepositoryId);
+    }
+
+    const shadowRepositoryIds = new Set([...candidateRepositoryIds].filter((id) => !referencedAfterDelete.has(id)));
+    const storageKeysReferencedByRetainedRepositories = new Set(shadowRepositories
+      .filter((record) => !shadowRepositoryIds.has(record.id))
+      .map((record) => record.storageKey));
+    const storageKeys = new Set(shadowRepositories
+      .filter((record) => shadowRepositoryIds.has(record.id) && !storageKeysReferencedByRetainedRepositories.has(record.storageKey))
+      .map((record) => record.storageKey));
+    return { checkpointIds, shadowRepositoryIds, storageKeys };
+  } catch (error) {
+    errors.push(`load checkpoint metadata for delete:${conversationId}: ${error instanceof Error ? error.message : String(error)}`);
+    return empty();
+  }
+}
+
+async function deleteUnusedShadowWorktreeDirectories(paths: StoragePaths, storageKeys: ReadonlySet<string>, deletedPaths: string[], errors: string[]): Promise<void> {
+  await Promise.all([...storageKeys].map(async (storageKey) => {
+    try {
+      const result = await deleteShadowWorktreeDirectory(paths.checkpointShadowWorktreesRootPath, storageKey);
+      deletedPaths.push(result.worktreePath);
+    } catch (error) {
+      errors.push(`delete shadow worktree:${storageKey}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }));
+}
+
 async function collectRunIdsForDeletion(paths: StoragePaths, conversationId: string, errors: string[]): Promise<Set<string>> {
   try {
-    const index = await loadRunHistoryIndex(paths, conversationId);
-    return new Set(index?.runs.map((run) => run.id) ?? []);
+    const index = await loadRunHistoryIndexStrict(runHistoryRoot(paths, conversationId), conversationId, { allowMissing: true, validatePages: true });
+    return new Set(index?.index.runs.map((run) => run.id) ?? []);
   } catch (error) {
     errors.push(`load run history for delete:${conversationId}: ${error instanceof Error ? error.message : String(error)}`);
     return new Set();

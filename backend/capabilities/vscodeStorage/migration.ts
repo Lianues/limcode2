@@ -12,7 +12,18 @@ export interface StorageRootMigrationResult {
   skipped: boolean;
 }
 
-export async function migrateStorageRoot(sourceRoot: vscode.Uri, targetRoot: vscode.Uri): Promise<StorageRootMigrationResult> {
+export interface StorageRootCleanupResult {
+  deletedEntries: string[];
+  failedEntries: Array<{ name: string; error: unknown }>;
+}
+
+/**
+ * 迁移第一阶段：只复制已注册业务 root，不删除源目录。
+ *
+ * saveGlobalStatus 成功切换 active root 之前，调用方必须保留旧 root 完整可用，
+ * 因此这里即使目标目录已写入部分数据，也绝不清理 sourceRoot。
+ */
+export async function copyStorageRootForMigration(sourceRoot: vscode.Uri, targetRoot: vscode.Uri): Promise<StorageRootMigrationResult> {
   const migratedAt = new Date().toISOString();
   const fromPath = sourceRoot.fsPath;
   const toPath = targetRoot.fsPath;
@@ -22,7 +33,6 @@ export async function migrateStorageRoot(sourceRoot: vscode.Uri, targetRoot: vsc
   }
 
   assertSafeMigrationRoots(fromPath, toPath);
-
   await vscode.workspace.fs.createDirectory(targetRoot);
 
   const copiedEntries: string[] = [];
@@ -34,13 +44,22 @@ export async function migrateStorageRoot(sourceRoot: vscode.Uri, targetRoot: vsc
     copiedEntries.push(name);
   }
 
+  return { fromPath, toPath, migratedAt, copiedEntries, deletedEntries: [], skipped: false };
+}
+
+/** 迁移第二阶段：active root 已成功切换后，best-effort 清理旧 root。失败只记录，不回滚新 root。 */
+export async function cleanupMigratedStorageRoot(sourceRoot: vscode.Uri, copiedEntries: readonly string[]): Promise<StorageRootCleanupResult> {
   const deletedEntries: string[] = [];
+  const failedEntries: Array<{ name: string; error: unknown }> = [];
   for (const name of copiedEntries) {
     const source = vscode.Uri.joinPath(sourceRoot, name);
-    if (await deleteDirectoryIfExists(source)) deletedEntries.push(name);
+    try {
+      if (await deleteDirectoryIfExists(source)) deletedEntries.push(name);
+    } catch (error) {
+      failedEntries.push({ name, error });
+    }
   }
-
-  return { fromPath, toPath, migratedAt, copiedEntries, deletedEntries, skipped: false };
+  return { deletedEntries, failedEntries };
 }
 
 function assertSafeMigrationRoots(sourcePath: string, targetPath: string): void {

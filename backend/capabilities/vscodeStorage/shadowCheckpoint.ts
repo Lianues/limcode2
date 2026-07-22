@@ -6,7 +6,10 @@ import type { CheckpointGitStatusRecord, CheckpointRecord, CheckpointSkipReason,
 import type { CheckpointPolicyRecord } from '../../../shared/protocol';
 import type { ShadowCheckpointCreateRequest } from '../types';
 import type { StoragePaths } from './clientStateStore';
-import { emptyDirectoryManifest, workspaceContainsProject } from '../../world/modules/checkpoint/policy';
+import { emptyDirectoryManifest, workspaceContainsProject, type EmptyDirectoryManifest } from '../../world/modules/checkpoint/policy';
+import { STORAGE_VERSION } from './constants';
+import { readJsonStrict, writeJson } from './json';
+import { withShadowWorktreeLock } from './shadowWorktreeLock';
 
 const EMPTY_DIRECTORY_MANIFEST_RELATIVE_PATH = '.limcode/checkpoint-empty-directories.json';
 
@@ -71,40 +74,41 @@ export async function createShadowCheckpoint(paths: StoragePaths, request: Shado
   let snapshot: SourceSnapshot | undefined;
   try {
     await ensureSystemGitAvailable(projectPath);
-    const worktreePath = path.join(paths.checkpointShadowWorktreesRootPath, request.shadowRepositoryStorageKey);
-    const isInitial = !(await exists(path.join(worktreePath, '.git')));
-    snapshot = await scanSourceWithGit(paths, projectPath, worktreePath, isInitial, request.policy);
-    if (isInitial && snapshot.byteCount > request.policy.initialSnapshotMaxBytes) {
-      return skipped(base, 'initial_size_exceeded', `项目文件大小 ${snapshot.byteCount} 超过初始存档阈值 ${request.policy.initialSnapshotMaxBytes}。`, snapshot);
-    }
-
-    await fs.mkdir(worktreePath, { recursive: true });
-    await ensureGitRepository(worktreePath);
-    await syncWorktree(worktreePath, snapshot, request.policy.preserveEmptyDirectories);
-    const commit = await commitWorktree(worktreePath, request);
-    if (!commit.created) {
-      if (commit.sha) {
-        return {
-          ...base,
-          status: 'created',
-          commitSha: commit.sha,
-          message: '项目内容没有变化，复用上一存档快照。',
-          fileCount: snapshot.files.length,
-          byteCount: snapshot.byteCount,
-          emptyDirectoryCount: snapshot.emptyDirectories.length
-        };
+    return await withShadowWorktreeLock(paths.checkpointShadowWorktreesRootPath, request.shadowRepositoryStorageKey, async ({ worktreePath }) => {
+      const isInitial = !(await exists(path.join(worktreePath, '.git')));
+      snapshot = await scanSourceWithGit(paths, projectPath, worktreePath, isInitial, request.policy);
+      if (isInitial && snapshot.byteCount > request.policy.initialSnapshotMaxBytes) {
+        return skipped(base, 'initial_size_exceeded', `项目文件大小 ${snapshot.byteCount} 超过初始存档阈值 ${request.policy.initialSnapshotMaxBytes}。`, snapshot);
       }
-      return skipped(base, 'no_changes', '项目内容没有变化，未创建新存档点。', snapshot);
-    }
-    return {
-      ...base,
-      status: 'created',
-      commitSha: commit.sha,
-      message: '已创建存档点。',
-      fileCount: snapshot.files.length,
-      byteCount: snapshot.byteCount,
-      emptyDirectoryCount: snapshot.emptyDirectories.length
-    };
+
+      await fs.mkdir(worktreePath, { recursive: true });
+      await ensureGitRepository(worktreePath);
+      await syncWorktree(worktreePath, snapshot, request.policy.preserveEmptyDirectories);
+      const commit = await commitWorktree(worktreePath, request);
+      if (!commit.created) {
+        if (commit.sha) {
+          return {
+            ...base,
+            status: 'created',
+            commitSha: commit.sha,
+            message: '项目内容没有变化，复用上一存档快照。',
+            fileCount: snapshot.files.length,
+            byteCount: snapshot.byteCount,
+            emptyDirectoryCount: snapshot.emptyDirectories.length
+          };
+        }
+        return skipped(base, 'no_changes', '项目内容没有变化，未创建新存档点。', snapshot);
+      }
+      return {
+        ...base,
+        status: 'created',
+        commitSha: commit.sha,
+        message: '已创建存档点。',
+        fileCount: snapshot.files.length,
+        byteCount: snapshot.byteCount,
+        emptyDirectoryCount: snapshot.emptyDirectories.length
+      };
+    });
   } catch (error) {
     const reason: CheckpointSkipReason = isGitUnavailable(error) ? 'git_unavailable' : 'io_error';
     return skipped(base, reason, error instanceof Error ? error.message : String(error), snapshot);
@@ -121,73 +125,87 @@ export async function restoreShadowCheckpoint(paths: StoragePaths, request: Chec
   }
   if (!request.commitSha) return { status: 'failed', message: '该存档点没有可回档的快照。' };
 
-  const worktreePath = path.join(paths.checkpointShadowWorktreesRootPath, request.shadowRepositoryStorageKey);
-  if (!(await exists(path.join(worktreePath, '.git')))) {
-    return { status: 'failed', message: 'shadow 仓库已被删除，无法回档。' };
-  }
-
-  let originalHead: string | undefined;
   try {
     await ensureSystemGitAvailable(projectPath);
-    const commitCheck = await runGit(worktreePath, ['cat-file', '-e', `${request.commitSha}^{commit}`], { allowExitCodes: [0, 128] });
-    if (commitCheck.exitCode !== 0) return { status: 'failed', message: '存档点对应的快照已不存在，无法回档。' };
-
-    originalHead = (await runGit(worktreePath, ['rev-parse', 'HEAD'], { allowExitCodes: [0, 128] })).stdout.trim() || undefined;
-    await runGit(worktreePath, ['checkout', '-f', request.commitSha]);
-
-    const targetFiles = await listShadowTrackedFiles(worktreePath);
-    const targetSet = new Set(targetFiles);
-
-    const tempRoot = await fs.mkdtemp(path.join(paths.checkpointShadowWorktreesRootPath, '.checkpoint-restore-'));
-    let removedFileCount = 0;
-    try {
-      const excludeFilePath = await writeCheckpointExcludeFile(tempRoot, request.policy.skipPatterns);
-      const source = await createGitSourceContext(projectPath, tempRoot);
-      const visibleFiles = await listSourceVisibleFiles(source, projectPath, request.policy.useGitignore, excludeFilePath, request.policy.skipPatterns);
-      for (const relativePath of visibleFiles) {
-        if (targetSet.has(relativePath)) continue;
-        await fs.rm(toAbsolutePath(projectPath, relativePath), { force: true }).catch(() => undefined);
-        removedFileCount += 1;
+    return await withShadowWorktreeLock(paths.checkpointShadowWorktreesRootPath, request.shadowRepositoryStorageKey, async ({ worktreePath }) => {
+      if (!(await exists(path.join(worktreePath, '.git')))) {
+        return { status: 'failed', message: 'shadow 仓库已被删除，无法回档。' };
       }
-      for (const relativePath of targetFiles) {
-        const sourceFile = toAbsolutePath(worktreePath, relativePath);
-        const destFile = toAbsolutePath(projectPath, relativePath);
-        await fs.mkdir(path.dirname(destFile), { recursive: true });
-        await fs.copyFile(sourceFile, destFile);
-      }
-      if (request.policy.preserveEmptyDirectories) {
-        for (const relativeDir of await readEmptyDirectoryManifest(worktreePath)) {
-          await fs.mkdir(toAbsolutePath(projectPath, relativeDir), { recursive: true }).catch(() => undefined);
+
+      let originalHead: string | undefined;
+      try {
+        const commitCheck = await runGit(worktreePath, ['cat-file', '-e', `${request.commitSha}^{commit}`], { allowExitCodes: [0, 128] });
+        if (commitCheck.exitCode !== 0) return { status: 'failed', message: '存档点对应的快照已不存在，无法回档。' };
+
+        originalHead = (await runGit(worktreePath, ['rev-parse', 'HEAD'], { allowExitCodes: [0, 128] })).stdout.trim() || undefined;
+        await runGit(worktreePath, ['checkout', '-f', request.commitSha]);
+
+        const targetFiles = await listShadowTrackedFiles(worktreePath);
+        const targetSet = new Set(targetFiles);
+        const emptyDirectoriesToRestore = request.policy.preserveEmptyDirectories
+          ? await readEmptyDirectoryManifest(worktreePath)
+          : [];
+
+        const tempRoot = await fs.mkdtemp(path.join(paths.checkpointShadowWorktreesRootPath, '.checkpoint-restore-'));
+        let removedFileCount = 0;
+        try {
+          const excludeFilePath = await writeCheckpointExcludeFile(tempRoot, request.policy.skipPatterns);
+          const source = await createGitSourceContext(projectPath, tempRoot);
+          const visibleFiles = await listSourceVisibleFiles(source, projectPath, request.policy.useGitignore, excludeFilePath, request.policy.skipPatterns);
+          for (const relativePath of visibleFiles) {
+            if (targetSet.has(relativePath)) continue;
+            await fs.rm(toAbsolutePath(projectPath, relativePath), { force: true }).catch(() => undefined);
+            removedFileCount += 1;
+          }
+          for (const relativePath of targetFiles) {
+            const sourceFile = toAbsolutePath(worktreePath, relativePath);
+            const destFile = toAbsolutePath(projectPath, relativePath);
+            await fs.mkdir(path.dirname(destFile), { recursive: true });
+            await fs.copyFile(sourceFile, destFile);
+          }
+          for (const relativeDir of emptyDirectoriesToRestore) {
+            await fs.mkdir(toAbsolutePath(projectPath, relativeDir), { recursive: true }).catch(() => undefined);
+          }
+        } finally {
+          await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
         }
-      }
-    } finally {
-      await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
-    }
 
-    return {
-      status: 'restored',
-      message: `已回档 ${targetFiles.length} 个文件${removedFileCount ? `，并移除 ${removedFileCount} 个存档后新增的文件` : ''}。`,
-      restoredFileCount: targetFiles.length,
-      removedFileCount
-    };
+        return {
+          status: 'restored',
+          message: `已回档 ${targetFiles.length} 个文件${removedFileCount ? `，并移除 ${removedFileCount} 个存档后新增的文件` : ''}。`,
+          restoredFileCount: targetFiles.length,
+          removedFileCount
+        };
+      } finally {
+        if (originalHead) await runGit(worktreePath, ['checkout', '-f', originalHead]).catch(() => undefined);
+      }
+    });
   } catch (error) {
     const reason = isGitUnavailable(error) ? '未检测到系统 git 命令，请安装 Git 并确保 git 位于 PATH。' : (error instanceof Error ? error.message : String(error));
     return { status: 'failed', message: `回档失败：${reason}` };
-  } finally {
-    if (originalHead) await runGit(worktreePath, ['checkout', '-f', originalHead]).catch(() => undefined);
   }
 }
 
 async function readEmptyDirectoryManifest(worktreePath: string): Promise<string[]> {
-  try {
-    const raw = await fs.readFile(path.join(worktreePath, ...EMPTY_DIRECTORY_MANIFEST_RELATIVE_PATH.split('/')), 'utf8');
-    const parsed = JSON.parse(raw) as { emptyDirectories?: unknown };
-    return Array.isArray(parsed.emptyDirectories)
-      ? parsed.emptyDirectories.filter((item): item is string => typeof item === 'string')
-      : [];
-  } catch {
-    return [];
-  }
+  const uri = vscode.Uri.file(path.join(worktreePath, ...EMPTY_DIRECTORY_MANIFEST_RELATIVE_PATH.split('/')));
+  const result = await readJsonStrict<unknown>(uri);
+  if (result.status === 'missing') return [];
+  if (result.status !== 'ok') throw new Error(`Empty directory manifest is ${result.status}: ${uri.fsPath}`);
+  return parseEmptyDirectoryManifest(result.value, uri);
+}
+
+function parseEmptyDirectoryManifest(value: unknown, uri: vscode.Uri): string[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Invalid empty directory manifest: ${uri.fsPath}`);
+  const record = value as Partial<EmptyDirectoryManifest> & Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (!keys.every((key) => key === 'schemaVersion' || key === 'emptyDirectories')) throw new Error(`Empty directory manifest has unknown fields: ${uri.fsPath}`);
+  if (record.schemaVersion !== STORAGE_VERSION) throw new Error(`Unsupported empty directory manifest schema: ${uri.fsPath}`);
+  if (!Array.isArray(record.emptyDirectories)) throw new Error(`Empty directory manifest directories are invalid: ${uri.fsPath}`);
+  const directories = record.emptyDirectories.map((item) => {
+    if (typeof item !== 'string') throw new Error(`Empty directory manifest directory entry is invalid: ${uri.fsPath}`);
+    return normalizeGitRelativePath(item);
+  });
+  return [...new Set(directories.filter((item): item is string => !!item))].sort(compareRelativePath);
 }
 
 function baseRecord(request: ShadowCheckpointCreateRequest, now: number): CheckpointRecord {
@@ -472,8 +490,7 @@ async function syncWorktree(worktreePath: string, snapshot: SourceSnapshot, pres
   }
   if (preserveEmptyDirectories) {
     const manifestPath = toAbsolutePath(worktreePath, EMPTY_DIRECTORY_MANIFEST_RELATIVE_PATH);
-    await fs.mkdir(path.dirname(manifestPath), { recursive: true });
-    await fs.writeFile(manifestPath, JSON.stringify(emptyDirectoryManifest(snapshot.emptyDirectories), null, 2), 'utf8');
+    await writeJson(vscode.Uri.file(manifestPath), emptyDirectoryManifest(snapshot.emptyDirectories));
   }
 }
 

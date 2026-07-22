@@ -114,4 +114,38 @@ if (process.argv[2] === '--worker') {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
   });
+
+  test('reader 读旧 index 后 writer prune 删除文件时重试到新 index', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-record-store-reader-retry-'));
+    const restore = installVscodeMock();
+    let recordStore;
+    try {
+      recordStore = require('../dist/extension/backend/capabilities/vscodeStorage/recordStore.js');
+      const root = MockUri.file(tempRoot);
+      const index = MockUri.joinPath(root, 'index.json');
+      const records = [
+        { id: 'a', value: 'old-a' },
+        { id: 'b', value: 'old-b' }
+      ];
+      await recordStore.saveRecordStore(root, index, records, 'record', (record) => record.id, { pruneMissing: true });
+
+      let pruned = false;
+      recordStore.__recordStoreTestHooks.afterLoadIndexBeforeReadFiles = async () => {
+        if (pruned) return;
+        pruned = true;
+        await recordStore.saveRecordStore(root, index, [{ id: 'b', value: 'new-b' }], 'record', (record) => record.id, { pruneMissing: true });
+      };
+      const loaded = await recordStore.loadRecordStore(root, index, 'record');
+      assert.deepEqual(loaded, [{ id: 'b', value: 'new-b' }]);
+
+      await recordStore.saveRecordStore(root, index, records, 'record', (record) => record.id, { pruneMissing: true });
+      pruned = false;
+      const byIds = await recordStore.loadRecordStoreByIds(root, index, 'record', ['a', 'b']);
+      assert.deepEqual(byIds, [{ id: 'b', value: 'new-b' }]);
+    } finally {
+      if (recordStore) recordStore.__recordStoreTestHooks.afterLoadIndexBeforeReadFiles = undefined;
+      restore();
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
 }

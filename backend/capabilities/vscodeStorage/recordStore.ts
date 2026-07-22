@@ -1,9 +1,8 @@
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { RECORDS_DIR, STORAGE_VERSION } from './constants';
-import { readJson, writeJson } from './json';
+import { isFileNotFoundError, readJson, readJsonStrict, writeJson } from './json';
 import { sortableName } from './naming';
+import { withStorageResourceLock } from './storageResourceLock';
 
 interface RecordsIndexFile {
   schemaVersion: typeof STORAGE_VERSION;
@@ -11,7 +10,7 @@ interface RecordsIndexFile {
   records: RecordIndexRecord[];
 }
 
-interface RecordIndexRecord {
+export interface RecordIndexRecord {
   id: string;
   file: string;
   updatedAt: string;
@@ -34,25 +33,50 @@ export interface SaveRecordStoreOptions {
   pruneMissing?: boolean;
 }
 
+export interface RecordStoreReadHookContext {
+  root: vscode.Uri;
+  indexUri: vscode.Uri;
+  recordKey: string;
+  attempt: number;
+  records: readonly RecordIndexRecord[];
+}
+
+export interface RecordStoreTestHooks {
+  /** 测试专用：reader 读取 index 后、读取 record files 前触发，用于模拟 prune 竞态。 */
+  afterLoadIndexBeforeReadFiles?: (context: RecordStoreReadHookContext) => void | Promise<void>;
+}
+
+export const __recordStoreTestHooks: RecordStoreTestHooks = {};
+
 const LOAD_RECORD_BATCH_SIZE = 32;
+const RECORD_STORE_READ_MAX_ATTEMPTS = 3;
 const RECORD_STORE_LOCK_STALE_MS = 30 * 60_000;
 const RECORD_STORE_LOCK_WAIT_MS = 5 * 60_000;
-const recordStoreMutationQueues = new Map<string, Promise<void>>();
 
 export async function loadRecordStore<TRecord extends { id: string }, TKey extends string>(
   root: vscode.Uri,
   indexUri: vscode.Uri,
   recordKey: TKey
 ): Promise<TRecord[] | undefined> {
-  const index = await loadRecordsIndex(indexUri, true);
-  if (!index) return undefined;
+  for (let attempt = 1; attempt <= RECORD_STORE_READ_MAX_ATTEMPTS; attempt += 1) {
+    const index = await loadRecordsIndex(indexUri, true);
+    if (!index) return undefined;
 
-  const files = await loadRecordFilesInBatches<TRecord, TKey>(root, index.records, recordKey, true);
-  const records: TRecord[] = [];
-  for (const record of files) {
-    if (record) records.push(record);
+    await __recordStoreTestHooks.afterLoadIndexBeforeReadFiles?.({ root, indexUri, recordKey, attempt, records: index.records });
+
+    try {
+      const files = await loadRecordFilesInBatches<TRecord, TKey>(root, index.records, recordKey, true);
+      const records: TRecord[] = [];
+      for (const record of files) {
+        if (record) records.push(record);
+      }
+      return records;
+    } catch (error) {
+      if (attempt < RECORD_STORE_READ_MAX_ATTEMPTS && await recordStoreIndexChanged(indexUri, index)) continue;
+      throw error;
+    }
   }
-  return records;
+  throw new Error(`Failed to load record store after retries: ${indexUri.fsPath}`);
 }
 
 export async function loadRecordStoreWithDiagnostics<TRecord extends { id: string }, TKey extends string>(
@@ -101,19 +125,30 @@ export async function loadRecordStoreByIds<TRecord extends { id: string }, TKey 
   recordKey: TKey,
   ids: Iterable<string>
 ): Promise<TRecord[]> {
-  const index = await loadRecordsIndex(indexUri, true);
-  if (!index) return [];
-
   const wanted = new Set(ids);
   if (wanted.size === 0) return [];
-  const indexById = new Map(index.records.map((record) => [record.id, record]));
-  const wantedRecords = [...wanted].map((id) => indexById.get(id)).filter((record): record is RecordIndexRecord => record !== undefined);
-  const files = await loadRecordFilesInBatches<TRecord, TKey>(root, wantedRecords, recordKey, true);
-  const records: TRecord[] = [];
-  for (const record of files) {
-    if (record) records.push(record);
+
+  for (let attempt = 1; attempt <= RECORD_STORE_READ_MAX_ATTEMPTS; attempt += 1) {
+    const index = await loadRecordsIndex(indexUri, true);
+    if (!index) return [];
+
+    await __recordStoreTestHooks.afterLoadIndexBeforeReadFiles?.({ root, indexUri, recordKey, attempt, records: index.records });
+
+    const indexById = new Map(index.records.map((record) => [record.id, record]));
+    const wantedRecords = [...wanted].map((id) => indexById.get(id)).filter((record): record is RecordIndexRecord => record !== undefined);
+    try {
+      const files = await loadRecordFilesInBatches<TRecord, TKey>(root, wantedRecords, recordKey, true);
+      const records: TRecord[] = [];
+      for (const record of files) {
+        if (record) records.push(record);
+      }
+      return records;
+    } catch (error) {
+      if (attempt < RECORD_STORE_READ_MAX_ATTEMPTS && await recordStoreIndexChanged(indexUri, index)) continue;
+      throw error;
+    }
   }
-  return records;
+  throw new Error(`Failed to load record store by ids after retries: ${indexUri.fsPath}`);
 }
 
 
@@ -254,7 +289,7 @@ async function removeRecordStoreRecordUnlocked(
     try {
       await vscode.workspace.fs.delete(vscode.Uri.joinPath(root, ...removed.file.split('/')));
     } catch (error) {
-      if (!isFileNotFound(error)) console.warn(`[LimCode] Failed to delete record file: ${removed.file}`, error);
+      if (!isFileNotFoundError(error)) console.warn(`[LimCode] Failed to delete record file: ${removed.file}`, error);
     }
   }
 }
@@ -306,7 +341,7 @@ async function listRecordFiles(root: vscode.Uri): Promise<string[]> {
       .filter((file) => file.toLowerCase().endsWith('.json'))
       .sort();
   } catch (error) {
-    if (isFileNotFound(error)) return [];
+    if (isFileNotFoundError(error)) return [];
     throw error;
   }
 }
@@ -315,106 +350,16 @@ async function deleteRecordFile(root: vscode.Uri, file: string): Promise<void> {
   try {
     await vscode.workspace.fs.delete(vscode.Uri.joinPath(root, ...file.split('/')));
   } catch (error) {
-    if (!isFileNotFound(error)) console.warn(`[LimCode] Failed to prune record file: ${file}`, error);
+    if (!isFileNotFoundError(error)) console.warn(`[LimCode] Failed to prune record file: ${file}`, error);
   }
 }
 
 
 async function withRecordStoreMutationLock<T>(indexUri: vscode.Uri, action: () => Promise<T>): Promise<T> {
-  const key = indexUri.toString(true);
-  const previous = recordStoreMutationQueues.get(key) ?? Promise.resolve();
-  let releaseTurn!: () => void;
-  const turn = new Promise<void>((resolve) => { releaseTurn = resolve; });
-  const queue = previous.catch(() => undefined).then(() => turn);
-  recordStoreMutationQueues.set(key, queue);
-
-  await previous.catch(() => undefined);
-  try {
-    return await withCrossProcessRecordStoreLock(indexUri, action);
-  } finally {
-    releaseTurn();
-    if (recordStoreMutationQueues.get(key) === queue) recordStoreMutationQueues.delete(key);
-  }
-}
-
-async function withCrossProcessRecordStoreLock<T>(indexUri: vscode.Uri, action: () => Promise<T>): Promise<T> {
-  if (indexUri.scheme !== 'file') return action();
-
-  const lockPath = `${indexUri.fsPath}.lock`;
-  await fs.mkdir(path.dirname(lockPath), { recursive: true });
-  const deadline = Date.now() + RECORD_STORE_LOCK_WAIT_MS;
-  let handle: fs.FileHandle | undefined;
-
-  while (!handle) {
-    try {
-      const candidate = await fs.open(lockPath, 'wx');
-      try {
-        await candidate.writeFile(JSON.stringify({ pid: process.pid, createdAt: Date.now(), indexPath: indexUri.fsPath }), 'utf8');
-        handle = candidate;
-      } catch (error) {
-        await candidate.close().catch(() => undefined);
-        await fs.rm(lockPath, { force: true }).catch(() => undefined);
-        throw error;
-      }
-    } catch (error) {
-      if (!isAlreadyExistsError(error)) throw error;
-      if (await removeStaleRecordStoreLock(lockPath)) continue;
-      if (Date.now() >= deadline) throw new Error(`Timed out waiting for record store lock: ${indexUri.fsPath}`);
-      await delay(25);
-    }
-  }
-
-  try {
-    return await action();
-  } finally {
-    await handle.close().catch(() => undefined);
-    await fs.rm(lockPath, { force: true }).catch(() => undefined);
-  }
-}
-
-async function removeStaleRecordStoreLock(lockPath: string): Promise<boolean> {
-  try {
-    const [raw, stat] = await Promise.all([
-      fs.readFile(lockPath, 'utf8').catch(() => ''),
-      fs.stat(lockPath)
-    ]);
-    const metadata = parseRecordStoreLockMetadata(raw);
-    const pid = typeof metadata?.pid === 'number' && Number.isInteger(metadata.pid) ? metadata.pid : undefined;
-    if (pid !== undefined && processIsAlive(pid)) return false;
-    const createdAt = typeof metadata?.createdAt === 'number' && Number.isFinite(metadata.createdAt) ? metadata.createdAt : stat.mtimeMs;
-    if (Date.now() - createdAt < RECORD_STORE_LOCK_STALE_MS && pid === undefined) return false;
-    await fs.rm(lockPath, { force: true });
-    return true;
-  } catch (error) {
-    if (isFileNotFound(error)) return true;
-    return false;
-  }
-}
-
-function parseRecordStoreLockMetadata(raw: string): { pid?: unknown; createdAt?: unknown } | undefined {
-  if (!raw) return undefined;
-  try {
-    return JSON.parse(raw) as { pid?: unknown; createdAt?: unknown };
-  } catch {
-    return undefined;
-  }
-}
-
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as { code?: unknown }).code === 'EPERM';
-  }
-}
-
-function isAlreadyExistsError(error: unknown): boolean {
-  return (error as { code?: unknown }).code === 'EEXIST';
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  return withStorageResourceLock(indexUri, action, {
+    waitMs: RECORD_STORE_LOCK_WAIT_MS,
+    staleMs: RECORD_STORE_LOCK_STALE_MS
+  });
 }
 
 async function readableIndexRecords<TRecord extends { id: string }, TKey extends string>(
@@ -427,14 +372,37 @@ async function readableIndexRecords<TRecord extends { id: string }, TKey extends
   return records.filter((record, index) => loaded[index]?.id === record.id);
 }
 
-async function loadRecordsIndex(indexUri: vscode.Uri, strict: boolean): Promise<RecordsIndexFile | undefined> {
-  const index = await readJson<RecordsIndexFile>(indexUri, { throwOnError: strict });
-  if (index === undefined) return undefined;
-  const normalized = normalizeRecordsIndexFile(index);
-  if (normalized) {
-    if (normalized.repaired) await writeJson(indexUri, normalized.index);
-    return normalized.index;
+async function recordStoreIndexChanged(indexUri: vscode.Uri, previous: RecordsIndexFile): Promise<boolean> {
+  try {
+    const current = await loadRecordsIndex(indexUri, true);
+    return !sameRecordsIndexFile(previous, current);
+  } catch (error) {
+    console.warn(`[LimCode] Failed to re-read record store index after record file read failure: ${indexUri.fsPath}`, error);
+    return false;
   }
+}
+
+function sameRecordsIndexFile(left: RecordsIndexFile | undefined, right: RecordsIndexFile | undefined): boolean {
+  if (!left || !right) return left === right;
+  if (left.schemaVersion !== right.schemaVersion || left.savedAt !== right.savedAt || left.records.length !== right.records.length) return false;
+  for (let index = 0; index < left.records.length; index += 1) {
+    const a = left.records[index];
+    const b = right.records[index];
+    if (a.id !== b.id || a.file !== b.file || a.updatedAt !== b.updatedAt) return false;
+  }
+  return true;
+}
+
+async function loadRecordsIndex(indexUri: vscode.Uri, strict: boolean): Promise<RecordsIndexFile | undefined> {
+  const result = await readJsonStrict<RecordsIndexFile>(indexUri);
+  if (result.status === 'missing') return undefined;
+  if (result.status === 'invalid' || result.status === 'ioError') {
+    if (strict) throw result.error;
+    return undefined;
+  }
+
+  const normalized = normalizeRecordsIndexFile(result.value);
+  if (normalized) return normalized.index;
   if (strict) throw new Error(`Record store index is invalid: ${indexUri.fsPath}`);
   return undefined;
 }
@@ -504,11 +472,4 @@ function isRecordFilePath(file: string): boolean {
 
 function isStoreRecord(value: unknown): value is { id: string } {
   return !!value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string' && !!(value as { id: string }).id.trim();
-}
-
-function isFileNotFound(error: unknown): boolean {
-  const candidate = error as { name?: unknown; code?: unknown; message?: unknown; stack?: unknown };
-  const text = [candidate.name, candidate.code, candidate.message, candidate.stack, String(error)]
-    .filter((part): part is string => typeof part === 'string').join('\n');
-  return /FileNotFound|EntryNotFound|ENOENT|ENOTDIR|not found|no such file|不存在|无法解析不存在的文件/i.test(text);
 }

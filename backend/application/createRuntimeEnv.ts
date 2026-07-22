@@ -11,7 +11,6 @@ import {
   createRulesCatalogCapability
 } from '../capabilities';
 import { createGlobalSettingsRecord } from '../capabilities/vscodeStorage/globalStatus';
-import { resolveAttachmentForClient } from '../capabilities/vscodeStorage/attachmentStore';
 import { createToolRegistry } from '../world/modules';
 import type { ToolSchema } from '../world/modules/llm/contracts';
 import { toolDefinitionRecord, type ToolDefinition } from '../world/modules/tools/registry';
@@ -30,7 +29,7 @@ export interface RuntimeEnvSetup {
  */
 export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSetup {
   const storage = createVsCodeStorageCapability(context);
-  const command = createCommandCapability({ paths: () => storage.paths });
+  const command = createCommandCapability({ paths: () => storage.isDataRootMutationActive?.() ? undefined : storage.paths });
   const workEnvironment = createWorkEnvironmentRuntimeCapability();
   const registry = createToolRegistry(command);
   const mcp = new McpRuntimeManager(storage);
@@ -65,7 +64,7 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
     headers: { 'User-Agent': 'LimCode/0.0.1' },
     proxy: async () => createGlobalSettingsRecord(context).proxy || undefined,
     resolveAttachment: async (input) => {
-      const result = await resolveAttachmentForClient(storage.paths, input);
+      const result = await storage.resolveAttachmentForClient(input);
       return result.status === 'available' ? result.part : undefined;
     }
   });

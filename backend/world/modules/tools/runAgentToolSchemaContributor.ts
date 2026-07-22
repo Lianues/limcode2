@@ -27,8 +27,8 @@ function withAgentTypeList(tool: ToolSchema, world: WorldReader, blueprints: Bui
   const typeProperty = cloneRecord(agentProperties.type);
 
   typeProperty.description = [
-    `The Agent type/configuration id to use. Defaults to ${DEFAULT_RUN_AGENT_TYPE}. When neither answerBridgeId nor agent.id is provided, the backend creates a temporary mirror dedicated to this child conversation. Prefer answerBridgeId for an existing child conversation; agent.id is only a compatibility selector.`,
-    'Currently available Agent types:',
+    `The Agent type/configuration id to use. Defaults to ${DEFAULT_RUN_AGENT_TYPE}. Use one of the available Agent types below. Runtime mirror ids are internal implementation details and are not valid Agent types; continue an existing child conversation with answerBridgeId instead.`,
+    'Available Agent types (pass one as agent.type):',
     typeList
   ].join('\n');
   agentProperties.type = typeProperty;
@@ -38,7 +38,7 @@ function withAgentTypeList(tool: ToolSchema, world: WorldReader, blueprints: Bui
 
   return {
     ...tool,
-    description: `${tool.description}\n\nPrefer answerBridgeId when continuing an existing child conversation. When creating a new child Agent, choose from these Agent types:\n${typeList}`,
+    description: `${tool.description}\n\nPrefer answerBridgeId when continuing an existing child conversation. When creating a new child Agent, choose an agent.type from this list (type/config id + description only; runtime mirror ids are intentionally hidden):\n${typeList}`,
     parameters
   };
 }
@@ -55,8 +55,7 @@ function formatAgentTypeList(world: WorldReader, agents: Record<string, BuiltinA
     if (agent.source === 'builtin' && !hasBuiltinAgentDefinition(agents, agent.id, kind)) continue;
     seen.add(agent.id);
     const label = agent.description?.trim() || agent.name.trim();
-    const suffix = kind && kind !== agent.id ? ` (kind: ${kind})` : '';
-    lines.push(label ? `- ${agent.id}: ${label}${suffix}` : `- ${agent.id}${suffix}`);
+    lines.push(label ? `- ${agent.id}: ${label}` : `- ${agent.id}`);
   }
 
   for (const agent of Object.values(agents)) {

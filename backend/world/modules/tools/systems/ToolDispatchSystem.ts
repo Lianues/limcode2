@@ -1406,8 +1406,9 @@ function resolveRunAgentPolicyDefaults(_definition: BuiltinAgentDefinition, _mod
 }
 
 function normalizeRunAgentForegroundWaitMs(value: unknown): { ok: true; value: number } | { ok: false; reason: string } {
+  if (value === undefined || value === null) return { ok: true, value: 0 };
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-    return { ok: false, reason: 'run_agent.foregroundWaitMs 为必填参数，需为非负毫秒数；0 表示启动后立即转后台。' };
+    return { ok: false, reason: 'run_agent.foregroundWaitMs 需为非负毫秒数；省略或 0 表示启动后立即转后台。' };
   }
   return { ok: true, value: Math.floor(value) };
 }
@@ -1565,7 +1566,7 @@ function createRunAgentAgentId(world: WorldReader, kind: string): string {
     const id = `agent-${agentSelectorSlug(kind)}-${createStableId('mirror')}`;
     if (findAgentById(world, id) === undefined) return id;
   }
-  return `agent-${agentSelectorSlug(kind)}-${Date.now().toString(36)}`;
+  return `agent-${agentSelectorSlug(kind)}-${createStableId('mirror')}`;
 }
 
 function executeRunAgentInterruptMode(

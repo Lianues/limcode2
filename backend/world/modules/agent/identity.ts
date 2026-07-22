@@ -27,7 +27,7 @@ export function findAgentTypeEntity(world: WorldReader, selector: string): Entit
 
 export function isRunAgentTemporaryId(id: string, kind: string): boolean {
   const prefix = `agent-${agentSelectorSlug(kind)}-`;
-  return id.startsWith(prefix) && /^[a-z0-9]+-[a-z0-9]{8}$/.test(id.slice(prefix.length));
+  return id.startsWith(prefix) && /^mirror-[a-z0-9]+-[a-z0-9]{8}$/.test(id.slice(prefix.length));
 }
 
 export function agentSelectorSlug(value: string): string {

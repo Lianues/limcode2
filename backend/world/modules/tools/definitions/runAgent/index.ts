@@ -15,30 +15,32 @@ export const runAgentTool: ToolDefinition = {
   execution: 'agentRun',
   declaration: {
     name: RUN_AGENT_TOOL_NAME,
-    description: `Start, continue, or interrupt a child AgentRun.
+    description: `Start, continue, or explicitly interrupt a child AgentRun.
 
 Usage:
-- Use agent.type to select an Agent type/configuration such as main, worker, or explore. It defaults to ${DEFAULT_RUN_AGENT_TYPE}.
-- Prefer answerBridgeId when continuing or appending to an existing run_agent child conversation. It resolves the bound child Agent and conversation and preserves the same default submit_agent_answer channel.
-- In the default run mode, if the reused child conversation is still responding, this call interrupts its current Run and force-sends the new message immediately instead of placing it in the normal queue.
-- Use mode="interrupt" with answerBridgeId to interrupt the active Run in that child conversation and recursively cancel all descendant child AgentRuns, including already-backgrounded descendants. Interrupt mode does not require prompt or foregroundWaitMs.
-- agent.id is a compatibility selector for a temporary Agent mirror previously returned by run_agent. Prefer answerBridgeId. agent.id is not an Agent type/configuration id and fails when the mirror cannot be found.
+- Use agent.type to select an Agent type/configuration such as main, worker, or explore. It defaults to ${DEFAULT_RUN_AGENT_TYPE}. Runtime mirror ids are internal and must not be used as agent.type.
+- Prefer answerBridgeId when continuing or appending to an existing run_agent child conversation. It resolves the bound child Agent/conversation and preserves the same default submit_agent_answer channel.
 - In run mode, put the complete task, background, role, and supplemental instructions in prompt. Separate context, conversation, and delivery parameters are not supported.
-- In run mode, foregroundWaitMs is the foreground wait budget in milliseconds, not an AgentRun termination timeout. Use 0 to background immediately. When the budget expires, the AgentRun continues in the background and the tool returns agentId, runId, conversationId, and answerBridgeId.
+- foregroundWaitMs is optional in run mode. Omit it or pass 0 to start the child Agent and return immediately. It is only a foreground wait budget, never an AgentRun timeout; when the budget expires, the child continues in the background and the tool returns agentId, runId, conversationId, and answerBridgeId.
+- Use a positive foregroundWaitMs only when the current reply truly cannot proceed without an immediate child result; keep it small.
+- Use mode="interrupt" with answerBridgeId only when the user explicitly asks to stop/replace that child task. Interrupt recursively cancels the active child Run and descendants, including backgrounded descendants. Never interrupt merely because the child Agent is slow or read_agent_answer reports status="running".
+- agent.id is an internal compatibility selector for a temporary Agent mirror previously returned by run_agent. The model normally should not use it; prefer answerBridgeId for an existing child conversation, or agent.type for a new child.
 
-IMPORTANT - Background execution behavior:
-When a child Agent is executed in the background (foregroundWaitMs budget expires, or foregroundWaitMs=0), you MUST NOT attempt to perform the delegated task yourself or continue working on it — the child agent is handling it.
+IMPORTANT - Async child Agent behavior:
+Child Agents are asynchronous. The parent Agent should not keep its own response open just to wait for child completion.
+Recommended pattern:
+1. Delegate with run_agent using foregroundWaitMs=0 or omit foregroundWaitMs.
+2. When run_agent returns backgrounded, immediately write useful text to the user (for example: the task has been dispatched, what is being checked, and that results will arrive later) and end the current turn.
+3. Let the child submit via submit_agent_answer delivery, or check later in a new turn with read_agent_answer if needed.
 
-You have two options instead:
-1. Respond to the user with a concise waiting message and end your current response, letting the child agent's result come back through the delivery policy (tool_response, notification, or append_to_source_conversation).
-2. Continue doing other independent work that does NOT require the child agent's answer — i.e., work that you can fully complete without waiting for the child agent's result.`,
+Do NOT poll read_agent_answer in a loop in the same response. Do NOT use tools to wait for a long-running child. If the child is slow, it is still running normally in the background.`,
     parameters: {
       type: 'object',
       properties: {
         mode: {
           type: 'string',
           enum: ['run', 'interrupt'],
-          description: 'Operation mode. Defaults to "run". Use "interrupt" with answerBridgeId to stop the active Run in an existing child conversation and recursively cancel its descendant child AgentRuns.'
+          description: 'Operation mode. Defaults to "run". Use "interrupt" with answerBridgeId only when the user explicitly wants to stop/replace an existing child task; it recursively cancels descendant child AgentRuns. Do not interrupt merely because a child is slow or still running.'
         },
         prompt: {
           type: 'string',
@@ -46,7 +48,7 @@ You have two options instead:
         },
         answerBridgeId: {
           type: 'string',
-          description: 'Continue, append to, or interrupt an existing run_agent child conversation. Required in interrupt mode. Interrupt mode recursively cancels descendant child AgentRuns. In run mode, the bound child Agent and conversation are reused, the same submit_agent_answer channel is preserved, and any active response is interrupted before this message is force-sent.'
+          description: 'Continue, append to, or explicitly interrupt an existing run_agent child conversation. Required in interrupt mode. In run mode, the bound child Agent and conversation are reused and the same submit_agent_answer channel is preserved.'
         },
         agent: {
           type: 'object',
@@ -54,17 +56,17 @@ You have two options instead:
           properties: {
             id: {
               type: 'string',
-              description: 'Compatibility selector for a temporary Agent mirror previously returned by run_agent. Prefer answerBridgeId and use this only when answerBridgeId is unavailable. To create a separate mirror of the same type, omit id and provide only agent.type.'
+              description: 'Internal compatibility selector for a temporary Agent mirror previously returned by run_agent. The model normally should not use this. Prefer answerBridgeId for an existing child conversation; to create a new child, omit id and provide agent.type.'
             },
             type: {
               type: 'string',
-              description: `The Agent type/configuration id to use, such as main, worker, or explore. When neither answerBridgeId nor agent.id is provided, the backend creates a temporary mirror dedicated to this child conversation. Available types are appended to the tool description at runtime. Defaults to ${DEFAULT_RUN_AGENT_TYPE}.`
+              description: `The Agent type/configuration id to use, such as main, worker, or explore. The backend may create a temporary runtime mirror internally, but mirror ids are not valid types and should not be supplied here. Available types are appended to the tool description at runtime. Defaults to ${DEFAULT_RUN_AGENT_TYPE}.`
             }
           }
         },
         foregroundWaitMs: {
           type: 'number',
-          description: 'Required in run mode. Foreground wait budget in milliseconds; this is not an AgentRun termination timeout. Use 0 to background immediately. When the budget expires, the AgentRun continues in the background and the tool returns agentId, runId, conversationId, and answerBridgeId.'
+          description: 'Optional in run mode. Foreground wait budget in milliseconds; this is not an AgentRun timeout. Omit or use 0 to background immediately (recommended for delegation). Use a small positive value only when the current reply truly needs an immediate child result. When the budget expires, the child continues in the background and the tool returns agentId, runId, conversationId, and answerBridgeId.'
         },
         wait: {
           type: 'string',

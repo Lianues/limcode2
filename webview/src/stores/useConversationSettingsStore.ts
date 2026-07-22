@@ -6,6 +6,7 @@ import type {
   ConversationSettingsSnapshotPayload
 } from '@shared/protocol';
 import { bridge, BridgeMessageType } from '@webview/transport';
+import { ScopedEditRevision } from '@shared/scopedEditRevision';
 
 interface ConversationSettingsState {
   common: ConversationSettingsRecord;
@@ -23,7 +24,14 @@ interface ConversationSettingsErrorOptions {
   correlationId?: string;
 }
 
-const conversationSettingsRequestSections = new Map<string, ConversationSettingsSection>();
+interface ConversationSettingsRequestMeta {
+  section: ConversationSettingsSection;
+  conversationId: string;
+  llmRevision?: number;
+}
+
+const conversationSettingsRequests = new Map<string, ConversationSettingsRequestMeta>();
+const llmEditRevisions = new ScopedEditRevision();
 
 function emptyCommon(conversationId = ''): ConversationSettingsRecord {
   return { conversationId, name: '' };
@@ -59,15 +67,37 @@ function settingsErrorStatus(requestType: string | undefined, message: string): 
   return `对话设置保存失败：${message}`;
 }
 
-function rememberConversationSettingsRequest(section: ConversationSettingsSection, requestId: string): void {
-  conversationSettingsRequestSections.set(requestId, section);
+function currentLlmEditRevision(conversationId: string): number {
+  return llmEditRevisions.current(conversationId);
 }
 
-function takeConversationSettingsRequestSection(requestId: string | undefined): ConversationSettingsSection | undefined {
+function nextLlmEditRevision(conversationId: string): number {
+  return llmEditRevisions.next(conversationId);
+}
+
+function rememberConversationSettingsRequest(
+  section: ConversationSettingsSection,
+  requestId: string,
+  conversationId: string,
+  llmRevision?: number
+): void {
+  conversationSettingsRequests.set(requestId, {
+    section,
+    conversationId,
+    ...(llmRevision !== undefined ? { llmRevision } : {})
+  });
+}
+
+function takeConversationSettingsRequest(requestId: string | undefined): ConversationSettingsRequestMeta | undefined {
   if (!requestId) return undefined;
-  const section = conversationSettingsRequestSections.get(requestId);
-  if (section) conversationSettingsRequestSections.delete(requestId);
-  return section;
+  const request = conversationSettingsRequests.get(requestId);
+  if (request) conversationSettingsRequests.delete(requestId);
+  return request;
+}
+
+function isStaleLlmSettingsResponse(request: ConversationSettingsRequestMeta | undefined, conversationId: string): boolean {
+  return request?.section === 'llm'
+    && llmEditRevisions.isStale(conversationId, request.llmRevision);
 }
 
 /** 对话级设置（common：对话名称；llm：当前对话渠道配置选择）。 */
@@ -108,17 +138,30 @@ export const useConversationSettingsStore = defineStore('conversationSettings', 
       this.status = '正在读取对话设置...';
       this.markLoadingSettingSection('common');
       this.markLoadingSettingSection('llm');
-      rememberConversationSettingsRequest('common', bridge.request(BridgeMessageType.ConversationSettingsGet, { conversationId, section: 'common' }));
-      rememberConversationSettingsRequest('llm', bridge.request(BridgeMessageType.ConversationSettingsGet, { conversationId, section: 'llm' }));
+      rememberConversationSettingsRequest(
+        'common',
+        bridge.request(BridgeMessageType.ConversationSettingsGet, { conversationId, section: 'common' }),
+        conversationId
+      );
+      rememberConversationSettingsRequest(
+        'llm',
+        bridge.request(BridgeMessageType.ConversationSettingsGet, { conversationId, section: 'llm' }),
+        conversationId,
+        currentLlmEditRevision(conversationId)
+      );
     },
     save(): void {
       if (!this.common.conversationId) return;
       this.markPendingSettingSection('common');
       this.status = '正在保存对话设置...';
-      rememberConversationSettingsRequest('common', bridge.request(BridgeMessageType.ConversationSettingsUpdate, {
-        section: 'common',
-        settings: { conversationId: this.common.conversationId, name: this.common.name }
-      }));
+      rememberConversationSettingsRequest(
+        'common',
+        bridge.request(BridgeMessageType.ConversationSettingsUpdate, {
+          section: 'common',
+          settings: { conversationId: this.common.conversationId, name: this.common.name }
+        }),
+        this.common.conversationId
+      );
     },
     selectLlmProviderConfigForConversation(conversationId: string, configId: string): void {
       if (!conversationId || !configId) return;
@@ -127,10 +170,16 @@ export const useConversationSettingsStore = defineStore('conversationSettings', 
       const settings = normalizeLlmSettings(this.llm);
       this.markPendingSettingSection('llm');
       this.status = '正在保存对话渠道设置...';
-      rememberConversationSettingsRequest('llm', bridge.request(BridgeMessageType.ConversationSettingsUpdate, {
-        section: 'llm',
-        settings
-      }));
+      const revision = nextLlmEditRevision(conversationId);
+      rememberConversationSettingsRequest(
+        'llm',
+        bridge.request(BridgeMessageType.ConversationSettingsUpdate, {
+          section: 'llm',
+          settings
+        }),
+        conversationId,
+        revision
+      );
       // 后端会在保存当前对话渠道后，把该渠道同步为新对话的 Global 默认值；
       // 其他已存在对话会先冻结到各自的对话级设置，避免被新的默认值影响。
     },
@@ -151,15 +200,38 @@ export const useConversationSettingsStore = defineStore('conversationSettings', 
       const settings = normalizeLlmSettings(this.llm);
       this.markPendingSettingSection('llm');
       this.status = '正在保存对话模型设置...';
-      rememberConversationSettingsRequest('llm', bridge.request(BridgeMessageType.ConversationSettingsUpdate, {
-        section: 'llm',
-        settings
-      }));
+      const revision = nextLlmEditRevision(conversationId);
+      rememberConversationSettingsRequest(
+        'llm',
+        bridge.request(BridgeMessageType.ConversationSettingsUpdate, {
+          section: 'llm',
+          settings
+        }),
+        conversationId,
+        revision
+      );
     },
     applySnapshot(payload: ConversationSettingsSnapshotPayload, correlationId?: string): void {
-      takeConversationSettingsRequestSection(correlationId);
+      const request = takeConversationSettingsRequest(correlationId);
+      const conversationId = payload.section === 'llm'
+        ? (payload.settings as ConversationLlmSettingsRecord).conversationId
+        : (payload.settings as ConversationSettingsRecord).conversationId;
+      const activeConversationId = payload.section === 'llm' ? this.llm.conversationId : this.common.conversationId;
+      // 切换会话后迟到的旧会话 snapshot 不能污染当前会话设置或结束当前会话的 loading/pending。
+      if (activeConversationId && conversationId !== activeConversationId) return;
       this.loadedSections[payload.section] = true;
       this.clearLoadingSettingSection(payload.section);
+
+      // 快速来回切换模型时，较早保存/读取请求的 snapshot 可能晚于新请求返回。
+      // 旧 snapshot 只能用于结束自己的请求，不能覆盖当前本地选择，也不能清掉较新请求的 pending 状态。
+      if (payload.section === 'llm' && (
+        isStaleLlmSettingsResponse(request, conversationId)
+        || (!request && this.pendingSettingsSections.llm === true)
+      )) {
+        if (!hasOutstandingSettingsWork(this)) this.status = '对话设置已同步';
+        return;
+      }
+
       this.clearPendingSettingSection(payload.section);
       delete this.failedSettingsSections[payload.section];
       if (payload.section === 'common') {
@@ -171,7 +243,11 @@ export const useConversationSettingsStore = defineStore('conversationSettings', 
       if (!hasOutstandingSettingsWork(this)) this.status = '对话设置已同步';
     },
     setError(message: string, options: ConversationSettingsErrorOptions = {}): void {
-      const section = options.section ?? takeConversationSettingsRequestSection(options.correlationId);
+      const request = takeConversationSettingsRequest(options.correlationId);
+      const section = options.section ?? request?.section;
+      const activeConversationId = section === 'llm' ? this.llm.conversationId : section === 'common' ? this.common.conversationId : '';
+      if (request && activeConversationId && request.conversationId !== activeConversationId) return;
+      if (section === 'llm' && request && isStaleLlmSettingsResponse(request, request.conversationId)) return;
       if (section) {
         this.clearLoadingSettingSection(section);
         this.clearPendingSettingSection(section);

@@ -25,7 +25,8 @@ import {
 import { CompressionBlock, CompressionContextVariant, RunCompressionBlockLink, type CompressionBlockData } from '../../compression/components';
 import { CompressionEventType } from '../../compression/events';
 import { hasActiveBlockingCompression } from '../../compression/queries';
-import { ToolCall, ToolPolicyScopeLink, ToolState } from '../../tools/components';
+import { selectLatestClosedCompressionBoundary } from '../../compression/selection';
+import { ToolCall, ToolPolicyScopeLink, ToolResultConsumed, ToolState } from '../../tools/components';
 import { ToolDefinitionsKey, ToolSchemasKey } from '../../tools/resources';
 import { isToolNameAllowedByPolicy } from '../../tools/policy';
 import { buildRuntimeToolSchemas, TOOL_SCHEMA_CONTRIBUTOR_READS } from '../../tools/schemaContributors';
@@ -46,8 +47,7 @@ import {
   isTextPart,
   textContent,
   type ContentPart,
-  type LlmInvocationSettingsSnapshotRecord,
-  type MessageContent
+  type LlmInvocationSettingsSnapshotRecord
 } from '../../../../../shared/protocol';
 import type { LlmModelSettings, LlmStartRequest, ToolSchema } from '../../llm/contracts';
 import { LlmInvocation } from '../../llm/components';
@@ -100,6 +100,7 @@ const LlmContextLookupComponents = [
   ToolPolicyScopeLink,
   ToolCall,
   ToolState,
+  ToolResultConsumed,
   LlmInvocation,
   CompressionBlock,
   CompressionContextVariant,
@@ -274,7 +275,7 @@ function maybeEnqueuePreDispatchCompression(
   const methodKind = settings?.compressionMethodKind;
   if (!settings || methodKind === undefined || methodKind === 'disabled' || methodKind === 'manual_summary') return false;
   const conversation = world.get(data.conversation, Conversation);
-  const anchor = selectPreDispatchCompressionAnchor(world, data, settings);
+  const anchor = selectPreDispatchCompressionAnchor(world, data);
   if (!conversation || !anchor) return false;
 
   const selected = selectRunContextCompressionVariant(world, data.conversation, settings);
@@ -312,29 +313,12 @@ function maybeEnqueuePreDispatchCompression(
   return true;
 }
 
-function selectPreDispatchCompressionAnchor(
+export function selectPreDispatchCompressionAnchor(
   world: WorldReader,
-  data: LlmRequestData,
-  settings: LlmInvocationSettingsSnapshotRecord
+  data: LlmRequestData
 ): PreDispatchCompressionAnchor | undefined {
   const targetMessages = nonStreamingConversationMessagesBefore(world, data.conversation, data.modelMessage);
-  if (targetMessages.length === 0) return undefined;
-  const runScopedSet = runScopedMessagesIn(world, data.run, targetMessages);
-  const runScopedMessages = targetMessages.filter((entity) => runScopedSet.has(entity));
-  const preserveLatestMessages = positiveInteger(settings.compressionTrigger?.preserveLatestMessages) ?? 8;
-  const candidates = runScopedMessages.length > 0
-    ? targetMessages.filter((entity) => {
-      const seq = world.get(entity, Message)?.seq ?? 0;
-      const earliestRunScopedSeq = Math.min(...runScopedMessages.map((message) => world.get(message, Message)?.seq ?? Number.POSITIVE_INFINITY));
-      return seq < earliestRunScopedSeq;
-    })
-    : targetMessages.slice(0, Math.max(0, targetMessages.length - preserveLatestMessages));
-  if (candidates.length === 0) return undefined;
-
-  const preferred = [...candidates].reverse().find((entity) => isClosedCompressionBoundary(world.get(entity, Message)?.content));
-  const anchorEntity = preferred ?? candidates[candidates.length - 1];
-  const anchor = world.get(anchorEntity, Message);
-  return anchor ? { entity: anchorEntity, id: anchor.id, seq: anchor.seq, role: anchor.role } : undefined;
+  return selectLatestClosedCompressionBoundary(world, targetMessages);
 }
 
 function preDispatchCompressionRisk(
@@ -405,15 +389,6 @@ function runScopedMessagesIn(world: WorldReader, run: Entity, candidates: Entity
     if (link?.run === run && candidateSet.has(link.message)) result.add(link.message);
   }
   return result;
-}
-
-function isClosedCompressionBoundary(content: MessageContent | undefined): boolean {
-  if (!content) return false;
-  if (content.role === 'model') {
-    return content.parts.some((part) => isTextPart(part) && part.thought !== true && part.text.trim())
-      && !content.parts.some(isFunctionCallPart);
-  }
-  return content.role === 'user' && content.parts.some(isFunctionResponsePart);
 }
 
 function estimateLlmRequestTokens(request: LlmStartRequest): number {

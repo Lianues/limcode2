@@ -1,3 +1,4 @@
+export * from './autoCompressionPlugin';
 export * from './components';
 export * from './events';
 export * from './plugin';

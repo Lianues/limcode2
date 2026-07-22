@@ -10,14 +10,14 @@ import { LlmInvocation } from '../../llm/components';
 import { CompressionBlock, CompressionBlockLlmInvocationLink, CompressionBlockSourceLink, CompressionContextVariant, RunCompressionBlockLink, type CompressionBlockData } from '../components';
 import { CompressionEventType } from '../events';
 import { ToolCall, ToolResultConsumed, ToolState } from '../../tools/components';
-import { isTerminalToolStatus } from '../../tools/state';
+import { hasActiveUnresolvedFunctionCallsInEntities } from '../selection';
 import type { CompressionBlockRecord, ContentPart, MessageContent, MessageRecord, ToolCallRecord } from '../../../../../shared/protocol';
 import { isFileDataPart, isFunctionCallPart, isFunctionResponsePart, isInlineDataPart, isProviderContextPart, isTextPart, isVisibleTextPart } from '../../../../../shared/protocol';
 import { buildTaskListTimeline, formatTaskListSnapshotForContext } from '../../../../../shared/taskListProjection';
 import { createStableId } from '../../../../utils/stableId';
 import { findUniqueById } from '../../../../utils/uniqueIds';
 
-const COMPRESSION_WRITE_COMPONENTS = [
+export const COMPRESSION_WRITE_COMPONENTS = [
   Conversation,
   Message,
   PartOf,
@@ -31,7 +31,7 @@ const COMPRESSION_WRITE_COMPONENTS = [
   LlmInvocation,
   CompressionBlockLlmInvocationLink
 ] as const;
-const COMPRESSION_READ_COMPONENTS = [...COMPRESSION_WRITE_COMPONENTS, ToolCall, ToolState, ToolResultConsumed] as const;
+export const COMPRESSION_READ_COMPONENTS = [...COMPRESSION_WRITE_COMPONENTS, ToolCall, ToolState, ToolResultConsumed] as const;
 
 export const CompressionSystem = defineSystem({
   name: 'CompressionSystem',
@@ -64,7 +64,7 @@ export const CompressionSystem = defineSystem({
     for (const payload of readEvents(ctx, CompressionEventType.Enable)) setBlockDisabled(world, cmd, payload.blockId, false);
     for (const payload of readEvents(ctx, CompressionEventType.Update)) updateCompressionBlock(world, cmd, payload);
     for (const payload of readEvents(ctx, CompressionEventType.Regenerate)) regenerateCompressionBlock(world, cmd, payload.blockId, payload.conversationId, payload.methodConfigId);
-    for (const payload of readEvents(ctx, CompressionEventType.Create)) createCompressionBlock(world, cmd, payload);
+    for (const payload of readEvents(ctx, CompressionEventType.Create)) tryCreateCompressionBlock(world, cmd, payload);
     for (const payload of readEvents(ctx, LlmEventType.RetryScheduled) as LlmRetryPayload[]) updateCompressionRetryState(world, cmd, payload, 'scheduled');
     for (const payload of readEvents(ctx, LlmEventType.RetryStarted) as LlmRetryPayload[]) updateCompressionRetryState(world, cmd, payload, 'retrying');
     for (const payload of readEvents(ctx, LlmEventType.RetryCancelled) as LlmRetryPayload[]) updateCompressionRetryState(world, cmd, payload, 'cancelled');
@@ -91,15 +91,15 @@ interface ReusableCompressionPredecessor {
   contents: MessageContent[];
 }
 
-function createCompressionBlock(
+export function tryCreateCompressionBlock(
   world: WorldReader,
   cmd: CommandSink,
   payload: { conversationId: string; startMessageId?: string; endMessageId?: string; methodConfigId?: string; methodKind?: CompressionBlockRecord['methodKind']; trigger?: 'manual' | 'auto' }
-): void {
+): boolean {
   const conversation = findConversation(world, payload.conversationId);
   if (conversation === undefined) {
     debugAutoCompression('compression.create.skipConversationNotFound', { payload });
-    return;
+    return false;
   }
   const methodKind = payload.methodKind ?? 'llm_summary';
 
@@ -119,7 +119,7 @@ function createCompressionBlock(
       conversation: describeConversation(world, conversation),
       methodKind
     });
-    return;
+    return false;
   }
 
   debugAutoCompression('compression.create.selection', {
@@ -137,6 +137,7 @@ function createCompressionBlock(
   });
 
   spawnCompressionBlock(world, cmd, conversation, methodKind, payload, selection);
+  return true;
 }
 
 function prepareFullSelection(
@@ -166,7 +167,7 @@ function prepareFullSelection(
     });
     return undefined;
   }
-  if (hasUnresolvedFunctionCallsInEntities(world, increment)) {
+  if (hasActiveUnresolvedFunctionCallsInEntities(world, increment)) {
     debugAutoCompression('compression.selection.skipIncrementUnresolvedFunctionCalls', {
       predecessorBlockId: predecessorBlock.id,
       predecessorBoundary,
@@ -202,7 +203,7 @@ function directCompressionSelection(world: WorldReader, selected: Entity[]): Com
     debugAutoCompression('compression.selection.skipEmptySelection', {});
     return undefined;
   }
-  if (hasUnresolvedFunctionCallsInEntities(world, selected)) {
+  if (hasActiveUnresolvedFunctionCallsInEntities(world, selected)) {
     debugAutoCompression('compression.selection.skipUnresolvedFunctionCalls', {
       selected: selected.map((entity) => describeMessageEntity(world, entity))
     });
@@ -678,7 +679,7 @@ function prepareSegmentedSelection(
   }
 
   const selected = closedRounds.flat();
-  if (hasUnresolvedFunctionCallsInEntities(world, selected)) {
+  if (hasActiveUnresolvedFunctionCallsInEntities(world, selected)) {
     debugAutoCompression('compression.segmented.skipUnresolvedFunctionCalls', {
       payload,
       selected: selected.map((entity) => describeMessageEntity(world, entity))
@@ -926,65 +927,6 @@ function messageContentsForEntities(world: WorldReader, entities: Entity[]): Mes
   return entities
     .map((entity) => world.get(entity, Message)?.content)
     .filter((content): content is MessageContent => !!content);
-}
-
-interface PendingFunctionCall {
-  id?: string;
-  name: string;
-  message: Entity;
-}
-
-function hasUnresolvedFunctionCallsInEntities(world: WorldReader, entities: Entity[]): boolean {
-  const pendingCallIds = new Map<string, PendingFunctionCall>();
-  const pendingCallNames = new Map<string, PendingFunctionCall[]>();
-  for (const entity of entities) {
-    const content = world.get(entity, Message)?.content;
-    if (!content) continue;
-    for (const part of content.parts) {
-      if (isFunctionCallPart(part)) {
-        const callId = part.id?.trim();
-        const pending: PendingFunctionCall = { ...(callId ? { id: callId } : {}), name: part.functionCall.name, message: entity };
-        if (callId) {
-          pendingCallIds.set(callId, pending);
-        } else {
-          const calls = pendingCallNames.get(part.functionCall.name) ?? [];
-          calls.push(pending);
-          pendingCallNames.set(part.functionCall.name, calls);
-        }
-        continue;
-      }
-      if (!isFunctionResponsePart(part)) continue;
-      const callId = part.id?.trim();
-      if (callId && pendingCallIds.delete(callId)) continue;
-      const pendingByName = pendingCallNames.get(part.functionResponse.name);
-      if (!pendingByName?.length) continue;
-      pendingByName.shift();
-      if (pendingByName.length === 0) pendingCallNames.delete(part.functionResponse.name);
-    }
-  }
-
-  const pendingCalls = [
-    ...pendingCallIds.values(),
-    ...[...pendingCallNames.values()].flat()
-  ];
-  return pendingCalls.some((call) => isActiveUnresolvedFunctionCall(world, call));
-}
-
-function isActiveUnresolvedFunctionCall(world: WorldReader, call: PendingFunctionCall): boolean {
-  const toolCall = findToolCallForFunctionCall(world, call);
-  if (toolCall === undefined) return false;
-  const state = world.get(toolCall, ToolState);
-  if (!state) return false;
-  return !isTerminalToolStatus(state.status) || !world.has(toolCall, ToolResultConsumed);
-}
-
-function findToolCallForFunctionCall(world: WorldReader, call: PendingFunctionCall): Entity | undefined {
-  return world.query(ToolCall, ToolState).find((entity) => {
-    const data = world.get(entity, ToolCall);
-    if (!data || data.name !== call.name) return false;
-    if (call.id && (data.id === call.id || data.functionCallId === call.id)) return true;
-    return world.get(entity, PartOf)?.parent === call.message;
-  });
 }
 
 function estimateContentsTokens(contents: MessageContent[]): number {

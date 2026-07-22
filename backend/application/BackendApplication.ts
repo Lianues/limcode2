@@ -15,6 +15,7 @@ import {
   agentAnswerPlugin,
   checkpointPlugin,
   compressionPlugin,
+  autoCompressionPlugin,
   llmPlugin,
   requestSpawnAgent,
   projectPlugin,
@@ -277,7 +278,7 @@ export class BackendApplication {
 
     installWorldPlugins(
       { world: this.world, scheduler: this.scheduler },
-      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), workflowPlugin(), planReviewPlugin(), projectPlugin(), workEnvironmentPlugin(), runtimeContextPlugin(), checkpointPlugin(), compressionPlugin(), llmPlugin(), agentAnswerPlugin(), toolsPlugin({ toolSchemas, toolDefinitions, toolRuntimeDefinitions: this.env.tools.registry }), backgroundCommandPlugin(), skillPlugin(), rulesPlugin(), chatPlugin(), agentRunPlugin()]
+      [commonPlugin(), clientSyncPlugin(), storageProjectionPlugin(), agentPlugin(), workflowPlugin(), planReviewPlugin(), projectPlugin(), workEnvironmentPlugin(), runtimeContextPlugin(), checkpointPlugin(), compressionPlugin(), llmPlugin(), agentAnswerPlugin(), toolsPlugin({ toolSchemas, toolDefinitions, toolRuntimeDefinitions: this.env.tools.registry }), autoCompressionPlugin(), backgroundCommandPlugin(), skillPlugin(), rulesPlugin(), chatPlugin(), agentRunPlugin()]
     );
     registerClientSyncSystems(this.scheduler);
 

@@ -12,13 +12,10 @@ import {
   type LlmRetryPayload
 } from '../../llm/events';
 import { LlmInvocation, type LlmInvocationData } from '../../llm/components';
-import { compressionThresholdTokens, observedUsageTokenCount } from '../../llm/usage';
 import { ToolCall, ToolCallEvent } from '../../tools/components';
 import { spawnToolCall, ToolCallBundle } from '../../tools/bundles';
 import { AgentRun, AgentRunSourceLink, ToolCallRunLink } from '../../agentRun/components';
 import { spawnToolCallRunLink } from '../../agentRun/bundles';
-import { CompressionBlock } from '../../compression/components';
-import { CompressionEventType } from '../../compression/events';
 import { LlmRequest, Message, Streaming, Conversation, PartOf, type LlmRequestData, type MessageData } from '../components';
 import {
   conversationClientStateStreamId,
@@ -30,8 +27,7 @@ import {
   isVisibleTextPart,
   type ClientPatchOp,
   type ContentPart,
-  type LlmTransientNoticeKind,
-  type LlmUsageMetadataRecord
+  type LlmTransientNoticeKind
 } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
 import { markClientStateConversationsDirty } from '../../../clientSync/dirtyConversations';
@@ -93,10 +89,10 @@ export const LlmPollSystem = defineSystem({
   name: 'LlmPollSystem',
   access: {
     queries: [LlmInvocationsByIdQuery, LlmRequestsByIdQuery, ModelMessagesQuery, ToolCallLookupQuery],
-    reads: { components: [PartOf, CompressionBlock, ToolCallEvent, ToolCallRunLink, AgentRunSourceLink] },
+    reads: { components: [PartOf, ToolCallEvent, ToolCallRunLink, AgentRunSourceLink] },
     writes: { components: [Streaming, AgentRun, ToolCall, ToolCallEvent, ToolCallRunLink] },
     resources: { read: [ClientSyncFastPatchStateKey, ClientStateDirtyConversationIdsKey], write: [ClientSyncFastPatchStateKey, ClientStateDirtyConversationIdsKey], mutationMode: 'update' },
-    events: { read: [LlmEventType.Started, LlmEventType.ThoughtDelta, LlmEventType.ThoughtProgress, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error, LlmEventType.RetryScheduled, LlmEventType.RetryStarted, LlmEventType.RetryCancelled, LlmEventType.RetryRecovered], emit: [CheckpointEventType.Requested, CompressionEventType.Create] },
+    events: { read: [LlmEventType.Started, LlmEventType.ThoughtDelta, LlmEventType.ThoughtProgress, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error, LlmEventType.RetryScheduled, LlmEventType.RetryStarted, LlmEventType.RetryCancelled, LlmEventType.RetryRecovered], emit: [CheckpointEventType.Requested] },
     effects: { emit: ['client.transientNotice'] },
     bundles: [ToolCallBundle]
   },
@@ -185,103 +181,6 @@ function requestOf(world: WorldReader, requestId: string): Entity | undefined {
   if (matches.length > 1) throw new Error(`Duplicate LlmRequest id: ${requestId}`);
   return matches[0];
 }
-
-function maybeEnqueueAutoCompression(
-  world: WorldReader,
-  cmd: CommandSink,
-  input: { conversation: Entity; endMessage: MessageData; invocation?: Entity; usageMetadata?: LlmUsageMetadataRecord; stage: 'llm_response_after' }
-): void {
-  if (!input.usageMetadata || input.invocation === undefined) return;
-  const conversation = world.get(input.conversation, Conversation);
-  const invocation = world.get(input.invocation, LlmInvocation);
-  const settings = invocation?.settings;
-  const trigger = settings?.compressionTrigger;
-  if (!settings || !trigger || trigger.mode !== 'token_threshold' || settings.compressionMethodKind === 'disabled') return;
-
-  const observedTokens = observedUsageTokenCount(input.usageMetadata);
-  const thresholdTokens = compressionThresholdTokens(settings);
-  debugAutoCompression('llm.done.check', {
-    stage: input.stage,
-    conversationId: conversation?.id,
-    endMessage: describeMessageData(input.endMessage),
-    invocationId: invocation?.id,
-    methodKind: settings.compressionMethodKind,
-    compressionConfigId: settings.compressionConfigId,
-    observedTokens,
-    thresholdTokens
-  });
-  if (observedTokens === undefined || thresholdTokens === undefined || observedTokens < thresholdTokens) {
-    debugAutoCompression('llm.done.skipBelowThreshold', { conversationId: conversation?.id, observedTokens, thresholdTokens });
-    return;
-  }
-
-  if (hasCompressionBlockForAnchor(world, input.conversation, input.endMessage.id)) {
-    debugAutoCompression('llm.done.skipDuplicateAnchor', {
-      conversationId: conversation?.id,
-      endMessage: describeMessageData(input.endMessage)
-    });
-    return;
-  }
-
-  if (!conversation) return;
-  debugAutoCompression('llm.done.enqueue', {
-    conversationId: conversation.id,
-    endMessage: describeMessageData(input.endMessage),
-    methodKind: settings.compressionMethodKind,
-    compressionConfigId: settings.compressionConfigId
-  });
-  cmd.enqueue({
-    type: CompressionEventType.Create,
-    payload: {
-      conversationId: conversation.id,
-      endMessageId: input.endMessage.id,
-      ...(settings.compressionConfigId ? { methodConfigId: settings.compressionConfigId } : {}),
-      ...(settings.compressionMethodKind ? { methodKind: settings.compressionMethodKind } : {}),
-      trigger: 'auto' as const
-    }
-  });
-}
-
-function hasCompressionBlockForAnchor(world: WorldReader, conversation: Entity, anchorMessageId: string): boolean {
-  return world.query(CompressionBlock).some((entity) => {
-    const block = world.get(entity, CompressionBlock);
-    return block?.conversation === conversation
-      && block.anchorMessageId === anchorMessageId
-      && (block.status === 'running' || block.status === 'pending' || block.status === 'complete');
-  });
-}
-
-function debugAutoCompression(stage: string, payload: Record<string, unknown>): void {
-  void stage;
-  void payload;
-}
-
-function describeMessageEntity(world: WorldReader, entity: Entity): Record<string, unknown> | undefined {
-  const message = world.get(entity, Message);
-  return message ? describeMessageData(message) : undefined;
-}
-
-function describeMessageData(message: MessageData): Record<string, unknown> {
-  return {
-    id: message.id,
-    seq: message.seq,
-    role: message.role,
-    status: message.status,
-    partKinds: message.content.parts.map(describePartKind),
-    visibleTextLength: message.content.parts
-      .filter(isVisibleTextPart)
-      .reduce((total, part) => total + ('text' in part ? part.text.length : 0), 0)
-  };
-}
-
-function describePartKind(part: ContentPart): string {
-  if (isTextPart(part)) return part.thought === true ? 'thoughtText' : 'text';
-  if (isFunctionCallPart(part)) return `functionCall:${part.functionCall.name}`;
-  if (isFunctionResponsePart(part)) return `functionResponse:${part.functionResponse.name}`;
-  if (isProviderContextPart(part)) return `providerContext:${part.providerContext.itemType ?? part.providerContext.format}`;
-  return Object.keys(part)[0] ?? 'unknown';
-}
-
 
 interface ApplyRequestUpdateResult {
   fastPatchBatches: ClientSyncFastPatchBatch[];
@@ -446,14 +345,6 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
           type: CheckpointEventType.Requested,
           payload: { conversationId: conversation.id, runId: run.id, floorMessageId: current.id, anchorPosition: 'after', trigger: 'llm_response_after' }
         });
-        if (waitsForTool) {
-          debugAutoCompression('llm.done.deferForToolResponses', {
-            conversationId: conversation.id,
-            modelMessage: describeMessageData(next)
-          });
-        } else {
-          maybeEnqueueAutoCompression(world, cmd, { conversation: requestData.conversation, endMessage: next, invocation: requestData.invocation, usageMetadata, stage: 'llm_response_after' });
-        }
       }
       cmd.add(requestData.run, AgentRun, {
         ...run,

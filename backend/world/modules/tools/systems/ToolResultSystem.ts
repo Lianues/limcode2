@@ -22,13 +22,9 @@ import { ToolEventType } from '../events';
 import { isTerminalToolStatus, toolStateToResponse, transitionToolState } from '../state';
 import { simplifyToolResponseForModel } from '../responseSimplifier';
 import { readEvents } from '../../../events';
-import type { ContentPart, InlineDataPart, LlmInvocationSettingsSnapshotRecord, ToolCallStatus } from '../../../../../shared/protocol';
-import { ASK_USER_TOOL_NAME, isFunctionResponsePart, isInlineDataPart } from '../../../../../shared/protocol';
+import type { InlineDataPart, ToolCallStatus } from '../../../../../shared/protocol';
+import { ASK_USER_TOOL_NAME } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
-import { CompressionBlock } from '../../compression/components';
-import { CompressionEventType } from '../../compression/events';
-import { LlmInvocation, RunLlmInvocationLink, type LlmInvocationData } from '../../llm/components';
-import { compressionThresholdTokens, observedUsageTokenCount } from '../../llm/usage';
 import { isYoloToolPolicy } from '../policy';
 
 const SettledToolCallsQuery = defineQuery({
@@ -69,9 +65,9 @@ export const ToolResultSystem = defineSystem({
   access: {
     queries: [SettledToolCallsQuery, ActiveToolWorkLookupQuery],
     bundles: [ToolResultMessageBundle, ToolCallEventBundle],
-    reads: { components: [LlmInvocation, RunLlmInvocationLink, ToolCallEvent, CompressionBlock, Message, PartOf, MessageRunLink] },
+    reads: { components: [ToolCallEvent, Message, PartOf, MessageRunLink] },
     writes: { components: [AgentRun, AgentRunNeedsModel, MessageRunLink, ToolState] },
-    events: { read: [ToolEventType.ResultSubmitRequested, ToolEventType.ResultRejectRequested], emit: [CheckpointEventType.Requested, CompressionEventType.Create] }
+    events: { read: [ToolEventType.ResultSubmitRequested, ToolEventType.ResultRejectRequested], emit: [CheckpointEventType.Requested] }
   },
   run(ctx) {
     const { world, cmd } = ctx;
@@ -156,17 +152,6 @@ export const ToolResultSystem = defineSystem({
         parts: inlineParts,
         durationMs: state.durationMs
       });
-      debugAutoCompression('tool.response.spawned', {
-        runId: runData.id,
-        conversationId: conversationData?.id,
-        toolCallId: call.id,
-        functionCallId: call.functionCallId,
-        toolName: call.name,
-        status: state.status,
-        responseMessageEntity: responseMessage,
-        expectedResponseMessageId: responseMessageId,
-        partKinds: describeToolResponsePartKinds(call.functionCallId ?? call.id, call.name, simplifiedResponse, inlineParts)
-      });
       spawnMessageRunLink(cmd, { message: responseMessage, run, role: 'tool_response' });
       cmd.add(entity, ToolResultConsumed, true);
       consumedThisPass.add(entity);
@@ -182,14 +167,6 @@ export const ToolResultSystem = defineSystem({
             anchorPosition: 'after',
             trigger: 'tool_execution_after'
           }
-        });
-        maybeEnqueueAutoCompressionAfterToolResponses(world, cmd, {
-          conversation: target.conversation,
-          conversationId: conversationData.id,
-          run,
-          runId: runData.id,
-          responseMessageId,
-          consumedThisPass
         });
       }
     }
@@ -259,56 +236,6 @@ function latestModelMessageForRun(world: WorldReader, run: Entity): Entity | und
   return latest?.entity;
 }
 
-function maybeEnqueueAutoCompressionAfterToolResponses(
-  world: WorldReader,
-  cmd: CommandSink,
-  input: { conversation: Entity; conversationId: string; run: Entity; runId: string; responseMessageId: string; consumedThisPass: ReadonlySet<Entity> }
-): void {
-  if (hasPendingToolWork(world, input.run, input.consumedThisPass)) {
-    debugAutoCompression('tool.response.skipPendingToolWork', { conversationId: input.conversationId, runId: input.runId, responseMessageId: input.responseMessageId });
-    return;
-  }
-
-  const settings = latestInvocationSettingsForRun(world, input.run);
-  const trigger = settings?.compressionTrigger;
-  if (!settings || !trigger || trigger.mode !== 'token_threshold' || settings.compressionMethodKind === 'disabled') return;
-
-  const observedTokens = latestObservedTokensForRun(world, input.run);
-  const thresholdTokens = compressionThresholdTokens(settings);
-  debugAutoCompression('tool.response.check', {
-    conversationId: input.conversationId,
-    runId: input.runId,
-    responseMessageId: input.responseMessageId,
-    methodKind: settings.compressionMethodKind,
-    compressionConfigId: settings.compressionConfigId,
-    observedTokens,
-    thresholdTokens
-  });
-  if (observedTokens === undefined || thresholdTokens === undefined || observedTokens < thresholdTokens) return;
-  if (hasCompressionBlockForAnchor(world, input.conversation, input.responseMessageId)) {
-    debugAutoCompression('tool.response.skipDuplicateAnchor', { conversationId: input.conversationId, responseMessageId: input.responseMessageId });
-    return;
-  }
-
-  debugAutoCompression('tool.response.enqueue', {
-    conversationId: input.conversationId,
-    runId: input.runId,
-    endMessageId: input.responseMessageId,
-    methodKind: settings.compressionMethodKind,
-    compressionConfigId: settings.compressionConfigId
-  });
-  cmd.enqueue({
-    type: CompressionEventType.Create,
-    payload: {
-      conversationId: input.conversationId,
-      endMessageId: input.responseMessageId,
-      ...(settings.compressionConfigId ? { methodConfigId: settings.compressionConfigId } : {}),
-      ...(settings.compressionMethodKind ? { methodKind: settings.compressionMethodKind } : {}),
-      trigger: 'auto' as const
-    }
-  });
-}
-
 function requiresResultSubmitApproval(world: WorldReader, run: Entity, toolName: string, state: ToolStateData): boolean {
   // ask_user 的用户提交动作本身就是明确确认，不再叠加通用“结果回传”审批。
   if (toolName === ASK_USER_TOOL_NAME || hasResultSubmitDecision(state)) return false;
@@ -362,60 +289,6 @@ function hasPendingToolWork(world: WorldReader, run: Entity, consumedThisPass: R
 
 function isTerminalRunStatus(status: string): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'stale';
-}
-
-function latestInvocationSettingsForRun(world: WorldReader, run: Entity): LlmInvocationSettingsSnapshotRecord | undefined {
-  return latestInvocationForRun(world, run)?.settings;
-}
-
-function latestObservedTokensForRun(world: WorldReader, run: Entity): number | undefined {
-  const invocation = latestInvocationForRun(world, run);
-  return invocation?.usageMetadata ? observedUsageTokenCount(invocation.usageMetadata) : undefined;
-}
-
-function latestInvocationForRun(world: WorldReader, run: Entity): LlmInvocationData | undefined {
-  let latest: { invocation: LlmInvocationData; invocationCreatedAt: number; linkCreatedAt: number; linkId: string } | undefined;
-  for (const entity of world.query(RunLlmInvocationLink)) {
-    const link = world.get(entity, RunLlmInvocationLink);
-    if (!link || link.run !== run) continue;
-    const invocation = world.get(link.invocation, LlmInvocation);
-    if (!invocation) continue;
-    const candidate = { invocation, invocationCreatedAt: invocation.createdAt, linkCreatedAt: link.createdAt, linkId: link.id };
-    if (!latest
-      || candidate.invocationCreatedAt > latest.invocationCreatedAt
-      || (candidate.invocationCreatedAt === latest.invocationCreatedAt && candidate.linkCreatedAt > latest.linkCreatedAt)
-      || (candidate.invocationCreatedAt === latest.invocationCreatedAt && candidate.linkCreatedAt === latest.linkCreatedAt && candidate.linkId > latest.linkId)) {
-      latest = candidate;
-    }
-  }
-  return latest?.invocation;
-}
-
-function hasCompressionBlockForAnchor(world: WorldReader, conversation: Entity, anchorMessageId: string): boolean {
-  return world.query(CompressionBlock).some((entity) => {
-    const block = world.get(entity, CompressionBlock);
-    return block?.conversation === conversation
-      && block.anchorMessageId === anchorMessageId
-      && (block.status === 'running' || block.status === 'pending' || block.status === 'complete');
-  });
-}
-
-
-function debugAutoCompression(stage: string, payload: Record<string, unknown>): void {
-  void stage;
-  void payload;
-}
-
-function describeToolResponsePartKinds(toolCallId: string, toolName: string, response: unknown, inlineParts: InlineDataPart[] | undefined): string[] {
-  const parts: ContentPart[] = [{
-    id: toolCallId,
-    functionResponse: { name: toolName, response, ...(inlineParts?.length ? { parts: inlineParts } : {}) }
-  }];
-  return parts.map((part) => {
-    if (isFunctionResponsePart(part)) return `functionResponse:${part.functionResponse.name}`;
-    if (isInlineDataPart(part)) return `inlineData:${part.inlineData.mimeType}`;
-    return Object.keys(part)[0] ?? 'unknown';
-  });
 }
 
 function inlinePartsFromToolResponse(value: unknown): InlineDataPart[] | undefined {

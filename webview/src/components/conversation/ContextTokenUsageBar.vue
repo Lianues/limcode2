@@ -2,24 +2,20 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT,
-  type LlmCompressionConfigRecord,
-  type LlmProviderConfigRecord,
-  type LlmProviderModelConfigRecord,
-  type MessageRecord
+  type LlmCompressionConfigRecord
 } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
-import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
 import HoverTooltipPanel from '@webview/components/ui/HoverTooltipPanel.vue';
 import {
   buildTokenUsageMessages,
   formatCompactTokenNumber,
   formatFloorNumber,
   formatTokenNumber,
-  normalizeTokenUsage,
   type TokenUsageMessageEntry
 } from './tokenUsageModel';
+import { resolveContextUsage } from '@shared/contextTokenUsage';
 
 interface TooltipPanelRow {
   kind?: 'row';
@@ -46,7 +42,6 @@ interface TokenBarSegment {
 const clientState = useClientStateStore();
 const conversationTimeline = useConversationTimelineStore();
 const globalSettings = useGlobalSettingsStore();
-const conversationSettings = useConversationSettingsStore();
 const root = ref<HTMLElement | null>(null);
 const expanded = ref(false);
 const chartScroller = ref<HTMLElement | null>(null);
@@ -69,22 +64,35 @@ const usageItems = computed(() => [...fixedContextUsageItems.value, ...messageUs
 const latestUsage = computed(() => usageItems.value[usageItems.value.length - 1]);
 const hasUsage = computed(() => usageItems.value.length > 0);
 const refreshKey = computed(() => usageItems.value.map((item) => `${item.id}:${item.total}:${item.ratio}`).join('|'));
-const activeProviderConfig = computed(() => activeProviderConfigForCurrentConversation());
-const activeModelId = computed(() => selectedModelIdForProvider(activeProviderConfig.value));
-const activeModelConfig = computed(() => modelConfigForProvider(activeProviderConfig.value, activeModelId.value));
-const activeCompressionTrigger = computed(() => compressionConfigForProvider(activeProviderConfig.value?.id, activeModelId.value)?.trigger);
-const contextWindowTokens = computed(() => normalizeTokenCount(activeModelConfig.value?.contextWindowTokens ?? activeProviderConfig.value?.contextWindowTokens) ?? 0);
-const actualContextTokens = computed(() => latestActualModelTotalTokens(conversationTimeline.currentMessages) ?? 0);
+const resolvedContextUsage = computed(() => resolveContextUsage({
+  messages: conversationTimeline.currentMessages,
+  llmInvocations: clientState.llmInvocations,
+  messageLlmInvocationLinks: clientState.messageLlmInvocationLinks,
+  providerConfigs: globalSettings.llmProviderConfigs.configs,
+  compressionSettings: globalSettings.llmCompression,
+  compressionConfigs: globalSettings.llmCompressionConfigs.configs
+}));
+const usageProviderConfig = computed(() => resolvedContextUsage.value.providerConfig);
+const usageModelId = computed(() => resolvedContextUsage.value.modelId ?? '');
+const usageModelConfig = computed(() => resolvedContextUsage.value.modelConfig);
+const usageCompressionTrigger = computed(() => resolvedContextUsage.value.compressionTrigger);
+const contextWindowTokens = computed(() => normalizeTokenCount(resolvedContextUsage.value.contextWindowTokens) ?? 0);
+const actualContextTokens = computed(() => resolvedContextUsage.value.totalTokens ?? 0);
 const hasContextUsage = computed(() => contextWindowTokens.value > 0 && actualContextTokens.value > 0);
 const contextUsageRatio = computed(() => hasContextUsage.value ? actualContextTokens.value / contextWindowTokens.value : 0);
 const contextUsageFillRatio = computed(() => clamp(contextUsageRatio.value, 0, 1));
 const contextUsagePercent = computed(() => contextUsageRatio.value * 100);
 const contextUsagePercentText = computed(() => formatPercent(contextUsagePercent.value));
-const compressionThresholdPercent = computed(() => resolveCompressionThresholdPercent(activeCompressionTrigger.value, contextWindowTokens.value));
-const compressionThresholdTokens = computed(() => resolveCompressionThresholdTokens(activeCompressionTrigger.value, contextWindowTokens.value, compressionThresholdPercent.value));
-const compressionThresholdPercentText = computed(() => formatPercent(compressionThresholdPercent.value));
-const hasThresholdZone = computed(() => compressionThresholdPercent.value < 100);
-const contextOverThreshold = computed(() => hasContextUsage.value && contextUsagePercent.value >= compressionThresholdPercent.value);
+const hasCompressionThreshold = computed(() => usageCompressionTrigger.value !== undefined && contextWindowTokens.value > 0);
+const compressionThresholdPercent = computed(() => hasCompressionThreshold.value
+  ? resolveCompressionThresholdPercent(usageCompressionTrigger.value, contextWindowTokens.value)
+  : 0);
+const compressionThresholdTokens = computed(() => hasCompressionThreshold.value
+  ? resolveCompressionThresholdTokens(usageCompressionTrigger.value, contextWindowTokens.value, compressionThresholdPercent.value)
+  : 0);
+const compressionThresholdPercentText = computed(() => hasCompressionThreshold.value ? formatPercent(compressionThresholdPercent.value) : '--');
+const hasThresholdZone = computed(() => hasCompressionThreshold.value && compressionThresholdPercent.value < 100);
+const contextOverThreshold = computed(() => hasContextUsage.value && hasCompressionThreshold.value && contextUsagePercent.value >= compressionThresholdPercent.value);
 const summaryPercentText = computed(() => `${contextUsagePercentText.value}（${compressionThresholdPercentText.value}）`);
 const summaryTitle = computed(() => contextSummaryTitle());
 const summaryFillStyle = computed(() => ({ width: usageBarWidth(contextUsageFillRatio.value, hasContextUsage.value) }));
@@ -152,74 +160,27 @@ function messageBarStyle(item: TokenUsageMessageEntry): Record<string, string> {
   return { height: usageBarHeight(item.ratio, item.total > 0) };
 }
 
-function latestActualModelTotalTokens(messages: MessageRecord[]): number | undefined {
-  const sortedMessages = [...messages].sort((left, right) => left.seq - right.seq || left.createdAt - right.createdAt || left.id.localeCompare(right.id));
-  for (let index = sortedMessages.length - 1; index >= 0; index -= 1) {
-    const message = sortedMessages[index];
-    if (message.role !== 'model' || !message.usageMetadata) continue;
-    const usage = normalizeTokenUsage(message.usageMetadata);
-    if (usage.sourceEstimated) continue;
-    if (usage.total !== undefined && usage.total > 0) return usage.total;
-  }
-  return undefined;
-}
-
-function activeProviderConfigForCurrentConversation(): LlmProviderConfigRecord | undefined {
-  const conversationProviderConfigId = conversationSettings.llm.conversationId === clientState.currentConversationId
-    ? conversationSettings.llm.activeProviderConfigId
-    : '';
-  return globalSettings.llmProviderConfigs.configs.find((config) => config.id === conversationProviderConfigId)
-    ?? globalSettings.llmProviderConfigs.configs.find((config) => config.id === globalSettings.llm.activeProviderConfigId)
-    ?? globalSettings.llmProviderConfigs.configs[0];
-}
-
-function selectedModelIdForProvider(config: LlmProviderConfigRecord | undefined): string {
-  if (!config) return '';
-  const conversationOverride = conversationSettings.llm.conversationId === clientState.currentConversationId
-    ? conversationSettings.llm.modelOverrides?.[config.id]?.trim()
-    : '';
-  if (conversationOverride && modelExistsInProvider(config, conversationOverride)) return conversationOverride;
-  return config.model?.trim() ?? '';
-}
-
-function modelConfigForProvider(config: LlmProviderConfigRecord | undefined, modelId: string): LlmProviderModelConfigRecord | undefined {
-  const id = modelId.trim();
-  if (!config || !id) return undefined;
-  return config.modelConfigs.find((candidate) => candidate.modelId === id);
-}
-
-function modelExistsInProvider(config: LlmProviderConfigRecord, modelId: string): boolean {
-  const id = modelId.trim();
-  if (!id) return false;
-  return config.model?.trim() === id || config.models.some((candidate) => candidate.id.trim() === id);
-}
-
-function compressionConfigForProvider(providerConfigId: string | undefined, modelId: string | undefined) {
-  const model = modelId?.trim();
-  const modelBinding = providerConfigId && model
-    ? globalSettings.llmCompression.modelBindings.find((item) => item.providerConfigId === providerConfigId && item.modelId === model)
-    : undefined;
-  const binding = providerConfigId
-    ? globalSettings.llmCompression.providerBindings.find((item) => item.providerConfigId === providerConfigId)
-    : undefined;
-  const configId = modelBinding?.compressionConfigId ?? binding?.compressionConfigId ?? globalSettings.llmCompression.defaultConfigId;
-  return globalSettings.llmCompressionConfigs.configs.find((config) => config.id === configId)
-    ?? globalSettings.llmCompressionConfigs.configs[0];
-}
-
 function contextSummaryTitle(): string {
   const lines: string[] = [];
-  const providerName = activeProviderConfig.value?.name?.trim();
-  if (providerName) lines.push(`渠道：${providerName}`);
-  const modelName = activeModelDisplayName();
-  if (modelName) lines.push(`模型：${modelName}${activeModelConfig.value ? '（模型专属配置）' : ''}`);
+  const providerName = usageProviderConfig.value?.name?.trim()
+    || resolvedContextUsage.value.invocation?.settings?.providerConfigName?.trim();
+  if (providerName) lines.push(`本次调用渠道：${providerName}`);
+  const modelName = usageModelDisplayName();
+  if (modelName) lines.push(`本次调用模型：${modelName}${usageModelConfig.value ? '（模型专属配置）' : ''}`);
   lines.push(contextWindowTokens.value > 0 ? `上下文窗口：${formatTokenNumber(contextWindowTokens.value)} token` : '上下文窗口：未设置');
   lines.push(
     hasContextUsage.value
       ? `当前上下文：${formatTokenNumber(actualContextTokens.value)} token（${contextUsagePercentText.value}）`
       : '当前上下文：暂无实际模型 total token'
   );
-  lines.push(`触发阈值：${formatTokenNumber(compressionThresholdTokens.value)} token（${compressionThresholdPercentText.value}）`);
+  lines.push(hasCompressionThreshold.value
+    ? `触发阈值：${formatTokenNumber(compressionThresholdTokens.value)} token（${compressionThresholdPercentText.value}）`
+    : '触发阈值：历史调用配置不可用');
+  if (resolvedContextUsage.value.settingsSource === 'message_model') {
+    lines.push('配置来源：按该条消息实际模型匹配当前配置（历史 invocation 快照不可用）');
+  } else if (resolvedContextUsage.value.settingsSource === 'invocation') {
+    lines.push('配置来源：该条消息对应的 invocation 快照');
+  }
   lines.push('用户消息预估 token 不参与此进度条，仅用于明细估算显示');
   if (latestUsage.value) {
     lines.push('');
@@ -229,10 +190,13 @@ function contextSummaryTitle(): string {
   return lines.join('\n');
 }
 
-function activeModelDisplayName(): string {
-  const modelId = activeModelId.value;
-  if (!modelId) return '';
-  const model = activeProviderConfig.value?.models.find((candidate) => candidate.id === modelId);
+function usageModelDisplayName(): string {
+  const snapshot = resolvedContextUsage.value.invocation?.settings;
+  const modelId = usageModelId.value;
+  const snapshotLabel = snapshot?.displayModelName?.trim() || snapshot?.modelName?.trim();
+  if (snapshotLabel) return modelId && snapshotLabel !== modelId ? `${snapshotLabel} (${modelId})` : snapshotLabel;
+  if (!modelId) return resolvedContextUsage.value.message?.model?.trim() ?? '';
+  const model = usageProviderConfig.value?.models.find((candidate) => candidate.id === modelId);
   const label = model?.name?.trim() || modelId;
   return label === modelId ? label : `${label} (${modelId})`;
 }

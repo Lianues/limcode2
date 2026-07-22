@@ -16,6 +16,7 @@ import type { ToolSchema } from '../world/modules/llm/contracts';
 import { toolDefinitionRecord, type ToolDefinition } from '../world/modules/tools/registry';
 import type { RuntimeEnv } from './RuntimeEnv';
 import { McpRuntimeManager } from './mcpRuntimeManager';
+import { applyModelSpecificConfig, applyRequestedModelOverride, modelExistsInConfig } from './llmSettingsResolution';
 
 export interface RuntimeEnvSetup {
   env: RuntimeEnv;
@@ -39,14 +40,12 @@ export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSe
       const override = request?.model;
       const overrideConfig = override?.providerConfigId ? await storage.loadLlmProviderConfigById(override.providerConfigId) : undefined;
       const base = overrideConfig ?? await storage.loadActiveLlmProviderConfig(request?.conversationId);
-      const overrideModel = override?.model?.trim();
-      const canUseOverrideModel = !!overrideModel && (!override?.providerConfigId || !!overrideConfig) && modelExistsInConfig(base, overrideModel);
-      const resolved = {
-        ...base,
-        ...(canUseOverrideModel && override?.provider ? { provider: override.provider } : {}),
-        ...(canUseOverrideModel ? { model: overrideModel } : {})
-      };
-      const withConversationModel = await applyConversationModelOverride(storage, request?.conversationId, resolved);
+      const requested = applyRequestedModelOverride(base, override, !!overrideConfig);
+      // ChatSend / retry / edit 已显式携带本次选择的模型时，以请求值为权威。
+      // 不能再用可能尚未落盘或迟到的 conversation override 把刚选择的模型覆盖回旧值。
+      const withConversationModel = requested.applied
+        ? requested.config
+        : await applyConversationModelOverride(storage, request?.conversationId, requested.config);
       return applyModelSpecificConfig(withConversationModel);
     },
     compressionSettings: async (request) => {
@@ -118,36 +117,6 @@ async function applyConversationModelOverride(
   const model = settings?.modelOverrides?.[config.id]?.trim();
   if (!model || model === config.model || !modelExistsInConfig(config, model)) return config;
   return { ...config, model };
-}
-
-function applyModelSpecificConfig(config: LlmProviderConfigRecord): LlmProviderConfigRecord {
-  const modelId = config.model.trim();
-  const modelConfig = modelId ? config.modelConfigs.find((candidate) => candidate.modelId === modelId) : undefined;
-  if (!modelConfig) return config;
-  const next: LlmProviderConfigRecord = {
-    ...config,
-    toolCallFormat: modelConfig.toolCallFormat,
-    stream: modelConfig.stream,
-    retryOnError: modelConfig.retryOnError,
-    retryMaxAttempts: modelConfig.retryMaxAttempts,
-    enableMultimodalTools: modelConfig.enableMultimodalTools,
-    contextWindowTokens: modelConfig.contextWindowTokens,
-    promptCache: modelConfig.promptCache
-  };
-
-  if (modelConfig.headers) next.headers = modelConfig.headers;
-  else delete next.headers;
-  if (modelConfig.generationConfig) next.generationConfig = modelConfig.generationConfig;
-  else delete next.generationConfig;
-  if (modelConfig.requestBody) next.requestBody = modelConfig.requestBody;
-  else delete next.requestBody;
-  return next;
-}
-
-function modelExistsInConfig(config: LlmProviderConfigRecord, model: string): boolean {
-  const id = model.trim();
-  if (!id) return false;
-  return config.model?.trim() === id || config.models.some((candidate) => candidate.id.trim() === id);
 }
 
 async function resolveSnapshotLlmProviderConfig(

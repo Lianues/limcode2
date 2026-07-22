@@ -49,6 +49,7 @@ export class MainPanel {
     context.subscriptions.push(
       vscode.window.registerWebviewPanelSerializer(MainPanel.viewType, {
         async deserializeWebviewPanel(webviewPanel, state) {
+          webviewPanel.iconPath = MainPanel.panelIconPath(context.extensionUri);
           const options = optionsFromSerializedState(state, webviewPanel.title);
           MainPanel.revive(webviewPanel, context.extensionUri, backendApp, options);
         }
@@ -79,6 +80,8 @@ export class MainPanel {
       column,
       MainPanel.webviewPanelOptions(extensionUri)
     );
+    // VS Code does not expose iconPath in createWebviewPanel options, so apply it immediately.
+    panel.iconPath = MainPanel.panelIconPath(extensionUri);
 
     MainPanel.revive(panel, extensionUri, backendApp, options);
   }

@@ -19,12 +19,24 @@ import {
   cleanupInactiveStorageGenerations,
   createStorageGenerationLocation,
   isSafeStorageGenerationId,
+  listStorageGenerations,
   STORAGE_GENERATIONS_DIR
 } from './storageGeneration';
 
 const DEFAULT_PAGE_SIZE = 50;
 const PAGES_DIR = 'pages';
 const READER_MAX_ATTEMPTS = 3;
+const HISTORY_PAGE_FILE_PATTERN = /^\d{6}\.json$/;
+
+class MissingIndexedConversationHistoryPageError extends Error {
+  public readonly pageUri: vscode.Uri;
+
+  public constructor(pageUri: vscode.Uri) {
+    super(`Indexed conversation history page is missing: ${pageUri.fsPath}`);
+    this.name = 'MissingIndexedConversationHistoryPageError';
+    this.pageUri = pageUri;
+  }
+}
 
 interface ConversationHistoryIndexFile {
   schemaVersion: typeof STORAGE_VERSION;
@@ -153,7 +165,13 @@ async function loadCanonicalProjectionForWrite(paths: StoragePaths): Promise<Con
   }
 
   const snapshot = parseCanonicalIndex(result.value, indexUri);
-  return loadProjectionFromIndex(paths.conversationHistoryRootUri, snapshot.index);
+  try {
+    return await loadProjectionFromIndex(paths.conversationHistoryRootUri, snapshot.index);
+  } catch (error) {
+    if (!isMissingIndexedHistoryPageError(error)) throw error;
+    console.warn(`[LimCode] Conversation history index references a missing page; rebuilding from retained generations. ${formatErrorMessage(error)}`);
+    return recoverProjectionAfterMissingIndexedPages(paths.conversationHistoryRootUri, snapshot.index);
+  }
 }
 
 async function loadCanonicalProjectionForUi(paths: StoragePaths): Promise<ConversationHistoryCanonicalProjection | undefined> {
@@ -173,6 +191,10 @@ async function loadCanonicalProjectionForUi(paths: StoragePaths): Promise<Conver
       projection = await loadProjectionFromIndex(rootUri, initial.index);
     } catch (error) {
       if (attempt < READER_MAX_ATTEMPTS && await indexGenerationChanged(rootUri, initial.index.generation)) continue;
+      if (isMissingIndexedHistoryPageError(error)) {
+        console.warn(`[LimCode] Conversation history index references a missing page; using recovered projection for UI. ${formatErrorMessage(error)}`);
+        return recoverProjectionAfterMissingIndexedPages(rootUri, initial.index);
+      }
       console.warn('[LimCode] Failed to load conversation history pages:', error);
       return undefined;
     }
@@ -218,9 +240,14 @@ async function indexGenerationChanged(rootUri: vscode.Uri, generation: string): 
   return !!current && current.index.generation !== generation;
 }
 
+interface LoadProjectionFromIndexOptions {
+  allowMissingPages?: boolean;
+}
+
 async function loadProjectionFromIndex(
   rootUri: vscode.Uri,
-  index: ConversationHistoryIndexFile
+  index: ConversationHistoryIndexFile,
+  options: LoadProjectionFromIndexOptions = {}
 ): Promise<ConversationHistoryCanonicalProjection> {
   const entries: SidebarConversationHistoryEntry[] = [];
   const originLinks: ConversationOriginLinkRecord[] = [];
@@ -230,7 +257,10 @@ async function loadProjectionFromIndex(
   for (const pageRecord of index.pages) {
     const pageUri = vscode.Uri.joinPath(rootUri, ...pageRecord.file.split('/'));
     const result = await readJsonStrict<unknown>(pageUri);
-    if (result.status === 'missing') throw new Error(`Indexed conversation history page is missing: ${pageUri.fsPath}`);
+    if (result.status === 'missing') {
+      if (options.allowMissingPages) continue;
+      throw new MissingIndexedConversationHistoryPageError(pageUri);
+    }
     if (result.status === 'invalid') throw new Error(`Indexed conversation history page JSON is invalid: ${pageUri.fsPath}`);
     if (result.status === 'ioError') throw new Error(`Failed to read indexed conversation history page: ${pageUri.fsPath}`);
 
@@ -244,12 +274,123 @@ async function loadProjectionFromIndex(
     totalFromPages += page.entries.length;
   }
 
-  if (totalFromPages !== index.total) {
+  if (totalFromPages !== index.total && !options.allowMissingPages) {
     throw new Error(`Conversation history index total does not match pages: ${index.total} !== ${totalFromPages}`);
   }
 
   return { entries, originLinks, generation: index.generation };
 }
+
+async function recoverProjectionAfterMissingIndexedPages(
+  rootUri: vscode.Uri,
+  index: ConversationHistoryIndexFile
+): Promise<ConversationHistoryCanonicalProjection> {
+  const retained = await loadLatestCompleteGenerationProjection(rootUri, index.generation);
+  const partial = await loadPartialProjectionFromIndex(rootUri, index);
+  if (retained && partial) return mergeConversationHistoryProjections(retained, partial);
+  if (retained) return retained;
+  if (partial) return partial;
+  return { entries: [], originLinks: [], generation: index.generation };
+}
+
+async function loadPartialProjectionFromIndex(
+  rootUri: vscode.Uri,
+  index: ConversationHistoryIndexFile
+): Promise<ConversationHistoryCanonicalProjection | undefined> {
+  try {
+    const projection = await loadProjectionFromIndex(rootUri, index, { allowMissingPages: true });
+    return projection.entries.length > 0 || projection.originLinks.length > 0 ? projection : undefined;
+  } catch (error) {
+    console.warn('[LimCode] Failed to salvage remaining conversation history pages from indexed generation:', error);
+    return undefined;
+  }
+}
+
+async function loadLatestCompleteGenerationProjection(
+  rootUri: vscode.Uri,
+  excludedGeneration: string
+): Promise<ConversationHistoryCanonicalProjection | undefined> {
+  const generations = await listStorageGenerations(rootUri);
+  for (const generation of generations.reverse()) {
+    if (generation.id === excludedGeneration) continue;
+    const projection = await tryLoadProjectionFromGenerationPages(rootUri, generation.id);
+    if (projection) return projection;
+  }
+  return undefined;
+}
+
+async function tryLoadProjectionFromGenerationPages(
+  rootUri: vscode.Uri,
+  generation: string
+): Promise<ConversationHistoryCanonicalProjection | undefined> {
+  const pagesRoot = vscode.Uri.joinPath(rootUri, STORAGE_GENERATIONS_DIR, generation, PAGES_DIR);
+  let directoryEntries: [string, vscode.FileType][];
+  try {
+    directoryEntries = await vscode.workspace.fs.readDirectory(pagesRoot);
+  } catch (error) {
+    if (isFileNotFoundError(error)) return undefined;
+    throw error;
+  }
+
+  const files = directoryEntries
+    .filter(([name, type]) => type === vscode.FileType.File && HISTORY_PAGE_FILE_PATTERN.test(name))
+    .map(([name]) => name)
+    .sort();
+  if (files.length === 0) return undefined;
+  for (let index = 0; index < files.length; index += 1) {
+    if (files[index] !== `${index.toString().padStart(6, '0')}.json`) return undefined;
+  }
+
+  const entries: SidebarConversationHistoryEntry[] = [];
+  const originLinks: ConversationOriginLinkRecord[] = [];
+  const seenEntryIds = new Set<string>();
+  try {
+    for (const file of files) {
+      const pageUri = vscode.Uri.joinPath(pagesRoot, file);
+      const result = await readJsonStrict<unknown>(pageUri);
+      if (result.status !== 'ok') return undefined;
+      const page = parseStandaloneGenerationPage(result.value, pageUri, generation);
+      for (const entry of page.entries) {
+        if (seenEntryIds.has(entry.id)) return undefined;
+        seenEntryIds.add(entry.id);
+        entries.push(entry);
+      }
+      originLinks.push(...page.originLinks);
+    }
+  } catch (error) {
+    console.warn(`[LimCode] Failed to read retained conversation history generation ${generation}:`, error);
+    return undefined;
+  }
+
+  return { entries, originLinks, generation };
+}
+
+function mergeConversationHistoryProjections(
+  base: ConversationHistoryCanonicalProjection,
+  overlay: ConversationHistoryCanonicalProjection
+): ConversationHistoryCanonicalProjection {
+  const entriesById = new Map<string, SidebarConversationHistoryEntry>();
+  for (const entry of base.entries) entriesById.set(entry.id, { ...entry });
+  for (const entry of overlay.entries) entriesById.set(entry.id, { ...entry });
+  const entryIds = new Set(entriesById.keys());
+  return {
+    entries: [...entriesById.values()],
+    originLinks: [...base.originLinks, ...overlay.originLinks]
+      .filter((link) => entryIds.has(link.conversationId))
+      .map((link) => ({ ...link })),
+    generation: base.generation ?? overlay.generation
+  };
+}
+
+function isMissingIndexedHistoryPageError(error: unknown): error is MissingIndexedConversationHistoryPageError {
+  return error instanceof MissingIndexedConversationHistoryPageError;
+}
+
+function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+
 
 async function writeCanonicalProjection(
   paths: StoragePaths,
@@ -488,6 +629,43 @@ function parseCanonicalPage(
     originLinks
   };
 }
+
+function parseStandaloneGenerationPage(
+  value: unknown,
+  uri: vscode.Uri,
+  generation: string
+): ConversationHistoryPageFile {
+  const page = value as Partial<ConversationHistoryPageFile> | undefined;
+  if (!isPlainObject(page)) throw new Error(`Conversation history page must be an object: ${uri.fsPath}`);
+  if (!hasOnlyKeys(page, ['schemaVersion', 'savedAt', 'generation', 'entries', 'originLinks'])) {
+    throw new Error(`Conversation history page has unknown fields: ${uri.fsPath}`);
+  }
+  if (page.schemaVersion !== STORAGE_VERSION) throw new Error(`Unsupported conversation history page schema: ${uri.fsPath}`);
+  if (typeof page.savedAt !== 'string' || !page.savedAt.trim()) throw new Error(`Conversation history page savedAt is invalid: ${uri.fsPath}`);
+  if (page.generation !== generation) throw new Error(`Conversation history page generation mismatch: ${uri.fsPath}`);
+  if (!Array.isArray(page.entries)) throw new Error(`Conversation history page entries are invalid: ${uri.fsPath}`);
+  if (!Array.isArray(page.originLinks)) throw new Error(`Conversation history page originLinks are invalid: ${uri.fsPath}`);
+
+  const entries: SidebarConversationHistoryEntry[] = [];
+  for (const entry of page.entries) {
+    if (!isSidebarConversationHistoryEntry(entry)) throw new Error(`Conversation history page entry is invalid: ${uri.fsPath}`);
+    entries.push({ ...entry });
+  }
+  const originLinks: ConversationOriginLinkRecord[] = [];
+  for (const link of page.originLinks) {
+    if (!isConversationOriginLinkRecord(link)) throw new Error(`Conversation history page origin link is invalid: ${uri.fsPath}`);
+    originLinks.push({ ...link });
+  }
+
+  return {
+    schemaVersion: STORAGE_VERSION,
+    savedAt: page.savedAt,
+    generation,
+    entries,
+    originLinks
+  };
+}
+
 
 async function findExistingHistoryProjectionTraces(rootUri: vscode.Uri): Promise<string[]> {
   try {

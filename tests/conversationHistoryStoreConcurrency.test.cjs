@@ -454,6 +454,33 @@ if (process.argv[2] === '--worker') {
     }
   });
 
+  test('index 引用的页面缺失时用保留 generation 恢复并允许继续写入', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-history-'));
+    try {
+      const paths = makePaths(tempRoot);
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('retained-before-missing', 1));
+      const retained = await readCanonicalProjection(tempRoot);
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('lost-current-page-entry', 2));
+      const broken = await readCanonicalProjection(tempRoot);
+      assert.notEqual(broken.index.generation, retained.index.generation);
+
+      const missingPagePath = path.join(historyRoot(tempRoot), ...broken.index.pages[0].file.split('/'));
+      await fs.rm(missingPagePath, { force: true });
+
+      const recoveredPage = await loadConversationHistoryPageFromStore(paths, { scope: { kind: 'all' }, limit: 10 });
+      assert.deepEqual(recoveredPage.entries.map((entry) => entry.id), ['retained-before-missing']);
+
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('after-missing-page', 3));
+      const healed = await readCanonicalProjection(tempRoot);
+      assert.deepEqual(new Set(healed.entries.map((entry) => entry.id)), new Set(['retained-before-missing', 'after-missing-page']));
+      assert.notEqual(healed.index.generation, broken.index.generation);
+      assert.equal((await listGenerationIds(tempRoot)).includes(broken.index.generation), false);
+    } finally {
+      await removeTempRoot(tempRoot);
+    }
+  });
+
+
   test('故障注入：页面写入成功但 index 发布失败后旧 50 条仍完整', async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-history-'));
     try {

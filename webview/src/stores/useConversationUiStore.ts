@@ -418,6 +418,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     cancelEditMode,
     setComposerDraft,
     clearChatDraft,
+    clearExitState,
     llmErrorBlocksForMessage,
     applyLlmTransientNotice,
     removeLlmErrorBlock,

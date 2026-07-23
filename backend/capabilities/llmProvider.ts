@@ -44,6 +44,7 @@ import type {
   LlmProviderHeadersRecord,
   LlmProviderKind,
   LlmProviderModelRecord,
+  LlmOpenAIResponsesTransport,
   LlmPromptCacheConfigRecord,
   LlmPromptCacheMode,
   LlmPromptCacheTtl,
@@ -240,6 +241,7 @@ export async function startLlmProvider(
       ...(headers ? { headers } : {}),
       ...(requestBody ? { requestBody } : {}),
       ...unifiedPromptCacheConfigEntry(settings, requestBody),
+      ...openAIResponsesWebSocketConfigEntry(settings, request.conversationId),
       ...(proxy ? { proxy, fetch: proxyFetch } : {})
     }, registry.llmProviders);
 
@@ -314,7 +316,8 @@ async function runLlmAttempt(
   retryRecoveryNotice?: LlmAttemptRetryRecoveryNotice
 ): Promise<void> {
   const preparedRequest = await prepareLlmStartRequestMultimodal(request, options);
-  if (settings.stream === false) {
+  const forceStreaming = isOpenAIResponsesWebSocketMode(settings);
+  if (settings.stream === false && !forceStreaming) {
     const response = await provider.chat<UnifiedLLMResponse>(toUnifiedRequest(preparedRequest, settings.generationConfig), {
       inputFormat: 'unified',
       outputFormat: 'unified',
@@ -569,6 +572,7 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
     ...(headers ? { headers } : {}),
     ...(requestBody ? { requestBody } : {}),
     ...unifiedPromptCacheConfigEntry(runtimeSettings, requestBody),
+    ...openAIResponsesWebSocketConfigEntry(runtimeSettings, request.conversationId),
     ...(proxy ? { proxy, fetch: proxyFetch } : {})
   }, registry.llmProviders);
 
@@ -581,25 +585,31 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
   const result = await dryRun.call(provider, toUnifiedRequest(preparedRequest, runtimeSettings.generationConfig), {
     inputFormat: 'unified',
     outputFormat: 'unified',
-    stream: runtimeSettings.stream !== false,
+    stream: runtimeSettings.stream !== false || isOpenAIResponsesWebSocketMode(runtimeSettings),
     curl: { includeApiKey: dryRunOptions.includeApiKey === true, prettyBody: true }
   });
+  const displayResult = isOpenAIResponsesWebSocketMode(runtimeSettings)
+    ? openAIResponsesWebSocketDryRunResult(result, dryRunOptions.includeApiKey === true)
+    : {
+      ...result,
+      maskedCurl: unified.formatRequestAsCurl(result.url, result.headers, result.body, { includeApiKey: false, prettyBody: true })
+    };
 
   return {
     provider: runtimeSettings.provider,
     model: runtimeSettings.model,
-    providerName: result.providerName,
-    url: result.url,
-    method: result.method,
-    stream: result.stream,
-    headers: result.headers,
-    body: result.body,
-    bodyText: result.bodyText,
-    curl: result.curl,
-    maskedCurl: unified.formatRequestAsCurl(result.url, result.headers, result.body, { includeApiKey: false, prettyBody: true }),
-    inputFormat: result.inputFormat,
-    outputFormat: result.outputFormat,
-    generatedAt: result.timestamp,
+    providerName: displayResult.providerName,
+    url: displayResult.url,
+    method: displayResult.method,
+    stream: displayResult.stream,
+    headers: displayResult.headers,
+    body: displayResult.body,
+    bodyText: displayResult.bodyText,
+    curl: displayResult.curl,
+    maskedCurl: displayResult.maskedCurl,
+    inputFormat: displayResult.inputFormat,
+    outputFormat: displayResult.outputFormat,
+    generatedAt: displayResult.timestamp,
     maskedSecrets: dryRunOptions.includeApiKey !== true || !apiKeyAvailable,
     apiKeyAvailable
   };
@@ -1323,6 +1333,7 @@ function normalizeSettings(settings: LlmProviderConfigRecord | undefined): LlmPr
     models: settings?.models ?? [],
     apiKey: settings?.apiKey?.trim() ?? '',
     toolCallFormat: normalizeToolCallFormat(settings?.toolCallFormat),
+    openaiResponsesTransport: normalizeOpenAIResponsesTransport(settings?.openaiResponsesTransport),
     stream: settings?.stream !== false,
     retryOnError: settings?.retryOnError !== false ? DEFAULT_LLM_RETRY_ON_ERROR : false,
     retryMaxAttempts,
@@ -1359,6 +1370,7 @@ function snapshotFromSettings(settings: LlmProviderConfigRecord, compressionConf
     ...(modelId ? { modelId } : {}),
     ...(modelName ? { modelName, displayModelName: modelName } : {}),
     toolCallFormat: settings.toolCallFormat,
+    openaiResponsesTransport: settings.openaiResponsesTransport,
     stream: settings.stream !== false,
     retryOnError: settings.retryOnError !== false,
     retryMaxAttempts: normalizeRetryMaxAttempts(settings.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
@@ -1408,6 +1420,10 @@ function normalizeProvider(provider: LlmProviderKind | undefined): LlmProviderKi
 
 function normalizeToolCallFormat(format: LlmToolCallFormat | undefined): LlmToolCallFormat {
   return format === 'function-call' ? format : 'function-call';
+}
+
+function normalizeOpenAIResponsesTransport(value: unknown): LlmOpenAIResponsesTransport {
+  return value === 'websocket' ? 'websocket' : 'http';
 }
 
 function normalizePromptCache(input: LlmPromptCacheConfigRecord | undefined, provider: LlmProviderKind): LlmPromptCacheConfigRecord {
@@ -1479,6 +1495,79 @@ function createOpenAIPromptCacheKey(settings: LlmProviderConfigRecord, conversat
       settings.id,
       settings.model,
       conversationId
+    ].join('\n'))
+    .digest('hex')
+    .slice(0, 32);
+}
+
+function openAIResponsesWebSocketConfigEntry(settings: LlmProviderConfigRecord, conversationId?: string): Record<string, unknown> {
+  if (!isOpenAIResponsesWebSocketMode(settings)) return {};
+  return {
+    transport: 'websocket',
+    webSocketSessionKey: createOpenAIResponsesWebSocketSessionKey(settings, conversationId)
+  };
+}
+
+function openAIResponsesWebSocketDryRunResult(result: UnifiedDryRunResult, includeApiKey: boolean): UnifiedDryRunResult & { maskedCurl: string } {
+  const url = toWebSocketUrl(result.url);
+  const body = openAIResponsesWebSocketDryRunPayload(result.body);
+  const headers = result.headers;
+  return {
+    ...result,
+    providerName: `${result.providerName} WebSocket`,
+    url,
+    body,
+    bodyText: stringifyJsonPretty(body),
+    curl: formatWebSocketDryRun(url, includeApiKey ? headers : maskSensitiveHeaders(headers), body),
+    maskedCurl: formatWebSocketDryRun(url, maskSensitiveHeaders(headers), body)
+  };
+}
+
+function openAIResponsesWebSocketDryRunPayload(body: unknown): Record<string, unknown> {
+  const record = isRecord(body) ? { ...body } : {};
+  delete record.type;
+  delete record.stream;
+  delete record.background;
+  delete record.previous_response_id;
+  return { type: 'response.create', ...record, store: false };
+}
+
+function formatWebSocketDryRun(url: string, headers: Record<string, string>, body: unknown): string {
+  return [
+    '# WebSocket mode：先建立连接，再发送 response.create JSON 事件。',
+    `CONNECT ${url}`,
+    '',
+    '# Headers',
+    stringifyJsonPretty(headers),
+    '',
+    '# Send',
+    stringifyJsonPretty(body)
+  ].join('\n');
+}
+
+function toWebSocketUrl(url: string): string {
+  const parsed = new URL(url);
+  if (parsed.protocol === 'https:') parsed.protocol = 'wss:';
+  else if (parsed.protocol === 'http:') parsed.protocol = 'ws:';
+  return parsed.toString();
+}
+
+function stringifyJsonPretty(value: unknown): string {
+  try { return JSON.stringify(value, null, 2); } catch { return String(value); }
+}
+
+function isOpenAIResponsesWebSocketMode(settings: LlmProviderConfigRecord): boolean {
+  return settings.provider === 'openai-responses' && settings.openaiResponsesTransport === 'websocket';
+}
+
+function createOpenAIResponsesWebSocketSessionKey(settings: LlmProviderConfigRecord, conversationId?: string): string {
+  return createHash('sha256')
+    .update([
+      'openai-responses-websocket',
+      settings.id,
+      settings.baseUrl,
+      settings.model,
+      conversationId?.trim() || 'global'
     ].join('\n'))
     .digest('hex')
     .slice(0, 32);

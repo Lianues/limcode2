@@ -492,6 +492,7 @@ export interface SubmitPlanToolOutputRecord {
 
 export type LlmProviderKind = 'openai-compatible' | 'openai-responses' | 'claude' | 'gemini' | 'deepseek';
 export type LlmToolCallFormat = 'function-call';
+export type LlmOpenAIResponsesTransport = 'http' | 'websocket';
 export type LlmPromptCacheTtl = '5m' | '30m' | '1h';
 /**
  * LimCode 暴露的 Prompt Cache 请求模式。
@@ -700,6 +701,7 @@ export interface LlmProviderModelConfigRecord {
   /** 绑定当前渠道模型列表中的模型 ID。 */
   modelId: string;
   toolCallFormat: LlmToolCallFormat;
+  openaiResponsesTransport: LlmOpenAIResponsesTransport;
   stream: boolean;
   /** 请求报错时是否自动重试。 */
   retryOnError: boolean;
@@ -724,6 +726,7 @@ export interface LlmProviderConfigRecord {
   models: LlmProviderModelRecord[];
   apiKey: string;
   toolCallFormat: LlmToolCallFormat;
+  openaiResponsesTransport: LlmOpenAIResponsesTransport;
   stream: boolean;
   /** 请求报错时是否自动重试。 */
   retryOnError: boolean;
@@ -756,6 +759,7 @@ export interface LlmInvocationSettingsSnapshotRecord {
   modelName?: string;
   displayModelName?: string;
   toolCallFormat?: LlmToolCallFormat;
+  openaiResponsesTransport?: LlmOpenAIResponsesTransport;
   stream?: boolean;
   retryOnError?: boolean;
   retryMaxAttempts?: number;

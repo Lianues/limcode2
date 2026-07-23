@@ -35,6 +35,7 @@ export function applyModelSpecificConfig(config: LlmProviderConfigRecord): LlmPr
   const next: LlmProviderConfigRecord = {
     ...config,
     toolCallFormat: modelConfig.toolCallFormat,
+    openaiResponsesTransport: modelConfig.openaiResponsesTransport,
     stream: modelConfig.stream,
     retryOnError: modelConfig.retryOnError,
     retryMaxAttempts: modelConfig.retryMaxAttempts,

@@ -54,7 +54,7 @@ const providerOptions: SettingsDropdownOption[] = [
 
 type AdvancedConfigPatch = Partial<Pick<
   LlmProviderConfigRecord,
-  'toolCallFormat' | 'stream' | 'retryOnError' | 'retryMaxAttempts' | 'enableMultimodalTools'
+  'toolCallFormat' | 'openaiResponsesTransport' | 'stream' | 'retryOnError' | 'retryMaxAttempts' | 'enableMultimodalTools'
 >>;
 
 const activeConfig = computed(() => settings.activeLlmProviderConfig);
@@ -203,6 +203,7 @@ function modelConfigAsProviderConfig(modelConfig: LlmProviderModelConfigRecord):
     models: base?.models ?? [],
     apiKey: base?.apiKey ?? '',
     toolCallFormat: modelConfig.toolCallFormat,
+    openaiResponsesTransport: modelConfig.openaiResponsesTransport,
     stream: modelConfig.stream,
     retryOnError: modelConfig.retryOnError,
     retryMaxAttempts: modelConfig.retryMaxAttempts,

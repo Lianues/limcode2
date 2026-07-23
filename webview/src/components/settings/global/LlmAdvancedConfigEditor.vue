@@ -8,6 +8,7 @@ import {
   isPromptCacheSupportedProvider,
   type LlmGenerationConfigRecord,
   type LlmProviderConfigRecord,
+  type LlmOpenAIResponsesTransport,
   type LlmPromptCacheConfigRecord,
   type LlmPromptCacheMode,
   type LlmPromptCacheTtl,
@@ -24,7 +25,7 @@ const TOKEN_STEP = 1_000;
 
 type AdvancedConfigPatch = Partial<Pick<
   LlmProviderConfigRecord,
-  'toolCallFormat' | 'stream' | 'retryOnError' | 'retryMaxAttempts' | 'enableMultimodalTools'
+  'toolCallFormat' | 'openaiResponsesTransport' | 'stream' | 'retryOnError' | 'retryMaxAttempts' | 'enableMultimodalTools'
 >>;
 
 const props = defineProps<{
@@ -42,6 +43,18 @@ const emit = defineEmits<{
 
 const toolCallFormatOptions: SettingsDropdownOption[] = [
   { value: 'function-call', label: 'Function Call' }
+];
+const openaiResponsesTransportOptions: SettingsDropdownOption[] = [
+  {
+    value: 'http',
+    label: 'HTTP',
+    description: '每次请求按当前本地上下文发送完整 input，使用普通 Responses HTTP/SSE。'
+  },
+  {
+    value: 'websocket',
+    label: 'WebSocket',
+    description: '保持连接并用 previous_response_id 发送增量 input；断线或记录变更后自动全量重建。'
+  }
 ];
 const promptCacheSupported = computed(() => isPromptCacheSupportedProvider(props.config.provider));
 const promptCache = computed<LlmPromptCacheConfigRecord>(() => props.config.promptCache ?? {
@@ -116,6 +129,10 @@ function updateToolCallFormat(value: string): void {
   emit('update-field', { toolCallFormat: value as LlmToolCallFormat });
 }
 
+function updateOpenAIResponsesTransport(value: string): void {
+  emit('update-field', { openaiResponsesTransport: (value === 'websocket' ? 'websocket' : 'http') as LlmOpenAIResponsesTransport });
+}
+
 function updatePromptCacheEnabled(enabled: boolean): void {
   emit('update-prompt-cache', {
     ...promptCache.value,
@@ -162,6 +179,17 @@ function normalizePromptCacheTtl(value: string | undefined): LlmPromptCacheTtl {
         title="选择工具调用格式"
         @update:model-value="updateToolCallFormat"
       />
+    </label>
+
+    <label v-if="config.provider === 'openai-responses'" class="global-settings-field openai-responses-transport-field">
+      <span>连接模式</span>
+      <SettingsDropdown
+        :model-value="config.openaiResponsesTransport ?? 'http'"
+        :options="openaiResponsesTransportOptions"
+        title="选择 OpenAI Responses 连接模式"
+        @update:model-value="updateOpenAIResponsesTransport"
+      />
+      <span class="stream-checkbox-text">WebSocket 模式仍保持 store=false，本地聊天记录是断线、CRUD 和 cache miss 后重建上下文的依据。</span>
     </label>
 
     <label class="global-settings-field context-window-field">

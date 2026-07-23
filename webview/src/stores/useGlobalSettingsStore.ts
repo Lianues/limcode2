@@ -24,6 +24,7 @@ import {
   type LlmCompressionSettingsRecord,
   type LlmProviderKind,
   type LlmProviderHeadersRecord,
+  type LlmOpenAIResponsesTransport,
   type LlmProviderConfigRecord,
   type LlmProviderModelConfigRecord,
   type LlmProviderModelRecord,
@@ -189,6 +190,7 @@ function createDefaultProviderConfig(name = '新渠道配置', provider: LlmProv
     models: [],
     apiKey: '',
     toolCallFormat: 'function-call',
+    openaiResponsesTransport: 'http',
     stream: true,
     retryOnError: DEFAULT_LLM_RETRY_ON_ERROR,
     retryMaxAttempts: DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
@@ -210,6 +212,7 @@ function createModelConfigFromProviderConfig(config: LlmProviderConfigRecord, mo
     id: `llm-model-config-${slugId(modelId)}-${createMessageId()}`,
     modelId,
     toolCallFormat: config.toolCallFormat,
+    openaiResponsesTransport: normalizeOpenAIResponsesTransport(config.openaiResponsesTransport),
     stream: config.stream !== false,
     retryOnError: config.retryOnError !== false,
     retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
@@ -258,6 +261,7 @@ function normalizeProviderConfigForUi(config: LlmProviderConfigRecord): LlmProvi
     provider,
     model,
     models,
+    openaiResponsesTransport: normalizeOpenAIResponsesTransport(config.openaiResponsesTransport),
     stream: config.stream !== false,
     retryOnError: config.retryOnError !== false,
     retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
@@ -309,6 +313,7 @@ function normalizeModelConfigForUi(config: LlmProviderModelConfigRecord, modelId
     id: config.id?.trim() || `llm-model-config-${createMessageId()}`,
     modelId,
     toolCallFormat: config.toolCallFormat === 'function-call' ? config.toolCallFormat : 'function-call',
+    openaiResponsesTransport: normalizeOpenAIResponsesTransport(config.openaiResponsesTransport),
     stream: config.stream !== false,
     retryOnError: config.retryOnError !== false,
     retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
@@ -321,6 +326,10 @@ function normalizeModelConfigForUi(config: LlmProviderModelConfigRecord, modelId
     createdAt: Number.isFinite(config.createdAt) && config.createdAt > 0 ? config.createdAt : now,
     updatedAt: Number.isFinite(config.updatedAt) && config.updatedAt > 0 ? config.updatedAt : now
   };
+}
+
+function normalizeOpenAIResponsesTransport(value: unknown): LlmOpenAIResponsesTransport {
+  return value === 'websocket' ? 'websocket' : 'http';
 }
 
 function normalizePromptCacheForUi(input: LlmPromptCacheConfigRecord | undefined, provider: LlmProviderKind): LlmPromptCacheConfigRecord {
@@ -599,6 +608,7 @@ function toPlainProviderConfig(config: LlmProviderConfigRecord): LlmProviderConf
     models,
     apiKey: config.apiKey,
     toolCallFormat: config.toolCallFormat,
+    openaiResponsesTransport: normalizeOpenAIResponsesTransport(config.openaiResponsesTransport),
     stream: config.stream !== false,
     retryOnError: config.retryOnError !== false,
     retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
@@ -619,6 +629,7 @@ function toPlainModelConfig(config: LlmProviderModelConfigRecord, provider: LlmP
     id: config.id,
     modelId: config.modelId.trim(),
     toolCallFormat: config.toolCallFormat === 'function-call' ? config.toolCallFormat : 'function-call',
+    openaiResponsesTransport: normalizeOpenAIResponsesTransport(config.openaiResponsesTransport),
     stream: config.stream !== false,
     retryOnError: config.retryOnError !== false,
     retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,

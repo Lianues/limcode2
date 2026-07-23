@@ -6,6 +6,7 @@ import type {
   LlmProviderHeadersRecord,
   LlmProviderKind,
   LlmProviderModelConfigRecord,
+  LlmOpenAIResponsesTransport,
   LlmProviderModelRecord,
   LlmPromptCacheConfigRecord,
   LlmPromptCacheMode,
@@ -77,6 +78,7 @@ export function createDefaultLlmProviderConfig(input: { name?: string } = {}): L
     models: [],
     apiKey: '',
     toolCallFormat: 'function-call',
+    openaiResponsesTransport: 'http',
     stream: true,
     retryOnError: DEFAULT_LLM_RETRY_ON_ERROR,
     retryMaxAttempts: DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
@@ -111,6 +113,7 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
     models,
     apiKey: typeof input?.apiKey === 'string' ? input.apiKey.trim() : fallback.apiKey,
     toolCallFormat: isKnownToolCallFormat(input?.toolCallFormat) ? input.toolCallFormat : fallback.toolCallFormat,
+    openaiResponsesTransport: normalizeOpenAIResponsesTransport(input?.openaiResponsesTransport),
     stream: typeof input?.stream === 'boolean' ? input.stream : true,
     retryOnError: typeof input?.retryOnError === 'boolean' ? input.retryOnError : DEFAULT_LLM_RETRY_ON_ERROR,
     retryMaxAttempts: finiteRetryMaxAttempts(input?.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
@@ -210,6 +213,7 @@ function normalizeModelConfigs(
       id: stringOrDefault(item.id, `llm-model-config-${createMessageId()}`),
       modelId,
       toolCallFormat: isKnownToolCallFormat(item.toolCallFormat) ? item.toolCallFormat : 'function-call',
+      openaiResponsesTransport: normalizeOpenAIResponsesTransport(item.openaiResponsesTransport),
       stream: typeof item.stream === 'boolean' ? item.stream : true,
       retryOnError: typeof item.retryOnError === 'boolean' ? item.retryOnError : DEFAULT_LLM_RETRY_ON_ERROR,
       retryMaxAttempts: finiteRetryMaxAttempts(item.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
@@ -240,6 +244,10 @@ function providerDefaultContextWindow(_provider: LlmProviderKind): number {
 
 function isKnownToolCallFormat(format: unknown): format is LlmToolCallFormat {
   return format === 'function-call';
+}
+
+function normalizeOpenAIResponsesTransport(value: unknown): LlmOpenAIResponsesTransport {
+  return value === 'websocket' ? 'websocket' : 'http';
 }
 
 function stringOrDefault(value: unknown, fallback: string): string {

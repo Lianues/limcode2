@@ -138,6 +138,7 @@ async function resolveSnapshotLlmProviderConfig(
     model: modelId,
     models: modelId ? [{ id: modelId, name: modelName }, ...base.models.filter((model) => model.id !== modelId)] : base.models,
     ...(snapshot.toolCallFormat ? { toolCallFormat: snapshot.toolCallFormat } : {}),
+    ...(snapshot.openaiResponsesTransport ? { openaiResponsesTransport: snapshot.openaiResponsesTransport } : {}),
     ...(snapshot.stream !== undefined ? { stream: snapshot.stream } : {}),
     ...(snapshot.retryOnError !== undefined ? { retryOnError: snapshot.retryOnError } : {}),
     ...(snapshot.retryMaxAttempts !== undefined ? { retryMaxAttempts: snapshot.retryMaxAttempts } : {}),

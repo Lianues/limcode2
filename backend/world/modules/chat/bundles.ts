@@ -6,6 +6,7 @@ import { isInlineDataPart } from '../../../../shared/protocol';
 import {
   Conversation,
   ConversationBranchLink,
+  ConversationFullContextLoaded,
   ConversationOriginLink,
   ConversationReuseLink,
   LlmRequest,
@@ -18,7 +19,7 @@ import {
   type MessageData
 } from './components';
 
-export const ConversationBundle = defineBundle({ name: 'ConversationBundle', writes: [Conversation], mutationMode: 'create', spawns: true });
+export const ConversationBundle = defineBundle({ name: 'ConversationBundle', writes: [Conversation, ConversationFullContextLoaded], mutationMode: 'create', spawns: true });
 export const ConversationLinkBundle = defineBundle({ name: 'ConversationLinkBundle', writes: [ConversationReuseLink, ConversationBranchLink, ConversationOriginLink], mutationMode: 'create', spawns: true });
 export const MessageBundle = defineBundle({ name: 'MessageBundle', writes: [Message, PartOf, MessageRevision, MessageCurrentRevisionLink], mutationMode: 'create', spawns: true });
 export const UserMessageBundle = MessageBundle;
@@ -29,6 +30,7 @@ export const LlmRequestBundle = defineBundle({ name: 'LlmRequestBundle', writes:
 export function spawnConversation(cmd: CommandSink, input: { id: string; title?: string; visibility?: 'visible' | 'hidden' | 'collapsed' }): Entity {
   const entity = cmd.spawn();
   cmd.add(entity, Conversation, { id: input.id, title: input.title, visibility: input.visibility ?? 'visible' });
+  cmd.add(entity, ConversationFullContextLoaded, { loadedAt: Date.now() });
   return entity;
 }
 

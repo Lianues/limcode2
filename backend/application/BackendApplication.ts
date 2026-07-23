@@ -681,7 +681,8 @@ export class BackendApplication {
   public ensureConversationDetailLoaded(conversationId: string): Promise<void> {
     const normalizedConversationId = conversationId.trim();
     if (!normalizedConversationId || this.deletedConversationIds.has(normalizedConversationId)) return Promise.resolve();
-    if (this.renderLoadedConversationDetails.has(normalizedConversationId)) {
+    if (this.renderLoadedConversationDetails.has(normalizedConversationId) || this.isConversationFullContextLoaded(normalizedConversationId)) {
+      this.renderLoadedConversationDetails.add(normalizedConversationId);
       this.markConversationFullContextLoaded(normalizedConversationId);
       return Promise.resolve();
     }
@@ -704,7 +705,8 @@ export class BackendApplication {
   private async loadConversationDetail(conversationId: string): Promise<void> {
     if (this.deletedConversationIds.has(conversationId)) return;
     if (!this.hydrated) await this.waitUntilHydrated();
-    if (this.renderLoadedConversationDetails.has(conversationId)) {
+    if (this.renderLoadedConversationDetails.has(conversationId) || this.isConversationFullContextLoaded(conversationId)) {
+      this.renderLoadedConversationDetails.add(conversationId);
       this.markConversationFullContextLoaded(conversationId);
       return;
     }
@@ -719,6 +721,15 @@ export class BackendApplication {
       ? backfillMissingToolResponsesForStatelessLoad(storedDetail, conversationId)
       : { state: storedDetail, addedCount: 0 };
     const detail = backfilled.state;
+
+    // run_agent / 分支等 ECS 内部新建对话在首次落盘前就可能请求完整上下文。
+    // 这类对话的消息已经在当前 world 中，不能因为 storage 还没有 detail 文件就反复等待加载，
+    // 否则首轮 AgentRun 会停在 preparing（前端显示“少女整理中”）。
+    if (!detail && this.hasUnpersistedConversationDetailInWorld(conversationId)) {
+      this.renderLoadedConversationDetails.add(conversationId);
+      this.markConversationFullContextLoaded(conversationId);
+      return;
+    }
 
     if (detail && this.findConversationEntity(conversationId) === undefined) {
       this.spawnPreHydrationConversation(conversationId);
@@ -808,11 +819,15 @@ export class BackendApplication {
   private persistableRenderDetailConversationIds(): string[] {
     const ids = new Set(this.renderLoadedConversationDetails);
     for (const conversationId of this.conversationTailLoaded) ids.add(conversationId);
+    for (const entity of this.world.query(Conversation, ConversationFullContextLoaded)) {
+      const conversation = this.world.get(entity, Conversation);
+      if (conversation?.id) ids.add(conversation.id);
+    }
     return [...ids].filter((conversationId) => !this.deletedConversationIds.has(conversationId) && this.findConversationEntity(conversationId) !== undefined);
   }
 
   private isConversationHistorySummaryComplete(conversationId: string): boolean {
-    return this.renderLoadedConversationDetails.has(conversationId);
+    return this.renderLoadedConversationDetails.has(conversationId) || this.isConversationFullContextLoaded(conversationId);
   }
 
   private collectConversationOriginLinksById(): Map<string, ConversationOriginLinkRecord> {
@@ -880,6 +895,18 @@ export class BackendApplication {
     this.conversationTailLoaded.add(conversationId);
     this.world.add(conversation, ConversationFullContextLoaded, { loadedAt: Date.now() });
     this.world.remove(conversation, ConversationFullContextPending);
+  }
+
+  private isConversationFullContextLoaded(conversationId: string): boolean {
+    const conversation = this.findConversationEntity(conversationId);
+    return conversation !== undefined && this.world.has(conversation, ConversationFullContextLoaded);
+  }
+
+  private hasUnpersistedConversationDetailInWorld(conversationId: string): boolean {
+    if (this.conversationTailLoaded.has(conversationId)) return false;
+    const conversation = this.findConversationEntity(conversationId);
+    if (conversation === undefined) return false;
+    return this.world.query(Message, PartOf).some((entity) => this.world.get(entity, PartOf)?.parent === conversation);
   }
 
   private clearConversationFullContextPending(conversationId: string): void {

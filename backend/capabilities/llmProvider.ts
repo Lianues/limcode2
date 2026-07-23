@@ -431,26 +431,60 @@ function rawErrorFromUnknown(error: unknown, extras: Record<string, unknown> = {
 }
 
 function messageFromRawError(rawError: LlmRawErrorInfoRecord): string {
-  if (typeof rawError.message === 'string' && rawError.message.trim()) return rawError.message.trim();
-  const bodyMessage = nestedMessage(rawError.rawBody) ?? nestedMessage(rawError.rawResponse) ?? nestedMessage(rawError.data);
-  if (bodyMessage) return bodyMessage;
+  const direct = typeof rawError.message === 'string' && rawError.message.trim() ? rawError.message.trim() : undefined;
+  const nested = nestedMessage(rawError.rawBody)
+    ?? nestedMessage(rawError.rawResponse)
+    ?? nestedMessage(rawError.rawChunk)
+    ?? nestedMessage(rawError.data);
+  if (nested && (!direct || isGenericErrorLabel(direct))) return nested;
+  if (direct && !isGenericErrorLabel(direct)) return direct;
   if (typeof rawError.bodyText === 'string' && rawError.bodyText.trim()) return truncateForSummary(rawError.bodyText.trim());
   if (typeof rawError.data === 'string' && rawError.data.trim()) return truncateForSummary(rawError.data.trim());
   const kind = typeof rawError.kind === 'string' && rawError.kind.trim() ? rawError.kind.trim() : 'llm_error';
-  const status = typeof rawError.status === 'number' ? ` HTTP ${rawError.status}` : '';
-  return `LLM 请求失败：${kind}${status}`;
+  const status = rawErrorStatus(rawError);
+  return `LLM 请求失败：${kind}${status !== undefined ? ` HTTP ${status}` : ''}`;
 }
 
 function nestedMessage(value: unknown): string | undefined {
   if (!isRecord(value)) return undefined;
   const direct = value.message;
-  if (typeof direct === 'string' && direct.trim()) return truncateForSummary(direct.trim());
+  if (typeof direct === 'string' && direct.trim() && !isGenericErrorLabel(direct)) return truncateForSummary(direct.trim());
   const error = value.error;
   if (isRecord(error)) {
     const message = error.message;
-    if (typeof message === 'string' && message.trim()) return truncateForSummary(message.trim());
+    if (typeof message === 'string' && message.trim() && !isGenericErrorLabel(message)) return truncateForSummary(message.trim());
+  }
+  const response = value.response;
+  if (isRecord(response)) return nestedMessage(response);
+  return undefined;
+}
+
+function rawErrorStatus(rawError: LlmRawErrorInfoRecord): number | undefined {
+  if (typeof rawError.status === 'number') return rawError.status;
+  if (typeof rawError.status_code === 'number') return rawError.status_code;
+  const rawChunk = rawError.rawChunk;
+  if (isRecord(rawChunk)) {
+    if (typeof rawChunk.status === 'number') return rawChunk.status;
+    if (typeof rawChunk.status_code === 'number') return rawChunk.status_code;
+  }
+  const rawBody = rawError.rawBody;
+  if (isRecord(rawBody)) {
+    if (typeof rawBody.status === 'number') return rawBody.status;
+    if (typeof rawBody.status_code === 'number') return rawBody.status_code;
   }
   return undefined;
+}
+
+function isGenericErrorLabel(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'stream_error'
+    || normalized === 'upstream_error'
+    || normalized === 'http_error'
+    || normalized === 'response_error'
+    || normalized === 'decode_error'
+    || normalized === 'stream_read_error'
+    || normalized === 'stream_parse_error'
+    || normalized === 'llm_error';
 }
 
 function truncateForSummary(value: string): string {

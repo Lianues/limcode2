@@ -125,7 +125,7 @@ export const ClientSyncSystem = defineSystem({
       const existing = streams[streamId];
       const requested = requestedConversationIds.has(conversationId);
       if (!requested && !existing) continue;
-      const next = conversationClientState(nextFull, conversationId);
+      const next = projectConversationClientState(nextFull, conversationId);
       if (requested || !existing?.lastState) {
         streams[streamId] = emitSnapshot(cmd, streamId, existing, next);
         didUpdateStreams = true;
@@ -352,7 +352,7 @@ function globalClientState(state: ClientState): ClientState {
   return clientStateWithTables(state, GLOBAL_CLIENT_STATE_TABLE_KEYS);
 }
 
-function conversationClientState(state: ClientState, conversationId: string): ClientState {
+export function projectConversationClientState(state: ClientState, conversationId: string): ClientState {
   const messages = recentConversationStreamMessages(state.messages.filter((message) => message.conversationId === conversationId));
   const messageIds = new Set(messages.map((message) => message.id));
   const messageToolCalls = state.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId));
@@ -443,7 +443,9 @@ function conversationClientState(state: ClientState, conversationId: string): Cl
     runContextPolicyLinks: state.runContextPolicyLinks.filter((link) => runIds.has(link.runId)),
     runDeliveryPolicyLinks: state.runDeliveryPolicyLinks.filter((link) => runIds.has(link.runId)),
     runEditPolicyLinks: state.runEditPolicyLinks.filter((link) => runIds.has(link.runId)),
-    agentRunInputRevisions: state.agentRunInputRevisions.filter((inputRevision) => runIds.has(inputRevision.runId)),
+    // 输入 revision 是后端审计/编辑影响分析数据，当前 Webview 没有消费者；
+    // 保持 conversation stream 为空，避免长会话为每个 Run structured-clone 数千条关系。
+    agentRunInputRevisions: [],
     runtimeContextSnapshots: state.runtimeContextSnapshots.filter((snapshot) => snapshot.conversationId === conversationId || runtimeContextSnapshotIds.has(snapshot.id)),
     conversationRuntimeContextSnapshotLinks,
     runRuntimeContextSnapshotLinks,

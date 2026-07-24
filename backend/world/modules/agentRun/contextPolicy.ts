@@ -88,6 +88,16 @@ export function selectRunContextMessageEntities(world: WorldReader, input: Build
   const runScopedMessageSet = runScopedMessagesIn(world, input.run, targetMessages);
   const runScopedMessages = targetMessages.filter((entity) => runScopedMessageSet.has(entity));
   const extraHistoryMessages = targetMessages.filter((entity) => !runScopedMessageSet.has(entity));
+  const compression = selectRunContextCompressionVariant(world, input.conversation, input.settingsSnapshot);
+  if (compression) {
+    const block = world.get(compression.block, CompressionBlock);
+    const boundarySeq = block?.endSeq ?? block?.anchorSeq ?? 0;
+    // 压缩边界之前的真实输入由 RunCompressionBlockLink + CompressionContextVariant 表达；
+    // 这里只记录 compact 之后仍会作为原始消息回放的 revision，避免为旧历史重复展开关系。
+    push(targetMessages.filter((entity) => (world.get(entity, Message)?.seq ?? 0) > boundarySeq));
+    return selected;
+  }
+
   const selectedHistory = selectHistoryMessages(world, extraHistoryMessages, policy);
   push(targetMessages.filter((entity) => selectedHistory.includes(entity) || runScopedMessageSet.has(entity)));
 

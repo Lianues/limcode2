@@ -158,10 +158,11 @@ export const LlmDispatchSystem = defineSystem({
         policy: contextPolicy,
         settingsSnapshot: data.invocation !== undefined ? world.get(data.invocation, LlmInvocation)?.settings : undefined
       };
-      recordInputRevisions(world, cmd, contextInput.run, selectRunContextMessageEntities(world, contextInput));
       const llmRequest = buildLlmStartRequestForRun(world, { run: data.run, conversation: data.conversation, modelMessage: data.modelMessage, invocation: data.invocation, requestId: data.id, tools: allTools });
       if (!llmRequest) continue;
       if (maybeEnqueuePreDispatchCompression(world, cmd, request, data, llmRequest)) continue;
+      // 只有确定本轮会真正发起 LLM 请求后才记录输入；若先进入自动压缩，不应把压缩前历史记入 Run。
+      recordInputRevisions(world, cmd, contextInput.run, selectRunContextMessageEntities(world, contextInput));
       recordCompressionContextLink(world, cmd, data.run, data.conversation, llmRequest.settingsSnapshot);
 
       cmd.effect({

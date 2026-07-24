@@ -4,6 +4,7 @@ export interface SmoothStreamingTextOptions {
   animateReplace?: boolean;
   replaceOutMs?: number;
   catchupFrames?: number;
+  finishCatchupFrames?: number;
   maxCharsPerFrame?: number;
   flushLagChars?: number;
 }
@@ -12,6 +13,7 @@ export interface SmoothStreamingTextOptions {
 // 每段 50ms，总体约 100ms，与消息进入动画保持同样节奏。
 const DEFAULT_REPLACE_OUT_MS = 50;
 const DEFAULT_CATCHUP_FRAMES = 14;
+const DEFAULT_FINISH_CATCHUP_FRAMES = 4;
 const DEFAULT_MAX_CHARS_PER_FRAME = 32;
 
 export function useSmoothStreamingText(
@@ -42,15 +44,20 @@ export function useSmoothStreamingText(
 
   function syncDisplayedText(wasStreaming: boolean): void {
     const target = source();
+    const current = displayedText.value;
 
     if (!streaming()) {
+      if (wasStreaming && target.startsWith(current) && current.length < target.length) {
+        clearReplaceTransition();
+        scheduleStreamFrame();
+        return;
+      }
       clearStreamFrame();
       replaceDisplayedText(target, (options.animateReplace ?? false) && !wasStreaming);
       return;
     }
 
     clearReplaceTransition();
-    const current = displayedText.value;
     if (!target.startsWith(current) || current.length > target.length) {
       displayedText.value = target;
       clearStreamFrame();
@@ -77,11 +84,8 @@ export function useSmoothStreamingText(
     streamFrameId = undefined;
 
     if (disposed) return;
-    if (!streaming()) {
-      displayedText.value = source();
-      return;
-    }
 
+    const activelyStreaming = streaming();
     const current = displayedText.value;
     const target = source();
     if (!target.startsWith(current) || current.length > target.length) {
@@ -101,8 +105,14 @@ export function useSmoothStreamingText(
     const elapsed = Math.max(16, now - lastStreamFrameTime);
     lastStreamFrameTime = now;
     const timeStep = Math.max(1, Math.floor(elapsed / 16));
-    const catchupStep = Math.ceil(remaining / (options.catchupFrames ?? DEFAULT_CATCHUP_FRAMES));
-    const step = Math.min(options.maxCharsPerFrame ?? DEFAULT_MAX_CHARS_PER_FRAME, Math.max(timeStep, catchupStep));
+    const catchupFrames = activelyStreaming
+      ? options.catchupFrames ?? DEFAULT_CATCHUP_FRAMES
+      : options.finishCatchupFrames ?? DEFAULT_FINISH_CATCHUP_FRAMES;
+    const catchupStep = Math.ceil(remaining / Math.max(1, catchupFrames));
+    // maxCharsPerFrame 是正常流速的软上限；backlog 过大时 catchupStep 可以超过它，
+    // 从而保证 WS 突发 delta 仍能在有限帧数内平滑追上，而不是逐字积压数秒。
+    const smoothStep = Math.min(options.maxCharsPerFrame ?? DEFAULT_MAX_CHARS_PER_FRAME, timeStep);
+    const step = Math.max(smoothStep, catchupStep);
     displayedText.value = target.slice(0, current.length + step);
 
     if (displayedText.value.length < target.length) scheduleStreamFrame();

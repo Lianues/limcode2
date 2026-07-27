@@ -22,7 +22,7 @@ import {
   spawnConversationReuseLink,
   spawnUserMessage
 } from '../../chat/bundles';
-import { conversationMessages } from '../../chat/queries';
+import { conversationMessages, conversationOriginDepth } from '../../chat/queries';
 import {
   ConversationWorkflowSelection,
   Workflow,
@@ -105,7 +105,7 @@ import { normalizeAskUserToolRequest } from '../../../../../shared/askUser';
 import { renderPlanMarkdown } from '../../../../../shared/planMarkdown';
 import { DELEGATED_PLAN_APPROVAL_MESSAGE, normalizeSubmitPlanToolRequest } from '../../../../../shared/planReview';
 import { allowOutsideProjectPathsFromConfig } from '../definitions/filePathPolicy';
-import { DEFAULT_RUN_AGENT_TYPE, RUN_AGENT_TOOL_NAME } from '../definitions/runAgent';
+import { DEFAULT_RUN_AGENT_TYPE, maxChildAgentDepthFromConfig, RUN_AGENT_TOOL_NAME } from '../definitions/runAgent';
 import {
   compareToolCallOrder,
   isExecutionApproved,
@@ -932,7 +932,7 @@ function notifyAgentAnswerSubmitted(
     sourceKind: 'agentRun',
     sourceRun: input.submitterRun,
     sourceConversation,
-    promoteIfActive: true
+    promoteIfActive: false
   });
 }
 
@@ -1626,6 +1626,12 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     return;
   }
 
+  const depthAuthorization = authorizeRunAgentDepth(world, authorization, call.name);
+  if (!depthAuthorization.ok) {
+    rejectToolCall(cmd, entity, call, state, depthAuthorization.reason);
+    return;
+  }
+
   const prompt = args.prompt?.trim();
   if (!prompt) {
     rejectToolCall(cmd, entity, call, state, 'run_agent 缺少必填 prompt。');
@@ -1673,6 +1679,26 @@ function executeRunAgentTool(world: WorldReader, cmd: CommandSink, entity: Entit
     payload: { ...progress, deliveryMode }
   });
   cmd.add(entity, InFlight, { kind: 'tool', startedAt: now });
+}
+
+function authorizeRunAgentDepth(
+  world: WorldReader,
+  authorization: Extract<AuthorizationResult, { ok: true }>,
+  toolName: string
+): { ok: true } | { ok: false; reason: string } {
+  const parentTarget = runTarget(world, authorization.run);
+  if (!parentTarget) return { ok: false, reason: '无法解析当前 AgentRun 所属对话，不能校验 run_agent 子 Agent 层级。' };
+
+  const config = effectiveToolConfig(world, authorization.policy, toolName);
+  const maxDepth = maxChildAgentDepthFromConfig(config);
+  const currentDepth = conversationOriginDepth(world, parentTarget.conversation);
+  const requestedDepth = currentDepth + 1;
+  if (requestedDepth <= maxDepth) return { ok: true };
+
+  return {
+    ok: false,
+    reason: `run_agent 已达到最大子 Agent 层级：当前对话层级为 ${currentDepth}，本次调用需要进入第 ${requestedDepth} 层，但当前工具策略上限为 ${maxDepth}。请在更上层对话调用，或提高 run_agent 的“最大子 Agent 层级”配置。`
+  };
 }
 
 interface LaunchChildAgentRunInput {

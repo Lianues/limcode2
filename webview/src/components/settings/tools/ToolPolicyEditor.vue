@@ -1510,6 +1510,18 @@ function inputNumber(event: Event): number {
   font: inherit;
 }
 
+.tool-config-field input[type='number'] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.tool-config-field input[type='number']::-webkit-outer-spin-button,
+.tool-config-field input[type='number']::-webkit-inner-spin-button {
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
 .tool-config-field textarea {
   resize: vertical;
   min-height: 72px;

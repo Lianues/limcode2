@@ -1,8 +1,21 @@
+import type { ToolConfigRecord } from '../../../../../../shared/protocol';
 import type { ToolCallSummaryContext, ToolDefinition } from '../../registry';
 import { defineToolDefinitionModule } from '../types';
 
 export const RUN_AGENT_TOOL_NAME = 'run_agent';
 export const DEFAULT_RUN_AGENT_TYPE = 'worker';
+export const MAX_CHILD_AGENT_DEPTH_CONFIG_KEY = 'maxChildAgentDepth';
+export const DEFAULT_MAX_CHILD_AGENT_DEPTH = 1;
+
+export function maxChildAgentDepthFromConfig(
+  config: ToolConfigRecord | undefined,
+  defaultValue = DEFAULT_MAX_CHILD_AGENT_DEPTH
+): number {
+  const value = config?.[MAX_CHILD_AGENT_DEPTH_CONFIG_KEY];
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : defaultValue;
+}
 
 export const runAgentToolModule = defineToolDefinitionModule({
   id: RUN_AGENT_TOOL_NAME,
@@ -86,6 +99,18 @@ Do NOT poll read_agent_answer in a loop in the same response. Do NOT use tools t
       readonly: false,
       defaultEnabled: true,
       checkpoint: { before: true, after: true }
+    },
+    configSchema: {
+      fields: [{
+        key: MAX_CHILD_AGENT_DEPTH_CONFIG_KEY,
+        label: '最大子 Agent 层级',
+        type: 'number',
+        description: '按子对话归属层级限制 run 模式。根对话为 0；设为 1 时仅允许根对话创建第一层子 Agent，子 Agent 不能继续调用 run_agent；设为 0 时禁止启动子 Agent。interrupt 模式不受此限制。',
+        defaultValue: DEFAULT_MAX_CHILD_AGENT_DEPTH
+      }]
+    },
+    defaultConfig: {
+      [MAX_CHILD_AGENT_DEPTH_CONFIG_KEY]: DEFAULT_MAX_CHILD_AGENT_DEPTH
     }
   },
   scheduling: resolveRunAgentScheduling,

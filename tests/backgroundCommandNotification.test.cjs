@@ -17,7 +17,6 @@ const {
   BackgroundCommandNotificationSystem
 } = require('../dist/extension/backend/world/modules/backgroundCommand/systems/BackgroundCommandNotificationSystem.js');
 const { Conversation, InFlight, LlmRequest, Message, PartOf, Streaming } = require('../dist/extension/backend/world/modules/chat/components.js');
-const { hasActiveUnresolvedFunctionCallsInEntities } = require('../dist/extension/backend/world/modules/compression/selection.js');
 const { ToolCall, ToolResultConsumed, ToolState } = require('../dist/extension/backend/world/modules/tools/components.js');
 
 function commandSink(world, events, effects = []) {
@@ -141,31 +140,41 @@ function createStreamingFixture() {
   return { world, agent, conversation, activeRun, modelMessage, request };
 }
 
-function applyPromotionAndAssertClosed(fixture, promoteEvents) {
-  assert.equal(promoteEvents.some((event) => event.type === 'agentRun:promote'), true);
-  AgentRunLifecycleSystem.run({
+function assertNotificationQueuedBehindActiveRun(fixture, emittedEvents, expectedText) {
+  assert.equal(emittedEvents.some((event) => event.type === 'agentRun:promote'), false);
+  assert.equal(fixture.world.get(fixture.activeRun, AgentRun).status, 'waiting_tool');
+  assert.equal(fixture.world.get(fixture.toolCall, ToolState).status, 'executing');
+  assert.equal(fixture.world.has(fixture.toolCall, ToolResultConsumed), false);
+
+  const notificationRun = fixture.world.query(AgentRun).find((entity) =>
+    fixture.world.get(entity, AgentRun)?.kind === 'notification'
+  );
+  assert.notEqual(notificationRun, undefined);
+  assert.equal(fixture.world.get(notificationRun, AgentRun).status, 'queued');
+  assert.equal(fixture.world.query(AgentRunQueueHold).some((entity) =>
+    fixture.world.get(entity, AgentRunQueueHold)?.run === notificationRun
+  ), false);
+  assert.equal(fixture.world.query(AgentRunQueuedInput).some((entity) => {
+    const input = fixture.world.get(entity, AgentRunQueuedInput);
+    return input?.run === notificationRun && input.content.parts.some((part) =>
+      typeof part.text === 'string' && part.text.includes(expectedText)
+    );
+  }), true);
+
+  AgentRunQueueSystem.run({
     world: fixture.world,
     cmd: commandSink(fixture.world, []),
-    events: promoteEvents
+    events: []
   });
 
-  assert.equal(fixture.world.get(fixture.activeRun, AgentRun).status, 'cancelled');
-  assert.equal(fixture.world.get(fixture.toolCall, ToolState).status, 'error');
-  assert.equal(fixture.world.has(fixture.toolCall, ToolResultConsumed), true);
-  const messages = fixture.world.query(Message)
-    .filter((entity) => fixture.world.get(entity, PartOf)?.parent === fixture.conversation)
-    .sort((left, right) => fixture.world.get(left, Message).seq - fixture.world.get(right, Message).seq);
-  const responseMessages = messages.filter((entity) =>
-    fixture.world.get(entity, Message).content.parts.some((part) => part.functionResponse)
-  );
-  assert.equal(responseMessages.length, 1);
-  const responsePart = fixture.world.get(responseMessages[0], Message).content.parts[0];
-  assert.equal(responsePart.id, 'call-active');
-  assert.equal(responsePart.functionResponse.response.interrupted, true);
-  assert.equal(hasActiveUnresolvedFunctionCallsInEntities(fixture.world, messages), false);
+  assert.equal(fixture.world.get(notificationRun, AgentRun).status, 'queued');
+  assert.equal(fixture.world.has(notificationRun, AgentRunNeedsModel), false);
+  assert.equal(fixture.world.query(AgentRunQueuedInput).some((entity) =>
+    fixture.world.get(entity, AgentRunQueuedInput)?.run === notificationRun
+  ), true);
 }
 
-test('background command exit still force-promotes and closes interrupted tool calls with responses', () => {
+test('background command exit queues behind the active run without interrupting it', () => {
   const fixture = createActiveFixture();
   const emittedEvents = [];
   BackgroundCommandNotificationSystem.run({
@@ -189,7 +198,7 @@ test('background command exit still force-promotes and closes interrupted tool c
     }]
   });
 
-  applyPromotionAndAssertClosed(fixture, emittedEvents);
+  assertNotificationQueuedBehindActiveRun(fixture, emittedEvents, '[Background command exited]');
 });
 
 test('force-promoted notification aborts the active LLM and materializes the notification for the next request', () => {
@@ -247,7 +256,7 @@ test('force-promoted notification aborts the active LLM and materializes the not
   assert.notEqual(notificationMessage, undefined);
 });
 
-test('background Agent answer force-promotion uses the same response-complete interruption path', () => {
+test('background Agent answer queues behind the active run without interrupting it', () => {
   const fixture = createActiveFixture();
   const submitterRun = fixture.world.spawn();
   fixture.world.add(submitterRun, AgentRun, {
@@ -267,8 +276,8 @@ test('background Agent answer force-promotion uses the same response-complete in
     sourceKind: 'agentRun',
     sourceRun: submitterRun,
     sourceConversation: fixture.conversation,
-    promoteIfActive: true
+    promoteIfActive: false
   });
 
-  applyPromotionAndAssertClosed(fixture, emittedEvents);
+  assertNotificationQueuedBehindActiveRun(fixture, emittedEvents, '[Agent answer submitted]');
 });

@@ -50,7 +50,7 @@ export const BackgroundCommandNotificationSystem = defineSystem({
         ...(target.sourceRun !== undefined ? { sourceRun: target.sourceRun } : {}),
         sourceConversation: target.conversation,
         ...(target.sourceToolCall !== undefined ? { sourceToolCall: target.sourceToolCall } : {}),
-        promoteIfActive: true
+        promoteIfActive: false
       });
     }
   }

@@ -23,9 +23,9 @@ export interface MainPanelOptions {
 
 type MainPanelKind = 'chat' | 'globalSettings' | 'workflowSettings' | 'agentSettings' | 'planDetail';
 
-// VS Code fixed-width tabs need spare room for the icon and hover close action.
-const PANEL_TAB_TITLE_MAX_DISPLAY_UNITS = 14;
-const PANEL_TAB_TITLE_ELLIPSIS = '...';
+// Keep fixed-width tabs compact enough that VS Code does not squeeze out the panel icon.
+const PANEL_TAB_TITLE_MAX_DISPLAY_UNITS = 16;
+const PANEL_TAB_TITLE_ELLIPSIS = '…';
 
 export class MainPanel {
   public static readonly viewType = 'limcode.mainPanel';
@@ -428,5 +428,5 @@ function displayUnits(text: string): number {
 
 function isWideCharacter(char: string): boolean {
   const codePoint = char.codePointAt(0) ?? 0;
-  return codePoint >= 0x1f300 || /[\u1100-\u115f\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/u.test(char);
+  return codePoint >= 0x1f300 || /[\u1100-\u115f\u2026\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/u.test(char);
 }

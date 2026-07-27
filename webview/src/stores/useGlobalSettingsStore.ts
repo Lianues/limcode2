@@ -75,6 +75,12 @@ interface GlobalSettingsState {
   mcpServers: McpServersSettingsRecord;
   /** 各 section 的来源文件路径，用于在 UI 展示。 */
   filePaths: Partial<Record<GlobalSettingsSection, string>>;
+  /** 各 section 最近一次 snapshot 携带的落盘版本，保存时回传做乐观并发校验。 */
+  revisions: Partial<Record<GlobalSettingsSection, string>>;
+  /** 本窗口有未落盘修改时暂存的外部快照，等用户确认后再覆盖表单。 */
+  pendingExternalSnapshots: Partial<Record<GlobalSettingsSection, GlobalSettingsSnapshotPayload>>;
+  /** 已检测到外部（其他窗口）修改、但尚未应用的 section。 */
+  externalChangedSections: Partial<Record<GlobalSettingsSection, boolean>>;
   /** 等待 llmProviderConfigs 保存完成后再持久化的 active provider id，避免 active id 先于新配置到达后端。 */
   pendingActiveProviderConfigIdAfterConfigsSave: string;
   /** 克隆压缩配置后待 llmCompressionConfigs 保存确认再持久化压缩绑定，避免绑定先于新配置到达后端被丢弃。 */
@@ -96,8 +102,31 @@ interface GlobalSettingsErrorOptions {
   section?: GlobalSettingsSection;
 }
 
+const GLOBAL_SETTINGS_SECTION_LABELS: Partial<Record<GlobalSettingsSection, string>> = {
+  common: '基础设置',
+  llm: '当前渠道选择',
+  llmProviderConfigs: '渠道配置',
+  llmCompression: '压缩绑定',
+  llmCompressionConfigs: '压缩配置',
+  checkpointMaintenance: '存档点维护',
+  appearance: '外观',
+  attachments: '附件',
+  runHistory: '运行历史',
+  mcpServers: 'MCP 服务'
+};
+
 function hasOutstandingSettingsWork(state: GlobalSettingsState): boolean {
   return Object.keys(state.loadingSettingsSections).length > 0 || Object.keys(state.pendingSettingsSections).length > 0;
+}
+
+/**
+ * 该 section 在本窗口是否存在未落盘的修改。
+ * 设置面板是自动保存的，所以「脏」= 有排队中的自动保存定时器，或有尚未被确认的保存请求。
+ */
+function isSectionDirty(state: GlobalSettingsState, section: GlobalSettingsSection): boolean {
+  if (section === 'llmProviderConfigs' && hasPendingLlmProviderConfigsSave()) return true;
+  if (section === 'llmCompressionConfigs' && hasPendingLlmCompressionConfigsSave()) return true;
+  return state.pendingSettingsSections[section] === true;
 }
 
 function settingsErrorStatus(requestType: string | undefined, message: string): string {
@@ -761,6 +790,11 @@ const llmProviderConfigsSaveRequestRevisions = new Map<string, number>();
 let llmCompressionConfigsAutoSaveTimer: number | undefined;
 let llmCompressionConfigsEditRevision = 0;
 const llmCompressionConfigsSaveRequestRevisions = new Map<string, number>();
+/**
+ * 每个 section 最后一次已同步的落盘版本（不会像 state.revisions 那样在发起保存时被消费掉）。
+ * 用于区分「真外部变更」与「本窗口自己刚写的值被 watcher 再次下发」。
+ */
+const lastSyncedRevisions = new Map<GlobalSettingsSection, string>();
 
 function touchLlmProviderConfigsRevision(): number {
   llmProviderConfigsEditRevision += 1;
@@ -817,6 +851,9 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
     runHistory: emptyRunHistory(),
     mcpServers: emptyMcpServers(),
     filePaths: {},
+    revisions: {},
+    pendingExternalSnapshots: {},
+    externalChangedSections: {},
     pendingActiveProviderConfigIdAfterConfigsSave: '',
     flushCompressionBindingAfterConfigsSave: false,
     loadedSections: {},
@@ -827,6 +864,15 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
     status: ''
   }),
   getters: {
+    /** 是否有外部窗口的修改等着被载入。 */
+    hasExternalSettingsChange(state): boolean {
+      return Object.keys(state.externalChangedSections).length > 0;
+    },
+    externalChangedSectionLabels(state): string {
+      return Object.keys(state.externalChangedSections)
+        .map((section) => GLOBAL_SETTINGS_SECTION_LABELS[section as GlobalSettingsSection] ?? section)
+        .join('\u3001');
+    },
     activeLlmProviderConfig(state): LlmProviderConfigRecord | undefined {
       return state.llmProviderConfigs.configs.find((config) => config.id === state.llm.activeProviderConfigId)
         ?? state.llmProviderConfigs.configs[0];
@@ -851,6 +897,17 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
     }
   },
   actions: {
+    /**
+     * 取出并作废本地记录的落盘版本。
+     * 请求一旦发出，本地 revision 即视为过期，直到收到新的 snapshot 才恢复校验；
+     * 否则同一窗口连发多次保存会反复携带同一个旧 revision，产生假冲突。
+     */
+    consumeExpectedRevision(section: GlobalSettingsSection): { expectedRevision?: string } {
+      const revision = this.revisions[section];
+      if (revision === undefined) return {};
+      delete this.revisions[section];
+      return { expectedRevision: revision };
+    },
     markLoadingSettingSection(section: GlobalSettingsSection): void {
       this.loadingSettingsSections[section] = true;
       delete this.failedSettingsSections[section];
@@ -871,6 +928,10 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       llmProviderConfigsSaveRequestRevisions.clear();
       llmCompressionConfigsSaveRequestRevisions.clear();
       this.status = '正在读取设置...';
+      lastSyncedRevisions.clear();
+      this.revisions = {};
+      this.pendingExternalSnapshots = {};
+      this.externalChangedSections = {};
       this.loadedSections = {};
       this.loadingSettingsSections = {};
       this.pendingSettingsSections = {};
@@ -888,10 +949,12 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       }
     },
     saveCommon(): void {
+      const revision = this.consumeExpectedRevision('common');
       this.markPendingSettingSection('common');
       this.status = '正在保存设置，并按需迁移、删除旧数据目录中的插件数据...';
       bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
         section: 'common',
+        ...revision,
         settings: {
           dataFilePath: this.common.dataFilePath,
           proxy: this.common.proxy,
@@ -901,10 +964,12 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       });
     },
     saveLlm(): void {
+      const revision = this.consumeExpectedRevision('llm');
       this.markPendingSettingSection('llm');
       this.status = '正在保存当前渠道选择...';
       bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
         section: 'llm',
+        ...revision,
         settings: {
           activeProviderConfigId: this.llm.activeProviderConfigId
         }
@@ -923,10 +988,12 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       this.saveCheckpointMaintenance();
     },
     saveCheckpointMaintenance(): void {
+      const revision = this.consumeExpectedRevision('checkpointMaintenance');
       this.markPendingSettingSection('checkpointMaintenance');
       this.status = '正在保存存档点维护设置...';
       bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
         section: 'checkpointMaintenance',
+        ...revision,
         settings: {
           autoCleanupEnabled: this.checkpointMaintenance.autoCleanupEnabled,
           autoCleanupDays: this.checkpointMaintenance.autoCleanupDays,
@@ -941,10 +1008,12 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       bridge.request(BridgeMessageType.GlobalSettingsGet, { section: 'appearance' });
     },
     saveAppearance(): void {
+      const revision = this.consumeExpectedRevision('appearance');
       this.markPendingSettingSection('appearance');
       this.status = '正在保存外观设置...';
       bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
         section: 'appearance',
+        ...revision,
         settings: {
           streamingTextPreparing: this.appearance.streamingTextPreparing,
           streamingTextWaiting: this.appearance.streamingTextWaiting,
@@ -966,10 +1035,12 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       this.saveAttachments();
     },
     saveAttachments(): void {
+      const revision = this.consumeExpectedRevision('attachments');
       this.markPendingSettingSection('attachments');
       this.status = '正在保存附件设置...';
       bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
         section: 'attachments',
+        ...revision,
         settings: {
           maxStoredInlineFileMb: this.attachments.maxStoredInlineFileMb
         }
@@ -986,10 +1057,12 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       this.saveRunHistory();
     },
     saveRunHistory(): void {
+      const revision = this.consumeExpectedRevision('runHistory');
       this.markPendingSettingSection('runHistory');
       this.status = '正在保存运行历史设置...';
       bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
         section: 'runHistory',
+        ...revision,
         settings: {
           detailPersistenceEnabled: this.runHistory.detailPersistenceEnabled === true
         }
@@ -1001,10 +1074,12 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       bridge.request(BridgeMessageType.GlobalSettingsGet, { section: 'mcpServers' });
     },
     saveMcpServers(refreshMcpTools = false): void {
+      const revision = this.consumeExpectedRevision('mcpServers');
       this.markPendingSettingSection('mcpServers');
       this.status = refreshMcpTools ? '正在尝试获取 MCP 工具...' : '正在保存 MCP 服务...';
       bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
         section: 'mcpServers',
+        ...revision,
         settings: {
           servers: this.mcpServers.servers.map(toPlainMcpServer)
         },
@@ -1050,10 +1125,12 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
     saveLlmProviderConfigs(): void {
       clearLlmProviderConfigsAutoSaveTimer();
       const requestRevision = touchLlmProviderConfigsRevision();
+      const revision = this.consumeExpectedRevision('llmProviderConfigs');
       this.markPendingSettingSection('llmProviderConfigs');
       this.status = '正在自动保存渠道配置...';
       const requestId = bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
         section: 'llmProviderConfigs',
+        ...revision,
         settings: {
           configs: this.llmProviderConfigs.configs.map((config) => {
             const plain = toPlainProviderConfig(config);
@@ -1084,7 +1161,11 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       this.markPendingSettingSection('llmCompression');
       this.status = '正在保存压缩绑定...';
       try {
-        bridge.request(BridgeMessageType.GlobalSettingsUpdate, { section: 'llmCompression', settings: toPlainCompressionSettings(this.llmCompression) });
+        bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
+          section: 'llmCompression',
+          ...this.consumeExpectedRevision('llmCompression'),
+          settings: toPlainCompressionSettings(this.llmCompression)
+        });
       } catch (error) {
         const message = `压缩绑定保存请求发送失败：${messageFromError(error)}`;
         this.clearPendingSettingSection('llmCompression');
@@ -1100,6 +1181,7 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       try {
         const requestId = bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
           section: 'llmCompressionConfigs',
+          ...this.consumeExpectedRevision('llmCompressionConfigs'),
           settings: {
             configs: this.llmCompressionConfigs.configs.map(toPlainCompressionConfig)
           }
@@ -1655,7 +1737,39 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       }
       this.saveLlmCompressionConfigs();
     },
-    applySnapshot(payload: GlobalSettingsSnapshotPayload, correlationId?: string): void {
+    /** 丢弃外部变更提示，保留本窗口当前表单内容。 */
+    dismissExternalSettingsChange(section?: GlobalSettingsSection): void {
+      const sections = section ? [section] : (Object.keys(this.externalChangedSections) as GlobalSettingsSection[]);
+      for (const item of sections) {
+        delete this.externalChangedSections[item];
+        delete this.pendingExternalSnapshots[item];
+      }
+    },
+    /** 用户确认后，把暂存的外部快照真正应用到表单。 */
+    applyExternalSettingsChange(section?: GlobalSettingsSection): void {
+      const sections = section ? [section] : (Object.keys(this.pendingExternalSnapshots) as GlobalSettingsSection[]);
+      for (const item of sections) {
+        const payload = this.pendingExternalSnapshots[item];
+        delete this.pendingExternalSnapshots[item];
+        delete this.externalChangedSections[item];
+        if (payload) this.applySnapshot(payload, undefined, { force: true });
+      }
+    },
+    applySnapshot(payload: GlobalSettingsSnapshotPayload, correlationId?: string, options: { force?: boolean } = {}): void {
+      // 外部（其他窗口）推送的快照不带 correlationId。
+      // 本窗口还有没写完的修改时绝不能直接覆盖表单（例如用户正在输入 API key）。
+      if (!options.force && correlationId === undefined && this.loadedSections[payload.section] && isSectionDirty(this, payload.section)) {
+        // 盘上版本就是本窗口上一次同步到的那个：什么都没变，不要报假的外部变更。
+        if (payload.revision !== undefined && lastSyncedRevisions.get(payload.section) === payload.revision) return;
+        this.pendingExternalSnapshots[payload.section] = payload;
+        this.externalChangedSections[payload.section] = true;
+        return;
+      }
+      delete this.pendingExternalSnapshots[payload.section];
+      delete this.externalChangedSections[payload.section];
+      if (payload.revision !== undefined) lastSyncedRevisions.set(payload.section, payload.revision);
+      else lastSyncedRevisions.delete(payload.section);
+
       const isLlmProviderConfigsSnapshot = payload.section === 'llmProviderConfigs';
       const providerConfigsRequestRevision = isLlmProviderConfigsSnapshot && correlationId
         ? llmProviderConfigsSaveRequestRevisions.get(correlationId)
@@ -1673,6 +1787,9 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
 
       this.loadedSections[payload.section] = true;
       this.filePaths[payload.section] = payload.filePath;
+      // 无论后续是否因本地编辑更新而跳过应用，盘上版本都要记下来供下一次保存校验。
+      if (payload.revision !== undefined) this.revisions[payload.section] = payload.revision;
+      else delete this.revisions[payload.section];
       this.clearLoadingSettingSection(payload.section);
       delete this.failedSettingsSections[payload.section];
 

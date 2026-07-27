@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { registerCommands } from './commands/registerCommands';
 import { MainPanel } from './panels/MainPanel';
 import { registerSidebarEntryView } from './views/SidebarEntryView';
+import { registerGlobalSettingsWatcher } from './watchers/GlobalSettingsWatcher';
 import { BackendApplication } from '../backend/application/BackendApplication';
 
 let backendApp: BackendApplication | undefined;
@@ -12,6 +13,7 @@ export function activate(context: vscode.ExtensionContext): void {
   MainPanel.registerSerializer(context, backendApp);
   registerCommands(context, backendApp);
   registerSidebarEntryView(context, backendApp);
+  registerGlobalSettingsWatcher(context, backendApp);
 
   console.log('LimCode (ECS backend) is active.');
 }

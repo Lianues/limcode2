@@ -10,39 +10,51 @@ import type {
 import { DEFAULT_LLM_COMPRESSION_RESERVE_TOKENS, DEFAULT_LLM_COMPRESSION_TRIGGER_PERCENT, createDefaultLlmCompressionConfig } from '../../../shared/protocol';
 import type { StoragePaths } from './clientStateStore';
 import { INDEX_FILE } from './constants';
-import { loadRecordStore, removeRecordStoreRecord, saveRecordStore } from './recordStore';
+import { loadRecordStore, loadRecordStoreRevision, saveRecordStore, type SaveRecordStoreOptions } from './recordStore';
 
 const RECORD_KEY = 'config';
 const CONFIGS_DIR = 'llm-compression-configs';
 const DEFAULT_CONFIG_NAME = '默认压缩方法';
+const REVISION_SECTION = 'llmCompressionConfigs';
 
-export async function loadLlmCompressionConfigsSettings(paths: StoragePaths): Promise<{ settings: LlmCompressionConfigsRecord; filePath: string }> {
+export interface LlmCompressionConfigsSettingsResult {
+  settings: LlmCompressionConfigsRecord;
+  filePath: string;
+  revision?: string;
+}
+
+export async function loadLlmCompressionConfigsSettings(paths: StoragePaths): Promise<LlmCompressionConfigsSettingsResult> {
   const records = await loadRawLlmCompressionConfigRecords(paths);
   if (records.length > 0) {
-    return { settings: { configs: sortConfigs(records.map((record) => normalizeLlmCompressionConfig(record))) }, filePath: configsIndexUri(paths).fsPath };
+    return {
+      settings: { configs: sortConfigs(records.map((record) => normalizeLlmCompressionConfig(record))) },
+      filePath: configsIndexUri(paths).fsPath,
+      revision: await loadRecordStoreRevision(configsIndexUri(paths))
+    };
   }
 
   const config = normalizeLlmCompressionConfig(createDefaultLlmCompressionConfig(DEFAULT_CONFIG_NAME));
   await writeLlmCompressionConfigRecords(paths, [config]);
-  return { settings: { configs: [config] }, filePath: configsIndexUri(paths).fsPath };
+  return {
+    settings: { configs: [config] },
+    filePath: configsIndexUri(paths).fsPath,
+    revision: await loadRecordStoreRevision(configsIndexUri(paths))
+  };
 }
 
 export async function saveLlmCompressionConfigsSettings(
   paths: StoragePaths,
-  settings: Partial<LlmCompressionConfigsRecord> | undefined
-): Promise<{ settings: LlmCompressionConfigsRecord; filePath: string }> {
-  const previous = await loadLlmCompressionConfigsSettings(paths);
+  settings: Partial<LlmCompressionConfigsRecord> | undefined,
+  expectedRevision?: string
+): Promise<LlmCompressionConfigsSettingsResult> {
   const configs = normalizeConfigList(settings?.configs);
   if (configs.length === 0) throw new Error('至少需要保留一个压缩方法配置。');
 
-  const nextIds = new Set(configs.map((config) => config.id));
-  for (const previousConfig of previous.settings.configs) {
-    if (!nextIds.has(previousConfig.id)) {
-      await removeRecordStoreRecord(configsRootUri(paths), configsIndexUri(paths), previousConfig.id, RECORD_KEY);
-    }
-  }
-
-  await writeLlmCompressionConfigRecords(paths, configs);
+  // 同 llmProviderConfigs：不在写入前逐条删除，而是靠同一把锁内的 pruneMissing 原子提交。
+  await writeLlmCompressionConfigRecords(paths, configs, {
+    pruneMissing: true,
+    ...(expectedRevision !== undefined ? { expectedSavedAt: expectedRevision, expectedSavedAtSection: REVISION_SECTION } : {})
+  });
   return loadLlmCompressionConfigsSettings(paths);
 }
 
@@ -115,8 +127,12 @@ async function loadRawLlmCompressionConfigRecords(paths: StoragePaths): Promise<
   return (await loadRecordStore<LlmCompressionConfigRecord, typeof RECORD_KEY>(configsRootUri(paths), configsIndexUri(paths), RECORD_KEY)) ?? [];
 }
 
-async function writeLlmCompressionConfigRecords(paths: StoragePaths, records: LlmCompressionConfigRecord[]): Promise<void> {
-  await saveRecordStore(configsRootUri(paths), configsIndexUri(paths), sortConfigs(records.map(normalizeLlmCompressionConfig)), RECORD_KEY, (record) => record.name);
+async function writeLlmCompressionConfigRecords(
+  paths: StoragePaths,
+  records: LlmCompressionConfigRecord[],
+  options: SaveRecordStoreOptions = {}
+): Promise<void> {
+  await saveRecordStore(configsRootUri(paths), configsIndexUri(paths), sortConfigs(records.map(normalizeLlmCompressionConfig)), RECORD_KEY, (record) => record.name, options);
 }
 
 function configsRootUri(paths: StoragePaths): vscode.Uri {

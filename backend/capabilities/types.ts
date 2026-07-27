@@ -631,6 +631,14 @@ export interface ResolvedAttachmentForClientResult {
   error?: string;
 }
 
+export interface GlobalSettingsStoreResult {
+  section: GlobalSettingsSection;
+  settings: GlobalSettingsSectionValue;
+  filePath: string;
+  /** 当前落盘版本（复用存储层已有的 savedAt），用于下一次写入的乐观并发校验。 */
+  revision?: string;
+}
+
 export interface StorageCapability {
   /** 当前 active data root 派生出的路径；数据目录切换后 getter 会返回新路径。 */
   readonly paths: RuntimePaths;
@@ -687,8 +695,9 @@ export interface StorageCapability {
   collectShadowWorktreeStats(): Promise<ShadowRepositoryDiskStatRecord[]>;
   deleteShadowWorktrees(storageKeys: string[]): Promise<{ deletedStorageKeys: string[] }>;
   cleanupUnusedShadowWorktrees(maxAgeDays: number): Promise<{ deletedStorageKeys: string[] }>;
-  loadGlobalSettings(section: GlobalSettingsSection): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
-  saveGlobalSettings(section: GlobalSettingsSection, settings: GlobalSettingsSectionValue): Promise<{ section: GlobalSettingsSection; settings: GlobalSettingsSectionValue; filePath: string }>;
+  loadGlobalSettings(section: GlobalSettingsSection): Promise<GlobalSettingsStoreResult>;
+  /** expectedRevision 可选：传入时做乐观并发校验，不传完全保持旧行为。 */
+  saveGlobalSettings(section: GlobalSettingsSection, settings: GlobalSettingsSectionValue, expectedRevision?: string): Promise<GlobalSettingsStoreResult>;
   loadActiveLlmProviderConfig(conversationId?: string): Promise<LlmProviderConfigRecord>;
   loadLlmProviderConfigById(configId: string): Promise<LlmProviderConfigRecord | undefined>;
   loadActiveLlmCompressionConfig(providerConfigId?: string, modelId?: string): Promise<LlmCompressionConfigRecord | undefined>;

@@ -2591,11 +2591,15 @@ export interface GlobalSettingsSnapshotPayload {
   section: GlobalSettingsSection;
   settings: GlobalSettingsSectionValue;
   filePath: string;
+  /** 该 section 当前落盘版本（复用存储层已有的 savedAt）。回传给 update 用于乐观并发校验。 */
+  revision?: string;
 }
 export interface GlobalSettingsUpdatePayload {
   section: GlobalSettingsSection;
   settings: GlobalSettingsSectionValue;
   refreshMcpTools?: boolean;
+  /** 本次修改所基于的落盘版本。不传表示不做校验（保持旧行为）。 */
+  expectedRevision?: string;
 }
 export interface ConversationSettingsRecord {
   conversationId: string;

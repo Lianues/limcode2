@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { SettingsRevisionConflictError } from '../settingsRevisionConflict';
 import { RECORDS_DIR, STORAGE_VERSION } from './constants';
 import { isFileNotFoundError, readJson, readJsonStrict, writeJson } from './json';
 import { sortableName } from './naming';
@@ -31,6 +32,13 @@ type RecordFile<TKey extends string, TRecord> = {
 
 export interface SaveRecordStoreOptions {
   pruneMissing?: boolean;
+  /**
+   * 乐观并发校验：本次保存所基于的 index savedAt。
+   * 不传 = 不校验 = 完全旧行为。校验直接搭在锁内本来就要做的 previousIndex 读取上，无额外 IO。
+   */
+  expectedSavedAt?: string;
+  /** 冲突报错中展示的 section 名；缺省用 index 路径。 */
+  expectedSavedAtSection?: string;
 }
 
 export interface RecordStoreReadHookContext {
@@ -156,6 +164,11 @@ export async function withRecordStoreTransaction<T>(lockUri: vscode.Uri, action:
   return withRecordStoreMutationLock(lockUri, action);
 }
 
+/** 读取 record store index 的当前 savedAt，用作乐观并发的 revision。index 缺失/损坏时返回 undefined。 */
+export async function loadRecordStoreRevision(indexUri: vscode.Uri): Promise<string | undefined> {
+  return (await loadRecordsIndex(indexUri, false))?.savedAt;
+}
+
 export async function saveRecordStore<TRecord extends { id: string }, TKey extends string>(
   root: vscode.Uri,
   indexUri: vscode.Uri,
@@ -181,6 +194,14 @@ async function saveRecordStoreUnlocked<TRecord extends { id: string }, TKey exte
   // 全量保存本身会重写所有 next records，因此不能让历史索引中的空/缺失文件永久阻断修复。
   // 在 mutation lock 内复用旧文件名；若旧文件已丢失，下面的原子 writeJson 会直接重建。
   const previousIndex = await loadRecordsIndex(indexUri, false);
+  // 版本比对必须发生在任何写入/删除之前：冲突时盘上数据必须逐字节不变。
+  if (options.expectedSavedAt !== undefined && previousIndex && previousIndex.savedAt !== options.expectedSavedAt) {
+    throw new SettingsRevisionConflictError(
+      options.expectedSavedAtSection ?? indexUri.fsPath,
+      options.expectedSavedAt,
+      previousIndex.savedAt
+    );
+  }
   const previousRecords = previousIndex?.records ?? [];
   const previousById = new Map(previousRecords.map((record) => [record.id, record]));
 

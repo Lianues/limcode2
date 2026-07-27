@@ -6,8 +6,12 @@ import { projectStorageStateWithCache, type StorageContributorProjectionState } 
 import type { AgentRunStatus, ClientState, ClientStateTableKey, ConversationOriginLinkRecord, MessageContent, MessageRecord, SidebarConversationHistoryEntry } from '../../shared/protocol';
 import { conversationCreatedAtFromId, displayConversationTitle } from '../../shared/conversationTitle';
 import { collectChangedClientStateConversationIds } from '../../shared/clientStateConversationScope';
-import { isConversationScopeLinkRecord } from '../../shared/clientStateSchema';
+import { createEmptyClientState, isConversationScopeLinkRecord } from '../../shared/clientStateSchema';
 import { conversationRenderDetailSlice, conversationRunHistorySlice } from '../capabilities/vscodeStorage/clientStateStore';
+import { projectChatState } from '../world/modules/chat/stateProjection';
+import { projectToolsRuntimeState } from '../world/modules/tools/stateProjection';
+import { checkpointStateProjection } from '../world/modules/checkpoint/stateProjection';
+import { projectStateProjection } from '../world/modules/project/stateProjection';
 
 const DEFAULT_PERSIST_DEBOUNCE_MS = 500;
 const MUTATION_GATE_CONTEXT = 'client-state-persistence:mutation-gate';
@@ -52,6 +56,8 @@ export interface ClientStatePersistenceOptions {
    * 降级成“新对话 / 暂无消息”或尾部工具响应。
    */
   isConversationHistorySummaryComplete?: (conversationId: string) => boolean;
+  /** 测试/宿主可覆盖；默认直接从 ECS 投影目标 conversation 的 timeline-only 数据。 */
+  projectConversationTimelineState?: (world: WorldReader, conversationId: string) => ClientState;
 }
 
 interface PendingRunHistoryState {
@@ -104,6 +110,16 @@ export class ClientStatePersistence {
     this.lastPersistedRunHistoryJson.clear();
   }
 
+  /** 记录刚从 storage 完整读取且未被修补的 render detail，避免 hydrate 本身触发重复回写。 */
+  public rememberConversationRenderDetailPersisted(conversationId: string, state: ClientState): void {
+    const normalizedConversationId = conversationId.trim();
+    if (!normalizedConversationId) return;
+    this.lastPersistedRenderDetailJson.set(
+      normalizedConversationId,
+      JSON.stringify(conversationRenderDetailSlice(state, normalizedConversationId))
+    );
+  }
+
   public queuePersist(): void {
     if (!this.enabled) return;
     if (this.mutationGateActive) {
@@ -154,17 +170,22 @@ export class ClientStatePersistence {
     this.pendingHistoryStates.clear();
 
     this.persistInFlight = true;
+    // 先启动 render detail 保存，让每个 conversation 立即预订自己的 timeline root FIFO。
+    // 后续消息 truncate 会排在这些旧快照之后，而不会被 skeleton/run-history 慢任务拖到旧快照前面。
+    const renderDetailTask = awaitAllPersistTasks(renderDetailStates.map(async ([conversationId, state]) => {
+      await this.storage.saveConversationRenderDetail(conversationId, state);
+      this.lastPersistedRenderDetailJson.set(conversationId, JSON.stringify(conversationRenderDetailSlice(state, conversationId)));
+    }));
+    const skeletonTask = skeletonState
+      ? this.storage.saveClientStateSkeleton(skeletonState).then(() => {
+          this.lastPersistedSkeletonJson = JSON.stringify(skeletonPersistenceSlice(skeletonState));
+        })
+      : Promise.resolve();
     try {
-      if (skeletonState) {
-        await this.storage.saveClientStateSkeleton(skeletonState);
-        this.lastPersistedSkeletonJson = JSON.stringify(skeletonPersistenceSlice(skeletonState));
-      }
+      // render 与 skeleton 并行；render 已先创建，因此会先预订 conversation timeline 队列。
+      await Promise.all([renderDetailTask, skeletonTask]);
 
       // 每个 conversation 使用独立存储目录，可并行落盘；共享 history index 仍在下方串行更新。
-      await awaitAllPersistTasks(renderDetailStates.map(async ([conversationId, state]) => {
-        await this.storage.saveConversationRenderDetail(conversationId, state);
-        this.lastPersistedRenderDetailJson.set(conversationId, JSON.stringify(conversationRenderDetailSlice(state, conversationId)));
-      }));
 
       await awaitAllPersistTasks(runHistoryStates.map(async ([conversationId, pending]) => {
         await this.storage.saveConversationRunHistory(conversationId, pending.state, { mode: pending.mode });
@@ -187,6 +208,56 @@ export class ClientStatePersistence {
   }
 
   /**
+   * 只强制保存一个 conversation 的聊天渲染时间线。
+   *
+   * 消息编辑/删除/重试只依赖 messages/revisions/tool/checkpoint timeline 已落盘，
+   * 不应等待全局 skeleton、run history、history summary 或其他 conversation。
+   * 底层 timeline root lock 会与普通后台 render 保存保持 FIFO 顺序。
+   */
+  public async persistConversationRenderDetailImmediately(
+    conversationId: string,
+    options: { throwOnError?: boolean } = {}
+  ): Promise<void> {
+    const normalizedConversationId = conversationId.trim();
+    if (!normalizedConversationId || !this.enabled) return;
+
+    if (this.mutationGateActive && !this.isInsideMutationGate()) {
+      this.persistPendingAfterMutationGate = true;
+      await this.waitForMutationGateIdle();
+      return this.persistConversationRenderDetailImmediately(normalizedConversationId, options);
+    }
+
+    const state = this.options.projectConversationTimelineState?.(this.world, normalizedConversationId)
+      ?? projectConversationTimelineState(this.world, normalizedConversationId);
+
+    try {
+      await this.storage.saveConversationTimelineRenderDetail(normalizedConversationId, state);
+      this.lastPersistedRenderDetailJson.set(normalizedConversationId, JSON.stringify(state));
+    } catch (error) {
+      console.warn(`[LimCode] Failed to persist conversation timeline before mutation: ${normalizedConversationId}`, error);
+      if (options.throwOnError) throw error;
+    }
+  }
+
+  /**
+   * 在读取完整 conversation timeline 前，先提交当前 ECS 中已 hydrate 的 timeline 变更。
+   *
+   * 复用独占持久化屏障，确保 debounce writer 不会在完整 reader 读取 generation 的过程中
+   * 发布新 index；提交失败会直接阻止后续读取和模型调用。
+   */
+  public async withConversationTimelineCommittedBeforeRead<T>(
+    conversationId: string,
+    action: () => Promise<T>
+  ): Promise<T> {
+    const normalizedConversationId = conversationId.trim();
+    if (!normalizedConversationId || !this.enabled) return action();
+    return this.withExclusiveMutationGate(async () => {
+      await this.persistConversationRenderDetailImmediately(normalizedConversationId, { throwOnError: true });
+      return action();
+    });
+  }
+
+  /**
    * 独占生命周期变更屏障：阻止新的普通持久化启动，等待已开始的持久化完成，
    * 并允许屏障内部显式调用 persistImmediately 安全落盘。
    */
@@ -199,6 +270,7 @@ export class ClientStatePersistence {
     await previousGate.catch(() => undefined);
 
     this.mutationGateActive = true;
+    if (this.persistTimer) this.persistPendingAfterMutationGate = true;
     this.clearPersistTimer();
     await this.waitForPersistIdle();
 
@@ -267,14 +339,11 @@ export class ClientStatePersistence {
       this.pendingSkeletonState = state;
     }
 
-    const targetIdsAreKnownChanged = !!targetConversationIds && !force;
     for (const conversationId of this.renderLoadedConversationIds(state)) {
       if (targetConversationIds && !targetConversationIds.has(conversationId)) continue;
-      if (!targetIdsAreKnownChanged) {
-        const detail = conversationRenderDetailSlice(state, conversationId);
-        const detailJson = JSON.stringify(detail);
-        if (!force && detailJson === this.lastPersistedRenderDetailJson.get(conversationId)) continue;
-      }
+      const detail = conversationRenderDetailSlice(state, conversationId);
+      const detailJson = JSON.stringify(detail);
+      if (!force && detailJson === this.lastPersistedRenderDetailJson.get(conversationId)) continue;
       this.pendingRenderDetailStates.set(conversationId, state);
       if (this.shouldPersistHistorySummary(conversationId)) {
         this.pendingHistoryStates.set(conversationId, state);
@@ -649,6 +718,16 @@ function knownRunHistoryConversationIds(state: ClientState): string[] {
 function conversationIdForToolCall(toolCallId: string, toolCallMessageIds: ReadonlyMap<string, string>, messageConversationIds: ReadonlyMap<string, string>): string | undefined {
   const messageId = toolCallMessageIds.get(toolCallId);
   return messageId ? messageConversationIds.get(messageId) : undefined;
+}
+
+function projectConversationTimelineState(world: WorldReader, conversationId: string): ClientState {
+  const projected = createEmptyClientState();
+  const chat = projectChatState(world);
+  const tools = projectToolsRuntimeState(world);
+  const checkpoints = checkpointStateProjection(world);
+  const projects = projectStateProjection(world);
+  Object.assign(projected, chat, tools, checkpoints, projects);
+  return conversationRenderDetailSlice(projected, conversationId);
 }
 
 function hasRunHistoryRecords(state: ClientState): boolean {

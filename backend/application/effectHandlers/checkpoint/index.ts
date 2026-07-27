@@ -12,7 +12,6 @@ import type { CheckpointCreateEffect } from '../../../world/modules/checkpoint/e
 import type { Emit } from '../../../capabilities/types';
 import type { WebviewCapability, StorageCapability } from '../../../capabilities/types';
 import type { EffectHandlerRegistry } from '../registry';
-
 /** 每个对话标签页在自身生命周期内只展示一次存档点问题提醒；关闭后重新打开会获得新的 clientId，可再次提醒。 */
 const checkpointNoticeShownClientIds = new Set<string>();
 /** 同一 shadow 仓库内串行创建存档点，避免首次消息同时触发 initial/after 时并发 git init 锁冲突。 */
@@ -33,7 +32,12 @@ function enqueueCheckpointCreate(storageKey: string, task: () => Promise<void>):
   checkpointCreateQueues.set(storageKey, tracked);
 }
 
-async function runCheckpointCreate(effect: CheckpointCreateEffect, storage: StorageCapability, webview: WebviewCapability, emit: Emit): Promise<void> {
+async function runCheckpointCreate(
+  effect: CheckpointCreateEffect,
+  storage: StorageCapability,
+  webview: WebviewCapability,
+  emit: Emit
+): Promise<void> {
   try {
     const record = await storage.createShadowCheckpoint(effect);
     emitCompletedCheckpoint(record, effect, emit);

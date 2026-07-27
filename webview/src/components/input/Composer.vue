@@ -80,6 +80,8 @@ const sendTitle = computed(() => {
 const compacting = computed(() => conversationTimeline.currentCompressionBlocks.some((block) => block.status === 'pending' || block.status === 'running'));
 const compactTitle = computed(() => compacting.value ? '取消上下文压缩' : '压缩当前上下文');
 const runSummary = computed(() => clientState.currentRunSummary);
+const showAbortAction = computed(() => runSummary.value.isRunning || ui.hasPendingTimelineMutation);
+const abortTitle = computed(() => ui.hasPendingTimelineMutation ? '中断当前整理，保留消息变更' : '终止当前对话正在执行的任务');
 const channelOptions = computed<SettingsDropdownOption[]>(() =>
   globalSettings.llmProviderConfigs.configs.map((config) => {
     const model = selectedModelForConfig(config);
@@ -132,7 +134,7 @@ const agentOptions = computed<SettingsDropdownOption[]>(() => {
   return options;
 });
 const activeAgentId = computed({
-  get: () => activeConversationAgent.value?.id ?? agentOptions.value[0]?.value ?? '',
+  get: () => activeConversationAgent.value?.id ?? '',
   set: (agentId: string) => selectAgent(agentId)
 });
 const activeWorkflowId = computed({
@@ -293,6 +295,7 @@ function onAttachmentWheel(event: WheelEvent): void {
 
 function abortConversation(): void {
   abortCurrentConversation();
+  ui.cancelPendingTimelineMutation();
 }
 
 function onQueueEdit(item: QueueItem): void {
@@ -678,11 +681,11 @@ function middleEllipsis(value: string, maxLength: number): string {
           <IconPaperclip class="composer-side-action-icon" stroke="2" aria-hidden="true" />
         </button>
         <button
-          v-if="runSummary.isRunning"
+          v-if="showAbortAction"
           type="button"
           class="composer-side-action composer-side-abort"
-          aria-label="终止当前对话正在执行的任务"
-          title="终止当前对话正在执行的任务"
+          :aria-label="abortTitle"
+          :title="abortTitle"
           @click="abortConversation"
         >
           <IconPlayerStop class="composer-side-action-icon" stroke="2" aria-hidden="true" />
@@ -697,6 +700,7 @@ function middleEllipsis(value: string, maxLength: number): string {
             v-model="activeAgentId"
             class="composer-meta-dropdown composer-agent-dropdown"
             :options="agentOptions"
+            placeholder="未选择 Agent"
             title="切换当前 Agent"
             searchable
             search-placeholder="筛选 Agent..."

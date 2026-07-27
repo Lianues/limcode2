@@ -66,7 +66,6 @@ import {
   type WebviewToExtensionMessage
 } from '../../shared/protocol';
 import { hydrateConversationDetail } from './clientStateHydration';
-
 import type { GlobalSettingsBridge } from './GlobalSettingsBridge';
 import type { ConversationSettingsBridge } from './ConversationSettingsBridge';
 import type { SetConversationProjectFolderInput } from './BackendApplication';
@@ -85,7 +84,7 @@ export interface WebviewMessageRouterDeps {
   isHydrated: () => boolean;
   requestSnapshot: (conversationId?: string) => void;
   requestPersist?: (reason: string) => void;
-  flushPersistence?: (reason: string) => Promise<void>;
+  flushConversationTimelinePersistence?: (conversationId: string, reason: string) => Promise<void>;
   ensureConversationDetailLoaded: (conversationId: string) => Promise<void>;
   ensureConversationTailLoaded: (conversationId: string) => Promise<void>;
   getProjectFolderCandidates: () => ProjectFolderCandidateRecord[];
@@ -96,11 +95,18 @@ export interface WebviewMessageRouterDeps {
   saveRuleFile: (scope: RuleScope, content: string) => Promise<void>;
 }
 
+interface ConversationTimelineMutationContext {
+  cancelRequested: boolean;
+}
+
 /**
  * Webview -> backend 消息路由。
  * 只负责把 bridge message 分发到 chat/settings/control 等应用动作。
  */
 export class WebviewMessageRouter {
+  private readonly conversationTimelineMutationTails = new Map<string, Promise<void>>();
+  private readonly conversationTimelineMutationContexts = new Map<string, Set<ConversationTimelineMutationContext>>();
+
   public constructor(private readonly deps: WebviewMessageRouterDeps) {}
 
   public handle(clientId: BridgeClientId, message: WebviewToExtensionMessage): void {
@@ -110,9 +116,11 @@ export class WebviewMessageRouter {
         {
           const payload = message.payload;
           this.upsertConversationModelOverride(payload.conversationId, payload.model);
-          void this.enqueueAfterConversationTailLoaded(payload.conversationId, () => {
-            this.deps.world.enqueue({ type: ChatEventType.Send, payload });
-          });
+          void this.runAfterConversationTimelineMutations(payload.conversationId, () =>
+            this.enqueueAfterConversationTailLoaded(payload.conversationId, () => {
+              this.deps.world.enqueue({ type: ChatEventType.Send, payload });
+            })
+          );
         }
         break;
       case BridgeMessageType.ChatAbort:
@@ -121,6 +129,7 @@ export class WebviewMessageRouter {
           this.postOperationResult(clientId, { ok: false, operation: message.type, targetId: message.payload.conversationId, code: 'not_found', message: '找不到要停止的对话。' }, message.id);
           return;
         }
+        this.cancelConversationTimelineMutations(message.payload.conversationId);
         this.deps.world.enqueue({ type: AgentRunEventType.CancelConversation, payload: { conversationId: message.payload.conversationId, reason: 'chat_abort' } });
         this.postOperationResult(clientId, { ok: true, operation: message.type, targetId: message.payload.conversationId }, message.id);
         break;
@@ -133,14 +142,14 @@ export class WebviewMessageRouter {
         {
           const payload = message.payload;
           this.upsertConversationModelOverride(payload.conversationId, payload.model);
-          void this.handleMessageEdit(payload);
+          this.enqueueConversationTimelineMutation(payload.conversationId, (mutation) => this.handleMessageEdit(clientId, payload, mutation, message.id));
         }
         break;
       case BridgeMessageType.MessageDeleteFrom:
         if (!this.deps.isHydrated() || !message.payload) return;
         {
           const payload = message.payload;
-          void this.handleMessageDeleteFrom(clientId, payload, message.id);
+          this.enqueueConversationTimelineMutation(payload.conversationId, () => this.handleMessageDeleteFrom(clientId, payload, message.id));
         }
         break;
       case BridgeMessageType.MessageRetryFrom:
@@ -148,7 +157,7 @@ export class WebviewMessageRouter {
         {
           const payload = message.payload;
           this.upsertConversationModelOverride(payload.conversationId, payload.model);
-          void this.handleMessageRetryFrom(clientId, payload, message.id);
+          this.enqueueConversationTimelineMutation(payload.conversationId, (mutation) => this.handleMessageRetryFrom(clientId, payload, mutation, message.id));
         }
         break;
       case BridgeMessageType.ToolPolicyScopeSet:
@@ -838,13 +847,15 @@ export class WebviewMessageRouter {
 
   private async handleMessageDeleteFrom(clientId: BridgeClientId, payload: MessageDeleteFromPayload, correlationId?: string): Promise<void> {
     try {
-      await this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'between', startMessageId: payload.messageId, endMessageId: payload.messageId, contextBeforeChunks: 1 }, () => undefined);
+      if (!this.messageExists(payload.conversationId, payload.messageId) || this.messageContainsFunctionResponse(payload.conversationId, payload.messageId)) {
+        await this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'between', startMessageId: payload.messageId, endMessageId: payload.messageId, contextBeforeChunks: 1 }, () => undefined);
+      }
       const deletePayload = this.normalizeDeleteFromPayload(payload);
       if (!this.messageExists(deletePayload.conversationId, deletePayload.messageId)) {
         this.postOperationResult(clientId, { ok: false, operation: BridgeMessageType.MessageDeleteFrom, targetId: deletePayload.messageId, code: 'not_found', message: '找不到要删除的消息。' }, correlationId);
         return;
       }
-      await this.deps.flushPersistence?.('before-message-delete-truncate');
+      await this.deps.flushConversationTimelinePersistence?.(deletePayload.conversationId, 'before-message-delete-truncate');
       await this.deps.storage.truncateConversationTimeline({ conversationId: deletePayload.conversationId, anchorMessageId: deletePayload.messageId, keepAnchor: false });
       this.deps.world.enqueue({ type: ChatEventType.DeleteFrom, payload: deletePayload });
       this.postOperationResult(clientId, { ok: true, operation: BridgeMessageType.MessageDeleteFrom, targetId: deletePayload.messageId }, correlationId);
@@ -858,6 +869,18 @@ export class WebviewMessageRouter {
   private normalizeDeleteFromPayload(payload: MessageDeleteFromPayload): MessageDeleteFromPayload {
     const boundaryMessageId = this.functionCallBoundaryForToolResponse(payload.conversationId, payload.messageId);
     return boundaryMessageId && boundaryMessageId !== payload.messageId ? { ...payload, messageId: boundaryMessageId } : payload;
+  }
+
+  private messageContainsFunctionResponse(conversationId: string, messageId: string): boolean {
+    const conversation = this.deps.world.query(Conversation).find((entity) => this.deps.world.get(entity, Conversation)?.id === conversationId);
+    if (conversation === undefined) return false;
+    return this.deps.world
+      .query(Message, PartOf)
+      .filter((entity) => this.deps.world.get(entity, PartOf)?.parent === conversation)
+      .some((entity) => {
+        const message = this.deps.world.get(entity, Message);
+        return message?.id === messageId && message.content.parts.some(isFunctionResponsePart);
+      });
   }
 
   private functionCallBoundaryForToolResponse(conversationId: string, messageId: string): string | undefined {
@@ -888,35 +911,104 @@ export class WebviewMessageRouter {
     return undefined;
   }
 
-  private async handleMessageEdit(payload: MessageEditPayload): Promise<void> {
+  private async handleMessageEdit(
+    clientId: BridgeClientId,
+    payload: MessageEditPayload,
+    mutation: ConversationTimelineMutationContext,
+    correlationId?: string
+  ): Promise<void> {
     try {
-      await this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'between', startMessageId: payload.messageId, endMessageId: payload.messageId, contextBeforeChunks: 1 }, () => undefined);
+      if (!this.messageExists(payload.conversationId, payload.messageId)) {
+        await this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'between', startMessageId: payload.messageId, endMessageId: payload.messageId, contextBeforeChunks: 1 }, () => undefined);
+      }
+      if (!this.messageExists(payload.conversationId, payload.messageId)) {
+        this.postOperationResult(clientId, { ok: false, operation: BridgeMessageType.MessageEdit, targetId: payload.messageId, code: 'not_found', message: '找不到要编辑的消息。' }, correlationId);
+        return;
+      }
       if (payload.deleteFollowing) {
-        await this.deps.flushPersistence?.('before-message-edit-truncate');
+        await this.deps.flushConversationTimelinePersistence?.(payload.conversationId, 'before-message-edit-truncate');
         await this.deps.storage.truncateConversationTimeline({ conversationId: payload.conversationId, anchorMessageId: payload.messageId, keepAnchor: true });
       }
-      this.deps.world.enqueue({ type: ChatEventType.Edit, payload });
+      const editPayload = mutation.cancelRequested && payload.runAfterEdit
+        ? { ...payload, runAfterEdit: false }
+        : payload;
+      this.deps.world.enqueue({ type: ChatEventType.Edit, payload: editPayload });
+      this.postOperationResult(clientId, { ok: true, operation: BridgeMessageType.MessageEdit, targetId: payload.messageId }, correlationId);
     } catch (error) {
+      const message = error instanceof Error ? error.message : '编辑消息前截断对话失败。';
       console.warn('[LimCode] Failed to prepare conversation before editing message.', error);
+      this.postOperationResult(clientId, { ok: false, operation: BridgeMessageType.MessageEdit, targetId: payload.messageId, code: 'storage_failed', message }, correlationId);
     }
   }
 
-  private async handleMessageRetryFrom(clientId: BridgeClientId, payload: MessageRetryFromPayload, correlationId?: string): Promise<void> {
+  private async handleMessageRetryFrom(
+    clientId: BridgeClientId,
+    payload: MessageRetryFromPayload,
+    mutation: ConversationTimelineMutationContext,
+    correlationId?: string
+  ): Promise<void> {
     try {
-      await this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'between', startMessageId: payload.messageId, endMessageId: payload.messageId, contextBeforeChunks: 1 }, () => undefined);
+      if (!this.messageExists(payload.conversationId, payload.messageId)) {
+        await this.enqueueAfterTimelineRangeLoaded({ conversationId: payload.conversationId, mode: 'between', startMessageId: payload.messageId, endMessageId: payload.messageId, contextBeforeChunks: 1 }, () => undefined);
+      }
       if (!this.messageExists(payload.conversationId, payload.messageId)) {
         this.postOperationResult(clientId, { ok: false, operation: BridgeMessageType.MessageRetryFrom, targetId: payload.messageId, code: 'not_found', message: '找不到要重试的消息。' }, correlationId);
         return;
       }
-      await this.deps.flushPersistence?.('before-message-retry-truncate');
+      await this.deps.flushConversationTimelinePersistence?.(payload.conversationId, 'before-message-retry-truncate');
       await this.deps.storage.truncateConversationTimeline({ conversationId: payload.conversationId, anchorMessageId: payload.messageId, keepAnchor: false });
-      this.deps.world.enqueue({ type: ChatEventType.RetryFrom, payload });
+      this.deps.world.enqueue(mutation.cancelRequested
+        ? { type: ChatEventType.DeleteFrom, payload: { conversationId: payload.conversationId, messageId: payload.messageId } }
+        : { type: ChatEventType.RetryFrom, payload });
       this.postOperationResult(clientId, { ok: true, operation: BridgeMessageType.MessageRetryFrom, targetId: payload.messageId }, correlationId);
     } catch (error) {
       const message = error instanceof Error ? error.message : '重试消息前截断对话失败。';
       console.warn('[LimCode] Failed to truncate conversation before retrying message.', error);
       this.postOperationResult(clientId, { ok: false, operation: BridgeMessageType.MessageRetryFrom, targetId: payload.messageId, code: 'storage_failed', message }, correlationId);
     }
+  }
+
+  private enqueueConversationTimelineMutation(
+    conversationId: string,
+    action: (mutation: ConversationTimelineMutationContext) => Promise<void>
+  ): void {
+    const normalizedConversationId = conversationId.trim();
+    if (!normalizedConversationId) return;
+    const mutation: ConversationTimelineMutationContext = { cancelRequested: false };
+    const contexts = this.conversationTimelineMutationContexts.get(normalizedConversationId) ?? new Set<ConversationTimelineMutationContext>();
+    contexts.add(mutation);
+    this.conversationTimelineMutationContexts.set(normalizedConversationId, contexts);
+
+    const previous = this.conversationTimelineMutationTails.get(normalizedConversationId) ?? Promise.resolve();
+    const current = previous
+      .catch((error) => console.warn('[LimCode] Previous conversation timeline mutation failed.', error))
+      .then(() => action(mutation));
+    this.conversationTimelineMutationTails.set(normalizedConversationId, current);
+    const clear = (): void => {
+      contexts.delete(mutation);
+      if (contexts.size === 0 && this.conversationTimelineMutationContexts.get(normalizedConversationId) === contexts) {
+        this.conversationTimelineMutationContexts.delete(normalizedConversationId);
+      }
+      if (this.conversationTimelineMutationTails.get(normalizedConversationId) === current) {
+        this.conversationTimelineMutationTails.delete(normalizedConversationId);
+      }
+    };
+    void current.then(clear, (error) => {
+      console.warn('[LimCode] Conversation timeline mutation failed.', error);
+      clear();
+    });
+  }
+
+  private cancelConversationTimelineMutations(conversationId: string): void {
+    const contexts = this.conversationTimelineMutationContexts.get(conversationId.trim());
+    if (!contexts) return;
+    for (const mutation of contexts) mutation.cancelRequested = true;
+  }
+
+  private async runAfterConversationTimelineMutations(conversationId: string, action: () => Promise<void>): Promise<void> {
+    const pending = this.conversationTimelineMutationTails.get(conversationId.trim());
+    if (pending) await pending.catch(() => undefined);
+    await action();
   }
 
   private async enqueueAfterTimelineRangeLoaded(

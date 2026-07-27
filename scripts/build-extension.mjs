@@ -17,7 +17,7 @@ await esbuild.build({
   bundle: true,
   platform: 'node',
   format: 'cjs',
-  target: 'node18',
+  target: 'node20',
   tsconfig: path.join(root, 'tsconfig.json'),
   external: ['vscode'],
   sourcemap: false,

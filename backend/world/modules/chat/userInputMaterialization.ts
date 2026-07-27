@@ -1,9 +1,10 @@
 import type { CommandSink, Entity, WorldReader } from '../../../ecs/types';
 import { createStableId } from '../../../utils/stableId';
 import { createMessageId, type MessageContent } from '../../../../shared/protocol';
-import { spawnCheckpointBarrier } from '../checkpoint/barriers';
+import { requestCheckpointBarrierIfEnabled } from '../checkpoint/barriers';
 import { Checkpoint } from '../checkpoint/components';
 import { CheckpointEventType } from '../checkpoint/events';
+import { evaluateCheckpointRequestPolicy } from '../checkpoint/queries';
 import { spawnUserContentMessage, spawnUserMessage } from './bundles';
 import { Conversation } from './components';
 import { conversationMessages } from './queries';
@@ -19,8 +20,8 @@ export function materializeUserInputMessage(
   const needsInitialCheckpoint = isFirstMessage && !hasInitialCheckpoint(world, conversation);
   const messageId = createStableId('msg');
   const message = spawnInputMessage(cmd, conversation, content, messageId);
-  if (needsInitialCheckpoint) requestInitialCheckpoint(cmd, conversationId);
-  requestUserMessageCheckpoints(cmd, conversationId, conversation, message, messageId);
+  if (needsInitialCheckpoint) requestInitialCheckpoint(world, cmd, conversationId, conversation);
+  requestUserMessageCheckpoints(world, cmd, conversationId, conversation, message, messageId);
   return message;
 }
 
@@ -36,32 +37,34 @@ function hasInitialCheckpoint(world: WorldReader, conversation: Entity): boolean
   });
 }
 
-function requestInitialCheckpoint(cmd: CommandSink, conversationId: string): void {
+function requestInitialCheckpoint(world: WorldReader, cmd: CommandSink, conversationId: string, conversation: Entity): void {
+  if (!evaluateCheckpointRequestPolicy(world, { conversation, trigger: 'conversation_initial' }).enabled) return;
   cmd.enqueue({
     type: CheckpointEventType.Requested,
     payload: { conversationId, trigger: 'conversation_initial' }
   });
 }
 
-function requestUserMessageCheckpoints(cmd: CommandSink, conversationId: string, conversation: Entity, floorMessage: Entity, floorMessageId: string): void {
+function requestUserMessageCheckpoints(world: WorldReader, cmd: CommandSink, conversationId: string, conversation: Entity, floorMessage: Entity, floorMessageId: string): void {
   const beforeCheckpointId = createMessageId();
-  spawnCheckpointBarrier(cmd, {
-    checkpointId: beforeCheckpointId,
-    conversation,
-    trigger: 'user_message_before',
-    targetKind: 'message_llm',
-    targetMessage: floorMessage,
-    targetMessageId: floorMessageId
-  });
-  cmd.enqueue({
-    type: CheckpointEventType.Requested,
-    payload: { checkpointId: beforeCheckpointId, conversationId, trigger: 'user_message_before', floorMessageId, anchorPosition: 'before' }
+  requestCheckpointBarrierIfEnabled(world, cmd, {
+    barrier: {
+      checkpointId: beforeCheckpointId,
+      conversation,
+      trigger: 'user_message_before',
+      targetKind: 'message_llm',
+      targetMessage: floorMessage,
+      targetMessageId: floorMessageId
+    },
+    request: { conversationId, floorMessageId, anchorPosition: 'before' }
   });
 
-  cmd.enqueue({
-    type: CheckpointEventType.Requested,
-    payload: { conversationId, trigger: 'user_message_after', floorMessageId, anchorPosition: 'after' }
-  });
+  if (evaluateCheckpointRequestPolicy(world, { conversation, trigger: 'user_message_after' }).enabled) {
+    cmd.enqueue({
+      type: CheckpointEventType.Requested,
+      payload: { conversationId, trigger: 'user_message_after', floorMessageId, anchorPosition: 'after' }
+    });
+  }
 }
 
 export function conversationIdForEntity(world: WorldReader, conversation: Entity): string | undefined {

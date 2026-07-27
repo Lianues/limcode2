@@ -2,7 +2,8 @@ import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldRea
 import { AgentRun, AgentRunNeedsModel, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunSourceLink, AgentRunTargetLink } from '../components';
 import { AgentRunBundle, markRunNeedsModel, spawnMessageRunLink } from '../bundles';
 import { isTerminalRunStatus } from '../queries';
-import { Checkpoint, CheckpointBarrier } from '../../checkpoint/components';
+import { Checkpoint, CheckpointBarrier, CheckpointPolicy, CheckpointPolicyScopeLink } from '../../checkpoint/components';
+import { ConversationWorkflowSelection, Workflow } from '../../workflow/components';
 import { CheckpointEventType } from '../../checkpoint/events';
 import { CompressionBlock } from '../../compression/components';
 import { hasActiveBlockingCompression } from '../../compression/queries';
@@ -14,7 +15,7 @@ const QueuedRunsQuery = defineQuery({
   name: 'QueuedAgentRunsWithoutModelRequest',
   all: [AgentRun, AgentRunTargetLink],
   none: [AgentRunNeedsModel],
-  read: [AgentRun, AgentRunTargetLink, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunSourceLink, AgentRunNeedsModel, LlmRequest, Conversation, Message, PartOf, Checkpoint, CheckpointBarrier, CompressionBlock],
+  read: [AgentRun, AgentRunTargetLink, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunSourceLink, AgentRunNeedsModel, LlmRequest, Conversation, Message, PartOf, Checkpoint, CheckpointBarrier, CheckpointPolicy, CheckpointPolicyScopeLink, ConversationWorkflowSelection, Workflow, CompressionBlock],
   add: [AgentRunNeedsModel],
   write: [AgentRun, AgentRunSourceLink],
   remove: [AgentRunNeedsModel, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunQueueHold],

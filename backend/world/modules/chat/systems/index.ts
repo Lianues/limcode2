@@ -8,5 +8,7 @@ import { MessageEditSystem } from './MessageEditSystem';
 import { MessageRetrySystem } from './MessageRetrySystem';
 
 export function registerChatSystems(scheduler: Scheduler): void {
-  scheduler.addMany([InputSystem, MessageEditSystem, MessageDeleteSystem, MessageRetrySystem, ContextAssemblySystem, LlmDispatchSystem, LlmPollSystem]);
+  // 同一会话的截断与随后发送可能在同一 scheduler tick 入队。
+  // 先提交时间线变更，再处理新输入，避免新消息被旧的 delete/retry 后缀级联吞掉。
+  scheduler.addMany([MessageEditSystem, MessageDeleteSystem, MessageRetrySystem, InputSystem, ContextAssemblySystem, LlmDispatchSystem, LlmPollSystem]);
 }

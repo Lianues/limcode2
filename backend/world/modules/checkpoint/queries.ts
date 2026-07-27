@@ -1,7 +1,8 @@
 import type { Entity, WorldReader } from '../../../ecs/types';
 import type {
   CheckpointPolicyRecord,
-  CheckpointPolicyScopeKind
+  CheckpointPolicyScopeKind,
+  CheckpointTriggerKind
 } from '../../../../shared/protocol';
 import { Agent } from '../agent/components';
 import { agentTypeEntityForRuntimeAgent } from '../agent/identity';
@@ -10,13 +11,52 @@ import { activeWorkflowForRun, activeWorkflowSelectionForConversation, runTarget
 import { Conversation } from '../chat/components';
 import { Workflow } from '../workflow/components';
 import { CheckpointPolicy, CheckpointPolicyScopeLink, type CheckpointPolicyScopeLinkData } from './components';
-import { DEFAULT_CHECKPOINT_TRIGGERS, normalizeCheckpointPolicy } from './policy';
+import { ToolDefinitionsKey } from '../tools/resources';
+import { DEFAULT_CHECKPOINT_TRIGGERS, effectiveCheckpointToolTriggerConfig, normalizeCheckpointPolicy, triggerConfigKey } from './policy';
 
 export interface CheckpointPolicyResolution {
   policy: CheckpointPolicyRecord;
   policyEntity?: Entity;
   link?: CheckpointPolicyScopeLinkData;
   inheritedFrom?: CheckpointPolicyScopeKind | 'fallback';
+}
+
+export type CheckpointRequestPolicyEvaluation =
+  | { enabled: true; resolution: CheckpointPolicyResolution }
+  | { enabled: false; reason: 'policy_disabled' | 'trigger_disabled'; resolution: CheckpointPolicyResolution };
+
+/**
+ * 在创建 barrier / Requested 事件前统一判断有效 Checkpoint Policy。
+ * RequestSystem 仍会再次调用它作为最终安全校验。
+ */
+export function evaluateCheckpointRequestPolicy(
+  world: WorldReader,
+  input: {
+    conversation: Entity;
+    run?: Entity;
+    trigger: CheckpointTriggerKind;
+    toolName?: string;
+  }
+): CheckpointRequestPolicyEvaluation {
+  const resolution = effectiveCheckpointPolicyForRequest(world, {
+    conversation: input.conversation,
+    ...(input.run !== undefined ? { run: input.run } : {})
+  });
+  if (!resolution.policy.enabled) return { enabled: false, reason: 'policy_disabled', resolution };
+
+  if (input.trigger === 'tool_execution_before' || input.trigger === 'tool_execution_after') {
+    const toolName = input.toolName?.trim();
+    if (!toolName) return { enabled: false, reason: 'trigger_disabled', resolution };
+    const toolDefinition = (world.tryGetResource(ToolDefinitionsKey) ?? []).find((tool) => tool.name === toolName);
+    const config = effectiveCheckpointToolTriggerConfig(toolName, resolution.policy.toolTriggers, toolDefinition);
+    const enabled = input.trigger === 'tool_execution_before' ? config.before : config.after;
+    return enabled ? { enabled: true, resolution } : { enabled: false, reason: 'trigger_disabled', resolution };
+  }
+
+  const triggerKey = triggerConfigKey(input.trigger);
+  return triggerKey && resolution.policy.triggers[triggerKey] === true
+    ? { enabled: true, resolution }
+    : { enabled: false, reason: 'trigger_disabled', resolution };
 }
 
 export function effectiveCheckpointPolicyForRequest(

@@ -1,7 +1,7 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
 import { createMessageId } from '../../../../../shared/protocol';
 import { readEvents } from '../../../events';
-import { Agent } from '../../agent/components';
+import { Agent, AgentKind } from '../../agent/components';
 import { AgentRun, AgentRunTargetLink } from '../../agentRun/components';
 import { Conversation, Message, PartOf } from '../../chat/components';
 import { Workflow, ConversationWorkflowSelection } from '../../workflow/components';
@@ -16,18 +16,17 @@ import {
   shadowRepositoryIdFor,
   shadowRepositoryStorageKeyFor
 } from '../bundles';
-import { effectiveCheckpointPolicyForRequest, findRunById } from '../queries';
-import { effectiveCheckpointToolTriggerConfig, triggerConfigKey } from '../policy';
-import type { CheckpointFloorAnchorPosition, CheckpointPolicyRecord } from '../../../../../shared/protocol';
+import { evaluateCheckpointRequestPolicy, findRunById } from '../queries';
+import type { CheckpointFloorAnchorPosition } from '../../../../../shared/protocol';
 import { ToolDefinitionsKey } from '../../tools/resources';
 import { markCheckpointBarrierPending, releaseCheckpointBarriers } from '../barriers';
-
 const CheckpointRequestQuery = defineQuery({
   name: 'CheckpointRequest',
   all: [Conversation],
   read: [
     Conversation,
     Agent,
+    AgentKind,
     AgentRun,
     AgentRunTargetLink,
     Workflow,
@@ -70,15 +69,18 @@ export const CheckpointRequestSystem = defineSystem({
         continue;
       }
       const run = findRunById(world, payload.runId);
-      const resolution = effectiveCheckpointPolicyForRequest(world, { conversation, ...(run !== undefined ? { run } : {}) });
-      if (!resolution.policy.enabled) {
-        releaseCheckpointBarriers(world, cmd, checkpointId, 'policy_disabled');
+      const toolName = toolNameForCheckpointRequest(world, payload);
+      const evaluation = evaluateCheckpointRequestPolicy(world, {
+        conversation,
+        ...(run !== undefined ? { run } : {}),
+        trigger: payload.trigger,
+        ...(toolName ? { toolName } : {})
+      });
+      if (!evaluation.enabled) {
+        releaseCheckpointBarriers(world, cmd, checkpointId, evaluation.reason);
         continue;
       }
-      if (!checkpointTriggerEnabled(world, payload, resolution.policy)) {
-        releaseCheckpointBarriers(world, cmd, checkpointId, 'trigger_disabled');
-        continue;
-      }
+      const resolution = evaluation.resolution;
 
       const repository = ensureShadowRepository(world, cmd, { conversationId: payload.conversationId, projectUri: project.data.uri });
       const repositoryId = shadowRepositoryIdFor(payload.conversationId, project.data.uri);
@@ -168,19 +170,6 @@ function resolveCheckpointAnchor(world: WorldReader, payload: CheckpointRequeste
   }
 
   return base;
-}
-
-function checkpointTriggerEnabled(world: WorldReader, payload: CheckpointRequestedPayload, policy: CheckpointPolicyRecord): boolean {
-  if (payload.trigger === 'tool_execution_before' || payload.trigger === 'tool_execution_after') {
-    const toolName = toolNameForCheckpointRequest(world, payload);
-    if (!toolName) return false;
-    const toolDefinition = (world.tryGetResource(ToolDefinitionsKey) ?? []).find((tool) => tool.name === toolName);
-    const config = effectiveCheckpointToolTriggerConfig(toolName, policy.toolTriggers, toolDefinition);
-    return payload.trigger === 'tool_execution_before' ? config.before : config.after;
-  }
-
-  const triggerKey = triggerConfigKey(payload.trigger);
-  return !!triggerKey && policy.triggers[triggerKey] === true;
 }
 
 function toolNameForCheckpointRequest(world: WorldReader, payload: CheckpointRequestedPayload): string | undefined {

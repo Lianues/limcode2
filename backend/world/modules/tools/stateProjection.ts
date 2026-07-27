@@ -136,8 +136,9 @@ function stripToolResultRecord(record: Record<string, unknown>): Record<string, 
       result.parts = child.map((part) => {
         const inlineData = (part as { inlineData?: unknown })?.inlineData;
         if (!inlineData || typeof inlineData !== 'object') return part;
-        const source = inlineData as Record<string, unknown>;
-        return { inlineData: { ...source, data: undefined } };
+        const source = { ...(inlineData as Record<string, unknown>) };
+        delete source.data;
+        return { inlineData: source };
       });
       continue;
     }

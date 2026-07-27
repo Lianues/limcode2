@@ -254,8 +254,13 @@ export function useBridgeBootstrap(): void {
   disposers.push(
     bridge.on(BridgeMessageType.OperationResult, (message) => {
       const result = message.payload;
-      if (!result || result.ok || !result.message) return;
-      if (result.operation === BridgeMessageType.MessageRetryFrom || result.operation === BridgeMessageType.MessageDeleteFrom) {
+      if (!result) return;
+      if (result.ok || !result.message) return;
+      if (
+        result.operation === BridgeMessageType.MessageEdit
+        || result.operation === BridgeMessageType.MessageRetryFrom
+        || result.operation === BridgeMessageType.MessageDeleteFrom
+      ) {
         conversationUi.clearExitState();
       }
       if (result.operation.startsWith('agentRun.') || result.operation.startsWith('queue.')) {

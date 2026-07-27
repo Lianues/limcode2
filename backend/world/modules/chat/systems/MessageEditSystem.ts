@@ -25,7 +25,9 @@ import { activeDeliveryPolicyForRun, answerBridgeIdForConversation, defaultAgent
 import { ToolCallEventBundle } from '../../tools/bundles';
 import { ToolCall, ToolCallEvent, ToolResultConsumed, ToolState } from '../../tools/components';
 import type { MessageContent } from '../../../../../shared/protocol';
-import { Checkpoint, CheckpointTimelineAnchor } from '../../checkpoint/components';
+import { Checkpoint, CheckpointPolicy, CheckpointPolicyScopeLink, CheckpointTimelineAnchor } from '../../checkpoint/components';
+import { evaluateCheckpointRequestPolicy } from '../../checkpoint/queries';
+import { ConversationWorkflowSelection, Workflow } from '../../workflow/components';
 import { CompressionBlock, CompressionBlockSourceLink } from '../../compression/components';
 import { CheckpointEventType } from '../../checkpoint/events';
 import {
@@ -44,7 +46,6 @@ import { ChatEventType } from '../events';
 import { conversationMessages } from '../queries';
 import { deleteMessagesFromIndex } from './MessageDeleteSystem';
 import { Conversation, InFlight, LlmRequest, Message, MessageCurrentRevisionLink, MessageRevision, PartOf, Streaming } from '../components';
-
 const MessageEditQuery = defineQuery({
   name: 'MessageEditLookup',
   all: [Message, PartOf],
@@ -75,7 +76,11 @@ const MessageEditQuery = defineQuery({
     RunDeliveryPolicyLink,
     LlmRequest,
     Checkpoint,
+    CheckpointPolicy,
+    CheckpointPolicyScopeLink,
     CheckpointTimelineAnchor,
+    ConversationWorkflowSelection,
+    Workflow,
     CompressionBlock,
     CompressionBlockSourceLink
   ],
@@ -112,8 +117,8 @@ export const MessageEditSystem = defineSystem({
       const isFirstUserMessage = current.role === 'user' && messagesBeforeEdit[0] === message;
       const needsInitialCheckpoint = isFirstUserMessage && !hasInitialCheckpoint(world, conversation);
       if (payload.runAfterEdit && current.role === 'user') {
-        if (needsInitialCheckpoint) requestInitialCheckpoint(cmd, payload.conversationId);
-        requestCheckpointBeforeEdit(cmd, payload.conversationId, current.id);
+        if (needsInitialCheckpoint) requestInitialCheckpoint(world, cmd, conversation, payload.conversationId);
+        requestCheckpointBeforeEdit(world, cmd, conversation, payload.conversationId, current.id);
       }
       const oldRevision = currentRevisionForMessage(world, message);
       for (const link of currentRevisionLinksForMessage(world, message)) cmd.remove(link, MessageCurrentRevisionLink);
@@ -130,7 +135,7 @@ export const MessageEditSystem = defineSystem({
       }
 
       if (payload.runAfterEdit && current.role === 'user') {
-        requestCheckpointAfterEdit(cmd, payload.conversationId, current.id);
+        requestCheckpointAfterEdit(world, cmd, conversation, payload.conversationId, current.id);
         spawnEditedMessageRun(world, cmd, conversation, message);
       }
     }
@@ -196,33 +201,44 @@ function hasInitialCheckpoint(world: WorldReader, conversation: Entity): boolean
   });
 }
 
-function requestInitialCheckpoint(cmd: CommandSink, conversationId: string): void {
+function requestInitialCheckpoint(world: WorldReader, cmd: CommandSink, conversation: Entity, conversationId: string): boolean {
+  if (!evaluateCheckpointRequestPolicy(world, { conversation, trigger: 'conversation_initial' }).enabled) return false;
   cmd.enqueue({
     type: CheckpointEventType.Requested,
     payload: { conversationId, trigger: 'conversation_initial' }
   });
+  return true;
 }
 
-function requestCheckpointBeforeEdit(cmd: CommandSink, conversationId: string, floorMessageId: string): void {
+function requestCheckpointBeforeEdit(world: WorldReader, cmd: CommandSink, conversation: Entity, conversationId: string, floorMessageId: string): boolean {
+  if (!evaluateCheckpointRequestPolicy(world, { conversation, trigger: 'user_message_before' }).enabled) return false;
   cmd.enqueue({
     type: CheckpointEventType.Requested,
     payload: { conversationId, trigger: 'user_message_before', floorMessageId, anchorPosition: 'before' }
   });
+  return true;
 }
 
-function requestCheckpointAfterEdit(cmd: CommandSink, conversationId: string, floorMessageId: string): void {
+function requestCheckpointAfterEdit(world: WorldReader, cmd: CommandSink, conversation: Entity, conversationId: string, floorMessageId: string): boolean {
+  if (!evaluateCheckpointRequestPolicy(world, { conversation, trigger: 'user_message_after' }).enabled) return false;
   cmd.enqueue({
     type: CheckpointEventType.Requested,
     payload: { conversationId, trigger: 'user_message_after', floorMessageId, anchorPosition: 'after' }
   });
+  return true;
 }
 
 
-function spawnEditedMessageRun(world: WorldReader, cmd: CommandSink, conversation: Entity, message: Entity): void {
+function spawnEditedMessageRun(
+  world: WorldReader,
+  cmd: CommandSink,
+  conversation: Entity,
+  message: Entity
+): Entity | undefined {
   const agent = defaultAgentForConversation(world, conversation);
-  if (agent === undefined) return;
+  if (agent === undefined) return undefined;
   const answerBridgeId = answerBridgeIdForConversation(world, conversation);
-  spawnAgentRun(cmd, {
+  const run = spawnAgentRun(cmd, {
     kind: 'chat',
     agent,
     conversation,
@@ -234,6 +250,7 @@ function spawnEditedMessageRun(world: WorldReader, cmd: CommandSink, conversatio
     deliveryMode: 'direct_reply',
     includeTranscript: 'full'
   });
+  return run;
 }
 
 function applySourceEditedPolicies(

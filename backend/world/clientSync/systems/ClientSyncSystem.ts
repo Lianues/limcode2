@@ -363,6 +363,8 @@ export function projectConversationClientState(state: ClientState, conversationI
   for (const toolCallId of collectRunDetailToolCallIds(state, runIds)) toolCallIds.add(toolCallId);
   const toolCalls = state.toolCalls.filter((toolCall) => toolCallIds.has(toolCall.id));
   const runPolicyIds = collectRunPolicyIds(state, runIds);
+  const agentConversationLinks = state.agentConversationLinks.filter((link) => link.conversationId === conversationId);
+  const conversationAgentSelections = state.conversationAgentSelections.filter((selection) => selection.conversationId === conversationId);
   const conversationProjectLinks = state.conversationProjectLinks.filter((link) => link.conversationId === conversationId);
   const projectContextIds = new Set(conversationProjectLinks.map((link) => link.projectContextId));
   const conversationWorkflowSelections = state.conversationWorkflowSelections.filter((selection) => selection.conversationId === conversationId);
@@ -403,6 +405,8 @@ export function projectConversationClientState(state: ClientState, conversationI
     conversationReuseLinks: state.conversationReuseLinks.filter((link) => link.conversationId === conversationId),
     conversationBranchLinks: state.conversationBranchLinks.filter((link) => link.sourceConversationId === conversationId || link.targetConversationId === conversationId),
     conversationOriginLinks: state.conversationOriginLinks.filter((link) => link.conversationId === conversationId),
+    agentConversationLinks,
+    conversationAgentSelections,
     projectContexts: state.projectContexts.filter((projectContext) => projectContextIds.has(projectContext.id)),
     conversationProjectLinks,
     shadowRepositories: state.shadowRepositories.filter((repository) => shadowRepositoryIds.has(repository.id)),

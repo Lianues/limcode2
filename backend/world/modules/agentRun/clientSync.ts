@@ -1,7 +1,7 @@
 import { defineClientStateContributor } from '../../clientSync/contributors';
-import { agentRunStateProjectionReads, projectAgentRunState } from './stateProjection';
+import { agentRunClientStateProjectionReads, projectAgentRunClientState } from './stateProjection';
 
-export const projectAgentRunClientState = projectAgentRunState;
+export { projectAgentRunClientState } from './stateProjection';
 
 export const agentRunClientSyncContributor = defineClientStateContributor({
   key: 'agentRuns',
@@ -25,10 +25,9 @@ export const agentRunClientSyncContributor = defineClientStateContributor({
     'runConversationPolicyLinks',
     'runContextPolicyLinks',
     'runDeliveryPolicyLinks',
-    'runEditPolicyLinks',
-    'agentRunInputRevisions'
+    'runEditPolicyLinks'
   ],
-  reads: agentRunStateProjectionReads,
+  reads: agentRunClientStateProjectionReads,
   project: projectAgentRunClientState,
   worker: {
     modulePath: '../world/modules/agentRun/clientSync',

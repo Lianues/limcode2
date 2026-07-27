@@ -1,7 +1,7 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
 import { createStableId } from '../../../../utils/stableId';
 import { findUniqueById } from '../../../../utils/uniqueIds';
-import { Agent, AgentConversationLink } from '../../agent/components';
+import { Agent, AgentConversationLink, AgentKind } from '../../agent/components';
 import {
   AgentRun,
   AgentRunNeedsModel,
@@ -25,6 +25,9 @@ import { readEvents } from '../../../events';
 import type { InlineDataPart, ToolCallStatus } from '../../../../../shared/protocol';
 import { ASK_USER_TOOL_NAME } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
+import { CheckpointPolicy, CheckpointPolicyScopeLink } from '../../checkpoint/components';
+import { evaluateCheckpointRequestPolicy } from '../../checkpoint/queries';
+import { ToolDefinitionsKey } from '../resources';
 import { isYoloToolPolicy } from '../policy';
 
 const SettledToolCallsQuery = defineQuery({
@@ -38,6 +41,7 @@ const SettledToolCallsQuery = defineQuery({
     AgentRun,
     AgentRunTargetLink,
     Agent,
+    AgentKind,
     AgentConversationLink,
     Conversation,
     ConversationWorkflowSelection,
@@ -45,7 +49,9 @@ const SettledToolCallsQuery = defineQuery({
     ToolPolicy,
     ToolPolicyScopeLink,
     RunWorkflowLink,
-    RunToolPolicyLink
+    RunToolPolicyLink,
+    CheckpointPolicy,
+    CheckpointPolicyScopeLink
   ],
   write: [ToolState],
   add: [ToolResultConsumed],
@@ -67,6 +73,7 @@ export const ToolResultSystem = defineSystem({
     bundles: [ToolResultMessageBundle, ToolCallEventBundle],
     reads: { components: [ToolCallEvent, Message, PartOf, MessageRunLink] },
     writes: { components: [AgentRun, AgentRunNeedsModel, MessageRunLink, ToolState] },
+    resources: { read: [ToolDefinitionsKey] },
     events: { read: [ToolEventType.ResultSubmitRequested, ToolEventType.ResultRejectRequested], emit: [CheckpointEventType.Requested] }
   },
   run(ctx) {
@@ -156,7 +163,15 @@ export const ToolResultSystem = defineSystem({
       cmd.add(entity, ToolResultConsumed, true);
       consumedThisPass.add(entity);
       touchedRuns.add(run);
-      if (conversationData) {
+      if (
+        conversationData
+        && evaluateCheckpointRequestPolicy(world, {
+          conversation: target.conversation,
+          run,
+          trigger: 'tool_execution_after',
+          toolName: call.name
+        }).enabled
+      ) {
         cmd.enqueue({
           type: CheckpointEventType.Requested,
           payload: {

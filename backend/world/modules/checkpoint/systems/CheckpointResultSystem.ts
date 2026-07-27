@@ -70,7 +70,8 @@ export const CheckpointResultSystem = defineSystem({
           });
         }
       }
-      releaseCheckpointBarriers(world, cmd, payload.checkpointId, releaseReasonForStatus(payload.status));
+      const releaseReason = releaseReasonForStatus(payload.status);
+      releaseCheckpointBarriers(world, cmd, payload.checkpointId, releaseReason);
     }
   }
 });

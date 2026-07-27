@@ -27,10 +27,14 @@ import {
   AgentRunTargetLink,
   MessageRunLink,
   RunDeliveryPolicy,
+  RunWorkflowLink,
   type RunDeliveryPolicyData
 } from '../components';
 import { activeDeliveryPolicyForRun, defaultAgentForConversation, isTerminalRunStatus, runSource, runTarget } from '../queries';
 import { CheckpointEventType } from '../../checkpoint/events';
+import { CheckpointPolicy, CheckpointPolicyScopeLink } from '../../checkpoint/components';
+import { evaluateCheckpointRequestPolicy } from '../../checkpoint/queries';
+import { ConversationWorkflowSelection, Workflow } from '../../workflow/components';
 import { AgentAnswer } from '../../agentAnswer/components';
 import { agentAnswerById } from '../../agentAnswer/queries';
 import { createCompletedAgentAnswerModelResponse } from '../../agentAnswer/modelResponse';
@@ -56,6 +60,7 @@ const DeliveringRunsQuery = defineQuery({
     AgentRunSourceLink,
     AgentRunTargetLink,
     RunDeliveryPolicy,
+    RunWorkflowLink,
     Agent,
     AgentKind,
     Conversation,
@@ -64,7 +69,11 @@ const DeliveringRunsQuery = defineQuery({
     PartOf,
     ToolCall,
     ToolState,
-    AgentAnswer
+    AgentAnswer,
+    CheckpointPolicy,
+    CheckpointPolicyScopeLink,
+    ConversationWorkflowSelection,
+    Workflow
   ],
   write: [AgentRun, ToolState],
   remove: [InFlight],
@@ -103,24 +112,36 @@ export const AgentRunDeliverySystem = defineSystem({
       const usageMetadata = runUsageMetadata(world, runEntity);
       const target = runTarget(world, runEntity);
       const conversation = target ? world.get(target.conversation, Conversation) : undefined;
-      if (conversation) {
-        requestRunCompletionCheckpoints(cmd, conversation.id, run.id, runCompletionFloorMessageId(world, runEntity));
+      if (conversation && target) {
+        requestRunCompletionCheckpoints(world, cmd, target.conversation, runEntity, conversation.id, run.id, runCompletionFloorMessageId(world, runEntity));
       }
       cmd.add(runEntity, AgentRun, { ...run, status: 'completed', updatedAt: now, completedAt: now, endReason: 'completed', ...(usageMetadata ? { usageMetadata } : {}) });
     }
   }
 });
 
-function requestRunCompletionCheckpoints(cmd: CommandSink, conversationId: string, runId: string, floorMessageId: string | undefined): void {
-  cmd.enqueue({
-    type: CheckpointEventType.Requested,
-    payload: { conversationId, runId, trigger: 'agent_run_completed_before', ...(floorMessageId ? { floorMessageId, anchorPosition: 'before' as const } : {}) }
-  });
+function requestRunCompletionCheckpoints(
+  world: WorldReader,
+  cmd: CommandSink,
+  conversation: Entity,
+  run: Entity,
+  conversationId: string,
+  runId: string,
+  floorMessageId: string | undefined
+): void {
+  if (evaluateCheckpointRequestPolicy(world, { conversation, run, trigger: 'agent_run_completed_before' }).enabled) {
+    cmd.enqueue({
+      type: CheckpointEventType.Requested,
+      payload: { conversationId, runId, trigger: 'agent_run_completed_before', ...(floorMessageId ? { floorMessageId, anchorPosition: 'before' as const } : {}) }
+    });
+  }
 
-  cmd.enqueue({
-    type: CheckpointEventType.Requested,
-    payload: { conversationId, runId, trigger: 'agent_run_completed_after', ...(floorMessageId ? { floorMessageId, anchorPosition: 'after' as const } : {}) }
-  });
+  if (evaluateCheckpointRequestPolicy(world, { conversation, run, trigger: 'agent_run_completed_after' }).enabled) {
+    cmd.enqueue({
+      type: CheckpointEventType.Requested,
+      payload: { conversationId, runId, trigger: 'agent_run_completed_after', ...(floorMessageId ? { floorMessageId, anchorPosition: 'after' as const } : {}) }
+    });
+  }
 }
 
 function runCompletionFloorMessageId(world: WorldReader, runEntity: Entity): string | undefined {

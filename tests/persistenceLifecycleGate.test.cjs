@@ -105,11 +105,241 @@ function makeStorage(overrides = {}) {
     calls,
     saveClientStateSkeleton: async (state) => { calls.push({ kind: 'skeleton', state: JSON.parse(JSON.stringify(state)) }); },
     saveConversationRenderDetail: async (conversationId, state) => { calls.push({ kind: 'render', conversationId, state }); },
+    saveConversationTimelineRenderDetail: async (conversationId, state) => { calls.push({ kind: 'timeline-render', conversationId, state }); },
     saveConversationRunHistory: async (conversationId, state, options) => { calls.push({ kind: 'runHistory', conversationId, state, options }); },
     upsertConversationHistoryEntry: async (entry) => { calls.push({ kind: 'history', entry }); },
     ...overrides
   };
 }
+
+test('render detail 会在慢 skeleton 完成前先预订并启动保存', async () => {
+  const conversationId = 'conversation-render-first';
+  const state = makeState(conversationId);
+  state.messages.push({
+    id: 'message-render-first',
+    conversationId,
+    role: 'user',
+    content: { parts: [{ text: '先保存 timeline' }] },
+    status: 'complete',
+    createdAt: 1,
+    seq: 1
+  });
+  const world = new FakeWorld(state);
+  const skeletonStarted = deferred();
+  const releaseSkeleton = deferred();
+  const renderStarted = deferred();
+  const storage = makeStorage({
+    saveClientStateSkeleton: async () => {
+      storage.calls.push({ kind: 'skeleton-start' });
+      skeletonStarted.resolve();
+      await releaseSkeleton.promise;
+      storage.calls.push({ kind: 'skeleton-end' });
+    },
+    saveConversationRenderDetail: async (id, snapshot) => {
+      storage.calls.push({ kind: 'render-start', conversationId: id, state: snapshot });
+      renderStarted.resolve();
+    }
+  });
+  const persistence = new ClientStatePersistence(world, storage, {
+    renderLoadedConversationIds: () => [conversationId],
+    isConversationHistorySummaryComplete: () => false
+  }, 5);
+  persistence.enable();
+
+  const persistPromise = persistence.persistImmediately({ force: true, throwOnError: true });
+  await Promise.all([skeletonStarted.promise, renderStarted.promise]);
+
+  assert.equal(storage.calls[0].kind, 'render-start');
+  assert.equal(storage.calls.some((call) => call.kind === 'skeleton-end'), false);
+  releaseSkeleton.resolve();
+  await persistPromise;
+});
+
+test('timeline-only 强制保存不等待正在进行的慢 run history', async () => {
+  const conversationId = 'conversation-targeted-render';
+  const state = makeState(conversationId);
+  state.messages.push({
+    id: 'message-targeted-render',
+    conversationId,
+    role: 'user',
+    content: { parts: [{ text: '只等待 timeline' }] },
+    status: 'complete',
+    createdAt: 1,
+    seq: 1
+  });
+  state.agentRuns.push({ id: 'run-targeted-render', kind: 'chat', status: 'completed', createdAt: 1, updatedAt: 1 });
+  state.agentRunTargetLinks.push({
+    id: 'run-target-targeted-render',
+    runId: 'run-targeted-render',
+    agentId: 'agent-main',
+    conversationId,
+    role: 'primary',
+    createdAt: 1,
+    updatedAt: 1
+  });
+  const world = new FakeWorld(state);
+  const runHistoryStarted = deferred();
+  const releaseRunHistory = deferred();
+  const storage = makeStorage({
+    saveConversationRunHistory: async () => {
+      storage.calls.push({ kind: 'run-history-start' });
+      runHistoryStarted.resolve();
+      await releaseRunHistory.promise;
+      storage.calls.push({ kind: 'run-history-end' });
+    }
+  });
+  const persistence = new ClientStatePersistence(world, storage, {
+    renderLoadedConversationIds: () => [conversationId],
+    runHistoryLoadedConversationIds: () => [conversationId],
+    isConversationHistorySummaryComplete: () => false,
+    projectConversationTimelineState: () => state
+  }, 5);
+  persistence.enable();
+
+  const fullPersist = persistence.persistImmediately({ force: true, throwOnError: true });
+  await runHistoryStarted.promise;
+  const targetedPersist = persistence.persistConversationRenderDetailImmediately(conversationId, { throwOnError: true });
+  const completedBeforeRunHistory = await Promise.race([
+    targetedPersist.then(() => true),
+    delay(50).then(() => false)
+  ]);
+
+  assert.equal(completedBeforeRunHistory, true);
+  assert.equal(storage.calls.filter((call) => call.kind === 'render').length, 1);
+  assert.equal(storage.calls.filter((call) => call.kind === 'timeline-render').length, 1);
+  assert.equal(storage.calls.some((call) => call.kind === 'run-history-end'), false);
+
+  releaseRunHistory.resolve();
+  await fullPersist;
+});
+
+test('完整上下文读取屏障会先提交 timeline，并阻止 debounce writer 并发', async () => {
+  const conversationId = 'conversation-context-read-barrier';
+  const state = makeState(conversationId);
+  state.messages.push({
+    id: 'message-context-read-barrier',
+    conversationId,
+    role: 'user',
+    content: { parts: [{ text: 'edited tail' }] },
+    status: 'complete',
+    createdAt: 1,
+    seq: 1
+  });
+  const world = new FakeWorld(state);
+  const timelineStarted = deferred();
+  const releaseTimeline = deferred();
+  const contextReadStarted = deferred();
+  const releaseContextRead = deferred();
+  const storage = makeStorage({
+    saveConversationTimelineRenderDetail: async (id, snapshot) => {
+      storage.calls.push({ kind: 'timeline-render-start', conversationId: id, state: snapshot });
+      timelineStarted.resolve();
+      await releaseTimeline.promise;
+      storage.calls.push({ kind: 'timeline-render-end', conversationId: id });
+    }
+  });
+  const persistence = new ClientStatePersistence(world, storage, {
+    renderLoadedConversationIds: () => [conversationId],
+    isConversationHistorySummaryComplete: () => false,
+    projectConversationTimelineState: () => {
+      const detail = createEmptyClientState();
+      detail.messages = [...world.state.messages];
+      return detail;
+    }
+  }, 5);
+  persistence.enable();
+
+  // 先存在一个 debounce 保存；进入屏障后不能丢失，也不能在 context read 中途执行。
+  persistence.queuePersist();
+  const barrier = persistence.withConversationTimelineCommittedBeforeRead(conversationId, async () => {
+    storage.calls.push({ kind: 'context-read-start' });
+    contextReadStarted.resolve();
+    persistence.queuePersist();
+    await releaseContextRead.promise;
+    storage.calls.push({ kind: 'context-read-end' });
+  });
+
+  await timelineStarted.promise;
+  assert.equal(storage.calls.some((call) => call.kind === 'context-read-start'), false);
+  releaseTimeline.resolve();
+  await contextReadStarted.promise;
+  assert.deepEqual(storage.calls.slice(0, 3).map((call) => call.kind), [
+    'timeline-render-start',
+    'timeline-render-end',
+    'context-read-start'
+  ]);
+  await delay(20);
+  assert.equal(storage.calls.some((call) => call.kind === 'render'), false);
+  assert.equal(storage.calls.some((call) => call.kind === 'skeleton'), false);
+
+  releaseContextRead.resolve();
+  await barrier;
+  await delay(20);
+  assert.equal(storage.calls.filter((call) => call.kind === 'render').length, 0, 'unchanged committed timeline must not be saved again');
+  assert.equal(storage.calls.filter((call) => call.kind === 'skeleton').length, 1, 'cleared pre-existing debounce persist must resume after barrier');
+});
+
+test('完整上下文读取屏障期间产生的新 timeline 变化会在退出后补保存', async () => {
+  const conversationId = 'conversation-context-read-dirty';
+  const initial = makeState(conversationId);
+  initial.messages.push({
+    id: 'message-context-read-dirty-1',
+    conversationId,
+    role: 'user',
+    content: { parts: [{ text: 'committed before read' }] },
+    status: 'complete',
+    createdAt: 1,
+    seq: 1
+  });
+  const world = new FakeWorld(initial);
+  const contextReadStarted = deferred();
+  const releaseContextRead = deferred();
+  const storage = makeStorage();
+  const persistence = new ClientStatePersistence(world, storage, {
+    renderLoadedConversationIds: () => [conversationId],
+    isConversationHistorySummaryComplete: () => false,
+    projectConversationTimelineState: () => {
+      const detail = createEmptyClientState();
+      detail.messages = [...world.state.messages];
+      return detail;
+    }
+  }, 5);
+  persistence.enable();
+
+  const barrier = persistence.withConversationTimelineCommittedBeforeRead(conversationId, async () => {
+    contextReadStarted.resolve();
+    await releaseContextRead.promise;
+  });
+  await contextReadStarted.promise;
+
+  const changed = makeState(conversationId);
+  changed.messages = [
+    ...initial.messages,
+    {
+      id: 'message-context-read-dirty-2',
+      conversationId,
+      role: 'model',
+      content: { parts: [{ text: 'created during read' }] },
+      status: 'complete',
+      createdAt: 2,
+      seq: 2
+    }
+  ];
+  world.setState(changed);
+  persistence.queuePersist();
+  await delay(20);
+  assert.equal(storage.calls.filter((call) => call.kind === 'render').length, 0);
+
+  releaseContextRead.resolve();
+  await barrier;
+  await delay(30);
+  const renderCalls = storage.calls.filter((call) => call.kind === 'render');
+  assert.equal(renderCalls.length, 1);
+  assert.deepEqual(renderCalls[0].state.messages.map((message) => message.id), [
+    'message-context-read-dirty-1',
+    'message-context-read-dirty-2'
+  ]);
+});
 
 test('in-flight persist and exclusive mutation gate are mutually exclusive', async () => {
   const state = makeState('conversation-a');

@@ -662,6 +662,7 @@ export interface StorageCapability {
   }): Promise<{ conversationId: string; removedMessageIds: string[] }>;
   saveClientStateSkeleton(state: ClientState): Promise<void>;
   saveConversationRenderDetail(conversationId: string, state: ClientState): Promise<void>;
+  saveConversationTimelineRenderDetail(conversationId: string, state: ClientState): Promise<void>;
   saveConversationRunHistory(conversationId: string, state: ClientState, options: { mode: ConversationRunHistorySaveMode }): Promise<void>;
   loadConversationRunHistoryPage(request: ConversationRunHistoryPageRequest): Promise<ConversationRunHistoryPageRecord>;
   loadConversationRunDetail(request: ConversationRunDetailRequest): Promise<ConversationRunDetailRecord | undefined>;

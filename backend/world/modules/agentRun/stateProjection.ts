@@ -51,42 +51,50 @@ import {
   ToolCallRunLink
 } from './components';
 
-export const agentRunStateProjectionReads: AccessDeclaration = {
-  components: [
-    Agent,
-    Conversation,
-    Message,
-    MessageRevision,
-    ToolCall,
-    Workflow,
-    ToolPolicy,
-    SystemPrompt,
-    ModelProfile,
-    AgentRun,
-    AgentRunQueueHold,
-    AgentRunQueueOrder,
-    AgentRunQueuedInput,
-    AgentRunSourceLink,
-    AgentRunTargetLink,
-    MessageRunLink,
-    ToolCallRunLink,
-    RunConversationPolicy,
-    RunContextPolicy,
-    RunDeliveryPolicy,
-    RunEditPolicy,
-    RunWorkflowLink,
-    RunSystemPromptLink,
-    RunModelProfileLink,
-    RunToolPolicyLink,
-    RunConversationPolicyLink,
-    RunContextPolicyLink,
-    RunDeliveryPolicyLink,
-    RunEditPolicyLink,
-    AgentRunInputRevision
-  ]
+const AGENT_RUN_CORE_PROJECTION_COMPONENTS = [
+  Agent,
+  Conversation,
+  Message,
+  ToolCall,
+  Workflow,
+  ToolPolicy,
+  SystemPrompt,
+  ModelProfile,
+  AgentRun,
+  AgentRunQueueHold,
+  AgentRunQueueOrder,
+  AgentRunQueuedInput,
+  AgentRunSourceLink,
+  AgentRunTargetLink,
+  MessageRunLink,
+  ToolCallRunLink,
+  RunConversationPolicy,
+  RunContextPolicy,
+  RunDeliveryPolicy,
+  RunEditPolicy,
+  RunWorkflowLink,
+  RunSystemPromptLink,
+  RunModelProfileLink,
+  RunToolPolicyLink,
+  RunConversationPolicyLink,
+  RunContextPolicyLink,
+  RunDeliveryPolicyLink,
+  RunEditPolicyLink
+] as const;
+
+export const agentRunClientStateProjectionReads: AccessDeclaration = {
+  components: AGENT_RUN_CORE_PROJECTION_COMPONENTS
 };
 
-export function projectAgentRunState(world: WorldReader): Partial<ClientState> {
+export const agentRunStateProjectionReads: AccessDeclaration = {
+  components: [...AGENT_RUN_CORE_PROJECTION_COMPONENTS, MessageRevision, AgentRunInputRevision]
+};
+
+export function projectAgentRunClientState(world: WorldReader): Partial<ClientState> {
+  return projectAgentRunState(world, { includeInputRevisions: false });
+}
+
+export function projectAgentRunState(world: WorldReader, options: { includeInputRevisions?: boolean } = {}): Partial<ClientState> {
   const agentRuns = world.query(AgentRun).map((entity): AgentRunRecord => ({ ...world.get(entity, AgentRun)! }));
   const agentRunQueueOrders = world.query(AgentRunQueueOrder).map((entity) => buildQueueOrderRecord(world, entity)).filter(isDefined);
   const agentRunQueueHolds = world.query(AgentRunQueueHold).map((entity) => buildQueueHoldRecord(world, entity)).filter(isDefined);
@@ -112,7 +120,9 @@ export function projectAgentRunState(world: WorldReader): Partial<ClientState> {
     runContextPolicyLinks: world.query(RunContextPolicyLink).map((entity) => buildRunPolicyLinkRecord(world, entity, RunContextPolicyLink, RunContextPolicy)).filter(isDefined),
     runDeliveryPolicyLinks: world.query(RunDeliveryPolicyLink).map((entity) => buildRunPolicyLinkRecord(world, entity, RunDeliveryPolicyLink, RunDeliveryPolicy)).filter(isDefined),
     runEditPolicyLinks: world.query(RunEditPolicyLink).map((entity) => buildRunPolicyLinkRecord(world, entity, RunEditPolicyLink, RunEditPolicy)).filter(isDefined),
-    agentRunInputRevisions: world.query(AgentRunInputRevision).map((entity) => buildInputRevisionRecord(world, entity)).filter(isDefined)
+    agentRunInputRevisions: options.includeInputRevisions === false
+      ? []
+      : world.query(AgentRunInputRevision).map((entity) => buildInputRevisionRecord(world, entity)).filter(isDefined)
   };
 }
 

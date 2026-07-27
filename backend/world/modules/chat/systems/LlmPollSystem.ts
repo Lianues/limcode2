@@ -14,7 +14,9 @@ import {
 import { LlmInvocation, type LlmInvocationData } from '../../llm/components';
 import { ToolCall, ToolCallEvent } from '../../tools/components';
 import { spawnToolCall, ToolCallBundle } from '../../tools/bundles';
-import { AgentRun, AgentRunSourceLink, ToolCallRunLink } from '../../agentRun/components';
+import { AgentRun, AgentRunSourceLink, AgentRunTargetLink, RunWorkflowLink, ToolCallRunLink } from '../../agentRun/components';
+import { Agent, AgentKind } from '../../agent/components';
+import { ConversationWorkflowSelection, Workflow } from '../../workflow/components';
 import { spawnToolCallRunLink } from '../../agentRun/bundles';
 import { LlmRequest, Message, Streaming, Conversation, PartOf, type LlmRequestData, type MessageData } from '../components';
 import {
@@ -30,6 +32,8 @@ import {
   type LlmTransientNoticeKind
 } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
+import { CheckpointPolicy, CheckpointPolicyScopeLink } from '../../checkpoint/components';
+import { evaluateCheckpointRequestPolicy } from '../../checkpoint/queries';
 import { markClientStateConversationsDirty } from '../../../clientSync/dirtyConversations';
 import { ClientStateDirtyConversationIdsKey, ClientSyncFastPatchStateKey, type ClientSyncFastPatchBatch } from '../../../clientSync/resources';
 
@@ -89,7 +93,7 @@ export const LlmPollSystem = defineSystem({
   name: 'LlmPollSystem',
   access: {
     queries: [LlmInvocationsByIdQuery, LlmRequestsByIdQuery, ModelMessagesQuery, ToolCallLookupQuery],
-    reads: { components: [PartOf, ToolCallEvent, ToolCallRunLink, AgentRunSourceLink] },
+    reads: { components: [PartOf, ToolCallEvent, ToolCallRunLink, AgentRunSourceLink, AgentRunTargetLink, RunWorkflowLink, Agent, AgentKind, ConversationWorkflowSelection, Workflow, CheckpointPolicy, CheckpointPolicyScopeLink] },
     writes: { components: [Streaming, AgentRun, ToolCall, ToolCallEvent, ToolCallRunLink] },
     resources: { read: [ClientSyncFastPatchStateKey, ClientStateDirtyConversationIdsKey], write: [ClientSyncFastPatchStateKey, ClientStateDirtyConversationIdsKey], mutationMode: 'update' },
     events: { read: [LlmEventType.Started, LlmEventType.ThoughtDelta, LlmEventType.ThoughtProgress, LlmEventType.ThoughtDone, LlmEventType.Delta, LlmEventType.ToolCall, LlmEventType.Done, LlmEventType.Error, LlmEventType.RetryScheduled, LlmEventType.RetryStarted, LlmEventType.RetryCancelled, LlmEventType.RetryRecovered], emit: [CheckpointEventType.Requested] },
@@ -340,7 +344,11 @@ function applyRequestUpdate(world: WorldReader, cmd: CommandSink, requestId: str
       const now = Date.now();
       const waitsForTool = sawToolCall || next.content.parts.some(isFunctionCallPart);
       const nextStatus = errorMessage ? 'failed' : waitsForTool ? 'waiting_tool' : 'delivering';
-      if (!errorMessage && conversation) {
+      if (
+        !errorMessage
+        && conversation
+        && evaluateCheckpointRequestPolicy(world, { conversation: requestData.conversation, run: requestData.run, trigger: 'llm_response_after' }).enabled
+      ) {
         cmd.enqueue({
           type: CheckpointEventType.Requested,
           payload: { conversationId: conversation.id, runId: run.id, floorMessageId: current.id, anchorPosition: 'after', trigger: 'llm_response_after' }

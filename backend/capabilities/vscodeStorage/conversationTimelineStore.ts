@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { isDeepStrictEqual } from 'node:util';
 import type {
   CheckpointRecord,
   CheckpointTimelineAnchorRecord,
@@ -278,21 +279,23 @@ export async function truncateConversationTimeline(paths: StoragePaths, request:
 }): Promise<{ conversationId: string; removedMessageIds: string[] }> {
   const root = conversationTimelineRoot(paths, request.conversationId);
   return withStorageResourceLock(root, async () => {
-    const previous = await loadTimelineIndexForWrite(root, request.conversationId, { allowMissing: true });
+    // index 已保存每个 chunk 的 messageIds。截断只需要读取并重写锚点 chunk；
+    // 锚点之前的完整 chunk 直接复用，后缀只从新 index 移除，避免长会话全量读取、校验和重写。
+    const previous = await loadTimelineIndexManifestForWrite(root, request.conversationId, { allowMissing: true });
     if (!previous || previous.index.chunks.length === 0) return { conversationId: request.conversationId, removedMessageIds: [] };
 
-    const detail = await loadTimelineDetailFromIndexStrict(root, previous.index, { validateProjections: true });
-    sortConversationTimelineDetail(detail);
-    const anchorMessageIndex = detail.messages.findIndex((message) => message.id === request.anchorMessageId);
-    if (anchorMessageIndex < 0) return { conversationId: request.conversationId, removedMessageIds: [] };
-
-    const keepCount = request.keepAnchor ? anchorMessageIndex + 1 : anchorMessageIndex;
-    const keptMessageIds = new Set(detail.messages.slice(0, keepCount).map((message) => message.id));
-    const removedMessageIds = detail.messages.slice(keepCount).map((message) => message.id);
+    const anchorChunkIndex = previous.index.chunks.findIndex((chunk) => chunk.messageIds.includes(request.anchorMessageId));
+    if (anchorChunkIndex < 0) return { conversationId: request.conversationId, removedMessageIds: [] };
+    const anchorChunkRecord = previous.index.chunks[anchorChunkIndex]!;
+    const anchorMessageIndex = anchorChunkRecord.messageIds.indexOf(request.anchorMessageId);
+    const keepCountInAnchorChunk = request.keepAnchor ? anchorMessageIndex + 1 : anchorMessageIndex;
+    const removedMessageIds = [
+      ...anchorChunkRecord.messageIds.slice(keepCountInAnchorChunk),
+      ...previous.index.chunks.slice(anchorChunkIndex + 1).flatMap((chunk) => chunk.messageIds)
+    ];
     if (removedMessageIds.length === 0) return { conversationId: request.conversationId, removedMessageIds: [] };
 
-    const nextDetail = timelineChunkDataToClientState(filterTimelineChunkByMessageIds(detail, keptMessageIds));
-    await publishTimelineDetail(paths, root, request.conversationId, nextDetail, previous.index);
+    await publishTimelineTruncateIncremental(root, request.conversationId, previous.index, anchorChunkIndex, keepCountInAnchorChunk);
     return { conversationId: request.conversationId, removedMessageIds };
   });
 }
@@ -341,19 +344,26 @@ export async function mutateConversationTimelineDetailInStore(
 }
 
 export async function saveConversationTimelineRenderDetailIncremental(paths: StoragePaths, conversationId: string, detail: ClientState): Promise<boolean> {
-  const storageDetail = await externalizeClientStateAttachments(paths, detail);
-  sortConversationTimelineDetail(storageDetail);
-  if (!hasTimelineDetailRecords(storageDetail)) return true;
-
   const root = conversationTimelineRoot(paths, conversationId);
   return withStorageResourceLock(root, async () => {
-    const previous = await loadTimelineIndexManifestForWrite(root, conversationId, { allowMissing: true });
-    if (!previous || previous.index.chunks.length === 0) return false;
+    // 先预订 timeline root FIFO，再处理附件和投影。这样已经捕获的旧 render 快照
+    // 必然排在后续 truncate 前，操作后的新快照则排在 truncate 后，不会发生旧状态晚写覆盖。
+    const storageDetail = await externalizeClientStateAttachments(paths, detail);
+    sortConversationTimelineDetail(storageDetail);
+    if (!hasTimelineDetailRecords(storageDetail)) return true;
 
-    const tailPlan = analyzeTailIncrementalPatch(previous.index, storageDetail);
+    const previous = await loadTimelineIndexManifestForWrite(root, conversationId, { allowMissing: true });
+    if (!previous || previous.index.chunks.length === 0) {
+      await publishTimelineDetail(paths, root, conversationId, storageDetail, previous?.index);
+      return true;
+    }
+
+    const tailPlan = await analyzeTailIncrementalPatch(root, previous.index, storageDetail);
     if (tailPlan.kind === 'tail') {
-      const tailSaved = await publishTimelineTailIncremental(root, conversationId, previous.index, storageDetail, tailPlan);
-      if (tailSaved) return true;
+      const tailSaved = await publishTimelineTailIncremental(root, conversationId, previous.index, tailPlan);
+      if (tailSaved) {
+        return true;
+      }
     }
 
     await publishMergedTimelineDetailFromIndex(paths, root, conversationId, previous.index, storageDetail);
@@ -499,7 +509,7 @@ async function loadTimelineDetailFromIndexStrict(root: vscode.Uri, index: Conver
 }
 
 type TailIncrementalPatchAnalysis =
-  | { kind: 'tail'; suffixStartIndex: number }
+  | { kind: 'tail'; suffixStartIndex: number; patch: ClientState }
   | { kind: 'fallback'; reason: string };
 
 async function publishMergedTimelineDetailFromIndex(
@@ -515,13 +525,77 @@ async function publishMergedTimelineDetailFromIndex(
   await publishTimelineDetail(paths, root, conversationId, next, previousIndex);
 }
 
+async function publishTimelineTruncateIncremental(
+  root: vscode.Uri,
+  conversationId: string,
+  previousIndex: ConversationTimelineIndexFile,
+  anchorChunkIndex: number,
+  keepCountInAnchorChunk: number
+): Promise<void> {
+  const anchorRecord = previousIndex.chunks[anchorChunkIndex];
+  if (!anchorRecord) throw new Error(`Conversation timeline truncate anchor chunk is missing: ${anchorChunkIndex}`);
+  if (keepCountInAnchorChunk < 0 || keepCountInAnchorChunk > anchorRecord.messageIds.length) {
+    throw new Error(`Conversation timeline truncate keep count is invalid: ${keepCountInAnchorChunk}`);
+  }
+
+  const savedAt = new Date().toISOString();
+  const generation = createStorageGenerationLocation(root);
+  await ensureTimelineGenerationRoots(generation.rootUri);
+
+  const prefixChunks = previousIndex.chunks.slice(0, anchorChunkIndex);
+  const indexChunks: ConversationTimelineChunkIndexRecord[] = [];
+  let visibleMessageOffset = 0;
+  for (let index = 0; index < prefixChunks.length; index += 1) {
+    const reused = reindexReusedTimelineChunkRecord(prefixChunks[index]!, index, visibleMessageOffset);
+    indexChunks.push(reused);
+    visibleMessageOffset += reused.messageCount;
+  }
+
+  if (keepCountInAnchorChunk === anchorRecord.messageIds.length) {
+    const reused = reindexReusedTimelineChunkRecord(anchorRecord, indexChunks.length, visibleMessageOffset);
+    indexChunks.push(reused);
+  } else if (keepCountInAnchorChunk > 0) {
+    const anchorChunk = await readConversationTimelineChunkStrict(root, anchorRecord, { validateProjections: true });
+    const keptMessageIds = new Set(anchorRecord.messageIds.slice(0, keepCountInAnchorChunk));
+    const retainedChunk = filterTimelineChunkByMessageIds(anchorChunk, keptMessageIds);
+    const projectionStates = await createProjectionRuntimeStatesFromPrefix(root, prefixChunks);
+    if (!projectionStates) throw new Error('Conversation timeline truncate cannot restore prefix projection state.');
+    const chunkRecord = await writeTimelineChunkIndexRecord({
+      root,
+      savedAt,
+      generation: generation.id,
+      conversationId,
+      chunkId: anchorChunkIndex.toString().padStart(6, '0'),
+      index: indexChunks.length,
+      chunk: retainedChunk,
+      visibleMessageOffset,
+      projectionStates
+    });
+    indexChunks.push(chunkRecord);
+  }
+
+  const nextIndex: ConversationTimelineIndexFile = {
+    kind: 'conversationTimeline.index',
+    schemaVersion: STORAGE_VERSION,
+    savedAt,
+    generation: generation.id,
+    conversationId,
+    chunkSize: CONVERSATION_TIMELINE_CHUNK_SIZE,
+    chunks: indexChunks
+  };
+
+  await __conversationTimelineStoreTestHooks.beforePublishIndex?.({ rootUri: root, conversationId, generation: generation.id });
+  await writeJson(vscode.Uri.joinPath(root, INDEX_FILE), nextIndex);
+  await cleanupOldTimelineGenerationsAfterPublish(root, nextIndex, previousIndex);
+}
+
 async function publishTimelineTailIncremental(
   root: vscode.Uri,
   conversationId: string,
   previousIndex: ConversationTimelineIndexFile,
-  patch: ClientState,
   plan: Extract<TailIncrementalPatchAnalysis, { kind: 'tail' }>
 ): Promise<boolean> {
+  const patch = plan.patch;
   const prefixChunks = previousIndex.chunks.slice(0, plan.suffixStartIndex);
   const previousSuffixRecord = previousIndex.chunks[plan.suffixStartIndex];
   if (!previousSuffixRecord) return false;
@@ -582,15 +656,30 @@ async function publishTimelineTailIncremental(
   return true;
 }
 
-function analyzeTailIncrementalPatch(index: ConversationTimelineIndexFile, patch: ClientState): TailIncrementalPatchAnalysis {
+async function analyzeTailIncrementalPatch(
+  root: vscode.Uri,
+  index: ConversationTimelineIndexFile,
+  inputPatch: ClientState
+): Promise<TailIncrementalPatchAnalysis> {
   const lastChunkIndex = index.chunks.length - 1;
   const lastChunk = index.chunks[lastChunkIndex];
   if (!lastChunk) return { kind: 'fallback', reason: 'missing tail chunk' };
 
   const messageChunkIndex = timelineMessageChunkIndex(index);
   if (!messageChunkIndex) return { kind: 'fallback', reason: 'duplicate indexed message id' };
-  if (!timelineToolCallChunkIndex(index)) return { kind: 'fallback', reason: 'duplicate indexed tool call id' };
+  const toolCallChunkIndex = timelineToolCallChunkIndex(index);
+  if (!toolCallChunkIndex) return { kind: 'fallback', reason: 'duplicate indexed tool call id' };
 
+  const prepared = await stripUnchangedPrefixContextFromTailPatch(
+    root,
+    index,
+    inputPatch,
+    messageChunkIndex,
+    toolCallChunkIndex,
+    lastChunkIndex
+  );
+  if (prepared.kind === 'fallback') return prepared;
+  const patch = prepared.patch;
   const tailMessageIds = new Set(lastChunk.messageIds);
   for (const message of patch.messages) {
     if (message.conversationId !== index.conversationId) return { kind: 'fallback', reason: 'message conversation mismatch' };
@@ -665,7 +754,110 @@ function analyzeTailIncrementalPatch(index: ConversationTimelineIndexFile, patch
     if (!tailShadowRepositoryIds.has(repository.id)) return { kind: 'fallback', reason: 'shadow repository is outside tail chunk' };
   }
 
-  return { kind: 'tail', suffixStartIndex: lastChunkIndex };
+  return { kind: 'tail', suffixStartIndex: lastChunkIndex, patch };
+}
+
+async function stripUnchangedPrefixContextFromTailPatch(
+  root: vscode.Uri,
+  index: ConversationTimelineIndexFile,
+  patch: ClientState,
+  messageChunkIndex: ReadonlyMap<string, number>,
+  toolCallChunkIndex: ReadonlyMap<string, number>,
+  lastChunkIndex: number
+): Promise<{ kind: 'tail'; patch: ClientState } | { kind: 'fallback'; reason: string }> {
+  const touchedPrefixChunkIndexes = new Set<number>();
+  const addPrefixChunk = (chunkIndex: number | undefined): void => {
+    if (chunkIndex !== undefined && chunkIndex >= 0 && chunkIndex < lastChunkIndex) touchedPrefixChunkIndexes.add(chunkIndex);
+  };
+  for (const message of patch.messages) addPrefixChunk(messageChunkIndex.get(message.id));
+  for (const revision of patch.messageRevisions) addPrefixChunk(messageChunkIndex.get(revision.messageId));
+  for (const link of patch.messageCurrentRevisionLinks) addPrefixChunk(messageChunkIndex.get(link.messageId));
+  for (const toolCall of patch.toolCalls) addPrefixChunk(messageChunkIndex.get(toolCall.messageId));
+  for (const event of patch.toolCallEvents) addPrefixChunk(toolCallChunkIndex.get(event.toolCallId));
+  for (const anchor of patch.checkpointTimelineAnchors) addPrefixChunk(messageChunkIndex.get(anchor.floorMessageId));
+  if (touchedPrefixChunkIndexes.size === 0) return { kind: 'tail', patch };
+
+  const prefixState = createEmptyClientState();
+  const prefixChunks = await Promise.all(
+    [...touchedPrefixChunkIndexes]
+      .sort((left, right) => left - right)
+      .map((chunkIndex) => readConversationTimelineChunkStrict(root, index.chunks[chunkIndex]!, { validateProjections: true }))
+  );
+  for (const chunk of prefixChunks) copyTimelineChunkToState(prefixState, chunk);
+
+  const nextPatch = createEmptyClientState();
+  const readablePatch = patch as unknown as Record<string, StoreRecord[]>;
+  const readablePrefix = prefixState as unknown as Record<string, StoreRecord[]>;
+  const writableNext = nextPatch as unknown as Record<string, StoreRecord[]>;
+  for (const key of TIMELINE_DETAIL_TABLE_KEYS) {
+    const storedById = new Map((readablePrefix[key] ?? []).map((record) => [record.id, record]));
+    const nextRecords = writableNext[key] ?? [];
+    for (const record of readablePatch[key] ?? []) {
+      const stored = storedById.get(record.id);
+      if (stored) {
+        if (!isJsonStorageEquivalent(stored, record)) {
+          return { kind: 'fallback', reason: `existing ${key} record changed outside tail chunk` };
+        }
+        continue;
+      }
+      if (timelineRecordBelongsToPrefix(record, key, messageChunkIndex, toolCallChunkIndex, lastChunkIndex)) {
+        return { kind: 'fallback', reason: `new ${key} record belongs outside tail chunk` };
+      }
+      nextRecords.push(record);
+    }
+    writableNext[key] = nextRecords;
+  }
+  return { kind: 'tail', patch: nextPatch };
+}
+
+/**
+ * Prefix 校验比较的是最终可落盘的 JSON 数据，而不是含 `undefined` 属性的临时内存形态。
+ * `writeJson` 会丢弃对象中的 undefined 字段；如果仍用内存深比较，会把同一条已持久化
+ * 记录永久误判为变化，并在每次保存时触发整条 timeline full rewrite。
+ */
+function isJsonStorageEquivalent(left: StoreRecord, right: StoreRecord): boolean {
+  try {
+    const leftJson = JSON.stringify(left);
+    const rightJson = JSON.stringify(right);
+    if (leftJson === undefined || rightJson === undefined) return false;
+    if (leftJson === rightJson) return true;
+    return isDeepStrictEqual(JSON.parse(leftJson), JSON.parse(rightJson));
+  } catch {
+    return false;
+  }
+}
+
+function timelineRecordBelongsToPrefix(
+  record: StoreRecord,
+  key: typeof TIMELINE_DETAIL_TABLE_KEYS[number],
+  messageChunkIndex: ReadonlyMap<string, number>,
+  toolCallChunkIndex: ReadonlyMap<string, number>,
+  lastChunkIndex: number
+): boolean {
+  let chunkIndex: number | undefined;
+  switch (key) {
+    case 'messages':
+      chunkIndex = messageChunkIndex.get(record.id);
+      break;
+    case 'messageRevisions':
+      chunkIndex = messageChunkIndex.get((record as MessageRevisionRecord).messageId);
+      break;
+    case 'messageCurrentRevisionLinks':
+      chunkIndex = messageChunkIndex.get((record as MessageCurrentRevisionLinkRecord).messageId);
+      break;
+    case 'toolCalls':
+      chunkIndex = messageChunkIndex.get((record as ToolCallRecord).messageId);
+      break;
+    case 'toolCallEvents':
+      chunkIndex = toolCallChunkIndex.get((record as ToolCallEventRecord).toolCallId);
+      break;
+    case 'checkpointTimelineAnchors':
+      chunkIndex = messageChunkIndex.get((record as CheckpointTimelineAnchorRecord).floorMessageId);
+      break;
+    default:
+      return false;
+  }
+  return chunkIndex !== undefined && chunkIndex < lastChunkIndex;
 }
 
 function canReuseTimelinePrefixForSuffix(

@@ -396,7 +396,7 @@ export const CLIENT_STATE_TABLES = {
   conversationReuseLinks: upsertRemoveTable('conversationReuseLink', 'link', { scope: { kind: 'conversation', field: 'conversationId' }, globalSnapshot: true }),
   conversationBranchLinks: upsertRemoveTable('conversationBranchLink', 'link', { scope: { kind: 'conversationAny', fields: ['sourceConversationId', 'targetConversationId'] }, globalSnapshot: true }),
   conversationOriginLinks: upsertRemoveTable('conversationOriginLink', 'link', { scope: { kind: 'conversation', field: 'conversationId' }, globalSnapshot: true }),
-  agentConversationLinks: upsertRemoveTable('agentConversationLink', 'link', { scope: { kind: 'conversation', field: 'conversationId', replace: 'removeOnly' }, globalSnapshot: true }),
+  agentConversationLinks: upsertRemoveTable('agentConversationLink', 'link', { scope: { kind: 'conversation', field: 'conversationId', replace: 'replace' }, globalSnapshot: true }),
   conversationAgentSelections: upsertRemoveTable('conversationAgentSelection', 'selection', { scope: { kind: 'conversation', field: 'conversationId' }, globalSnapshot: true }),
   projectContexts: upsertRemoveTable('projectContext', 'projectContext', {
     cascadeRemove: [

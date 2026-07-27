@@ -52,6 +52,7 @@ import {
   removeMessageRecord,
   saveClientStateSkeletonToStores,
   saveConversationRenderDetailToStores,
+  saveConversationTimelineRenderDetailToStores,
   saveConversationRunHistoryToStores,
   saveMessageRecord,
   saveToolCallRecord,
@@ -294,6 +295,11 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     async saveConversationRenderDetail(conversationId, state) {
       return withSharedDataRoot(async (paths) => {
         await saveConversationRenderDetailToStores(paths, conversationId, state);
+      });
+    },
+    async saveConversationTimelineRenderDetail(conversationId, state) {
+      return withSharedDataRoot(async (paths) => {
+        await saveConversationTimelineRenderDetailToStores(paths, conversationId, state);
       });
     },
     async saveConversationRunHistory(conversationId, state, options) {

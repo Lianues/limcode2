@@ -1,5 +1,8 @@
 import type { CommandSink, Entity, WorldReader } from '../../../ecs/types';
 import type { CheckpointTriggerKind } from '../../../../shared/protocol';
+import type { CheckpointRequestedPayload } from './events';
+import { CheckpointEventType } from './events';
+import { evaluateCheckpointRequestPolicy } from './queries';
 import {
   CheckpointBarrier,
   type CheckpointBarrierData,
@@ -20,6 +23,42 @@ export interface SpawnCheckpointBarrierInput {
   targetMessageId?: string;
   targetLlmRequest?: Entity;
   targetLlmRequestId?: string;
+}
+
+export interface RequestCheckpointBarrierInput {
+  barrier: SpawnCheckpointBarrierInput & { conversation: Entity };
+  request: Omit<CheckpointRequestedPayload, 'checkpointId' | 'trigger'>;
+  toolName?: string;
+}
+
+export type RequestCheckpointBarrierResult =
+  | { requested: true; checkpointId: string; barrier: Entity }
+  | { requested: false; reason: 'policy_disabled' | 'trigger_disabled' };
+
+/** 原子地执行有效策略前置检查；关闭时既不创建 barrier，也不发送 Requested 事件。 */
+export function requestCheckpointBarrierIfEnabled(
+  world: WorldReader,
+  cmd: CommandSink,
+  input: RequestCheckpointBarrierInput
+): RequestCheckpointBarrierResult {
+  const evaluation = evaluateCheckpointRequestPolicy(world, {
+    conversation: input.barrier.conversation,
+    ...(input.barrier.targetRun !== undefined ? { run: input.barrier.targetRun } : {}),
+    trigger: input.barrier.trigger,
+    ...(input.toolName ? { toolName: input.toolName } : {})
+  });
+  if (!evaluation.enabled) return { requested: false, reason: evaluation.reason };
+
+  const barrier = spawnCheckpointBarrier(cmd, input.barrier);
+  cmd.enqueue({
+    type: CheckpointEventType.Requested,
+    payload: {
+      ...input.request,
+      checkpointId: input.barrier.checkpointId,
+      trigger: input.barrier.trigger
+    }
+  });
+  return { requested: true, checkpointId: input.barrier.checkpointId, barrier };
 }
 
 export function spawnCheckpointBarrier(cmd: CommandSink, input: SpawnCheckpointBarrierInput): Entity {

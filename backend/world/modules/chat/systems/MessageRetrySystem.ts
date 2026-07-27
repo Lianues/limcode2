@@ -18,7 +18,9 @@ import { AgentRunBundle, spawnAgentRun } from '../../agentRun/bundles';
 import { answerBridgeIdForConversation, defaultAgentForConversation, runSource, runTarget } from '../../agentRun/queries';
 import { ToolCallEventBundle } from '../../tools/bundles';
 import { ToolCall, ToolCallEvent, ToolResultConsumed, ToolState } from '../../tools/components';
+import { MessageBundle } from '../bundles';
 import { ChatEventType } from '../events';
+import { spawnMissingAgentError } from '../missingAgentError';
 import { conversationMessages } from '../queries';
 import {
   Conversation,
@@ -31,7 +33,6 @@ import {
   Streaming
 } from '../components';
 import { deleteMessagesFromIndex } from './MessageDeleteSystem';
-
 const RETRY_READ_COMPONENTS = [
   Agent,
   AgentConversationLink,
@@ -66,8 +67,8 @@ export const MessageRetrySystem = defineSystem({
     reads: { components: RETRY_READ_COMPONENTS },
     writes: { components: RETRY_READ_COMPONENTS, mutationMode: 'delete' },
     events: { read: [ChatEventType.RetryFrom] },
-    bundles: [AgentRunBundle, ToolCallEventBundle],
-    effects: { emit: ['llm.abort', 'tool.abort'] }
+    bundles: [MessageBundle, AgentRunBundle, ToolCallEventBundle],
+    effects: { emit: ['llm.abort', 'tool.abort', 'client.transientNotice'] }
   },
   run(ctx) {
     const { world, cmd } = ctx;
@@ -84,8 +85,11 @@ export const MessageRetrySystem = defineSystem({
       if (!modelMessageData || modelMessageData.role !== 'model') continue;
 
       const retryInput = buildRetryInput(world, conversation, messages, startIndex, modelMessage);
-      if (!retryInput) continue;
       deleteMessagesFromIndex(world, cmd, messages, startIndex);
+      if (!retryInput) {
+        spawnMissingAgentError(cmd, conversation, payload.conversationId);
+        continue;
+      }
       spawnAgentRun(cmd, retryInput);
     }
   }

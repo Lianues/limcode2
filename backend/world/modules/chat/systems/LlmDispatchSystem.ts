@@ -63,7 +63,6 @@ import { buildRunContextContents, selectRunContextCompressionVariant, selectRunC
 import { AgentRunBundle } from '../../agentRun/bundles';
 import { createStableId } from '../../../../utils/stableId';
 import { conversationMessages } from '../queries';
-
 const PendingLlmRequestsQuery = defineQuery({
   name: 'PendingLlmRequests',
   all: [LlmRequest],
@@ -145,9 +144,12 @@ export const LlmDispatchSystem = defineSystem({
     for (const request of requests) {
       const data = world.get(request, LlmRequest);
       if (!data) continue;
-      if (hasActiveBlockingCompression(world, data.conversation)) continue;
+      if (hasActiveBlockingCompression(world, data.conversation)) {
+        continue;
+      }
       const barriers = checkpointBarriersForLlmRequest(world, request, data);
-      if (barriers.some((item) => item.barrier.status !== 'released')) continue;
+      const blockedBarriers = barriers.filter((item) => item.barrier.status !== 'released');
+      if (blockedBarriers.length > 0) continue;
       for (const barrier of barriers) consumeReleasedCheckpointBarrier(cmd, barrier.entity);
 
       const contextPolicy = activeContextPolicyForRun(world, data.run);

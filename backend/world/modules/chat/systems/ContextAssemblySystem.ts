@@ -5,19 +5,19 @@ import { AgentRun, AgentRunNeedsModel, AgentRunQueueHold, AgentRunQueuedInput, A
 import { spawnMessageRunLink } from '../../agentRun/bundles';
 import { activeModelProfileForRun, isTerminalRunStatus } from '../../agentRun/queries';
 import { CompressionBlock } from '../../compression/components';
+import { Agent, AgentKind } from '../../agent/components';
 import { hasActiveBlockingCompression } from '../../compression/queries';
 import { ConversationWorkflowSelection, Workflow, ModelProfile, ModelProfileScopeLink } from '../../workflow/components';
 import { LlmRequest, Conversation, ConversationFullContextLoaded, ConversationFullContextPending, Message } from '../components';
 import { ModelMessageBundle, LlmRequestBundle, MessageBundle, spawnMessage, spawnModelMessage, spawnLlmRequest } from '../bundles';
 import { materializeUserInputMessage } from '../userInputMaterialization';
 import { CheckpointEventType } from '../../checkpoint/events';
-import { spawnCheckpointBarrier } from '../../checkpoint/barriers';
-import { Checkpoint, CheckpointBarrier } from '../../checkpoint/components';
+import { requestCheckpointBarrierIfEnabled } from '../../checkpoint/barriers';
+import { Checkpoint, CheckpointBarrier, CheckpointPolicy, CheckpointPolicyScopeLink } from '../../checkpoint/components';
 import { LlmInvocation, MessageLlmInvocationLink, RunLlmInvocationLink } from '../../llm/components';
 import { LlmInvocationBundle, MessageLlmInvocationLinkBundle, spawnLlmInvocation, spawnMessageLlmInvocationLink, spawnRunLlmInvocationLink } from '../../llm/bundles';
 import { createStableId } from '../../../../utils/stableId';
 import { createMessageId } from '../../../../../shared/protocol';
-
 const RunsNeedingModelQuery = defineQuery({
   name: 'RunsNeedingModel',
   all: [AgentRun, AgentRunNeedsModel],
@@ -48,7 +48,7 @@ export const ContextAssemblySystem = defineSystem({
   name: 'ContextAssemblySystem',
   access: {
     queries: [RunsNeedingModelQuery, ActiveLlmRequestsQuery, LlmInvocationLookupQuery],
-    reads: { components: [RunWorkflowLink, RunModelProfileLink, ConversationWorkflowSelection, Workflow, ModelProfile, ModelProfileScopeLink, CompressionBlock, ConversationFullContextLoaded, ConversationFullContextPending, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, Checkpoint] },
+    reads: { components: [RunWorkflowLink, RunModelProfileLink, ConversationWorkflowSelection, Workflow, ModelProfile, ModelProfileScopeLink, Agent, AgentKind, CompressionBlock, ConversationFullContextLoaded, ConversationFullContextPending, AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, Checkpoint, CheckpointPolicy, CheckpointPolicyScopeLink] },
     bundles: [ModelMessageBundle, MessageBundle, LlmRequestBundle, LlmInvocationBundle, MessageLlmInvocationLinkBundle],
     writes: { components: [AgentRun, MessageRunLink, ConversationFullContextPending, CheckpointBarrier] },
     events: { read: [LlmEventType.InvocationResolved, LlmEventType.InvocationResolveError], emit: [CheckpointEventType.Requested] },
@@ -58,12 +58,16 @@ export const ContextAssemblySystem = defineSystem({
     const { world, cmd } = ctx;
     for (const event of ctx.events) {
       switch (event.type) {
-        case LlmEventType.InvocationResolved:
-          materializeResolvedInvocation(world, cmd, event.payload as LlmInvocationResolvedPayload);
+        case LlmEventType.InvocationResolved: {
+          const payload = event.payload as LlmInvocationResolvedPayload;
+          materializeResolvedInvocation(world, cmd, payload);
           break;
-        case LlmEventType.InvocationResolveError:
-          materializeInvocationResolveError(world, cmd, event.payload as LlmInvocationResolveErrorPayload);
+        }
+        case LlmEventType.InvocationResolveError: {
+          const payload = event.payload as LlmInvocationResolveErrorPayload;
+          materializeInvocationResolveError(world, cmd, payload);
           break;
+        }
       }
     }
 
@@ -73,12 +77,16 @@ export const ContextAssemblySystem = defineSystem({
         continue;
       }
       const target = targetForRun(world, run);
-      if (!target) continue;
+      if (!target) {
+        continue;
+      }
       if (!world.has(target.conversation, ConversationFullContextLoaded)) {
         requestFullContextLoad(world, cmd, run, target.conversation);
         continue;
       }
-      if (hasActiveBlockingCompression(world, target.conversation)) continue;
+      if (hasActiveBlockingCompression(world, target.conversation)) {
+        continue;
+      }
 
       drainQueuedInputsIntoRun(world, cmd, run, target.conversation);
 
@@ -100,7 +108,12 @@ export const ContextAssemblySystem = defineSystem({
   }
 });
 
-function requestFullContextLoad(world: WorldReader, cmd: CommandSink, run: Entity, conversation: Entity): void {
+function requestFullContextLoad(
+  world: WorldReader,
+  cmd: CommandSink,
+  run: Entity,
+  conversation: Entity
+): void {
   markRunPreparing(world, cmd, run);
   if (world.has(conversation, ConversationFullContextPending)) return;
   const data = world.get(conversation, Conversation);
@@ -115,7 +128,11 @@ function markRunPreparing(world: WorldReader, cmd: CommandSink, run: Entity): vo
   cmd.add(run, AgentRun, { ...data, status: 'preparing', updatedAt: Date.now() });
 }
 
-function materializeResolvedInvocation(world: WorldReader, cmd: CommandSink, payload: LlmInvocationResolvedPayload): void {
+function materializeResolvedInvocation(
+  world: WorldReader,
+  cmd: CommandSink,
+  payload: LlmInvocationResolvedPayload
+): void {
   const invocation = invocationEntityById(world, payload.invocationId);
   if (invocation === undefined) return;
   const current = world.get(invocation, LlmInvocation);
@@ -204,21 +221,25 @@ function requestLlmResponseBeforeCheckpoint(
   const conversationData = world.get(conversation, Conversation);
   if (!runData || !conversationData) return;
   const checkpointId = createMessageId();
-  spawnCheckpointBarrier(cmd, {
-    checkpointId,
-    conversation,
-    trigger: 'llm_response_before',
-    targetKind: 'llm_request',
-    targetRun: run,
-    targetRunId: runData.id,
-    targetMessage: modelMessage,
-    targetMessageId: modelMessageId,
-    targetLlmRequest: llmRequest,
-    targetLlmRequestId: llmRequestId
-  });
-  cmd.enqueue({
-    type: CheckpointEventType.Requested,
-    payload: { checkpointId, conversationId: conversationData.id, runId: runData.id, floorMessageId: modelMessageId, anchorPosition: 'before', trigger: 'llm_response_before' }
+  requestCheckpointBarrierIfEnabled(world, cmd, {
+    barrier: {
+      checkpointId,
+      conversation,
+      trigger: 'llm_response_before',
+      targetKind: 'llm_request',
+      targetRun: run,
+      targetRunId: runData.id,
+      targetMessage: modelMessage,
+      targetMessageId: modelMessageId,
+      targetLlmRequest: llmRequest,
+      targetLlmRequestId: llmRequestId
+    },
+    request: {
+      conversationId: conversationData.id,
+      runId: runData.id,
+      floorMessageId: modelMessageId,
+      anchorPosition: 'before'
+    }
   });
 }
 

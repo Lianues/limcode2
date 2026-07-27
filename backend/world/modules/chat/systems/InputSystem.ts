@@ -10,18 +10,20 @@ import { cleanupRunLlmRequests } from '../../agentRun/llmRequestCleanup';
 import { answerBridgeIdForConversation, defaultAgentForConversation, effectiveEditPolicyForRun, findAgentById, findConversationById, runTarget } from '../../agentRun/queries';
 import type { ChatSendPayload, MessageContent } from '../../../../../shared/protocol';
 import { CheckpointEventType } from '../../checkpoint/events';
-import { Checkpoint, CheckpointBarrier } from '../../checkpoint/components';
+import { Checkpoint, CheckpointBarrier, CheckpointPolicy, CheckpointPolicyScopeLink } from '../../checkpoint/components';
+import { ConversationWorkflowSelection, Workflow } from '../../workflow/components';
 import { CompressionBlock } from '../../compression/components';
 import { hasActiveBlockingCompression } from '../../compression/queries';
 import { conversationMessages } from '../queries';
 import { materializeUserInputMessage } from '../userInputMaterialization';
 import { markClientStateConversationDirty } from '../../../clientSync/dirtyConversations';
 import { ClientStateDirtyConversationIdsKey } from '../../../clientSync/resources';
+import { spawnMissingAgentError } from '../missingAgentError';
 
 const ConversationsByIdQuery = defineQuery({
   name: 'ConversationsById',
   all: [Conversation],
-  read: [Conversation, Agent, AgentConversationLink, ConversationAgentSelection, AgentRun, AgentRunSourceLink, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink, LlmRequest, Message, Checkpoint, CheckpointBarrier, CompressionBlock],
+  read: [Conversation, Agent, AgentConversationLink, ConversationAgentSelection, AgentRun, AgentRunSourceLink, AgentRunTargetLink, RunEditPolicy, RunEditPolicyLink, LlmRequest, Message, Checkpoint, CheckpointBarrier, CheckpointPolicy, CheckpointPolicyScopeLink, ConversationWorkflowSelection, Workflow, CompressionBlock],
   write: [AgentRun, Message],
   remove: [AgentRunNeedsModel, Streaming, LlmRequest],
   role: 'work'
@@ -34,6 +36,7 @@ export const InputSystem = defineSystem({
     writes: { components: [CheckpointBarrier], mutationMode: 'create' },
     resources: { read: [ClientStateDirtyConversationIdsKey], write: [ClientStateDirtyConversationIdsKey], mutationMode: 'update' },
     events: { read: [ChatEventType.Send], emit: [CheckpointEventType.Requested] },
+    effects: { emit: ['client.transientNotice'] },
     bundles: [UserMessageBundle, AgentRunBundle]
   },
   run(ctx) {
@@ -48,10 +51,13 @@ export const InputSystem = defineSystem({
 
 function handleSend(world: WorldReader, cmd: CommandSink, conversation: Entity, payload: ChatSendPayload): void {
   markClientStateConversationDirty(world, cmd, payload.conversationId);
-  const agent = payload.agentId ? findAgentById(world, payload.agentId) ?? defaultAgentForConversation(world, conversation) : defaultAgentForConversation(world, conversation);
-  if (agent === undefined) return;
   const content = normalizeInputContent(payload);
   if (content.parts.length === 0) return;
+  const agent = payload.agentId ? findAgentById(world, payload.agentId) ?? defaultAgentForConversation(world, conversation) : defaultAgentForConversation(world, conversation);
+  if (agent === undefined) {
+    materializeMissingAgentError(world, cmd, conversation, payload.conversationId, content);
+    return;
+  }
 
   if (hasActiveBlockingCompression(world, conversation)) {
     spawnQueuedChatRun(world, cmd, { agent, conversation, content });
@@ -96,6 +102,17 @@ function normalizeInputContent(payload: ChatSendPayload): MessageContent {
   }
   const text = payload.text?.trim() ?? '';
   return { role: 'user', parts: text ? [{ text }] : [] };
+}
+
+function materializeMissingAgentError(
+  world: WorldReader,
+  cmd: CommandSink,
+  conversation: Entity,
+  conversationId: string,
+  content: MessageContent
+): void {
+  materializeUserInputMessage(world, cmd, conversation, conversationId, content);
+  spawnMissingAgentError(cmd, conversation, conversationId);
 }
 
 function spawnChatRun(

@@ -99,9 +99,7 @@ import {
 } from '../../workEnvironment/bundles';
 import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey, ToolSchemasKey } from '../resources';
 import { isToolNameAllowedByPolicy, isYoloToolPolicy } from '../policy';
-import { spawnCheckpointBarrier, consumeReleasedCheckpointBarrier, newestBarrierForTarget } from '../../checkpoint/barriers';
-import { effectiveCheckpointPolicyForRequest } from '../../checkpoint/queries';
-import { effectiveCheckpointToolTriggerConfig } from '../../checkpoint/policy';
+import { consumeReleasedCheckpointBarrier, newestBarrierForTarget, requestCheckpointBarrierIfEnabled } from '../../checkpoint/barriers';
 import { isReadonlyCommandCall } from '../definitions/command';
 import { normalizeAskUserToolRequest } from '../../../../../shared/askUser';
 import { renderPlanMarkdown } from '../../../../../shared/planMarkdown';
@@ -506,50 +504,37 @@ function awaitToolExecutionBeforeCheckpoint(
     return true;
   }
 
-  if (!toolExecutionBeforeCheckpointEnabled(world, authorization, call)) return false;
+  if (isYoloToolPolicy(authorization.policy)) return false;
 
   const target = runTarget(world, authorization.run);
   if (!target) return false;
   const checkpointId = createMessageId();
-  spawnCheckpointBarrier(cmd, {
-    checkpointId,
-    conversation: target.conversation,
-    trigger: 'tool_execution_before',
-    targetKind: 'tool_execution',
-    targetRun: authorization.run,
-    targetRunId: authorization.runId,
-    targetToolCall: entity,
-    targetToolCallId: call.id
-  });
-  cmd.enqueue({
-    type: CheckpointEventType.Requested,
-    payload: {
+  return requestCheckpointBarrierIfEnabled(world, cmd, {
+    barrier: {
       checkpointId,
+      conversation: target.conversation,
+      trigger: 'tool_execution_before',
+      targetKind: 'tool_execution',
+      targetRun: authorization.run,
+      targetRunId: authorization.runId,
+      targetToolCall: entity,
+      targetToolCallId: call.id
+    },
+    request: {
       conversationId: authorization.conversationId,
       runId: authorization.runId,
       toolCallId: call.id,
       toolName: call.name,
-      anchorPosition: 'before',
-      trigger: 'tool_execution_before'
-    }
-  });
-  return true;
+      anchorPosition: 'before'
+    },
+    toolName: call.name
+  }).requested;
 }
 
 function toolExecutionBarrierMatches(barrier: CheckpointBarrierData, entity: Entity, toolCallId: string): boolean {
   return barrier.trigger === 'tool_execution_before'
     && barrier.targetKind === 'tool_execution'
     && (barrier.targetToolCall === entity || barrier.targetToolCallId === toolCallId);
-}
-
-function toolExecutionBeforeCheckpointEnabled(world: WorldReader, authorization: Extract<AuthorizationResult, { ok: true }>, call: ToolCallData): boolean {
-  if (isYoloToolPolicy(authorization.policy)) return false;
-  const target = runTarget(world, authorization.run);
-  if (!target) return false;
-  const resolution = effectiveCheckpointPolicyForRequest(world, { conversation: target.conversation, run: authorization.run });
-  if (!resolution.policy.enabled) return false;
-  const toolDefinition = (world.tryGetResource(ToolDefinitionsKey) ?? []).find((tool) => tool.name === call.name);
-  return effectiveCheckpointToolTriggerConfig(call.name, resolution.policy.toolTriggers, toolDefinition).before;
 }
 
 function executeRuntimeToolCall(world: WorldReader, cmd: CommandSink, entity: Entity, call: ToolCallData, state: ToolStateData, authorization: Extract<AuthorizationResult, { ok: true }>): void {

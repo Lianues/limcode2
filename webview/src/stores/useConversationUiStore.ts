@@ -119,15 +119,18 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
   const editingQueueRunId = ref<string | undefined>(undefined);
   const editConfirmOpen = ref(false);
   const pendingEditText = ref('');
+  const pendingTimelineMutationActivity = shallowRef<ActivityTimelineRowInput>();
 
   const seenMessageIds = new Set<string>();
   const enterTimers = new Map<string, number>();
   let lastTimelineSnapshot: TimelineSyncSnapshot = createEmptyTimelineSyncSnapshot();
   let initializedMessages = false;
   let exitingFromId: string | undefined;
+  let optimisticallyHiddenFromId: string | undefined;
   let exitActionTimer: number | undefined;
 
   const isEditing = computed(() => composerMode.value === 'edit');
+  const hasPendingTimelineMutation = computed(() => pendingTimelineMutationActivity.value !== undefined);
   const activeComposerSnapshot = computed(() => composerSnapshots.value[composerMode.value]);
   const composerDraft = computed(() => activeComposerSnapshot.value.draft);
 
@@ -196,7 +199,8 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
         ...row,
         expanded: expandedCheckpointRowId.value === row.id,
         phase: phaseForAnchoredTimelineRow(row, messageIndexById, messages)
-      }));
+      }))
+      .filter((row) => !optimisticallyHiddenFromId || row.phase !== 'exiting');
 
     const rows = allRows.flatMap((row): ConversationTimelineViewRow[] => {
       if (row.kind === 'checkpoint') return [];
@@ -218,13 +222,23 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
       }
       return [];
     });
-    const activityViewRows: ActivityViewRow[] = activityRows.map((row) => ({
+    const localPreparingActivity = pendingTimelineMutationActivity.value;
+    const hasBackendPreparingActivity = !!localPreparingActivity && activityRows.some((row) =>
+      row.conversationId === localPreparingActivity.conversationId && row.activityKind === 'preparing'
+    );
+    const effectiveActivityRows = localPreparingActivity && !hasBackendPreparingActivity
+      ? [...activityRows, localPreparingActivity]
+      : activityRows;
+    const activityViewRows: ActivityViewRow[] = effectiveActivityRows.map((row) => ({
       ...row,
       kind: 'activity',
       phase: 'stable'
     }));
-    timelineRows.value = [...rows, ...activityViewRows];
-    messageRows.value = rows.filter((row): row is MessageViewRow => row.kind === 'message');
+    const visibleRows = optimisticallyHiddenFromId
+      ? rows.filter((row) => row.phase !== 'exiting')
+      : rows;
+    timelineRows.value = [...visibleRows, ...activityViewRows];
+    messageRows.value = visibleRows.filter((row): row is MessageViewRow => row.kind === 'message');
   }
 
   function pruneExpandedCheckpointRows(rows: readonly ConversationTimelineRow[]): void {
@@ -245,6 +259,18 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     refreshRowPhases();
 
     exitActionTimer = window.setTimeout(() => {
+      // 动画结束后立即收起布局，并用本地 preparing row 衔接后端真实状态；
+      // 不让透明消息继续占位，也不留下“什么都没有”的等待空窗。
+      optimisticallyHiddenFromId = messageId;
+      const targetMessage = lastTimelineSnapshot.messages.find((message) => message.id === messageId);
+      if (targetMessage) {
+        pendingTimelineMutationActivity.value = {
+          id: `activity:timeline-mutation:${messageId}`,
+          conversationId: targetMessage.conversationId,
+          activityKind: 'preparing'
+        };
+      }
+      refreshRowPhases();
       action();
       exitActionTimer = undefined;
     }, delay);
@@ -383,8 +409,17 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     refreshRowPhases();
   }
 
+  function cancelPendingTimelineMutation(): boolean {
+    if (!pendingTimelineMutationActivity.value) return false;
+    pendingTimelineMutationActivity.value = undefined;
+    refreshRowPhases();
+    return true;
+  }
+
   function clearExitState(): void {
     exitingFromId = undefined;
+    optimisticallyHiddenFromId = undefined;
+    pendingTimelineMutationActivity.value = undefined;
     clearExitTimers();
     refreshRowPhases();
   }
@@ -409,6 +444,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     editConfirmOpen,
     pendingEditText,
     isEditing,
+    hasPendingTimelineMutation,
     syncMessages,
     syncTimeline,
     toggleCheckpointMarker,
@@ -418,6 +454,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     cancelEditMode,
     setComposerDraft,
     clearChatDraft,
+    cancelPendingTimelineMutation,
     clearExitState,
     llmErrorBlocksForMessage,
     applyLlmTransientNotice,

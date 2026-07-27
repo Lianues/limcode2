@@ -231,7 +231,7 @@ export async function startLlmProvider(
     const proxyFetch = proxy ? createProxyFetch(proxy) : undefined;
     const headers = mergeHeaders(await resolveMaybe(options.headers), settings.headers);
     const requestBody = requestBodyWithOpenAIPromptCacheKey(settings, request.conversationId);
-    if (proxy) console.log(`[LimCode] LLM proxy enabled: ${proxy}`);
+    const webSocketConfig = openAIResponsesWebSocketConfigEntry(settings, request.conversationId);
     const provider = unified.createLLMFromConfig({
       provider: settings.provider,
       model: settings.model,
@@ -241,7 +241,7 @@ export async function startLlmProvider(
       ...(headers ? { headers } : {}),
       ...(requestBody ? { requestBody } : {}),
       ...unifiedPromptCacheConfigEntry(settings, requestBody),
-      ...openAIResponsesWebSocketConfigEntry(settings, request.conversationId),
+      ...webSocketConfig,
       ...(proxy ? { proxy, fetch: proxyFetch } : {})
     }, registry.llmProviders);
 

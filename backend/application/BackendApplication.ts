@@ -132,7 +132,6 @@ import { ConversationAttentionTracker, type ConversationAttentionRequest } from 
 import { PlanReviewAttentionTracker, collectPendingPlanReviewAttention, planReviewAttentionMessage } from './planReviewAttention';
 import { createStableId } from '../utils/stableId';
 import { findUniqueById } from '../utils/uniqueIds';
-
 const MAX_WARM_CLOSED_CONVERSATIONS = 3;
 const USER_ATTENTION_NOTIFICATION_ACTION = '打开标签页';
 const OPEN_PANEL_COMMAND = 'limcode.openPanel';
@@ -240,7 +239,7 @@ export class BackendApplication {
       isHydrated: () => this.hydrated,
       requestSnapshot: (conversationId) => this.requestSnapshot(conversationId),
       requestPersist: (reason) => this.requestPersistSoon(reason),
-      flushPersistence: (_reason) => this.persistence.persistImmediately({ ensurePersisted: true, throwOnError: true }),
+      flushConversationTimelinePersistence: (conversationId) => this.persistence.persistConversationRenderDetailImmediately(conversationId, { throwOnError: true }),
       ensureConversationDetailLoaded: (conversationId) => this.ensureConversationDetailLoaded(conversationId),
       ensureConversationTailLoaded: (conversationId) => this.ensureConversationTailLoaded(conversationId),
       getProjectFolderCandidates: () => this.getProjectFolderCandidates(),
@@ -704,7 +703,9 @@ export class BackendApplication {
 
   private async loadConversationDetail(conversationId: string): Promise<void> {
     if (this.deletedConversationIds.has(conversationId)) return;
-    if (!this.hydrated) await this.waitUntilHydrated();
+    if (!this.hydrated) {
+      await this.waitUntilHydrated();
+    }
     if (this.renderLoadedConversationDetails.has(conversationId) || this.isConversationFullContextLoaded(conversationId)) {
       this.renderLoadedConversationDetails.add(conversationId);
       this.markConversationFullContextLoaded(conversationId);
@@ -738,6 +739,9 @@ export class BackendApplication {
     const hydrated = detail ? await hydrateConversationDetail(this.world, detail, conversationId) : false;
     if (detail && hydrated) this.primeConversationStreamState(conversationId, detail);
     const loaded = detail !== undefined && (hydrated || this.findConversationEntity(conversationId) !== undefined);
+    if (detail && loaded && backfilled.addedCount === 0) {
+      this.persistence.rememberConversationRenderDetailPersisted(conversationId, detail);
+    }
     if (loaded) {
       this.renderLoadedConversationDetails.add(conversationId);
       this.coldConversationHistoryEntries.delete(conversationId);
@@ -877,7 +881,10 @@ export class BackendApplication {
     if (!conversationId || this.conversationContextLoadInFlight.has(conversationId)) return;
     this.conversationContextLoadInFlight.add(conversationId);
     setTimeout(() => {
-      void this.ensureConversationDetailLoaded(conversationId)
+      void this.persistence.withConversationTimelineCommittedBeforeRead(
+        conversationId,
+        () => this.ensureConversationDetailLoaded(conversationId)
+      )
         .catch((error) => {
           console.warn('[LimCode] Failed to hydrate conversation context for LLM.', error);
         })

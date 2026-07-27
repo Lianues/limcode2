@@ -12,6 +12,7 @@ const {
   ToolCallRunLink
 } = require('../dist/extension/backend/world/modules/agentRun/components.js');
 const { AgentRunLifecycleSystem } = require('../dist/extension/backend/world/modules/agentRun/systems/AgentRunLifecycleSystem.js');
+const { hasActiveUnresolvedFunctionCallsInEntities } = require('../dist/extension/backend/world/modules/compression/selection.js');
 const { Conversation, Message, PartOf } = require('../dist/extension/backend/world/modules/chat/components.js');
 const { ToolPolicy } = require('../dist/extension/backend/world/modules/workflow/components.js');
 const { ToolCall, ToolResultConsumed, ToolState } = require('../dist/extension/backend/world/modules/tools/components.js');
@@ -237,6 +238,83 @@ test('a canonical user-interrupted tool result still closes the run when every c
   assert.equal(runData.status, 'cancelled');
   assert.equal(runData.endReason, 'cancelled_by_user');
   assert.equal(world.has(run, AgentRunNeedsModel), false);
+});
+
+test('cancelling a run consumes abandoned tool calls so compression is not blocked until restart', () => {
+  const world = new MapWorld();
+  const agent = addAgent(world, 'main-cancel-compression');
+  const conversation = addConversation(world, 'conversation-cancel-compression');
+  const run = addRun(world, {
+    id: 'run-cancel-compression',
+    kind: 'chat',
+    status: 'waiting_tool',
+    agent,
+    conversation,
+    createdAt: 10
+  });
+  const modelMessage = addModelMessage(world, conversation, run, 100);
+  world.add(modelMessage, Message, {
+    ...world.get(modelMessage, Message),
+    content: {
+      role: 'model',
+      parts: [
+        { id: 'tool-cancel-read', functionCall: { name: 'read', args: { path: 'a.txt' } } },
+        { id: 'tool-cancel-shell', functionCall: { name: 'shell', args: { command: 'echo test' } } }
+      ]
+    }
+  });
+  const readCall = addToolCall(world, {
+    run,
+    modelMessage,
+    id: 'tool-cancel-read',
+    name: 'read',
+    args: { path: 'a.txt' },
+    status: 'executing',
+    createdAt: 110
+  });
+  const shellCall = addToolCall(world, {
+    run,
+    modelMessage,
+    id: 'tool-cancel-shell',
+    name: 'shell',
+    args: { command: 'echo test' },
+    status: 'queued',
+    createdAt: 111
+  });
+
+  assert.equal(hasActiveUnresolvedFunctionCallsInEntities(world, [modelMessage]), true);
+
+  AgentRunLifecycleSystem.run({
+    world,
+    cmd: commandSink(world),
+    events: [{
+      type: 'agentRun:cancel',
+      payload: {
+        runId: 'run-cancel-compression',
+        conversationId: 'conversation-cancel-compression',
+        reason: '用户终止当前任务。'
+      }
+    }]
+  });
+
+  assert.equal(world.get(run, AgentRun).status, 'cancelled');
+  assert.equal(world.get(readCall, ToolState).status, 'error');
+  assert.equal(world.get(shellCall, ToolState).status, 'error');
+  assert.equal(world.has(readCall, ToolResultConsumed), true);
+  assert.equal(world.has(shellCall, ToolResultConsumed), true);
+
+  const conversationMessages = world.query(Message)
+    .filter((entity) => world.get(entity, PartOf)?.parent === conversation)
+    .sort((left, right) => world.get(left, Message).seq - world.get(right, Message).seq);
+  const responseMessages = conversationMessages.filter((entity) =>
+    world.get(entity, Message).content.parts.some((part) => part.functionResponse)
+  );
+  assert.equal(responseMessages.length, 2);
+  assert.deepEqual(
+    responseMessages.map((entity) => world.get(entity, Message).content.parts[0].id).sort(),
+    ['tool-cancel-read', 'tool-cancel-shell']
+  );
+  assert.equal(hasActiveUnresolvedFunctionCallsInEntities(world, conversationMessages), false);
 });
 
 function addAgent(world, id) {

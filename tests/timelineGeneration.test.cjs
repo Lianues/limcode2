@@ -376,6 +376,73 @@ test('truncate 发布新 generation 且不原地覆盖旧 chunk', async () => {
   }
 });
 
+test('truncate 只重写锚点 chunk 并复用未受影响前缀', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-truncate-incremental-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  const conversationId = 'conv-truncate-incremental';
+  try {
+    await timelineStore.saveConversationTimelineDetail(paths, conversationId, makeTimelineState(createEmptyClientState, conversationId, 250, { withTaskListToolCall: true }));
+    const root = timelineRoot(paths, conversationId);
+    const beforeIndex = await readJsonFile(path.join(root, 'index.json'));
+    assert.equal(beforeIndex.chunks.length, 3);
+    const beforePrefixChunk = beforeIndex.chunks[0];
+    const beforePrefixInfo = await collectChunkRefInfo(root, [beforePrefixChunk]);
+    const beforeAnchorChunk = beforeIndex.chunks[1];
+
+    const result = await timelineStore.truncateConversationTimeline(paths, {
+      conversationId,
+      anchorMessageId: 'm-150',
+      keepAnchor: true
+    });
+    assert.equal(result.removedMessageIds.length, 100);
+    assert.equal(result.removedMessageIds[0], 'm-151');
+    assert.equal(result.removedMessageIds.at(-1), 'm-250');
+
+    const afterIndex = await readJsonFile(path.join(root, 'index.json'));
+    assert.notEqual(afterIndex.generation, beforeIndex.generation);
+    assert.equal(afterIndex.chunks.length, 2);
+    assert.deepEqual(afterIndex.chunks[0], beforePrefixChunk);
+    assert.notEqual(afterIndex.chunks[1].file, beforeAnchorChunk.file);
+    assert.equal(afterIndex.chunks[1].generation, afterIndex.generation);
+    assert.equal(afterIndex.chunks[1].messageIds.length, 50);
+    assert.equal(afterIndex.chunks[1].messageIds.at(-1), 'm-150');
+    assert.deepEqual(await collectChunkRefInfo(root, [afterIndex.chunks[0]]), beforePrefixInfo);
+
+    const detail = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    assert.equal(detail.messages.length, 150);
+    assert.equal(detail.messages.at(-1).id, 'm-150');
+  } finally {
+    await removeTempRoot(tempRoot);
+  }
+});
+
+test('truncate 落在 chunk 边界时只发布新 index 并复用全部保留 chunk', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-truncate-boundary-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  const conversationId = 'conv-truncate-boundary';
+  try {
+    await timelineStore.saveConversationTimelineDetail(paths, conversationId, makeTimelineState(createEmptyClientState, conversationId, 250));
+    const root = timelineRoot(paths, conversationId);
+    const beforeIndex = await readJsonFile(path.join(root, 'index.json'));
+
+    const result = await timelineStore.truncateConversationTimeline(paths, {
+      conversationId,
+      anchorMessageId: 'm-201',
+      keepAnchor: false
+    });
+    assert.equal(result.removedMessageIds.length, 50);
+
+    const afterIndex = await readJsonFile(path.join(root, 'index.json'));
+    assert.notEqual(afterIndex.generation, beforeIndex.generation);
+    assert.deepEqual(afterIndex.chunks, beforeIndex.chunks.slice(0, 2));
+    const detail = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    assert.equal(detail.messages.length, 200);
+    assert.equal(detail.messages.at(-1).id, 'm-200');
+  } finally {
+    await removeTempRoot(tempRoot);
+  }
+});
+
 test('tail incremental 只重写受影响 suffix 并复用 prefix generation/projection', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-tail-incremental-'));
   const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
@@ -420,6 +487,86 @@ test('tail incremental 只重写受影响 suffix 并复用 prefix generation/pro
     assert.ok(projection);
     assert.equal(projection.latestChunkId, afterIndex.chunks[2].id);
     assert.ok(projection.latestSnapshot.items.some((item) => item.title === '梳理实现'));
+  } finally {
+    await removeTempRoot(tempRoot);
+  }
+});
+
+test('tail incremental 会校验并忽略未变化的只读 context prefix', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-tail-context-prefix-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  const conversationId = 'conv-tail-context-prefix';
+  try {
+    const initial = makeTimelineState(createEmptyClientState, conversationId, 250);
+    await timelineStore.saveConversationTimelineDetail(paths, conversationId, initial);
+    const root = timelineRoot(paths, conversationId);
+    const beforeIndex = await readJsonFile(path.join(root, 'index.json'));
+    const beforePrefixChunks = beforeIndex.chunks.slice(0, 2);
+
+    const patch = createEmptyClientState();
+    const contextPrefixMessage = initial.messages.find((message) => message.id === 'm-150');
+    assert.ok(contextPrefixMessage);
+    patch.messages.push(contextPrefixMessage);
+    patch.messages.push(textMessage(conversationId, 'm-250', 250, 'updated streamed tail', 'model'));
+    patch.messages.push(textMessage(conversationId, 'm-251', 251, 'new tail message', 'user'));
+    const saved = await timelineStore.saveConversationTimelineRenderDetailIncremental(paths, conversationId, patch);
+    assert.equal(saved, true);
+
+    const afterIndex = await readJsonFile(path.join(root, 'index.json'));
+    assert.deepEqual(afterIndex.chunks.slice(0, 2), beforePrefixChunks);
+    const detail = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    assert.equal(detail.messages.length, 251);
+    assert.equal(detail.messages.find((message) => message.id === 'm-150').content.parts[0].text, 'message 150');
+    assert.equal(detail.messages.find((message) => message.id === 'm-250').content.parts[0].text, 'updated streamed tail');
+  } finally {
+    await removeTempRoot(tempRoot);
+  }
+});
+
+test('tail incremental 按 JSON 落盘语义忽略 prefix ToolCall 的 undefined 字段', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-tail-json-equivalent-prefix-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  const conversationId = 'conv-tail-json-equivalent-prefix';
+  try {
+    const initial = makeTimelineState(createEmptyClientState, conversationId, 250);
+    const prefixMessage = initial.messages.find((message) => message.id === 'm-150');
+    assert.ok(prefixMessage);
+    const prefixToolCall = tailToolCall(prefixMessage, 'tool-prefix-json-equivalent');
+    prefixToolCall.result = {
+      parts: [{ inlineData: { mimeType: 'image/png', name: 'result.png', data: undefined } }]
+    };
+    initial.toolCalls.push(prefixToolCall);
+    await timelineStore.saveConversationTimelineDetail(paths, conversationId, initial);
+
+    const root = timelineRoot(paths, conversationId);
+    const beforeIndex = await readJsonFile(path.join(root, 'index.json'));
+    const beforePrefixChunks = beforeIndex.chunks.slice(0, 2);
+    const storedBefore = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    const storedInlineData = storedBefore.toolCalls[0].result.parts[0].inlineData;
+    assert.equal(Object.prototype.hasOwnProperty.call(storedInlineData, 'data'), false);
+
+    const patch = createEmptyClientState();
+    patch.messages.push(prefixMessage);
+    patch.toolCalls.push(prefixToolCall);
+    patch.messages.push(textMessage(conversationId, 'm-250', 250, 'updated streamed tail', 'model'));
+    patch.messages.push(textMessage(conversationId, 'm-251', 251, 'new tail message', 'user'));
+    const saved = await timelineStore.saveConversationTimelineRenderDetailIncremental(paths, conversationId, patch);
+    assert.equal(saved, true);
+
+    const afterEquivalentIndex = await readJsonFile(path.join(root, 'index.json'));
+    assert.deepEqual(afterEquivalentIndex.chunks.slice(0, 2), beforePrefixChunks);
+
+    const changedPatch = createEmptyClientState();
+    changedPatch.toolCalls.push({ ...prefixToolCall, status: 'warning', error: 'real persisted change' });
+    const changedSaved = await timelineStore.saveConversationTimelineRenderDetailIncremental(paths, conversationId, changedPatch);
+    assert.equal(changedSaved, true);
+
+    const afterChangedIndex = await readJsonFile(path.join(root, 'index.json'));
+    assert.notDeepEqual(afterChangedIndex.chunks.slice(0, 2), afterEquivalentIndex.chunks.slice(0, 2));
+    const storedAfter = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    const changedToolCall = storedAfter.toolCalls.find((toolCall) => toolCall.id === prefixToolCall.id);
+    assert.equal(changedToolCall.status, 'warning');
+    assert.equal(changedToolCall.error, 'real persisted change');
   } finally {
     await removeTempRoot(tempRoot);
   }

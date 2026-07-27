@@ -11,6 +11,7 @@ const {
   PartOf
 } = require('../dist/extension/backend/world/modules/chat/components.js');
 const {
+  AgentRun,
   AgentRunInputRevision,
   MessageRunLink
 } = require('../dist/extension/backend/world/modules/agentRun/components.js');
@@ -26,6 +27,12 @@ const {
 const {
   projectConversationClientState
 } = require('../dist/extension/backend/world/clientSync/systems/ClientSyncSystem.js');
+const {
+  projectAgentRunClientState
+} = require('../dist/extension/backend/world/modules/agentRun/clientSync.js');
+const {
+  projectAgentRunState
+} = require('../dist/extension/backend/world/modules/agentRun/stateProjection.js');
 const {
   LlmInvocation
 } = require('../dist/extension/backend/world/modules/llm/components.js');
@@ -342,6 +349,28 @@ test('预压缩 attempt 未产出 block 时下一轮放行原始输入并记录�
     'revision-before-boundary'
   ]);
   assert.equal(fixture.world.query(RunCompressionBlockLink).length, 0);
+});
+
+test('client contributor 从源头跳过后端输入 revision 审计关系，storage projection 仍保留', () => {
+  const world = new MapWorld();
+  const conversation = addConversation(world);
+  const message = addMessage(world, conversation, 'message-1', 1);
+  const revision = addCurrentMessageRevision(world, message, 'revision-1', 'message-1');
+  const run = world.spawn();
+  world.add(run, AgentRun, { id: 'run-1', kind: 'chat', status: 'completed', createdAt: 1, updatedAt: 1 });
+  const inputRevision = world.spawn();
+  world.add(inputRevision, AgentRunInputRevision, {
+    id: 'input-revision-1',
+    run,
+    conversation,
+    revision
+  });
+
+  const clientState = projectAgentRunClientState(world);
+  const storageState = projectAgentRunState(world);
+
+  assert.deepEqual(clientState.agentRunInputRevisions, []);
+  assert.deepEqual(storageState.agentRunInputRevisions.map((record) => record.id), ['input-revision-1']);
 });
 
 test('conversation client stream 不投影后端输入 revision 审计关系', () => {

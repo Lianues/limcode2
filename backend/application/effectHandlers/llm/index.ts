@@ -1,5 +1,4 @@
 import type { EffectHandlerRegistry } from '../registry';
-
 export function registerLlmEffectHandlers(registry: EffectHandlerRegistry): void {
   registry.register('llm.resolveInvocation', (effect, env, emit) => {
     env.llm.resolveInvocation(effect, emit);

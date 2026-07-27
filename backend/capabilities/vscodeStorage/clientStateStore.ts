@@ -719,6 +719,14 @@ async function saveClientStateSkeletonToStoresUnlocked(paths: StoragePaths, stat
   await __clientStateSkeletonStoreTestHooks.afterStoresSaved?.();
 }
 
+export async function saveConversationTimelineRenderDetailToStores(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
+  assertUniqueClientStateIds(state, `saveConversationTimelineRenderDetail:${conversationId}:source`);
+  const detail = conversationRenderDetailSlice(state, conversationId);
+  assertUniqueClientStateIds(detail, `saveConversationTimelineRenderDetail:${conversationId}:detail`);
+  const saved = await saveConversationTimelineRenderDetailIncremental(paths, conversationId, detail);
+  if (!saved) await saveMergedConversationTimelineDetail(paths, conversationId, detail);
+}
+
 export async function saveConversationRenderDetailToStores(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
   assertUniqueClientStateIds(state, `saveConversationRenderDetail:${conversationId}:source`);
   const detail = conversationRenderDetailSlice(state, conversationId);

@@ -2,14 +2,16 @@ import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldRea
 import { createStableId } from '../../../../utils/stableId';
 import { readEvents } from '../../../events';
 import { Conversation, InFlight, LlmRequest, Message, Streaming } from '../../chat/components';
+import { spawnToolResponseMessage, ToolResultMessageBundle } from '../../chat/bundles';
 import { ToolCall, ToolResultConsumed, ToolState, type ToolCallData, type ToolStateData } from '../../tools/components';
 import { ToolCallEventBundle, spawnToolCallEvent } from '../../tools/bundles';
-import { interruptToolCall } from '../../tools/interrupt';
+import { interruptedToolResult, interruptToolCall } from '../../tools/interrupt';
+import { simplifyToolResponseForModel } from '../../tools/responseSimplifier';
 import { activeExecutionBatchForRun } from '../../tools/scheduling';
 import { ToolDefinitionsKey, ToolRuntimeDefinitionsKey } from '../../tools/resources';
-import { isTerminalToolStatus, transitionToolState } from '../../tools/state';
+import { isTerminalToolStatus, toolStateToResponse, transitionToolState } from '../../tools/state';
 import type { AgentRunEndReason, AgentRunErrorType, AgentRunKind, AgentRunQueueHoldReason, MessageContent, QueueInputUpdatePayload } from '../../../../../shared/protocol';
-import { AgentRunBundle, markRunNeedsModel, spawnAgentRun } from '../bundles';
+import { AgentRunBundle, markRunNeedsModel, spawnAgentRun, spawnMessageRunLink } from '../bundles';
 import { cleanupRunLlmRequests, type RunLlmCleanupReason } from '../llmRequestCleanup';
 import {
   AgentRun,
@@ -72,6 +74,7 @@ const LifecycleRunsQuery = defineQuery({
     Conversation
   ],
   write: [AgentRun, AgentRunQueueHold, AgentRunQueueOrder, AgentRunQueuedInput, Message, ToolState, RunDeliveryPolicy],
+  add: [ToolResultConsumed],
   remove: [AgentRunQueueHold, AgentRunQueuedInput, AgentRunQueueOrder, AgentRunNeedsModel, Streaming, InFlight, LlmRequest],
   mutationMode: 'update',
   role: 'work'
@@ -101,7 +104,7 @@ export const AgentRunLifecycleSystem = defineSystem({
       ]
     },
     effects: { emit: ['llm.abort', 'tool.abort', 'tool.background'] },
-    bundles: [AgentRunBundle, ToolCallEventBundle]
+    bundles: [AgentRunBundle, ToolCallEventBundle, ToolResultMessageBundle]
   },
   run(ctx) {
     const { world, cmd } = ctx;
@@ -686,9 +689,33 @@ function failOpenToolCalls(world: WorldReader, cmd: CommandSink, run: Entity, ba
     if (!toolCallEntitiesInRun.has(entity) || backgroundedToolCalls.has(entity)) continue;
     const call = world.get(entity, ToolCall);
     const state = world.get(entity, ToolState);
-    if (!call || !state) continue;
+    if (!call || !state || world.has(entity, ToolResultConsumed)) continue;
+
+    const target = runTarget(world, run);
+    const terminalStatus = isTerminalToolStatus(state.status) ? state.status : undefined;
+    const responseStatus = terminalStatus ?? 'error';
+    const rawResponse = terminalStatus ? toolStateToResponse(state) : interruptedToolResult();
+    const response = terminalStatus
+      ? simplifyToolResponseForModel(call.name, responseStatus, rawResponse)
+      : rawResponse;
+
     // 统一标记为“被用户中断执行”，并对仍在途的运行时工具尽力 emit tool.abort 真中断。
-    interruptToolCall(cmd, entity, call, state, { emitAbort: true });
+    if (!terminalStatus) interruptToolCall(cmd, entity, call, state, { emitAbort: true });
+
+    // 整个 run 已进入终态，ToolResultSystem 不会再处理这些结果。这里必须同时落地 functionResponse
+    // 和消费事实；只在工具卡上显示“已中断”并不能闭合模型协议中的 functionCall。
+    if (target) {
+      const responseMessage = spawnToolResponseMessage(cmd, {
+        conversation: target.conversation,
+        toolCallId: call.functionCallId ?? call.id,
+        toolName: call.name,
+        status: responseStatus,
+        response,
+        durationMs: state.durationMs ?? Math.max(0, Date.now() - call.createdAt)
+      });
+      spawnMessageRunLink(cmd, { message: responseMessage, run, role: 'tool_response' });
+    }
+    cmd.add(entity, ToolResultConsumed, true);
   }
 }
 

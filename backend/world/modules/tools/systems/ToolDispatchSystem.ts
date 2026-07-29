@@ -1,7 +1,7 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
 import { createStableId } from '../../../../utils/stableId';
 import { readEvents } from '../../../events';
-import { Agent, AgentConversationLink, AgentKind, type AgentData } from '../../agent/components';
+import { Agent, AgentConversationLink, AgentKind, ConversationAgentSelection, type AgentData } from '../../agent/components';
 import { agentSelectorSlug, isTemporaryAgentEntity } from '../../agent/identity';
 import {
   AgentBlueprintsKey,
@@ -9,7 +9,7 @@ import {
   type BuiltinAgentRegistry,
   type BuiltinWorkflowDefinition
 } from '../../agent/blueprints';
-import { AgentFromBlueprintBundle, linkAgentToConversation, selectAgentForConversation, spawnAgentRuntimeMirror } from '../../agent/bundles';
+import { AgentFromBlueprintBundle, ensureConversationAgentSelection, linkAgentToConversation, selectAgentForConversation, spawnAgentRuntimeMirror } from '../../agent/bundles';
 import { Conversation, ConversationBranchLink, ConversationOriginLink, ConversationReuseLink, InFlight, Message, MessageRevision, PartOf } from '../../chat/components';
 import {
   cloneMessageToConversation,
@@ -161,6 +161,7 @@ const QueuedToolCallsQuery = defineQuery({
     MessageRevision,
     Agent,
     AgentConversationLink,
+    ConversationAgentSelection,
     ConversationWorkflowSelection,
     Workflow,
     ToolPolicy,
@@ -202,7 +203,7 @@ export const ToolDispatchSystem = defineSystem({
   name: 'ToolDispatchSystem',
   access: {
     queries: [QueuedToolCallsQuery],
-    writes: { components: [CheckpointBarrier] },
+    writes: { components: [CheckpointBarrier, ConversationAgentSelection] },
     resources: { read: [AgentBlueprintsKey, ToolSchemasKey, ToolDefinitionsKey, ToolRuntimeDefinitionsKey] },
     bundles: [ToolCallEventBundle, ConversationBundle, ConversationLinkBundle, MessageBundle, AgentRunBundle, AgentAnswerBundle, AgentFromBlueprintBundle, WorkflowBundle, ConversationProjectLinkBundle, WorkEnvironmentBundle, PlanReviewBundle],
     events: {
@@ -1171,7 +1172,7 @@ function resolveRunAgentTargetByAnswerBridge(
   }
 
   ensureAgentConversationLink(world, cmd, target.agent, target.conversation, 'default');
-  selectAgentForConversation(cmd, {
+  ensureConversationAgentSelection(world, cmd, {
     agent: target.agent,
     conversation: target.conversation,
     conversationId: conversationData.id,
@@ -1859,7 +1860,7 @@ function resolveRunAgentConversation(
     if (existingConversation !== undefined) {
       ensureAgentConversationLink(world, cmd, input.targetAgent, existingConversation, 'default');
       const conversationId = world.get(existingConversation, Conversation)?.id ?? String(existingConversation);
-      selectAgentForConversation(cmd, { agent: input.targetAgent, conversation: existingConversation, conversationId, agentId: input.targetAgentId });
+      ensureConversationAgentSelection(world, cmd, { agent: input.targetAgent, conversation: existingConversation, conversationId, agentId: input.targetAgentId });
       return {
         ok: true,
         value: {

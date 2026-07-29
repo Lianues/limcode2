@@ -198,6 +198,43 @@ const timelineStore = require('../dist/extension/backend/capabilities/vscodeStor
 const clientStateStore = require('../dist/extension/backend/capabilities/vscodeStorage/clientStateStore.js');
 const { createEmptyClientState } = require('../dist/extension/shared/clientStateSchema.js');
 
+test('无关 conversation 的重复 skeleton relation 不阻塞目标 conversation timeline 保存', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-scope-isolation-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  const conversationId = 'conv-scope-isolation-target';
+  try {
+    const base = createEmptyClientState();
+    const next = makeTimelineState(createEmptyClientState, conversationId, 1);
+    const duplicateId = 'conversation-agent:conv-unrelated:agent-reviewer-mirror';
+    next.conversationAgentSelections = [
+      {
+        id: duplicateId,
+        conversationId: 'conv-unrelated',
+        agentId: 'agent-reviewer-mirror',
+        role: 'active',
+        createdAt: 1,
+        updatedAt: 1
+      },
+      {
+        id: duplicateId,
+        conversationId: 'conv-unrelated',
+        agentId: 'agent-reviewer-mirror',
+        role: 'active',
+        createdAt: 1,
+        updatedAt: 2
+      }
+    ];
+
+    await clientStateStore.saveConversationRenderDetailToStores(paths, conversationId, base, next);
+
+    const saved = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    assert.equal(saved.messages.length, 1);
+    assert.equal(saved.messages[0].conversationId, conversationId);
+  } finally {
+    await removeTempRoot(tempRoot);
+  }
+});
+
 test('timeline full publish 失败时旧 generation 仍完整可读', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-publish-fail-'));
   const paths = createVscodeStoragePaths(MockUri.file(tempRoot));

@@ -9,6 +9,7 @@ import { Workflow, ModelProfile, ModelProfileScopeLink, SystemPrompt, SystemProm
 import { ToolPolicyScopeLink } from '../../tools/components';
 import { WorkEnvironmentPolicyScopeLink } from '../../workEnvironment/components';
 import { Agent, AgentConversationLink, AgentKind, AgentStatus, ConversationAgentSelection } from '../components';
+import { ensureConversationAgentSelection } from '../bundles';
 import { AgentEventType } from '../events';
 
 export const AgentCrudSystem = defineSystem({
@@ -70,23 +71,11 @@ export const AgentCrudSystem = defineSystem({
       const agent = findByRecordId(world, Agent, payload.agentId);
       if (conversation === undefined || agent === undefined) continue;
       ensureAgentConversationLink(world, cmd, agent, conversation);
-      const now = Date.now();
-      let selected: Entity | undefined;
-      for (const entity of world.query(ConversationAgentSelection)) {
-        const current = world.get(entity, ConversationAgentSelection);
-        if (!current || current.conversation !== conversation || current.role !== 'active') continue;
-        if (selected === undefined) selected = entity;
-        else cmd.despawn(entity);
-      }
-      const entity = selected ?? cmd.spawn();
-      const previous = selected !== undefined ? world.get(selected, ConversationAgentSelection) : undefined;
-      cmd.add(entity, ConversationAgentSelection, {
-        id: `conversation-agent:${payload.conversationId}:${payload.agentId}`,
+      ensureConversationAgentSelection(world, cmd, {
         conversation,
+        conversationId: payload.conversationId,
         agent,
-        role: 'active',
-        createdAt: previous?.createdAt ?? now,
-        updatedAt: now
+        agentId: payload.agentId
       });
     }
 

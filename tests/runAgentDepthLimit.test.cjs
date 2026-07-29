@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { MapWorld } = require('../dist/extension/backend/ecs/World.js');
-const { Agent, AgentKind } = require('../dist/extension/backend/world/modules/agent/components.js');
+const { Agent, AgentKind, ConversationAgentSelection } = require('../dist/extension/backend/world/modules/agent/components.js');
 const { AgentBlueprintsKey, createDefaultAgentBlueprints } = require('../dist/extension/backend/world/modules/agent/blueprints.js');
 const {
   AgentRun,
@@ -87,6 +87,66 @@ test('default max depth allows a root conversation to launch the first child Age
   assert.equal(conversationOriginDepth(fixture.world, childConversation), 1);
 });
 
+test('run_agent 使用 answerBridgeId 续接同一子对话时不会重复创建 active Agent selection', () => {
+  const fixture = createCallerFixture({ callerConversationId: 'conversation-answer-bridge-selection' });
+
+  ToolDispatchSystem.run({ world: fixture.world, cmd: commandSink(fixture.world), events: [] });
+  const firstResult = fixture.world.get(fixture.toolCall, ToolState).result;
+  assert.ok(firstResult.answerBridgeId);
+  assert.equal(activeSelectionsForConversation(fixture.world, firstResult.conversationId).length, 1);
+  fixture.world.despawn(fixture.toolCall);
+
+  const continuation = addRunAgentToolCall(
+    fixture.world,
+    fixture.run,
+    fixture.modelMessage,
+    'tool-run-agent-answer-bridge-continuation',
+    120,
+    {
+      mode: 'run',
+      prompt: '继续检查同一个子对话',
+      answerBridgeId: firstResult.answerBridgeId,
+      foregroundWaitMs: 0
+    }
+  );
+  ToolDispatchSystem.run({ world: fixture.world, cmd: commandSink(fixture.world), events: [] });
+
+  assert.equal(fixture.world.get(continuation, ToolState).status, 'success');
+  const selections = activeSelectionsForConversation(fixture.world, firstResult.conversationId);
+  assert.equal(selections.length, 1);
+  assert.equal(selections[0].id, `conversation-agent:${firstResult.conversationId}:${firstResult.agentId}`);
+});
+
+test('run_agent 使用 runtime mirror agent.id 续接同一子对话时不会重复创建 active Agent selection', () => {
+  const fixture = createCallerFixture({ callerConversationId: 'conversation-mirror-selection' });
+
+  ToolDispatchSystem.run({ world: fixture.world, cmd: commandSink(fixture.world), events: [] });
+  const firstResult = fixture.world.get(fixture.toolCall, ToolState).result;
+  assert.ok(firstResult.agentId);
+  assert.equal(activeSelectionsForConversation(fixture.world, firstResult.conversationId).length, 1);
+  fixture.world.despawn(fixture.toolCall);
+
+  const continuation = addRunAgentToolCall(
+    fixture.world,
+    fixture.run,
+    fixture.modelMessage,
+    'tool-run-agent-mirror-continuation',
+    120,
+    {
+      mode: 'run',
+      prompt: '复用同一个 runtime mirror',
+      agent: { id: firstResult.agentId, type: 'worker' },
+      foregroundWaitMs: 0
+    }
+  );
+  ToolDispatchSystem.run({ world: fixture.world, cmd: commandSink(fixture.world), events: [] });
+
+  assert.equal(fixture.world.get(continuation, ToolState).status, 'success');
+  const selections = activeSelectionsForConversation(fixture.world, firstResult.conversationId);
+  assert.equal(selections.length, 1);
+  assert.equal(selections[0].id, `conversation-agent:${firstResult.conversationId}:${firstResult.agentId}`);
+});
+
 test('a first-level child Agent cannot launch a second-level Agent with the default max depth', () => {
   const fixture = createChildCallerFixture();
   const runCountBefore = fixture.world.query(AgentRun).length;
@@ -150,7 +210,7 @@ function createCallerFixture(options = {}) {
   bindRunToolPolicy(world, run, options.maxDepth);
   const modelMessage = addModelMessage(world, conversation, run, 100);
   const toolCall = addRunAgentToolCall(world, run, modelMessage, 'tool-run-agent', 110);
-  return { world, conversation, agent, run, toolCall };
+  return { world, conversation, agent, run, modelMessage, toolCall };
 }
 
 function addAgent(world, id, kind) {
@@ -253,13 +313,19 @@ function addModelMessage(world, conversation, run, seq) {
   return message;
 }
 
-function addRunAgentToolCall(world, run, modelMessage, id, createdAt) {
+function activeSelectionsForConversation(world, conversationId) {
+  return world.query(ConversationAgentSelection)
+    .map((entity) => world.get(entity, ConversationAgentSelection))
+    .filter((selection) => selection && selection.role === 'active' && world.get(selection.conversation, Conversation)?.id === conversationId);
+}
+
+function addRunAgentToolCall(world, run, modelMessage, id, createdAt, args = undefined) {
   const entity = world.spawn();
   world.add(entity, ToolCall, {
     id,
     functionCallId: id,
     name: RUN_AGENT_TOOL_NAME,
-    argsJson: JSON.stringify({
+    argsJson: JSON.stringify(args ?? {
       mode: 'run',
       prompt: '执行子任务',
       agent: { type: 'worker' },

@@ -217,14 +217,37 @@ export function linkAgentToConversation(
   return link;
 }
 
+export interface SelectAgentForConversationInput {
+  agent: Entity;
+  conversation: Entity;
+  conversationId: string;
+  agentId: string;
+}
+
+interface PendingConversationAgentSelection {
+  entity: Entity;
+  createdAt: number;
+}
+
+/**
+ * CommandBuffer 的写入在 wave 边界才可见。同一 system pass 内多次 ensure 时，
+ * 仅查询 world 仍会重复 spawn，因此按当前 CommandSink 记录待提交的 active relation。
+ */
+const pendingConversationAgentSelections = new WeakMap<CommandSink, Map<string, PendingConversationAgentSelection>>();
+
+export function conversationAgentSelectionId(conversationId: string, agentId: string): string {
+  return `conversation-agent:${conversationId}:${agentId}`;
+}
+
+/** 仅用于同时创建新 conversation 的 bundle；已有 conversation 应调用 ensureConversationAgentSelection。 */
 export function selectAgentForConversation(
   cmd: CommandSink,
-  input: { agent: Entity; conversation: Entity; conversationId: string; agentId: string }
+  input: SelectAgentForConversationInput
 ): Entity {
   const now = Date.now();
   const selection = cmd.spawn();
   cmd.add(selection, ConversationAgentSelection, {
-    id: `conversation-agent:${input.conversationId}:${input.agentId}`,
+    id: conversationAgentSelectionId(input.conversationId, input.agentId),
     conversation: input.conversation,
     agent: input.agent,
     role: 'active',
@@ -232,6 +255,74 @@ export function selectAgentForConversation(
     updatedAt: now
   });
   return selection;
+}
+
+/**
+ * 确保一个 conversation 只有一条 active Agent selection。
+ *
+ * - 复用已有 relation entity，而不是用相同稳定 id 再 spawn 一个 entity；
+ * - 清理历史运行时已经产生的同 conversation 重复项；
+ * - 同一 CommandBuffer 中的重复调用复用待提交 entity，避免延迟写入可见性竞态。
+ */
+export function ensureConversationAgentSelection(
+  world: WorldReader,
+  cmd: CommandSink,
+  input: SelectAgentForConversationInput
+): Entity {
+  const relationKey = `active:${input.conversationId}`;
+  let pendingByRelation = pendingConversationAgentSelections.get(cmd);
+  if (!pendingByRelation) {
+    pendingByRelation = new Map();
+    pendingConversationAgentSelections.set(cmd, pendingByRelation);
+  }
+
+  const now = Date.now();
+  const id = conversationAgentSelectionId(input.conversationId, input.agentId);
+  const pending = pendingByRelation.get(relationKey);
+  if (pending) {
+    cmd.add(pending.entity, ConversationAgentSelection, {
+      id,
+      conversation: input.conversation,
+      agent: input.agent,
+      role: 'active',
+      createdAt: pending.createdAt,
+      updatedAt: now
+    });
+    return pending.entity;
+  }
+
+  const candidates = world.query(ConversationAgentSelection)
+    .map((entity) => ({ entity, data: world.get(entity, ConversationAgentSelection) }))
+    .filter((candidate): candidate is { entity: Entity; data: NonNullable<typeof candidate.data> } => {
+      if (!candidate.data || candidate.data.role !== 'active') return false;
+      const candidateConversationId = world.get(candidate.data.conversation, Conversation)?.id;
+      return candidate.data.conversation === input.conversation
+        || candidateConversationId === input.conversationId
+        || candidate.data.id === id;
+    })
+    .sort((left, right) => {
+      const leftExact = left.data.id === id ? 1 : 0;
+      const rightExact = right.data.id === id ? 1 : 0;
+      return rightExact - leftExact
+        || left.data.createdAt - right.data.createdAt
+        || left.entity - right.entity;
+    });
+
+  const selected = candidates[0];
+  const entity = selected?.entity ?? cmd.spawn();
+  const createdAt = selected?.data.createdAt ?? now;
+  pendingByRelation.set(relationKey, { entity, createdAt });
+
+  for (const duplicate of candidates.slice(1)) cmd.despawn(duplicate.entity);
+  cmd.add(entity, ConversationAgentSelection, {
+    id,
+    conversation: input.conversation,
+    agent: input.agent,
+    role: 'active',
+    createdAt,
+    updatedAt: now
+  });
+  return entity;
 }
 
 export function spawnSystemPrompt(cmd: CommandSink, input: { id: string; name: string; text: string }): Entity {

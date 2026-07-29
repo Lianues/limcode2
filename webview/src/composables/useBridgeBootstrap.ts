@@ -241,7 +241,10 @@ export function useBridgeBootstrap(): void {
       ) {
         globalSettings.setError(message.payload.message, {
           requestType: message.payload.requestType,
-          section: globalSettingsSectionFromScope(message.scope)
+          section: globalSettingsSectionFromScope(message.scope),
+          correlationId: message.correlationId,
+          code: message.payload.code,
+          actualRevision: message.payload.actualRevision
         });
       } else if (
         message.payload?.requestType === BridgeMessageType.ConversationSettingsGet

@@ -12,18 +12,22 @@ import type {
   LlmSettingsRecord,
   McpServersSettingsRecord
 } from '../../../shared/protocol';
-import type { DeleteConversationDataResult, StorageCapability } from '../types';
+import type { DeleteConversationDataResult, GlobalSettingsStoreResult, StorageCapability } from '../types';
+import { SettingsRevisionConflictError } from '../settingsRevisionConflict';
 import { loadGlobalSettingsFile, writeGlobalSettingsFile } from './globalSettings';
 import { loadLlmProviderConfigsSettings, saveLlmProviderConfigsSettings } from './llmProviderConfigs';
 import { loadLlmCompressionConfigsSettings, normalizeLlmCompressionSettings, saveLlmCompressionConfigsSettings } from './llmCompressionConfigs';
 import { loadMcpServersSettings, saveMcpServersSettings } from './mcpServers';
 import {
+  commitGlobalStatus,
   createGlobalSettingsRecord,
-  LIMCODE_GLOBAL_STATUS_LABEL,
+  globalStatusFileUri,
+  globalStatusRevision,
+  loadCommittedGlobalStatus,
   normalizeStatusDataRootPath,
   resolveDataRootUri,
-  saveGlobalStatus,
-  sameFsPath
+  sameFsPath,
+  type LimCodeGlobalStatus
 } from './globalStatus';
 import { cleanupMigratedStorageRoot, copyStorageRootForMigration } from './migration';
 import { createVscodeStoragePaths } from './paths';
@@ -42,6 +46,7 @@ import {
 } from './attachmentStore';
 import {
   appendToolCallEventRecord,
+  collectConversationRunIdsForDeletionFromStores,
   deleteConversationDataFromStores,
   loadClientStateSkeletonSnapshotFromStores,
   loadConversationDetailFromStores,
@@ -60,6 +65,13 @@ import {
   truncateConversationTimelineFromStores
 } from './clientStateStore';
 import { loadTimelineProjectionContext } from './conversationTimelineStore';
+import {
+  commitClientStateSkeletonConversationDeletion,
+  openClientStateSkeletonSnapshot,
+  refreshClientStateSkeletonPin,
+  releaseClientStateSkeletonSnapshot,
+  type PinnedClientStateSkeletonSnapshot
+} from './clientStateSkeletonTransaction';
 import {
   loadConversationHistoryPageFromStore,
   removeConversationHistoryEntryFromStore,
@@ -149,9 +161,21 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
   let currentPaths = createVscodeStoragePaths(resolveDataRootUri(context));
   const dataRootGate = new DataRootMutationGate();
   const processLease = createDataRootProcessLease(context, () => resolveDataRootUri(context).fsPath);
-  let stagedSkeletonTransactionId: string | undefined;
+  let stagedSkeletonPin: PinnedClientStateSkeletonSnapshot | undefined;
+  let stagedSkeletonOpened = false;
   processLease.start();
   context.subscriptions.push({ dispose: () => processLease.dispose() });
+  context.subscriptions.push({
+    dispose: () => {
+      const pin = stagedSkeletonPin;
+      stagedSkeletonPin = undefined;
+      stagedSkeletonOpened = false;
+      if (pin) {
+        void releaseClientStateSkeletonSnapshot(getPaths(), pin)
+          .catch((error) => console.warn('[LimCode] Failed to release staged skeleton pin during dispose.', error));
+      }
+    }
+  });
   registerShadowDiffProvider(context);
 
   function getPaths(): StoragePaths {
@@ -174,11 +198,20 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
   }
 
 
-  async function loadCommonGlobalSettings(): Promise<{ section: 'common'; settings: GlobalSettingsRecord; filePath: string }> {
-    return { section: 'common', settings: createGlobalSettingsRecord(context), filePath: LIMCODE_GLOBAL_STATUS_LABEL };
+  async function loadCommonGlobalSettings(): Promise<GlobalSettingsStoreResult> {
+    const status = await loadCommittedGlobalStatus(context);
+    return {
+      section: 'common',
+      settings: createGlobalSettingsRecord(context, status),
+      filePath: globalStatusFileUri(context).fsPath,
+      revision: globalStatusRevision(status)
+    };
   }
 
-  async function saveCommonGlobalSettings(settings: GlobalSettingsSectionValue): Promise<{ section: 'common'; settings: GlobalSettingsRecord; filePath: string }> {
+  async function saveCommonGlobalSettings(
+    settings: GlobalSettingsSectionValue,
+    expectedRevision: string
+  ): Promise<GlobalSettingsStoreResult> {
     return withExclusiveDataRoot(async () => {
       const input = settings as Partial<GlobalSettingsRecord> | undefined;
       const targetDataRootPath = normalizeStatusDataRootPath(context, input?.dataFilePath ?? '');
@@ -186,10 +219,21 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       await processLease.setActiveOperation({ kind: DATA_ROOT_MIGRATION_OPERATION, targetRootPath: targetRootUri.fsPath });
       try {
         return await withStorageResourceLock(dataRootMigrationLockUri(context), async () => {
-          const sourceRootUri = resolveDataRootUri(context);
-          const migration = await prepareAndRunStorageRootMigration(sourceRootUri, targetRootUri, targetDataRootPath, input?.proxy ?? '');
+          const currentStatus = await loadCommittedGlobalStatus(context);
+          const actualRevision = globalStatusRevision(currentStatus);
+          if (actualRevision !== expectedRevision) {
+            throw new SettingsRevisionConflictError('common', expectedRevision, actualRevision);
+          }
+          const sourceRootUri = resolveDataRootUri(context, currentStatus.dataRootPath);
+          const committed = await prepareAndRunStorageRootMigration(
+            currentStatus,
+            sourceRootUri,
+            targetRootUri,
+            targetDataRootPath,
+            input?.proxy ?? ''
+          );
           await processLease.heartbeat();
-          return migration;
+          return committed;
         });
       } finally {
         await processLease.clearActiveOperation(DATA_ROOT_MIGRATION_OPERATION);
@@ -198,16 +242,28 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
   }
 
   async function prepareAndRunStorageRootMigration(
+    currentStatus: LimCodeGlobalStatus,
     sourceRootUri: vscode.Uri,
     targetRootUri: vscode.Uri,
     targetDataRootPath: string,
     proxy: string
-  ): Promise<{ section: 'common'; settings: GlobalSettingsRecord; filePath: string }> {
+  ): Promise<GlobalSettingsStoreResult> {
+    const previousSettings = createGlobalSettingsRecord(context, currentStatus);
     const migration = await copyStorageRootAfterLeaseCheck(sourceRootUri, targetRootUri);
-    await saveGlobalStatus(context, targetDataRootPath, proxy, migration.skipped ? undefined : { fromPath: migration.fromPath, toPath: migration.toPath, migratedAt: migration.migratedAt });
+    const nextStatus = await commitGlobalStatus(
+      context,
+      currentStatus,
+      targetDataRootPath,
+      proxy,
+      migration.skipped ? undefined : {
+        fromPath: migration.fromPath,
+        toPath: migration.toPath,
+        migratedAt: migration.migratedAt
+      }
+    );
     await processLease.heartbeat();
     if (!migration.skipped) {
-      const activeRootAfterSave = resolveDataRootUri(context);
+      const activeRootAfterSave = resolveDataRootUri(context, nextStatus.dataRootPath);
       if (sameFsPath(activeRootAfterSave.fsPath, targetRootUri.fsPath)) {
         try {
           const cleanup = await cleanupMigratedStorageRoot(sourceRootUri, migration.copiedEntries);
@@ -224,7 +280,14 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
         });
       }
     }
-    return loadCommonGlobalSettings();
+    return {
+      section: 'common',
+      settings: createGlobalSettingsRecord(context, nextStatus),
+      filePath: globalStatusFileUri(context).fsPath,
+      revision: globalStatusRevision(nextStatus),
+      previousSettings,
+      dataRootChanged: !migration.skipped
+    };
   }
 
   async function copyStorageRootAfterLeaseCheck(sourceRootUri: vscode.Uri, targetRootUri: vscode.Uri) {
@@ -234,40 +297,75 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     return copyStorageRootForMigration(sourceRootUri, targetRootUri);
   }
 
-  async function saveNormalizedLlmGlobalSettings(paths: StoragePaths, settings: GlobalSettingsSectionValue): Promise<{ section: 'llm'; settings: LlmSettingsRecord; filePath: string }> {
+  async function saveNormalizedLlmGlobalSettings(
+    paths: StoragePaths,
+    settings: GlobalSettingsSectionValue,
+    expectedRevision: string
+  ): Promise<GlobalSettingsStoreResult> {
     await ensureLlmSettingsRoots(paths);
     const configs = (await loadLlmProviderConfigsSettings(paths)).settings.configs;
     const input = settings as Partial<LlmSettingsRecord> | undefined;
     const activeConfig = configs.find((config) => config.id === input?.activeProviderConfigId) ?? configs[0];
-    await writeGlobalSettingsFile(paths.settingsRootUri, 'llm', { activeProviderConfigId: activeConfig?.id ?? '' });
-    return loadNormalizedLlmGlobalSettings(paths);
+    const stored = await writeGlobalSettingsFile(
+      paths.settingsRootUri,
+      'llm',
+      { activeProviderConfigId: activeConfig?.id ?? '' },
+      expectedRevision
+    );
+    return stored;
   }
 
   return {
     get paths() { return getPaths(); },
     isDataRootMutationActive() { return dataRootGate.isExclusiveActive; },
     async ensureReady() {
+      // 先从跨 Extension Host 共享的 canonical status 恢复 active data root，再允许任何业务读写。
+      await loadCommittedGlobalStatus(context);
       return withSharedDataRoot(async () => {
-        // 读路径懒加载：启动阶段不预创建/读取 settings，避免阻塞侧边栏首屏。
+        // 业务 settings 仍按需懒加载，避免阻塞侧边栏首屏。
       });
     },
     async loadClientStateSkeleton(options) {
       return withSharedDataRoot(async (paths) => {
         const profile = options?.profile ?? 'full';
         if (profile === 'startup') {
-          const snapshot = await loadClientStateSkeletonSnapshotFromStores(paths, options);
-          stagedSkeletonTransactionId = snapshot.transactionId;
-          return snapshot.state;
-        }
-        if (profile === 'deferred') {
+          if (stagedSkeletonPin) await releaseClientStateSkeletonSnapshot(paths, stagedSkeletonPin);
+          stagedSkeletonPin = undefined;
+          stagedSkeletonOpened = false;
+          const pin = await openClientStateSkeletonSnapshot(paths, processLease.instanceId);
           try {
-            const snapshot = await loadClientStateSkeletonSnapshotFromStores(paths, options, stagedSkeletonTransactionId);
-            return snapshot.state;
-          } finally {
-            stagedSkeletonTransactionId = undefined;
+            const state = pin
+              ? await loadClientStateSkeletonSnapshotFromStores(paths, pin, { profile: 'startup' })
+              : undefined;
+            stagedSkeletonPin = pin;
+            stagedSkeletonOpened = true;
+            return state;
+          } catch (error) {
+            if (pin) await releaseClientStateSkeletonSnapshot(paths, pin);
+            throw error;
           }
         }
-        return (await loadClientStateSkeletonSnapshotFromStores(paths, options)).state;
+        if (profile === 'deferred') {
+          if (!stagedSkeletonOpened) throw new Error('Deferred client-state skeleton load requires a startup snapshot pin.');
+          const pin = stagedSkeletonPin;
+          try {
+            if (!pin) return undefined;
+            await refreshClientStateSkeletonPin(paths, pin);
+            return loadClientStateSkeletonSnapshotFromStores(paths, pin, { profile: 'deferred' });
+          } finally {
+            if (pin) await releaseClientStateSkeletonSnapshot(paths, pin);
+            stagedSkeletonPin = undefined;
+            stagedSkeletonOpened = false;
+          }
+        }
+
+        const pin = await openClientStateSkeletonSnapshot(paths, processLease.instanceId);
+        if (!pin) return undefined;
+        try {
+          return await loadClientStateSkeletonSnapshotFromStores(paths, pin, { profile: 'full' });
+        } finally {
+          await releaseClientStateSkeletonSnapshot(paths, pin);
+        }
       });
     },
     async loadConversationDetail(conversationId, options) {
@@ -288,19 +386,17 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     async truncateConversationTimeline(request) {
       return withSharedDataRoot((paths) => truncateConversationTimelineFromStores(paths, request));
     },
-    async saveClientStateSkeleton(state) {
+    async saveClientStateSkeleton(patch) {
+      return withSharedDataRoot((paths) => saveClientStateSkeletonToStores(paths, patch));
+    },
+    async saveConversationRenderDetail(conversationId, localBase, localNext) {
       return withSharedDataRoot(async (paths) => {
-        await saveClientStateSkeletonToStores(paths, state);
+        await saveConversationRenderDetailToStores(paths, conversationId, localBase, localNext);
       });
     },
-    async saveConversationRenderDetail(conversationId, state) {
+    async saveConversationTimelineRenderDetail(conversationId, localBase, localNext) {
       return withSharedDataRoot(async (paths) => {
-        await saveConversationRenderDetailToStores(paths, conversationId, state);
-      });
-    },
-    async saveConversationTimelineRenderDetail(conversationId, state) {
-      return withSharedDataRoot(async (paths) => {
-        await saveConversationTimelineRenderDetailToStores(paths, conversationId, state);
+        await saveConversationTimelineRenderDetailToStores(paths, conversationId, localBase, localNext);
       });
     },
     async saveConversationRunHistory(conversationId, state, options) {
@@ -328,6 +424,18 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     async removeConversationHistoryEntry(conversationId) {
       return withSharedDataRoot(async (paths) => {
         await removeConversationHistoryEntryFromStore(paths, conversationId);
+      });
+    },
+    async deleteConversationSkeleton(conversationId, runIds) {
+      return withSharedDataRoot(async (paths) => {
+        // 本地 ECS 可能尚未 hydrate 其它窗口持久化的 run；先从 canonical run history
+        // 补齐 runId，避免 skeleton 中独立的 run→环境/runtime snapshot Link 成为孤儿。
+        const persistedRunIds = await collectConversationRunIdsForDeletionFromStores(paths, conversationId);
+        await commitClientStateSkeletonConversationDeletion(
+          paths,
+          conversationId,
+          new Set([...(runIds ?? []), ...persistedRunIds])
+        );
       });
     },
     async deleteConversationData(conversationId) {
@@ -393,7 +501,13 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
         if (section === 'llmProviderConfigs') {
           const stored = await loadLlmProviderConfigsSettings(paths);
           await loadNormalizedLlmGlobalSettings(paths);
-          return { section, settings: stored.settings, filePath: stored.filePath, revision: stored.revision };
+          return {
+            section,
+            settings: stored.settings,
+            filePath: stored.filePath,
+            revision: stored.revision,
+            ...(stored.previousSettings ? { previousSettings: stored.previousSettings } : {})
+          };
         }
         if (section === 'llmCompression') {
           const configs = (await loadLlmCompressionConfigsSettings(paths)).settings.configs;
@@ -414,9 +528,9 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       });
     },
     async saveGlobalSettings(section, settings, expectedRevision) {
-      if (section === 'common') return saveCommonGlobalSettings(settings);
+      if (section === 'common') return saveCommonGlobalSettings(settings, expectedRevision);
       return withSharedDataRoot(async (paths) => {
-        if (section === 'llm') return saveNormalizedLlmGlobalSettings(paths, settings);
+        if (section === 'llm') return saveNormalizedLlmGlobalSettings(paths, settings, expectedRevision);
         if (section === 'llmProviderConfigs') {
           const stored = await saveLlmProviderConfigsSettings(paths, settings as Partial<LlmProviderConfigsRecord> | undefined, expectedRevision);
           await loadNormalizedLlmGlobalSettings(paths);
@@ -425,21 +539,37 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
         if (section === 'llmCompression') {
           const configs = (await loadLlmCompressionConfigsSettings(paths)).settings.configs;
           const normalized = normalizeLlmCompressionSettings(settings as Partial<LlmCompressionSettingsRecord> | undefined, configs);
-          await writeGlobalSettingsFile(paths.settingsRootUri, 'llmCompression', normalized, expectedRevision);
-          const stored = await loadGlobalSettingsFile(paths.settingsRootUri, 'llmCompression');
-          return { section, settings: stored.settings, filePath: stored.filePath, revision: stored.revision };
+          const stored = await writeGlobalSettingsFile(paths.settingsRootUri, 'llmCompression', normalized, expectedRevision);
+          return {
+            section,
+            settings: stored.settings,
+            filePath: stored.filePath,
+            revision: stored.revision,
+            ...(stored.previousSettings ? { previousSettings: stored.previousSettings } : {})
+          };
         }
         if (section === 'llmCompressionConfigs') {
           const stored = await saveLlmCompressionConfigsSettings(paths, settings as Partial<LlmCompressionConfigsRecord> | undefined, expectedRevision);
-          return { section, settings: stored.settings, filePath: stored.filePath, revision: stored.revision };
+          return {
+            section,
+            settings: stored.settings,
+            filePath: stored.filePath,
+            revision: stored.revision,
+            ...(stored.previousSettings ? { previousSettings: stored.previousSettings } : {})
+          };
         }
         if (section === 'mcpServers') {
           const stored = await saveMcpServersSettings(paths, settings as Partial<McpServersSettingsRecord> | undefined, expectedRevision);
-          return { section, settings: stored.settings, filePath: stored.filePath, revision: stored.revision };
+          return {
+            section,
+            settings: stored.settings,
+            filePath: stored.filePath,
+            revision: stored.revision,
+            ...(stored.previousSettings ? { previousSettings: stored.previousSettings } : {})
+          };
         }
         await ensureStorageDirectory(paths.settingsRootUri);
-        await writeGlobalSettingsFile(paths.settingsRootUri, section, settings, expectedRevision);
-        return loadGlobalSettingsFile(paths.settingsRootUri, section);
+        return writeGlobalSettingsFile(paths.settingsRootUri, section, settings, expectedRevision);
       });
     },
     async loadActiveLlmProviderConfig(conversationId) {
@@ -490,12 +620,13 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
         return (await loadLlmCompressionConfigsSettings(paths)).settings.configs.find((config) => config.id === id);
       });
     },
-    async loadConversationSettings(conversationId, section) {
+    async loadConversationSettings(conversationId, section, options) {
       return withSharedDataRoot(async (paths) => {
         const uri = conversationSettingsUri(paths, conversationId, section);
         const result = await readJsonStrict<unknown>(uri);
         if (section === 'llm') {
           if (result.status === 'missing') {
+            if (options?.initializeMissing === false) return undefined;
             const frozen = await freezeMissingConversationLlmSettingsToCurrentGlobal(paths, conversationId, uri);
             return { conversationId, section, settings: frozen, filePath: uri.fsPath };
           }
@@ -553,7 +684,7 @@ async function ensureLlmSettingsRoots(paths: StoragePaths): Promise<void> {
   await ensureStorageDirectory(paths.settingsRootUri);
 }
 
-async function loadNormalizedLlmGlobalSettings(paths: StoragePaths): Promise<{ section: 'llm'; settings: LlmSettingsRecord; filePath: string; revision?: string }> {
+async function loadNormalizedLlmGlobalSettings(paths: StoragePaths): Promise<{ section: 'llm'; settings: LlmSettingsRecord; filePath: string; revision: string }> {
   await ensureLlmSettingsRoots(paths);
   const configs = (await loadLlmProviderConfigsSettings(paths)).settings.configs;
   const stored = await loadGlobalSettingsFile(paths.settingsRootUri, 'llm');

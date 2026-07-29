@@ -23,6 +23,10 @@ export const MODEL_PROFILE_SCOPE_LINKS_ROOT_DIR = 'model-profile-scope-links';
 export const CONVERSATION_WORKFLOW_SELECTIONS_ROOT_DIR = 'conversation-workflow-selections';
 export const CONVERSATION_AGENT_SELECTIONS_ROOT_DIR = 'conversation-agent-selections';
 export const CONVERSATIONS_ROOT_DIR = 'conversations';
+export const CONVERSATION_REUSE_LINKS_ROOT_DIR = 'conversation-reuse-links';
+export const CONVERSATION_BRANCH_LINKS_ROOT_DIR = 'conversation-branch-links';
+export const CONVERSATION_ORIGIN_LINKS_ROOT_DIR = 'conversation-origin-links';
+export const CLIENT_STATE_SKELETON_ROOT_DIR = 'client-state-skeleton';
 export const CONVERSATION_HISTORY_ROOT_DIR = 'conversation-history';
 export const ATTACHMENTS_ROOT_DIR = 'attachments';
 export const PROJECT_CONTEXTS_ROOT_DIR = 'project-contexts';
@@ -77,6 +81,10 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
   CONVERSATION_WORKFLOW_SELECTIONS_ROOT_DIR,
   CONVERSATION_AGENT_SELECTIONS_ROOT_DIR,
   CONVERSATIONS_ROOT_DIR,
+  CONVERSATION_REUSE_LINKS_ROOT_DIR,
+  CONVERSATION_BRANCH_LINKS_ROOT_DIR,
+  CONVERSATION_ORIGIN_LINKS_ROOT_DIR,
+  CLIENT_STATE_SKELETON_ROOT_DIR,
   CONVERSATION_HISTORY_ROOT_DIR,
   ATTACHMENTS_ROOT_DIR,
   PROJECT_CONTEXTS_ROOT_DIR,

@@ -81,7 +81,15 @@ const { collectShadowWorktreeStats, deleteShadowWorktrees, cleanupUnusedShadowWo
 const { restoreShadowCheckpoint } = require('../dist/extension/backend/capabilities/vscodeStorage/shadowCheckpoint.js');
 const { createVscodeStoragePaths } = require('../dist/extension/backend/capabilities/vscodeStorage/paths.js');
 const clientStateStore = require('../dist/extension/backend/capabilities/vscodeStorage/clientStateStore.js');
+const skeletonPatch = require('../dist/extension/backend/capabilities/vscodeStorage/clientStateSkeletonPatch.js');
 const { createEmptyClientState } = require('../dist/extension/shared/clientStateSchema.js');
+
+async function saveSkeletonState(paths, state) {
+  return clientStateStore.saveClientStateSkeletonToStores(
+    paths,
+    skeletonPatch.createClientStateSkeletonPatch(createEmptyClientState(), state)
+  );
+}
 
 test('same storageKey operations are serial and different keys can run in parallel', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-shadow-lock-serial-'));
@@ -175,7 +183,7 @@ test('auto cleanup keeps stale worktree while checkpoint metadata references it'
       updatedAt: 1,
       commitSha: 'abc'
     });
-    await clientStateStore.saveClientStateSkeletonToStores(paths, state);
+    await saveSkeletonState(paths, state);
 
     const result = await cleanupUnusedShadowWorktrees(paths, 1);
     assert.deepEqual(result.deletedStorageKeys, []);
@@ -229,10 +237,13 @@ test('auto cleanup refuses to delete when metadata cannot be loaded', async () =
   try {
     const worktree = path.join(paths.checkpointShadowWorktreesRootPath, 'repo-invalid-meta');
     await makeWorktreeWithMtime(worktree, Date.now() - 10 * 24 * 60 * 60 * 1000);
-    await clientStateStore.saveClientStateSkeletonToStores(paths, createEmptyClientState());
-    await fs.writeFile(paths.shadowRepositoriesIndexUri.fsPath, '{bad-json', 'utf8');
+    await saveSkeletonState(paths, createEmptyClientState());
+    const pointer = JSON.parse(await fs.readFile(path.join(paths.clientStateSkeletonRootPath, 'current.json'), 'utf8'));
+    const manifest = JSON.parse(await fs.readFile(path.join(paths.clientStateSkeletonRootPath, 'snapshots', `${pointer.snapshotId}.json`), 'utf8'));
+    const generation = manifest.stores.shadowRepositories.generation;
+    await fs.writeFile(path.join(paths.shadowRepositoriesRootPath, 'generations', generation, 'index.json'), '{bad-json', 'utf8');
 
-    await assert.rejects(cleanupUnusedShadowWorktrees(paths, 1), /JSON|Unexpected|invalid/i);
+    await assert.rejects(cleanupUnusedShadowWorktrees(paths, 1), /JSON|Unexpected|invalid|unavailable/i);
     assert.equal(await exists(worktree), true);
   } finally {
     await removeTempRoot(tempRoot);

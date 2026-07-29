@@ -33,6 +33,12 @@ import {
 import { BUILTIN_TIMELINE_PROJECTIONS, type ConversationTimelineChunkData, type TimelineProjectionSpec } from './timelineProjections';
 import { externalizeClientStateAttachments, markClientStateAttachmentsForClient } from './attachmentStore';
 import { assertUniqueRecords } from '../../utils/uniqueIds';
+import {
+  applyConversationTimelinePatch,
+  CONVERSATION_TIMELINE_TABLE_KEYS,
+  createConversationTimelinePatch,
+  type ConversationTimelinePatch
+} from './conversationTimelinePatch';
 
 export type StoragePaths = ReturnType<typeof createVscodeStoragePaths>;
 
@@ -201,18 +207,7 @@ const TIMELINE_SIDECAR_KEYS: readonly TimelineSidecarKey[] = [
   'checkpoint-timeline-anchors'
 ] as const;
 
-const TIMELINE_DETAIL_TABLE_KEYS = [
-  'messages',
-  'messageRevisions',
-  'messageCurrentRevisionLinks',
-  'toolCalls',
-  'toolCallEvents',
-  'projectContexts',
-  'shadowRepositories',
-  'conversationCheckpointRepositoryLinks',
-  'checkpoints',
-  'checkpointTimelineAnchors'
-] as const;
+const TIMELINE_DETAIL_TABLE_KEYS = CONVERSATION_TIMELINE_TABLE_KEYS;
 
 export async function loadConversationTimelineDetail(paths: StoragePaths, conversationId: string): Promise<ClientState | undefined> {
   const root = conversationTimelineRoot(paths, conversationId);
@@ -316,18 +311,39 @@ export async function saveConversationTimelineDetail(paths: StoragePaths, conver
   });
 }
 
-export async function mergeConversationTimelineDetailIntoStore(paths: StoragePaths, conversationId: string, detail: ClientState): Promise<void> {
-  const storageDetail = await externalizeClientStateAttachments(paths, detail);
-  sortConversationTimelineDetail(storageDetail);
+export async function commitConversationTimelineRenderDetail(
+  paths: StoragePaths,
+  conversationId: string,
+  localBase: ClientState,
+  localNext: ClientState
+): Promise<void> {
   const root = conversationTimelineRoot(paths, conversationId);
   await withStorageResourceLock(root, async () => {
-    const previous = await loadTimelineIndexForWrite(root, conversationId, { allowMissing: true });
-    const next = previous
+    // attachment externalization 是存储语义的一部分；base/next 必须先归一化到同一语义再计算 hash/CAS。
+    const [storageBase, storageNext] = await Promise.all([
+      externalizeClientStateAttachments(paths, localBase),
+      externalizeClientStateAttachments(paths, localNext)
+    ]);
+    sortConversationTimelineDetail(storageBase);
+    sortConversationTimelineDetail(storageNext);
+    const patch = createConversationTimelinePatch(storageBase, storageNext);
+    if (Object.keys(patch).length === 0) return;
+
+    const previous = await loadTimelineIndexManifestForWrite(root, conversationId, { allowMissing: true });
+    const current = previous
       ? await loadTimelineDetailFromIndexStrict(root, previous.index, { validateProjections: true })
       : createEmptyClientState();
-    mergeTimelineDetailTables(next, storageDetail);
-    sortConversationTimelineDetail(next);
-    await publishTimelineDetail(paths, root, conversationId, next, previous?.index, 'merge');
+    const applied = applyConversationTimelinePatch(conversationId, current, patch);
+    if (!applied.changed) return;
+    sortConversationTimelineDetail(applied.state);
+
+    // 无删除的正常 append/stream update 继续复用 tail incremental；CAS 已在完整 current 上完成。
+    if (previous && !timelinePatchHasRemoves(patch)) {
+      const delta = timelinePatchUpsertState(patch);
+      const tailPlan = await analyzeTailIncrementalPatch(root, previous.index, delta);
+      if (tailPlan.kind === 'tail' && await publishTimelineTailIncremental(root, conversationId, previous.index, tailPlan)) return;
+    }
+    await publishTimelineDetail(paths, root, conversationId, applied.state, previous?.index, 'replace');
   });
 }
 
@@ -346,34 +362,6 @@ export async function mutateConversationTimelineDetailInStore(
     const storageDetail = await externalizeClientStateAttachments(paths, detail);
     sortConversationTimelineDetail(storageDetail);
     await publishTimelineDetail(paths, root, conversationId, storageDetail, previous?.index, 'replace');
-  });
-}
-
-export async function saveConversationTimelineRenderDetailIncremental(paths: StoragePaths, conversationId: string, detail: ClientState): Promise<boolean> {
-  const root = conversationTimelineRoot(paths, conversationId);
-  return withStorageResourceLock(root, async () => {
-    // 先预订 timeline root FIFO，再处理附件和投影。这样已经捕获的旧 render 快照
-    // 必然排在后续 truncate 前，操作后的新快照则排在 truncate 后，不会发生旧状态晚写覆盖。
-    const storageDetail = await externalizeClientStateAttachments(paths, detail);
-    sortConversationTimelineDetail(storageDetail);
-    if (!hasTimelineDetailRecords(storageDetail)) return true;
-
-    const previous = await loadTimelineIndexManifestForWrite(root, conversationId, { allowMissing: true });
-    if (!previous || previous.index.chunks.length === 0) {
-      await publishTimelineDetail(paths, root, conversationId, storageDetail, previous?.index, previous ? 'merge' : 'replace');
-      return true;
-    }
-
-    const tailPlan = await analyzeTailIncrementalPatch(root, previous.index, storageDetail);
-    if (tailPlan.kind === 'tail') {
-      const tailSaved = await publishTimelineTailIncremental(root, conversationId, previous.index, tailPlan);
-      if (tailSaved) {
-        return true;
-      }
-    }
-
-    await publishMergedTimelineDetailFromIndex(paths, root, conversationId, previous.index, storageDetail);
-    return true;
   });
 }
 
@@ -632,19 +620,6 @@ async function loadTimelineDetailFromIndexStrict(root: vscode.Uri, index: Conver
 type TailIncrementalPatchAnalysis =
   | { kind: 'tail'; suffixStartIndex: number; patch: ClientState }
   | { kind: 'fallback'; reason: string };
-
-async function publishMergedTimelineDetailFromIndex(
-  paths: StoragePaths,
-  root: vscode.Uri,
-  conversationId: string,
-  previousIndex: ConversationTimelineIndexFile,
-  patch: ClientState
-): Promise<void> {
-  const next = await loadTimelineDetailFromIndexStrict(root, previousIndex, { validateProjections: true });
-  mergeTimelineDetailTables(next, patch);
-  sortConversationTimelineDetail(next);
-  await publishTimelineDetail(paths, root, conversationId, next, previousIndex, 'merge');
-}
 
 async function publishTimelineTruncateIncremental(
   root: vscode.Uri,
@@ -1630,10 +1605,19 @@ function copyTimelineChunkToState(state: ClientState, chunk: ConversationTimelin
   state.checkpointTimelineAnchors.push(...chunk.checkpointTimelineAnchors);
 }
 
-function hasTimelineDetailRecords(detail: ClientState): boolean {
-  return TIMELINE_DETAIL_TABLE_KEYS.some((key) => detail[key].length > 0);
+function timelinePatchHasRemoves(patch: ConversationTimelinePatch): boolean {
+  return Object.values(patch).some((table) => (table?.removes.length ?? 0) > 0);
 }
 
+function timelinePatchUpsertState(patch: ConversationTimelinePatch): ClientState {
+  const state = createEmptyClientState();
+  const writable = state as unknown as Record<string, StoreRecord[]>;
+  for (const key of TIMELINE_DETAIL_TABLE_KEYS) {
+    writable[key] = patch[key]?.upserts.map((upsert) => upsert.record) ?? [];
+  }
+  sortConversationTimelineDetail(state);
+  return state;
+}
 
 function mergeTimelineDetailTables(target: ClientState, source: ClientState): void {
   const writableTarget = target as unknown as Record<string, StoreRecord[]>;

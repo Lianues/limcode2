@@ -65,9 +65,14 @@ export class WebviewHub implements WebviewCapability {
     }
   }
 
-  public broadcastToStream(streamId: string, message: ExtensionToWebviewMessage): void {
+  public broadcastToStream(
+    streamId: string,
+    message: ExtensionToWebviewMessage,
+    options: { excludeClientIds?: readonly BridgeClientId[] } = {}
+  ): void {
+    const excluded = new Set(options.excludeClientIds ?? []);
     for (const client of this.clients.values()) {
-      if (client.subscriptions.has(streamId)) {
+      if (client.subscriptions.has(streamId) && !excluded.has(client.id)) {
         this.post(client.id, message);
       }
     }

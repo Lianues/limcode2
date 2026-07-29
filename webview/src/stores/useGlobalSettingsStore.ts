@@ -15,7 +15,9 @@ import {
   type CheckpointMaintenanceSettingsRecord,
   type GlobalSettingsRecord,
   type GlobalSettingsSection,
+  type GlobalSettingsSectionValue,
   type GlobalSettingsSnapshotPayload,
+  type GlobalSettingsUpdatePayload,
   type LlmGenerationConfigRecord,
   type LlmCompressionConfigRecord,
   type LlmCompressionConfigsRecord,
@@ -75,8 +77,10 @@ interface GlobalSettingsState {
   mcpServers: McpServersSettingsRecord;
   /** 各 section 的来源文件路径，用于在 UI 展示。 */
   filePaths: Partial<Record<GlobalSettingsSection, string>>;
-  /** 各 section 最近一次 snapshot 携带的落盘版本，保存时回传做乐观并发校验。 */
+  /** 各 section 最近一次 committed snapshot 携带的 opaque revision。 */
   revisions: Partial<Record<GlobalSettingsSection, string>>;
+  /** 各 section 最近一次 committed 纯数据，用作 dirty 判定与三方合并 base。 */
+  baselines: Partial<Record<GlobalSettingsSection, GlobalSettingsSectionValue>>;
   /** 本窗口有未落盘修改时暂存的外部快照，等用户确认后再覆盖表单。 */
   pendingExternalSnapshots: Partial<Record<GlobalSettingsSection, GlobalSettingsSnapshotPayload>>;
   /** 已检测到外部（其他窗口）修改、但尚未应用的 section。 */
@@ -100,6 +104,9 @@ interface GlobalSettingsState {
 interface GlobalSettingsErrorOptions {
   requestType?: string;
   section?: GlobalSettingsSection;
+  correlationId?: string;
+  code?: 'settings_revision_conflict';
+  actualRevision?: string;
 }
 
 const GLOBAL_SETTINGS_SECTION_LABELS: Partial<Record<GlobalSettingsSection, string>> = {
@@ -124,9 +131,10 @@ function hasOutstandingSettingsWork(state: GlobalSettingsState): boolean {
  * 设置面板是自动保存的，所以「脏」= 有排队中的自动保存定时器，或有尚未被确认的保存请求。
  */
 function isSectionDirty(state: GlobalSettingsState, section: GlobalSettingsSection): boolean {
-  if (section === 'llmProviderConfigs' && hasPendingLlmProviderConfigsSave()) return true;
-  if (section === 'llmCompressionConfigs' && hasPendingLlmCompressionConfigsSave()) return true;
-  return state.pendingSettingsSections[section] === true;
+  const baseline = state.baselines[section];
+  const contentDirty = baseline !== undefined
+    && !sameSerializableValue(plainSettingsFromState(state, section), baseline);
+  return contentDirty || state.pendingSettingsSections[section] === true || hasPendingSectionSave(section);
 }
 
 function settingsErrorStatus(requestType: string | undefined, message: string): string {
@@ -745,7 +753,7 @@ function toPlainCompressionConfig(config: LlmCompressionConfigRecord): LlmCompre
       }
     } : {}),
     createdAt: normalized.createdAt,
-    updatedAt: Date.now()
+    updatedAt: normalized.updatedAt
   };
 }
 
@@ -773,37 +781,234 @@ function toPlainCompressionSettings(settings: LlmCompressionSettingsRecord): Llm
   };
 }
 
+function plainSettingsFromState(state: GlobalSettingsState, section: GlobalSettingsSection): GlobalSettingsSectionValue {
+  switch (section) {
+    case 'common':
+      return {
+        dataFilePath: state.common.dataFilePath,
+        proxy: state.common.proxy,
+        activeDataRootPath: state.common.activeDataRootPath,
+        defaultDataRootPath: state.common.defaultDataRootPath
+      };
+    case 'llm':
+      return { activeProviderConfigId: state.llm.activeProviderConfigId };
+    case 'llmProviderConfigs':
+      return { configs: state.llmProviderConfigs.configs.map(toPlainProviderConfig) };
+    case 'llmCompression':
+      return toPlainCompressionSettings(state.llmCompression);
+    case 'llmCompressionConfigs':
+      return { configs: state.llmCompressionConfigs.configs.map(toPlainCompressionConfig) };
+    case 'checkpointMaintenance':
+      return {
+        autoCleanupEnabled: state.checkpointMaintenance.autoCleanupEnabled,
+        autoCleanupDays: state.checkpointMaintenance.autoCleanupDays,
+        autoDismissEnabled: state.checkpointMaintenance.autoDismissEnabled,
+        autoDismissSeconds: state.checkpointMaintenance.autoDismissSeconds
+      };
+    case 'appearance':
+      return { ...state.appearance };
+    case 'attachments':
+      return { maxStoredInlineFileMb: state.attachments.maxStoredInlineFileMb };
+    case 'runHistory':
+      return { detailPersistenceEnabled: state.runHistory.detailPersistenceEnabled === true };
+    case 'mcpServers':
+      return { servers: state.mcpServers.servers.map(toPlainMcpServer) };
+  }
+}
+
+function cloneSettingsValue<T extends GlobalSettingsSectionValue>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
 function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 function sameSerializableValue(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return stableSerializableString(left) === stableSerializableString(right);
+}
+
+function stableSerializableString(value: unknown): string {
+  return JSON.stringify(canonicalSerializableValue(value));
+}
+
+function canonicalSerializableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalSerializableValue);
+  if (isPlainJsonObject(value)) {
+    return Object.fromEntries(
+      Object.keys(value).sort().map((key) => [key, canonicalSerializableValue(value[key])])
+    );
+  }
+  return value;
+}
+
+const MERGE_MISSING = Symbol('merge-missing');
+type MergeNodeValue = unknown | typeof MERGE_MISSING;
+
+interface ThreeWayMergeResult {
+  value: MergeNodeValue;
+  conflicts: string[];
+}
+
+/**
+ * 基于 committed base 合并本地与外部快照。id 数组按 record 合并；同一路径双方都改动
+ * 才标记冲突。这样不同窗口新增不同配置会自动取并集，而不是整表 last-writer-wins。
+ */
+function mergeSettingsThreeWay(
+  base: GlobalSettingsSectionValue,
+  local: GlobalSettingsSectionValue,
+  remote: GlobalSettingsSectionValue,
+  localWinsConflicts = false
+): { value: GlobalSettingsSectionValue; conflicts: string[] } {
+  const merged = mergeNode(base, local, remote, '$', localWinsConflicts);
+  return {
+    value: cloneSettingsValue(merged.value as GlobalSettingsSectionValue),
+    conflicts: merged.conflicts
+  };
+}
+
+function mergeNode(
+  base: MergeNodeValue,
+  local: MergeNodeValue,
+  remote: MergeNodeValue,
+  path: string,
+  localWinsConflicts: boolean
+): ThreeWayMergeResult {
+  if (sameMergeValue(local, remote)) return { value: cloneMergeValue(local), conflicts: [] };
+  if (sameMergeValue(local, base)) return { value: cloneMergeValue(remote), conflicts: [] };
+  if (sameMergeValue(remote, base)) return { value: cloneMergeValue(local), conflicts: [] };
+
+  if (Array.isArray(base) && Array.isArray(local) && Array.isArray(remote)) {
+    const keyed = mergeKeyedArrays(base, local, remote, path, localWinsConflicts);
+    if (keyed) return keyed;
+  }
+
+  if (isPlainJsonObject(base) && isPlainJsonObject(local) && isPlainJsonObject(remote)) {
+    const output: Record<string, unknown> = {};
+    const conflicts: string[] = [];
+    const keys = new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(remote)]);
+    for (const key of [...keys].sort()) {
+      const child = mergeNode(
+        Object.prototype.hasOwnProperty.call(base, key) ? base[key] : MERGE_MISSING,
+        Object.prototype.hasOwnProperty.call(local, key) ? local[key] : MERGE_MISSING,
+        Object.prototype.hasOwnProperty.call(remote, key) ? remote[key] : MERGE_MISSING,
+        `${path}.${key}`,
+        localWinsConflicts
+      );
+      conflicts.push(...child.conflicts);
+      if (child.value !== MERGE_MISSING) output[key] = child.value;
+    }
+    return { value: output, conflicts };
+  }
+
+  return {
+    value: cloneMergeValue(local),
+    conflicts: localWinsConflicts ? [] : [path]
+  };
+}
+
+function mergeKeyedArrays(
+  base: unknown[],
+  local: unknown[],
+  remote: unknown[],
+  path: string,
+  localWinsConflicts: boolean
+): ThreeWayMergeResult | undefined {
+  const baseMap = keyedArrayMap(base);
+  const localMap = keyedArrayMap(local);
+  const remoteMap = keyedArrayMap(remote);
+  if (!baseMap || !localMap || !remoteMap) return undefined;
+
+  const order = [...remoteMap.keys(), ...[...localMap.keys()].filter((key) => !remoteMap.has(key))];
+  const output: unknown[] = [];
+  const conflicts: string[] = [];
+  for (const key of order) {
+    const child = mergeNode(
+      baseMap.get(key) ?? MERGE_MISSING,
+      localMap.get(key) ?? MERGE_MISSING,
+      remoteMap.get(key) ?? MERGE_MISSING,
+      `${path}[${JSON.stringify(key)}]`,
+      localWinsConflicts
+    );
+    conflicts.push(...child.conflicts);
+    if (child.value !== MERGE_MISSING) output.push(child.value);
+  }
+  return { value: output, conflicts };
+}
+
+function keyedArrayMap(values: unknown[]): Map<string, unknown> | undefined {
+  if (values.length === 0) return new Map();
+  const result = new Map<string, unknown>();
+  for (const value of values) {
+    const key = mergeRecordKey(value);
+    if (!key || result.has(key)) return undefined;
+    result.set(key, value);
+  }
+  return result;
+}
+
+function mergeRecordKey(value: unknown): string | undefined {
+  if (!isPlainJsonObject(value)) return undefined;
+  if (typeof value.id === 'string' && value.id) return `id:${value.id}`;
+  if (typeof value.providerConfigId === 'string' && typeof value.modelId === 'string') {
+    return `provider-model:${value.providerConfigId}:${value.modelId}`;
+  }
+  if (typeof value.providerConfigId === 'string' && value.providerConfigId) return `provider:${value.providerConfigId}`;
+  if (typeof value.modelId === 'string' && value.modelId) return `model:${value.modelId}`;
+  return undefined;
+}
+
+function sameMergeValue(left: MergeNodeValue, right: MergeNodeValue): boolean {
+  if (left === MERGE_MISSING || right === MERGE_MISSING) return left === right;
+  return sameSerializableValue(left, right);
+}
+
+function cloneMergeValue(value: MergeNodeValue): MergeNodeValue {
+  if (value === MERGE_MISSING) return MERGE_MISSING;
+  return JSON.parse(JSON.stringify(value)) as unknown;
+}
+
+function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 let modelFetchTimeout: number | undefined;
 const LLM_PROVIDER_CONFIGS_AUTOSAVE_DELAY_MS = 400;
 const LLM_COMPRESSION_CONFIGS_AUTOSAVE_DELAY_MS = 400;
 let llmProviderConfigsAutoSaveTimer: number | undefined;
-let llmProviderConfigsEditRevision = 0;
-const llmProviderConfigsSaveRequestRevisions = new Map<string, number>();
 let llmCompressionConfigsAutoSaveTimer: number | undefined;
-let llmCompressionConfigsEditRevision = 0;
-const llmCompressionConfigsSaveRequestRevisions = new Map<string, number>();
-/**
- * 每个 section 最后一次已同步的落盘版本（不会像 state.revisions 那样在发起保存时被消费掉）。
- * 用于区分「真外部变更」与「本窗口自己刚写的值被 watcher 再次下发」。
- */
-const lastSyncedRevisions = new Map<GlobalSettingsSection, string>();
 
-function touchLlmProviderConfigsRevision(): number {
-  llmProviderConfigsEditRevision += 1;
-  return llmProviderConfigsEditRevision;
+type PendingGlobalSettingsUpdate = Omit<GlobalSettingsUpdatePayload, 'expectedRevision'>;
+
+interface SectionSaveAttempt {
+  requestId: string;
+  payload: PendingGlobalSettingsUpdate;
 }
 
-function touchLlmCompressionConfigsRevision(): number {
-  llmCompressionConfigsEditRevision += 1;
-  return llmCompressionConfigsEditRevision;
+interface SectionSaveCoordinator {
+  inFlight?: SectionSaveAttempt;
+  queued?: PendingGlobalSettingsUpdate;
+  awaitingConflictSnapshot?: boolean;
+}
+
+/** 每个 section 只有一个 in-flight writer；后续编辑合并为最新 queued payload。 */
+const sectionSaveCoordinators = new Map<GlobalSettingsSection, SectionSaveCoordinator>();
+
+function coordinatorFor(section: GlobalSettingsSection): SectionSaveCoordinator {
+  let coordinator = sectionSaveCoordinators.get(section);
+  if (!coordinator) {
+    coordinator = {};
+    sectionSaveCoordinators.set(section, coordinator);
+  }
+  return coordinator;
+}
+
+function hasPendingSectionSave(section: GlobalSettingsSection): boolean {
+  const coordinator = sectionSaveCoordinators.get(section);
+  const timerPending = section === 'llmProviderConfigs'
+    ? llmProviderConfigsAutoSaveTimer !== undefined
+    : section === 'llmCompressionConfigs' && llmCompressionConfigsAutoSaveTimer !== undefined;
+  return !!coordinator?.inFlight || !!coordinator?.queued || timerPending;
 }
 
 function clearLlmProviderConfigsAutoSaveTimer(): void {
@@ -819,11 +1024,11 @@ function clearLlmCompressionConfigsAutoSaveTimer(): void {
 }
 
 function hasPendingLlmProviderConfigsSave(): boolean {
-  return llmProviderConfigsAutoSaveTimer !== undefined || llmProviderConfigsSaveRequestRevisions.size > 0;
+  return hasPendingSectionSave('llmProviderConfigs');
 }
 
 function hasPendingLlmCompressionConfigsSave(): boolean {
-  return llmCompressionConfigsAutoSaveTimer !== undefined || llmCompressionConfigsSaveRequestRevisions.size > 0;
+  return hasPendingSectionSave('llmCompressionConfigs');
 }
 
 function clearModelFetchTimeout(): void {
@@ -852,6 +1057,7 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
     mcpServers: emptyMcpServers(),
     filePaths: {},
     revisions: {},
+    baselines: {},
     pendingExternalSnapshots: {},
     externalChangedSections: {},
     pendingActiveProviderConfigIdAfterConfigsSave: '',
@@ -897,16 +1103,43 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
     }
   },
   actions: {
-    /**
-     * 取出并作废本地记录的落盘版本。
-     * 请求一旦发出，本地 revision 即视为过期，直到收到新的 snapshot 才恢复校验；
-     * 否则同一窗口连发多次保存会反复携带同一个旧 revision，产生假冲突。
-     */
-    consumeExpectedRevision(section: GlobalSettingsSection): { expectedRevision?: string } {
-      const revision = this.revisions[section];
-      if (revision === undefined) return {};
-      delete this.revisions[section];
-      return { expectedRevision: revision };
+    /** 同 section 严格单飞；in-flight 期间的新编辑只替换 queued latest payload。 */
+    enqueueSettingsUpdate(payload: PendingGlobalSettingsUpdate): void {
+      const coordinator = coordinatorFor(payload.section);
+      coordinator.queued = {
+        ...payload,
+        settings: cloneSettingsValue(payload.settings)
+      };
+      this.markPendingSettingSection(payload.section);
+      this.pumpSettingsUpdate(payload.section);
+    },
+    pumpSettingsUpdate(section: GlobalSettingsSection): void {
+      const coordinator = coordinatorFor(section);
+      if (coordinator.inFlight || coordinator.awaitingConflictSnapshot || this.externalChangedSections[section] || !coordinator.queued) return;
+      const expectedRevision = this.revisions[section];
+      if (!expectedRevision) {
+        if (!this.loadingSettingsSections[section]) {
+          this.markLoadingSettingSection(section);
+          bridge.request(BridgeMessageType.GlobalSettingsGet, { section });
+        }
+        this.failedSettingsSections[section] = '尚未取得一致设置快照，已暂停保存并重新读取。';
+        return;
+      }
+
+      const payload = coordinator.queued;
+      coordinator.queued = undefined;
+      try {
+        const requestId = bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
+          ...payload,
+          expectedRevision
+        });
+        coordinator.inFlight = { requestId, payload };
+      } catch (error) {
+        coordinator.queued = payload;
+        const message = `设置保存请求发送失败：${messageFromError(error)}`;
+        this.failedSettingsSections[section] = message;
+        this.status = `设置保存失败：${message}`;
+      }
     },
     markLoadingSettingSection(section: GlobalSettingsSection): void {
       this.loadingSettingsSections[section] = true;
@@ -925,11 +1158,10 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
     requestAll(): void {
       clearLlmProviderConfigsAutoSaveTimer();
       clearLlmCompressionConfigsAutoSaveTimer();
-      llmProviderConfigsSaveRequestRevisions.clear();
-      llmCompressionConfigsSaveRequestRevisions.clear();
+      sectionSaveCoordinators.clear();
       this.status = '正在读取设置...';
-      lastSyncedRevisions.clear();
       this.revisions = {};
+      this.baselines = {};
       this.pendingExternalSnapshots = {};
       this.externalChangedSections = {};
       this.loadedSections = {};
@@ -949,30 +1181,17 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       }
     },
     saveCommon(): void {
-      const revision = this.consumeExpectedRevision('common');
-      this.markPendingSettingSection('common');
       this.status = '正在保存设置，并按需迁移、删除旧数据目录中的插件数据...';
-      bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
+      this.enqueueSettingsUpdate({
         section: 'common',
-        ...revision,
-        settings: {
-          dataFilePath: this.common.dataFilePath,
-          proxy: this.common.proxy,
-          activeDataRootPath: this.common.activeDataRootPath,
-          defaultDataRootPath: this.common.defaultDataRootPath
-        }
+        settings: plainSettingsFromState(this, 'common')
       });
     },
     saveLlm(): void {
-      const revision = this.consumeExpectedRevision('llm');
-      this.markPendingSettingSection('llm');
       this.status = '正在保存当前渠道选择...';
-      bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
+      this.enqueueSettingsUpdate({
         section: 'llm',
-        ...revision,
-        settings: {
-          activeProviderConfigId: this.llm.activeProviderConfigId
-        }
+        settings: plainSettingsFromState(this, 'llm')
       });
     },
     ensureCheckpointMaintenance(): void {
@@ -988,18 +1207,10 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       this.saveCheckpointMaintenance();
     },
     saveCheckpointMaintenance(): void {
-      const revision = this.consumeExpectedRevision('checkpointMaintenance');
-      this.markPendingSettingSection('checkpointMaintenance');
       this.status = '正在保存存档点维护设置...';
-      bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
+      this.enqueueSettingsUpdate({
         section: 'checkpointMaintenance',
-        ...revision,
-        settings: {
-          autoCleanupEnabled: this.checkpointMaintenance.autoCleanupEnabled,
-          autoCleanupDays: this.checkpointMaintenance.autoCleanupDays,
-          autoDismissEnabled: this.checkpointMaintenance.autoDismissEnabled,
-          autoDismissSeconds: this.checkpointMaintenance.autoDismissSeconds
-        }
+        settings: plainSettingsFromState(this, 'checkpointMaintenance')
       });
     },
     ensureAppearance(): void {
@@ -1008,19 +1219,10 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       bridge.request(BridgeMessageType.GlobalSettingsGet, { section: 'appearance' });
     },
     saveAppearance(): void {
-      const revision = this.consumeExpectedRevision('appearance');
-      this.markPendingSettingSection('appearance');
       this.status = '正在保存外观设置...';
-      bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
+      this.enqueueSettingsUpdate({
         section: 'appearance',
-        ...revision,
-        settings: {
-          streamingTextPreparing: this.appearance.streamingTextPreparing,
-          streamingTextWaiting: this.appearance.streamingTextWaiting,
-          streamingTextThinking: this.appearance.streamingTextThinking,
-          streamingTextWriting: this.appearance.streamingTextWriting,
-          streamingTextToolExecuting: this.appearance.streamingTextToolExecuting
-        }
+        settings: plainSettingsFromState(this, 'appearance')
       });
     },
     ensureAttachments(): void {
@@ -1035,15 +1237,10 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       this.saveAttachments();
     },
     saveAttachments(): void {
-      const revision = this.consumeExpectedRevision('attachments');
-      this.markPendingSettingSection('attachments');
       this.status = '正在保存附件设置...';
-      bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
+      this.enqueueSettingsUpdate({
         section: 'attachments',
-        ...revision,
-        settings: {
-          maxStoredInlineFileMb: this.attachments.maxStoredInlineFileMb
-        }
+        settings: plainSettingsFromState(this, 'attachments')
       });
     },
     ensureRunHistory(): void {
@@ -1057,15 +1254,10 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       this.saveRunHistory();
     },
     saveRunHistory(): void {
-      const revision = this.consumeExpectedRevision('runHistory');
-      this.markPendingSettingSection('runHistory');
       this.status = '正在保存运行历史设置...';
-      bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
+      this.enqueueSettingsUpdate({
         section: 'runHistory',
-        ...revision,
-        settings: {
-          detailPersistenceEnabled: this.runHistory.detailPersistenceEnabled === true
-        }
+        settings: plainSettingsFromState(this, 'runHistory')
       });
     },
     ensureMcpServers(): void {
@@ -1074,15 +1266,10 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       bridge.request(BridgeMessageType.GlobalSettingsGet, { section: 'mcpServers' });
     },
     saveMcpServers(refreshMcpTools = false): void {
-      const revision = this.consumeExpectedRevision('mcpServers');
-      this.markPendingSettingSection('mcpServers');
       this.status = refreshMcpTools ? '正在尝试获取 MCP 工具...' : '正在保存 MCP 服务...';
-      bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
+      this.enqueueSettingsUpdate({
         section: 'mcpServers',
-        ...revision,
-        settings: {
-          servers: this.mcpServers.servers.map(toPlainMcpServer)
-        },
+        settings: plainSettingsFromState(this, 'mcpServers'),
         ...(refreshMcpTools ? { refreshMcpTools: true } : {})
       });
     },
@@ -1113,7 +1300,6 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       this.saveMcpServers(true);
     },
     queueLlmProviderConfigsAutoSave(): void {
-      touchLlmProviderConfigsRevision();
       clearLlmProviderConfigsAutoSaveTimer();
       this.markPendingSettingSection('llmProviderConfigs');
       this.status = '正在自动保存渠道配置...';
@@ -1124,31 +1310,22 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
     },
     saveLlmProviderConfigs(): void {
       clearLlmProviderConfigsAutoSaveTimer();
-      const requestRevision = touchLlmProviderConfigsRevision();
-      const revision = this.consumeExpectedRevision('llmProviderConfigs');
-      this.markPendingSettingSection('llmProviderConfigs');
       this.status = '正在自动保存渠道配置...';
-      const requestId = bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
+      const settings = plainSettingsFromState(this, 'llmProviderConfigs') as LlmProviderConfigsRecord;
+      this.enqueueSettingsUpdate({
         section: 'llmProviderConfigs',
-        ...revision,
         settings: {
-          configs: this.llmProviderConfigs.configs.map((config) => {
-            const plain = toPlainProviderConfig(config);
-            return {
-              ...plain,
-              name: plain.name.trim() || '未命名渠道',
-              apiKey: plain.apiKey.trim(),
-              baseUrl: plain.baseUrl.trim(),
-              model: plain.model.trim(),
-              updatedAt: Date.now()
-            };
-          })
+          configs: settings.configs.map((plain) => ({
+            ...plain,
+            name: plain.name.trim() || '未命名渠道',
+            apiKey: plain.apiKey.trim(),
+            baseUrl: plain.baseUrl.trim(),
+            model: plain.model.trim()
+          }))
         }
       });
-      llmProviderConfigsSaveRequestRevisions.set(requestId, requestRevision);
     },
     queueLlmCompressionConfigsAutoSave(): void {
-      touchLlmCompressionConfigsRevision();
       clearLlmCompressionConfigsAutoSaveTimer();
       this.markPendingSettingSection('llmCompressionConfigs');
       this.status = '正在自动保存压缩配置...';
@@ -1158,41 +1335,19 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       }, LLM_COMPRESSION_CONFIGS_AUTOSAVE_DELAY_MS);
     },
     saveLlmCompression(): void {
-      this.markPendingSettingSection('llmCompression');
       this.status = '正在保存压缩绑定...';
-      try {
-        bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
-          section: 'llmCompression',
-          ...this.consumeExpectedRevision('llmCompression'),
-          settings: toPlainCompressionSettings(this.llmCompression)
-        });
-      } catch (error) {
-        const message = `压缩绑定保存请求发送失败：${messageFromError(error)}`;
-        this.clearPendingSettingSection('llmCompression');
-        this.failedSettingsSections.llmCompression = message;
-        this.status = `设置保存失败：${message}`;
-      }
+      this.enqueueSettingsUpdate({
+        section: 'llmCompression',
+        settings: plainSettingsFromState(this, 'llmCompression')
+      });
     },
     saveLlmCompressionConfigs(): void {
       clearLlmCompressionConfigsAutoSaveTimer();
-      const requestRevision = touchLlmCompressionConfigsRevision();
-      this.markPendingSettingSection('llmCompressionConfigs');
       this.status = '正在保存压缩配置...';
-      try {
-        const requestId = bridge.request(BridgeMessageType.GlobalSettingsUpdate, {
-          section: 'llmCompressionConfigs',
-          ...this.consumeExpectedRevision('llmCompressionConfigs'),
-          settings: {
-            configs: this.llmCompressionConfigs.configs.map(toPlainCompressionConfig)
-          }
-        });
-        llmCompressionConfigsSaveRequestRevisions.set(requestId, requestRevision);
-      } catch (error) {
-        const message = `压缩配置保存请求发送失败：${messageFromError(error)}`;
-        if (!hasPendingLlmCompressionConfigsSave()) this.clearPendingSettingSection('llmCompressionConfigs');
-        this.failedSettingsSections.llmCompressionConfigs = message;
-        this.status = `设置保存失败：${message}`;
-      }
+      this.enqueueSettingsUpdate({
+        section: 'llmCompressionConfigs',
+        settings: plainSettingsFromState(this, 'llmCompressionConfigs')
+      });
     },
     selectCompressionConfigForActiveProvider(configId: string, deferPersist = false): void {
       if (!this.llmCompressionConfigs.configs.some((config) => config.id === configId)) return;
@@ -1737,125 +1892,221 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       }
       this.saveLlmCompressionConfigs();
     },
-    /** 丢弃外部变更提示，保留本窗口当前表单内容。 */
+    /** 用户选择“保留当前”：先吸收所有非冲突外部字段，冲突字段显式本地优先。 */
     dismissExternalSettingsChange(section?: GlobalSettingsSection): void {
       const sections = section ? [section] : (Object.keys(this.externalChangedSections) as GlobalSettingsSection[]);
       for (const item of sections) {
-        delete this.externalChangedSections[item];
-        delete this.pendingExternalSnapshots[item];
+        const payload = this.pendingExternalSnapshots[item];
+        if (!payload) continue;
+        const coordinator = coordinatorFor(item);
+        if (coordinator.inFlight) continue;
+        this.resolveExternalSnapshot(payload, true);
       }
     },
-    /** 用户确认后，把暂存的外部快照真正应用到表单。 */
+    /** 用户选择“载入外部”：显式丢弃该 section 尚未发送的本地保存。 */
     applyExternalSettingsChange(section?: GlobalSettingsSection): void {
       const sections = section ? [section] : (Object.keys(this.pendingExternalSnapshots) as GlobalSettingsSection[]);
       for (const item of sections) {
         const payload = this.pendingExternalSnapshots[item];
+        if (!payload) continue;
+        const coordinator = coordinatorFor(item);
+        if (coordinator.inFlight) {
+          this.status = '当前保存尚未确认，请稍后再载入外部设置。';
+          continue;
+        }
+        coordinator.queued = undefined;
+        coordinator.awaitingConflictSnapshot = false;
+        if (item === 'llmProviderConfigs') {
+          clearLlmProviderConfigsAutoSaveTimer();
+          this.pendingActiveProviderConfigIdAfterConfigsSave = '';
+        }
+        if (item === 'llmCompressionConfigs') {
+          clearLlmCompressionConfigsAutoSaveTimer();
+          this.flushCompressionBindingAfterConfigsSave = false;
+        }
+        this.applyCommittedMetadata(payload);
+        this.applySectionSettings(item, payload.settings);
         delete this.pendingExternalSnapshots[item];
         delete this.externalChangedSections[item];
-        if (payload) this.applySnapshot(payload, undefined, { force: true });
+        this.clearPendingSettingSection(item);
       }
+      if (!hasOutstandingSettingsWork(this)) this.status = '已载入外部设置';
     },
-    applySnapshot(payload: GlobalSettingsSnapshotPayload, correlationId?: string, options: { force?: boolean } = {}): void {
-      // 外部（其他窗口）推送的快照不带 correlationId。
-      // 本窗口还有没写完的修改时绝不能直接覆盖表单（例如用户正在输入 API key）。
-      if (!options.force && correlationId === undefined && this.loadedSections[payload.section] && isSectionDirty(this, payload.section)) {
-        // 盘上版本就是本窗口上一次同步到的那个：什么都没变，不要报假的外部变更。
-        if (payload.revision !== undefined && lastSyncedRevisions.get(payload.section) === payload.revision) return;
-        this.pendingExternalSnapshots[payload.section] = payload;
-        this.externalChangedSections[payload.section] = true;
-        return;
-      }
-      delete this.pendingExternalSnapshots[payload.section];
-      delete this.externalChangedSections[payload.section];
-      if (payload.revision !== undefined) lastSyncedRevisions.set(payload.section, payload.revision);
-      else lastSyncedRevisions.delete(payload.section);
-
-      const isLlmProviderConfigsSnapshot = payload.section === 'llmProviderConfigs';
-      const providerConfigsRequestRevision = isLlmProviderConfigsSnapshot && correlationId
-        ? llmProviderConfigsSaveRequestRevisions.get(correlationId)
+    applySnapshot(payload: GlobalSettingsSnapshotPayload, correlationId?: string): void {
+      const section = payload.section;
+      const coordinator = coordinatorFor(section);
+      const localAttempt = correlationId && coordinator.inFlight?.requestId === correlationId
+        ? coordinator.inFlight
         : undefined;
-      const isLlmCompressionConfigsSnapshot = payload.section === 'llmCompressionConfigs';
-      const compressionConfigsRequestRevision = isLlmCompressionConfigsSnapshot && correlationId
-        ? llmCompressionConfigsSaveRequestRevisions.get(correlationId)
-        : undefined;
-      if (providerConfigsRequestRevision !== undefined && correlationId) {
-        llmProviderConfigsSaveRequestRevisions.delete(correlationId);
-      }
-      if (compressionConfigsRequestRevision !== undefined && correlationId) {
-        llmCompressionConfigsSaveRequestRevisions.delete(correlationId);
-      }
 
-      this.loadedSections[payload.section] = true;
-      this.filePaths[payload.section] = payload.filePath;
-      // 无论后续是否因本地编辑更新而跳过应用，盘上版本都要记下来供下一次保存校验。
-      if (payload.revision !== undefined) this.revisions[payload.section] = payload.revision;
-      else delete this.revisions[payload.section];
-      this.clearLoadingSettingSection(payload.section);
-      delete this.failedSettingsSections[payload.section];
+      if (localAttempt) {
+        coordinator.inFlight = undefined;
+        coordinator.awaitingConflictSnapshot = false;
+        const current = plainSettingsFromState(this, section);
+        // server 归一化与请求发出后的继续编辑做三方合并；继续编辑显式本地优先。
+        const merged = mergeSettingsThreeWay(localAttempt.payload.settings, current, payload.settings, true);
+        this.applyCommittedMetadata(payload);
+        this.applySectionSettings(section, merged.value);
+        // 依赖配置 id 的后续 section 只能在“该 id 已真实包含于本次 server ack”后保存。
+        // 不能因冲突三方合并把本地 record 暂时放回表单，就提前提交一个磁盘上尚不存在的引用。
+        this.flushDependentSettingsAfterCommittedSnapshot(payload);
+        this.updateQueuedSettingsFromCurrent(section);
 
-      if (providerConfigsRequestRevision !== undefined && providerConfigsRequestRevision < llmProviderConfigsEditRevision) {
-        if (!hasPendingLlmProviderConfigsSave()) this.clearPendingSettingSection(payload.section);
+        const pendingExternal = this.pendingExternalSnapshots[section];
+        if (pendingExternal && pendingExternal.revision !== payload.revision) {
+          this.resolveExternalSnapshot(pendingExternal);
+        } else {
+          delete this.pendingExternalSnapshots[section];
+          delete this.externalChangedSections[section];
+        }
+        this.pumpSettingsUpdate(section);
+        this.refreshPendingSettingSection(section);
         if (!hasOutstandingSettingsWork(this)) this.status = '设置已同步';
         return;
       }
 
-      if (compressionConfigsRequestRevision !== undefined && compressionConfigsRequestRevision < llmCompressionConfigsEditRevision) {
-        if (!hasPendingLlmCompressionConfigsSave()) this.clearPendingSettingSection(payload.section);
-        if (!hasOutstandingSettingsWork(this)) this.status = '设置已同步';
+      this.clearLoadingSettingSection(section);
+      if (this.loadedSections[section] && this.revisions[section] === payload.revision) {
+        this.pumpSettingsUpdate(section);
         return;
       }
 
-      if (isLlmCompressionConfigsSnapshot && compressionConfigsRequestRevision === undefined && hasPendingLlmCompressionConfigsSave()) {
+      if (!this.loadedSections[section]) {
+        this.applyCommittedMetadata(payload);
+        this.applySectionSettings(section, payload.settings);
+        this.pumpSettingsUpdate(section);
+        this.refreshPendingSettingSection(section);
         return;
       }
 
-      if (payload.section === 'llm') {
-        this.llm = { ...emptyLlm(), ...(payload.settings as LlmSettingsRecord) };
-      } else if (payload.section === 'llmProviderConfigs') {
-        const settings = payload.settings as LlmProviderConfigsRecord;
-        this.llmProviderConfigs = {
-          configs: settings.configs.map(normalizeProviderConfigForUi)
-        };
-        if (this.pendingActiveProviderConfigIdAfterConfigsSave) {
-          const pendingId = this.pendingActiveProviderConfigIdAfterConfigsSave;
-          this.pendingActiveProviderConfigIdAfterConfigsSave = '';
-          const nextActiveId = this.llmProviderConfigs.configs.some((config) => config.id === pendingId)
-            ? pendingId
-            : this.llmProviderConfigs.configs[0]?.id ?? '';
-          this.llm.activeProviderConfigId = nextActiveId;
-          this.saveLlm();
-        }
-      } else if (payload.section === 'llmCompression') {
-        this.llmCompression = { ...emptyLlmCompression(), ...(payload.settings as LlmCompressionSettingsRecord) };
-      } else if (payload.section === 'llmCompressionConfigs') {
-        const settings = payload.settings as LlmCompressionConfigsRecord;
-        this.llmCompressionConfigs = { configs: settings.configs.map((config) => normalizeCompressionConfigForUi(config)) };
-        // 克隆/新建的压缩配置已确认落盘，此时再持久化压缩绑定，后端归一化不会因“配置不存在”丢弃绑定。
-        if (this.flushCompressionBindingAfterConfigsSave) {
-          this.flushCompressionBindingAfterConfigsSave = false;
-          this.saveLlmCompression();
-        }
-      } else if (payload.section === 'checkpointMaintenance') {
-        this.checkpointMaintenance = { ...emptyCheckpointMaintenance(), ...(payload.settings as CheckpointMaintenanceSettingsRecord) };
-      } else if (payload.section === 'appearance') {
-        this.appearance = { ...emptyAppearance(), ...(payload.settings as AppearanceSettingsRecord) };
-      } else if (payload.section === 'attachments') {
-        this.attachments = { ...emptyAttachments(), ...(payload.settings as AttachmentSettingsRecord) };
-      } else if (payload.section === 'runHistory') {
-        this.runHistory = { ...emptyRunHistory(), ...(payload.settings as RunHistorySettingsRecord) };
-      } else if (payload.section === 'mcpServers') {
-        const settings = payload.settings as McpServersSettingsRecord;
-        this.mcpServers = { servers: [...(settings.servers ?? [])].sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id)) };
-      } else {
-        this.common = payload.settings as GlobalSettingsRecord;
+      // 有旧 revision 的请求尚在飞行时，先暂存外部快照；其成功/冲突结果决定下一步 base。
+      if (coordinator.inFlight) {
+        this.stageExternalSnapshot(payload);
+        return;
       }
-      const shouldClearPending = (!isLlmProviderConfigsSnapshot || !hasPendingLlmProviderConfigsSave())
-        && (!isLlmCompressionConfigsSnapshot || !hasPendingLlmCompressionConfigsSave());
-      if (shouldClearPending) {
-        this.clearPendingSettingSection(payload.section);
+
+      if (isSectionDirty(this, section) || coordinator.awaitingConflictSnapshot) {
+        this.resolveExternalSnapshot(payload);
+        return;
       }
+
+      this.applyCommittedMetadata(payload);
+      this.applySectionSettings(section, payload.settings);
+      this.pumpSettingsUpdate(section);
+      this.refreshPendingSettingSection(section);
       if (!hasOutstandingSettingsWork(this)) this.status = '设置已同步';
     },
+    resolveExternalSnapshot(payload: GlobalSettingsSnapshotPayload, localWinsConflicts = false): boolean {
+      const section = payload.section;
+      const baseline = this.baselines[section];
+      if (!baseline) {
+        this.applyCommittedMetadata(payload);
+        this.applySectionSettings(section, payload.settings);
+        delete this.pendingExternalSnapshots[section];
+        delete this.externalChangedSections[section];
+        coordinatorFor(section).awaitingConflictSnapshot = false;
+        return true;
+      }
+
+      const local = plainSettingsFromState(this, section);
+      const merged = mergeSettingsThreeWay(baseline, local, payload.settings, localWinsConflicts);
+      if (merged.conflicts.length > 0) {
+        this.stageExternalSnapshot(payload);
+        coordinatorFor(section).awaitingConflictSnapshot = false;
+        this.status = `检测到外部设置与本地编辑冲突：${merged.conflicts.slice(0, 3).join('、')}`;
+        return false;
+      }
+
+      this.applyCommittedMetadata(payload);
+      this.applySectionSettings(section, merged.value);
+      delete this.pendingExternalSnapshots[section];
+      delete this.externalChangedSections[section];
+      const coordinator = coordinatorFor(section);
+      coordinator.awaitingConflictSnapshot = false;
+      this.updateQueuedSettingsFromCurrent(section);
+      this.pumpSettingsUpdate(section);
+      this.refreshPendingSettingSection(section);
+      return true;
+    },
+    stageExternalSnapshot(payload: GlobalSettingsSnapshotPayload): void {
+      this.pendingExternalSnapshots[payload.section] = {
+        ...payload,
+        settings: cloneSettingsValue(payload.settings)
+      };
+      this.externalChangedSections[payload.section] = true;
+    },
+    applyCommittedMetadata(payload: GlobalSettingsSnapshotPayload): void {
+      this.loadedSections[payload.section] = true;
+      this.filePaths[payload.section] = payload.filePath;
+      this.revisions[payload.section] = payload.revision;
+      this.baselines[payload.section] = cloneSettingsValue(payload.settings);
+      this.clearLoadingSettingSection(payload.section);
+      delete this.failedSettingsSections[payload.section];
+    },
+    updateQueuedSettingsFromCurrent(section: GlobalSettingsSection): void {
+      const coordinator = coordinatorFor(section);
+      if (!coordinator.queued) return;
+      coordinator.queued = {
+        ...coordinator.queued,
+        settings: plainSettingsFromState(this, section)
+      };
+    },
+    refreshPendingSettingSection(section: GlobalSettingsSection): void {
+      if (hasPendingSectionSave(section)) this.markPendingSettingSection(section);
+      else this.clearPendingSettingSection(section);
+    },
+    applySectionSettings(section: GlobalSettingsSection, value: GlobalSettingsSectionValue): void {
+      if (section === 'llm') {
+        this.llm = { ...emptyLlm(), ...(value as LlmSettingsRecord) };
+      } else if (section === 'llmProviderConfigs') {
+        const settings = value as LlmProviderConfigsRecord;
+        this.llmProviderConfigs = { configs: settings.configs.map(normalizeProviderConfigForUi) };
+      } else if (section === 'llmCompression') {
+        this.llmCompression = { ...emptyLlmCompression(), ...(value as LlmCompressionSettingsRecord) };
+      } else if (section === 'llmCompressionConfigs') {
+        const settings = value as LlmCompressionConfigsRecord;
+        this.llmCompressionConfigs = { configs: settings.configs.map(normalizeCompressionConfigForUi) };
+      } else if (section === 'checkpointMaintenance') {
+        this.checkpointMaintenance = { ...emptyCheckpointMaintenance(), ...(value as CheckpointMaintenanceSettingsRecord) };
+      } else if (section === 'appearance') {
+        this.appearance = { ...emptyAppearance(), ...(value as AppearanceSettingsRecord) };
+      } else if (section === 'attachments') {
+        this.attachments = { ...emptyAttachments(), ...(value as AttachmentSettingsRecord) };
+      } else if (section === 'runHistory') {
+        this.runHistory = { ...emptyRunHistory(), ...(value as RunHistorySettingsRecord) };
+      } else if (section === 'mcpServers') {
+        const settings = value as McpServersSettingsRecord;
+        this.mcpServers = {
+          servers: [...(settings.servers ?? [])].sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
+        };
+      } else {
+        this.common = cloneSettingsValue(value as GlobalSettingsRecord);
+      }
+    },
+    flushDependentSettingsAfterCommittedSnapshot(payload: GlobalSettingsSnapshotPayload): void {
+      if (payload.section === 'llmProviderConfigs') {
+        const pendingId = this.pendingActiveProviderConfigIdAfterConfigsSave;
+        const committed = (payload.settings as LlmProviderConfigsRecord).configs;
+        if (pendingId && committed.some((config) => config.id === pendingId)) {
+          this.pendingActiveProviderConfigIdAfterConfigsSave = '';
+          this.llm.activeProviderConfigId = pendingId;
+          this.saveLlm();
+        }
+        return;
+      }
+      if (payload.section !== 'llmCompressionConfigs' || !this.flushCompressionBindingAfterConfigsSave) return;
+      const committedIds = new Set((payload.settings as LlmCompressionConfigsRecord).configs.map((config) => config.id));
+      const referencedIds = new Set([
+        this.llmCompression.defaultConfigId,
+        ...this.llmCompression.providerBindings.map((binding) => binding.compressionConfigId),
+        ...this.llmCompression.modelBindings.map((binding) => binding.compressionConfigId)
+      ].filter((id): id is string => !!id));
+      if ([...referencedIds].every((id) => committedIds.has(id))) {
+        this.flushCompressionBindingAfterConfigsSave = false;
+        this.saveLlmCompression();
+      }
+    },
+
     applyLlmProviderModelsSnapshot(payload: LlmProviderModelsSnapshotPayload): void {
       clearModelFetchTimeout();
       const config = this.llmProviderConfigs.configs.find((candidate) => candidate.id === payload.configId);
@@ -1865,26 +2116,54 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
       this.status = models.length ? `已获取 ${models.length} 个模型，请选择要添加的模型` : '没有获取到模型';
     },
     setError(message: string, options: GlobalSettingsErrorOptions = {}): void {
-      clearModelFetchTimeout();
       if (options.requestType === BridgeMessageType.LlmProviderModelsGet) {
+        clearModelFetchTimeout();
         this.closeFetchedModelsDialog();
         this.status = settingsErrorStatus(options.requestType, message);
         return;
       }
 
-      clearLlmProviderConfigsAutoSaveTimer();
-      clearLlmCompressionConfigsAutoSaveTimer();
-      llmProviderConfigsSaveRequestRevisions.clear();
-      llmCompressionConfigsSaveRequestRevisions.clear();
-      this.closeFetchedModelsDialog();
-      if (options.section) {
-        this.clearLoadingSettingSection(options.section);
-        this.clearPendingSettingSection(options.section);
-        this.failedSettingsSections[options.section] = message;
-      } else {
+      const section = options.section;
+      if (!section) {
         this.loadingSettingsSections = {};
-        this.pendingSettingsSections = {};
+        this.status = settingsErrorStatus(options.requestType, message);
+        return;
       }
+
+      this.clearLoadingSettingSection(section);
+      const coordinator = coordinatorFor(section);
+      if (options.requestType === BridgeMessageType.GlobalSettingsUpdate) {
+        const attempt = coordinator.inFlight;
+        // 迟到或不属于本 store 的错误不得清理当前 section 的新请求。
+        if (options.correlationId && attempt?.requestId !== options.correlationId) return;
+        if (attempt) coordinator.inFlight = undefined;
+
+        if (options.code === 'settings_revision_conflict') {
+          if (!coordinator.queued && attempt) coordinator.queued = attempt.payload;
+          coordinator.awaitingConflictSnapshot = true;
+          const external = this.pendingExternalSnapshots[section];
+          if (external) {
+            const resolved = this.resolveExternalSnapshot(external);
+            if (resolved) {
+              delete this.failedSettingsSections[section];
+              this.status = '检测到并发修改，已自动合并并基于最新版本重新保存。';
+              return;
+            }
+          } else if (!this.loadingSettingsSections[section]) {
+            this.markLoadingSettingSection(section);
+            bridge.request(BridgeMessageType.GlobalSettingsGet, { section });
+          }
+          this.markPendingSettingSection(section);
+          this.failedSettingsSections[section] = message;
+          this.status = this.pendingExternalSnapshots[section]
+            ? settingsErrorStatus(options.requestType, message)
+            : '检测到并发修改，正在读取最新设置以重新合并...';
+          return;
+        }
+      }
+
+      this.refreshPendingSettingSection(section);
+      this.failedSettingsSections[section] = message;
       this.status = settingsErrorStatus(options.requestType, message);
     }
   }

@@ -27,9 +27,10 @@ import {
   defaultLlmPromptCacheTtlForProvider
 } from '../../../shared/protocol';
 import { DEFAULT_LLM_BASE_URL } from '../llmProvider';
+import { isSettingsRevisionConflictError } from '../settingsRevisionConflict';
 import type { StoragePaths } from './clientStateStore';
 import { INDEX_FILE } from './constants';
-import { loadRecordStore, loadRecordStoreRevision, saveRecordStore, type SaveRecordStoreOptions } from './recordStore';
+import { commitRecordStoreSnapshot, loadRecordStoreSnapshot, missingRecordStoreRevision, type RecordStoreSnapshot } from './recordStore';
 
 const RECORD_KEY = 'config';
 const CONFIGS_DIR = 'llm-provider-configs';
@@ -39,46 +40,53 @@ const REVISION_SECTION = 'llmProviderConfigs';
 export interface LlmProviderConfigsSettingsResult {
   settings: LlmProviderConfigsRecord;
   filePath: string;
-  revision?: string;
+  revision: string;
+  previousSettings?: LlmProviderConfigsRecord;
 }
 
 export async function loadLlmProviderConfigsSettings(paths: StoragePaths): Promise<LlmProviderConfigsSettingsResult> {
-  const records = await loadRawLlmProviderConfigRecords(paths);
-  if (records.length > 0) {
-    return {
-      settings: { configs: sortConfigs(records.map((record) => normalizeLlmProviderConfig(record))) },
-      filePath: configsIndexUri(paths).fsPath,
-      revision: await loadRecordStoreRevision(configsIndexUri(paths))
-    };
-  }
+  const root = configsRootUri(paths);
+  const indexUri = configsIndexUri(paths);
+  const snapshot = await loadRecordStoreSnapshot<LlmProviderConfigRecord, typeof RECORD_KEY>(root, indexUri, RECORD_KEY);
+  if (snapshot && snapshot.records.length > 0) return providerSettingsFromSnapshot(indexUri, snapshot);
 
   const config = createDefaultLlmProviderConfig({ name: DEFAULT_CONFIG_NAME });
-  await writeLlmProviderConfigRecords(paths, [config]);
-  return {
-    settings: { configs: [config] },
-    filePath: configsIndexUri(paths).fsPath,
-    revision: await loadRecordStoreRevision(configsIndexUri(paths))
-  };
+  try {
+    const initialized = await commitRecordStoreSnapshot(root, indexUri, [config], RECORD_KEY, (record) => record.name, {
+      expectedRevision: snapshot?.revision ?? missingRecordStoreRevision(indexUri),
+      section: REVISION_SECTION,
+      pruneMissing: true
+    });
+    return providerSettingsFromSnapshot(indexUri, initialized);
+  } catch (error) {
+    if (!isSettingsRevisionConflictError(error)) throw error;
+    const current = await loadRecordStoreSnapshot<LlmProviderConfigRecord, typeof RECORD_KEY>(root, indexUri, RECORD_KEY);
+    if (!current || current.records.length === 0) throw error;
+    return providerSettingsFromSnapshot(indexUri, current);
+  }
 }
 
 export async function saveLlmProviderConfigsSettings(
   paths: StoragePaths,
   settings: Partial<LlmProviderConfigsRecord> | undefined,
-  expectedRevision?: string
+  expectedRevision: string
 ): Promise<LlmProviderConfigsSettingsResult> {
   const configs = normalizeConfigList(settings?.configs);
-  if (configs.length === 0) {
-    throw new Error('至少需要保留一个渠道配置。');
-  }
+  if (configs.length === 0) throw new Error('至少需要保留一个渠道配置。');
 
-  // 删除已移除渠道的 record 文件不再单独走 removeRecordStoreRecord：
-  // 那会在写入前先做破坏性操作，冲突时数据已经没了。改为交给同一把锁内的 pruneMissing，
-  // 使「校验 → 发布新索引 → 清理旧文件」成为一次原子提交。
-  await writeLlmProviderConfigRecords(paths, configs, {
-    pruneMissing: true,
-    ...(expectedRevision !== undefined ? { expectedSavedAt: expectedRevision, expectedSavedAtSection: REVISION_SECTION } : {})
-  });
-  return loadLlmProviderConfigsSettings(paths);
+  const indexUri = configsIndexUri(paths);
+  const committed = await commitRecordStoreSnapshot(
+    configsRootUri(paths),
+    indexUri,
+    configs,
+    RECORD_KEY,
+    (record) => record.name,
+    { expectedRevision, section: REVISION_SECTION, pruneMissing: true }
+  );
+  return {
+    ...providerSettingsFromSnapshot(indexUri, committed),
+    previousSettings: providerSettingsFromRecords(committed.previousRecords)
+  };
 }
 
 export function createDefaultLlmProviderConfig(input: { name?: string } = {}): LlmProviderConfigRecord {
@@ -146,34 +154,25 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
 function normalizeConfigList(input: LlmProviderConfigRecord[] | undefined): LlmProviderConfigRecord[] {
   const byId = new Map<string, LlmProviderConfigRecord>();
   for (const item of input ?? []) {
-    const config = normalizeLlmProviderConfig({ ...item, updatedAt: Date.now() });
+    const config = normalizeLlmProviderConfig(item);
     byId.set(config.id, config);
   }
   return sortConfigs([...byId.values()]);
 }
 
-async function loadRawLlmProviderConfigRecords(paths: StoragePaths): Promise<LlmProviderConfigRecord[]> {
-  const records = await loadRecordStore<LlmProviderConfigRecord, typeof RECORD_KEY>(
-    configsRootUri(paths),
-    configsIndexUri(paths),
-    RECORD_KEY
-  );
-  return records ?? [];
+function providerSettingsFromSnapshot(
+  indexUri: vscode.Uri,
+  snapshot: RecordStoreSnapshot<LlmProviderConfigRecord>
+): LlmProviderConfigsSettingsResult {
+  return {
+    settings: providerSettingsFromRecords(snapshot.records),
+    filePath: indexUri.fsPath,
+    revision: snapshot.revision
+  };
 }
 
-async function writeLlmProviderConfigRecords(
-  paths: StoragePaths,
-  records: LlmProviderConfigRecord[],
-  options: SaveRecordStoreOptions = {}
-): Promise<void> {
-  await saveRecordStore(
-    configsRootUri(paths),
-    configsIndexUri(paths),
-    sortConfigs(records.map((record) => normalizeLlmProviderConfig(record))),
-    RECORD_KEY,
-    (record) => record.name,
-    options
-  );
+function providerSettingsFromRecords(records: LlmProviderConfigRecord[]): LlmProviderConfigsRecord {
+  return { configs: sortConfigs(records.map((record) => normalizeLlmProviderConfig(record))) };
 }
 
 function configsRootUri(paths: StoragePaths): vscode.Uri {

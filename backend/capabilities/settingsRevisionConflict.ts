@@ -13,8 +13,8 @@ export class SettingsRevisionConflictError extends Error {
 
   public constructor(
     public readonly section: string,
-    public readonly expectedRevision?: string,
-    public readonly actualRevision?: string
+    public readonly expectedRevision: string,
+    public readonly actualRevision: string
   ) {
     super(`设置「${section}」已在其他窗口修改，本次保存已被拒绝以避免覆盖。已为你载入最新值，请重新修改。`);
     this.name = SETTINGS_REVISION_CONFLICT_NAME;

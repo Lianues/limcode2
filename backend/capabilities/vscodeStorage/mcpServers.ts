@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { McpServerConfigRecord, McpServersSettingsRecord, McpServerTransportRecord } from '../../../shared/protocol';
-import { loadRecordStore, loadRecordStoreRevision, saveRecordStore } from './recordStore';
+import { isSettingsRevisionConflictError } from '../settingsRevisionConflict';
+import { commitRecordStoreSnapshot, loadRecordStoreSnapshot, missingRecordStoreRevision, type RecordStoreSnapshot } from './recordStore';
 import type { createVscodeStoragePaths } from './paths';
 
 type StoragePaths = ReturnType<typeof createVscodeStoragePaths>;
@@ -12,30 +13,60 @@ export interface McpServersSettingsResult {
   section: 'mcpServers';
   settings: McpServersSettingsRecord;
   filePath: string;
-  revision?: string;
+  revision: string;
+  previousSettings?: McpServersSettingsRecord;
 }
 
 export async function loadMcpServersSettings(paths: StoragePaths): Promise<McpServersSettingsResult> {
   const root = mcpServersRootUri(paths);
   const indexUri = mcpServersIndexUri(paths);
-  const records = await loadRecordStore<McpServerConfigRecord, 'server'>(root, indexUri, 'server');
-  const settings = normalizeMcpServersSettings({ servers: records ?? [] });
-  if (!records) await saveMcpServersSettings(paths, settings);
-  return { section: 'mcpServers', settings, filePath: indexUri.fsPath, revision: await loadRecordStoreRevision(indexUri) };
+  const snapshot = await loadRecordStoreSnapshot<McpServerConfigRecord, 'server'>(root, indexUri, 'server');
+  if (snapshot) return mcpSettingsFromSnapshot(indexUri, snapshot);
+
+  try {
+    const initialized = await commitRecordStoreSnapshot<McpServerConfigRecord, 'server'>(root, indexUri, [], 'server', (server) => server.name, {
+      expectedRevision: missingRecordStoreRevision(indexUri),
+      section: REVISION_SECTION,
+      pruneMissing: true
+    });
+    return mcpSettingsFromSnapshot(indexUri, initialized);
+  } catch (error) {
+    if (!isSettingsRevisionConflictError(error)) throw error;
+    const current = await loadRecordStoreSnapshot<McpServerConfigRecord, 'server'>(root, indexUri, 'server');
+    if (!current) throw error;
+    return mcpSettingsFromSnapshot(indexUri, current);
+  }
 }
 
 export async function saveMcpServersSettings(
   paths: StoragePaths,
   input: Partial<McpServersSettingsRecord> | undefined,
-  expectedRevision?: string
+  expectedRevision: string
 ): Promise<McpServersSettingsResult> {
   const root = mcpServersRootUri(paths);
   const indexUri = mcpServersIndexUri(paths);
   const settings = normalizeMcpServersSettings(input);
-  await saveRecordStore(root, indexUri, settings.servers, 'server', (server) => server.name, {
-    ...(expectedRevision !== undefined ? { expectedSavedAt: expectedRevision, expectedSavedAtSection: REVISION_SECTION } : {})
+  const committed = await commitRecordStoreSnapshot(root, indexUri, settings.servers, 'server', (server) => server.name, {
+    expectedRevision,
+    section: REVISION_SECTION,
+    pruneMissing: true
   });
-  return { section: 'mcpServers', settings, filePath: indexUri.fsPath, revision: await loadRecordStoreRevision(indexUri) };
+  return {
+    ...mcpSettingsFromSnapshot(indexUri, committed),
+    previousSettings: normalizeMcpServersSettings({ servers: committed.previousRecords })
+  };
+}
+
+function mcpSettingsFromSnapshot(
+  indexUri: vscode.Uri,
+  snapshot: RecordStoreSnapshot<McpServerConfigRecord>
+): McpServersSettingsResult {
+  return {
+    section: 'mcpServers',
+    settings: normalizeMcpServersSettings({ servers: snapshot.records }),
+    filePath: indexUri.fsPath,
+    revision: snapshot.revision
+  };
 }
 
 export function normalizeMcpServersSettings(input: Partial<McpServersSettingsRecord> | undefined): McpServersSettingsRecord {

@@ -100,7 +100,9 @@ import type {
   ClientState,
   ConversationLlmSettingsRecord,
   ConversationSettingsRecord,
+  LlmProviderConfigsRecord,
   LlmProviderKind,
+  LlmSettingsRecord,
   MessageContent,
   PersistenceStatusRecord,
   ProjectFolderCandidateRecord,
@@ -117,7 +119,7 @@ import { createDefaultAgentRecord, createDefaultAgentSpawnRequest, DEFAULT_AGENT
 import { hydrateClientStateSkeleton, hydrateConversationDetail } from './clientStateHydration';
 import { backfillMissingToolResponsesForStatelessLoad } from './toolResponseBackfill';
 import { ClientStatePersistence } from './ClientStatePersistence';
-import { GlobalSettingsBridge } from './GlobalSettingsBridge';
+import { GlobalSettingsBridge, type GlobalSettingsCommitEvent } from './GlobalSettingsBridge';
 import { ConversationSettingsBridge } from './ConversationSettingsBridge';
 import { WebviewClientRegistry } from './WebviewClientRegistry';
 import { WebviewMessageRouter } from './WebviewMessageRouter';
@@ -219,9 +221,8 @@ export class BackendApplication {
     this.globalSettingsBridge = new GlobalSettingsBridge({
       storage: this.env.storage,
       webview: this.env.webview,
-      beforeDataRootChange: () => this.persistence.persistImmediately({ force: true, throwOnError: true }),
-      beforeUpdate: (payload) => this.beforeGlobalSettingsUpdate(payload),
-      afterUpdate: (payload) => this.afterGlobalSettingsUpdate(payload)
+      beforeCommonCommit: () => this.persistence.persistImmediately({ force: true, throwOnError: true }),
+      afterCommit: (event) => this.afterGlobalSettingsCommit(event)
     });
     this.conversationSettingsBridge = new ConversationSettingsBridge({
       world: this.world,
@@ -528,17 +529,38 @@ export class BackendApplication {
       }
 
       const entity = this.findConversationEntity(normalizedConversationId);
-      this.deletedConversationIds.add(normalizedConversationId);
-      if (entity !== undefined) {
-        const cascade = this.collectConversationCascadeEntities(entity, normalizedConversationId);
-        for (const target of cascade) {
-          const request = this.world.get(target, LlmRequest);
-          if (request?.id) this.env.llm.abort(request.id);
-        }
-        for (const target of cascade) {
-          this.world.despawn(target);
-        }
+      const cascade = entity !== undefined
+        ? this.collectConversationCascadeEntities(entity, normalizedConversationId)
+        : [];
+      const runIdsToDelete = new Set<string>();
+      for (const target of cascade) {
+        const run = this.world.get(target, AgentRun);
+        if (run?.id) runIdsToDelete.add(run.id);
       }
+
+      // 先阻止新的发送/懒加载，但在 coordinator 提交成功前不破坏 ECS。若提交失败，
+      // 只需撤销 deleted 标记即可恢复原内存状态，不会出现“UI 已删、磁盘未删”的半事务。
+      this.deletedConversationIds.add(normalizedConversationId);
+      try {
+        await this.env.storage.deleteConversationSkeleton(normalizedConversationId, [...runIdsToDelete]);
+      } catch (error) {
+        this.deletedConversationIds.delete(normalizedConversationId);
+        const message = `删除逻辑提交失败：${error instanceof Error ? error.message : String(error)}`;
+        return {
+          ok: false,
+          operation: 'conversation.delete',
+          targetId: normalizedConversationId,
+          code: 'storage_failed' as const,
+          message,
+          errors: [message]
+        };
+      }
+
+      for (const target of cascade) {
+        const request = this.world.get(target, LlmRequest);
+        if (request?.id) this.env.llm.abort(request.id);
+      }
+      for (const target of cascade) this.world.despawn(target);
 
       this.renderLoadedConversationDetails.delete(normalizedConversationId);
       this.runHistoryLoadedConversationDetails.delete(normalizedConversationId);
@@ -556,12 +578,6 @@ export class BackendApplication {
       this.requestSnapshot();
       this.requestSnapshot(normalizedConversationId);
       this.conversationHistoryChangedEmitter.fire();
-
-      try {
-        await this.persistence.persistImmediately({ force: true, throwOnError: true });
-      } catch (error) {
-        errors.push(`删除后持久化失败：${error instanceof Error ? error.message : String(error)}`);
-      }
 
       const ok = storageResult.ok && errors.length === 0;
       return {
@@ -678,6 +694,10 @@ export class BackendApplication {
     if (page.state.messages.length > 0 && this.findConversationEntity(conversationId) === undefined) {
       this.spawnPreHydrationConversation(conversationId);
     }
+    // tail 虽然不是完整 timeline，却是本进程对这些已知 record 的精确磁盘 base。
+    // 若不记录，首次保存会把整个 tail 当作 expected=missing 的“新增”；另一窗口期间
+    // 完成同 id 流式消息后，本窗口仅追加新消息也会产生假冲突并阻断后续落盘。
+    this.persistence.rememberConversationRenderDetailPersisted(conversationId, page.state);
     if (page.state.messages.length > 0) {
       const backfilled = backfillMissingToolResponsesForStatelessLoad(page.state, conversationId);
       await hydrateConversationDetail(this.world, backfilled.state, conversationId);
@@ -751,8 +771,9 @@ export class BackendApplication {
     const hydrated = detail ? await hydrateConversationDetail(this.world, detail, conversationId) : false;
     if (detail && hydrated) this.primeConversationStreamState(conversationId, detail);
     const loaded = detail !== undefined && (hydrated || this.findConversationEntity(conversationId) !== undefined);
-    if (detail && loaded && backfilled.addedCount === 0) {
-      this.persistence.rememberConversationRenderDetailPersisted(conversationId, detail);
+    if (storedDetail && loaded) {
+      // baseline 必须是逐字节来自磁盘的原始 detail；backfill 属于本地 mutation，随后用 CAS patch 提交。
+      this.persistence.rememberConversationRenderDetailPersisted(conversationId, storedDetail);
     }
     if (loaded) {
       this.renderLoadedConversationDetails.add(conversationId);
@@ -1249,12 +1270,17 @@ export class BackendApplication {
       }
     } catch (error) {
       startupStorageHealthy = false;
-      this.persistence.markUnavailable(error);
+      this.persistence.markSkeletonUnavailable(error);
       console.warn('[LimCode] Failed to initialize stored chat state. Starting with a fresh in-memory conversation; skeleton persistence remains disabled to protect existing data.', error);
       requestSpawnAgent(this.world, createDefaultAgentSpawnRequest());
     } finally {
       this.hydrated = true;
       this.deferredSkeletonComplete = false;
+      // timeline 与 deferred metadata 解耦：startup 一结束就允许聊天落盘。startup 健康时，
+      // skeleton 的 per-record patch 也只会提交当前本地真正新增/修改的记录，不会把尚未
+      // hydrate 的 deferred store 当成空表覆盖；deferred 完成后再确认最终 skeleton 健康态。
+      this.persistence.enable({ skeleton: startupStorageHealthy });
+      this.persistence.queuePersist({ delayMs: 0 });
       // 工作环境、存档点等策略属于 deferred skeleton。先启动 deferred hydration，再放行配置类消息，
       // 避免设置页刚打开时的修改被尚未加载的旧 skeleton 覆盖或因 scope 依赖未就绪而丢弃。
       this.deferredSkeletonReady = this.startDeferredClientStateSkeletonLoad(startupStorageHealthy);
@@ -1278,13 +1304,14 @@ export class BackendApplication {
       if (deferred) {
         const hydrated = await hydrateClientStateSkeleton(this.world, deferred, { allowDefaults: false, resetMessageSeq: false });
         if (hydrated) {
+          this.persistence.rememberPersistedSkeletonProfile(deferred, 'deferred');
           this.requestSnapshot();
           this.conversationHistoryChangedEmitter.fire();
         }
       }
     } catch (error) {
       deferredStorageHealthy = false;
-      this.persistence.markUnavailable(error);
+      this.persistence.markSkeletonUnavailable(error);
       console.warn('[LimCode] Failed to lazy-load deferred client state skeleton.', error);
     } finally {
       try {
@@ -1293,11 +1320,11 @@ export class BackendApplication {
         deferredStorageHealthy = false;
         console.warn('[LimCode] Failed to synchronize workspace work environments after deferred hydration.', error);
       }
-      if (startupStorageHealthy && deferredStorageHealthy) {
-        this.persistence.enable();
-        this.persistence.queuePersist({ delayMs: 0 });
-      } else {
-        console.warn('[LimCode] Skeleton persistence is disabled for this session to avoid overwriting partially loaded data.');
+      const skeletonHealthy = startupStorageHealthy && deferredStorageHealthy;
+      this.persistence.enable({ skeleton: skeletonHealthy });
+      this.persistence.queuePersist({ delayMs: 0 });
+      if (!skeletonHealthy) {
+        console.warn('[LimCode] Skeleton persistence is disabled for this session, but conversation timeline persistence remains active.');
       }
       this.deferredSkeletonComplete = true;
       this.flushPendingDeferredSkeletonMessages();
@@ -1354,16 +1381,6 @@ export class BackendApplication {
     this.world.enqueue({ type: ClientSyncEventType.Resync, payload: conversationId ? { conversationId } : {} });
   }
 
-  private async beforeGlobalSettingsUpdate(payload: { section: string; settings?: unknown }): Promise<void> {
-    if (payload.section === 'llm') {
-      await this.freezeLoadedConversationsToCurrentGlobalLlmDefault();
-      return;
-    }
-    if (payload.section === 'llmProviderConfigs') {
-      await this.freezeLoadedConversationsToCurrentProviderModels();
-    }
-  }
-
   private async copyConversationSettings(sourceConversationId: string, targetConversationId: string): Promise<void> {
     try {
       const common = await this.env.storage.loadConversationSettings(sourceConversationId, 'common');
@@ -1411,9 +1428,11 @@ export class BackendApplication {
     const activeProviderConfigId = settings?.activeProviderConfigId?.trim();
     if (!activeProviderConfigId) return;
 
+    const current = await this.env.storage.loadGlobalSettings('llm');
     await this.globalSettingsBridge.update({
       section: 'llm',
-      settings: { activeProviderConfigId }
+      settings: { activeProviderConfigId },
+      expectedRevision: current.revision
     });
   }
 
@@ -1432,16 +1451,39 @@ export class BackendApplication {
     });
   }
 
-  private async afterGlobalSettingsUpdate(payload: { section: string; refreshMcpTools?: boolean }): Promise<void> {
-    if (payload.section === 'mcpServers' || payload.section === 'common') {
-      await this.refreshMcpRuntime(payload.refreshMcpTools === true);
+  private async afterGlobalSettingsCommit(event: GlobalSettingsCommitEvent): Promise<void> {
+    const { request, stored } = event;
+    // watcher 重绑是 data-root commit 的生命周期动作，必须先于任何可能失败的运行时刷新。
+    if (stored.dataRootChanged) this.storageRootChangedEmitter.fire();
+
+    const tasks: Array<{ label: string; run: () => Promise<void> }> = [];
+    if (request.section === 'llm') {
+      tasks.push({
+        label: 'freeze previous global LLM default',
+        run: () => this.freezeLoadedConversationsToPreviousGlobalLlmDefault(stored.previousSettings as LlmSettingsRecord | undefined)
+      });
     }
-    if (payload.section === 'common') {
-      // 数据根目录切换后，全局技能来源 <dataRoot>/skills 会变化，需重新扫描技能目录。
-      await this.syncSkillCatalogResource();
-      // 同理，全局规则来源 <dataRoot>/{AGENTS,CLAUDE}.md 也随数据根变化，需重新扫描规则。
-      await this.syncRulesCatalogResource();
-      this.storageRootChangedEmitter.fire();
+    if (request.section === 'llmProviderConfigs') {
+      tasks.push({
+        label: 'freeze previous provider models',
+        run: () => this.freezeLoadedConversationsToPreviousProviderModels(stored.previousSettings as LlmProviderConfigsRecord | undefined)
+      });
+    }
+    if (request.section === 'mcpServers' || request.section === 'common') {
+      tasks.push({ label: 'refresh MCP runtime', run: () => this.refreshMcpRuntime(request.refreshMcpTools === true) });
+    }
+    if (request.section === 'common') {
+      // 数据根目录切换后，全局技能与规则来源都变化；各刷新互不阻断。
+      tasks.push({ label: 'refresh global skills', run: () => this.syncSkillCatalogResource() });
+      tasks.push({ label: 'refresh global rules', run: () => this.syncRulesCatalogResource() });
+    }
+
+    const results = await Promise.allSettled(tasks.map((task) => task.run()));
+    for (let index = 0; index < results.length; index += 1) {
+      const result = results[index];
+      if (result.status === 'rejected') {
+        console.warn(`[LimCode] Global settings committed, but failed to ${tasks[index].label}.`, result.reason);
+      }
     }
   }
 
@@ -1463,52 +1505,49 @@ export class BackendApplication {
     this.requestSnapshot();
   }
 
-  private async freezeLoadedConversationsToCurrentGlobalLlmDefault(): Promise<void> {
-    let currentProviderConfigId = '';
-    try {
-      currentProviderConfigId = (await this.env.storage.loadActiveLlmProviderConfig()).id;
-    } catch (error) {
-      console.warn('[LimCode] Failed to resolve current global LLM default before update.', error);
-      return;
-    }
-    if (!currentProviderConfigId) return;
+  private async freezeLoadedConversationsToPreviousGlobalLlmDefault(previous: LlmSettingsRecord | undefined): Promise<void> {
+    const previousProviderConfigId = previous?.activeProviderConfigId?.trim() ?? '';
+    if (!previousProviderConfigId) return;
 
     for (const conversationId of this.loadedConversationIds()) {
       try {
-        const stored = await this.env.storage.loadConversationSettings(conversationId, 'llm');
-        const settings = stored?.settings as import('../../shared/protocol').ConversationLlmSettingsRecord | undefined;
+        // 只读探测 missing，不能在 post-commit 后把新全局默认先物化进 conversation。
+        const stored = await this.env.storage.loadConversationSettings(conversationId, 'llm', { initializeMissing: false });
+        const settings = stored?.settings as ConversationLlmSettingsRecord | undefined;
         if (settings?.activeProviderConfigId) continue;
         await this.env.storage.saveConversationSettings('llm', {
           conversationId,
-          activeProviderConfigId: currentProviderConfigId,
+          activeProviderConfigId: previousProviderConfigId,
           ...(settings?.modelOverrides ? { modelOverrides: settings.modelOverrides } : {})
         });
       } catch (error) {
-        console.warn(`[LimCode] Failed to freeze LLM default for conversation "${conversationId}".`, error);
+        console.warn(`[LimCode] Failed to freeze previous LLM default for conversation "${conversationId}".`, error);
       }
     }
   }
 
-  private async freezeLoadedConversationsToCurrentProviderModels(): Promise<void> {
+  private async freezeLoadedConversationsToPreviousProviderModels(previous: LlmProviderConfigsRecord | undefined): Promise<void> {
+    const previousById = new Map((previous?.configs ?? []).map((config) => [config.id, config]));
+    if (previousById.size === 0) return;
+
     for (const conversationId of this.loadedConversationIds()) {
       try {
         const stored = await this.env.storage.loadConversationSettings(conversationId, 'llm');
-        const settings = stored?.settings as import('../../shared/protocol').ConversationLlmSettingsRecord | undefined;
-        if (!settings?.activeProviderConfigId) continue;
-        if (settings.modelOverrides?.[settings.activeProviderConfigId]) continue;
-        const provider = await this.env.storage.loadActiveLlmProviderConfig(conversationId);
-        const model = provider.model?.trim();
+        const settings = stored?.settings as ConversationLlmSettingsRecord | undefined;
+        const providerConfigId = settings?.activeProviderConfigId?.trim();
+        if (!providerConfigId || settings?.modelOverrides?.[providerConfigId]) continue;
+        const model = previousById.get(providerConfigId)?.model?.trim();
         if (!model) continue;
         await this.env.storage.saveConversationSettings('llm', {
           conversationId,
-          activeProviderConfigId: settings.activeProviderConfigId,
+          activeProviderConfigId: providerConfigId,
           modelOverrides: {
-            ...(settings.modelOverrides ?? {}),
-            [settings.activeProviderConfigId]: model
+            ...(settings?.modelOverrides ?? {}),
+            [providerConfigId]: model
           }
         });
       } catch (error) {
-        console.warn(`[LimCode] Failed to freeze LLM model for conversation "${conversationId}".`, error);
+        console.warn(`[LimCode] Failed to freeze previous LLM model for conversation "${conversationId}".`, error);
       }
     }
   }

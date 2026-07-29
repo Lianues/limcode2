@@ -69,13 +69,18 @@ export class DataRootProcessLease {
     this.disposed = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
-    void deleteLeaseUri(leaseUri(this.context, this.instanceId));
+    const pendingWrite = this.writeInFlight;
+    // 不能与正在进行的 heartbeat 并发删除：旧实现可能先删 lease，随后迟到 write
+    // 又把它复活，导致窗口已关闭后仍暂时阻塞 data-root migration。
+    void (async () => {
+      if (pendingWrite) await pendingWrite.catch(() => undefined);
+      await deleteLeaseUri(leaseUri(this.context, this.instanceId));
+    })().catch((error) => console.warn('[LimCode] Failed to remove data-root process lease during dispose.', error));
   }
 
   public async heartbeat(): Promise<void> {
     if (this.disposed) return;
-    if (this.writeInFlight) await this.writeInFlight;
-    await this.writeLease();
+    await this.beginHeartbeatWrite();
   }
 
   public async setActiveOperation(operation: Omit<DataRootProcessLeaseOperation, 'startedAt'> & { startedAt?: number }): Promise<void> {
@@ -93,12 +98,20 @@ export class DataRootProcessLease {
 
   private scheduleHeartbeat(): void {
     if (this.disposed || this.writeInFlight) return;
-    this.writeInFlight = this.writeLease()
-      .catch((error) => {
-        this.lastError = error;
-        console.warn('[LimCode] Failed to refresh data-root process lease:', error);
-      })
-      .finally(() => { this.writeInFlight = undefined; });
+    void this.beginHeartbeatWrite().catch((error) => {
+      this.lastError = error;
+      console.warn('[LimCode] Failed to refresh data-root process lease:', error);
+    });
+  }
+
+  private beginHeartbeatWrite(): Promise<void> {
+    if (this.writeInFlight) return this.writeInFlight;
+    const write = this.writeLease();
+    const tracked = write.finally(() => {
+      if (this.writeInFlight === tracked) this.writeInFlight = undefined;
+    });
+    this.writeInFlight = tracked;
+    return tracked;
   }
 
   private async writeLease(): Promise<void> {

@@ -3,8 +3,11 @@ import type { Dirent } from 'fs';
 import * as path from 'path';
 import type { CheckpointRecord, ConversationCheckpointRepositoryLinkRecord, ShadowRepositoryDiskStatRecord, ShadowRepositoryRecord } from '../../../shared/protocol';
 import type { StoragePaths } from './clientStateStore';
-import { loadRecordStore } from './recordStore';
-import { withClientStateSkeletonReadTransaction } from './clientStateSkeletonTransaction';
+import {
+  loadPinnedClientStateSkeletonStore,
+  withLockedClientStateSkeletonSnapshot,
+  type PinnedClientStateSkeletonSnapshot
+} from './clientStateSkeletonTransaction';
 import {
   SHADOW_WORKTREE_LOCKS_DIR,
   deleteShadowWorktreeDirectory,
@@ -91,9 +94,9 @@ export async function cleanupUnusedShadowWorktrees(paths: StoragePaths, maxAgeDa
   const deletedStorageKeys: string[] = [];
   for (const storageKey of stale) {
     // Keep lock ordering consistent with conversation deletion: skeleton -> worktree.
-    const deleted = await withClientStateSkeletonReadTransaction(paths, async () => {
+    const deleted = await withLockedClientStateSkeletonSnapshot(paths, async (snapshot) => {
       return withShadowWorktreeLock(root, storageKey, async ({ storageKey: lockedKey, worktreePath }) => {
-        const latestReferencedStorageKeys = await loadReferencedShadowStorageKeysUnlocked(paths);
+        const latestReferencedStorageKeys = await loadReferencedShadowStorageKeysFromSnapshot(paths, snapshot);
         if (latestReferencedStorageKeys.has(lockedKey)) return false;
         const stat = await fs.stat(worktreePath).catch(() => undefined);
         if (!stat?.isDirectory()) return false;
@@ -109,29 +112,36 @@ export async function cleanupUnusedShadowWorktrees(paths: StoragePaths, maxAgeDa
 }
 
 async function loadReferencedShadowStorageKeys(paths: StoragePaths): Promise<Set<string>> {
-  return withClientStateSkeletonReadTransaction(paths, () => loadReferencedShadowStorageKeysUnlocked(paths));
+  return withLockedClientStateSkeletonSnapshot(paths, (snapshot) => loadReferencedShadowStorageKeysFromSnapshot(paths, snapshot));
 }
 
-async function loadReferencedShadowStorageKeysUnlocked(paths: StoragePaths): Promise<Set<string>> {
-  const [repositories, checkpoints, repositoryLinks] = await Promise.all([
-    loadRecordStore<ShadowRepositoryRecord, string>(paths.shadowRepositoriesRootUri, paths.shadowRepositoriesIndexUri, 'shadowRepository'),
-    loadRecordStore<CheckpointRecord, string>(paths.checkpointsRootUri, paths.checkpointsIndexUri, 'checkpoint'),
-    loadRecordStore<ConversationCheckpointRepositoryLinkRecord, string>(paths.conversationCheckpointRepositoryLinksRootUri, paths.conversationCheckpointRepositoryLinksIndexUri, 'link')
+async function loadReferencedShadowStorageKeysFromSnapshot(
+  paths: StoragePaths,
+  snapshot: PinnedClientStateSkeletonSnapshot | undefined
+): Promise<Set<string>> {
+  if (!snapshot) return new Set();
+  const [repositoriesRaw, checkpointsRaw, repositoryLinksRaw] = await Promise.all([
+    loadPinnedClientStateSkeletonStore(paths, snapshot, 'shadowRepositories'),
+    loadPinnedClientStateSkeletonStore(paths, snapshot, 'checkpoints'),
+    loadPinnedClientStateSkeletonStore(paths, snapshot, 'conversationCheckpointRepositoryLinks')
   ]);
+  const repositories = repositoriesRaw as ShadowRepositoryRecord[];
+  const checkpoints = checkpointsRaw as CheckpointRecord[];
+  const repositoryLinks = repositoryLinksRaw as ConversationCheckpointRepositoryLinkRecord[];
 
   const repositoryById = new Map<string, ShadowRepositoryRecord>();
-  for (const repository of repositories ?? []) {
+  for (const repository of repositories) {
     if (!shadowWorktreePath(paths.checkpointShadowWorktreesRootPath, repository.storageKey)) continue;
     repositoryById.set(repository.id, repository);
   }
 
   const referenced = new Set<string>();
   for (const repository of repositoryById.values()) referenced.add(repository.storageKey);
-  for (const checkpoint of checkpoints ?? []) {
+  for (const checkpoint of checkpoints) {
     const repository = repositoryById.get(checkpoint.shadowRepositoryId);
     if (repository) referenced.add(repository.storageKey);
   }
-  for (const link of repositoryLinks ?? []) {
+  for (const link of repositoryLinks) {
     const repository = repositoryById.get(link.shadowRepositoryId);
     if (repository) referenced.add(repository.storageKey);
   }

@@ -495,7 +495,7 @@ export class WebviewMessageRouter {
       case BridgeMessageType.GlobalSettingsUpdate:
         if (!message.payload) return;
         this.deps.webview.subscribe(clientId, globalSettingsStreamId(message.payload.section));
-        void this.deps.globalSettingsBridge.update(message.payload, message.id);
+        void this.deps.globalSettingsBridge.update(message.payload, message.id, clientId);
         break;
       case BridgeMessageType.ConversationSettingsGet:
         if (!message.payload) return;

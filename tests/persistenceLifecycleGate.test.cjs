@@ -103,14 +103,86 @@ function makeStorage(overrides = {}) {
   const calls = [];
   return {
     calls,
-    saveClientStateSkeleton: async (state) => { calls.push({ kind: 'skeleton', state: JSON.parse(JSON.stringify(state)) }); },
-    saveConversationRenderDetail: async (conversationId, state) => { calls.push({ kind: 'render', conversationId, state }); },
-    saveConversationTimelineRenderDetail: async (conversationId, state) => { calls.push({ kind: 'timeline-render', conversationId, state }); },
+    saveClientStateSkeleton: async (patch) => { calls.push({ kind: 'skeleton', patch: JSON.parse(JSON.stringify(patch)) }); },
+    saveConversationRenderDetail: async (conversationId, base, state) => { calls.push({ kind: 'render', conversationId, base, state }); },
+    saveConversationTimelineRenderDetail: async (conversationId, base, state) => { calls.push({ kind: 'timeline-render', conversationId, base, state }); },
     saveConversationRunHistory: async (conversationId, state, options) => { calls.push({ kind: 'runHistory', conversationId, state, options }); },
     upsertConversationHistoryEntry: async (entry) => { calls.push({ kind: 'history', entry }); },
     ...overrides
   };
 }
+
+test('skeleton 不健康时 timeline 仍独立启用并持久化聊天，未启用时强制保存明确失败', async () => {
+  const conversationId = 'conversation-timeline-health-split';
+  const state = makeState(conversationId);
+  state.messages.push({
+    id: 'message-timeline-health-split',
+    conversationId,
+    role: 'user',
+    content: { parts: [{ text: 'metadata 损坏也不能让聊天静默不落盘' }] },
+    status: 'complete',
+    createdAt: 1,
+    seq: 1
+  });
+  const world = new FakeWorld(state);
+  const disabledStorage = makeStorage();
+  const disabled = new ClientStatePersistence(world, disabledStorage, {
+    renderLoadedConversationIds: () => [conversationId],
+    isConversationHistorySummaryComplete: () => false
+  }, 5);
+  await assert.rejects(
+    disabled.persistImmediately({ ensurePersisted: true, throwOnError: true }),
+    /timeline persistence is not enabled/
+  );
+
+  const storage = makeStorage();
+  const persistence = new ClientStatePersistence(world, storage, {
+    renderLoadedConversationIds: () => [conversationId],
+    isConversationHistorySummaryComplete: () => false
+  }, 5);
+  persistence.enable({ skeleton: false });
+  await persistence.persistImmediately({ force: true, throwOnError: true });
+  assert.equal(storage.calls.filter((call) => call.kind === 'render').length, 1);
+  assert.equal(storage.calls.filter((call) => call.kind === 'skeleton').length, 0);
+});
+
+test('tail-only hydrate 会作为已知 record base，后续追加不会把旧 tail 重新声明为新增', async () => {
+  const conversationId = 'conversation-tail-base';
+  const tail = makeState(conversationId);
+  tail.messages.push({
+    id: 'stream-tail-base',
+    conversationId,
+    role: 'model',
+    content: { parts: [{ text: 'old partial' }] },
+    status: 'streaming',
+    createdAt: 1,
+    seq: 1
+  });
+  const next = JSON.parse(JSON.stringify(tail));
+  next.messages.push({
+    id: 'append-after-tail',
+    conversationId,
+    role: 'user',
+    content: { parts: [{ text: 'new append' }] },
+    status: 'complete',
+    createdAt: 2,
+    seq: 2
+  });
+  const world = new FakeWorld(next);
+  const storage = makeStorage();
+  const persistence = new ClientStatePersistence(world, storage, {
+    renderLoadedConversationIds: () => [conversationId],
+    isConversationHistorySummaryComplete: () => false
+  }, 5);
+  persistence.rememberConversationRenderDetailPersisted(conversationId, tail);
+  persistence.enable({ skeleton: false });
+  await persistence.persistImmediately({ force: true, throwOnError: true });
+
+  const render = storage.calls.find((call) => call.kind === 'render');
+  assert.ok(render);
+  assert.deepEqual(render.base.messages.map((message) => message.id), ['stream-tail-base']);
+  assert.deepEqual(render.state.messages.map((message) => message.id), ['stream-tail-base', 'append-after-tail']);
+});
 
 test('render detail 会在慢 skeleton 完成前先预订并启动保存', async () => {
   const conversationId = 'conversation-render-first';
@@ -135,8 +207,8 @@ test('render detail 会在慢 skeleton 完成前先预订并启动保存', async
       await releaseSkeleton.promise;
       storage.calls.push({ kind: 'skeleton-end' });
     },
-    saveConversationRenderDetail: async (id, snapshot) => {
-      storage.calls.push({ kind: 'render-start', conversationId: id, state: snapshot });
+    saveConversationRenderDetail: async (id, base, snapshot) => {
+      storage.calls.push({ kind: 'render-start', conversationId: id, base, state: snapshot });
       renderStarted.resolve();
     }
   });
@@ -231,8 +303,8 @@ test('完整上下文读取屏障会先提交 timeline，并阻止 debounce writ
   const contextReadStarted = deferred();
   const releaseContextRead = deferred();
   const storage = makeStorage({
-    saveConversationTimelineRenderDetail: async (id, snapshot) => {
-      storage.calls.push({ kind: 'timeline-render-start', conversationId: id, state: snapshot });
+    saveConversationTimelineRenderDetail: async (id, base, snapshot) => {
+      storage.calls.push({ kind: 'timeline-render-start', conversationId: id, base, state: snapshot });
       timelineStarted.resolve();
       await releaseTimeline.promise;
       storage.calls.push({ kind: 'timeline-render-end', conversationId: id });
@@ -347,11 +419,11 @@ test('in-flight persist and exclusive mutation gate are mutually exclusive', asy
   const saveStarted = deferred();
   const releaseSave = deferred();
   const storage = makeStorage({
-    saveClientStateSkeleton: async (snapshot) => {
-      storage.calls.push({ kind: 'skeleton-start', state: snapshot });
+    saveClientStateSkeleton: async (patch) => {
+      storage.calls.push({ kind: 'skeleton-start', patch });
       saveStarted.resolve();
       await releaseSave.promise;
-      storage.calls.push({ kind: 'skeleton-end', state: snapshot });
+      storage.calls.push({ kind: 'skeleton-end', patch });
     }
   });
   const persistence = new ClientStatePersistence(world, storage, {}, 5);
@@ -372,10 +444,12 @@ test('in-flight persist and exclusive mutation gate are mutually exclusive', asy
 });
 
 test('external persist during gate waits and cannot revive deleted conversation skeleton', async () => {
-  const world = new FakeWorld(makeState('conversation-delete'));
+  const initial = makeState('conversation-delete');
+  const world = new FakeWorld(initial);
   const storage = makeStorage();
   const persistence = new ClientStatePersistence(world, storage, {}, 5);
   persistence.enable();
+  persistence.rememberPersistedState(initial);
 
   const gateEntered = deferred();
   const releaseGate = deferred();
@@ -396,8 +470,8 @@ test('external persist during gate waits and cannot revive deleted conversation 
   await Promise.all([gatePromise, externalPersist]);
   assert.ok(storage.calls.length >= 1);
   for (const call of storage.calls.filter((item) => item.kind === 'skeleton')) {
-    assert.equal(call.state.conversations.some((conversation) => conversation.id === 'conversation-delete'), false);
-    assert.equal(call.state.agentConversationLinks.some((link) => link.conversationId === 'conversation-delete'), false);
+    assert.equal(call.patch.conversations?.upserts?.some((upsert) => upsert.record.id === 'conversation-delete') ?? false, false);
+    assert.equal(call.patch.agentConversationLinks?.upserts?.some((upsert) => upsert.record.conversationId === 'conversation-delete') ?? false, false);
   }
 });
 
@@ -412,7 +486,7 @@ test('explicit persist inside exclusive mutation gate does not deadlock', async 
   });
 
   assert.equal(storage.calls.filter((call) => call.kind === 'skeleton').length, 1);
-  assert.equal(storage.calls[0].state.conversations[0].id, 'conversation-safe');
+  assert.equal(storage.calls[0].patch.conversations.upserts[0].record.id, 'conversation-safe');
 });
 
 test('立即 queue 会暴露 pending/saving/saved，失败后按有限退避自动重试', async () => {

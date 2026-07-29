@@ -56,17 +56,15 @@ import type {
 import { createEmptyClientState, isConversationScopeLinkRecord } from '../../../shared/clientStateSchema';
 import { INDEX_FILE, STORAGE_VERSION } from './constants';
 import { createVscodeStoragePaths } from './paths';
-import { loadRecordStore, removeRecordStoreRecord, saveRecordStore } from './recordStore';
 import { isFileNotFoundError as isStorageFileNotFoundError, readJsonStrict, writeJson } from './json';
 import { loadGlobalSettingsFile } from './globalSettings';
 import {
   loadConversationTimelinePage,
   loadConversationTimelineRange,
+  commitConversationTimelineRenderDetail,
   loadConversationTimelineDetail,
-  mergeConversationTimelineDetailIntoStore,
   mutateConversationTimelineDetailInStore,
   saveConversationTimelineDetail,
-  saveConversationTimelineRenderDetailIncremental,
   truncateConversationTimeline
 } from './conversationTimelineStore';
 import { withStorageResourceLock } from './storageResourceLock';
@@ -80,11 +78,17 @@ import {
 import { loadConversationCompressionDetail, saveConversationCompressionDetail } from './compressionStore';
 import { assertUniqueClientStateIds, assertUniqueRecords } from '../../utils/uniqueIds';
 import type { DeleteConversationDataResult } from '../types';
-import { deleteShadowWorktreeDirectory } from './shadowWorktreeLock';
 import {
-  withClientStateSkeletonMutation,
-  withClientStateSkeletonReadTransaction
+  commitClientStateSkeletonPatch,
+  loadPinnedClientStateSkeletonStore,
+  type ClientStateSkeletonCommitResult,
+  type PinnedClientStateSkeletonSnapshot
 } from './clientStateSkeletonTransaction';
+import type { ClientStateSkeletonPatch } from './clientStateSkeletonPatch';
+import {
+  assignSkeletonRecordsToState,
+  skeletonStoresForProfile
+} from './clientStateSkeletonStores';
 
 export type StoragePaths = ReturnType<typeof createVscodeStoragePaths>;
 
@@ -174,9 +178,6 @@ export interface RunHistoryStoreTestHooks {
 export const __runHistoryStoreTestHooks: RunHistoryStoreTestHooks = {};
 
 
-const CONVERSATION_REUSE_LINKS_DIR = 'reuse-links';
-const CONVERSATION_BRANCH_LINKS_DIR = 'branch-links';
-const CONVERSATION_ORIGIN_LINKS_DIR = 'origin-links';
 const CONVERSATION_DETAILS_DIR = 'details';
 const RUN_HISTORY_CONVERSATIONS_DIR = 'conversations';
 const RUN_HISTORY_PAGES_DIR = 'pages';
@@ -228,170 +229,31 @@ const RUN_DETAIL_TABLE_KEYS = [
   'llmInvocations'
 ] as const;
 
-export interface LoadedClientStateSkeletonSnapshot {
-  state: ClientState | undefined;
-  transactionId: string;
-}
-
-export async function loadClientStateSkeletonFromStores(paths: StoragePaths, options: LoadClientStateSkeletonOptions = {}): Promise<ClientState | undefined> {
-  return (await loadClientStateSkeletonSnapshotFromStores(paths, options)).state;
-}
-
 export async function loadClientStateSkeletonSnapshotFromStores(
   paths: StoragePaths,
-  options: LoadClientStateSkeletonOptions = {},
-  expectedTransactionId?: string
-): Promise<LoadedClientStateSkeletonSnapshot> {
-  return withClientStateSkeletonReadTransaction(paths, async ({ transactionId }) => {
-    const state = createEmptyClientState();
-    const profile = options.profile ?? 'full';
-
-    if (profile === 'startup' || profile === 'full') {
-      await loadStartupSkeletonRecords(paths, state);
-    }
-
-    if (profile === 'deferred' || profile === 'full') {
-      await loadDeferredSkeletonRecords(paths, state);
-    }
-
-    assertUniqueClientStateIds(state, `clientStateSkeleton:${profile}`);
-    return { state: hasAnyState(state) ? state : undefined, transactionId };
-  }, expectedTransactionId);
+  pin: PinnedClientStateSkeletonSnapshot,
+  options: LoadClientStateSkeletonOptions = {}
+): Promise<ClientState | undefined> {
+  const state = createEmptyClientState();
+  const profile = options.profile ?? 'full';
+  const stores = skeletonStoresForProfile(profile);
+  const loaded = await Promise.all(stores.map(async (store) => ({
+    key: store.key,
+    records: await loadPinnedClientStateSkeletonStore(paths, pin, store.key)
+  })));
+  for (const store of loaded) assignSkeletonRecordsToState(state, store.key, store.records);
+  assertUniqueClientStateIds(state, `clientStateSkeleton:${profile}:${pin.snapshotId}`);
+  return hasAnyState(state) ? state : undefined;
 }
 
-async function loadStartupSkeletonRecords(paths: StoragePaths, state: ClientState): Promise<void> {
-  const [
-    agents,
-    workflows,
-    planReviewPolicies,
-    planReviewPolicyScopeLinks,
-    toolPolicies,
-    toolPolicyScopeLinks,
-    skillPolicies,
-    skillPolicyScopeLinks,
-    systemPrompts,
-    systemPromptScopeLinks,
-    runtimeContexts,
-    runtimeContextScopeLinks,
-    runtimeContextSnapshots,
-    conversationRuntimeContextSnapshotLinks,
-    runRuntimeContextSnapshotLinks,
-    modelProfiles,
-    modelProfileScopeLinks,
-    conversationWorkflowSelections,
-    conversations,
-    conversationReuseLinks,
-    conversationBranchLinks,
-    conversationOriginLinks,
-    agentConversationLinks,
-    conversationAgentSelections,
-    agentAnswers,
-    agentAnswerSubmissionLinks,
-    agentAnswerTargetLinks
-  ] = await Promise.all([
-    loadSkeletonRecords<AgentRecord>('agents', [paths.agentsRootUri, paths.agentsIndexUri], 'agent'),
-    loadSkeletonRecords<WorkflowRecord>('workflows', [paths.workflowsRootUri, paths.workflowsIndexUri], 'workflow'),
-    loadSkeletonRecords<PlanReviewPolicyRecord>('planReviewPolicies', [paths.planReviewPoliciesRootUri, paths.planReviewPoliciesIndexUri], 'policy'),
-    loadSkeletonRecords<PlanReviewPolicyScopeLinkRecord>('planReviewPolicyScopeLinks', [paths.planReviewPolicyScopeLinksRootUri, paths.planReviewPolicyScopeLinksIndexUri], 'link'),
-    loadSkeletonRecords<ToolPolicyRecord>('toolPolicies', [paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri], 'toolPolicy'),
-    loadSkeletonRecords<ToolPolicyScopeLinkRecord>('toolPolicyScopeLinks', [paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri], 'link'),
-    loadSkeletonRecords<SkillPolicyRecord>('skillPolicies', [paths.skillPoliciesRootUri, paths.skillPoliciesIndexUri], 'skillPolicy'),
-    loadSkeletonRecords<SkillPolicyScopeLinkRecord>('skillPolicyScopeLinks', [paths.skillPolicyScopeLinksRootUri, paths.skillPolicyScopeLinksIndexUri], 'link'),
-    loadSkeletonRecords<SystemPromptRecord>('systemPrompts', [paths.systemPromptsRootUri, paths.systemPromptsIndexUri], 'systemPrompt'),
-    loadSkeletonRecords<SystemPromptScopeLinkRecord>('systemPromptScopeLinks', [paths.systemPromptScopeLinksRootUri, paths.systemPromptScopeLinksIndexUri], 'link'),
-    loadSkeletonRecords<RuntimeContextRecord>('runtimeContexts', [paths.runtimeContextsRootUri, paths.runtimeContextsIndexUri], 'runtimeContext'),
-    loadSkeletonRecords<RuntimeContextScopeLinkRecord>('runtimeContextScopeLinks', [paths.runtimeContextScopeLinksRootUri, paths.runtimeContextScopeLinksIndexUri], 'link'),
-    loadSkeletonRecords<RuntimeContextSnapshotRecord>('runtimeContextSnapshots', [paths.runtimeContextSnapshotsRootUri, paths.runtimeContextSnapshotsIndexUri], 'snapshot'),
-    loadSkeletonRecords<ConversationRuntimeContextSnapshotLinkRecord>('conversationRuntimeContextSnapshotLinks', [paths.conversationRuntimeContextSnapshotLinksRootUri, paths.conversationRuntimeContextSnapshotLinksIndexUri], 'link'),
-    loadSkeletonRecords<RunRuntimeContextSnapshotLinkRecord>('runRuntimeContextSnapshotLinks', [paths.runRuntimeContextSnapshotLinksRootUri, paths.runRuntimeContextSnapshotLinksIndexUri], 'link'),
-    loadSkeletonRecords<ModelProfileRecord>('modelProfiles', [paths.modelProfilesRootUri, paths.modelProfilesIndexUri], 'modelProfile'),
-    loadSkeletonRecords<ModelProfileScopeLinkRecord>('modelProfileScopeLinks', [paths.modelProfileScopeLinksRootUri, paths.modelProfileScopeLinksIndexUri], 'link'),
-    loadSkeletonRecords<ConversationWorkflowSelectionRecord>('conversationWorkflowSelections', [paths.conversationWorkflowSelectionsRootUri, paths.conversationWorkflowSelectionsIndexUri], 'selection'),
-    loadSkeletonRecords<ConversationRecord>('conversations', [paths.conversationsRootUri, paths.conversationsIndexUri], 'conversation'),
-    loadSkeletonRecords<ConversationReuseLinkRecord>('conversationReuseLinks', subStore(paths.conversationsRootUri, CONVERSATION_REUSE_LINKS_DIR), 'link'),
-    loadSkeletonRecords<ConversationBranchLinkRecord>('conversationBranchLinks', subStore(paths.conversationsRootUri, CONVERSATION_BRANCH_LINKS_DIR), 'link'),
-    loadSkeletonRecords<ConversationOriginLinkRecord>('conversationOriginLinks', subStore(paths.conversationsRootUri, CONVERSATION_ORIGIN_LINKS_DIR), 'link'),
-    loadSkeletonRecords<AgentConversationLinkRecord>('agentConversationLinks', [paths.linksRootUri, paths.linksIndexUri], 'link'),
-    loadSkeletonRecords<ConversationAgentSelectionRecord>('conversationAgentSelections', [paths.conversationAgentSelectionsRootUri, paths.conversationAgentSelectionsIndexUri], 'selection'),
-    loadSkeletonRecords<AgentAnswerRecord>('agentAnswers', [paths.agentAnswersRootUri, paths.agentAnswersIndexUri], 'answer'),
-    loadSkeletonRecords<AgentAnswerSubmissionLinkRecord>('agentAnswerSubmissionLinks', [paths.agentAnswerSubmissionLinksRootUri, paths.agentAnswerSubmissionLinksIndexUri], 'link'),
-    loadSkeletonRecords<AgentAnswerTargetLinkRecord>('agentAnswerTargetLinks', [paths.agentAnswerTargetLinksRootUri, paths.agentAnswerTargetLinksIndexUri], 'link')
-  ]);
-
-  state.agents = agents;
-  state.workflows = workflows;
-  state.planReviewPolicies = planReviewPolicies;
-  state.planReviewPolicyScopeLinks = planReviewPolicyScopeLinks;
-  state.toolPolicies = toolPolicies;
-  state.toolPolicyScopeLinks = toolPolicyScopeLinks;
-  state.skillPolicies = skillPolicies;
-  state.skillPolicyScopeLinks = skillPolicyScopeLinks;
-  state.systemPrompts = systemPrompts;
-  state.systemPromptScopeLinks = systemPromptScopeLinks;
-  state.runtimeContexts = runtimeContexts;
-  state.runtimeContextScopeLinks = runtimeContextScopeLinks;
-  state.runtimeContextSnapshots = runtimeContextSnapshots;
-  state.conversationRuntimeContextSnapshotLinks = conversationRuntimeContextSnapshotLinks;
-  state.runRuntimeContextSnapshotLinks = runRuntimeContextSnapshotLinks;
-  state.modelProfiles = modelProfiles;
-  state.modelProfileScopeLinks = modelProfileScopeLinks;
-  state.conversationWorkflowSelections = conversationWorkflowSelections;
-  state.conversations = conversations;
-  state.conversationReuseLinks = conversationReuseLinks;
-  state.conversationBranchLinks = conversationBranchLinks;
-  state.conversationOriginLinks = conversationOriginLinks;
-  state.agentConversationLinks = agentConversationLinks;
-  state.conversationAgentSelections = conversationAgentSelections;
-  state.agentAnswers = agentAnswers;
-  state.agentAnswerSubmissionLinks = agentAnswerSubmissionLinks;
-  state.agentAnswerTargetLinks = agentAnswerTargetLinks;
+export async function loadClientStateSkeletonFromStores(
+  paths: StoragePaths,
+  pin: PinnedClientStateSkeletonSnapshot,
+  options: LoadClientStateSkeletonOptions = {}
+): Promise<ClientState | undefined> {
+  return loadClientStateSkeletonSnapshotFromStores(paths, pin, options);
 }
 
-async function loadDeferredSkeletonRecords(paths: StoragePaths, state: ClientState): Promise<void> {
-  const [
-    projectContexts,
-    conversationProjectLinks,
-    workEnvironments,
-    conversationWorkEnvironmentLinks,
-    runWorkEnvironmentLinks,
-    workEnvironmentPolicies,
-    workEnvironmentPolicyScopeLinks,
-    checkpointPolicies,
-    checkpointPolicyScopeLinks,
-    shadowRepositories,
-    conversationCheckpointRepositoryLinks,
-    checkpoints,
-    checkpointTimelineAnchors
-  ] = await Promise.all([
-    loadSkeletonRecords<ProjectContextRecord>('projectContexts', [paths.projectContextsRootUri, paths.projectContextsIndexUri], 'projectContext'),
-    loadSkeletonRecords<ConversationProjectLinkRecord>('conversationProjectLinks', [paths.conversationProjectLinksRootUri, paths.conversationProjectLinksIndexUri], 'link'),
-    loadSkeletonRecords<WorkEnvironmentRecord>('workEnvironments', [paths.workEnvironmentsRootUri, paths.workEnvironmentsIndexUri], 'workEnvironment'),
-    loadSkeletonRecords<ConversationWorkEnvironmentLinkRecord>('conversationWorkEnvironmentLinks', [paths.conversationWorkEnvironmentLinksRootUri, paths.conversationWorkEnvironmentLinksIndexUri], 'link'),
-    loadSkeletonRecords<RunWorkEnvironmentLinkRecord>('runWorkEnvironmentLinks', [paths.runWorkEnvironmentLinksRootUri, paths.runWorkEnvironmentLinksIndexUri], 'link'),
-    loadSkeletonRecords<WorkEnvironmentPolicyRecord>('workEnvironmentPolicies', [paths.workEnvironmentPoliciesRootUri, paths.workEnvironmentPoliciesIndexUri], 'policy'),
-    loadSkeletonRecords<WorkEnvironmentPolicyScopeLinkRecord>('workEnvironmentPolicyScopeLinks', [paths.workEnvironmentPolicyScopeLinksRootUri, paths.workEnvironmentPolicyScopeLinksIndexUri], 'link'),
-    loadSkeletonRecords<CheckpointPolicyRecord>('checkpointPolicies', [paths.checkpointPoliciesRootUri, paths.checkpointPoliciesIndexUri], 'policy'),
-    loadSkeletonRecords<CheckpointPolicyScopeLinkRecord>('checkpointPolicyScopeLinks', [paths.checkpointPolicyScopeLinksRootUri, paths.checkpointPolicyScopeLinksIndexUri], 'link'),
-    loadSkeletonRecords<ShadowRepositoryRecord>('shadowRepositories', [paths.shadowRepositoriesRootUri, paths.shadowRepositoriesIndexUri], 'shadowRepository'),
-    loadSkeletonRecords<ConversationCheckpointRepositoryLinkRecord>('conversationCheckpointRepositoryLinks', [paths.conversationCheckpointRepositoryLinksRootUri, paths.conversationCheckpointRepositoryLinksIndexUri], 'link'),
-    loadSkeletonRecords<CheckpointRecord>('checkpoints', [paths.checkpointsRootUri, paths.checkpointsIndexUri], 'checkpoint'),
-    loadSkeletonRecords<CheckpointTimelineAnchorRecord>('checkpointTimelineAnchors', [paths.checkpointTimelineAnchorsRootUri, paths.checkpointTimelineAnchorsIndexUri], 'anchor')
-  ]);
-
-  state.projectContexts = projectContexts;
-  state.conversationProjectLinks = conversationProjectLinks;
-  state.workEnvironments = workEnvironments;
-  state.conversationWorkEnvironmentLinks = conversationWorkEnvironmentLinks;
-  state.runWorkEnvironmentLinks = runWorkEnvironmentLinks;
-  state.workEnvironmentPolicies = workEnvironmentPolicies;
-  state.workEnvironmentPolicyScopeLinks = workEnvironmentPolicyScopeLinks;
-  state.checkpointPolicies = checkpointPolicies;
-  state.checkpointPolicyScopeLinks = checkpointPolicyScopeLinks;
-  state.shadowRepositories = shadowRepositories;
-  state.conversationCheckpointRepositoryLinks = conversationCheckpointRepositoryLinks;
-  state.checkpoints = checkpoints;
-  state.checkpointTimelineAnchors = checkpointTimelineAnchors;
-}
 
 export async function loadConversationDetailFromStores(
   paths: StoragePaths,
@@ -595,30 +457,36 @@ async function loadConversationRunHistoryForMessagesFromStores(paths: StoragePat
   return state;
 }
 
+export async function collectConversationRunIdsForDeletionFromStores(
+  paths: StoragePaths,
+  conversationId: string
+): Promise<string[]> {
+  const normalizedConversationId = conversationId.trim();
+  if (!normalizedConversationId) return [];
+  const errors: string[] = [];
+  const runIds = await collectRunIdsForDeletion(paths, normalizedConversationId, errors);
+  if (errors.length > 0) {
+    throw new Error(`Unable to resolve complete Conversation run cascade: ${errors.join('; ')}`);
+  }
+  return [...runIds];
+}
+
 export async function deleteConversationDataFromStores(paths: StoragePaths, conversationId: string): Promise<DeleteConversationDataResult> {
   const normalizedConversationId = conversationId.trim();
   if (!normalizedConversationId) {
     return { ok: false, conversationId, deletedPaths: [], errors: ['conversationId is empty'] };
   }
-  return withClientStateSkeletonMutation(paths, async () => {
-    const result = await deleteConversationDataFromStoresUnlocked(paths, normalizedConversationId);
-    return { value: result, commit: result.ok };
-  });
-}
-
-async function deleteConversationDataFromStoresUnlocked(paths: StoragePaths, normalizedConversationId: string): Promise<DeleteConversationDataResult> {
   const deletedPaths: string[] = [];
   const errors: string[] = [];
-
   const runIds = await collectRunIdsForDeletion(paths, normalizedConversationId, errors);
-  const checkpointDeletion = await collectCheckpointDeletionPlan(paths, normalizedConversationId, errors);
 
+  // 领域 skeleton 删除已由 ECS remove patch 原子提交。这里只做提交后的物理 detail cleanup；
+  // crash 最多留下 orphan，绝不能再原地改任何 skeleton root/index。
   await tryDeleteUri(conversationDetailRoot(paths, normalizedConversationId), deletedPaths, errors, { recursive: true });
   await tryDeleteUri(runHistoryRoot(paths, normalizedConversationId), deletedPaths, errors, { recursive: true });
   for (const runId of runIds) {
     await pruneRunDetailForConversation(paths, runId, normalizedConversationId, deletedPaths, errors);
   }
-
   for (const root of [
     paths.compressionBlocksRootUri,
     paths.compressionBlockSourceLinksRootUri,
@@ -628,126 +496,49 @@ async function deleteConversationDataFromStoresUnlocked(paths: StoragePaths, nor
   ]) {
     await tryDeleteUri(vscode.Uri.joinPath(root, 'conversations', safeShardName(normalizedConversationId)), deletedPaths, errors, { recursive: true });
   }
-
-  await removeStoreRecord(paths.conversationsRootUri, paths.conversationsIndexUri, normalizedConversationId, 'conversation', deletedPaths, errors);
-  await pruneStoreRecords<ConversationReuseLinkRecord>(...subStore(paths.conversationsRootUri, CONVERSATION_REUSE_LINKS_DIR), 'link', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
-  await pruneStoreRecords<ConversationBranchLinkRecord>(...subStore(paths.conversationsRootUri, CONVERSATION_BRANCH_LINKS_DIR), 'link', (record) => record.sourceConversationId === normalizedConversationId || record.targetConversationId === normalizedConversationId, deletedPaths, errors);
-  await pruneStoreRecords<ConversationOriginLinkRecord>(...subStore(paths.conversationsRootUri, CONVERSATION_ORIGIN_LINKS_DIR), 'link', (record) => record.conversationId === normalizedConversationId || record.sourceConversationId === normalizedConversationId || runIds.has(record.sourceRunId ?? ''), deletedPaths, errors);
-  await pruneStoreRecords<AgentConversationLinkRecord>(paths.linksRootUri, paths.linksIndexUri, 'link', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
-  await pruneStoreRecords<ConversationAgentSelectionRecord>(paths.conversationAgentSelectionsRootUri, paths.conversationAgentSelectionsIndexUri, 'selection', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
-  await pruneStoreRecords<ConversationWorkflowSelectionRecord>(paths.conversationWorkflowSelectionsRootUri, paths.conversationWorkflowSelectionsIndexUri, 'selection', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
-  await pruneStoreRecords<ConversationProjectLinkRecord>(paths.conversationProjectLinksRootUri, paths.conversationProjectLinksIndexUri, 'link', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
-  await pruneStoreRecords<ConversationWorkEnvironmentLinkRecord>(paths.conversationWorkEnvironmentLinksRootUri, paths.conversationWorkEnvironmentLinksIndexUri, 'link', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
-  await pruneStoreRecords<ConversationRuntimeContextSnapshotLinkRecord>(paths.conversationRuntimeContextSnapshotLinksRootUri, paths.conversationRuntimeContextSnapshotLinksIndexUri, 'link', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
-  await pruneStoreRecords<CheckpointPolicyScopeLinkRecord>(paths.checkpointPolicyScopeLinksRootUri, paths.checkpointPolicyScopeLinksIndexUri, 'link', (record) => isConversationScopeLinkRecord(record, normalizedConversationId), deletedPaths, errors);
-  await pruneStoreRecords<WorkEnvironmentPolicyScopeLinkRecord>(paths.workEnvironmentPolicyScopeLinksRootUri, paths.workEnvironmentPolicyScopeLinksIndexUri, 'link', (record) => isConversationScopeLinkRecord(record, normalizedConversationId), deletedPaths, errors);
-  await pruneStoreRecords<SystemPromptScopeLinkRecord>(paths.systemPromptScopeLinksRootUri, paths.systemPromptScopeLinksIndexUri, 'link', (record) => isConversationScopeLinkRecord(record, normalizedConversationId), deletedPaths, errors);
-  await pruneStoreRecords<ModelProfileScopeLinkRecord>(paths.modelProfileScopeLinksRootUri, paths.modelProfileScopeLinksIndexUri, 'link', (record) => isConversationScopeLinkRecord(record, normalizedConversationId), deletedPaths, errors);
-  await pruneStoreRecords<RuntimeContextScopeLinkRecord>(paths.runtimeContextScopeLinksRootUri, paths.runtimeContextScopeLinksIndexUri, 'link', (record) => isConversationScopeLinkRecord(record, normalizedConversationId), deletedPaths, errors);
-  await pruneStoreRecords<PlanReviewPolicyScopeLinkRecord>(paths.planReviewPolicyScopeLinksRootUri, paths.planReviewPolicyScopeLinksIndexUri, 'link', (record) => isConversationScopeLinkRecord(record, normalizedConversationId), deletedPaths, errors);
-  await pruneStoreRecords<ConversationCheckpointRepositoryLinkRecord>(paths.conversationCheckpointRepositoryLinksRootUri, paths.conversationCheckpointRepositoryLinksIndexUri, 'link', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
-  await pruneStoreRecords<CheckpointRecord>(paths.checkpointsRootUri, paths.checkpointsIndexUri, 'checkpoint', (record) => record.conversationId === normalizedConversationId, deletedPaths, errors);
-  await pruneStoreRecords<CheckpointTimelineAnchorRecord>(paths.checkpointTimelineAnchorsRootUri, paths.checkpointTimelineAnchorsIndexUri, 'anchor', (record) => record.conversationId === normalizedConversationId || checkpointDeletion.checkpointIds.has(record.checkpointId), deletedPaths, errors);
-  if (checkpointDeletion.shadowRepositoryIds.size > 0) {
-    await pruneStoreRecords<ShadowRepositoryRecord>(paths.shadowRepositoriesRootUri, paths.shadowRepositoriesIndexUri, 'shadowRepository', (record) => checkpointDeletion.shadowRepositoryIds.has(record.id), deletedPaths, errors);
-    await deleteUnusedShadowWorktreeDirectories(paths, checkpointDeletion.storageKeys, deletedPaths, errors);
-  }
-
-  if (runIds.size > 0) {
-    await pruneStoreRecords<RunRuntimeContextSnapshotLinkRecord>(paths.runRuntimeContextSnapshotLinksRootUri, paths.runRuntimeContextSnapshotLinksIndexUri, 'link', (record) => runIds.has(record.runId), deletedPaths, errors);
-    await pruneStoreRecords<RunWorkEnvironmentLinkRecord>(paths.runWorkEnvironmentLinksRootUri, paths.runWorkEnvironmentLinksIndexUri, 'link', (record) => runIds.has(record.runId), deletedPaths, errors);
-  }
-
   return { ok: errors.length === 0, conversationId: normalizedConversationId, deletedPaths, errors };
 }
 
-export async function saveClientStateSkeletonToStores(paths: StoragePaths, state: ClientState): Promise<void> {
-  return withClientStateSkeletonMutation(paths, async () => {
-    await saveClientStateSkeletonToStoresUnlocked(paths, state);
-    return { value: undefined, commit: true };
-  });
+
+export async function saveClientStateSkeletonToStores(
+  paths: StoragePaths,
+  patch: ClientStateSkeletonPatch
+): Promise<ClientStateSkeletonCommitResult> {
+  return commitClientStateSkeletonPatch(paths, patch);
 }
 
-async function saveClientStateSkeletonToStoresUnlocked(paths: StoragePaths, state: ClientState): Promise<void> {
-  assertUniqueClientStateIds(state, 'saveClientStateSkeleton');
-  const results = await Promise.allSettled([
-    saveRecords(paths.agentsRootUri, paths.agentsIndexUri, state.agents, 'agent', (record) => record.name || record.id),
-    saveRecords(paths.workflowsRootUri, paths.workflowsIndexUri, state.workflows, 'workflow', (record) => record.name || record.id),
-    saveRecords(paths.planReviewPoliciesRootUri, paths.planReviewPoliciesIndexUri, state.planReviewPolicies, 'policy', (record) => record.id),
-    saveRecords(paths.planReviewPolicyScopeLinksRootUri, paths.planReviewPolicyScopeLinksIndexUri, state.planReviewPolicyScopeLinks, 'link'),
-    saveRecords(paths.toolPoliciesRootUri, paths.toolPoliciesIndexUri, state.toolPolicies, 'toolPolicy', (record) => record.name || record.id),
-    saveRecords(paths.toolPolicyScopeLinksRootUri, paths.toolPolicyScopeLinksIndexUri, state.toolPolicyScopeLinks, 'link'),
-    saveRecords(paths.skillPoliciesRootUri, paths.skillPoliciesIndexUri, state.skillPolicies, 'skillPolicy', (record) => record.name || record.id),
-    saveRecords(paths.skillPolicyScopeLinksRootUri, paths.skillPolicyScopeLinksIndexUri, state.skillPolicyScopeLinks, 'link'),
-    saveRecords(paths.systemPromptsRootUri, paths.systemPromptsIndexUri, state.systemPrompts, 'systemPrompt', (record) => record.name || record.id),
-    saveRecords(paths.systemPromptScopeLinksRootUri, paths.systemPromptScopeLinksIndexUri, state.systemPromptScopeLinks, 'link'),
-    saveRecords(paths.runtimeContextsRootUri, paths.runtimeContextsIndexUri, state.runtimeContexts, 'runtimeContext', (record) => record.name || record.id),
-    saveRecords(paths.runtimeContextScopeLinksRootUri, paths.runtimeContextScopeLinksIndexUri, state.runtimeContextScopeLinks, 'link'),
-    saveRecords(paths.runtimeContextSnapshotsRootUri, paths.runtimeContextSnapshotsIndexUri, state.runtimeContextSnapshots, 'snapshot', (record) => record.name || record.id),
-    saveRecords(paths.conversationRuntimeContextSnapshotLinksRootUri, paths.conversationRuntimeContextSnapshotLinksIndexUri, state.conversationRuntimeContextSnapshotLinks, 'link'),
-    saveRecords(paths.runRuntimeContextSnapshotLinksRootUri, paths.runRuntimeContextSnapshotLinksIndexUri, state.runRuntimeContextSnapshotLinks, 'link'),
-    saveRecords(paths.modelProfilesRootUri, paths.modelProfilesIndexUri, state.modelProfiles, 'modelProfile', (record) => record.name || record.id),
-    saveRecords(paths.modelProfileScopeLinksRootUri, paths.modelProfileScopeLinksIndexUri, state.modelProfileScopeLinks, 'link'),
-    saveRecords(paths.conversationWorkflowSelectionsRootUri, paths.conversationWorkflowSelectionsIndexUri, state.conversationWorkflowSelections, 'selection'),
-    saveRecords(paths.conversationsRootUri, paths.conversationsIndexUri, state.conversations, 'conversation', (record) => record.title || record.id),
-    saveRecords(...subStore(paths.conversationsRootUri, CONVERSATION_REUSE_LINKS_DIR), state.conversationReuseLinks, 'link'),
-    saveRecords(...subStore(paths.conversationsRootUri, CONVERSATION_BRANCH_LINKS_DIR), state.conversationBranchLinks, 'link'),
-    saveRecords(...subStore(paths.conversationsRootUri, CONVERSATION_ORIGIN_LINKS_DIR), state.conversationOriginLinks, 'link'),
-    saveRecords(paths.linksRootUri, paths.linksIndexUri, state.agentConversationLinks, 'link'),
-    saveRecords(paths.conversationAgentSelectionsRootUri, paths.conversationAgentSelectionsIndexUri, state.conversationAgentSelections, 'selection'),
-    saveRecords(paths.agentAnswersRootUri, paths.agentAnswersIndexUri, state.agentAnswers, 'answer', (record) => record.title || record.id),
-    saveRecords(paths.agentAnswerSubmissionLinksRootUri, paths.agentAnswerSubmissionLinksIndexUri, state.agentAnswerSubmissionLinks, 'link'),
-    saveRecords(paths.agentAnswerTargetLinksRootUri, paths.agentAnswerTargetLinksIndexUri, state.agentAnswerTargetLinks, 'link'),
-    saveRecords(paths.projectContextsRootUri, paths.projectContextsIndexUri, state.projectContexts, 'projectContext', (record) => record.name || record.id),
-    saveRecords(paths.conversationProjectLinksRootUri, paths.conversationProjectLinksIndexUri, state.conversationProjectLinks, 'link'),
-    saveRecords(paths.workEnvironmentsRootUri, paths.workEnvironmentsIndexUri, state.workEnvironments, 'workEnvironment', (record) => record.name || record.id),
-    saveRecords(paths.workEnvironmentPoliciesRootUri, paths.workEnvironmentPoliciesIndexUri, state.workEnvironmentPolicies, 'policy', (record) => record.name || record.id),
-    saveRecords(paths.workEnvironmentPolicyScopeLinksRootUri, paths.workEnvironmentPolicyScopeLinksIndexUri, state.workEnvironmentPolicyScopeLinks, 'link'),
-    saveRecords(paths.conversationWorkEnvironmentLinksRootUri, paths.conversationWorkEnvironmentLinksIndexUri, state.conversationWorkEnvironmentLinks, 'link'),
-    saveRecords(paths.runWorkEnvironmentLinksRootUri, paths.runWorkEnvironmentLinksIndexUri, state.runWorkEnvironmentLinks, 'link'),
-    saveRecords(paths.checkpointPoliciesRootUri, paths.checkpointPoliciesIndexUri, state.checkpointPolicies, 'policy', (record) => record.name || record.id),
-    saveRecords(paths.checkpointPolicyScopeLinksRootUri, paths.checkpointPolicyScopeLinksIndexUri, state.checkpointPolicyScopeLinks, 'link'),
-    saveRecords(paths.shadowRepositoriesRootUri, paths.shadowRepositoriesIndexUri, state.shadowRepositories, 'shadowRepository'),
-    saveRecords(paths.conversationCheckpointRepositoryLinksRootUri, paths.conversationCheckpointRepositoryLinksIndexUri, state.conversationCheckpointRepositoryLinks, 'link'),
-    saveRecords(paths.checkpointsRootUri, paths.checkpointsIndexUri, state.checkpoints, 'checkpoint', (record) => record.projectDisplayPath || record.id),
-    saveRecords(paths.checkpointTimelineAnchorsRootUri, paths.checkpointTimelineAnchorsIndexUri, state.checkpointTimelineAnchors, 'anchor')
-  ]);
-  const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
-  if (failures.length > 0) {
-    const details = failures.map((failure) => failure.reason instanceof Error ? failure.reason.message : String(failure.reason)).join('; ');
-    throw new Error(`Failed to save ${failures.length} client state store(s): ${details}`);
-  }
-  await __clientStateSkeletonStoreTestHooks.afterStoresSaved?.();
+
+export async function saveConversationTimelineRenderDetailToStores(
+  paths: StoragePaths,
+  conversationId: string,
+  localBase: ClientState,
+  localNext: ClientState
+): Promise<void> {
+  const baseDetail = conversationRenderDetailSlice(localBase, conversationId);
+  const nextDetail = conversationRenderDetailSlice(localNext, conversationId);
+  assertUniqueClientStateIds(baseDetail, `saveConversationTimelineRenderDetail:${conversationId}:base`);
+  assertUniqueClientStateIds(nextDetail, `saveConversationTimelineRenderDetail:${conversationId}:next`);
+  await commitConversationTimelineRenderDetail(paths, conversationId, baseDetail, nextDetail);
 }
 
-export async function saveConversationTimelineRenderDetailToStores(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
-  assertUniqueClientStateIds(state, `saveConversationTimelineRenderDetail:${conversationId}:source`);
-  const detail = conversationRenderDetailSlice(state, conversationId);
-  assertUniqueClientStateIds(detail, `saveConversationTimelineRenderDetail:${conversationId}:detail`);
-  const saved = await saveConversationTimelineRenderDetailIncremental(paths, conversationId, detail);
-  if (!saved) await saveMergedConversationTimelineDetail(paths, conversationId, detail);
-}
-
-export async function saveConversationRenderDetailToStores(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
-  assertUniqueClientStateIds(state, `saveConversationRenderDetail:${conversationId}:source`);
-  const detail = conversationRenderDetailSlice(state, conversationId);
-  assertUniqueClientStateIds(detail, `saveConversationRenderDetail:${conversationId}:detail`);
+export async function saveConversationRenderDetailToStores(
+  paths: StoragePaths,
+  conversationId: string,
+  localBase: ClientState,
+  localNext: ClientState
+): Promise<void> {
+  const baseDetail = conversationRenderDetailSlice(localBase, conversationId);
+  const nextDetail = conversationRenderDetailSlice(localNext, conversationId);
+  assertUniqueClientStateIds(baseDetail, `saveConversationRenderDetail:${conversationId}:base`);
+  assertUniqueClientStateIds(nextDetail, `saveConversationRenderDetail:${conversationId}:next`);
   const compression = createEmptyClientState();
-  copyCompressionTables(compression, detail);
-  const incrementalSaved = await saveConversationTimelineRenderDetailIncremental(paths, conversationId, detail);
-  const timelineSave = incrementalSaved
-    ? Promise.resolve()
-    : saveMergedConversationTimelineDetail(paths, conversationId, detail);
+  copyCompressionTables(compression, nextDetail);
   const existingCompression = await loadConversationCompressionDetail(paths, conversationId);
   if (existingCompression) preserveKnownCompressionSourceLinks(compression, existingCompression);
   await Promise.all([
-    timelineSave,
+    commitConversationTimelineRenderDetail(paths, conversationId, baseDetail, nextDetail),
     saveConversationCompressionDetail(paths, conversationId, compression)
   ]);
-}
-
-async function saveMergedConversationTimelineDetail(paths: StoragePaths, conversationId: string, detail: ClientState): Promise<void> {
-  await mergeConversationTimelineDetailIntoStore(paths, conversationId, detail);
 }
 
 export async function saveConversationRunHistoryToStores(
@@ -1638,44 +1429,6 @@ function collectRunPolicyIds(state: ClientState, runIds: ReadonlySet<string>): {
   };
 }
 
-async function loadRecords<TRecord extends StoreRecord>(root: vscode.Uri, indexUri: vscode.Uri, recordKey: StoreKey): Promise<TRecord[]> {
-  return (await loadRecordStore<TRecord, string>(root, indexUri, recordKey)) ?? [];
-}
-
-async function removeStoreRecord(
-  root: vscode.Uri,
-  indexUri: vscode.Uri,
-  id: string,
-  recordKey: StoreKey,
-  deletedPaths: string[],
-  errors: string[]
-): Promise<void> {
-  try {
-    await removeRecordStoreRecord(root, indexUri, id, recordKey);
-    deletedPaths.push(indexUri.fsPath);
-  } catch (error) {
-    errors.push(`remove ${recordKey}:${id}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-async function pruneStoreRecords<TRecord extends StoreRecord>(
-  root: vscode.Uri,
-  indexUri: vscode.Uri,
-  recordKey: StoreKey,
-  shouldDelete: (record: TRecord) => boolean,
-  deletedPaths: string[],
-  errors: string[]
-): Promise<void> {
-  try {
-    const records = await loadRecords<TRecord>(root, indexUri, recordKey);
-    const next = records.filter((record) => !shouldDelete(record));
-    if (next.length === records.length) return;
-    await saveRecordStore<TRecord, string>(root, indexUri, next, recordKey, (record) => record.id, { pruneMissing: true });
-    deletedPaths.push(indexUri.fsPath);
-  } catch (error) {
-    errors.push(`prune ${recordKey}:${indexUri.fsPath}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
 
 async function pruneRunDetailForConversation(
   paths: StoragePaths,
@@ -1816,62 +1569,6 @@ function scrubSharedRunDetailStateForConversation(
 }
 
 
-interface CheckpointDeletionPlan {
-  checkpointIds: Set<string>;
-  shadowRepositoryIds: Set<string>;
-  storageKeys: Set<string>;
-}
-
-async function collectCheckpointDeletionPlan(paths: StoragePaths, conversationId: string, errors: string[]): Promise<CheckpointDeletionPlan> {
-  const empty = (): CheckpointDeletionPlan => ({ checkpointIds: new Set(), shadowRepositoryIds: new Set(), storageKeys: new Set() });
-  try {
-    const [checkpoints, repositoryLinks, shadowRepositories] = await Promise.all([
-      loadRecords<CheckpointRecord>(paths.checkpointsRootUri, paths.checkpointsIndexUri, 'checkpoint'),
-      loadRecords<ConversationCheckpointRepositoryLinkRecord>(paths.conversationCheckpointRepositoryLinksRootUri, paths.conversationCheckpointRepositoryLinksIndexUri, 'link'),
-      loadRecords<ShadowRepositoryRecord>(paths.shadowRepositoriesRootUri, paths.shadowRepositoriesIndexUri, 'shadowRepository')
-    ]);
-    const checkpointIds = new Set(checkpoints.filter((record) => record.conversationId === conversationId).map((record) => record.id));
-    const candidateRepositoryIds = new Set<string>();
-    for (const checkpoint of checkpoints) {
-      if (checkpoint.conversationId === conversationId) candidateRepositoryIds.add(checkpoint.shadowRepositoryId);
-    }
-    for (const link of repositoryLinks) {
-      if (link.conversationId === conversationId) candidateRepositoryIds.add(link.shadowRepositoryId);
-    }
-
-    const referencedAfterDelete = new Set<string>();
-    for (const checkpoint of checkpoints) {
-      if (checkpoint.conversationId !== conversationId) referencedAfterDelete.add(checkpoint.shadowRepositoryId);
-    }
-    for (const link of repositoryLinks) {
-      if (link.conversationId !== conversationId) referencedAfterDelete.add(link.shadowRepositoryId);
-    }
-
-    const shadowRepositoryIds = new Set([...candidateRepositoryIds].filter((id) => !referencedAfterDelete.has(id)));
-    const storageKeysReferencedByRetainedRepositories = new Set(shadowRepositories
-      .filter((record) => !shadowRepositoryIds.has(record.id))
-      .map((record) => record.storageKey));
-    const storageKeys = new Set(shadowRepositories
-      .filter((record) => shadowRepositoryIds.has(record.id) && !storageKeysReferencedByRetainedRepositories.has(record.storageKey))
-      .map((record) => record.storageKey));
-    return { checkpointIds, shadowRepositoryIds, storageKeys };
-  } catch (error) {
-    errors.push(`load checkpoint metadata for delete:${conversationId}: ${error instanceof Error ? error.message : String(error)}`);
-    return empty();
-  }
-}
-
-async function deleteUnusedShadowWorktreeDirectories(paths: StoragePaths, storageKeys: ReadonlySet<string>, deletedPaths: string[], errors: string[]): Promise<void> {
-  await Promise.all([...storageKeys].map(async (storageKey) => {
-    try {
-      const result = await deleteShadowWorktreeDirectory(paths.checkpointShadowWorktreesRootPath, storageKey);
-      deletedPaths.push(result.worktreePath);
-    } catch (error) {
-      errors.push(`delete shadow worktree:${storageKey}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }));
-}
-
 async function collectRunIdsForDeletion(paths: StoragePaths, conversationId: string, errors: string[]): Promise<Set<string>> {
   try {
     const index = await loadRunHistoryIndexStrict(runHistoryRoot(paths, conversationId), conversationId, { allowMissing: true, validatePages: true });
@@ -1900,31 +1597,6 @@ async function tryDeleteUri(
 function isFileNotFoundError(error: unknown): boolean {
   const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
   return code === 'FileNotFound' || code === 'ENOENT';
-}
-
-async function loadSkeletonRecords<TRecord extends StoreRecord>(
-  label: string,
-  location: [vscode.Uri, vscode.Uri],
-  recordKey: StoreKey
-): Promise<TRecord[]> {
-  const [root, indexUri] = location;
-  return loadRecords<TRecord>(root, indexUri, recordKey);
-}
-
-
-async function saveRecords<TRecord extends StoreRecord>(
-  root: vscode.Uri,
-  indexUri: vscode.Uri,
-  records: TRecord[],
-  recordKey: StoreKey,
-  labelForRecord?: (record: TRecord) => string
-): Promise<void> {
-  await saveRecordStore<TRecord, string>(root, indexUri, records, recordKey, labelForRecord);
-}
-
-function subStore(root: vscode.Uri, dir: string): [vscode.Uri, vscode.Uri] {
-  const childRoot = vscode.Uri.joinPath(root, dir);
-  return [childRoot, vscode.Uri.joinPath(childRoot, INDEX_FILE)];
 }
 
 function conversationDetailRoot(paths: StoragePaths, conversationId: string): vscode.Uri {

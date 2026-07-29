@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { BackendApplication } from '../../backend/application/BackendApplication';
 import { GLOBAL_SETTINGS_SECTIONS, type GlobalSettingsSection } from '../../shared/protocol';
+import { LIMCODE_GLOBAL_STATUS_FILE } from '../../backend/capabilities/vscodeStorage/globalStatus';
 
 /**
  * 全局设置文件监听白名单。
@@ -9,6 +10,8 @@ import { GLOBAL_SETTINGS_SECTIONS, type GlobalSettingsSection } from '../../shar
  * 每会话一份的 `conversation-*-llm.json`，多 agent 任务会在短时间内批量写入，
  * 用通配会把刷新事件刷爆。
  */
+export const GLOBAL_STATUS_WATCH_PATTERN = LIMCODE_GLOBAL_STATUS_FILE;
+
 export const GLOBAL_SETTINGS_WATCH_PATTERNS = [
   'settings/{llm,llm-compression,appearance,attachments,checkpoint-maintenance,run-history}.json',
   'settings/llm-provider-configs/**/*.json',
@@ -36,7 +39,7 @@ const DIRECTORY_SECTIONS: Record<string, GlobalSettingsSection> = {
 };
 
 export function registerGlobalSettingsWatcher(context: vscode.ExtensionContext, backendApp: BackendApplication): void {
-  const watcher = new GlobalSettingsWatcher(backendApp);
+  const watcher = new GlobalSettingsWatcher(backendApp, context.globalStorageUri);
   context.subscriptions.push(watcher);
   // data root 被用户改掉后，watcher 必须重建到新的根目录。
   context.subscriptions.push(backendApp.onDidChangeStorageRoot(() => watcher.ensureWatcher()));
@@ -55,7 +58,10 @@ class GlobalSettingsWatcher implements vscode.Disposable {
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly dirtySections = new Set<GlobalSettingsSection>();
 
-  public constructor(private readonly backendApp: BackendApplication) {}
+  public constructor(
+    private readonly backendApp: BackendApplication,
+    private readonly canonicalStatusRoot: vscode.Uri
+  ) {}
 
   public ensureWatcher(): void {
     const root = this.backendApp.getStorageRootUri();
@@ -73,6 +79,17 @@ class GlobalSettingsWatcher implements vscode.Disposable {
       watcher.onDidDelete(schedule);
       this.watchers.push(watcher);
     }
+
+    // common/proxy 的 canonical authority 位于 Extension globalStorageUri，而不是 active
+    // data root/settings。若不单独监听，多 Extension Host 同时存活时 proxy 外部修改永远不刷新。
+    const statusWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(this.canonicalStatusRoot, GLOBAL_STATUS_WATCH_PATTERN)
+    );
+    const scheduleCommon = () => this.scheduleSection('common');
+    statusWatcher.onDidCreate(scheduleCommon);
+    statusWatcher.onDidChange(scheduleCommon);
+    statusWatcher.onDidDelete(scheduleCommon);
+    this.watchers.push(statusWatcher);
   }
 
   public dispose(): void {
@@ -89,6 +106,10 @@ class GlobalSettingsWatcher implements vscode.Disposable {
   private scheduleRefresh(uri: vscode.Uri): void {
     const section = sectionFromSettingsUri(uri);
     if (!section) return;
+    this.scheduleSection(section);
+  }
+
+  private scheduleSection(section: GlobalSettingsSection): void {
     this.dirtySections.add(section);
 
     if (this.refreshTimer !== undefined) clearTimeout(this.refreshTimer);

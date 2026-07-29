@@ -1,4 +1,4 @@
-import type { StorageCapability, WebviewCapability } from '../capabilities/types';
+import type { GlobalSettingsStoreResult, StorageCapability, WebviewCapability } from '../capabilities/types';
 import { isSettingsRevisionConflictError } from '../capabilities/settingsRevisionConflict';
 import {
   BridgeMessageType,
@@ -7,22 +7,27 @@ import {
   createMessageId,
   type BridgeClientId,
   type ExtensionToWebviewMessage,
-  type GlobalSettingsRecord,
   type GlobalSettingsSection,
   type GlobalSettingsUpdatePayload
 } from '../../shared/protocol';
 
+export interface GlobalSettingsCommitEvent {
+  request: GlobalSettingsUpdatePayload;
+  stored: GlobalSettingsStoreResult;
+}
+
 export interface GlobalSettingsBridgeDeps {
   storage: StorageCapability;
   webview: WebviewCapability;
-  beforeDataRootChange?: () => Promise<void>;
-  beforeUpdate?: (payload: GlobalSettingsUpdatePayload) => Promise<void> | void;
-  afterUpdate?: (payload: GlobalSettingsUpdatePayload) => Promise<void> | void;
+  /** common 提交前始终 flush 当前 data root；是否真的切 root 由存储事务返回。 */
+  beforeCommonCommit?: () => Promise<void>;
+  /** 已提交后的领域副作用。失败只能告警，不能把已落盘设置伪装成保存失败。 */
+  afterCommit?: (event: GlobalSettingsCommitEvent) => Promise<void> | void;
 }
 
 /**
- * 全局设置桥接。
- * common 属于扩展级配置，保存于 VS Code globalState；llm 只保存当前激活的可复用渠道配置 id。
+ * 全局设置桥接：负责 request/ack 的 client 归属、CAS 冲突刷新与 committed snapshot 广播。
+ * 存储提交和运行时副作用是两个清晰边界；后者失败不会回滚或否认前者。
  */
 export class GlobalSettingsBridge {
   public constructor(private readonly deps: GlobalSettingsBridgeDeps) {}
@@ -34,7 +39,6 @@ export class GlobalSettingsBridge {
     try {
       const stored = await this.deps.storage.loadGlobalSettings(section);
       const message = this.createSnapshotMessage(stored, correlationId);
-
       if (clientId) this.deps.webview.post(clientId, message);
       else this.deps.webview.broadcastToStream(streamId, message);
     } catch (error) {
@@ -43,44 +47,104 @@ export class GlobalSettingsBridge {
     }
   }
 
-  public async update(payload: GlobalSettingsUpdatePayload | undefined, correlationId?: string): Promise<void> {
+  public async update(
+    payload: GlobalSettingsUpdatePayload | undefined,
+    correlationId?: string,
+    requesterClientId?: BridgeClientId
+  ): Promise<void> {
     if (!payload) return;
 
+    let stored: GlobalSettingsStoreResult;
     try {
-      const dataRootPathChanged = payload.section === 'common' && await this.isDataRootPathChange(payload);
-      if (dataRootPathChanged) {
-        await this.deps.beforeDataRootChange?.();
-      }
-      await this.deps.beforeUpdate?.(payload);
-
-      const stored = await this.deps.storage.saveGlobalSettings(payload.section, payload.settings, payload.expectedRevision);
-      await this.deps.afterUpdate?.(payload);
-      this.deps.webview.broadcastToStream(
-        globalSettingsStreamId(payload.section),
-        this.createSnapshotMessage(stored, correlationId)
-      );
-      if (dataRootPathChanged) {
-        for (const section of GLOBAL_SETTINGS_SECTIONS) {
-          if (section === 'common') continue;
-          const nextStored = await this.deps.storage.loadGlobalSettings(section);
-          this.deps.webview.broadcastToStream(
-            globalSettingsStreamId(section),
-            this.createSnapshotMessage(nextStored, correlationId)
-          );
-        }
-      }
+      // common 可能迁移并清理当前 data root。无论最后是否实际切换，都先保证内存数据已提交。
+      if (payload.section === 'common') await this.deps.beforeCommonCommit?.();
+      stored = await this.deps.storage.saveGlobalSettings(payload.section, payload.settings, payload.expectedRevision);
     } catch (error) {
       console.warn('[LimCode] Failed to update global settings:', error);
-      // 写入被乐观并发拒绝：盘上数据未被动过。先把最新值推回前端（避免面板停留在陈旧快照），
-      // 再发错误信封；顺序不能颠倒，否则 snapshot 会清掉刚设置的错误提示。
       if (isSettingsRevisionConflictError(error)) {
-        try {
-          await this.postSnapshot(undefined, payload.section);
-        } catch (snapshotError) {
-          console.warn('[LimCode] Failed to refresh global settings after revision conflict:', snapshotError);
-        }
+        await this.publishLatestAfterConflict(payload.section, requesterClientId);
       }
-      this.postSettingsError(BridgeMessageType.GlobalSettingsUpdate, payload.section, error, correlationId);
+      this.postSettingsError(
+        BridgeMessageType.GlobalSettingsUpdate,
+        payload.section,
+        error,
+        correlationId,
+        requesterClientId
+      );
+      return;
+    }
+
+    // 只有请求者收到 correlated ack；其它订阅者只收到无 correlation 的 external snapshot。
+    this.publishCommittedSnapshot(stored, correlationId, requesterClientId);
+
+    // 先让 ack 离开提交路径，再启动领域副作用。async handler 会同步执行到首个 await，
+    // 因而 common handler 可以立即触发 watcher 重绑，同时任何后续失败都只记录告警。
+    this.startAfterCommit({ request: payload, stored });
+
+    if (stored.dataRootChanged) {
+      await this.broadcastSnapshotsAfterDataRootChange();
+    }
+  }
+
+  private publishCommittedSnapshot(
+    stored: GlobalSettingsStoreResult,
+    correlationId: string | undefined,
+    requesterClientId: BridgeClientId | undefined
+  ): void {
+    const streamId = globalSettingsStreamId(stored.section);
+    if (requesterClientId) {
+      this.deps.webview.post(requesterClientId, this.createSnapshotMessage(stored, correlationId));
+    }
+    this.deps.webview.broadcastToStream(
+      streamId,
+      this.createSnapshotMessage(stored),
+      requesterClientId ? { excludeClientIds: [requesterClientId] } : undefined
+    );
+  }
+
+  private async publishLatestAfterConflict(
+    section: GlobalSettingsSection,
+    requesterClientId: BridgeClientId | undefined
+  ): Promise<void> {
+    try {
+      const latest = await this.deps.storage.loadGlobalSettings(section);
+      const streamId = globalSettingsStreamId(section);
+      const message = this.createSnapshotMessage(latest);
+      if (requesterClientId) this.deps.webview.post(requesterClientId, message);
+      this.deps.webview.broadcastToStream(
+        streamId,
+        message,
+        requesterClientId ? { excludeClientIds: [requesterClientId] } : undefined
+      );
+    } catch (snapshotError) {
+      console.warn('[LimCode] Failed to refresh global settings after revision conflict:', snapshotError);
+    }
+  }
+
+  private async broadcastSnapshotsAfterDataRootChange(): Promise<void> {
+    for (const section of GLOBAL_SETTINGS_SECTIONS) {
+      if (section === 'common') continue;
+      try {
+        const stored = await this.deps.storage.loadGlobalSettings(section);
+        this.deps.webview.broadcastToStream(
+          globalSettingsStreamId(section),
+          this.createSnapshotMessage(stored)
+        );
+      } catch (error) {
+        // common 已经 committed；新 root 的某个 section 读取失败不能反向伪装成 common 保存失败。
+        console.warn(`[LimCode] Failed to broadcast ${section} after data-root commit:`, error);
+      }
+    }
+  }
+
+  private startAfterCommit(event: GlobalSettingsCommitEvent): void {
+    try {
+      const result = this.deps.afterCommit?.(event);
+      void Promise.resolve(result).catch((error) => {
+        console.warn(`[LimCode] Global settings ${event.request.section} committed, but post-commit refresh failed:`, error);
+      });
+    } catch (error) {
+      console.warn(`[LimCode] Global settings ${event.request.section} committed, but post-commit hook failed:`, error);
     }
   }
 
@@ -92,6 +156,7 @@ export class GlobalSettingsBridge {
     clientId?: BridgeClientId
   ): void {
     const message = error instanceof Error ? error.message : String(error);
+    const isConflict = isSettingsRevisionConflictError(error);
     const envelope: ExtensionToWebviewMessage = {
       id: createMessageId(),
       type: BridgeMessageType.Error,
@@ -100,17 +165,18 @@ export class GlobalSettingsBridge {
       correlationId,
       payload: {
         requestType,
-        message
+        message,
+        ...(isConflict ? { code: 'settings_revision_conflict' as const, actualRevision: error.actualRevision } : {})
       }
     };
-    if (clientId) this.deps.webview.post(clientId, envelope);
-    else this.deps.webview.broadcast(envelope);
+    if (clientId) {
+      this.deps.webview.post(clientId, envelope);
+    } else if (requestType === BridgeMessageType.GlobalSettingsGet) {
+      this.deps.webview.broadcastToStream(globalSettingsStreamId(section), envelope);
+    }
   }
 
-  private createSnapshotMessage(
-    stored: Awaited<ReturnType<StorageCapability['loadGlobalSettings']>>,
-    correlationId?: string
-  ): ExtensionToWebviewMessage {
+  private createSnapshotMessage(stored: GlobalSettingsStoreResult, correlationId?: string): ExtensionToWebviewMessage {
     return {
       id: createMessageId(),
       type: BridgeMessageType.GlobalSettingsSnapshot,
@@ -121,15 +187,8 @@ export class GlobalSettingsBridge {
         section: stored.section,
         settings: stored.settings,
         filePath: stored.filePath,
-        ...(stored.revision !== undefined ? { revision: stored.revision } : {})
+        revision: stored.revision
       }
     };
-  }
-
-  private async isDataRootPathChange(payload: GlobalSettingsUpdatePayload): Promise<boolean> {
-    const current = await this.deps.storage.loadGlobalSettings('common');
-    const currentSettings = current.settings as GlobalSettingsRecord;
-    const nextSettings = payload.settings as Partial<GlobalSettingsRecord> | undefined;
-    return (nextSettings?.dataFilePath ?? '').trim() !== currentSettings.dataFilePath.trim();
   }
 }

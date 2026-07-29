@@ -6,12 +6,19 @@ import { projectStorageStateWithCache, type StorageContributorProjectionState } 
 import type { AgentRunStatus, ClientState, ClientStateTableKey, ConversationOriginLinkRecord, MessageContent, MessageRecord, PersistenceStatusRecord, SidebarConversationHistoryEntry } from '../../shared/protocol';
 import { conversationCreatedAtFromId, displayConversationTitle } from '../../shared/conversationTitle';
 import { collectChangedClientStateConversationIds } from '../../shared/clientStateConversationScope';
-import { createEmptyClientState, isConversationScopeLinkRecord } from '../../shared/clientStateSchema';
+import { createEmptyClientState } from '../../shared/clientStateSchema';
+import { stripConversationFromClientState } from '../utils/clientStateConversationCascade';
 import { conversationRenderDetailSlice, conversationRunHistorySlice } from '../capabilities/vscodeStorage/clientStateStore';
 import { projectChatState } from '../world/modules/chat/stateProjection';
 import { projectToolsRuntimeState } from '../world/modules/tools/stateProjection';
 import { checkpointStateProjection } from '../world/modules/checkpoint/stateProjection';
 import { projectStateProjection } from '../world/modules/project/stateProjection';
+import { createClientStateSkeletonPatch, isClientStateSkeletonRevisionConflictError } from '../capabilities/vscodeStorage/clientStateSkeletonPatch';
+import { skeletonStoresForProfile } from '../capabilities/vscodeStorage/clientStateSkeletonStores';
+import {
+  CONVERSATION_TIMELINE_TABLE_KEYS,
+  isConversationTimelineRevisionConflictError
+} from '../capabilities/vscodeStorage/conversationTimelinePatch';
 
 const DEFAULT_PERSIST_DEBOUNCE_MS = 500;
 const DEFAULT_PERSIST_RETRY_DELAYS_MS = [250, 1_000, 3_000] as const;
@@ -74,10 +81,15 @@ interface PendingRunHistoryState {
  * 避免普通聊天只加载 messages/toolCalls 时把未加载的 runHistory index 覆盖为空。
  */
 export class ClientStatePersistence {
-  private enabled = false;
+  private timelineEnabled = false;
+  private skeletonEnabled = false;
   private lastPersistedSkeletonJson = '';
+  /** 本进程上次确认提交的本地 skeleton base；不能替换成包含外部 union 的磁盘全量快照。 */
+  private lastAcknowledgedLocalSkeletonState: ClientState | undefined;
   private pendingSkeletonState: ClientState | undefined;
   private readonly lastPersistedRenderDetailJson = new Map<string, string>();
+  /** 每个 conversation 上次确认提交的本地 render base；外部 union 不写入该 base。 */
+  private readonly lastAcknowledgedLocalRenderDetailState = new Map<string, ClientState>();
   private readonly lastPersistedRunHistoryJson = new Map<string, string>();
   private readonly pendingRenderDetailStates = new Map<string, ClientState>();
   private readonly pendingRunHistoryStates = new Map<string, PendingRunHistoryState>();
@@ -112,8 +124,9 @@ export class ClientStatePersistence {
     private readonly debounceMs = DEFAULT_PERSIST_DEBOUNCE_MS
   ) {}
 
-  public enable(): void {
-    this.enabled = true;
+  public enable(options: { skeleton: boolean } = { skeleton: true }): void {
+    this.timelineEnabled = true;
+    this.skeletonEnabled = options.skeleton;
     this.emitStatus();
   }
 
@@ -121,38 +134,52 @@ export class ClientStatePersistence {
     return { ...this.persistenceStatus };
   }
 
-  public markUnavailable(error: unknown): void {
-    this.clearPersistTimer();
-    this.clearRetryTimer();
-    this.queuedPersistDelayMs = undefined;
-    this.setPersistenceStatus({
-      phase: 'error',
-      error: persistenceErrorMessage(error)
-    });
+  public markSkeletonUnavailable(error: unknown): void {
+    this.skeletonEnabled = false;
+    void error;
+    // timeline/render detail 的健康状态与 skeleton 独立；不能因 metadata hydration 失败
+    // 让后续聊天消息静默不落盘。
   }
 
   public rememberPersistedState(state: ClientState): void {
-    this.lastPersistedSkeletonJson = JSON.stringify(skeletonPersistenceSlice(state));
+    const skeleton = skeletonPersistenceSlice(state);
+    this.lastAcknowledgedLocalSkeletonState = cloneClientState(skeleton);
+    this.lastPersistedSkeletonJson = JSON.stringify(skeleton);
     this.lastProjectedState = state;
     this.projectionClock = '';
     this.contributorStates = {};
     this.lastPersistedRenderDetailJson.clear();
+    this.lastAcknowledgedLocalRenderDetailState.clear();
     this.lastPersistedRunHistoryJson.clear();
     this.markSaved();
   }
 
-  /** 记录刚从 storage 完整读取且未被修补的 render detail，避免 hydrate 本身触发重复回写。 */
+  /** staged hydration 的另一个 profile 仍属于同一个 pinned snapshot，合并进本地已确认 base。 */
+  public rememberPersistedSkeletonProfile(state: ClientState, profile: 'startup' | 'deferred'): void {
+    const base = this.lastAcknowledgedLocalSkeletonState
+      ? cloneClientState(this.lastAcknowledgedLocalSkeletonState)
+      : createEmptyClientState();
+    for (const store of skeletonStoresForProfile(profile)) {
+      (base as unknown as Record<string, unknown>)[store.key] = cloneSerializable(state[store.key]);
+    }
+    this.lastAcknowledgedLocalSkeletonState = base;
+    this.lastPersistedSkeletonJson = JSON.stringify(base);
+  }
+
+  /**
+   * 记录刚从 storage 读取且未被本地修补的已知 render records。state 可以是完整 detail，
+   * 也可以只是 tail page；partial base 只约束其中已知 id，不会把未加载 prefix 解释为删除。
+   */
   public rememberConversationRenderDetailPersisted(conversationId: string, state: ClientState): void {
     const normalizedConversationId = conversationId.trim();
     if (!normalizedConversationId) return;
-    this.lastPersistedRenderDetailJson.set(
-      normalizedConversationId,
-      JSON.stringify(conversationRenderDetailSlice(state, normalizedConversationId))
-    );
+    const detail = conversationRenderDetailSlice(state, normalizedConversationId);
+    this.lastAcknowledgedLocalRenderDetailState.set(normalizedConversationId, cloneClientState(detail));
+    this.lastPersistedRenderDetailJson.set(normalizedConversationId, JSON.stringify(detail));
   }
 
   public queuePersist(options: { delayMs?: number } = {}): void {
-    if (!this.enabled) return;
+    if (!this.timelineEnabled) return;
     this.clearRetryTimer();
     if (this.persistenceStatus.phase === 'error') this.retryAttempt = 0;
     const requestedDelay = normalizeDelayMs(options.delayMs, this.debounceMs);
@@ -198,7 +225,12 @@ export class ClientStatePersistence {
       return;
     }
 
-    if (!this.enabled || !latestState) return;
+    if (!this.timelineEnabled || !latestState) {
+      if (options.ensurePersisted || options.forceConversationId || options.throwOnError) {
+        throw new Error('Client-state timeline persistence is not enabled.');
+      }
+      return;
+    }
 
     const targetConversationIds = options.force || options.ensurePersisted
       ? undefined
@@ -232,12 +264,20 @@ export class ClientStatePersistence {
     // 先启动 render detail 保存，让每个 conversation 立即预订自己的 timeline root FIFO。
     // 后续消息 truncate 会排在这些旧快照之后，而不会被 skeleton/run-history 慢任务拖到旧快照前面。
     const renderDetailTask = awaitAllPersistTasks(renderDetailStates.map(async ([conversationId, state]) => {
-      await this.storage.saveConversationRenderDetail(conversationId, state);
-      this.lastPersistedRenderDetailJson.set(conversationId, JSON.stringify(conversationRenderDetailSlice(state, conversationId)));
+      const next = conversationRenderDetailSlice(state, conversationId);
+      const base = this.lastAcknowledgedLocalRenderDetailState.get(conversationId) ?? createEmptyClientState();
+      await this.storage.saveConversationRenderDetail(conversationId, base, next);
+      this.lastAcknowledgedLocalRenderDetailState.set(conversationId, cloneClientState(next));
+      this.lastPersistedRenderDetailJson.set(conversationId, JSON.stringify(next));
     }));
-    const skeletonTask = skeletonState
-      ? this.storage.saveClientStateSkeleton(skeletonState).then(() => {
-          this.lastPersistedSkeletonJson = JSON.stringify(skeletonPersistenceSlice(skeletonState));
+    const nextLocalSkeleton = skeletonState ? skeletonPersistenceSlice(skeletonState) : undefined;
+    const skeletonPatch = nextLocalSkeleton
+      ? createClientStateSkeletonPatch(this.lastAcknowledgedLocalSkeletonState ?? createEmptyClientState(), nextLocalSkeleton)
+      : undefined;
+    const skeletonTask = nextLocalSkeleton && skeletonPatch
+      ? this.storage.saveClientStateSkeleton(skeletonPatch).then(() => {
+          this.lastAcknowledgedLocalSkeletonState = cloneClientState(nextLocalSkeleton);
+          this.lastPersistedSkeletonJson = JSON.stringify(nextLocalSkeleton);
         })
       : Promise.resolve();
     try {
@@ -256,7 +296,10 @@ export class ClientStatePersistence {
       this.retryAttempt = 0;
     } catch (error) {
       persistenceFailure = error;
-      shouldRetry = !options.throwOnError;
+      // 同 id 语义冲突不能盲重试同一 stale patch；需要用户/领域层显式重新加载或解决。
+      shouldRetry = !options.throwOnError
+        && !isClientStateSkeletonRevisionConflictError(error)
+        && !isConversationTimelineRevisionConflictError(error);
       this.restorePendingStates(skeletonState, renderDetailStates, runHistoryStates, historyStates);
       this.setPersistenceStatus({
         phase: 'error',
@@ -292,7 +335,11 @@ export class ClientStatePersistence {
     options: { throwOnError?: boolean } = {}
   ): Promise<void> {
     const normalizedConversationId = conversationId.trim();
-    if (!normalizedConversationId || !this.enabled) return;
+    if (!normalizedConversationId) return;
+    if (!this.timelineEnabled) {
+      if (options.throwOnError) throw new Error('Conversation timeline persistence is not enabled.');
+      return;
+    }
 
     if (this.mutationGateActive && !this.isInsideMutationGate()) {
       this.persistPendingAfterMutationGate = true;
@@ -304,8 +351,11 @@ export class ClientStatePersistence {
       ?? projectConversationTimelineState(this.world, normalizedConversationId);
 
     try {
-      await this.storage.saveConversationTimelineRenderDetail(normalizedConversationId, state);
-      this.lastPersistedRenderDetailJson.set(normalizedConversationId, JSON.stringify(state));
+      const base = this.lastAcknowledgedLocalRenderDetailState.get(normalizedConversationId) ?? createEmptyClientState();
+      await this.storage.saveConversationTimelineRenderDetail(normalizedConversationId, base, state);
+      const acknowledged = mergeAcknowledgedTimelineState(base, state);
+      this.lastAcknowledgedLocalRenderDetailState.set(normalizedConversationId, acknowledged);
+      this.lastPersistedRenderDetailJson.set(normalizedConversationId, JSON.stringify(acknowledged));
     } catch (error) {
       console.warn(`[LimCode] Failed to persist conversation timeline before mutation: ${normalizedConversationId}`, error);
       if (options.throwOnError) throw error;
@@ -323,7 +373,7 @@ export class ClientStatePersistence {
     action: () => Promise<T>
   ): Promise<T> {
     const normalizedConversationId = conversationId.trim();
-    if (!normalizedConversationId || !this.enabled) return action();
+    if (!normalizedConversationId || !this.timelineEnabled) return action();
     return this.withExclusiveMutationGate(async () => {
       await this.persistConversationRenderDetailImmediately(normalizedConversationId, { throwOnError: true });
       return action();
@@ -376,6 +426,7 @@ export class ClientStatePersistence {
     this.pendingRunHistoryStates.delete(normalizedConversationId);
     this.pendingHistoryStates.delete(normalizedConversationId);
     this.lastPersistedRenderDetailJson.delete(normalizedConversationId);
+    this.lastAcknowledgedLocalRenderDetailState.delete(normalizedConversationId);
     this.lastPersistedRunHistoryJson.delete(normalizedConversationId);
 
     if (this.pendingSkeletonState) {
@@ -384,9 +435,14 @@ export class ClientStatePersistence {
     if (this.lastProjectedState) {
       this.lastProjectedState = stripConversationFromClientState(this.lastProjectedState, normalizedConversationId);
     }
-    this.lastPersistedSkeletonJson = this.lastProjectedState
-      ? JSON.stringify(skeletonPersistenceSlice(this.lastProjectedState))
-      : stripConversationFromSkeletonJson(this.lastPersistedSkeletonJson, normalizedConversationId);
+    // 调用契约：仅在 coordinator 语义删除已 committed 后调用，届时才能推进本地 base。
+    if (this.lastAcknowledgedLocalSkeletonState) {
+      this.lastAcknowledgedLocalSkeletonState = stripConversationFromClientState(
+        this.lastAcknowledgedLocalSkeletonState,
+        normalizedConversationId
+      );
+      this.lastPersistedSkeletonJson = JSON.stringify(this.lastAcknowledgedLocalSkeletonState);
+    }
   }
 
   private hasPendingStates(): boolean {
@@ -415,9 +471,11 @@ export class ClientStatePersistence {
   }
 
   private collectPendingStates(state: ClientState, force: boolean, targetConversationIds?: ReadonlySet<string>): void {
-    const skeletonJson = JSON.stringify(skeletonPersistenceSlice(state));
-    if (force || skeletonJson !== this.lastPersistedSkeletonJson) {
-      this.pendingSkeletonState = state;
+    if (this.skeletonEnabled) {
+      const skeletonJson = JSON.stringify(skeletonPersistenceSlice(state));
+      if (force || skeletonJson !== this.lastPersistedSkeletonJson) {
+        this.pendingSkeletonState = state;
+      }
     }
 
     for (const conversationId of this.renderLoadedConversationIds(state)) {
@@ -732,122 +790,20 @@ function skeletonPersistenceSlice(state: ClientState): ClientState {
   };
 }
 
-function stripConversationFromSkeletonJson(json: string, conversationId: string): string {
-  if (!json) return '';
-  try {
-    return JSON.stringify(skeletonPersistenceSlice(stripConversationFromClientState(JSON.parse(json) as ClientState, conversationId)));
-  } catch {
-    return '';
+function mergeAcknowledgedTimelineState(base: ClientState, nextTimeline: ClientState): ClientState {
+  const merged = cloneClientState(base);
+  for (const key of CONVERSATION_TIMELINE_TABLE_KEYS) {
+    (merged as unknown as Record<string, unknown>)[key] = cloneSerializable(nextTimeline[key]);
   }
+  return merged;
 }
 
-function stripConversationFromClientState(state: ClientState, conversationId: string): ClientState {
-  const removedMessageIds = new Set(state.messages.filter((message) => message.conversationId === conversationId).map((message) => message.id));
-  const removedRevisionIds = new Set(state.messageRevisions.filter((revision) => revision.conversationId === conversationId || removedMessageIds.has(revision.messageId)).map((revision) => revision.id));
-  const removedToolCallIds = new Set(state.toolCalls.filter((toolCall) => removedMessageIds.has(toolCall.messageId)).map((toolCall) => toolCall.id));
-  const removedCompressionBlockIds = new Set(state.compressionBlocks.filter((block) => block.conversationId === conversationId).map((block) => block.id));
-  const removedCheckpointIds = new Set(state.checkpoints.filter((checkpoint) => checkpoint.conversationId === conversationId).map((checkpoint) => checkpoint.id));
-  for (const anchor of state.checkpointTimelineAnchors) {
-    if (anchor.conversationId === conversationId) removedCheckpointIds.add(anchor.checkpointId);
-  }
+function cloneClientState(state: ClientState): ClientState {
+  return cloneSerializable(state);
+}
 
-  const removedRunIds = new Set<string>();
-  for (const link of state.agentRunTargetLinks) if (link.conversationId === conversationId) removedRunIds.add(link.runId);
-  for (const link of state.agentRunSourceLinks) {
-    if (link.sourceConversationId === conversationId || (link.sourceMessageId && removedMessageIds.has(link.sourceMessageId)) || (link.sourceToolCallId && removedToolCallIds.has(link.sourceToolCallId))) {
-      removedRunIds.add(link.runId);
-    }
-    if (link.sourceRunId && removedRunIds.has(link.sourceRunId)) removedRunIds.add(link.runId);
-  }
-  for (const link of state.messageRunLinks) if (removedMessageIds.has(link.messageId)) removedRunIds.add(link.runId);
-  for (const link of state.toolCallRunLinks) if (removedToolCallIds.has(link.toolCallId)) removedRunIds.add(link.runId);
-  for (const input of state.agentRunInputRevisions) if (input.conversationId === conversationId || removedRevisionIds.has(input.revisionId)) removedRunIds.add(input.runId);
-  for (const link of state.runCompressionBlockLinks) if (removedCompressionBlockIds.has(link.blockId)) removedRunIds.add(link.runId);
-
-  const removedConversationPolicyIds = new Set(state.runConversationPolicies.filter((policy) => policy.conversationId === conversationId || policy.branchFromConversationId === conversationId).map((policy) => policy.id));
-  for (const link of state.runConversationPolicyLinks) if (removedRunIds.has(link.runId)) removedConversationPolicyIds.add(link.policyId);
-  const removedContextPolicyIds = new Set(state.runContextPolicyLinks.filter((link) => removedRunIds.has(link.runId)).map((link) => link.policyId));
-  const removedDeliveryPolicyIds = new Set(state.runDeliveryPolicyLinks.filter((link) => removedRunIds.has(link.runId)).map((link) => link.policyId));
-  for (const policy of state.runDeliveryPolicies) if (policy.targetConversationId === conversationId || (policy.targetToolCallId && removedToolCallIds.has(policy.targetToolCallId))) removedDeliveryPolicyIds.add(policy.id);
-  const removedEditPolicyIds = new Set(state.runEditPolicyLinks.filter((link) => removedRunIds.has(link.runId)).map((link) => link.policyId));
-
-  const removedInvocationIds = new Set<string>();
-  for (const link of state.runLlmInvocationLinks) if (removedRunIds.has(link.runId)) removedInvocationIds.add(link.invocationId);
-  for (const link of state.messageLlmInvocationLinks) if (removedMessageIds.has(link.messageId)) removedInvocationIds.add(link.invocationId);
-  for (const link of state.compressionBlockLlmInvocationLinks) if (removedCompressionBlockIds.has(link.blockId)) removedInvocationIds.add(link.invocationId);
-
-  const removedPlanProposalIds = new Set(state.runPlanProposalLinks.filter((link) => removedRunIds.has(link.runId)).map((link) => link.planProposalId));
-  const planProposalIdsStillReferenced = new Set(state.runPlanProposalLinks.filter((link) => !removedRunIds.has(link.runId)).map((link) => link.planProposalId));
-
-  const repositoryIdsReferencedByDeletedConversation = new Set<string>();
-  for (const checkpoint of state.checkpoints) if (removedCheckpointIds.has(checkpoint.id)) repositoryIdsReferencedByDeletedConversation.add(checkpoint.shadowRepositoryId);
-  for (const link of state.conversationCheckpointRepositoryLinks) if (link.conversationId === conversationId) repositoryIdsReferencedByDeletedConversation.add(link.shadowRepositoryId);
-  const repositoryIdsStillReferenced = new Set<string>();
-  for (const checkpoint of state.checkpoints) if (!removedCheckpointIds.has(checkpoint.id)) repositoryIdsStillReferenced.add(checkpoint.shadowRepositoryId);
-  for (const link of state.conversationCheckpointRepositoryLinks) if (link.conversationId !== conversationId) repositoryIdsStillReferenced.add(link.shadowRepositoryId);
-  const removedShadowRepositoryIds = new Set([...repositoryIdsReferencedByDeletedConversation].filter((id) => !repositoryIdsStillReferenced.has(id)));
-
-  return {
-    ...state,
-    conversations: state.conversations.filter((conversation) => conversation.id !== conversationId),
-    conversationReuseLinks: state.conversationReuseLinks.filter((link) => link.conversationId !== conversationId),
-    conversationBranchLinks: state.conversationBranchLinks.filter((link) => link.sourceConversationId !== conversationId && link.targetConversationId !== conversationId),
-    conversationOriginLinks: state.conversationOriginLinks.filter((link) => link.conversationId !== conversationId && link.sourceConversationId !== conversationId && !removedRunIds.has(link.sourceRunId ?? '')),
-    agentConversationLinks: state.agentConversationLinks.filter((link) => link.conversationId !== conversationId),
-    conversationAgentSelections: state.conversationAgentSelections.filter((selection) => selection.conversationId !== conversationId),
-    conversationWorkflowSelections: state.conversationWorkflowSelections.filter((selection) => selection.conversationId !== conversationId),
-    conversationProjectLinks: state.conversationProjectLinks.filter((link) => link.conversationId !== conversationId),
-    conversationWorkEnvironmentLinks: state.conversationWorkEnvironmentLinks.filter((link) => link.conversationId !== conversationId),
-    conversationRuntimeContextSnapshotLinks: state.conversationRuntimeContextSnapshotLinks.filter((link) => link.conversationId !== conversationId),
-    checkpointPolicyScopeLinks: state.checkpointPolicyScopeLinks.filter((link) => !isConversationScopeLinkRecord(link, conversationId)),
-    workEnvironmentPolicyScopeLinks: state.workEnvironmentPolicyScopeLinks.filter((link) => !isConversationScopeLinkRecord(link, conversationId)),
-    systemPromptScopeLinks: state.systemPromptScopeLinks.filter((link) => !isConversationScopeLinkRecord(link, conversationId)),
-    modelProfileScopeLinks: state.modelProfileScopeLinks.filter((link) => !isConversationScopeLinkRecord(link, conversationId)),
-    runtimeContextScopeLinks: state.runtimeContextScopeLinks.filter((link) => !isConversationScopeLinkRecord(link, conversationId)),
-    planReviewPolicyScopeLinks: state.planReviewPolicyScopeLinks.filter((link) => !isConversationScopeLinkRecord(link, conversationId)),
-    conversationCheckpointRepositoryLinks: state.conversationCheckpointRepositoryLinks.filter((link) => link.conversationId !== conversationId),
-    checkpoints: state.checkpoints.filter((checkpoint) => !removedCheckpointIds.has(checkpoint.id)),
-    checkpointTimelineAnchors: state.checkpointTimelineAnchors.filter((anchor) => anchor.conversationId !== conversationId && !removedCheckpointIds.has(anchor.checkpointId)),
-    shadowRepositories: state.shadowRepositories.filter((repository) => !removedShadowRepositoryIds.has(repository.id)),
-    messages: state.messages.filter((message) => message.conversationId !== conversationId),
-    messageRevisions: state.messageRevisions.filter((revision) => revision.conversationId !== conversationId && !removedMessageIds.has(revision.messageId)),
-    messageCurrentRevisionLinks: state.messageCurrentRevisionLinks.filter((link) => !removedMessageIds.has(link.messageId) && !removedRevisionIds.has(link.revisionId)),
-    toolCalls: state.toolCalls.filter((toolCall) => !removedToolCallIds.has(toolCall.id)),
-    toolCallEvents: state.toolCallEvents.filter((event) => !removedToolCallIds.has(event.toolCallId)),
-    compressionBlocks: state.compressionBlocks.filter((block) => block.conversationId !== conversationId),
-    compressionBlockSourceLinks: state.compressionBlockSourceLinks.filter((link) => !removedCompressionBlockIds.has(link.blockId)),
-    compressionContextVariants: state.compressionContextVariants.filter((variant) => !removedCompressionBlockIds.has(variant.blockId)),
-    runCompressionBlockLinks: state.runCompressionBlockLinks.filter((link) => !removedRunIds.has(link.runId) && !removedCompressionBlockIds.has(link.blockId)),
-    runPlanProposalLinks: state.runPlanProposalLinks.filter((link) => !removedRunIds.has(link.runId)),
-    planProposals: state.planProposals.filter((proposal) => !removedPlanProposalIds.has(proposal.id) || planProposalIdsStillReferenced.has(proposal.id)),
-    compressionBlockLlmInvocationLinks: state.compressionBlockLlmInvocationLinks.filter((link) => !removedCompressionBlockIds.has(link.blockId) && !removedInvocationIds.has(link.invocationId)),
-    llmInvocations: state.llmInvocations.filter((invocation) => !removedInvocationIds.has(invocation.id)),
-    runLlmInvocationLinks: state.runLlmInvocationLinks.filter((link) => !removedRunIds.has(link.runId) && !removedInvocationIds.has(link.invocationId)),
-    messageLlmInvocationLinks: state.messageLlmInvocationLinks.filter((link) => !removedMessageIds.has(link.messageId) && !removedInvocationIds.has(link.invocationId)),
-    agentRuns: state.agentRuns.filter((run) => !removedRunIds.has(run.id)),
-    agentRunQueueOrders: state.agentRunQueueOrders.filter((order) => !removedRunIds.has(order.runId) && order.conversationId !== conversationId),
-    agentRunQueueHolds: state.agentRunQueueHolds.filter((hold) => !removedRunIds.has(hold.runId) && hold.conversationId !== conversationId),
-    agentRunQueuedInputs: state.agentRunQueuedInputs.filter((input) => !removedRunIds.has(input.runId) && input.conversationId !== conversationId),
-    agentRunSourceLinks: state.agentRunSourceLinks.filter((link) => !removedRunIds.has(link.runId) && !removedRunIds.has(link.sourceRunId ?? '') && link.sourceConversationId !== conversationId && !removedMessageIds.has(link.sourceMessageId ?? '') && !removedToolCallIds.has(link.sourceToolCallId ?? '')),
-    agentRunTargetLinks: state.agentRunTargetLinks.filter((link) => !removedRunIds.has(link.runId) && link.conversationId !== conversationId),
-    messageRunLinks: state.messageRunLinks.filter((link) => !removedRunIds.has(link.runId) && !removedMessageIds.has(link.messageId)),
-    toolCallRunLinks: state.toolCallRunLinks.filter((link) => !removedRunIds.has(link.runId) && !removedToolCallIds.has(link.toolCallId)),
-    runConversationPolicies: state.runConversationPolicies.filter((policy) => !removedConversationPolicyIds.has(policy.id)),
-    runContextPolicies: state.runContextPolicies.filter((policy) => !removedContextPolicyIds.has(policy.id)),
-    runDeliveryPolicies: state.runDeliveryPolicies.filter((policy) => !removedDeliveryPolicyIds.has(policy.id)),
-    runEditPolicies: state.runEditPolicies.filter((policy) => !removedEditPolicyIds.has(policy.id)),
-    runWorkflowLinks: state.runWorkflowLinks.filter((link) => !removedRunIds.has(link.runId)),
-    runSystemPromptLinks: state.runSystemPromptLinks.filter((link) => !removedRunIds.has(link.runId)),
-    runModelProfileLinks: state.runModelProfileLinks.filter((link) => !removedRunIds.has(link.runId)),
-    runToolPolicyLinks: state.runToolPolicyLinks.filter((link) => !removedRunIds.has(link.runId)),
-    runRuntimeContextSnapshotLinks: state.runRuntimeContextSnapshotLinks.filter((link) => !removedRunIds.has(link.runId)),
-    runWorkEnvironmentLinks: state.runWorkEnvironmentLinks.filter((link) => !removedRunIds.has(link.runId)),
-    runConversationPolicyLinks: state.runConversationPolicyLinks.filter((link) => !removedRunIds.has(link.runId) && !removedConversationPolicyIds.has(link.policyId)),
-    runContextPolicyLinks: state.runContextPolicyLinks.filter((link) => !removedRunIds.has(link.runId) && !removedContextPolicyIds.has(link.policyId)),
-    runDeliveryPolicyLinks: state.runDeliveryPolicyLinks.filter((link) => !removedRunIds.has(link.runId) && !removedDeliveryPolicyIds.has(link.policyId)),
-    runEditPolicyLinks: state.runEditPolicyLinks.filter((link) => !removedRunIds.has(link.runId) && !removedEditPolicyIds.has(link.policyId)),
-    agentRunInputRevisions: state.agentRunInputRevisions.filter((input) => !removedRunIds.has(input.runId) && input.conversationId !== conversationId && !removedRevisionIds.has(input.revisionId))
-  };
+function cloneSerializable<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function knownRunHistoryConversationIds(state: ClientState): string[] {

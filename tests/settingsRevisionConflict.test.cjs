@@ -118,7 +118,10 @@ const {
   writeGlobalSettingsFile
 } = require('../dist/extension/backend/capabilities/vscodeStorage/globalSettings.js');
 const { isSettingsRevisionConflictError } = require('../dist/extension/backend/capabilities/settingsRevisionConflict.js');
-const { GLOBAL_SETTINGS_WATCH_PATTERNS } = require('../dist/extension/vscode/watchers/GlobalSettingsWatcher.js');
+const {
+  GLOBAL_SETTINGS_WATCH_PATTERNS,
+  GLOBAL_STATUS_WATCH_PATTERN
+} = require('../dist/extension/vscode/watchers/GlobalSettingsWatcher.js');
 
 function createPaths(tempRoot) {
   return { settingsRootUri: MockUri.file(path.join(tempRoot, 'settings')) };
@@ -210,22 +213,21 @@ test('复现原 bug：B 窗口持旧 revision 提交时 A 窗口新增的渠道�
   }
 });
 
-test('不传 expectedRevision 时完全保持旧行为（不校验、允许全量覆盖）', async () => {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-revision-legacy-'));
+test('expectedRevision 是强制事务前置条件，缺失时拒绝写入且不改变磁盘', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-revision-required-'));
   try {
     const paths = createPaths(tempRoot);
+    const configsRoot = path.join(tempRoot, 'settings', 'llm-provider-configs');
     const initial = await loadLlmProviderConfigsSettings(paths);
+    const before = await readTree(configsRoot);
 
-    await delay(5);
-    await saveLlmProviderConfigsSettings(paths, { configs: [...initial.settings.configs, configWithName('P1')] });
+    await assert.rejects(
+      () => saveLlmProviderConfigsSettings(paths, { configs: [...initial.settings.configs, configWithName('P1')] }, undefined),
+      (error) => isSettingsRevisionConflictError(error)
+    );
 
-    await delay(5);
-    // 旧行为：陈旧列表照样落盘，P1 被移除。这是本方案刻意保留的兼容路径。
-    const saved = await saveLlmProviderConfigsSettings(paths, { configs: initial.settings.configs });
-    assert.deepEqual(saved.settings.configs.map((config) => config.name), ['默认渠道']);
-
-    const reloaded = await loadLlmProviderConfigsSettings(paths);
-    assert.deepEqual(reloaded.settings.configs.map((config) => config.name), ['默认渠道']);
+    const after = await readTree(configsRoot);
+    assert.deepEqual(after, before);
   } finally {
     await removeTempRoot(tempRoot);
   }
@@ -258,16 +260,19 @@ test('文件型 section 同样支持 revision 校验且冲突时不覆盖', asyn
     assert.deepEqual(afterConflict.settings, { maxStoredInlineFileMb: 40 });
     assert.equal(afterConflict.revision, afterFirst.revision);
 
-    // 不传 expectedRevision 仍然直接覆盖。
-    await delay(5);
-    await writeGlobalSettingsFile(settingsRoot, 'attachments', { maxStoredInlineFileMb: 99 });
-    assert.deepEqual((await loadGlobalSettingsFile(settingsRoot, 'attachments')).settings, { maxStoredInlineFileMb: 99 });
+    // 不允许退化为无版本写入。
+    await assert.rejects(
+      () => writeGlobalSettingsFile(settingsRoot, 'attachments', { maxStoredInlineFileMb: 99 }, undefined),
+      (error) => isSettingsRevisionConflictError(error)
+    );
+    assert.deepEqual((await loadGlobalSettingsFile(settingsRoot, 'attachments')).settings, { maxStoredInlineFileMb: 40 });
   } finally {
     await removeTempRoot(tempRoot);
   }
 });
 
-test('settings watcher 白名单精确到具体文件，不会匹配高频的 conversation-*-llm.json', () => {
+test('settings watcher 白名单精确到具体文件，并单独监听 canonical common status', () => {
+  assert.equal(GLOBAL_STATUS_WATCH_PATTERN, '.limcode-global-status.json');
   assert.ok(Array.isArray(GLOBAL_SETTINGS_WATCH_PATTERNS));
   assert.ok(GLOBAL_SETTINGS_WATCH_PATTERNS.length > 0);
 

@@ -9,8 +9,8 @@ class MockUri {
   constructor(fsPath) {
     this.scheme = 'file';
     this.fsPath = path.resolve(fsPath);
+    this.path = this.fsPath.replace(/\\/g, '/');
   }
-
   static file(fsPath) { return new MockUri(fsPath); }
   static joinPath(base, ...segments) { return new MockUri(path.join(base.fsPath, ...segments)); }
   toString() { return `file://${this.fsPath.replace(/\\/g, '/')}`; }
@@ -42,18 +42,9 @@ function installVscodeMock() {
   return () => { Module._load = originalLoad; };
 }
 
-function deferred() {
-  let resolve;
-  const promise = new Promise((res) => { resolve = res; });
-  return { promise, resolve };
-}
+function clone(value) { return JSON.parse(JSON.stringify(value)); }
 
-function delay(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-function skeletonState(createEmptyClientState, suffix) {
-  const state = createEmptyClientState();
+function addBundle(state, suffix) {
   state.conversations.push({ id: `conversation-${suffix}`, title: suffix, visibility: 'visible' });
   state.agents.push({ id: `agent-${suffix}`, name: suffix, kind: 'main', createdAt: 1, updatedAt: 1 });
   state.agentConversationLinks.push({
@@ -65,162 +56,223 @@ function skeletonState(createEmptyClientState, suffix) {
   return state;
 }
 
-const SKELETON_MANIFEST_FILE = '.client-state-skeleton-manifest.json';
-
-function skeletonManifestPath(paths) {
-  return path.join(paths.globalStorageUri.fsPath, SKELETON_MANIFEST_FILE);
-}
-
-async function readSkeletonManifest(paths) {
-  return JSON.parse(await fs.readFile(skeletonManifestPath(paths), 'utf8'));
+function setDeferredProject(state, suffix) {
+  state.projectContexts = [{
+    id: `project-${suffix}`,
+    kind: 'workspaceFolder',
+    uri: `file:///project-${suffix}`,
+    name: suffix,
+    createdAt: 1,
+    updatedAt: 1
+  }];
+  return state;
 }
 
 const restore = installVscodeMock();
 const { createVscodeStoragePaths } = require('../dist/extension/backend/capabilities/vscodeStorage/paths.js');
 const clientStateStore = require('../dist/extension/backend/capabilities/vscodeStorage/clientStateStore.js');
 const skeletonTransaction = require('../dist/extension/backend/capabilities/vscodeStorage/clientStateSkeletonTransaction.js');
+const skeletonPatch = require('../dist/extension/backend/capabilities/vscodeStorage/clientStateSkeletonPatch.js');
 const { createEmptyClientState } = require('../dist/extension/shared/clientStateSchema.js');
 
-test('skeleton reader waits for a multi-store mutation and observes one committed snapshot', async () => {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-skeleton-transaction-'));
-  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
-  const gate = deferred();
-  const writing = deferred();
+async function commitState(paths, base, next) {
+  return clientStateStore.saveClientStateSkeletonToStores(paths, skeletonPatch.createClientStateSkeletonPatch(base, next));
+}
+
+async function loadPinned(paths, pin, profile = 'full') {
+  return clientStateStore.loadClientStateSkeletonSnapshotFromStores(paths, pin, { profile });
+}
+
+async function loadCurrent(paths, owner = 'test-current') {
+  const pin = await skeletonTransaction.openClientStateSkeletonSnapshot(paths, owner);
+  if (!pin) return undefined;
   try {
-    await clientStateStore.saveClientStateSkeletonToStores(paths, skeletonState(createEmptyClientState, 'old'));
+    return await loadPinned(paths, pin, 'full');
+  } finally {
+    await skeletonTransaction.releaseClientStateSkeletonSnapshot(paths, pin);
+  }
+}
 
-    let blocked = false;
-    skeletonTransaction.__clientStateSkeletonTransactionTestHooks.afterManifestWrite = async (manifest) => {
-      if (!blocked && manifest.state === 'writing') {
-        blocked = true;
-        writing.resolve();
-        await gate.promise;
-      }
+async function withTemp(prefix, action) {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  try {
+    return await action(createVscodeStoragePaths(MockUri.file(tempRoot)), tempRoot);
+  } finally {
+    skeletonTransaction.__clientStateSkeletonTransactionTestHooks.afterPhase = undefined;
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+test('不同窗口基于同一 base 新增不同 Conversation/Link，最终 committed snapshot 取 union', async () => {
+  await withTemp('limcode-skeleton-union-', async (paths) => {
+    const base = addBundle(createEmptyClientState(), 'base');
+    await commitState(paths, createEmptyClientState(), base);
+
+    const windowA = addBundle(clone(base), 'A');
+    const windowB = addBundle(clone(base), 'B');
+    await commitState(paths, base, windowA);
+    await commitState(paths, base, windowB);
+
+    const loaded = await loadCurrent(paths);
+    assert.deepEqual(loaded.conversations.map((record) => record.id).sort(), [
+      'conversation-A', 'conversation-B', 'conversation-base'
+    ]);
+    assert.deepEqual(loaded.agentConversationLinks.map((record) => record.id).sort(), [
+      'link-A', 'link-B', 'link-base'
+    ]);
+  });
+});
+
+test('陈旧窗口只新增 Y 时不会复活已被另一窗口删除的 X', async () => {
+  await withTemp('limcode-skeleton-delete-no-resurrect-', async (paths) => {
+    const base = addBundle(createEmptyClientState(), 'X');
+    await commitState(paths, createEmptyClientState(), base);
+    const staleAddsY = addBundle(clone(base), 'Y');
+    await commitState(paths, base, createEmptyClientState());
+    await commitState(paths, base, staleAddsY);
+
+    const loaded = await loadCurrent(paths);
+    assert.deepEqual(loaded.conversations.map((record) => record.id), ['conversation-Y']);
+    assert.deepEqual(loaded.agentConversationLinks.map((record) => record.id), ['link-Y']);
+  });
+});
+
+test('同 id 分叉更新明确冲突，绝不静默 last-writer-wins', async () => {
+  await withTemp('limcode-skeleton-conflict-', async (paths) => {
+    const base = addBundle(createEmptyClientState(), 'same');
+    await commitState(paths, createEmptyClientState(), base);
+    const a = clone(base);
+    const b = clone(base);
+    a.conversations[0].title = 'A title';
+    b.conversations[0].title = 'B title';
+    await commitState(paths, base, a);
+    await assert.rejects(
+      () => commitState(paths, base, b),
+      (error) => error && error.clientStateSkeletonRevisionConflict === true
+    );
+    assert.equal((await loadCurrent(paths)).conversations[0].title, 'A title');
+  });
+});
+
+test('startup/deferred 使用同一 immutable pin，期间多次 commit 不会让 staged hydration 失败或漂移', async () => {
+  await withTemp('limcode-skeleton-pin-', async (paths) => {
+    const first = setDeferredProject(addBundle(createEmptyClientState(), 'first'), 'first');
+    await commitState(paths, createEmptyClientState(), first);
+    const pin = await skeletonTransaction.openClientStateSkeletonSnapshot(paths, 'staged-reader');
+    assert.ok(pin);
+
+    const startup = await loadPinned(paths, pin, 'startup');
+    const second = setDeferredProject(addBundle(createEmptyClientState(), 'second'), 'second');
+    await commitState(paths, first, second);
+    const third = clone(second);
+    third.conversations[0].title = 'third';
+    await commitState(paths, second, third);
+
+    const deferred = await loadPinned(paths, pin, 'deferred');
+    assert.deepEqual(startup.conversations.map((item) => item.id), ['conversation-first']);
+    assert.deepEqual(deferred.projectContexts.map((item) => item.id), ['project-first']);
+    await skeletonTransaction.releaseClientStateSkeletonSnapshot(paths, pin);
+
+    const current = await loadCurrent(paths);
+    assert.equal(current.conversations[0].title, 'third');
+    assert.deepEqual(current.projectContexts.map((item) => item.id), ['project-second']);
+  });
+});
+
+test('current pointer 发布前 crash 仍完整读取 old；发布后 crash 只读取完整 new', async () => {
+  await withTemp('limcode-skeleton-crash-', async (paths) => {
+    const oldState = addBundle(createEmptyClientState(), 'old');
+    await commitState(paths, createEmptyClientState(), oldState);
+    const beforePublish = clone(oldState);
+    beforePublish.conversations[0].title = 'before-publish';
+
+    skeletonTransaction.__clientStateSkeletonTransactionTestHooks.afterPhase = async (phase) => {
+      if (phase === 'snapshotWritten') throw new Error('crash-before-current');
     };
+    await assert.rejects(() => commitState(paths, oldState, beforePublish), /crash-before-current/);
+    assert.equal((await loadCurrent(paths)).conversations[0].title, 'old');
 
-    const saving = clientStateStore.saveClientStateSkeletonToStores(paths, skeletonState(createEmptyClientState, 'new'));
-    await writing.promise;
+    skeletonTransaction.__clientStateSkeletonTransactionTestHooks.afterPhase = undefined;
+    const afterPublish = clone(oldState);
+    afterPublish.conversations[0].title = 'after-current';
+    skeletonTransaction.__clientStateSkeletonTransactionTestHooks.afterPhase = async (phase) => {
+      if (phase === 'currentWritten') throw new Error('crash-after-current');
+    };
+    await assert.rejects(() => commitState(paths, oldState, afterPublish), /crash-after-current/);
+    assert.equal((await loadCurrent(paths)).conversations[0].title, 'after-current');
+  });
+});
 
-    let readerResolved = false;
-    const reading = clientStateStore.loadClientStateSkeletonFromStores(paths, { profile: 'full' }).then((value) => {
-      readerResolved = true;
-      return value;
+test('live pin 保护任意旧 generation；release 后后续 GC 可回收', async () => {
+  await withTemp('limcode-skeleton-pin-gc-', async (paths) => {
+    const one = addBundle(createEmptyClientState(), 'one');
+    await commitState(paths, createEmptyClientState(), one);
+    const pin = await skeletonTransaction.openClientStateSkeletonSnapshot(paths, 'gc-reader');
+    const pinnedManifestPath = path.join(paths.clientStateSkeletonRootPath, 'snapshots', `${pin.snapshotId}.json`);
+
+    const two = clone(one); two.conversations[0].title = 'two';
+    const three = clone(two); three.conversations[0].title = 'three';
+    await commitState(paths, one, two);
+    await commitState(paths, two, three);
+    assert.equal((await loadPinned(paths, pin)).conversations[0].title, 'one');
+    await fs.access(pinnedManifestPath);
+
+    await skeletonTransaction.releaseClientStateSkeletonSnapshot(paths, pin);
+    const four = clone(three); four.conversations[0].title = 'four';
+    await commitState(paths, three, four);
+    await assert.rejects(() => fs.access(pinnedManifestPath), /ENOENT/);
+  });
+});
+
+test('语义化 Conversation 删除基于最新 union，能移除调用窗口未 hydrate 的外部 Link', async () => {
+  await withTemp('limcode-skeleton-semantic-delete-', async (paths) => {
+    const initial = addBundle(createEmptyClientState(), 'target');
+    initial.conversationProjectLinks.push({
+      id: 'external-project-link',
+      conversationId: 'conversation-target',
+      projectContextId: 'project-external',
+      role: 'primary',
+      createdAt: 1,
+      updatedAt: 1
     });
-    await delay(40);
-    assert.equal(readerResolved, false, 'reader must wait for the skeleton transaction lock');
-
-    gate.resolve();
-    await saving;
-    const loaded = await reading;
-    assert.deepEqual(loaded.conversations.map((record) => record.id), ['conversation-new']);
-    assert.deepEqual(loaded.agents.map((record) => record.id), ['agent-new']);
-    assert.deepEqual(loaded.agentConversationLinks.map((record) => record.id), ['link-new']);
-  } finally {
-    skeletonTransaction.__clientStateSkeletonTransactionTestHooks.afterManifestWrite = undefined;
-    gate.resolve();
-    await fs.rm(tempRoot, { recursive: true, force: true });
-  }
+    initial.projectContexts.push({
+      id: 'project-external', kind: 'workspaceFolder', uri: 'file:///external', name: 'external', createdAt: 1, updatedAt: 1
+    });
+    await commitState(paths, createEmptyClientState(), initial);
+    await skeletonTransaction.commitClientStateSkeletonConversationDeletion(paths, 'conversation-target');
+    const loaded = await loadCurrent(paths);
+    assert.equal(loaded.conversations.length, 0);
+    assert.equal(loaded.agentConversationLinks.length, 0);
+    assert.equal(loaded.conversationProjectLinks.length, 0);
+    assert.equal(loaded.projectContexts.length, 1, '独立 ProjectContext 主体不能因 Link 删除而级联删除');
+  });
 });
 
-test('interrupted skeleton write 只有 prepared marker 才能在读取时提升为 committed', async () => {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-skeleton-prepared-'));
-  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
-  try {
-    await clientStateStore.saveClientStateSkeletonToStores(paths, skeletonState(createEmptyClientState, 'old'));
-    let interrupted = false;
-    skeletonTransaction.__clientStateSkeletonTransactionTestHooks.afterManifestWrite = async (manifest) => {
-      if (!interrupted && manifest.state === 'prepared') {
-        interrupted = true;
-        throw new Error('simulated crash after prepared marker');
-      }
-    };
+test('current/previous 指针缺失但 generation traces 仍存在时 fail closed，不误判为空存储', async () => {
+  await withTemp('limcode-skeleton-missing-pointer-', async (paths) => {
+    const state = addBundle(createEmptyClientState(), 'pointer');
+    await commitState(paths, createEmptyClientState(), state);
+    await fs.rm(path.join(paths.clientStateSkeletonRootPath, 'current.json'));
 
     await assert.rejects(
-      () => clientStateStore.saveClientStateSkeletonToStores(paths, skeletonState(createEmptyClientState, 'prepared')),
-      /simulated crash after prepared marker/
+      () => skeletonTransaction.openClientStateSkeletonSnapshot(paths, 'missing-pointer-reader'),
+      /pointer is missing while storage traces still exist/
     );
-    assert.equal((await readSkeletonManifest(paths)).state, 'prepared');
-
-    skeletonTransaction.__clientStateSkeletonTransactionTestHooks.afterManifestWrite = undefined;
-    const recovered = await clientStateStore.loadClientStateSkeletonFromStores(paths, { profile: 'full' });
-    assert.deepEqual(recovered.conversations.map((record) => record.id), ['conversation-prepared']);
-    assert.equal((await readSkeletonManifest(paths)).state, 'committed');
-  } finally {
-    skeletonTransaction.__clientStateSkeletonTransactionTestHooks.afterManifestWrite = undefined;
-    await fs.rm(tempRoot, { recursive: true, force: true });
-  }
-});
-
-test('stores 未确认完成时 writing skeleton 不得被读取器误提交', async () => {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-skeleton-writing-'));
-  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
-  try {
-    await clientStateStore.saveClientStateSkeletonToStores(paths, skeletonState(createEmptyClientState, 'old'));
-    clientStateStore.__clientStateSkeletonStoreTestHooks.afterStoresSaved = async () => {
-      throw new Error('simulated unconfirmed store completion');
-    };
-
     await assert.rejects(
-      () => clientStateStore.saveClientStateSkeletonToStores(paths, skeletonState(createEmptyClientState, 'unconfirmed')),
-      /simulated unconfirmed store completion/
+      () => commitState(paths, createEmptyClientState(), addBundle(createEmptyClientState(), 'replacement')),
+      /pointer is missing while storage traces still exist/
     );
-    assert.equal((await readSkeletonManifest(paths)).state, 'writing');
+  });
+});
 
-    clientStateStore.__clientStateSkeletonStoreTestHooks.afterStoresSaved = undefined;
+test('空存储不创建 coordinator；open 返回 undefined', async () => {
+  await withTemp('limcode-skeleton-empty-', async (paths) => {
+    assert.equal(await skeletonTransaction.openClientStateSkeletonSnapshot(paths, 'empty-reader'), undefined);
     await assert.rejects(
-      () => clientStateStore.loadClientStateSkeletonFromStores(paths, { profile: 'full' }),
-      /incomplete.*writing|writing.*incomplete/i
+      () => fs.access(path.join(paths.clientStateSkeletonRootPath, 'current.json')),
+      /ENOENT/
     );
-    assert.equal((await readSkeletonManifest(paths)).state, 'writing');
-  } finally {
-    clientStateStore.__clientStateSkeletonStoreTestHooks.afterStoresSaved = undefined;
-    await fs.rm(tempRoot, { recursive: true, force: true });
-  }
+  });
 });
 
-test('startup/deferred hydration can pin one committed skeleton transaction', async () => {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-skeleton-pinned-'));
-  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
-  try {
-    await clientStateStore.saveClientStateSkeletonToStores(paths, skeletonState(createEmptyClientState, 'first'));
-    const startup = await clientStateStore.loadClientStateSkeletonSnapshotFromStores(paths, { profile: 'startup' });
-    await clientStateStore.saveClientStateSkeletonToStores(paths, skeletonState(createEmptyClientState, 'second'));
-    await assert.rejects(
-      () => clientStateStore.loadClientStateSkeletonSnapshotFromStores(paths, { profile: 'deferred' }, startup.transactionId),
-      /snapshot changed during staged hydration/i
-    );
-  } finally {
-    await fs.rm(tempRoot, { recursive: true, force: true });
-  }
-});
-
-test('manifest missing with skeleton traces is rejected rather than treated as an empty store', async () => {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-skeleton-trace-'));
-  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
-  try {
-    await fs.mkdir(path.dirname(paths.conversationsIndexUri.fsPath), { recursive: true });
-    await fs.writeFile(paths.conversationsIndexUri.fsPath, '{}\n');
-    await assert.rejects(
-      () => clientStateStore.loadClientStateSkeletonFromStores(paths, { profile: 'full' }),
-      /manifest is missing.*traces exist/i
-    );
-  } finally {
-    await fs.rm(tempRoot, { recursive: true, force: true });
-  }
-});
-
-test('empty storage (no manifest, no traces) stays empty without writing a manifest', async () => {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-skeleton-empty-'));
-  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
-  try {
-    const loaded = await clientStateStore.loadClientStateSkeletonFromStores(paths, { profile: 'full' });
-    assert.equal(loaded, undefined);
-    await assert.rejects(() => fs.access(skeletonManifestPath(paths)), /ENOENT/, 'must not fabricate a manifest for a brand-new user');
-  } finally {
-    await fs.rm(tempRoot, { recursive: true, force: true });
-  }
-});
-
-test('收尾恢复 vscode mock', () => {
-  restore();
-});
+test('收尾恢复 vscode mock', () => restore());

@@ -171,6 +171,27 @@ function makeTimelineState(createEmptyClientState, conversationId, count, option
   return state;
 }
 
+const TIMELINE_TABLE_KEYS = [
+  'messages', 'messageRevisions', 'messageCurrentRevisionLinks', 'toolCalls', 'toolCallEvents',
+  'projectContexts', 'shadowRepositories', 'conversationCheckpointRepositoryLinks', 'checkpoints',
+  'checkpointTimelineAnchors'
+];
+
+/** 把测试中的稀疏 upsert 输入转换为生产使用的 local base -> local next CAS 提交。 */
+async function commitTimelinePatch(paths, conversationId, patch) {
+  const base = await timelineStore.loadConversationTimelineDetail(paths, conversationId) ?? createEmptyClientState();
+  const next = JSON.parse(JSON.stringify(base));
+  for (const key of TIMELINE_TABLE_KEYS) {
+    const records = patch[key] ?? [];
+    if (records.length === 0) continue;
+    const byId = new Map(next[key].map((record) => [record.id, record]));
+    for (const record of records) byId.set(record.id, JSON.parse(JSON.stringify(record)));
+    next[key] = [...byId.values()];
+  }
+  await timelineStore.commitConversationTimelineRenderDetail(paths, conversationId, base, next);
+  return true;
+}
+
 const restore = installVscodeMock();
 const { createVscodeStoragePaths } = require('../dist/extension/backend/capabilities/vscodeStorage/paths.js');
 const timelineStore = require('../dist/extension/backend/capabilities/vscodeStorage/conversationTimelineStore.js');
@@ -247,7 +268,7 @@ test('incremental 严格合并后 projection context 仍可读', async () => {
     await timelineStore.saveConversationTimelineDetail(paths, conversationId, makeTimelineState(createEmptyClientState, conversationId, 2, { withTaskListToolCall: true }));
     const patch = createEmptyClientState();
     patch.messages.push(textMessage(conversationId, 'm-3', 3, 'new tail', 'model'));
-    const saved = await timelineStore.saveConversationTimelineRenderDetailIncremental(paths, conversationId, patch);
+    const saved = await commitTimelinePatch(paths, conversationId, patch);
     assert.equal(saved, true);
 
     const page = await timelineStore.loadConversationTimelinePage(paths, {
@@ -459,7 +480,7 @@ test('tail incremental 只重写受影响 suffix 并复用 prefix generation/pro
     const patch = createEmptyClientState();
     patch.messages.push(textMessage(conversationId, 'm-250', 250, 'updated streamed tail', 'model'));
     patch.messages.push(textMessage(conversationId, 'm-251', 251, 'new tail message', 'model'));
-    const saved = await timelineStore.saveConversationTimelineRenderDetailIncremental(paths, conversationId, patch);
+    const saved = await commitTimelinePatch(paths, conversationId, patch);
     assert.equal(saved, true);
 
     const afterIndex = await readJsonFile(path.join(root, 'index.json'));
@@ -511,7 +532,7 @@ test('跨 chunk 尾部发布遇到 Canceled 时旧 active index 仍保留完整�
       throw new Error('Canceled');
     };
     await assert.rejects(
-      timelineStore.saveConversationTimelineRenderDetailIncremental(paths, conversationId, patch),
+      commitTimelinePatch(paths, conversationId, patch),
       /Canceled/
     );
     timelineStore.__conversationTimelineStoreTestHooks.beforePublishIndex = undefined;
@@ -522,7 +543,7 @@ test('跨 chunk 尾部发布遇到 Canceled 时旧 active index 仍保留完整�
     assert.equal(afterFailureDetail.messages.length, 100);
     assert.equal(afterFailureDetail.messages.at(-1).id, 'm-100');
 
-    await timelineStore.saveConversationTimelineRenderDetailIncremental(paths, conversationId, patch);
+    await commitTimelinePatch(paths, conversationId, patch);
     const committedIndex = await readJsonFile(path.join(root, 'index.json'));
     assert.equal(committedIndex.chunks.length, 2);
     assert.deepEqual(committedIndex.chunks[0].messageIds, beforeIndex.chunks[0].messageIds);
@@ -548,7 +569,7 @@ test('merge active index 只剩最新 chunk 时会用 previous index 恢复旧�
     patch.messages.push(textMessage(conversationId, 'm-101', 101, 'new tail 101', 'user'));
     patch.messages.push(textMessage(conversationId, 'm-102', 102, 'new tail 102', 'model'));
     patch.messages.push(textMessage(conversationId, 'm-103', 103, 'new tail 103', 'user'));
-    await timelineStore.saveConversationTimelineRenderDetailIncremental(paths, conversationId, patch);
+    await commitTimelinePatch(paths, conversationId, patch);
 
     const active = await readJsonFile(path.join(root, 'index.json'));
     const previous = await readJsonFile(path.join(root, 'index.previous.json'));
@@ -607,7 +628,7 @@ test('tail incremental 会校验并忽略未变化的只读 context prefix', asy
     patch.messages.push(contextPrefixMessage);
     patch.messages.push(textMessage(conversationId, 'm-250', 250, 'updated streamed tail', 'model'));
     patch.messages.push(textMessage(conversationId, 'm-251', 251, 'new tail message', 'user'));
-    const saved = await timelineStore.saveConversationTimelineRenderDetailIncremental(paths, conversationId, patch);
+    const saved = await commitTimelinePatch(paths, conversationId, patch);
     assert.equal(saved, true);
 
     const afterIndex = await readJsonFile(path.join(root, 'index.json'));
@@ -648,7 +669,7 @@ test('tail incremental 按 JSON 落盘语义忽略 prefix ToolCall 的 undefined
     patch.toolCalls.push(prefixToolCall);
     patch.messages.push(textMessage(conversationId, 'm-250', 250, 'updated streamed tail', 'model'));
     patch.messages.push(textMessage(conversationId, 'm-251', 251, 'new tail message', 'user'));
-    const saved = await timelineStore.saveConversationTimelineRenderDetailIncremental(paths, conversationId, patch);
+    const saved = await commitTimelinePatch(paths, conversationId, patch);
     assert.equal(saved, true);
 
     const afterEquivalentIndex = await readJsonFile(path.join(root, 'index.json'));
@@ -656,7 +677,7 @@ test('tail incremental 按 JSON 落盘语义忽略 prefix ToolCall 的 undefined
 
     const changedPatch = createEmptyClientState();
     changedPatch.toolCalls.push({ ...prefixToolCall, status: 'warning', error: 'real persisted change' });
-    const changedSaved = await timelineStore.saveConversationTimelineRenderDetailIncremental(paths, conversationId, changedPatch);
+    const changedSaved = await commitTimelinePatch(paths, conversationId, changedPatch);
     assert.equal(changedSaved, true);
 
     const afterChangedIndex = await readJsonFile(path.join(root, 'index.json'));
@@ -688,7 +709,7 @@ test('tail incremental 不再跳过仅 tool event patch', async () => {
       at: Date.now(),
       delta: 'tail event persisted'
     });
-    const saved = await timelineStore.saveConversationTimelineRenderDetailIncremental(paths, conversationId, patch);
+    const saved = await commitTimelinePatch(paths, conversationId, patch);
     assert.equal(saved, true);
 
     const detail = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
@@ -711,7 +732,7 @@ test('修改早期 message 会 fallback full rewrite 而不是复用 prefix', as
 
     const patch = createEmptyClientState();
     patch.messages.push(textMessage(conversationId, 'm-1', 1, 'early edit', 'user'));
-    const saved = await timelineStore.saveConversationTimelineRenderDetailIncremental(paths, conversationId, patch);
+    const saved = await commitTimelinePatch(paths, conversationId, patch);
     assert.equal(saved, true);
 
     const afterIndex = await readJsonFile(path.join(root, 'index.json'));
@@ -742,7 +763,7 @@ test('tail incremental 受影响 suffix projection 损坏会阻止写入', async
     const patch = createEmptyClientState();
     patch.messages.push(textMessage(conversationId, 'm-251', 251, 'blocked by corrupt suffix', 'model'));
     await assert.rejects(
-      timelineStore.saveConversationTimelineRenderDetailIncremental(paths, conversationId, patch),
+      commitTimelinePatch(paths, conversationId, patch),
       /projection JSON is invalid|Failed to read|hash|Unexpected/i
     );
 
@@ -764,7 +785,7 @@ test('并发 tail incremental writers 不丢消息', async () => {
       const seq = 251 + index;
       const patch = createEmptyClientState();
       patch.messages.push(textMessage(conversationId, `m-${seq}`, seq, `concurrent tail ${seq}`, seq % 2 ? 'user' : 'model'));
-      return timelineStore.saveConversationTimelineRenderDetailIncremental(paths, conversationId, patch);
+      return commitTimelinePatch(paths, conversationId, patch);
     }));
 
     const detail = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
@@ -772,6 +793,68 @@ test('并发 tail incremental writers 不丢消息', async () => {
     for (let seq = 251; seq <= 262; seq += 1) {
       assert.ok(detail.messages.some((message) => message.id === `m-${seq}`), `missing m-${seq}`);
     }
+  } finally {
+    await removeTempRoot(tempRoot);
+  }
+});
+
+test('陈旧窗口只追加新消息时，不会把同 id 已完成流式消息回退为旧内容', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-stale-stream-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  const conversationId = 'conv-stale-stream';
+  try {
+    const initial = createEmptyClientState();
+    const streaming = textMessage(conversationId, 'stream-1', 1, 'OLD PARTIAL CONTENT', 'model');
+    streaming.status = 'streaming';
+    initial.messages.push(streaming);
+    await timelineStore.saveConversationTimelineDetail(paths, conversationId, initial);
+
+    const baseA = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    const baseB = JSON.parse(JSON.stringify(baseA));
+
+    const nextA = JSON.parse(JSON.stringify(baseA));
+    nextA.messages[0].content.parts[0].text = 'NEW FINAL CONTENT';
+    nextA.messages[0].status = 'complete';
+    await timelineStore.commitConversationTimelineRenderDetail(paths, conversationId, baseA, nextA);
+
+    const nextB = JSON.parse(JSON.stringify(baseB));
+    nextB.messages.push(textMessage(conversationId, 'message-from-stale-window', 2, 'independent append'));
+    await timelineStore.commitConversationTimelineRenderDetail(paths, conversationId, baseB, nextB);
+
+    const stored = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    assert.equal(stored.messages.length, 2);
+    assert.equal(stored.messages.find((message) => message.id === 'stream-1').content.parts[0].text, 'NEW FINAL CONTENT');
+    assert.equal(stored.messages.find((message) => message.id === 'stream-1').status, 'complete');
+    assert.ok(stored.messages.some((message) => message.id === 'message-from-stale-window'));
+  } finally {
+    await removeTempRoot(tempRoot);
+  }
+});
+
+test('两个窗口真正修改同一 timeline record 时明确冲突，不静默覆盖', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-same-record-conflict-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  const conversationId = 'conv-same-record-conflict';
+  try {
+    const initial = createEmptyClientState();
+    initial.messages.push(textMessage(conversationId, 'shared-message', 1, 'original', 'model'));
+    await timelineStore.saveConversationTimelineDetail(paths, conversationId, initial);
+
+    const baseA = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    const baseB = JSON.parse(JSON.stringify(baseA));
+    const nextA = JSON.parse(JSON.stringify(baseA));
+    const nextB = JSON.parse(JSON.stringify(baseB));
+    nextA.messages[0].content.parts[0].text = 'writer A';
+    nextB.messages[0].content.parts[0].text = 'writer B';
+
+    await timelineStore.commitConversationTimelineRenderDetail(paths, conversationId, baseA, nextA);
+    await assert.rejects(
+      timelineStore.commitConversationTimelineRenderDetail(paths, conversationId, baseB, nextB),
+      /Conversation timeline conflict.*shared-message/
+    );
+
+    const stored = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    assert.equal(stored.messages[0].content.parts[0].text, 'writer A');
   } finally {
     await removeTempRoot(tempRoot);
   }

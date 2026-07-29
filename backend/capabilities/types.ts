@@ -375,7 +375,7 @@ export interface WebviewCapability {
   unsubscribe(clientId: BridgeClientId, streamId: string): void;
   post(clientId: BridgeClientId, message: ExtensionToWebviewMessage): void;
   broadcast(message: ExtensionToWebviewMessage): void;
-  broadcastToStream(streamId: string, message: ExtensionToWebviewMessage): void;
+  broadcastToStream(streamId: string, message: ExtensionToWebviewMessage, options?: { excludeClientIds?: readonly BridgeClientId[] }): void;
   clientIds(): BridgeClientId[];
   clientRecords(): WebviewClientRuntimeRecord[];
 }
@@ -475,6 +475,24 @@ export interface RuntimePaths {
   conversationsRootPath: string;
   conversationsIndexUri: vscode.Uri;
   conversationsIndexPath: string;
+  /** Conversation 复用关系独立数据根目录。 */
+  conversationReuseLinksRootUri: vscode.Uri;
+  conversationReuseLinksRootPath: string;
+  conversationReuseLinksIndexUri: vscode.Uri;
+  conversationReuseLinksIndexPath: string;
+  /** Conversation 分支关系独立数据根目录。 */
+  conversationBranchLinksRootUri: vscode.Uri;
+  conversationBranchLinksRootPath: string;
+  conversationBranchLinksIndexUri: vscode.Uri;
+  conversationBranchLinksIndexPath: string;
+  /** Conversation 来源关系独立数据根目录。 */
+  conversationOriginLinksRootUri: vscode.Uri;
+  conversationOriginLinksRootPath: string;
+  conversationOriginLinksIndexUri: vscode.Uri;
+  conversationOriginLinksIndexPath: string;
+  /** ClientState skeleton 事务协调元数据根目录；不保存领域 record。 */
+  clientStateSkeletonRootUri: vscode.Uri;
+  clientStateSkeletonRootPath: string;
   /** 侧边栏历史列表读模型根目录：<dataRoot>/conversation-history */
   conversationHistoryRootUri: vscode.Uri;
   conversationHistoryRootPath: string;
@@ -635,8 +653,12 @@ export interface GlobalSettingsStoreResult {
   section: GlobalSettingsSection;
   settings: GlobalSettingsSectionValue;
   filePath: string;
-  /** 当前落盘版本（复用存储层已有的 savedAt），用于下一次写入的乐观并发校验。 */
-  revision?: string;
+  /** 一致快照的 opaque revision，用于下一次写入 CAS。 */
+  revision: string;
+  /** 仅保存结果携带：本次提交覆盖前的同一一致快照。 */
+  previousSettings?: GlobalSettingsSectionValue;
+  /** 仅 common 保存结果携带：由提交事务判定实际是否切换了 data root。 */
+  dataRootChanged?: boolean;
 }
 
 export interface StorageCapability {
@@ -668,9 +690,11 @@ export interface StorageCapability {
     anchorMessageId: string;
     keepAnchor: boolean;
   }): Promise<{ conversationId: string; removedMessageIds: string[] }>;
-  saveClientStateSkeleton(state: ClientState): Promise<void>;
-  saveConversationRenderDetail(conversationId: string, state: ClientState): Promise<void>;
-  saveConversationTimelineRenderDetail(conversationId: string, state: ClientState): Promise<void>;
+  saveClientStateSkeleton(
+    patch: import('./vscodeStorage/clientStateSkeletonPatch').ClientStateSkeletonPatch
+  ): Promise<import('./vscodeStorage/clientStateSkeletonTransaction').ClientStateSkeletonCommitResult>;
+  saveConversationRenderDetail(conversationId: string, localBase: ClientState, localNext: ClientState): Promise<void>;
+  saveConversationTimelineRenderDetail(conversationId: string, localBase: ClientState, localNext: ClientState): Promise<void>;
   saveConversationRunHistory(conversationId: string, state: ClientState, options: { mode: ConversationRunHistorySaveMode }): Promise<void>;
   loadConversationRunHistoryPage(request: ConversationRunHistoryPageRequest): Promise<ConversationRunHistoryPageRecord>;
   loadConversationRunDetail(request: ConversationRunDetailRequest): Promise<ConversationRunDetailRecord | undefined>;
@@ -681,6 +705,8 @@ export interface StorageCapability {
     originLink?: import('../../shared/protocol').ConversationOriginLinkRecord
   ): Promise<void>;
   removeConversationHistoryEntry(conversationId: string): Promise<void>;
+  /** 原子提交 Conversation 及其 skeleton 关系 cascade；物理 detail cleanup 必须在其后。 */
+  deleteConversationSkeleton(conversationId: string, runIds?: readonly string[]): Promise<void>;
   deleteConversationData(conversationId: string): Promise<DeleteConversationDataResult>;
   saveMessageSnapshot(conversationId: string, message: import('../../shared/protocol').MessageRecord): Promise<void>;
   removeMessage(conversationId: string, messageId: string): Promise<void>;
@@ -696,13 +722,17 @@ export interface StorageCapability {
   deleteShadowWorktrees(storageKeys: string[]): Promise<{ deletedStorageKeys: string[] }>;
   cleanupUnusedShadowWorktrees(maxAgeDays: number): Promise<{ deletedStorageKeys: string[] }>;
   loadGlobalSettings(section: GlobalSettingsSection): Promise<GlobalSettingsStoreResult>;
-  /** expectedRevision 可选：传入时做乐观并发校验，不传完全保持旧行为。 */
-  saveGlobalSettings(section: GlobalSettingsSection, settings: GlobalSettingsSectionValue, expectedRevision?: string): Promise<GlobalSettingsStoreResult>;
+  /** 普通业务写入必须基于 loadGlobalSettings 返回的一致快照 revision。 */
+  saveGlobalSettings(section: GlobalSettingsSection, settings: GlobalSettingsSectionValue, expectedRevision: string): Promise<GlobalSettingsStoreResult>;
   loadActiveLlmProviderConfig(conversationId?: string): Promise<LlmProviderConfigRecord>;
   loadLlmProviderConfigById(configId: string): Promise<LlmProviderConfigRecord | undefined>;
   loadActiveLlmCompressionConfig(providerConfigId?: string, modelId?: string): Promise<LlmCompressionConfigRecord | undefined>;
   loadLlmCompressionConfigById(configId: string): Promise<LlmCompressionConfigRecord | undefined>;
-  loadConversationSettings(conversationId: string, section: ConversationSettingsSection): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string } | undefined>;
+  loadConversationSettings(
+    conversationId: string,
+    section: ConversationSettingsSection,
+    options?: { initializeMissing?: boolean }
+  ): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string } | undefined>;
   saveConversationSettings(section: ConversationSettingsSection, settings: ConversationSettingsSectionValue): Promise<{ conversationId: string; section: ConversationSettingsSection; settings: ConversationSettingsSectionValue; filePath: string }>;
 }
 

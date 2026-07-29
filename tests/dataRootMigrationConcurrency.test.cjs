@@ -96,7 +96,15 @@ function disposeContext(context) {
 }
 
 async function removeTempRoot(target) {
-  await fs.rm(target, { recursive: true, force: true });
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fs.rm(target, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (attempt >= 10 || !['EPERM', 'EACCES', 'EBUSY', 'ENOTEMPTY'].includes(error && error.code)) throw error;
+      await delay(25 * attempt);
+    }
+  }
 }
 
 async function seedRegisteredRoot(root, name = 'agent-a') {
@@ -140,6 +148,26 @@ function reloadStorageModule(hooks) {
   return require(modulePath).createVsCodeStorageCapability;
 }
 
+test('process lease dispose waits for in-flight heartbeat and does not resurrect lease file', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-lease-dispose-'));
+  const createVsCodeStorageCapability = reloadStorageModule();
+  let context;
+  try {
+    context = createContext(tempRoot);
+    const storage = createVsCodeStorageCapability(context);
+    await storage.ensureReady();
+    disposeContext(context);
+    context = undefined;
+    await delay(100);
+    const leasesRoot = path.join(tempRoot, '.limcode-data-root-leases');
+    const leases = await fs.readdir(leasesRoot).catch((error) => error && error.code === 'ENOENT' ? [] : Promise.reject(error));
+    assert.deepEqual(leases.filter((name) => name.endsWith('.json')), []);
+  } finally {
+    disposeContext(context);
+    await removeTempRoot(tempRoot);
+  }
+});
+
 test('started shared write finishes before data-root migration copies', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-migration-shared-first-'));
   const oldRoot = path.join(tempRoot, 'old');
@@ -148,16 +176,19 @@ test('started shared write finishes before data-root migration copies', async ()
   const createVsCodeStorageCapability = reloadStorageModule({
     beforeCopy: async () => { order.push('copy'); }
   });
-  const blocker = patchWriteFileForBlock((filePath) => filePath.includes('attachments.json'), order);
+  let blocker;
   let context;
   try {
     await seedRegisteredRoot(oldRoot);
     context = createContext(oldRoot);
     const storage = createVsCodeStorageCapability(context);
-    const shared = storage.saveGlobalSettings('attachments', { maxStoredInlineFileMb: 7 });
+    const attachmentRevision = (await storage.loadGlobalSettings('attachments')).revision;
+    const commonRevision = (await storage.loadGlobalSettings('common')).revision;
+    blocker = patchWriteFileForBlock((filePath) => filePath.includes('attachments.json'), order);
+    const shared = storage.saveGlobalSettings('attachments', { maxStoredInlineFileMb: 7 }, attachmentRevision);
     while (!blocker.started) await delay(5);
 
-    const migration = storage.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' });
+    const migration = storage.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' }, commonRevision);
     await delay(30);
     assert.equal(order.includes('copy'), false, 'exclusive migration must wait for active shared write');
 
@@ -167,7 +198,7 @@ test('started shared write finishes before data-root migration copies', async ()
     const firstCopyIndex = order.indexOf('copy');
     assert.ok(firstCopyIndex > releaseIndex, `copy must start after shared write release: ${order.join(' -> ')}`);
   } finally {
-    blocker.restore();
+    blocker?.restore();
     disposeContext(context);
     await removeTempRoot(tempRoot);
   }
@@ -193,14 +224,16 @@ test('new shared writes queue while migration is active and paths provider can r
     await seedRegisteredRoot(oldRoot);
     context = createContext(oldRoot);
     const storage = createVsCodeStorageCapability(context);
+    const commonRevision = (await storage.loadGlobalSettings('common')).revision;
+    const attachmentRevision = (await storage.loadGlobalSettings('attachments')).revision;
     const pathsProvider = () => storage.isDataRootMutationActive?.() ? undefined : storage.paths;
-    const migration = storage.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' });
+    const migration = storage.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' }, commonRevision);
     await copyStarted.promise;
     assert.equal(storage.isDataRootMutationActive(), true);
     assert.equal(pathsProvider(), undefined, 'command paths provider should return undefined during exclusive migration');
 
     let sharedResolved = false;
-    const shared = storage.saveGlobalSettings('attachments', { maxStoredInlineFileMb: 8 }).then(() => { sharedResolved = true; order.push('shared-after-migration'); });
+    const shared = storage.saveGlobalSettings('attachments', { maxStoredInlineFileMb: 8 }, attachmentRevision).then(() => { sharedResolved = true; order.push('shared-after-migration'); });
     await delay(30);
     assert.equal(sharedResolved, false, 'new shared write must queue while exclusive migration is active');
 
@@ -208,7 +241,13 @@ test('new shared writes queue while migration is active and paths provider can r
     await Promise.all([migration, shared]);
     assert.equal(storage.isDataRootMutationActive(), false);
     assert.equal(pathsProvider().globalStoragePath, path.resolve(newRoot));
-    assert.deepEqual(order, ['copy-start', 'copy-release', 'shared-after-migration']);
+    assert.equal(order.at(-1), 'shared-after-migration');
+    assert.ok(order.filter((item) => item === 'copy-start').length >= 1);
+    assert.equal(
+      order.filter((item) => item === 'copy-start').length,
+      order.filter((item) => item === 'copy-release').length,
+      '每个业务 root 的复制都必须在 shared write 放行前完成'
+    );
     assert.ok(await fileExists(path.join(newRoot, 'settings', 'attachments.json')));
   } finally {
     disposeContext(context);
@@ -216,7 +255,7 @@ test('new shared writes queue while migration is active and paths provider can r
   }
 });
 
-test('globalStatus failure keeps old root intact and active', async () => {
+test('globalState 投影失败不会伪装成迁移失败或回滚 canonical 提交', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-migration-status-fail-'));
   const oldRoot = path.join(tempRoot, 'old');
   const newRoot = path.join(tempRoot, 'new');
@@ -226,10 +265,11 @@ test('globalStatus failure keeps old root intact and active', async () => {
     await seedRegisteredRoot(oldRoot);
     context = createContext(oldRoot, { failUpdate: true });
     const storage = createVsCodeStorageCapability(context);
-    await assert.rejects(() => storage.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' }), /global-status-failed/);
-    assert.ok(await fileExists(path.join(oldRoot, 'agents', 'agent-a.json')), 'old root must not be cleaned when status update fails');
-    assert.ok(await fileExists(path.join(newRoot, 'agents', 'agent-a.json')), 'copy may exist in target, but active root remains old');
-    assert.equal(storage.paths.globalStoragePath, path.resolve(oldRoot));
+    const commonRevision = (await storage.loadGlobalSettings('common')).revision;
+    await storage.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' }, commonRevision);
+    assert.equal(await fileExists(path.join(oldRoot, 'agents', 'agent-a.json')), false, 'canonical 提交后旧业务 root 可清理');
+    assert.ok(await fileExists(path.join(newRoot, 'agents', 'agent-a.json')));
+    assert.equal(storage.paths.globalStoragePath, path.resolve(newRoot));
   } finally {
     disposeContext(context);
     await removeTempRoot(tempRoot);
@@ -255,7 +295,8 @@ test('attachment operations queue while migration is active', async () => {
     await fs.writeFile(sourceFile, 'attachment-body', 'utf8');
     context = createContext(oldRoot);
     const storage = createVsCodeStorageCapability(context);
-    const migration = storage.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' });
+    const commonRevision = (await storage.loadGlobalSettings('common')).revision;
+    const migration = storage.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' }, commonRevision);
     await copyStarted.promise;
 
     let resolved = false;
@@ -290,9 +331,10 @@ test('migration refuses when another live instance still uses source root', asyn
     const storageA = createVsCodeStorageCapability(contextA);
     const storageB = createVsCodeStorageCapability(contextB);
     await storageB.ensureReady();
+    const commonRevision = (await storageA.loadGlobalSettings('common')).revision;
 
     await assert.rejects(
-      () => storageA.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' }),
+      () => storageA.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' }, commonRevision),
       /其它 LimCode\/VS Code 窗口仍在使用源数据目录/
     );
     assert.equal(storageA.paths.globalStoragePath, path.resolve(oldRoot));
@@ -325,23 +367,49 @@ test('simultaneous migration requests across instances are serialized by stable 
     await seedRegisteredRoot(oldRoot);
     contextB = createContext(oldRoot, { values: sharedValues });
     const storageB = createVsCodeStorageCapability(contextB);
-    const first = storageB.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' });
+    const firstRevision = (await storageB.loadGlobalSettings('common')).revision;
+    const first = storageB.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' }, firstRevision);
     await copyStarted.promise;
 
     contextA = createContext(oldRoot, { values: sharedValues });
     const storageA = createVsCodeStorageCapability(contextA);
-    const second = storageA.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' }).then(() => order.push('second-done'));
+    const secondRevision = (await storageA.loadGlobalSettings('common')).revision;
+    const second = storageA.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' }, secondRevision)
+      .then(() => undefined, (error) => error);
     await delay(30);
     assert.deepEqual(order, ['copy-start']);
 
     copyGate.resolve();
-    await Promise.all([first, second]);
+    const [, secondResult] = await Promise.all([first, second]);
+    assert.equal(secondResult?.settingsRevisionConflict, true, '第二个陈旧提交必须在稳定锁内被 CAS 拒绝');
     assert.equal(storageA.paths.globalStoragePath, path.resolve(newRoot));
     assert.equal(storageB.paths.globalStoragePath, path.resolve(newRoot));
-    assert.deepEqual(order, ['copy-start', 'copy-release', 'second-done']);
+    assert.deepEqual(order, ['copy-start', 'copy-release']);
   } finally {
     disposeContext(contextA);
     disposeContext(contextB);
+    await removeTempRoot(tempRoot);
+  }
+});
+
+test('canonical global status 初始化后消失会 fail closed，不用 globalState 陈旧投影重建', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-global-status-missing-'));
+  const createVsCodeStorageCapability = reloadStorageModule();
+  let context;
+  try {
+    context = createContext(tempRoot);
+    const storage = createVsCodeStorageCapability(context);
+    await storage.loadGlobalSettings('common');
+    const canonical = path.join(tempRoot, '.limcode-global-status.json');
+    await fs.rm(canonical);
+
+    await assert.rejects(
+      () => storage.loadGlobalSettings('common'),
+      /Canonical global status disappeared/
+    );
+    assert.equal(await fileExists(canonical), false);
+  } finally {
+    disposeContext(context);
     await removeTempRoot(tempRoot);
   }
 });
@@ -360,7 +428,8 @@ test('successful migration switches active root before best-effort cleanup', asy
     await seedRegisteredRoot(oldRoot);
     context = createContext(oldRoot, { beforeUpdate: async () => { order.push('status'); } });
     const storage = createVsCodeStorageCapability(context);
-    await storage.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: 'http://proxy.local' });
+    const commonRevision = (await storage.loadGlobalSettings('common')).revision;
+    await storage.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: 'http://proxy.local' }, commonRevision);
     assert.equal(storage.paths.globalStoragePath, path.resolve(newRoot));
     assert.ok(await fileExists(path.join(newRoot, 'agents', 'agent-a.json')));
     assert.equal(await fileExists(path.join(oldRoot, 'agents', 'agent-a.json')), false);

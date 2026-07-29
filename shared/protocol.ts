@@ -2604,15 +2604,15 @@ export interface GlobalSettingsSnapshotPayload {
   section: GlobalSettingsSection;
   settings: GlobalSettingsSectionValue;
   filePath: string;
-  /** 该 section 当前落盘版本（复用存储层已有的 savedAt）。回传给 update 用于乐观并发校验。 */
-  revision?: string;
+  /** 该 section 一致快照的 opaque revision；普通写入必须原样回传。 */
+  revision: string;
 }
 export interface GlobalSettingsUpdatePayload {
   section: GlobalSettingsSection;
   settings: GlobalSettingsSectionValue;
   refreshMcpTools?: boolean;
-  /** 本次修改所基于的落盘版本。不传表示不做校验（保持旧行为）。 */
-  expectedRevision?: string;
+  /** 本次修改所基于的一致快照 revision。缺失 revision 的无条件覆盖路径不再存在。 */
+  expectedRevision: string;
 }
 export interface ConversationSettingsRecord {
   conversationId: string;
@@ -2848,7 +2848,12 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.Hello, BridgeHelloPayload>
   | BridgeEnvelope<BridgeMessageType.Pong, { text: string; receivedAt: number }>
   | BridgeEnvelope<BridgeMessageType.WorkspaceInfo, WorkspaceInfo>
-  | BridgeEnvelope<BridgeMessageType.Error, { requestType?: string; message: string }>
+  | BridgeEnvelope<BridgeMessageType.Error, {
+      requestType?: string;
+      message: string;
+      code?: 'settings_revision_conflict';
+      actualRevision?: string;
+    }>
   | BridgeEnvelope<BridgeMessageType.OperationResult, OperationResult>
   | BridgeEnvelope<BridgeMessageType.ClientSnapshot, ClientSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ClientPatch, ClientPatchPayload>

@@ -8,6 +8,10 @@ import {
   CONVERSATION_AGENT_SELECTIONS_ROOT_DIR,
   CONVERSATION_WORKFLOW_SELECTIONS_ROOT_DIR,
   CONVERSATIONS_ROOT_DIR,
+  CONVERSATION_REUSE_LINKS_ROOT_DIR,
+  CONVERSATION_BRANCH_LINKS_ROOT_DIR,
+  CONVERSATION_ORIGIN_LINKS_ROOT_DIR,
+  CLIENT_STATE_SKELETON_ROOT_DIR,
   CONVERSATION_PROJECT_LINKS_ROOT_DIR,
   INDEX_FILE,
   LLM_SETTINGS_FILE,
@@ -87,6 +91,13 @@ export interface VscodeStorageUris {
   modelProfilesIndexUri: vscode.Uri;
   conversationsRootUri: vscode.Uri;
   conversationsIndexUri: vscode.Uri;
+  conversationReuseLinksRootUri: vscode.Uri;
+  conversationReuseLinksIndexUri: vscode.Uri;
+  conversationBranchLinksRootUri: vscode.Uri;
+  conversationBranchLinksIndexUri: vscode.Uri;
+  conversationOriginLinksRootUri: vscode.Uri;
+  conversationOriginLinksIndexUri: vscode.Uri;
+  clientStateSkeletonRootUri: vscode.Uri;
   conversationHistoryRootUri: vscode.Uri;
   conversationHistoryIndexUri: vscode.Uri;
   attachmentsRootUri: vscode.Uri;
@@ -174,6 +185,10 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
   const runRuntimeContextSnapshotLinks = root(globalStorageUri, RUN_RUNTIME_CONTEXT_SNAPSHOT_LINKS_ROOT_DIR);
   const modelProfiles = root(globalStorageUri, MODEL_PROFILES_ROOT_DIR);
   const conversations = root(globalStorageUri, CONVERSATIONS_ROOT_DIR);
+  const conversationReuseLinks = root(globalStorageUri, CONVERSATION_REUSE_LINKS_ROOT_DIR);
+  const conversationBranchLinks = root(globalStorageUri, CONVERSATION_BRANCH_LINKS_ROOT_DIR);
+  const conversationOriginLinks = root(globalStorageUri, CONVERSATION_ORIGIN_LINKS_ROOT_DIR);
+  const clientStateSkeletonRootUri = vscode.Uri.joinPath(globalStorageUri, CLIENT_STATE_SKELETON_ROOT_DIR);
   const conversationHistory = root(globalStorageUri, CONVERSATION_HISTORY_ROOT_DIR);
   const attachments = root(globalStorageUri, ATTACHMENTS_ROOT_DIR);
   const projectContexts = root(globalStorageUri, PROJECT_CONTEXTS_ROOT_DIR);
@@ -275,6 +290,20 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     conversationsRootPath: conversations.rootUri.fsPath,
     conversationsIndexUri: conversations.indexUri,
     conversationsIndexPath: conversations.indexUri.fsPath,
+    conversationReuseLinksRootUri: conversationReuseLinks.rootUri,
+    conversationReuseLinksRootPath: conversationReuseLinks.rootUri.fsPath,
+    conversationReuseLinksIndexUri: conversationReuseLinks.indexUri,
+    conversationReuseLinksIndexPath: conversationReuseLinks.indexUri.fsPath,
+    conversationBranchLinksRootUri: conversationBranchLinks.rootUri,
+    conversationBranchLinksRootPath: conversationBranchLinks.rootUri.fsPath,
+    conversationBranchLinksIndexUri: conversationBranchLinks.indexUri,
+    conversationBranchLinksIndexPath: conversationBranchLinks.indexUri.fsPath,
+    conversationOriginLinksRootUri: conversationOriginLinks.rootUri,
+    conversationOriginLinksRootPath: conversationOriginLinks.rootUri.fsPath,
+    conversationOriginLinksIndexUri: conversationOriginLinks.indexUri,
+    conversationOriginLinksIndexPath: conversationOriginLinks.indexUri.fsPath,
+    clientStateSkeletonRootUri,
+    clientStateSkeletonRootPath: clientStateSkeletonRootUri.fsPath,
     conversationHistoryRootUri: conversationHistory.rootUri,
     conversationHistoryRootPath: conversationHistory.rootUri.fsPath,
     conversationHistoryIndexUri: conversationHistory.indexUri,

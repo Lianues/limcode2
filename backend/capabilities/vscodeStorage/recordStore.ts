@@ -1,10 +1,12 @@
 import * as vscode from 'vscode';
 import { SettingsRevisionConflictError } from '../settingsRevisionConflict';
-import { RECORDS_DIR, STORAGE_VERSION } from './constants';
+import { INDEX_FILE, RECORDS_DIR, STORAGE_VERSION } from './constants';
 import { isFileNotFoundError, readJson, readJsonStrict, writeJson } from './json';
 import { sortableName } from './naming';
 import { withStorageResourceLock } from './storageResourceLock';
 import { deleteStorageUri, ensureStorageDirectory, readStorageDirectory } from './storageFs';
+import { createMissingStorageRevision, createStorageRevision } from './storageRevision';
+import { assertSafeStorageGenerationId, getStorageGenerationRootUri } from './storageGeneration';
 
 interface RecordsIndexFile {
   schemaVersion: typeof STORAGE_VERSION;
@@ -33,13 +35,47 @@ type RecordFile<TKey extends string, TRecord> = {
 
 export interface SaveRecordStoreOptions {
   pruneMissing?: boolean;
-  /**
-   * 乐观并发校验：本次保存所基于的 index savedAt。
-   * 不传 = 不校验 = 完全旧行为。校验直接搭在锁内本来就要做的 previousIndex 读取上，无额外 IO。
-   */
-  expectedSavedAt?: string;
-  /** 冲突报错中展示的 section 名；缺省用 index 路径。 */
-  expectedSavedAtSection?: string;
+}
+
+export interface RecordStoreSnapshot<TRecord> {
+  records: TRecord[];
+  revision: string;
+}
+
+export interface RecordStoreCommitResult<TRecord> extends RecordStoreSnapshot<TRecord> {
+  previousRecords: TRecord[];
+}
+
+export interface RecordStoreGenerationRef {
+  generation: string;
+  revision: string;
+}
+
+interface RecordStoreGenerationIndex {
+  kind: 'recordStore.generation';
+  schemaVersion: typeof STORAGE_VERSION;
+  storeKey: string;
+  generation: string;
+  revision: string;
+  savedAt: string;
+  records: Array<{ id: string; file: string; recordRevision: string }>;
+}
+
+interface RecordStoreGenerationRecordFile<TKey extends string, TRecord> {
+  kind: 'recordStore.generationRecord';
+  schemaVersion: typeof STORAGE_VERSION;
+  storeKey: string;
+  generation: string;
+  recordRevision: string;
+  savedAt: string;
+  record: Record<TKey, TRecord>;
+}
+
+export interface CommitRecordStoreSnapshotOptions extends SaveRecordStoreOptions {
+  /** 调用方读取快照时拿到的 opaque revision；普通提交必须提供。 */
+  expectedRevision: string;
+  /** 冲突错误中使用的稳定领域 section。 */
+  section: string;
 }
 
 export interface RecordStoreReadHookContext {
@@ -165,9 +201,70 @@ export async function withRecordStoreTransaction<T>(lockUri: vscode.Uri, action:
   return withRecordStoreMutationLock(lockUri, action);
 }
 
-/** 读取 record store index 的当前 savedAt，用作乐观并发的 revision。index 缺失/损坏时返回 undefined。 */
-export async function loadRecordStoreRevision(indexUri: vscode.Uri): Promise<string | undefined> {
-  return (await loadRecordsIndex(indexUri, false))?.savedAt;
+/**
+ * 在 mutation lock 内一次性读取 records 与其 revision，避免“旧 records + 新 revision”撕裂快照。
+ * snapshot 读取使用严格模式；index 缺失但 records 仍存在时拒绝把孤儿数据当作空 store。
+ */
+export async function loadRecordStoreSnapshot<TRecord extends { id: string }, TKey extends string>(
+  root: vscode.Uri,
+  indexUri: vscode.Uri,
+  recordKey: TKey
+): Promise<RecordStoreSnapshot<TRecord> | undefined> {
+  return withRecordStoreMutationLock(indexUri, () => loadRecordStoreSnapshotUnlocked<TRecord, TKey>(root, indexUri, recordKey));
+}
+
+/** 尚未创建 index 的 record store revision，仅供显式初始化 CAS 使用。 */
+export function missingRecordStoreRevision(indexUri: vscode.Uri): string {
+  return createMissingStorageRevision(`record-store:${indexUri.toString()}`);
+}
+
+/**
+ * 基于一致快照提交完整 record 集合。调用方必须携带 base revision；比较、写入与返回
+ * next revision 都在同一把锁内完成。普通业务不再允许省略 revision 退化为无条件覆盖。
+ */
+export async function commitRecordStoreSnapshot<TRecord extends { id: string }, TKey extends string>(
+  root: vscode.Uri,
+  indexUri: vscode.Uri,
+  records: TRecord[],
+  recordKey: TKey,
+  labelForRecord: (record: TRecord) => string,
+  options: CommitRecordStoreSnapshotOptions
+): Promise<RecordStoreCommitResult<TRecord>> {
+  return withRecordStoreMutationLock(indexUri, async () => {
+    const current = await loadRecordStoreSnapshotUnlocked<TRecord, TKey>(root, indexUri, recordKey);
+    const actualRevision = current?.revision ?? missingRecordStoreRevision(indexUri);
+    if (actualRevision !== options.expectedRevision) {
+      throw new SettingsRevisionConflictError(options.section, options.expectedRevision, actualRevision);
+    }
+
+    await saveRecordStoreUnlocked(root, indexUri, records, recordKey, labelForRecord, {
+      pruneMissing: options.pruneMissing
+    });
+    return {
+      records: [...records],
+      revision: createStorageRevision(records),
+      previousRecords: [...(current?.records ?? [])]
+    };
+  });
+}
+
+async function loadRecordStoreSnapshotUnlocked<TRecord extends { id: string }, TKey extends string>(
+  root: vscode.Uri,
+  indexUri: vscode.Uri,
+  recordKey: TKey
+): Promise<RecordStoreSnapshot<TRecord> | undefined> {
+  const index = await loadRecordsIndex(indexUri, true);
+  if (!index) {
+    const traces = await listRecordFiles(root);
+    if (traces.length > 0) {
+      throw new Error(`Record store index is missing while record files still exist: ${indexUri.fsPath}`);
+    }
+    return undefined;
+  }
+
+  const files = await loadRecordFilesInBatches<TRecord, TKey>(root, index.records, recordKey, true);
+  const records = files.filter((record): record is TRecord => record !== undefined);
+  return { records, revision: createStorageRevision(records) };
 }
 
 export async function saveRecordStore<TRecord extends { id: string }, TKey extends string>(
@@ -195,14 +292,6 @@ async function saveRecordStoreUnlocked<TRecord extends { id: string }, TKey exte
   // 全量保存本身会重写所有 next records，因此不能让历史索引中的空/缺失文件永久阻断修复。
   // 在 mutation lock 内复用旧文件名；若旧文件已丢失，下面的原子 writeJson 会直接重建。
   const previousIndex = await loadRecordsIndex(indexUri, false);
-  // 版本比对必须发生在任何写入/删除之前：冲突时盘上数据必须逐字节不变。
-  if (options.expectedSavedAt !== undefined && previousIndex && previousIndex.savedAt !== options.expectedSavedAt) {
-    throw new SettingsRevisionConflictError(
-      options.expectedSavedAtSection ?? indexUri.fsPath,
-      options.expectedSavedAt,
-      previousIndex.savedAt
-    );
-  }
   const previousRecords = previousIndex?.records ?? [];
   const previousById = new Map(previousRecords.map((record) => [record.id, record]));
 
@@ -314,6 +403,174 @@ async function removeRecordStoreRecordUnlocked(
       if (!isFileNotFoundError(error)) console.warn(`[LimCode] Failed to delete record file: ${removed.file}`, error);
     }
   }
+}
+
+/**
+ * 为 skeleton coordinator 准备不可变领域 generation。该函数不发布 root index、
+ * 不 prune，也绝不修改已存在 generation；generation index 是该目录最后一个写入点。
+ */
+export async function prepareRecordStoreGeneration<TRecord extends { id: string }, TKey extends string>(
+  root: vscode.Uri,
+  records: TRecord[],
+  recordKey: TKey,
+  labelForRecord: (record: TRecord) => string,
+  options: { storeKey: string; generation: string }
+): Promise<RecordStoreGenerationRef> {
+  const generation = assertSafeStorageGenerationId(options.generation);
+  const generationRoot = getStorageGenerationRootUri(root, generation);
+  const recordsRoot = vscode.Uri.joinPath(generationRoot, RECORDS_DIR);
+  await ensureStorageDirectory(recordsRoot);
+
+  const ids = new Set<string>();
+  const files = new Set<string>();
+  const indexRecords: RecordStoreGenerationIndex['records'] = [];
+  const savedAt = new Date().toISOString();
+  for (const record of records) {
+    if (!record.id.trim() || ids.has(record.id)) throw new Error(`Duplicate or empty record id in ${options.storeKey}: ${record.id}`);
+    ids.add(record.id);
+    const file = `${RECORDS_DIR}/${sortableName(record.id, labelForRecord(record))}.json`;
+    if (files.has(file)) throw new Error(`Duplicate generation record path in ${options.storeKey}: ${file}`);
+    files.add(file);
+    const recordRevision = createStorageRevision(record);
+    await writeJson(vscode.Uri.joinPath(generationRoot, ...file.split('/')), {
+      kind: 'recordStore.generationRecord',
+      schemaVersion: STORAGE_VERSION,
+      storeKey: options.storeKey,
+      generation,
+      recordRevision,
+      savedAt,
+      record: { [recordKey]: record } as Record<TKey, TRecord>
+    } satisfies RecordStoreGenerationRecordFile<TKey, TRecord>);
+    indexRecords.push({ id: record.id, file, recordRevision });
+  }
+
+  const revision = createStorageRevision(records);
+  await writeJson(vscode.Uri.joinPath(generationRoot, INDEX_FILE), {
+    kind: 'recordStore.generation',
+    schemaVersion: STORAGE_VERSION,
+    storeKey: options.storeKey,
+    generation,
+    revision,
+    savedAt,
+    records: indexRecords
+  } satisfies RecordStoreGenerationIndex);
+  return { generation, revision };
+}
+
+/** 严格读取 coordinator manifest 指定的 immutable generation，并逐 record 校验 hash。 */
+export async function loadRecordStoreGeneration<TRecord extends { id: string }, TKey extends string>(
+  root: vscode.Uri,
+  ref: RecordStoreGenerationRef,
+  recordKey: TKey,
+  storeKey: string
+): Promise<RecordStoreSnapshot<TRecord>> {
+  const generation = assertSafeStorageGenerationId(ref.generation);
+  const generationRoot = getStorageGenerationRootUri(root, generation);
+  const indexUri = vscode.Uri.joinPath(generationRoot, INDEX_FILE);
+  const indexResult = await readJsonStrict<unknown>(indexUri);
+  if (indexResult.status !== 'ok') throw new Error(`Record store generation index is unavailable: ${indexUri.fsPath}`);
+  const index = parseRecordStoreGenerationIndex(indexResult.value, indexUri, storeKey, generation);
+  if (index.revision !== ref.revision) {
+    throw new Error(`Record store generation revision mismatch for ${storeKey}: expected=${ref.revision}, actual=${index.revision}`);
+  }
+
+  const records: TRecord[] = [];
+  for (const entry of index.records) {
+    const fileUri = vscode.Uri.joinPath(generationRoot, ...entry.file.split('/'));
+    const fileResult = await readJsonStrict<unknown>(fileUri);
+    if (fileResult.status !== 'ok') throw new Error(`Record store generation file is unavailable: ${fileUri.fsPath}`);
+    const record = parseRecordStoreGenerationRecord<TRecord, TKey>(
+      fileResult.value,
+      fileUri,
+      recordKey,
+      storeKey,
+      generation,
+      entry.id,
+      entry.recordRevision
+    );
+    records.push(record);
+  }
+  const actualRevision = createStorageRevision(records);
+  if (actualRevision !== index.revision) {
+    throw new Error(`Record store generation content hash mismatch for ${storeKey}: expected=${index.revision}, actual=${actualRevision}`);
+  }
+  return { records, revision: actualRevision };
+}
+
+function parseRecordStoreGenerationIndex(
+  value: unknown,
+  uri: vscode.Uri,
+  storeKey: string,
+  generation: string
+): RecordStoreGenerationIndex {
+  const candidate = isPlainRecord(value) ? value : undefined;
+  if (!candidate || !hasOnlyKeys(candidate, ['kind', 'schemaVersion', 'storeKey', 'generation', 'revision', 'savedAt', 'records'])) {
+    throw new Error(`Record store generation index structure is invalid: ${uri.fsPath}`);
+  }
+  if (candidate.kind !== 'recordStore.generation' || candidate.schemaVersion !== STORAGE_VERSION
+    || candidate.storeKey !== storeKey || candidate.generation !== generation
+    || typeof candidate.revision !== 'string' || !candidate.revision
+    || typeof candidate.savedAt !== 'string' || !Array.isArray(candidate.records)) {
+    throw new Error(`Record store generation index metadata is invalid: ${uri.fsPath}`);
+  }
+  const records: RecordStoreGenerationIndex['records'] = [];
+  const ids = new Set<string>();
+  const files = new Set<string>();
+  for (const raw of candidate.records) {
+    const record = isPlainRecord(raw) ? raw : undefined;
+    if (!record || !hasOnlyKeys(record, ['id', 'file', 'recordRevision'])
+      || typeof record.id !== 'string' || !record.id.trim() || ids.has(record.id)
+      || typeof record.file !== 'string' || !isRecordFilePath(record.file) || files.has(record.file)
+      || typeof record.recordRevision !== 'string' || !record.recordRevision) {
+      throw new Error(`Record store generation index record is invalid: ${uri.fsPath}`);
+    }
+    ids.add(record.id);
+    files.add(record.file);
+    records.push({ id: record.id, file: record.file, recordRevision: record.recordRevision });
+  }
+  return {
+    kind: 'recordStore.generation',
+    schemaVersion: STORAGE_VERSION,
+    storeKey,
+    generation,
+    revision: candidate.revision,
+    savedAt: candidate.savedAt,
+    records
+  };
+}
+
+function parseRecordStoreGenerationRecord<TRecord extends { id: string }, TKey extends string>(
+  value: unknown,
+  uri: vscode.Uri,
+  recordKey: TKey,
+  storeKey: string,
+  generation: string,
+  expectedId: string,
+  expectedRevision: string
+): TRecord {
+  const candidate = isPlainRecord(value) ? value : undefined;
+  if (!candidate || !hasOnlyKeys(candidate, ['kind', 'schemaVersion', 'storeKey', 'generation', 'recordRevision', 'savedAt', 'record'])) {
+    throw new Error(`Record store generation record structure is invalid: ${uri.fsPath}`);
+  }
+  const wrapped = isPlainRecord(candidate.record) ? candidate.record : undefined;
+  const record = wrapped?.[recordKey];
+  if (candidate.kind !== 'recordStore.generationRecord' || candidate.schemaVersion !== STORAGE_VERSION
+    || candidate.storeKey !== storeKey || candidate.generation !== generation
+    || candidate.recordRevision !== expectedRevision || typeof candidate.savedAt !== 'string'
+    || !wrapped || !hasOnlyKeys(wrapped, [recordKey]) || !isStoreRecord(record) || record.id !== expectedId
+    || createStorageRevision(record) !== expectedRevision) {
+    throw new Error(`Record store generation record metadata/hash is invalid: ${uri.fsPath}`);
+  }
+  return record as TRecord;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasOnlyKeys(record: Record<string, unknown>, keys: readonly string[]): boolean {
+  const allowed = new Set(keys);
+  return Object.keys(record).every((key) => allowed.has(key)) && keys.every((key) => Object.prototype.hasOwnProperty.call(record, key));
 }
 
 async function loadRecordFilesInBatches<TRecord extends { id: string }, TKey extends string>(

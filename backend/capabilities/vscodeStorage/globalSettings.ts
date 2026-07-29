@@ -24,6 +24,7 @@ import { readJsonStrict, writeJson, type StrictJsonReadResult } from './json';
 import { createDefaultLlmSettings, normalizeLlmSettings } from './llmSettings';
 import { normalizeLlmCompressionSettings } from './llmCompressionConfigs';
 import { withStorageResourceLock } from './storageResourceLock';
+import { createMissingStorageRevision, createStorageRevision } from './storageRevision';
 
 interface GlobalSettingsFile<T> {
   schemaVersion: typeof STORAGE_VERSION;
@@ -35,8 +36,10 @@ export interface GlobalSettingsFileResult {
   section: GlobalSettingsSection;
   settings: GlobalSettingsSectionValue;
   filePath: string;
-  /** 当前落盘版本：直接复用文件里已有的 savedAt，零新增字段、零 schema 变更。 */
-  revision?: string;
+  /** 规范化设置内容的 opaque revision；与 savedAt 解耦，任意语义变化都会改变。 */
+  revision: string;
+  /** 仅提交结果携带：CAS 比对所针对的前一份一致快照。 */
+  previousSettings?: GlobalSettingsSectionValue;
 }
 
 type FileBackedGlobalSettingsSection = Exclude<GlobalSettingsSection, 'common' | 'llmProviderConfigs' | 'llmCompressionConfigs' | 'mcpServers'>;
@@ -175,37 +178,32 @@ export async function loadGlobalSettingsFile(
 }
 
 /**
- * 写入全局设置文件。
- * 传入 expectedRevision 时，在已有的资源锁内再读一次盘上版本做 CAS；
- * 不传则完全保持旧行为（内部初始化、迁移等路径不受影响）。
+ * 基于一致快照提交文件型全局设置。普通业务提交必须携带读取时拿到的 revision；
+ * 比较、写入和 next revision 返回都在同一资源锁内完成。
  */
 export async function writeGlobalSettingsFile(
   root: vscode.Uri,
   section: GlobalSettingsSection,
   settings: GlobalSettingsSectionValue,
-  expectedRevision?: string
-): Promise<void> {
+  expectedRevision: string
+): Promise<GlobalSettingsFileResult> {
   const uri = globalSettingsFileUri(root, section);
-  await withStorageResourceLock(uri, async () => {
-    if (expectedRevision !== undefined) {
-      const actualRevision = await readGlobalSettingsRevisionUnlocked(uri, section);
-      // 文件缺失/损坏时 revision 为 undefined：此时没有可被覆盖丢失的数据，不阻断写入。
-      if (actualRevision !== undefined && actualRevision !== expectedRevision) {
-        throw new SettingsRevisionConflictError(section, expectedRevision, actualRevision);
-      }
-    }
-    await writeGlobalSettingsFileUnlocked(uri, section, settings);
-  });
-}
+  return withStorageResourceLock(uri, async () => {
+    const current = await readJsonStrict<unknown>(uri);
+    let previous: GlobalSettingsFileResult | undefined;
+    if (current.status === 'ok') previous = materializeGlobalSettingsFile(root, section, current.value);
+    else if (current.status !== 'missing') throw strictJsonReadError('global settings', section, current);
 
-async function readGlobalSettingsRevisionUnlocked(uri: vscode.Uri, section: GlobalSettingsSection): Promise<string | undefined> {
-  const current = await readJsonStrict<unknown>(uri);
-  if (current.status !== 'ok') return undefined;
-  try {
-    return parseGlobalSettingsFile(section, uri, current.value).savedAt;
-  } catch {
-    return undefined;
-  }
+    const actualRevision = previous?.revision ?? missingGlobalSettingsRevision(uri, section);
+    if (actualRevision !== expectedRevision) {
+      throw new SettingsRevisionConflictError(section, expectedRevision, actualRevision);
+    }
+    const committed = await writeGlobalSettingsFileUnlocked(uri, section, settings);
+    return {
+      ...committed,
+      ...(previous ? { previousSettings: previous.settings } : {})
+    };
+  });
 }
 
 export function globalSettingsFileUri(root: vscode.Uri, section: GlobalSettingsSection): vscode.Uri {
@@ -221,8 +219,7 @@ async function initializeMissingGlobalSettingsFile(
     const current = await readJsonStrict<unknown>(uri);
     if (current.status === 'missing') {
       const defaults = getFileBackedSpec(section).createDefault();
-      const revision = await writeGlobalSettingsFileUnlocked(uri, section, defaults);
-      return { section, settings: defaults, filePath: uri.fsPath, revision };
+      return writeGlobalSettingsFileUnlocked(uri, section, defaults);
     }
     if (current.status !== 'ok') throw strictJsonReadError('global settings', section, current);
     return materializeGlobalSettingsFile(root, section, current.value);
@@ -237,11 +234,12 @@ function materializeGlobalSettingsFile(
   const uri = globalSettingsFileUri(root, section);
   const spec = getFileBackedSpec(section);
   const file = parseGlobalSettingsFile(section, uri, value);
+  const settings = spec.normalize(file.settings as Partial<GlobalSettingsSectionValue> | undefined);
   return {
     section,
-    settings: spec.normalize(file.settings as Partial<GlobalSettingsSectionValue> | undefined),
+    settings,
     filePath: uri.fsPath,
-    revision: file.savedAt
+    revision: createStorageRevision(settings)
   };
 }
 
@@ -249,15 +247,24 @@ async function writeGlobalSettingsFileUnlocked(
   uri: vscode.Uri,
   section: GlobalSettingsSection,
   settings: GlobalSettingsSectionValue
-): Promise<string> {
+): Promise<GlobalSettingsFileResult> {
   const spec = getFileBackedSpec(section);
-  const savedAt = new Date().toISOString();
+  const normalized = spec.normalize(settings as Partial<GlobalSettingsSectionValue> | undefined);
   await writeJson(uri, {
     schemaVersion: STORAGE_VERSION,
-    savedAt,
-    settings: spec.normalize(settings as Partial<GlobalSettingsSectionValue> | undefined)
+    savedAt: new Date().toISOString(),
+    settings: normalized
   } satisfies GlobalSettingsFile<GlobalSettingsSectionValue>);
-  return savedAt;
+  return {
+    section,
+    settings: normalized,
+    filePath: uri.fsPath,
+    revision: createStorageRevision(normalized)
+  };
+}
+
+function missingGlobalSettingsRevision(uri: vscode.Uri, section: GlobalSettingsSection): string {
+  return createMissingStorageRevision(`global-settings:${section}:${uri.toString()}`);
 }
 
 function parseGlobalSettingsFile(

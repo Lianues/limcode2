@@ -3,6 +3,7 @@ import type { AgentRecord } from '../../../shared/protocol';
 import { RECORDS_DIR, STORAGE_VERSION } from './constants';
 import { readJson, writeJson } from './json';
 import { sortableName } from './naming';
+import { ensureStorageDirectory } from './storageFs';
 
 interface AgentsIndexFile {
   schemaVersion: typeof STORAGE_VERSION;
@@ -37,7 +38,7 @@ export async function loadAgents(root: vscode.Uri, indexUri: vscode.Uri): Promis
 export async function saveAgents(root: vscode.Uri, indexUri: vscode.Uri, agents: AgentRecord[]): Promise<void> {
   const savedAt = new Date().toISOString();
   const recordsRoot = vscode.Uri.joinPath(root, RECORDS_DIR);
-  await vscode.workspace.fs.createDirectory(recordsRoot);
+  await ensureStorageDirectory(recordsRoot);
   const previousIndex = await readJson<AgentsIndexFile>(indexUri);
   const previousById = new Map(previousIndex?.records.map((record) => [record.id, record]));
 

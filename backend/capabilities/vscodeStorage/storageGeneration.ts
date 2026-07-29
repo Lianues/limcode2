@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
 import { isFileNotFoundError } from './json';
+import { deleteStorageUri, readStorageDirectory } from './storageFs';
 
 export const STORAGE_GENERATIONS_DIR = 'generations';
 
@@ -75,7 +76,7 @@ export async function listStorageGenerations(baseRootUri: vscode.Uri, options: S
   const generationsRootUri = getStorageGenerationsRootUri(baseRootUri, options);
   let entries: [string, vscode.FileType][];
   try {
-    entries = await vscode.workspace.fs.readDirectory(generationsRootUri);
+    entries = await readStorageDirectory(generationsRootUri);
   } catch (error) {
     if (isFileNotFoundError(error)) return [];
     throw error;
@@ -101,7 +102,7 @@ export async function cleanupInactiveStorageGenerations(
   for (const generation of generations) {
     if (active.has(generation.id)) continue;
     try {
-      await vscode.workspace.fs.delete(generation.rootUri, { recursive: true, useTrash: false });
+      await deleteStorageUri(generation.rootUri, { recursive: true, useTrash: false });
       deleted.push(generation);
     } catch (error) {
       if (isFileNotFoundError(error)) {

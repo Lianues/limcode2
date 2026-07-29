@@ -3,7 +3,7 @@ import type { WorldReader } from '../ecs/types';
 import type { ConversationRunHistorySaveMode, StorageCapability } from '../capabilities/types';
 import { StorageStateContributorsKey } from '../world/storageProjection/resources';
 import { projectStorageStateWithCache, type StorageContributorProjectionState } from '../world/storageProjection/projection';
-import type { AgentRunStatus, ClientState, ClientStateTableKey, ConversationOriginLinkRecord, MessageContent, MessageRecord, SidebarConversationHistoryEntry } from '../../shared/protocol';
+import type { AgentRunStatus, ClientState, ClientStateTableKey, ConversationOriginLinkRecord, MessageContent, MessageRecord, PersistenceStatusRecord, SidebarConversationHistoryEntry } from '../../shared/protocol';
 import { conversationCreatedAtFromId, displayConversationTitle } from '../../shared/conversationTitle';
 import { collectChangedClientStateConversationIds } from '../../shared/clientStateConversationScope';
 import { createEmptyClientState, isConversationScopeLinkRecord } from '../../shared/clientStateSchema';
@@ -14,6 +14,7 @@ import { checkpointStateProjection } from '../world/modules/checkpoint/stateProj
 import { projectStateProjection } from '../world/modules/project/stateProjection';
 
 const DEFAULT_PERSIST_DEBOUNCE_MS = 500;
+const DEFAULT_PERSIST_RETRY_DELAYS_MS = [250, 1_000, 3_000] as const;
 const MUTATION_GATE_CONTEXT = 'client-state-persistence:mutation-gate';
 
 const RUN_HISTORY_TABLE_KEYS = [
@@ -58,6 +59,9 @@ export interface ClientStatePersistenceOptions {
   isConversationHistorySummaryComplete?: (conversationId: string) => boolean;
   /** 测试/宿主可覆盖；默认直接从 ECS 投影目标 conversation 的 timeline-only 数据。 */
   projectConversationTimelineState?: (world: WorldReader, conversationId: string) => ClientState;
+  onStatusChange?: (status: PersistenceStatusRecord) => void;
+  /** 测试可缩短；生产默认 250ms / 1s / 3s，耗尽后保留 error 状态等待下一次变更。 */
+  retryDelaysMs?: readonly number[];
 }
 
 interface PendingRunHistoryState {
@@ -79,6 +83,15 @@ export class ClientStatePersistence {
   private readonly pendingRunHistoryStates = new Map<string, PendingRunHistoryState>();
   private readonly pendingHistoryStates = new Map<string, ClientState>();
   private persistTimer: ReturnType<typeof setTimeout> | undefined;
+  private persistTimerDueAt: number | undefined;
+  private queuedPersistDelayMs: number | undefined;
+  private retryTimer: ReturnType<typeof setTimeout> | undefined;
+  private retryAttempt = 0;
+  private persistenceStatus: PersistenceStatusRecord = {
+    phase: 'pending',
+    updatedAt: Date.now(),
+    pendingSince: Date.now()
+  };
   private persistInFlight = false;
   private persistPendingAfterInFlight = false;
   private readonly persistIdleWaiters: Array<() => void> = [];
@@ -99,7 +112,24 @@ export class ClientStatePersistence {
     private readonly debounceMs = DEFAULT_PERSIST_DEBOUNCE_MS
   ) {}
 
-  public enable(): void { this.enabled = true; }
+  public enable(): void {
+    this.enabled = true;
+    this.emitStatus();
+  }
+
+  public statusSnapshot(): PersistenceStatusRecord {
+    return { ...this.persistenceStatus };
+  }
+
+  public markUnavailable(error: unknown): void {
+    this.clearPersistTimer();
+    this.clearRetryTimer();
+    this.queuedPersistDelayMs = undefined;
+    this.setPersistenceStatus({
+      phase: 'error',
+      error: persistenceErrorMessage(error)
+    });
+  }
 
   public rememberPersistedState(state: ClientState): void {
     this.lastPersistedSkeletonJson = JSON.stringify(skeletonPersistenceSlice(state));
@@ -108,6 +138,7 @@ export class ClientStatePersistence {
     this.contributorStates = {};
     this.lastPersistedRenderDetailJson.clear();
     this.lastPersistedRunHistoryJson.clear();
+    this.markSaved();
   }
 
   /** 记录刚从 storage 完整读取且未被修补的 render detail，避免 hydrate 本身触发重复回写。 */
@@ -120,8 +151,19 @@ export class ClientStatePersistence {
     );
   }
 
-  public queuePersist(): void {
+  public queuePersist(options: { delayMs?: number } = {}): void {
     if (!this.enabled) return;
+    this.clearRetryTimer();
+    if (this.persistenceStatus.phase === 'error') this.retryAttempt = 0;
+    const requestedDelay = normalizeDelayMs(options.delayMs, this.debounceMs);
+    this.queuedPersistDelayMs = this.queuedPersistDelayMs === undefined
+      ? requestedDelay
+      : Math.min(this.queuedPersistDelayMs, requestedDelay);
+    if (this.persistInFlight) {
+      this.persistPendingAfterInFlight = true;
+      return;
+    }
+    this.markPending();
     if (this.mutationGateActive) {
       this.persistPendingAfterMutationGate = true;
       return;
@@ -131,23 +173,30 @@ export class ClientStatePersistence {
 
   public async persistImmediately(options: { force?: boolean; ensurePersisted?: boolean; forceConversationId?: string; throwOnError?: boolean } = {}): Promise<void> {
     this.clearPersistTimer();
+    this.clearRetryTimer();
 
     if (this.mutationGateActive && !this.isInsideMutationGate()) {
       this.persistPendingAfterMutationGate = true;
+      this.markPending();
       await this.waitForMutationGateIdle();
       return this.persistImmediately(options);
     }
 
     if (this.persistInFlight) {
       this.persistPendingAfterInFlight = true;
+      this.markPending();
       await this.waitForPersistIdle();
       return this.persistImmediately(options);
     }
 
+    this.queuedPersistDelayMs = undefined;
     const latest = this.projectLatestState();
     const forcedConversationId = options.forceConversationId?.trim();
     const latestState = latest?.state ?? this.lastProjectedState;
-    if (!options.force && !options.ensurePersisted && !forcedConversationId && latest && !latest.changed && !this.hasPendingStates()) return;
+    if (!options.force && !options.ensurePersisted && !forcedConversationId && latest && !latest.changed && !this.hasPendingStates()) {
+      this.markSavedIfIdle();
+      return;
+    }
 
     if (!this.enabled || !latestState) return;
 
@@ -158,7 +207,10 @@ export class ClientStatePersistence {
         : undefined;
     this.collectPendingStates(latestState, !!options.force, targetConversationIds);
     if (forcedConversationId) this.collectForcedConversationState(latestState, forcedConversationId);
-    if (!this.pendingSkeletonState && this.pendingRenderDetailStates.size === 0 && this.pendingRunHistoryStates.size === 0 && this.pendingHistoryStates.size === 0) return;
+    if (!this.pendingSkeletonState && this.pendingRenderDetailStates.size === 0 && this.pendingRunHistoryStates.size === 0 && this.pendingHistoryStates.size === 0) {
+      this.markSavedIfIdle();
+      return;
+    }
 
     const skeletonState = this.pendingSkeletonState;
     const renderDetailStates = [...this.pendingRenderDetailStates.entries()];
@@ -170,6 +222,13 @@ export class ClientStatePersistence {
     this.pendingHistoryStates.clear();
 
     this.persistInFlight = true;
+    this.setPersistenceStatus({
+      phase: 'saving',
+      pendingSince: this.persistenceStatus.pendingSince ?? Date.now()
+    });
+    let persistSucceeded = false;
+    let persistenceFailure: unknown;
+    let shouldRetry = false;
     // 先启动 render detail 保存，让每个 conversation 立即预订自己的 timeline root FIFO。
     // 后续消息 truncate 会排在这些旧快照之后，而不会被 skeleton/run-history 慢任务拖到旧快照前面。
     const renderDetailTask = awaitAllPersistTasks(renderDetailStates.map(async ([conversationId, state]) => {
@@ -193,8 +252,17 @@ export class ClientStatePersistence {
       }));
 
       await this.persistHistoryEntries(historyStates);
+      persistSucceeded = true;
+      this.retryAttempt = 0;
     } catch (error) {
+      persistenceFailure = error;
+      shouldRetry = !options.throwOnError;
       this.restorePendingStates(skeletonState, renderDetailStates, runHistoryStates, historyStates);
+      this.setPersistenceStatus({
+        phase: 'error',
+        error: persistenceErrorMessage(error),
+        pendingSince: this.persistenceStatus.pendingSince ?? Date.now()
+      });
       console.warn('[LimCode] Failed to persist client state:', error);
       if (options.throwOnError) throw error;
     } finally {
@@ -202,7 +270,12 @@ export class ClientStatePersistence {
       this.resolvePersistIdleWaiters();
       if (this.persistPendingAfterInFlight) {
         this.persistPendingAfterInFlight = false;
+        this.markPending();
         this.schedulePersistCheck();
+      } else if (persistSucceeded) {
+        this.markSaved();
+      } else if (shouldRetry) {
+        this.scheduleRetryAfterFailure(persistenceFailure);
       }
     }
   }
@@ -270,7 +343,14 @@ export class ClientStatePersistence {
     await previousGate.catch(() => undefined);
 
     this.mutationGateActive = true;
-    if (this.persistTimer) this.persistPendingAfterMutationGate = true;
+    if (this.persistTimer) {
+      this.persistPendingAfterMutationGate = true;
+      const remainingMs = Math.max(0, (this.persistTimerDueAt ?? Date.now()) - Date.now());
+      this.queuedPersistDelayMs = this.queuedPersistDelayMs === undefined
+        ? remainingMs
+        : Math.min(this.queuedPersistDelayMs, remainingMs);
+      this.markPending();
+    }
     this.clearPersistTimer();
     await this.waitForPersistIdle();
 
@@ -282,6 +362,7 @@ export class ClientStatePersistence {
       this.resolveMutationGateIdleWaiters();
       if (this.persistPendingAfterMutationGate) {
         this.persistPendingAfterMutationGate = false;
+        this.markPending();
         this.schedulePersistCheck();
       }
     }
@@ -438,7 +519,6 @@ export class ClientStatePersistence {
   }
 
   private schedulePersistCheck(): void {
-    if (this.persistTimer) return;
     if (this.mutationGateActive) {
       this.persistPendingAfterMutationGate = true;
       return;
@@ -447,16 +527,92 @@ export class ClientStatePersistence {
       this.persistPendingAfterInFlight = true;
       return;
     }
+
+    const delayMs = this.queuedPersistDelayMs ?? this.debounceMs;
+    const dueAt = Date.now() + delayMs;
+    if (this.persistTimer && this.persistTimerDueAt !== undefined && this.persistTimerDueAt <= dueAt) {
+      this.queuedPersistDelayMs = undefined;
+      return;
+    }
+
+    this.clearPersistTimer();
+    this.queuedPersistDelayMs = undefined;
+    this.persistTimerDueAt = dueAt;
     this.persistTimer = setTimeout(() => {
       this.persistTimer = undefined;
+      this.persistTimerDueAt = undefined;
       void this.persistImmediately();
-    }, this.debounceMs);
+    }, Math.max(0, dueAt - Date.now()));
   }
 
   private clearPersistTimer(): void {
-    if (!this.persistTimer) return;
-    clearTimeout(this.persistTimer);
+    if (this.persistTimer) clearTimeout(this.persistTimer);
     this.persistTimer = undefined;
+    this.persistTimerDueAt = undefined;
+  }
+
+  private clearRetryTimer(): void {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
+  }
+
+  private scheduleRetryAfterFailure(error: unknown): void {
+    const delays = this.options.retryDelaysMs ?? DEFAULT_PERSIST_RETRY_DELAYS_MS;
+    const delayMs = normalizeRetryDelayMs(delays[this.retryAttempt]);
+    if (delayMs === undefined) return;
+
+    this.retryAttempt += 1;
+    const nextRetryAt = Date.now() + delayMs;
+    this.setPersistenceStatus({
+      phase: 'error',
+      error: persistenceErrorMessage(error),
+      pendingSince: this.persistenceStatus.pendingSince ?? Date.now(),
+      retryAttempt: this.retryAttempt,
+      nextRetryAt
+    });
+    this.clearRetryTimer();
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = undefined;
+      void this.persistImmediately();
+    }, delayMs);
+  }
+
+  private markPending(): void {
+    const now = Date.now();
+    this.setPersistenceStatus({
+      phase: 'pending',
+      pendingSince: this.persistenceStatus.pendingSince ?? now
+    });
+  }
+
+  private markSavedIfIdle(): void {
+    if (this.persistInFlight || this.persistTimer || this.retryTimer || this.mutationGateActive || this.hasPendingStates()) return;
+    this.markSaved();
+  }
+
+  private markSaved(): void {
+    const now = Date.now();
+    this.setPersistenceStatus({ phase: 'saved', lastSavedAt: now });
+  }
+
+  private setPersistenceStatus(next: Omit<PersistenceStatusRecord, 'updatedAt'>): void {
+    const lastSavedAt = next.lastSavedAt ?? this.persistenceStatus.lastSavedAt;
+    const candidate: PersistenceStatusRecord = {
+      ...next,
+      updatedAt: this.persistenceStatus.updatedAt,
+      ...(lastSavedAt !== undefined ? { lastSavedAt } : {})
+    };
+    if (samePersistenceStatus(this.persistenceStatus, candidate)) return;
+    this.persistenceStatus = { ...candidate, updatedAt: Date.now() };
+    this.emitStatus();
+  }
+
+  private emitStatus(): void {
+    try {
+      this.options.onStatusChange?.({ ...this.persistenceStatus });
+    } catch (error) {
+      console.warn('[LimCode] Failed to publish persistence status:', error);
+    }
   }
 
   private waitForPersistIdle(): Promise<void> {
@@ -844,6 +1000,29 @@ function normalizeText(text: string): string {
 
 function truncateText(text: string, maxLength: number): string {
   return text.length > maxLength ? `${text.slice(0, Math.max(0, maxLength - 1))}…` : text;
+}
+
+function samePersistenceStatus(left: PersistenceStatusRecord, right: PersistenceStatusRecord): boolean {
+  return left.phase === right.phase
+    && left.pendingSince === right.pendingSince
+    && left.lastSavedAt === right.lastSavedAt
+    && left.retryAttempt === right.retryAttempt
+    && left.nextRetryAt === right.nextRetryAt
+    && left.error === right.error;
+}
+
+function normalizeDelayMs(value: number | undefined, fallback: number): number {
+  if (value === undefined) return Math.max(0, Math.floor(fallback));
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : Math.max(0, Math.floor(fallback));
+}
+
+function normalizeRetryDelayMs(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value) || value < 0) return undefined;
+  return Math.floor(value);
+}
+
+function persistenceErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isActiveAgentRunStatus(status: AgentRunStatus): boolean {

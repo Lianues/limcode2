@@ -8,11 +8,13 @@ import HoverTooltipPanel from '@webview/components/ui/HoverTooltipPanel.vue';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useRuntimeContextStore } from '@webview/stores/useRuntimeContextStore';
+import { usePersistenceStatusStore } from '@webview/stores/usePersistenceStatusStore';
 import { bridge, BridgeMessageType } from '@webview/transport';
 
 const clientState = useClientStateStore();
 const conversationTimeline = useConversationTimelineStore();
 const runtimeContext = useRuntimeContextStore();
+const persistenceStatus = usePersistenceStatusStore();
 const headerRoot = ref<HTMLElement | null>(null);
 const projectDropdownOpen = ref(false);
 const runtimeContextOpen = ref(false);
@@ -47,8 +49,16 @@ const runDetailRun = computed(() =>
   runSummary.value.activeRuns.find((run) => run.status !== 'queued') ?? runSummary.value.primaryRun
 );
 const runDetailStatusLabel = computed(() => runDetailRun.value ? agentRunStatusLabel(runDetailRun.value.status) : '空闲');
+const persistencePhase = computed(() => persistenceStatus.status.phase);
+const persistenceIsSyncing = computed(() => persistencePhase.value === 'pending' || persistencePhase.value === 'saving');
+const persistenceHasError = computed(() => persistencePhase.value === 'error');
 const runStatusClass = computed(() => `run-status-${runDetailRun.value?.status ?? 'idle'}`);
-const runStatusTriggerLabel = computed(() => runSummary.value.isRunning ? '响应中' : '空闲');
+const runStatusTriggerLabel = computed(() => {
+  if (persistenceHasError.value) return '保存失败';
+  if (runSummary.value.isRunning) return '响应中';
+  if (persistenceIsSyncing.value) return '同步中';
+  return '已保存';
+});
 const primaryRunToolCalls = computed<ToolCallRecord[]>(() => {
   const run = runDetailRun.value;
   if (!run) return [];
@@ -74,51 +84,75 @@ const primaryRunAgentName = computed(() => {
   const target = clientState.agentRunTargetLinks.find((link) => link.runId === runId);
   return clientState.agents.find((agent) => agent.id === target?.agentId)?.name;
 });
+const persistenceStatusLabel = computed(() => {
+  if (!persistenceStatus.hasSnapshot) return '正在确认保存状态';
+  switch (persistencePhase.value) {
+    case 'pending': return '等待写入';
+    case 'saving': return '正在写入磁盘';
+    case 'saved': return '已写入磁盘';
+    case 'error': return '保存失败';
+  }
+});
 const runStatusTooltipRows = computed<RunStatusTooltipItem[]>(() => {
   const summary = runSummary.value;
   const run = runDetailRun.value;
+  const rows: RunStatusTooltipItem[] = [];
+
   if (!summary.isRunning || !run) {
-    return [{ label: '状态', value: '当前无后台任务' }];
+    rows.push({ label: '运行状态', value: '当前无后台任务' });
+  } else {
+    rows.push(
+      { label: '当前阶段', value: runDetailStatusLabel.value },
+      { label: '执行者', value: primaryRunAgentName.value ?? '当前 Agent' },
+      { label: '活跃任务', value: `${summary.activeRuns.length} 个` }
+    );
+    const toolCalls = primaryRunToolCalls.value;
+    if (toolCalls.length > 0) {
+      rows.push({ kind: 'divider', id: 'tools' });
+      for (const [index, call] of toolCalls.slice(0, MAX_TOOLTIP_TOOL_CALLS).entries()) {
+        const toolLabel = toolCalls.length > 1 ? `工具 ${index + 1}` : '工具';
+        rows.push({ label: toolLabel, value: call.name });
+        const content = toolCallContentPreview(call);
+        if (content) rows.push({ label: '内容', value: content, nested: true });
+        rows.push({ label: '进度', value: toolCallStatusLabel(call.status), nested: true });
+      }
+      if (toolCalls.length > MAX_TOOLTIP_TOOL_CALLS) {
+        const otherNames = toolCalls.slice(MAX_TOOLTIP_TOOL_CALLS).map((call) => call.name).join('、');
+        rows.push({ label: '其他工具', value: compactTooltipText(otherNames, 72) });
+      }
+    } else if (run.status === 'waiting_tool') {
+      rows.push(
+        { kind: 'divider', id: 'tools-pending' },
+        { label: '等待对象', value: '工具状态同步中' }
+      );
+    } else if (run.status === 'waiting_child_run') {
+      rows.push(
+        { kind: 'divider', id: 'child-run' },
+        { label: '等待对象', value: '子任务' }
+      );
+    }
   }
 
-  const rows: RunStatusTooltipItem[] = [
-    { label: '当前阶段', value: runDetailStatusLabel.value },
-    { label: '执行者', value: primaryRunAgentName.value ?? '当前 Agent' },
-    { label: '活跃任务', value: `${summary.activeRuns.length} 个` }
-  ];
-  const toolCalls = primaryRunToolCalls.value;
-  if (toolCalls.length > 0) {
-    rows.push({ kind: 'divider', id: 'tools' });
-    for (const [index, call] of toolCalls.slice(0, MAX_TOOLTIP_TOOL_CALLS).entries()) {
-      const toolLabel = toolCalls.length > 1 ? `工具 ${index + 1}` : '工具';
-      rows.push({ label: toolLabel, value: call.name });
-      const content = toolCallContentPreview(call);
-      if (content) rows.push({ label: '内容', value: content, nested: true });
-      rows.push({ label: '进度', value: toolCallStatusLabel(call.status), nested: true });
-    }
-    if (toolCalls.length > MAX_TOOLTIP_TOOL_CALLS) {
-      const otherNames = toolCalls.slice(MAX_TOOLTIP_TOOL_CALLS).map((call) => call.name).join('、');
-      rows.push({ label: '其他工具', value: compactTooltipText(otherNames, 72) });
-    }
-  } else if (run.status === 'waiting_tool') {
-    rows.push(
-      { kind: 'divider', id: 'tools-pending' },
-      { label: '等待对象', value: '工具状态同步中' }
-    );
-  } else if (run.status === 'waiting_child_run') {
-    rows.push(
-      { kind: 'divider', id: 'child-run' },
-      { label: '等待对象', value: '子任务' }
-    );
+  rows.push(
+    { kind: 'divider', id: 'persistence' },
+    { label: '保存状态', value: persistenceStatusLabel.value }
+  );
+  const status = persistenceStatus.status;
+  if (status.lastSavedAt !== undefined) {
+    rows.push({ label: '上次保存', value: formatStatusTime(status.lastSavedAt), nested: true });
+  }
+  if (status.error) {
+    rows.push({ label: '失败原因', value: compactTooltipText(status.error, 96), nested: true });
+  }
+  if (status.nextRetryAt !== undefined) {
+    rows.push({ label: '自动重试', value: formatStatusTime(status.nextRetryAt), nested: true });
   }
   return rows;
 });
 const runStatusAriaLabel = computed(() => {
   const summary = runSummary.value;
-  if (!summary.isRunning) return '当前无后台任务';
-  const toolNames = primaryRunToolCalls.value.map((call) => call.name);
-  const toolDetail = toolNames.length > 0 ? `；当前工具：${toolNames.join('、')}` : '';
-  return `后台任务响应中；当前阶段：${runDetailStatusLabel.value}${toolDetail}`;
+  const runDetail = summary.isRunning ? `后台任务响应中；当前阶段：${runDetailStatusLabel.value}` : '当前无后台任务';
+  return `${runDetail}；保存状态：${persistenceStatusLabel.value}`;
 });
 const currentProject = computed(() => clientState.currentProjectContext);
 const projectPath = computed(() => currentProject.value ? displayProjectUri(currentProject.value.uri) : '未绑定项目');
@@ -206,6 +240,14 @@ function displayProjectUri(uri: string): string {
     // ignore and use raw uri
   }
   return uri;
+}
+
+function formatStatusTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
 }
 
 function middleEllipsis(value: string, maxLength: number): string {
@@ -343,9 +385,17 @@ function compactTooltipText(value: string, maxLength = 72): string {
         </span>
         <HoverTooltipPanel
           class="run-status"
-          :class="[runStatusClass, { 'is-active': runSummary.isRunning }]"
+          :class="[
+            runStatusClass,
+            {
+              'is-active': runSummary.isRunning && !persistenceHasError,
+              'is-syncing': !runSummary.isRunning && persistenceIsSyncing,
+              'is-saved': !runSummary.isRunning && persistencePhase === 'saved',
+              'is-error': persistenceHasError
+            }
+          ]"
           :aria-label="runStatusAriaLabel"
-          :panel-title="runSummary.isRunning ? '响应详情' : '运行状态'"
+          panel-title="运行与保存状态"
           :rows="runStatusTooltipRows"
           role="status"
           aria-live="polite"
@@ -675,6 +725,24 @@ function compactTooltipText(value: string, maxLength = 72): string {
   background: var(--vscode-testing-iconQueued);
   opacity: 1;
   animation: lc-status-pulse-glow var(--lc-status-pulse-duration) infinite ease-in-out;
+}
+
+.run-status.is-syncing .run-status-dot {
+  background: var(--vscode-testing-iconQueued, var(--vscode-descriptionForeground));
+  opacity: 1;
+  animation: lc-status-pulse-glow var(--lc-status-pulse-duration) infinite ease-in-out;
+}
+
+.run-status.is-saved .run-status-dot {
+  background: var(--vscode-testing-iconPassed, var(--vscode-descriptionForeground));
+  opacity: 0.9;
+  animation: none;
+}
+
+.run-status.is-error .run-status-dot {
+  background: var(--vscode-testing-iconFailed, var(--vscode-errorForeground));
+  opacity: 1;
+  animation: none;
 }
 
 .run-status-paused .run-status-dot {

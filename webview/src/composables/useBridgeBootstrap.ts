@@ -10,6 +10,7 @@ import { useConversationTimelineStore } from '@webview/stores/useConversationTim
 import { useConversationUiStore } from '@webview/stores/useConversationUiStore';
 import { useSystemPromptStore } from '@webview/stores/useSystemPromptStore';
 import { useRuntimeContextStore } from '@webview/stores/useRuntimeContextStore';
+import { usePersistenceStatusStore } from '@webview/stores/usePersistenceStatusStore';
 
 /**
  * 在 App 根组件挂载时调用一次：集中注册所有入站桥接监听并接入对应 store，
@@ -86,6 +87,7 @@ export function useBridgeBootstrap(): void {
   const conversationUi = useConversationUiStore();
   const systemPromptStore = useSystemPromptStore();
   const runtimeContextStore = useRuntimeContextStore();
+  const persistenceStatus = usePersistenceStatusStore();
 
   const disposers: Array<() => void> = [];
   const requestedConversationStreams = new Set<string>();
@@ -109,6 +111,12 @@ export function useBridgeBootstrap(): void {
       bridge.request(BridgeMessageType.ClientResync, {});
     }
   }
+
+  disposers.push(
+    bridge.on(BridgeMessageType.PersistenceStatusSnapshot, (message) => {
+      if (message.payload) persistenceStatus.applySnapshot(message.payload);
+    })
+  );
 
   disposers.push(
     bridge.on(BridgeMessageType.Hello, (message) => {

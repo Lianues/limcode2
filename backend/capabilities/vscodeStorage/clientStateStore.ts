@@ -70,6 +70,7 @@ import {
   truncateConversationTimeline
 } from './conversationTimelineStore';
 import { withStorageResourceLock } from './storageResourceLock';
+import { deleteStorageUri, ensureStorageDirectory, readStorageDirectory } from './storageFs';
 import {
   cleanupInactiveStorageGenerations,
   createStorageGenerationLocation,
@@ -1249,7 +1250,7 @@ async function publishRunHistoryIndexAndPages(
   const savedAt = new Date().toISOString();
   const generation = createStorageGenerationLocation(root);
   const pagesRoot = vscode.Uri.joinPath(generation.rootUri, RUN_HISTORY_PAGES_DIR);
-  await vscode.workspace.fs.createDirectory(pagesRoot);
+  await ensureStorageDirectory(pagesRoot);
 
   const pageSize = RUN_HISTORY_PAGE_SIZE;
   const pages: ConversationRunHistoryPageIndexRecord[] = [];
@@ -1515,7 +1516,7 @@ function runHistoryGenerationsReferencedByIndex(index: ConversationRunHistoryInd
 
 async function findExistingRunHistoryTraces(root: vscode.Uri): Promise<string[]> {
   try {
-    const entries = await vscode.workspace.fs.readDirectory(root);
+    const entries = await readStorageDirectory(root);
     return entries.map(([name]) => name).filter((name) => name !== INDEX_FILE).sort();
   } catch (error) {
     if (isStorageFileNotFoundError(error)) return [];
@@ -1691,7 +1692,7 @@ async function pruneRunDetailForConversation(
       const summaries = existing.summaries.filter((summary) => summary.conversationId !== conversationId);
       if (summaries.length === existing.summaries.length) return;
       if (summaries.length === 0) {
-        await vscode.workspace.fs.delete(uri, { recursive: false, useTrash: false });
+        await deleteStorageUri(uri, { recursive: false, useTrash: false });
         deletedPaths.push(uri.fsPath);
         return;
       }
@@ -1888,7 +1889,7 @@ async function tryDeleteUri(
   options: { recursive?: boolean } = {}
 ): Promise<void> {
   try {
-    await vscode.workspace.fs.delete(uri, { recursive: options.recursive ?? false, useTrash: false });
+    await deleteStorageUri(uri, { recursive: options.recursive ?? false, useTrash: false });
     deletedPaths.push(uri.fsPath);
   } catch (error) {
     if (isFileNotFoundError(error)) return;

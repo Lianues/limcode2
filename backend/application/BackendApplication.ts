@@ -102,6 +102,7 @@ import type {
   ConversationSettingsRecord,
   LlmProviderKind,
   MessageContent,
+  PersistenceStatusRecord,
   ProjectFolderCandidateRecord,
   ConversationOriginLinkRecord,
   RuleScope,
@@ -209,7 +210,8 @@ export class BackendApplication {
     this.persistence = new ClientStatePersistence(this.world, this.env.storage, {
       renderLoadedConversationIds: () => this.persistableRenderDetailConversationIds(),
       runHistoryLoadedConversationIds: () => this.runHistoryLoadedConversationDetails,
-      isConversationHistorySummaryComplete: (conversationId) => this.isConversationHistorySummaryComplete(conversationId)
+      isConversationHistorySummaryComplete: (conversationId) => this.isConversationHistorySummaryComplete(conversationId),
+      onStatusChange: (status) => this.broadcastPersistenceStatus(status)
     });
     this.globalSettingsBridge = new GlobalSettingsBridge({
       storage: this.env.storage,
@@ -237,6 +239,7 @@ export class BackendApplication {
       globalSettingsBridge: this.globalSettingsBridge,
       conversationSettingsBridge: this.conversationSettingsBridge,
       isHydrated: () => this.hydrated,
+      getPersistenceStatus: () => this.persistence.statusSnapshot(),
       requestSnapshot: (conversationId) => this.requestSnapshot(conversationId),
       requestPersist: (reason) => this.requestPersistSoon(reason),
       flushConversationTimelinePersistence: (conversationId) => this.persistence.persistConversationRenderDetailImmediately(conversationId, { throwOnError: true }),
@@ -266,7 +269,8 @@ export class BackendApplication {
       afterTick: () => {
         flushEffects(this.outbox, this.env, (event) => this.world.enqueue(event), this.effectHandlers);
         this.notifyPendingUserAttention();
-        this.persistence.queuePersist();
+        if (this.hasActiveAgentRuns()) this.persistence.queuePersist();
+        else this.persistence.queuePersist({ delayMs: 0 });
         this.conversationHistoryChangedEmitter.fire();
         this.processConversationDetailEvictions();
       }
@@ -1237,6 +1241,7 @@ export class BackendApplication {
       }
     } catch (error) {
       startupStorageHealthy = false;
+      this.persistence.markUnavailable(error);
       console.warn('[LimCode] Failed to initialize stored chat state. Starting with a fresh in-memory conversation; skeleton persistence remains disabled to protect existing data.', error);
       requestSpawnAgent(this.world, createDefaultAgentSpawnRequest());
     } finally {
@@ -1271,6 +1276,7 @@ export class BackendApplication {
       }
     } catch (error) {
       deferredStorageHealthy = false;
+      this.persistence.markUnavailable(error);
       console.warn('[LimCode] Failed to lazy-load deferred client state skeleton.', error);
     } finally {
       try {
@@ -1281,7 +1287,7 @@ export class BackendApplication {
       }
       if (startupStorageHealthy && deferredStorageHealthy) {
         this.persistence.enable();
-        this.persistence.queuePersist();
+        this.persistence.queuePersist({ delayMs: 0 });
       } else {
         console.warn('[LimCode] Skeleton persistence is disabled for this session to avoid overwriting partially loaded data.');
       }
@@ -1304,6 +1310,22 @@ export class BackendApplication {
         console.warn('[LimCode] Failed to auto-clean unused shadow worktrees.', error);
       }
     })();
+  }
+
+  private broadcastPersistenceStatus(status: PersistenceStatusRecord): void {
+    this.env.webview.broadcast({
+      id: createMessageId(),
+      type: BridgeMessageType.PersistenceStatusSnapshot,
+      channel: 'control',
+      payload: { ...status }
+    });
+  }
+
+  private hasActiveAgentRuns(): boolean {
+    return this.world.query(AgentRun).some((entity) => {
+      const run = this.world.get(entity, AgentRun);
+      return !!run && isActiveAgentRunStatus(run.status);
+    });
   }
 
   private requestPersistSoon(reason: string): void {

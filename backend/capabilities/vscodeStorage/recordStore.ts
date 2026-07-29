@@ -3,6 +3,7 @@ import { RECORDS_DIR, STORAGE_VERSION } from './constants';
 import { isFileNotFoundError, readJson, readJsonStrict, writeJson } from './json';
 import { sortableName } from './naming';
 import { withStorageResourceLock } from './storageResourceLock';
+import { deleteStorageUri, ensureStorageDirectory, readStorageDirectory } from './storageFs';
 
 interface RecordsIndexFile {
   schemaVersion: typeof STORAGE_VERSION;
@@ -177,7 +178,7 @@ async function saveRecordStoreUnlocked<TRecord extends { id: string }, TKey exte
 ): Promise<void> {
   const savedAt = new Date().toISOString();
   const recordsRoot = vscode.Uri.joinPath(root, RECORDS_DIR);
-  await vscode.workspace.fs.createDirectory(recordsRoot);
+  await ensureStorageDirectory(recordsRoot);
   // 全量保存本身会重写所有 next records，因此不能让历史索引中的空/缺失文件永久阻断修复。
   // 在 mutation lock 内复用旧文件名；若旧文件已丢失，下面的原子 writeJson 会直接重建。
   const previousIndex = await loadRecordsIndex(indexUri, false);
@@ -231,7 +232,7 @@ async function upsertRecordStoreRecordsUnlocked<TRecord extends { id: string }, 
 ): Promise<void> {
   const savedAt = new Date().toISOString();
   const recordsRoot = vscode.Uri.joinPath(root, RECORDS_DIR);
-  await vscode.workspace.fs.createDirectory(recordsRoot);
+  await ensureStorageDirectory(recordsRoot);
   const previousIndex = await loadRecordsIndex(indexUri, false);
   const previousRecords = await readableIndexRecords(root, previousIndex?.records ?? [], recordKey);
   const nextById = new Map(previousRecords.map((record) => [record.id, record]));
@@ -287,7 +288,7 @@ async function removeRecordStoreRecordUnlocked(
 
   if (removed) {
     try {
-      await vscode.workspace.fs.delete(vscode.Uri.joinPath(root, ...removed.file.split('/')));
+      await deleteStorageUri(vscode.Uri.joinPath(root, ...removed.file.split('/')));
     } catch (error) {
       if (!isFileNotFoundError(error)) console.warn(`[LimCode] Failed to delete record file: ${removed.file}`, error);
     }
@@ -334,7 +335,7 @@ async function loadRecordFile<TRecord extends { id: string }, TKey extends strin
 async function listRecordFiles(root: vscode.Uri): Promise<string[]> {
   const recordsRoot = vscode.Uri.joinPath(root, RECORDS_DIR);
   try {
-    const entries = await vscode.workspace.fs.readDirectory(recordsRoot);
+    const entries = await readStorageDirectory(recordsRoot);
     return entries
       .filter(([, type]) => type === vscode.FileType.File)
       .map(([name]) => `${RECORDS_DIR}/${name}`)
@@ -348,7 +349,7 @@ async function listRecordFiles(root: vscode.Uri): Promise<string[]> {
 
 async function deleteRecordFile(root: vscode.Uri, file: string): Promise<void> {
   try {
-    await vscode.workspace.fs.delete(vscode.Uri.joinPath(root, ...file.split('/')));
+    await deleteStorageUri(vscode.Uri.joinPath(root, ...file.split('/')));
   } catch (error) {
     if (!isFileNotFoundError(error)) console.warn(`[LimCode] Failed to prune record file: ${file}`, error);
   }

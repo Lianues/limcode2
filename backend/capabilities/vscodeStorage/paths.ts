@@ -52,6 +52,7 @@ import {
   COMPRESSION_BLOCK_SOURCE_LINKS_ROOT_DIR,
   COMPRESSION_CONTEXT_VARIANTS_ROOT_DIR
 } from './constants';
+import { ensureStorageDirectory } from './storageFs';
 
 export interface VscodeStorageUris {
   agentsRootUri: vscode.Uri;
@@ -404,5 +405,5 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
 }
 
 export async function ensureStorageRoots(...roots: vscode.Uri[]): Promise<void> {
-  await Promise.all(roots.map((root) => vscode.workspace.fs.createDirectory(root)));
+  await Promise.all(roots.map((root) => ensureStorageDirectory(root)));
 }

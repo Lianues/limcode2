@@ -15,6 +15,7 @@ import { INDEX_FILE, STORAGE_VERSION } from './constants';
 import { isFileNotFoundError, readJsonStrict, writeJson } from './json';
 import type { StoragePaths } from './clientStateStore';
 import { withStorageResourceLock } from './storageResourceLock';
+import { ensureStorageDirectory, readStorageDirectory } from './storageFs';
 import {
   cleanupInactiveStorageGenerations,
   createStorageGenerationLocation,
@@ -326,7 +327,7 @@ async function tryLoadProjectionFromGenerationPages(
   const pagesRoot = vscode.Uri.joinPath(rootUri, STORAGE_GENERATIONS_DIR, generation, PAGES_DIR);
   let directoryEntries: [string, vscode.FileType][];
   try {
-    directoryEntries = await vscode.workspace.fs.readDirectory(pagesRoot);
+    directoryEntries = await readStorageDirectory(pagesRoot);
   } catch (error) {
     if (isFileNotFoundError(error)) return undefined;
     throw error;
@@ -401,7 +402,7 @@ async function writeCanonicalProjection(
   const savedAt = new Date().toISOString();
   const generation = createStorageGenerationLocation(rootUri);
   const pagesRoot = vscode.Uri.joinPath(generation.rootUri, PAGES_DIR);
-  await vscode.workspace.fs.createDirectory(pagesRoot);
+  await ensureStorageDirectory(pagesRoot);
 
   const entries = uniqueById(projection.entries).map((entry) => ({ ...entry }));
   const entryIds = new Set(entries.map((entry) => entry.id));
@@ -669,7 +670,7 @@ function parseStandaloneGenerationPage(
 
 async function findExistingHistoryProjectionTraces(rootUri: vscode.Uri): Promise<string[]> {
   try {
-    const entries = await vscode.workspace.fs.readDirectory(rootUri);
+    const entries = await readStorageDirectory(rootUri);
     return entries.map(([name]) => name).sort();
   } catch (error) {
     if (isFileNotFoundError(error)) return [];

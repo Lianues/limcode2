@@ -60,6 +60,7 @@ import {
   type MessageEditPayload,
   type MessageRetryFromPayload,
   type OperationResult,
+  type PersistenceStatusRecord,
   type LlmProviderModelsGetPayload,
   type ProjectFolderCandidateRecord,
   type RuleScope,
@@ -82,6 +83,7 @@ export interface WebviewMessageRouterDeps {
   globalSettingsBridge: GlobalSettingsBridge;
   conversationSettingsBridge: ConversationSettingsBridge;
   isHydrated: () => boolean;
+  getPersistenceStatus: () => PersistenceStatusRecord;
   requestSnapshot: (conversationId?: string) => void;
   requestPersist?: (reason: string) => void;
   flushConversationTimelinePersistence?: (conversationId: string, reason: string) => Promise<void>;
@@ -599,6 +601,13 @@ export class WebviewMessageRouter {
         break;
       case BridgeMessageType.Ready:
         this.sendBridgeHello(clientId, message.id);
+        this.deps.webview.post(clientId, {
+          id: createMessageId(),
+          type: BridgeMessageType.PersistenceStatusSnapshot,
+          channel: 'control',
+          correlationId: message.id,
+          payload: this.deps.getPersistenceStatus()
+        });
         if (this.deps.clients.getOrUnknown(clientId).meta.kind === 'globalSettings') {
           // 流订阅不依赖 hydration 状态，提前注册可确保 hydration 完成后的快照不会丢失。
           // requestSnapshot 在未 hydrated 时自动排队，hydration 完成后由 flushPendingSnapshots 投递。

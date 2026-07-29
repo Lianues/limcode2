@@ -414,3 +414,32 @@ test('explicit persist inside exclusive mutation gate does not deadlock', async 
   assert.equal(storage.calls.filter((call) => call.kind === 'skeleton').length, 1);
   assert.equal(storage.calls[0].state.conversations[0].id, 'conversation-safe');
 });
+
+test('立即 queue 会暴露 pending/saving/saved，失败后按有限退避自动重试', async () => {
+  const world = new FakeWorld(makeState('conversation-status'));
+  const saved = deferred();
+  const phases = [];
+  let attempts = 0;
+  const storage = makeStorage({
+    saveClientStateSkeleton: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('transient disk failure');
+      saved.resolve();
+    }
+  });
+  const persistence = new ClientStatePersistence(world, storage, {
+    onStatusChange: (status) => phases.push(status.phase),
+    retryDelaysMs: [5]
+  }, 500);
+  persistence.enable();
+
+  persistence.queuePersist({ delayMs: 0 });
+  await saved.promise;
+  await delay(20);
+
+  assert.equal(attempts, 2);
+  assert.ok(phases.includes('pending'));
+  assert.ok(phases.includes('saving'));
+  assert.ok(phases.includes('error'));
+  assert.equal(phases.at(-1), 'saved');
+});

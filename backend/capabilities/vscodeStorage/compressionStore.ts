@@ -7,6 +7,7 @@ import type { StoragePaths } from './clientStateStore';
 import { loadRecordStoreWithDiagnostics, saveRecordStore, withRecordStoreTransaction, type RecordStoreDiagnosticsResult } from './recordStore';
 import { readJsonStrict, writeJson } from './json';
 import { assertUniqueClientStateIds, assertUniqueRecords } from '../../utils/uniqueIds';
+import { readStorageDirectory } from './storageFs';
 
 const CONVERSATIONS_DIR = 'conversations';
 const COMPRESSION_MANIFEST_FILE = 'compression-manifest.json';
@@ -291,7 +292,7 @@ async function findCompressionStoreTraces(paths: StoragePaths, conversationId: s
 async function compressionStoreHasTraces(root: vscode.Uri): Promise<boolean> {
   if (await uriExists(vscode.Uri.joinPath(root, INDEX_FILE))) return true;
   try {
-    const entries = await vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(root, 'records'));
+    const entries = await readStorageDirectory(vscode.Uri.joinPath(root, 'records'));
     return entries.some(([name, type]) => type === vscode.FileType.File && name.toLowerCase().endsWith('.json'));
   } catch {
     return false;

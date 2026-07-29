@@ -143,6 +143,7 @@ export enum BridgeMessageType {
   ClientResync = 'client.resync',
   ClientSnapshot = 'state.snapshot',
   ClientPatch = 'state.patch',
+  PersistenceStatusSnapshot = 'persistence.status.snapshot',
   ConversationTimelinePageGet = 'conversationTimeline.page.get',
   ConversationTimelinePageSnapshot = 'conversationTimeline.page.snapshot',
   ConversationTimelinePatch = 'conversationTimeline.patch',
@@ -2310,6 +2311,18 @@ export interface ConversationAgentSelectPayload {
   conversationId: string; agentId: string;
 }
 
+export type PersistenceStatusPhase = 'pending' | 'saving' | 'saved' | 'error';
+
+export interface PersistenceStatusRecord {
+  phase: PersistenceStatusPhase;
+  updatedAt: number;
+  pendingSince?: number;
+  lastSavedAt?: number;
+  retryAttempt?: number;
+  nextRetryAt?: number;
+  error?: string;
+}
+
 export type ConversationTimelinePageDirection = 'initial' | 'older' | 'newer' | 'around';
 export type ConversationTimelinePageApplyMode = 'replace' | 'prepend' | 'append' | 'merge';
 
@@ -2835,6 +2848,7 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.OperationResult, OperationResult>
   | BridgeEnvelope<BridgeMessageType.ClientSnapshot, ClientSnapshotPayload>
   | BridgeEnvelope<BridgeMessageType.ClientPatch, ClientPatchPayload>
+  | BridgeEnvelope<BridgeMessageType.PersistenceStatusSnapshot, PersistenceStatusRecord>
   | BridgeEnvelope<BridgeMessageType.ConversationTimelinePageSnapshot, ConversationTimelinePageRecord>
   | BridgeEnvelope<BridgeMessageType.ConversationTimelinePatch, ConversationTimelinePatchPayload>
   | BridgeEnvelope<BridgeMessageType.ConversationTimelineMetaSnapshot, ConversationTimelinePageRecord>

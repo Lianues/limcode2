@@ -18,6 +18,7 @@ import type { StoragePaths } from './clientStateStore';
 import { loadGlobalSettingsFile } from './globalSettings';
 import { loadRecordStore, loadRecordStoreByIds, upsertRecordStoreRecords } from './recordStore';
 import { readJson, writeJson } from './json';
+import { ensureStorageDirectory, readStorageFile, writeStorageFile } from './storageFs';
 
 const ATTACHMENT_RECORD_KEY = 'attachment';
 const ATTACHMENT_BLOBS_DIR = 'blobs';
@@ -158,7 +159,7 @@ export async function resolveAttachmentForClient(paths: StoragePaths, input: { a
   if (input.sourcePath?.trim()) {
     try {
       const uri = vscode.Uri.file(input.sourcePath.trim());
-      const data = await vscode.workspace.fs.readFile(uri);
+      const data = await readStorageFile(uri);
       return {
         part: {
           inlineData: {
@@ -190,15 +191,15 @@ export async function materializeAttachmentFileUri(paths: StoragePaths, input: {
   if (!data) return undefined;
   const fileName = safeAttachmentFileName(input.attachmentId, resolved.part.inlineData.name ?? input.name, resolved.part.inlineData.mimeType);
   const uri = vscode.Uri.joinPath(paths.attachmentsRootUri, ATTACHMENT_OPENED_DIR, fileName);
-  await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(paths.attachmentsRootUri, ATTACHMENT_OPENED_DIR));
-  await vscode.workspace.fs.writeFile(uri, Buffer.from(data, 'base64'));
+  await ensureStorageDirectory(vscode.Uri.joinPath(paths.attachmentsRootUri, ATTACHMENT_OPENED_DIR));
+  await writeStorageFile(uri, Buffer.from(data, 'base64'));
   return uri;
 }
 
 export async function ensureAttachmentRoots(paths: StoragePaths): Promise<void> {
   await Promise.all([
-    vscode.workspace.fs.createDirectory(paths.attachmentsRootUri),
-    vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(paths.attachmentsRootUri, ATTACHMENT_BLOBS_DIR))
+    ensureStorageDirectory(paths.attachmentsRootUri),
+    ensureStorageDirectory(vscode.Uri.joinPath(paths.attachmentsRootUri, ATTACHMENT_BLOBS_DIR))
   ]);
 }
 

@@ -29,6 +29,7 @@ import { cleanupMigratedStorageRoot, copyStorageRootForMigration } from './migra
 import { createVscodeStoragePaths } from './paths';
 import { readJsonStrict, writeJson, type StrictJsonReadResult } from './json';
 import { withStorageResourceLock } from './storageResourceLock';
+import { deleteStorageUri, ensureStorageDirectory } from './storageFs';
 import {
   assertNoOtherLiveInstanceUsingDataRoot,
   createDataRootProcessLease,
@@ -333,8 +334,8 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       return withSharedDataRoot(async (paths) => {
         const result: DeleteConversationDataResult = await deleteConversationDataFromStores(paths, conversationId);
         await collectDeleteStep(result, () => removeConversationHistoryEntryFromStore(paths, conversationId), `history:${conversationId}`);
-        await collectDeleteStep(result, () => vscode.workspace.fs.delete(conversationSettingsUri(paths, conversationId, 'common'), { useTrash: false }), conversationSettingsUri(paths, conversationId, 'common').fsPath, true);
-        await collectDeleteStep(result, () => vscode.workspace.fs.delete(conversationSettingsUri(paths, conversationId, 'llm'), { useTrash: false }), conversationSettingsUri(paths, conversationId, 'llm').fsPath, true);
+        await collectDeleteStep(result, () => deleteStorageUri(conversationSettingsUri(paths, conversationId, 'common'), { useTrash: false }), conversationSettingsUri(paths, conversationId, 'common').fsPath, true);
+        await collectDeleteStep(result, () => deleteStorageUri(conversationSettingsUri(paths, conversationId, 'llm'), { useTrash: false }), conversationSettingsUri(paths, conversationId, 'llm').fsPath, true);
         return { ...result, ok: result.errors.length === 0 };
       });
     },
@@ -408,7 +409,7 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
           const stored = await loadMcpServersSettings(paths);
           return { section, settings: stored.settings, filePath: stored.filePath };
         }
-        await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
+        await ensureStorageDirectory(paths.settingsRootUri);
         return loadGlobalSettingsFile(paths.settingsRootUri, section);
       });
     },
@@ -436,7 +437,7 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
           const stored = await saveMcpServersSettings(paths, settings as Partial<McpServersSettingsRecord> | undefined);
           return { section, settings: stored.settings, filePath: stored.filePath };
         }
-        await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
+        await ensureStorageDirectory(paths.settingsRootUri);
         await writeGlobalSettingsFile(paths.settingsRootUri, section, settings);
         return loadGlobalSettingsFile(paths.settingsRootUri, section);
       });
@@ -467,7 +468,7 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     },
     async loadActiveLlmCompressionConfig(providerConfigId, modelId) {
       return withSharedDataRoot(async (paths) => {
-        await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
+        await ensureStorageDirectory(paths.settingsRootUri);
         const configs = (await loadLlmCompressionConfigsSettings(paths)).settings.configs;
         const stored = await loadGlobalSettingsFile(paths.settingsRootUri, 'llmCompression');
         const settings = normalizeLlmCompressionSettings(stored.settings as Partial<LlmCompressionSettingsRecord> | undefined, configs);
@@ -510,7 +511,7 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     },
     async saveConversationSettings(section, settings) {
       return withSharedDataRoot(async (paths) => {
-        await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
+        await ensureStorageDirectory(paths.settingsRootUri);
         const conversationId = (settings as ConversationSettingsRecord | ConversationLlmSettingsRecord).conversationId;
         const normalized = section === 'llm'
           ? normalizeConversationLlmSettings(conversationId, settings as Partial<ConversationLlmSettingsRecord>)
@@ -549,7 +550,7 @@ function safeFileName(input: string): string {
 }
 
 async function ensureLlmSettingsRoots(paths: StoragePaths): Promise<void> {
-  await vscode.workspace.fs.createDirectory(paths.settingsRootUri);
+  await ensureStorageDirectory(paths.settingsRootUri);
 }
 
 async function loadNormalizedLlmGlobalSettings(paths: StoragePaths): Promise<{ section: 'llm'; settings: LlmSettingsRecord; filePath: string }> {

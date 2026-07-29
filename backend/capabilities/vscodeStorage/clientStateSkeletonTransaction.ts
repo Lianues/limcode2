@@ -10,7 +10,7 @@ const CLIENT_STATE_SKELETON_TRANSACTION_RESOURCE = '.client-state-skeleton-trans
 const CLIENT_STATE_SKELETON_MANIFEST_KIND = 'clientStateSkeleton.manifest';
 const EMPTY_SKELETON_TRANSACTION_ID = 'empty';
 
-type ClientStateSkeletonManifestState = 'writing' | 'committed';
+type ClientStateSkeletonManifestState = 'writing' | 'prepared' | 'committed';
 
 interface ClientStateSkeletonManifest {
   kind: typeof CLIENT_STATE_SKELETON_MANIFEST_KIND;
@@ -60,7 +60,8 @@ export async function withClientStateSkeletonReadTransaction<T>(
  * Mutate one or more skeleton record stores as one published snapshot. The
  * writing marker is deliberately left in place after a failure/partial result,
  * preventing future readers from treating mixed tables as a valid snapshot.
- * A later complete mutation may repair and publish the stores again.
+ * Only a durable prepared marker proves every store completed; readers may
+ * promote prepared to committed after an interruption in the final marker write.
  */
 export async function withClientStateSkeletonMutation<T>(
   paths: StoragePaths,
@@ -77,6 +78,11 @@ export async function withClientStateSkeletonMutation<T>(
 
     const result = await action();
     if (result.commit) {
+      await writeClientStateSkeletonManifest(paths, {
+        state: 'prepared',
+        transactionId,
+        startedAt
+      });
       await writeClientStateSkeletonManifest(paths, {
         state: 'committed',
         transactionId,
@@ -100,19 +106,19 @@ async function readCommittedClientStateSkeletonManifest(paths: StoragePaths): Pr
   if (result.status === 'ioError') throw new Error(`Failed to read client-state skeleton manifest: ${uri.fsPath}`);
 
   const manifest = parseClientStateSkeletonManifest(result.value, uri);
-  if (manifest.state !== 'committed') {
-    // 写入者先落 `writing` 标记、再写全部存储、最后落 `committed`。若进程在最后一步前退出，
-    // 清单会停在 `writing`。由于存储本身是原子写且此刻持锁无并发写者，现有存储即为一份完整快照，
-    // 把该事务提升为 committed 即可从被中断的写入中恢复。
-    return promoteWritingSkeletonManifestToCommitted(paths, manifest);
+  if (manifest.state === 'writing') {
+    throw new Error(`Client-state skeleton transaction is incomplete (writing): ${manifest.transactionId}`);
+  }
+  if (manifest.state === 'prepared') {
+    return promotePreparedSkeletonManifestToCommitted(paths, manifest);
   }
   return manifest;
 }
 
-async function promoteWritingSkeletonManifestToCommitted(paths: StoragePaths, manifest: ClientStateSkeletonManifest): Promise<ClientStateSkeletonManifest> {
+async function promotePreparedSkeletonManifestToCommitted(paths: StoragePaths, manifest: ClientStateSkeletonManifest): Promise<ClientStateSkeletonManifest> {
   const committedAt = new Date().toISOString();
   await writeClientStateSkeletonManifest(paths, { state: 'committed', transactionId: manifest.transactionId, startedAt: manifest.startedAt, committedAt });
-  console.warn(`[LimCode] Recovered an interrupted client-state skeleton write by committing transaction ${manifest.transactionId}.`);
+  console.warn(`[LimCode] Recovered a prepared client-state skeleton transaction ${manifest.transactionId}.`);
   return { ...manifest, state: 'committed', committedAt };
 }
 
@@ -121,7 +127,7 @@ function parseClientStateSkeletonManifest(value: unknown, uri: vscode.Uri): Clie
   if (!manifest
     || manifest.kind !== CLIENT_STATE_SKELETON_MANIFEST_KIND
     || manifest.schemaVersion !== STORAGE_VERSION
-    || (manifest.state !== 'writing' && manifest.state !== 'committed')
+    || (manifest.state !== 'writing' && manifest.state !== 'prepared' && manifest.state !== 'committed')
     || typeof manifest.transactionId !== 'string'
     || !manifest.transactionId.trim()
     || typeof manifest.startedAt !== 'string'

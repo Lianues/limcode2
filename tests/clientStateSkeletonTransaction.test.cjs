@@ -122,28 +122,56 @@ test('skeleton reader waits for a multi-store mutation and observes one committe
   }
 });
 
-test('interrupted skeleton write (writing marker over fully-written stores) is self-healed by committing on read', async () => {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-skeleton-failure-'));
+test('interrupted skeleton write 只有 prepared marker 才能在读取时提升为 committed', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-skeleton-prepared-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  try {
+    await clientStateStore.saveClientStateSkeletonToStores(paths, skeletonState(createEmptyClientState, 'old'));
+    let interrupted = false;
+    skeletonTransaction.__clientStateSkeletonTransactionTestHooks.afterManifestWrite = async (manifest) => {
+      if (!interrupted && manifest.state === 'prepared') {
+        interrupted = true;
+        throw new Error('simulated crash after prepared marker');
+      }
+    };
+
+    await assert.rejects(
+      () => clientStateStore.saveClientStateSkeletonToStores(paths, skeletonState(createEmptyClientState, 'prepared')),
+      /simulated crash after prepared marker/
+    );
+    assert.equal((await readSkeletonManifest(paths)).state, 'prepared');
+
+    skeletonTransaction.__clientStateSkeletonTransactionTestHooks.afterManifestWrite = undefined;
+    const recovered = await clientStateStore.loadClientStateSkeletonFromStores(paths, { profile: 'full' });
+    assert.deepEqual(recovered.conversations.map((record) => record.id), ['conversation-prepared']);
+    assert.equal((await readSkeletonManifest(paths)).state, 'committed');
+  } finally {
+    skeletonTransaction.__clientStateSkeletonTransactionTestHooks.afterManifestWrite = undefined;
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('stores 未确认完成时 writing skeleton 不得被读取器误提交', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-skeleton-writing-'));
   const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
   try {
     await clientStateStore.saveClientStateSkeletonToStores(paths, skeletonState(createEmptyClientState, 'old'));
     clientStateStore.__clientStateSkeletonStoreTestHooks.afterStoresSaved = async () => {
-      throw new Error('simulated skeleton publication failure');
+      throw new Error('simulated unconfirmed store completion');
     };
 
-    // 存储被完整写入，但进程在写 committed 标记前"崩溃"，清单停在 writing。
     await assert.rejects(
-      () => clientStateStore.saveClientStateSkeletonToStores(paths, skeletonState(createEmptyClientState, 'partial')),
-      /simulated skeleton publication failure/
+      () => clientStateStore.saveClientStateSkeletonToStores(paths, skeletonState(createEmptyClientState, 'unconfirmed')),
+      /simulated unconfirmed store completion/
     );
     assert.equal((await readSkeletonManifest(paths)).state, 'writing');
 
     clientStateStore.__clientStateSkeletonStoreTestHooks.afterStoresSaved = undefined;
-
-    // 读取器把被中断的写入提升为 committed，并返回磁盘上已完整写入的 'partial' 数据。
-    const recovered = await clientStateStore.loadClientStateSkeletonFromStores(paths, { profile: 'full' });
-    assert.deepEqual(recovered.conversations.map((record) => record.id), ['conversation-partial']);
-    assert.equal((await readSkeletonManifest(paths)).state, 'committed');
+    await assert.rejects(
+      () => clientStateStore.loadClientStateSkeletonFromStores(paths, { profile: 'full' }),
+      /incomplete.*writing|writing.*incomplete/i
+    );
+    assert.equal((await readSkeletonManifest(paths)).state, 'writing');
   } finally {
     clientStateStore.__clientStateSkeletonStoreTestHooks.afterStoresSaved = undefined;
     await fs.rm(tempRoot, { recursive: true, force: true });

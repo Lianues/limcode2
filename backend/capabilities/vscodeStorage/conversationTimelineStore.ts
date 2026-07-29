@@ -23,6 +23,7 @@ import { INDEX_FILE, STORAGE_VERSION } from './constants';
 import { createVscodeStoragePaths } from './paths';
 import { isFileNotFoundError, readJsonStrict, writeJson } from './json';
 import { withStorageResourceLock } from './storageResourceLock';
+import { ensureStorageDirectory, readStorageDirectory } from './storageFs';
 import {
   cleanupInactiveStorageGenerations,
   createStorageGenerationLocation,
@@ -52,12 +53,16 @@ type TimelineFileKind =
   | 'conversationTimeline.sidecar'
   | 'conversationTimeline.projection';
 
+type ConversationTimelineIndexOperation = 'replace' | 'merge' | 'truncate';
+
 interface ConversationTimelineIndexFile {
   kind: 'conversationTimeline.index';
   schemaVersion: typeof STORAGE_VERSION;
   savedAt: string;
   generation: string;
   conversationId: string;
+  operation: ConversationTimelineIndexOperation;
+  parentGeneration?: string;
   chunkSize: number;
   chunks: ConversationTimelineChunkIndexRecord[];
 }
@@ -182,6 +187,7 @@ const DEFAULT_TIMELINE_PAGE_CHUNKS = 2;
 const MAX_TIMELINE_PAGE_CHUNKS = 5;
 const TIMELINE_READER_MAX_ATTEMPTS = 3;
 const CHUNK_ID_PATTERN = /^\d{6}$/;
+const PREVIOUS_TIMELINE_INDEX_FILE = 'index.previous.json';
 
 const TIMELINE_SIDECAR_KEYS: readonly TimelineSidecarKey[] = [
   'message-revisions',
@@ -306,7 +312,7 @@ export async function saveConversationTimelineDetail(paths: StoragePaths, conver
   const root = conversationTimelineRoot(paths, conversationId);
   await withStorageResourceLock(root, async () => {
     const previous = await loadTimelineIndexForWrite(root, conversationId, { allowMissing: true });
-    await publishTimelineDetail(paths, root, conversationId, storageDetail, previous?.index);
+    await publishTimelineDetail(paths, root, conversationId, storageDetail, previous?.index, 'replace');
   });
 }
 
@@ -321,7 +327,7 @@ export async function mergeConversationTimelineDetailIntoStore(paths: StoragePat
       : createEmptyClientState();
     mergeTimelineDetailTables(next, storageDetail);
     sortConversationTimelineDetail(next);
-    await publishTimelineDetail(paths, root, conversationId, next, previous?.index);
+    await publishTimelineDetail(paths, root, conversationId, next, previous?.index, 'merge');
   });
 }
 
@@ -339,7 +345,7 @@ export async function mutateConversationTimelineDetailInStore(
     await mutate(detail);
     const storageDetail = await externalizeClientStateAttachments(paths, detail);
     sortConversationTimelineDetail(storageDetail);
-    await publishTimelineDetail(paths, root, conversationId, storageDetail, previous?.index);
+    await publishTimelineDetail(paths, root, conversationId, storageDetail, previous?.index, 'replace');
   });
 }
 
@@ -354,7 +360,7 @@ export async function saveConversationTimelineRenderDetailIncremental(paths: Sto
 
     const previous = await loadTimelineIndexManifestForWrite(root, conversationId, { allowMissing: true });
     if (!previous || previous.index.chunks.length === 0) {
-      await publishTimelineDetail(paths, root, conversationId, storageDetail, previous?.index);
+      await publishTimelineDetail(paths, root, conversationId, storageDetail, previous?.index, previous ? 'merge' : 'replace');
       return true;
     }
 
@@ -385,6 +391,23 @@ export async function loadTimelineProjectionContext(
   });
 }
 
+interface TimelineIndexCandidateRead {
+  status: 'ok' | 'missing' | 'invalid' | 'ioError';
+  uri: vscode.Uri;
+  snapshot?: ConversationTimelineIndexSnapshot;
+  error?: unknown;
+}
+
+interface ResolvedTimelineIndexRead {
+  snapshot?: ConversationTimelineIndexSnapshot;
+  issue?: Error;
+}
+
+type TimelineMergeRecovery =
+  | { kind: 'unchanged'; index: ConversationTimelineIndexFile }
+  | { kind: 'recovered'; index: ConversationTimelineIndexFile; restoredMessageCount: number }
+  | { kind: 'fallback' };
+
 async function loadTimelineForUi<T>(
   root: vscode.Uri,
   conversationId: string,
@@ -409,6 +432,16 @@ async function loadTimelineForUi<T>(
       value = await load(initial.index);
     } catch (error) {
       if (attempt < TIMELINE_READER_MAX_ATTEMPTS && await timelineIndexGenerationChanged(root, conversationId, initial.index.generation, options)) continue;
+      const previous = await readTimelineIndexCandidate(root, conversationId, PREVIOUS_TIMELINE_INDEX_FILE);
+      if (previous.status === 'ok' && previous.snapshot && previous.snapshot.index.generation !== initial.index.generation) {
+        try {
+          const previousValue = await load(previous.snapshot.index);
+          console.warn(`[LimCode] Recovered ${label} from previous timeline index after active generation failed validation.`, error);
+          return previousValue;
+        } catch {
+          // Preserve the active failure below; it carries the original damaged path.
+        }
+      }
       if (options.strictErrors) throw error;
       console.warn(`[LimCode] Failed to load ${label}:`, error);
       return fallback;
@@ -426,35 +459,17 @@ async function loadTimelineForUi<T>(
 }
 
 async function tryLoadTimelineIndexForUi(root: vscode.Uri, conversationId: string, options: TimelineUiLoadOptions = {}): Promise<ConversationTimelineIndexSnapshot | undefined> {
-  const indexUri = vscode.Uri.joinPath(root, INDEX_FILE);
-  const result = await readJsonStrict<unknown>(indexUri);
-  if (result.status === 'missing') {
-    const traces = await findExistingTimelineTracesForUi(root);
-    if (traces.length > 0) {
-      const error = new Error(`Conversation timeline index is missing while timeline traces exist: ${traces.join(', ')}`);
-      if (options.strictErrors) throw error;
-      console.warn('[LimCode]', error.message);
-    }
-    return undefined;
-  }
-  if (result.status === 'invalid') {
-    if (options.strictErrors) throw new Error(`Conversation timeline index JSON is invalid: ${indexUri.fsPath}`);
-    console.warn(`[LimCode] Conversation timeline index JSON is invalid: ${indexUri.fsPath}`, result.error);
-    return undefined;
-  }
-  if (result.status === 'ioError') {
-    if (options.strictErrors) throw new Error(`Failed to read conversation timeline index: ${indexUri.fsPath}`);
-    console.warn(`[LimCode] Failed to read conversation timeline index: ${indexUri.fsPath}`, result.error);
-    return undefined;
-  }
+  const resolved = await resolveTimelineIndexSnapshot(root, conversationId);
+  if (resolved.snapshot) return resolved.snapshot;
 
-  try {
-    return parseTimelineIndex(result.value, indexUri, conversationId);
-  } catch (error) {
-    if (options.strictErrors) throw error;
-    console.warn('[LimCode] Conversation timeline index structure is invalid:', error);
-    return undefined;
-  }
+  const traces = await findExistingTimelineTracesForUi(root);
+  const issue = resolved.issue ?? (traces.length > 0
+    ? new Error(`Conversation timeline index is missing while timeline traces exist: ${traces.join(', ')}`)
+    : undefined);
+  if (!issue) return undefined;
+  if (options.strictErrors) throw issue;
+  console.warn('[LimCode]', issue.message);
+  return undefined;
 }
 
 async function timelineIndexGenerationChanged(root: vscode.Uri, conversationId: string, generation: string, options: TimelineUiLoadOptions = {}): Promise<boolean> {
@@ -465,25 +480,131 @@ async function timelineIndexGenerationChanged(root: vscode.Uri, conversationId: 
 async function loadTimelineIndexForWrite(root: vscode.Uri, conversationId: string, options: { allowMissing: boolean }): Promise<ConversationTimelineIndexSnapshot | undefined> {
   const snapshot = await loadTimelineIndexManifestForWrite(root, conversationId, options);
   if (!snapshot) return undefined;
-  await validateTimelineIndexReferencesForWrite(root, snapshot.index);
-  return snapshot;
+  try {
+    await validateTimelineIndexReferencesForWrite(root, snapshot.index);
+    return snapshot;
+  } catch (error) {
+    const previous = await readTimelineIndexCandidate(root, conversationId, PREVIOUS_TIMELINE_INDEX_FILE);
+    if (previous.status === 'ok' && previous.snapshot && previous.snapshot.index.generation !== snapshot.index.generation) {
+      await validateTimelineIndexReferencesForWrite(root, previous.snapshot.index);
+      console.warn('[LimCode] Active conversation timeline index failed validation; continuing from previous committed index.', error);
+      return previous.snapshot;
+    }
+    throw error;
+  }
 }
 
 async function loadTimelineIndexManifestForWrite(root: vscode.Uri, conversationId: string, options: { allowMissing: boolean }): Promise<ConversationTimelineIndexSnapshot | undefined> {
-  const indexUri = vscode.Uri.joinPath(root, INDEX_FILE);
-  const result = await readJsonStrict<unknown>(indexUri);
-  if (result.status === 'missing') {
-    const traces = await findExistingTimelineTraces(root);
-    if (traces.length > 0) {
-      throw new Error(`Conversation timeline index is missing but storage contains timeline traces: ${traces.join(', ')}`);
-    }
-    if (options.allowMissing) return undefined;
-    throw new Error(`Conversation timeline index is missing: ${indexUri.fsPath}`);
-  }
-  if (result.status === 'invalid') throw new Error(`Conversation timeline index JSON is invalid: ${indexUri.fsPath}`);
-  if (result.status === 'ioError') throw new Error(`Failed to read conversation timeline index: ${indexUri.fsPath}`);
+  const resolved = await resolveTimelineIndexSnapshot(root, conversationId);
+  if (resolved.snapshot) return resolved.snapshot;
 
-  return parseTimelineIndex(result.value, indexUri, conversationId);
+  const traces = await findExistingTimelineTraces(root);
+  if (resolved.issue) throw resolved.issue;
+  if (traces.length > 0) {
+    throw new Error(`Conversation timeline index is missing but storage contains timeline traces: ${traces.join(', ')}`);
+  }
+  if (options.allowMissing) return undefined;
+  throw new Error(`Conversation timeline index is missing: ${vscode.Uri.joinPath(root, INDEX_FILE).fsPath}`);
+}
+
+async function resolveTimelineIndexSnapshot(root: vscode.Uri, conversationId: string): Promise<ResolvedTimelineIndexRead> {
+  const active = await readTimelineIndexCandidate(root, conversationId, INDEX_FILE);
+  if (active.status === 'ok' && active.snapshot) {
+    const activeIndex = active.snapshot.index;
+    if (activeIndex.operation !== 'merge') return { snapshot: active.snapshot };
+
+    const previous = await readTimelineIndexCandidate(root, conversationId, PREVIOUS_TIMELINE_INDEX_FILE);
+    if (previous.status !== 'ok' || !previous.snapshot || activeIndex.parentGeneration !== previous.snapshot.index.generation) {
+      return { snapshot: active.snapshot };
+    }
+
+    const recovery = recoverMissingMergePrefix(activeIndex, previous.snapshot.index);
+    if (recovery.kind === 'unchanged') return { snapshot: active.snapshot };
+    if (recovery.kind === 'recovered') {
+      console.warn(`[LimCode] Recovered ${recovery.restoredMessageCount} omitted conversation timeline message(s) from previous index.`);
+      return { snapshot: { uri: active.snapshot.uri, index: recovery.index } };
+    }
+    console.warn('[LimCode] Active merge timeline regressed within an existing chunk; falling back to previous committed index.');
+    return { snapshot: previous.snapshot };
+  }
+
+  const previous = await readTimelineIndexCandidate(root, conversationId, PREVIOUS_TIMELINE_INDEX_FILE);
+  if (previous.status === 'ok' && previous.snapshot) {
+    console.warn(`[LimCode] Active conversation timeline index is unavailable; using previous committed index: ${active.uri.fsPath}`);
+    return { snapshot: previous.snapshot };
+  }
+
+  return { issue: timelineIndexReadIssue(active) };
+}
+
+async function readTimelineIndexCandidate(root: vscode.Uri, conversationId: string, fileName: string): Promise<TimelineIndexCandidateRead> {
+  const uri = vscode.Uri.joinPath(root, fileName);
+  const result = await readJsonStrict<unknown>(uri);
+  if (result.status !== 'ok') return { status: result.status, uri, error: result.error };
+  try {
+    return { status: 'ok', uri, snapshot: parseTimelineIndex(result.value, uri, conversationId) };
+  } catch (error) {
+    return { status: 'invalid', uri, error };
+  }
+}
+
+function timelineIndexReadIssue(read: TimelineIndexCandidateRead): Error | undefined {
+  if (read.status === 'missing') return undefined;
+  if (read.status === 'invalid') return new Error(`Conversation timeline index JSON is invalid or structure is invalid: ${read.uri.fsPath}`);
+  if (read.status === 'ioError') return new Error(`Failed to read conversation timeline index: ${read.uri.fsPath}`);
+  return undefined;
+}
+
+function recoverMissingMergePrefix(active: ConversationTimelineIndexFile, previous: ConversationTimelineIndexFile): TimelineMergeRecovery {
+  const activeMessageIds = new Set(active.chunks.flatMap((chunk) => chunk.messageIds));
+  const missingMessageIds = previous.chunks
+    .flatMap((chunk) => chunk.messageIds)
+    .filter((messageId) => !activeMessageIds.has(messageId));
+  if (missingMessageIds.length === 0) return { kind: 'unchanged', index: active };
+
+  const chunksById = new Map(previous.chunks.map((chunk) => [chunk.id, chunk]));
+  for (const activeChunk of active.chunks) {
+    const previousChunk = chunksById.get(activeChunk.id);
+    if (previousChunk && previousChunk.messageIds.some((messageId) => !activeChunk.messageIds.includes(messageId))) {
+      return { kind: 'fallback' };
+    }
+    chunksById.set(activeChunk.id, activeChunk);
+  }
+
+  const ordered = [...chunksById.values()].sort((left, right) => left.id.localeCompare(right.id));
+  const seenMessageIds = new Set<string>();
+  let visibleMessageOffset = 0;
+  let previousEndSeq: number | undefined;
+  const chunks: ConversationTimelineChunkIndexRecord[] = [];
+  for (let index = 0; index < ordered.length; index += 1) {
+    const chunk = ordered[index];
+    if (previousEndSeq !== undefined && chunk.startSeq < previousEndSeq) return { kind: 'fallback' };
+    if (chunk.messageIds.some((messageId) => seenMessageIds.has(messageId))) return { kind: 'fallback' };
+    for (const messageId of chunk.messageIds) seenMessageIds.add(messageId);
+    const canonical = reindexReusedTimelineChunkRecord(chunk, index, visibleMessageOffset);
+    const preceding = chunks[chunks.length - 1];
+    if (preceding && !timelineProjectionChainConnects(preceding, canonical)) return { kind: 'fallback' };
+    chunks.push(canonical);
+    visibleMessageOffset += canonical.messageCount;
+    previousEndSeq = canonical.endSeq;
+  }
+
+  return {
+    kind: 'recovered',
+    restoredMessageCount: missingMessageIds.length,
+    index: { ...active, chunks }
+  };
+}
+
+function timelineProjectionChainConnects(
+  previous: ConversationTimelineChunkIndexRecord,
+  current: ConversationTimelineChunkIndexRecord
+): boolean {
+  for (const [projectionKey, currentRef] of Object.entries(current.projections)) {
+    const previousRef = previous.projections[projectionKey];
+    if (!previousRef || currentRef.previousCheckpointHash !== previousRef.checkpointHash) return false;
+  }
+  return true;
 }
 
 async function validateTimelineIndexReferencesForWrite(root: vscode.Uri, index: ConversationTimelineIndexFile): Promise<void> {
@@ -522,7 +643,7 @@ async function publishMergedTimelineDetailFromIndex(
   const next = await loadTimelineDetailFromIndexStrict(root, previousIndex, { validateProjections: true });
   mergeTimelineDetailTables(next, patch);
   sortConversationTimelineDetail(next);
-  await publishTimelineDetail(paths, root, conversationId, next, previousIndex);
+  await publishTimelineDetail(paths, root, conversationId, next, previousIndex, 'merge');
 }
 
 async function publishTimelineTruncateIncremental(
@@ -580,12 +701,14 @@ async function publishTimelineTruncateIncremental(
     savedAt,
     generation: generation.id,
     conversationId,
+    operation: 'truncate',
+    parentGeneration: previousIndex.generation,
     chunkSize: CONVERSATION_TIMELINE_CHUNK_SIZE,
     chunks: indexChunks
   };
 
   await __conversationTimelineStoreTestHooks.beforePublishIndex?.({ rootUri: root, conversationId, generation: generation.id });
-  await writeJson(vscode.Uri.joinPath(root, INDEX_FILE), nextIndex);
+  await publishTimelineIndex(root, nextIndex, previousIndex);
   await cleanupOldTimelineGenerationsAfterPublish(root, nextIndex, previousIndex);
 }
 
@@ -645,13 +768,16 @@ async function publishTimelineTailIncremental(
     savedAt,
     generation: generation.id,
     conversationId,
+    operation: 'merge',
+    parentGeneration: previousIndex.generation,
     chunkSize: CONVERSATION_TIMELINE_CHUNK_SIZE,
     chunks: indexChunks
   };
 
+  assertMergePreservesPreviousTimeline(previousIndex, nextIndex);
   await __conversationTimelineStoreTestHooks.beforePublishIndex?.({ rootUri: root, conversationId, generation: generation.id });
 
-  await writeJson(vscode.Uri.joinPath(root, INDEX_FILE), nextIndex);
+  await publishTimelineIndex(root, nextIndex, previousIndex);
   await cleanupOldTimelineGenerationsAfterPublish(root, nextIndex, previousIndex);
   return true;
 }
@@ -1090,7 +1216,8 @@ async function publishTimelineDetail(
   root: vscode.Uri,
   conversationId: string,
   detail: ClientState,
-  previousIndex: ConversationTimelineIndexFile | undefined
+  previousIndex: ConversationTimelineIndexFile | undefined,
+  operation: ConversationTimelineIndexOperation
 ): Promise<void> {
   const savedAt = new Date().toISOString();
   const generation = createStorageGenerationLocation(root);
@@ -1124,13 +1251,16 @@ async function publishTimelineDetail(
     savedAt,
     generation: generation.id,
     conversationId,
+    operation,
+    ...(previousIndex ? { parentGeneration: previousIndex.generation } : {}),
     chunkSize: CONVERSATION_TIMELINE_CHUNK_SIZE,
     chunks: indexChunks
   };
 
+  if (previousIndex && operation === 'merge') assertMergePreservesPreviousTimeline(previousIndex, nextIndex);
   await __conversationTimelineStoreTestHooks.beforePublishIndex?.({ rootUri: root, conversationId, generation: generation.id });
 
-  await writeJson(vscode.Uri.joinPath(root, INDEX_FILE), nextIndex);
+  await publishTimelineIndex(root, nextIndex, previousIndex);
   await cleanupOldTimelineGenerationsAfterPublish(root, nextIndex, previousIndex);
 }
 
@@ -1207,11 +1337,34 @@ async function writeTimelineChunkIndexRecord(input: {
 
 async function ensureTimelineGenerationRoots(generationRoot: vscode.Uri): Promise<void> {
   await Promise.all([
-    vscode.workspace.fs.createDirectory(generationRoot),
-    vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(generationRoot, CONVERSATION_TIMELINE_CHUNKS_DIR)),
-    ...TIMELINE_SIDECAR_KEYS.map((key) => vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(generationRoot, CONVERSATION_TIMELINE_SIDECARS_DIR, key))),
-    ...BUILTIN_TIMELINE_PROJECTIONS.map((spec) => vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(generationRoot, CONVERSATION_TIMELINE_PROJECTIONS_DIR, safeProjectionKey(spec.key))))
+    ensureStorageDirectory(generationRoot),
+    ensureStorageDirectory(vscode.Uri.joinPath(generationRoot, CONVERSATION_TIMELINE_CHUNKS_DIR)),
+    ...TIMELINE_SIDECAR_KEYS.map((key) => ensureStorageDirectory(vscode.Uri.joinPath(generationRoot, CONVERSATION_TIMELINE_SIDECARS_DIR, key))),
+    ...BUILTIN_TIMELINE_PROJECTIONS.map((spec) => ensureStorageDirectory(vscode.Uri.joinPath(generationRoot, CONVERSATION_TIMELINE_PROJECTIONS_DIR, safeProjectionKey(spec.key))))
   ]);
+}
+
+async function publishTimelineIndex(
+  root: vscode.Uri,
+  currentIndex: ConversationTimelineIndexFile,
+  previousIndex: ConversationTimelineIndexFile | undefined
+): Promise<void> {
+  if (previousIndex) {
+    await writeJson(vscode.Uri.joinPath(root, PREVIOUS_TIMELINE_INDEX_FILE), previousIndex);
+  }
+  await writeJson(vscode.Uri.joinPath(root, INDEX_FILE), currentIndex);
+}
+
+function assertMergePreservesPreviousTimeline(
+  previousIndex: ConversationTimelineIndexFile,
+  nextIndex: ConversationTimelineIndexFile
+): void {
+  const nextMessageIds = new Set(nextIndex.chunks.flatMap((chunk) => chunk.messageIds));
+  const missing = previousIndex.chunks
+    .flatMap((chunk) => chunk.messageIds)
+    .filter((messageId) => !nextMessageIds.has(messageId));
+  if (missing.length === 0) return;
+  throw new Error(`Conversation timeline merge would remove ${missing.length} previously committed message(s); refusing to publish a partial timeline.`);
 }
 
 async function cleanupOldTimelineGenerationsAfterPublish(
@@ -1632,7 +1785,7 @@ function yieldToExtensionHost(): Promise<void> {
 function parseTimelineIndex(value: unknown, uri: vscode.Uri, conversationId: string): ConversationTimelineIndexSnapshot {
   const index = value as Partial<ConversationTimelineIndexFile> | undefined;
   if (!isPlainObject(index)) throw new Error(`Conversation timeline index must be an object: ${uri.fsPath}`);
-  if (!hasOnlyKeys(index, ['kind', 'schemaVersion', 'savedAt', 'generation', 'conversationId', 'chunkSize', 'chunks'])) {
+  if (!hasOnlyKeys(index, ['kind', 'schemaVersion', 'savedAt', 'generation', 'conversationId', 'operation', 'parentGeneration', 'chunkSize', 'chunks'])) {
     throw new Error(`Conversation timeline index has unknown fields: ${uri.fsPath}`);
   }
   if (index.kind !== 'conversationTimeline.index') throw new Error(`Conversation timeline index kind is invalid: ${uri.fsPath}`);
@@ -1640,6 +1793,13 @@ function parseTimelineIndex(value: unknown, uri: vscode.Uri, conversationId: str
   if (typeof index.savedAt !== 'string' || !index.savedAt.trim()) throw new Error(`Conversation timeline index savedAt is invalid: ${uri.fsPath}`);
   if (typeof index.generation !== 'string' || !isSafeStorageGenerationId(index.generation)) throw new Error(`Conversation timeline index generation is invalid: ${uri.fsPath}`);
   if (index.conversationId !== conversationId) throw new Error(`Conversation timeline index conversation mismatch: ${uri.fsPath}`);
+  if (!isTimelineIndexOperation(index.operation)) throw new Error(`Conversation timeline index operation is invalid: ${uri.fsPath}`);
+  if (index.parentGeneration !== undefined && (typeof index.parentGeneration !== 'string' || !isSafeStorageGenerationId(index.parentGeneration))) {
+    throw new Error(`Conversation timeline index parentGeneration is invalid: ${uri.fsPath}`);
+  }
+  if ((index.operation === 'merge' || index.operation === 'truncate') && !index.parentGeneration) {
+    throw new Error(`Conversation timeline index parentGeneration is required for ${index.operation}: ${uri.fsPath}`);
+  }
   if (index.chunkSize !== CONVERSATION_TIMELINE_CHUNK_SIZE) throw new Error(`Conversation timeline index chunkSize is invalid: ${uri.fsPath}`);
   if (!Array.isArray(index.chunks)) throw new Error(`Conversation timeline index chunks are invalid: ${uri.fsPath}`);
 
@@ -1668,6 +1828,8 @@ function parseTimelineIndex(value: unknown, uri: vscode.Uri, conversationId: str
       savedAt: index.savedAt,
       generation: index.generation,
       conversationId,
+      operation: index.operation,
+      ...(index.parentGeneration ? { parentGeneration: index.parentGeneration } : {}),
       chunkSize: CONVERSATION_TIMELINE_CHUNK_SIZE,
       chunks
     }
@@ -1914,8 +2076,11 @@ function validateChunkRecordMetadata(record: ConversationTimelineChunkIndexRecor
 
 async function findExistingTimelineTraces(root: vscode.Uri): Promise<string[]> {
   try {
-    const entries = await vscode.workspace.fs.readDirectory(root);
-    return entries.map(([name]) => name).filter((name) => name !== INDEX_FILE).sort();
+    const entries = await readStorageDirectory(root);
+    return entries
+      .map(([name]) => name)
+      .filter((name) => name !== INDEX_FILE && name !== PREVIOUS_TIMELINE_INDEX_FILE)
+      .sort();
   } catch (error) {
     if (isFileNotFoundError(error)) return [];
     throw error;
@@ -2047,6 +2212,10 @@ function isStringArray(value: unknown): value is string[] {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isTimelineIndexOperation(value: unknown): value is ConversationTimelineIndexOperation {
+  return value === 'replace' || value === 'merge' || value === 'truncate';
 }
 
 function isSafeNonNegativeInteger(value: unknown): value is number {

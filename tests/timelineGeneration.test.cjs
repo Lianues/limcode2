@@ -492,6 +492,104 @@ test('tail incremental 只重写受影响 suffix 并复用 prefix generation/pro
   }
 });
 
+test('跨 chunk 尾部发布遇到 Canceled 时旧 active index 仍保留完整历史', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-tail-cancelled-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  const conversationId = 'conv-tail-cancelled';
+  try {
+    await timelineStore.saveConversationTimelineDetail(paths, conversationId, makeTimelineState(createEmptyClientState, conversationId, 100));
+    const root = timelineRoot(paths, conversationId);
+    const beforeIndex = await readJsonFile(path.join(root, 'index.json'));
+    assert.equal(beforeIndex.chunks.length, 1);
+
+    const patch = createEmptyClientState();
+    patch.messages.push(textMessage(conversationId, 'm-101', 101, 'new tail 101', 'user'));
+    patch.messages.push(textMessage(conversationId, 'm-102', 102, 'new tail 102', 'model'));
+    patch.messages.push(textMessage(conversationId, 'm-103', 103, 'new tail 103', 'user'));
+
+    timelineStore.__conversationTimelineStoreTestHooks.beforePublishIndex = async () => {
+      throw new Error('Canceled');
+    };
+    await assert.rejects(
+      timelineStore.saveConversationTimelineRenderDetailIncremental(paths, conversationId, patch),
+      /Canceled/
+    );
+    timelineStore.__conversationTimelineStoreTestHooks.beforePublishIndex = undefined;
+
+    const afterFailureIndex = await readJsonFile(path.join(root, 'index.json'));
+    assert.equal(afterFailureIndex.generation, beforeIndex.generation);
+    const afterFailureDetail = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    assert.equal(afterFailureDetail.messages.length, 100);
+    assert.equal(afterFailureDetail.messages.at(-1).id, 'm-100');
+
+    await timelineStore.saveConversationTimelineRenderDetailIncremental(paths, conversationId, patch);
+    const committedIndex = await readJsonFile(path.join(root, 'index.json'));
+    assert.equal(committedIndex.chunks.length, 2);
+    assert.deepEqual(committedIndex.chunks[0].messageIds, beforeIndex.chunks[0].messageIds);
+    const committedDetail = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    assert.equal(committedDetail.messages.length, 103);
+    assert.equal(committedDetail.messages.at(-1).id, 'm-103');
+  } finally {
+    timelineStore.__conversationTimelineStoreTestHooks.beforePublishIndex = undefined;
+    await removeTempRoot(tempRoot);
+  }
+});
+
+test('merge active index 只剩最新 chunk 时会用 previous index 恢复旧前缀', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-previous-recovery-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  const conversationId = 'conv-previous-recovery';
+  try {
+    await timelineStore.saveConversationTimelineDetail(paths, conversationId, makeTimelineState(createEmptyClientState, conversationId, 100));
+    const root = timelineRoot(paths, conversationId);
+    const previousCommitted = await readJsonFile(path.join(root, 'index.json'));
+
+    const patch = createEmptyClientState();
+    patch.messages.push(textMessage(conversationId, 'm-101', 101, 'new tail 101', 'user'));
+    patch.messages.push(textMessage(conversationId, 'm-102', 102, 'new tail 102', 'model'));
+    patch.messages.push(textMessage(conversationId, 'm-103', 103, 'new tail 103', 'user'));
+    await timelineStore.saveConversationTimelineRenderDetailIncremental(paths, conversationId, patch);
+
+    const active = await readJsonFile(path.join(root, 'index.json'));
+    const previous = await readJsonFile(path.join(root, 'index.previous.json'));
+    assert.equal(active.operation, 'merge');
+    assert.equal(active.parentGeneration, previousCommitted.generation);
+    assert.equal(previous.generation, previousCommitted.generation);
+    assert.equal(active.chunks.length, 2);
+
+    // 模拟用户反馈中的形态：根 active index 仍是合法 JSON，但只挂载最新 generation 的 3 条消息。
+    const tail = active.chunks[1];
+    const regressed = {
+      ...active,
+      chunks: [{
+        ...tail,
+        index: 0,
+        messageOffsetStart: 1,
+        messageOffsetEnd: tail.messageCount
+      }]
+    };
+    await fs.writeFile(path.join(root, 'index.json'), `${JSON.stringify(regressed, null, 2)}\n`, 'utf8');
+
+    const recovered = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    assert.equal(recovered.messages.length, 103);
+    assert.equal(recovered.messages[0].id, 'm-1');
+    assert.equal(recovered.messages.at(-1).id, 'm-103');
+
+    const page = await timelineStore.loadConversationTimelinePage(paths, {
+      conversationId,
+      direction: 'initial',
+      chunkCount: 2,
+      includeProjections: ['task-list']
+    });
+    assert.ok(page.projections && page.projections['task-list']);
+    assert.equal(page.pageInfo.totalChunks, 2);
+    assert.equal(page.pageInfo.totalMessages, 103);
+    assert.equal(page.state.messages.length, 103);
+  } finally {
+    await removeTempRoot(tempRoot);
+  }
+});
+
 test('tail incremental 会校验并忽略未变化的只读 context prefix', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-tail-context-prefix-'));
   const paths = createVscodeStoragePaths(MockUri.file(tempRoot));

@@ -90,7 +90,7 @@ import { CLIENT_STATE_TABLE_KEYS } from '../../shared/clientStateSchema';
 import { EffectHandlerRegistry, registerApplicationEffectHandlers } from './effectHandlers';
 import { flushEffects, flushEffectsWhere } from './executeEffects';
 import type { RuntimeEnv } from './RuntimeEnv';
-import { BridgeMessageType, GLOBAL_SETTINGS_SECTIONS, conversationClientStateStreamId, createMessageId } from '../../shared/protocol';
+import { BridgeMessageType, GLOBAL_SETTINGS_SECTIONS, conversationClientStateStreamId, createMessageId, type GlobalSettingsSection } from '../../shared/protocol';
 import type {
   AgentRunStatus,
   CheckpointMaintenanceSettingsRecord,
@@ -199,8 +199,11 @@ export class BackendApplication {
   private readonly conversationEvictionGeneration = new Map<string, number>();
   private conversationEvictionInFlight: string | undefined;
   private readonly conversationHistoryChangedEmitter = new vscode.EventEmitter<void>();
+  private readonly storageRootChangedEmitter = new vscode.EventEmitter<void>();
   private readonly disposables: vscode.Disposable[] = [];
   public readonly onDidChangeConversationHistory = this.conversationHistoryChangedEmitter.event;
+  /** data root 被切换后触发，供文件监听器重建到新的根目录。 */
+  public readonly onDidChangeStorageRoot = this.storageRootChangedEmitter.event;
 
   public constructor(context: vscode.ExtensionContext) {
     const { env, toolSchemas, toolDefinitions } = createRuntimeEnv(context);
@@ -617,6 +620,11 @@ export class BackendApplication {
 
   public getConversationHistoryRootUri(): vscode.Uri {
     return this.env.storage.paths.conversationHistoryRootUri;
+  }
+
+  /** 重新读盘并把某个全局设置 section 的最新值广播给所有订阅者。幂等纯读操作。 */
+  public postGlobalSettingsSnapshot(section: GlobalSettingsSection): Promise<void> {
+    return this.globalSettingsBridge.postSnapshot(undefined, section);
   }
 
   public attachWebview(webview: vscode.Webview, meta: WebviewClientMeta = { kind: 'unknown' }): BridgeClientId {
@@ -1433,6 +1441,7 @@ export class BackendApplication {
       await this.syncSkillCatalogResource();
       // 同理，全局规则来源 <dataRoot>/{AGENTS,CLAUDE}.md 也随数据根变化，需重新扫描规则。
       await this.syncRulesCatalogResource();
+      this.storageRootChangedEmitter.fire();
     }
   }
 

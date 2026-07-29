@@ -1,4 +1,5 @@
 import type { StorageCapability, WebviewCapability } from '../capabilities/types';
+import { isSettingsRevisionConflictError } from '../capabilities/settingsRevisionConflict';
 import {
   BridgeMessageType,
   GLOBAL_SETTINGS_SECTIONS,
@@ -52,7 +53,7 @@ export class GlobalSettingsBridge {
       }
       await this.deps.beforeUpdate?.(payload);
 
-      const stored = await this.deps.storage.saveGlobalSettings(payload.section, payload.settings);
+      const stored = await this.deps.storage.saveGlobalSettings(payload.section, payload.settings, payload.expectedRevision);
       await this.deps.afterUpdate?.(payload);
       this.deps.webview.broadcastToStream(
         globalSettingsStreamId(payload.section),
@@ -70,6 +71,15 @@ export class GlobalSettingsBridge {
       }
     } catch (error) {
       console.warn('[LimCode] Failed to update global settings:', error);
+      // 写入被乐观并发拒绝：盘上数据未被动过。先把最新值推回前端（避免面板停留在陈旧快照），
+      // 再发错误信封；顺序不能颠倒，否则 snapshot 会清掉刚设置的错误提示。
+      if (isSettingsRevisionConflictError(error)) {
+        try {
+          await this.postSnapshot(undefined, payload.section);
+        } catch (snapshotError) {
+          console.warn('[LimCode] Failed to refresh global settings after revision conflict:', snapshotError);
+        }
+      }
       this.postSettingsError(BridgeMessageType.GlobalSettingsUpdate, payload.section, error, correlationId);
     }
   }
@@ -110,7 +120,8 @@ export class GlobalSettingsBridge {
       payload: {
         section: stored.section,
         settings: stored.settings,
-        filePath: stored.filePath
+        filePath: stored.filePath,
+        ...(stored.revision !== undefined ? { revision: stored.revision } : {})
       }
     };
   }

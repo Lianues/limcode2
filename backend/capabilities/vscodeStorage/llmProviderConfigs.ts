@@ -29,41 +29,55 @@ import {
 import { DEFAULT_LLM_BASE_URL } from '../llmProvider';
 import type { StoragePaths } from './clientStateStore';
 import { INDEX_FILE } from './constants';
-import { loadRecordStore, removeRecordStoreRecord, saveRecordStore } from './recordStore';
+import { loadRecordStore, loadRecordStoreRevision, saveRecordStore, type SaveRecordStoreOptions } from './recordStore';
 
 const RECORD_KEY = 'config';
 const CONFIGS_DIR = 'llm-provider-configs';
 const DEFAULT_CONFIG_NAME = '默认渠道';
+const REVISION_SECTION = 'llmProviderConfigs';
 
-export async function loadLlmProviderConfigsSettings(paths: StoragePaths): Promise<{ settings: LlmProviderConfigsRecord; filePath: string }> {
+export interface LlmProviderConfigsSettingsResult {
+  settings: LlmProviderConfigsRecord;
+  filePath: string;
+  revision?: string;
+}
+
+export async function loadLlmProviderConfigsSettings(paths: StoragePaths): Promise<LlmProviderConfigsSettingsResult> {
   const records = await loadRawLlmProviderConfigRecords(paths);
   if (records.length > 0) {
-    return { settings: { configs: sortConfigs(records.map((record) => normalizeLlmProviderConfig(record))) }, filePath: configsIndexUri(paths).fsPath };
+    return {
+      settings: { configs: sortConfigs(records.map((record) => normalizeLlmProviderConfig(record))) },
+      filePath: configsIndexUri(paths).fsPath,
+      revision: await loadRecordStoreRevision(configsIndexUri(paths))
+    };
   }
 
   const config = createDefaultLlmProviderConfig({ name: DEFAULT_CONFIG_NAME });
   await writeLlmProviderConfigRecords(paths, [config]);
-  return { settings: { configs: [config] }, filePath: configsIndexUri(paths).fsPath };
+  return {
+    settings: { configs: [config] },
+    filePath: configsIndexUri(paths).fsPath,
+    revision: await loadRecordStoreRevision(configsIndexUri(paths))
+  };
 }
 
 export async function saveLlmProviderConfigsSettings(
   paths: StoragePaths,
-  settings: Partial<LlmProviderConfigsRecord> | undefined
-): Promise<{ settings: LlmProviderConfigsRecord; filePath: string }> {
-  const previous = await loadLlmProviderConfigsSettings(paths);
+  settings: Partial<LlmProviderConfigsRecord> | undefined,
+  expectedRevision?: string
+): Promise<LlmProviderConfigsSettingsResult> {
   const configs = normalizeConfigList(settings?.configs);
   if (configs.length === 0) {
     throw new Error('至少需要保留一个渠道配置。');
   }
 
-  const nextIds = new Set(configs.map((config) => config.id));
-  for (const previousConfig of previous.settings.configs) {
-    if (!nextIds.has(previousConfig.id)) {
-      await removeRecordStoreRecord(configsRootUri(paths), configsIndexUri(paths), previousConfig.id, RECORD_KEY);
-    }
-  }
-
-  await writeLlmProviderConfigRecords(paths, configs);
+  // 删除已移除渠道的 record 文件不再单独走 removeRecordStoreRecord：
+  // 那会在写入前先做破坏性操作，冲突时数据已经没了。改为交给同一把锁内的 pruneMissing，
+  // 使「校验 → 发布新索引 → 清理旧文件」成为一次原子提交。
+  await writeLlmProviderConfigRecords(paths, configs, {
+    pruneMissing: true,
+    ...(expectedRevision !== undefined ? { expectedSavedAt: expectedRevision, expectedSavedAtSection: REVISION_SECTION } : {})
+  });
   return loadLlmProviderConfigsSettings(paths);
 }
 
@@ -147,13 +161,18 @@ async function loadRawLlmProviderConfigRecords(paths: StoragePaths): Promise<Llm
   return records ?? [];
 }
 
-async function writeLlmProviderConfigRecords(paths: StoragePaths, records: LlmProviderConfigRecord[]): Promise<void> {
+async function writeLlmProviderConfigRecords(
+  paths: StoragePaths,
+  records: LlmProviderConfigRecord[],
+  options: SaveRecordStoreOptions = {}
+): Promise<void> {
   await saveRecordStore(
     configsRootUri(paths),
     configsIndexUri(paths),
     sortConfigs(records.map((record) => normalizeLlmProviderConfig(record))),
     RECORD_KEY,
-    (record) => record.name
+    (record) => record.name,
+    options
   );
 }
 

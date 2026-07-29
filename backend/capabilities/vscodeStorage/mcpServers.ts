@@ -1,30 +1,41 @@
 import * as vscode from 'vscode';
 import type { McpServerConfigRecord, McpServersSettingsRecord, McpServerTransportRecord } from '../../../shared/protocol';
-import { loadRecordStore, saveRecordStore } from './recordStore';
+import { loadRecordStore, loadRecordStoreRevision, saveRecordStore } from './recordStore';
 import type { createVscodeStoragePaths } from './paths';
 
 type StoragePaths = ReturnType<typeof createVscodeStoragePaths>;
 
 const MCP_SERVERS_DIR = 'mcp-servers';
+const REVISION_SECTION = 'mcpServers';
 
-export async function loadMcpServersSettings(paths: StoragePaths): Promise<{ section: 'mcpServers'; settings: McpServersSettingsRecord; filePath: string }> {
+export interface McpServersSettingsResult {
+  section: 'mcpServers';
+  settings: McpServersSettingsRecord;
+  filePath: string;
+  revision?: string;
+}
+
+export async function loadMcpServersSettings(paths: StoragePaths): Promise<McpServersSettingsResult> {
   const root = mcpServersRootUri(paths);
   const indexUri = mcpServersIndexUri(paths);
   const records = await loadRecordStore<McpServerConfigRecord, 'server'>(root, indexUri, 'server');
   const settings = normalizeMcpServersSettings({ servers: records ?? [] });
   if (!records) await saveMcpServersSettings(paths, settings);
-  return { section: 'mcpServers', settings, filePath: indexUri.fsPath };
+  return { section: 'mcpServers', settings, filePath: indexUri.fsPath, revision: await loadRecordStoreRevision(indexUri) };
 }
 
 export async function saveMcpServersSettings(
   paths: StoragePaths,
-  input: Partial<McpServersSettingsRecord> | undefined
-): Promise<{ section: 'mcpServers'; settings: McpServersSettingsRecord; filePath: string }> {
+  input: Partial<McpServersSettingsRecord> | undefined,
+  expectedRevision?: string
+): Promise<McpServersSettingsResult> {
   const root = mcpServersRootUri(paths);
   const indexUri = mcpServersIndexUri(paths);
   const settings = normalizeMcpServersSettings(input);
-  await saveRecordStore(root, indexUri, settings.servers, 'server', (server) => server.name);
-  return { section: 'mcpServers', settings, filePath: indexUri.fsPath };
+  await saveRecordStore(root, indexUri, settings.servers, 'server', (server) => server.name, {
+    ...(expectedRevision !== undefined ? { expectedSavedAt: expectedRevision, expectedSavedAtSection: REVISION_SECTION } : {})
+  });
+  return { section: 'mcpServers', settings, filePath: indexUri.fsPath, revision: await loadRecordStoreRevision(indexUri) };
 }
 
 export function normalizeMcpServersSettings(input: Partial<McpServersSettingsRecord> | undefined): McpServersSettingsRecord {

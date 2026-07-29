@@ -393,52 +393,52 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
         if (section === 'llmProviderConfigs') {
           const stored = await loadLlmProviderConfigsSettings(paths);
           await loadNormalizedLlmGlobalSettings(paths);
-          return { section, settings: stored.settings, filePath: stored.filePath };
+          return { section, settings: stored.settings, filePath: stored.filePath, revision: stored.revision };
         }
         if (section === 'llmCompression') {
           const configs = (await loadLlmCompressionConfigsSettings(paths)).settings.configs;
           const stored = await loadGlobalSettingsFile(paths.settingsRootUri, 'llmCompression');
           const settings = normalizeLlmCompressionSettings(stored.settings as Partial<LlmCompressionSettingsRecord> | undefined, configs);
-          return { section, settings, filePath: stored.filePath };
+          return { section, settings, filePath: stored.filePath, revision: stored.revision };
         }
         if (section === 'llmCompressionConfigs') {
           const stored = await loadLlmCompressionConfigsSettings(paths);
-          return { section, settings: stored.settings, filePath: stored.filePath };
+          return { section, settings: stored.settings, filePath: stored.filePath, revision: stored.revision };
         }
         if (section === 'mcpServers') {
           const stored = await loadMcpServersSettings(paths);
-          return { section, settings: stored.settings, filePath: stored.filePath };
+          return { section, settings: stored.settings, filePath: stored.filePath, revision: stored.revision };
         }
         await ensureStorageDirectory(paths.settingsRootUri);
         return loadGlobalSettingsFile(paths.settingsRootUri, section);
       });
     },
-    async saveGlobalSettings(section, settings) {
+    async saveGlobalSettings(section, settings, expectedRevision) {
       if (section === 'common') return saveCommonGlobalSettings(settings);
       return withSharedDataRoot(async (paths) => {
         if (section === 'llm') return saveNormalizedLlmGlobalSettings(paths, settings);
         if (section === 'llmProviderConfigs') {
-          const stored = await saveLlmProviderConfigsSettings(paths, settings as Partial<LlmProviderConfigsRecord> | undefined);
+          const stored = await saveLlmProviderConfigsSettings(paths, settings as Partial<LlmProviderConfigsRecord> | undefined, expectedRevision);
           await loadNormalizedLlmGlobalSettings(paths);
-          return { section, settings: stored.settings, filePath: stored.filePath };
+          return { section, settings: stored.settings, filePath: stored.filePath, revision: stored.revision };
         }
         if (section === 'llmCompression') {
           const configs = (await loadLlmCompressionConfigsSettings(paths)).settings.configs;
           const normalized = normalizeLlmCompressionSettings(settings as Partial<LlmCompressionSettingsRecord> | undefined, configs);
-          await writeGlobalSettingsFile(paths.settingsRootUri, 'llmCompression', normalized);
+          await writeGlobalSettingsFile(paths.settingsRootUri, 'llmCompression', normalized, expectedRevision);
           const stored = await loadGlobalSettingsFile(paths.settingsRootUri, 'llmCompression');
-          return { section, settings: stored.settings, filePath: stored.filePath };
+          return { section, settings: stored.settings, filePath: stored.filePath, revision: stored.revision };
         }
         if (section === 'llmCompressionConfigs') {
-          const stored = await saveLlmCompressionConfigsSettings(paths, settings as Partial<LlmCompressionConfigsRecord> | undefined);
-          return { section, settings: stored.settings, filePath: stored.filePath };
+          const stored = await saveLlmCompressionConfigsSettings(paths, settings as Partial<LlmCompressionConfigsRecord> | undefined, expectedRevision);
+          return { section, settings: stored.settings, filePath: stored.filePath, revision: stored.revision };
         }
         if (section === 'mcpServers') {
-          const stored = await saveMcpServersSettings(paths, settings as Partial<McpServersSettingsRecord> | undefined);
-          return { section, settings: stored.settings, filePath: stored.filePath };
+          const stored = await saveMcpServersSettings(paths, settings as Partial<McpServersSettingsRecord> | undefined, expectedRevision);
+          return { section, settings: stored.settings, filePath: stored.filePath, revision: stored.revision };
         }
         await ensureStorageDirectory(paths.settingsRootUri);
-        await writeGlobalSettingsFile(paths.settingsRootUri, section, settings);
+        await writeGlobalSettingsFile(paths.settingsRootUri, section, settings, expectedRevision);
         return loadGlobalSettingsFile(paths.settingsRootUri, section);
       });
     },
@@ -553,14 +553,14 @@ async function ensureLlmSettingsRoots(paths: StoragePaths): Promise<void> {
   await ensureStorageDirectory(paths.settingsRootUri);
 }
 
-async function loadNormalizedLlmGlobalSettings(paths: StoragePaths): Promise<{ section: 'llm'; settings: LlmSettingsRecord; filePath: string }> {
+async function loadNormalizedLlmGlobalSettings(paths: StoragePaths): Promise<{ section: 'llm'; settings: LlmSettingsRecord; filePath: string; revision?: string }> {
   await ensureLlmSettingsRoots(paths);
   const configs = (await loadLlmProviderConfigsSettings(paths)).settings.configs;
   const stored = await loadGlobalSettingsFile(paths.settingsRootUri, 'llm');
   const settings = stored.settings as LlmSettingsRecord;
   const activeConfig = configs.find((config) => config.id === settings.activeProviderConfigId) ?? configs[0];
   const normalized: LlmSettingsRecord = { activeProviderConfigId: activeConfig?.id ?? '' };
-  return { section: 'llm', settings: normalized, filePath: stored.filePath };
+  return { section: 'llm', settings: normalized, filePath: stored.filePath, revision: stored.revision };
 }
 
 function normalizeConversationCommonSettings(conversationId: string, settings: Partial<ConversationSettingsRecord> | undefined): ConversationSettingsRecord {

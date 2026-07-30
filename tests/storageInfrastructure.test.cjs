@@ -361,6 +361,33 @@ if (process.argv[2] === '--lock-worker') {
     }
   });
 
+  test('通用资源锁立即回收 owner 已退出但 heartbeat 仍新鲜的 lockfile', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-lock-dead-owner-'));
+    try {
+      const resource = MockUri.file(path.join(tempRoot, 'resource.json'));
+      const lockPath = path.join(tempRoot, 'resource.lock');
+      const deadPid = 2_147_483_647;
+      const now = Date.now();
+      await fs.writeFile(lockPath, `${JSON.stringify({
+        ownerToken: 'exited-owner-token',
+        pid: deadPid,
+        createdAt: now,
+        heartbeatAt: now,
+        resource: resource.toString()
+      })}\n`, 'utf8');
+
+      let acquired = false;
+      await withStorageResourceLock(resource, async () => {
+        acquired = true;
+      }, lockTestOptions(lockPath, { waitMs: 250, staleMs: 60_000, pollIntervalMs: 5 }));
+
+      assert.equal(acquired, true);
+      await assert.rejects(fs.access(lockPath));
+    } finally {
+      await removeTempRoot(tempRoot);
+    }
+  });
+
   for (const [label, content] of [['空', ''], ['损坏', '{not-json']]) {
     test(`通用资源锁可在短等待后恢复${label} metadata lockfile`, async () => {
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-lock-recover-'));

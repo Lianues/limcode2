@@ -316,11 +316,10 @@ async function recoverExistingLockFile(lockPath: string, options: NormalizedStor
     return true;
   }
 
-  const heartbeatAgeMs = Math.max(0, Date.now() - snapshot.metadata.heartbeatAt);
   const ownerAlive = processIsAlive(snapshot.metadata.pid);
-  // 新格式先用 heartbeatAt 判定 stale，再结合 owner pid 存活状态。
-  // heartbeat 仍新鲜或 owner pid 仍存活时都不抢占；长 action 会持续刷新 heartbeat，避免 createdAt 超时误删活锁。
-  if (heartbeatAgeMs < options.staleMs || ownerAlive) return false;
+  // owner 仍存活时绝不抢占；长 action 即使超过 staleMs，也由进程存活状态保护。
+  // owner 已退出后不可能再刷新或释放该锁，应立即回收，避免应用重启后被“新鲜”的遗留 heartbeat 阻塞到 staleMs。
+  if (ownerAlive) return false;
   await removeLockFileWithRetry(lockPath, options, true);
   return true;
 }

@@ -13,6 +13,7 @@ scripts/**
 docs/**
 milestone/**
 remote-exec/**
+packages/**
 node_modules/**
 tests/**
 coverage/**

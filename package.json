@@ -5,6 +5,9 @@
   "version": "0.0.1",
   "publisher": "your-publisher",
   "private": true,
+  "workspaces": [
+    "packages/unified-llm-provider"
+  ],
   "engines": {
     "vscode": "^1.100.0"
   },
@@ -62,10 +65,11 @@
     }
   },
   "scripts": {
+    "build:provider": "npm --workspace unified-llm-provider run build",
     "clean:extension": "node -e \"require('fs').rmSync('dist/extension',{recursive:true,force:true})\"",
     "bundle:extension": "node scripts/build-extension.mjs",
-    "compile": "npm run clean:extension && tsc -p tsconfig.json && npm run bundle:extension",
-    "watch": "tsc -watch -p tsconfig.json",
+    "compile": "npm run build:provider && npm run clean:extension && tsc -p tsconfig.json && npm run bundle:extension",
+    "watch": "npm run build:provider && tsc -watch -p tsconfig.json",
     "build:webview": "vite build",
     "dev:webview": "vite --host 127.0.0.1 --port 31819 --strictPort",
     "build": "npm run compile && npm run build:webview",
@@ -73,6 +77,7 @@
     "test:node:compiled": "node scripts/run-node-tests.mjs",
     "test:node": "npm run compile && npm run test:node:compiled",
     "test": "npm run test:node",
+    "test:provider": "npm --workspace unified-llm-provider test",
     "test:conversation-history": "npm run compile && node --test tests/conversationHistoryTree.test.cjs",
     "test:conversation-history-store": "npm run compile && node --test tests/conversationHistoryStoreConcurrency.test.cjs",
     "test:record-store-concurrency": "npm run compile && node --test tests/recordStoreConcurrency.test.cjs",
@@ -90,9 +95,9 @@
     "test:plan-review-attention": "npm run compile && node --test tests/planReviewAttention.test.cjs",
     "test:run-agent-interrupt": "npm run compile && node --test tests/runAgentInterrupt.test.cjs",
     "test:stable-ids": "npm run compile && node --test tests/stableIdsAndHydration.test.cjs",
-    "check": "npm run compile && npm run typecheck:webview && npm run test:node:compiled",
+    "check": "npm run compile && npm run typecheck:webview && npm run test:provider && npm run test:node:compiled",
     "vscode:prepublish": "npm run build",
-    "package:local": "vsce package --allow-missing-repository"
+    "package:local": "vsce package --allow-missing-repository --no-dependencies"
   },
   "devDependencies": {
     "@tabler/icons-vue": "^3.44.0",
@@ -114,6 +119,6 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "tokenx": "^1.3.0",
-    "unified-llm-provider": "^0.1.32"
+    "unified-llm-provider": "file:./packages/unified-llm-provider"
   }
 }

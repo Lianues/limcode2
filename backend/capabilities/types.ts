@@ -54,6 +54,7 @@ export interface LlmCapability {
   listModels(config: LlmProviderConfigRecord): Promise<LlmProviderModelRecord[]>;
   cancelRetry(requestId: string): void;
   abort(requestId: string): void;
+  dispose(): void;
 }
 
 /** 文件系统能力：隐藏 vscode.workspace.fs 等外部句柄。 */

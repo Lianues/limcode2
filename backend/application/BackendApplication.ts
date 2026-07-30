@@ -1230,6 +1230,7 @@ export class BackendApplication {
     await this.hydratedReady;
     await this.deferredSkeletonReady;
     await this.scheduler.stopAndDrain();
+    this.env.llm.dispose();
 
     let persistenceError: unknown;
     try {

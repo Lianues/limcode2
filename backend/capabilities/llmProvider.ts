@@ -57,6 +57,20 @@ import type {
 
 export const DEFAULT_LLM_BASE_URL = 'https://api.openai.com/v1';
 const COMPRESSION_DEBUG_PREFIX = '[LimCode][CompressionDebug]';
+const SAFE_LLM_ERROR_METADATA_FIELDS = [
+  'transport',
+  'phase',
+  'closeCode',
+  'closeReason',
+  'closeWasClean',
+  'receivedServerEvent',
+  'attempt',
+  'maxAttempts',
+  'retryable',
+  'code',
+  'status',
+  'statusCode'
+] as const;
 
 type MaybeProvider<T, TArg = void> = T | undefined | ((arg: TArg) => T | undefined | Promise<T | undefined>);
 type LlmSettingsRequest = LlmStartRequest | LlmResolveInvocationRequest | undefined;
@@ -209,6 +223,19 @@ export function createLlmProviderCapability(options: LlmProviderOptions): LlmCap
       if (!controller) return;
       controllers.delete(requestId);
       controller.abort(createAbortError(`Aborted LLM request: ${requestId}`));
+    },
+    dispose() {
+      for (const control of retryControls.values()) {
+        control.cancelRequested = true;
+        control.wakeRetryWait?.();
+      }
+      retryControls.clear();
+      for (const [requestId, controller] of controllers) {
+        controller.abort(createAbortError(`Disposed LLM capability during request: ${requestId}`));
+      }
+      controllers.clear();
+      resolvedRuntimeSettingsByInvocationId.clear();
+      unifiedLlmProvider.resetOpenAIResponsesWebSocketSessions();
     }
   };
 }
@@ -259,6 +286,7 @@ export async function startLlmProvider(
         const failure = failureFromCaughtError(error);
         const nextRetryCount = retryCount + 1;
         const canRetry = retryEnabled
+          && isRetryableLlmRawError(failure.rawError)
           && !retryControl.cancelRequested
           && (maxRetries === -1 || nextRetryCount <= maxRetries);
 
@@ -416,7 +444,7 @@ function failureFromProviderError(error: unknown, extras: Record<string, unknown
   };
 }
 
-function rawErrorFromUnknown(error: unknown, extras: Record<string, unknown> = {}): LlmRawErrorInfoRecord {
+export function rawErrorFromUnknown(error: unknown, extras: Record<string, unknown> = {}): LlmRawErrorInfoRecord {
   const base = toPlainJsonLike(error);
   const baseRecord = isRecord(base) ? base : { data: base };
   const merged: LlmRawErrorInfoRecord = { ...baseRecord };
@@ -430,7 +458,7 @@ function rawErrorFromUnknown(error: unknown, extras: Record<string, unknown> = {
   return merged;
 }
 
-function messageFromRawError(rawError: LlmRawErrorInfoRecord): string {
+export function messageFromRawError(rawError: LlmRawErrorInfoRecord): string {
   const direct = typeof rawError.message === 'string' && rawError.message.trim() ? rawError.message.trim() : undefined;
   const nested = nestedMessage(rawError.rawBody)
     ?? nestedMessage(rawError.rawResponse)
@@ -438,24 +466,60 @@ function messageFromRawError(rawError: LlmRawErrorInfoRecord): string {
     ?? nestedMessage(rawError.data);
   if (nested && (!direct || isGenericErrorLabel(direct))) return nested;
   if (direct && !isGenericErrorLabel(direct)) return direct;
-  if (typeof rawError.bodyText === 'string' && rawError.bodyText.trim()) return truncateForSummary(rawError.bodyText.trim());
-  if (typeof rawError.data === 'string' && rawError.data.trim()) return truncateForSummary(rawError.data.trim());
+  if (typeof rawError.bodyText === 'string' && rawError.bodyText.trim() && !isGenericErrorLabel(rawError.bodyText)) {
+    return truncateForSummary(rawError.bodyText.trim());
+  }
+  if (typeof rawError.data === 'string' && rawError.data.trim() && !isGenericErrorLabel(rawError.data)) {
+    return truncateForSummary(rawError.data.trim());
+  }
+  const closeMessage = webSocketCloseMessage(rawError);
+  if (closeMessage) return closeMessage;
+  const code = nestedErrorCode(rawError);
   const kind = typeof rawError.kind === 'string' && rawError.kind.trim() ? rawError.kind.trim() : 'llm_error';
   const status = rawErrorStatus(rawError);
-  return `LLM 请求失败：${kind}${status !== undefined ? ` HTTP ${status}` : ''}`;
+  return `LLM 请求失败：${code ?? kind}${status !== undefined ? ` HTTP ${status}` : ''}`;
 }
 
-function nestedMessage(value: unknown): string | undefined {
-  if (!isRecord(value)) return undefined;
-  const direct = value.message;
-  if (typeof direct === 'string' && direct.trim() && !isGenericErrorLabel(direct)) return truncateForSummary(direct.trim());
-  const error = value.error;
-  if (isRecord(error)) {
-    const message = error.message;
-    if (typeof message === 'string' && message.trim() && !isGenericErrorLabel(message)) return truncateForSummary(message.trim());
+function nestedMessage(value: unknown, depth = 0, seen = new WeakSet<object>()): string | undefined {
+  if (typeof value === 'string') {
+    const message = value.trim();
+    return message && !isGenericErrorLabel(message) ? truncateForSummary(message) : undefined;
   }
-  const response = value.response;
-  if (isRecord(response)) return nestedMessage(response);
+  if (!isRecord(value) || depth >= 8 || seen.has(value)) return undefined;
+  seen.add(value);
+  const direct = value.message;
+  if (typeof direct === 'string' && direct.trim() && !isGenericErrorLabel(direct)) {
+    return truncateForSummary(direct.trim());
+  }
+  for (const key of ['error', 'cause', 'rawBody', 'rawResponse', 'rawChunk', 'data', 'response']) {
+    const nested = nestedMessage(value[key], depth + 1, seen);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
+function webSocketCloseMessage(value: unknown, depth = 0, seen = new WeakSet<object>()): string | undefined {
+  if (!isRecord(value) || depth >= 8 || seen.has(value)) return undefined;
+  seen.add(value);
+  if (typeof value.closeCode === 'number' && Number.isFinite(value.closeCode)) {
+    const reason = typeof value.closeReason === 'string' ? value.closeReason.trim() : '';
+    return `OpenAI Responses WebSocket closed: ${value.closeCode}${reason ? ` ${reason}` : ''}`;
+  }
+  for (const key of ['error', 'cause', 'rawBody', 'rawResponse', 'rawChunk', 'data', 'response']) {
+    const nested = webSocketCloseMessage(value[key], depth + 1, seen);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
+function nestedErrorCode(value: unknown, depth = 0, seen = new WeakSet<object>()): string | undefined {
+  if (!isRecord(value) || depth >= 8 || seen.has(value)) return undefined;
+  seen.add(value);
+  if (typeof value.code === 'string' && value.code.trim()) return value.code.trim();
+  for (const key of ['error', 'cause', 'rawBody', 'rawResponse', 'rawChunk', 'data', 'response']) {
+    const nested = nestedErrorCode(value[key], depth + 1, seen);
+    if (nested) return nested;
+  }
   return undefined;
 }
 
@@ -476,7 +540,7 @@ function rawErrorStatus(rawError: LlmRawErrorInfoRecord): number | undefined {
 }
 
 function isGenericErrorLabel(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
   return normalized === 'stream_error'
     || normalized === 'upstream_error'
     || normalized === 'http_error'
@@ -490,6 +554,24 @@ function isGenericErrorLabel(value: string): boolean {
 function truncateForSummary(value: string): string {
   const limit = 600;
   return value.length > limit ? `${value.slice(0, limit)}…` : value;
+}
+
+export function isRetryableLlmRawError(rawError: LlmRawErrorInfoRecord | undefined): boolean {
+  if (rawError?.retryable === false) return false;
+  if (rawError?.transport !== 'websocket') return true;
+
+  const attempt = positiveInteger(rawError.attempt);
+  const maxAttempts = positiveInteger(rawError.maxAttempts);
+  // maxAttempts=1 表示 provider 将单次慢失败交给 LimCode 重试。
+  // 大于 1 且已经用尽时，provider 已完成自己的连接恢复，不能再叠加外层重试。
+  return maxAttempts === undefined
+    || maxAttempts <= 1
+    || attempt === undefined
+    || attempt < maxAttempts;
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 function retryDelayForAttempt(retryAttempt: number): number {
@@ -538,13 +620,18 @@ function toPlainJsonLike(value: unknown, seen = new WeakSet<object>()): unknown 
   if (value instanceof Error) {
     if (seen.has(value)) return '[Circular]';
     seen.add(value);
-    const cause = (value as { cause?: unknown }).cause;
-    return {
+    const source = value as Error & Record<string, unknown> & { cause?: unknown };
+    const result: Record<string, unknown> = {
       name: value.name,
       message: value.message,
-      stack: value.stack,
-      ...(cause !== undefined ? { cause: toPlainJsonLike(cause, seen) } : {})
+      stack: value.stack
     };
+    if (source.cause !== undefined) result.cause = toPlainJsonLike(source.cause, seen);
+    for (const key of SAFE_LLM_ERROR_METADATA_FIELDS) {
+      const child = source[key];
+      if (child !== undefined) result[key] = toPlainJsonLike(child, seen);
+    }
+    return result;
   }
   if (typeof Headers !== 'undefined' && value instanceof Headers) {
     return Object.fromEntries(value.entries());

@@ -2065,7 +2065,8 @@ export const useGlobalSettingsStore = defineStore('globalSettings', {
         this.llmCompression = { ...emptyLlmCompression(), ...(value as LlmCompressionSettingsRecord) };
       } else if (section === 'llmCompressionConfigs') {
         const settings = value as LlmCompressionConfigsRecord;
-        this.llmCompressionConfigs = { configs: settings.configs.map(normalizeCompressionConfigForUi) };
+        // 归一化函数第二参数是 contextWindowTokens；必须包一层，避免 Array.map 把数组索引误传成 token 上限。
+        this.llmCompressionConfigs = { configs: settings.configs.map((config) => normalizeCompressionConfigForUi(config)) };
       } else if (section === 'checkpointMaintenance') {
         this.checkpointMaintenance = { ...emptyCheckpointMaintenance(), ...(value as CheckpointMaintenanceSettingsRecord) };
       } else if (section === 'appearance') {

@@ -261,14 +261,24 @@ export class ClientStatePersistence {
     let persistSucceeded = false;
     let persistenceFailure: unknown;
     let shouldRetry = false;
+    const persistenceFailures: unknown[] = [];
+    const failedRenderDetailStates: Array<[string, ClientState]> = [];
+    const failedRunHistoryStates: Array<[string, PendingRunHistoryState]> = [];
+    let failedSkeletonState: ClientState | undefined;
+    let failedHistoryStates: Array<[string, ClientState]> = [];
     // 先启动 render detail 保存，让每个 conversation 立即预订自己的 timeline root FIFO。
     // 后续消息 truncate 会排在这些旧快照之后，而不会被 skeleton/run-history 慢任务拖到旧快照前面。
     const renderDetailTask = awaitAllPersistTasks(renderDetailStates.map(async ([conversationId, state]) => {
-      const next = conversationRenderDetailSlice(state, conversationId);
-      const base = this.lastAcknowledgedLocalRenderDetailState.get(conversationId) ?? createEmptyClientState();
-      await this.storage.saveConversationRenderDetail(conversationId, base, next);
-      this.lastAcknowledgedLocalRenderDetailState.set(conversationId, cloneClientState(next));
-      this.lastPersistedRenderDetailJson.set(conversationId, JSON.stringify(next));
+      try {
+        const next = conversationRenderDetailSlice(state, conversationId);
+        const base = this.lastAcknowledgedLocalRenderDetailState.get(conversationId) ?? createEmptyClientState();
+        await this.storage.saveConversationRenderDetail(conversationId, base, next);
+        this.lastAcknowledgedLocalRenderDetailState.set(conversationId, cloneClientState(next));
+        this.lastPersistedRenderDetailJson.set(conversationId, JSON.stringify(next));
+      } catch (error) {
+        failedRenderDetailStates.push([conversationId, state]);
+        throw error;
+      }
     }));
     const nextLocalSkeleton = skeletonState ? skeletonPersistenceSlice(skeletonState) : undefined;
     const skeletonPatch = nextLocalSkeleton
@@ -282,25 +292,44 @@ export class ClientStatePersistence {
       : Promise.resolve();
     try {
       // render 与 skeleton 并行；render 已先创建，因此会先预订 conversation timeline 队列。
-      await Promise.all([renderDetailTask, skeletonTask]);
+      const [renderResult, skeletonResult] = await Promise.allSettled([renderDetailTask, skeletonTask]);
+      if (renderResult.status === 'rejected') persistenceFailures.push(renderResult.reason);
+      if (skeletonResult.status === 'rejected') {
+        failedSkeletonState = skeletonState;
+        persistenceFailures.push(skeletonResult.reason);
+      }
 
-      // 每个 conversation 使用独立存储目录，可并行落盘；共享 history index 仍在下方串行更新。
+      // skeleton 是全局目录；conversation timeline 已按独立目录落盘，不能让一个 skeleton 冲突把整个窗口
+      // 所有对话的 render detail 重新放回 pending。只有 render detail 本身成功后，才继续保存其 run/history 衍生数据。
+      if (renderResult.status === 'fulfilled') {
+        await awaitAllPersistTasks(runHistoryStates.map(async ([conversationId, pending]) => {
+          try {
+            await this.storage.saveConversationRunHistory(conversationId, pending.state, { mode: pending.mode });
+            this.lastPersistedRunHistoryJson.set(conversationId, JSON.stringify(conversationRunHistorySlice(pending.state, conversationId)));
+          } catch (error) {
+            failedRunHistoryStates.push([conversationId, pending]);
+            throw error;
+          }
+        })).catch((error) => {
+          persistenceFailures.push(error);
+        });
 
-      await awaitAllPersistTasks(runHistoryStates.map(async ([conversationId, pending]) => {
-        await this.storage.saveConversationRunHistory(conversationId, pending.state, { mode: pending.mode });
-        this.lastPersistedRunHistoryJson.set(conversationId, JSON.stringify(conversationRunHistorySlice(pending.state, conversationId)));
-      }));
+        await this.persistHistoryEntries(historyStates).catch((error) => {
+          failedHistoryStates = historyStates;
+          persistenceFailures.push(error);
+        });
+      } else {
+        failedRunHistoryStates.push(...runHistoryStates);
+        failedHistoryStates = historyStates;
+      }
 
-      await this.persistHistoryEntries(historyStates);
+      if (persistenceFailures.length > 0) throw primaryPersistenceFailure(persistenceFailures);
       persistSucceeded = true;
       this.retryAttempt = 0;
     } catch (error) {
       persistenceFailure = error;
-      // 同 id 语义冲突不能盲重试同一 stale patch；需要用户/领域层显式重新加载或解决。
-      shouldRetry = !options.throwOnError
-        && !isClientStateSkeletonRevisionConflictError(error)
-        && !isConversationTimelineRevisionConflictError(error);
-      this.restorePendingStates(skeletonState, renderDetailStates, runHistoryStates, historyStates);
+      shouldRetry = !options.throwOnError && shouldRetryPersistenceFailures(persistenceFailures.length > 0 ? persistenceFailures : [error]);
+      this.restorePendingStates(failedSkeletonState, failedRenderDetailStates, failedRunHistoryStates, failedHistoryStates);
       this.setPersistenceStatus({
         phase: 'error',
         error: persistenceErrorMessage(error),
@@ -735,6 +764,14 @@ async function awaitAllPersistTasks(tasks: Promise<void>[]): Promise<void> {
   if (failure) throw failure.reason;
 }
 
+function primaryPersistenceFailure(failures: readonly unknown[]): unknown {
+  return failures.find((error) => !isClientStateSkeletonRevisionConflictError(error)) ?? failures[0];
+}
+
+function shouldRetryPersistenceFailures(failures: readonly unknown[]): boolean {
+  return failures.some((error) => !isClientStateSkeletonRevisionConflictError(error) && !isConversationTimelineRevisionConflictError(error));
+}
+
 function changedStorageTableKeys(
   changedContributorKeys: readonly string[],
   contributorStates: Record<string, StorageContributorProjectionState>
@@ -753,6 +790,7 @@ function changedStorageTableKeys(
 function skeletonPersistenceSlice(state: ClientState): ClientState {
   return {
     ...state,
+    workEnvironments: state.workEnvironments.map(normalizeWorkEnvironmentForSkeletonPersistence),
     checkpoints: state.checkpoints.filter((checkpoint) => checkpoint.status !== 'pending'),
     checkpointTimelineAnchors: state.checkpointTimelineAnchors.filter((anchor) => state.checkpoints.some((checkpoint) => checkpoint.id === anchor.checkpointId && checkpoint.status !== 'pending')),
     messages: [],
@@ -796,6 +834,14 @@ function mergeAcknowledgedTimelineState(base: ClientState, nextTimeline: ClientS
     (merged as unknown as Record<string, unknown>)[key] = cloneSerializable(nextTimeline[key]);
   }
   return merged;
+}
+
+function normalizeWorkEnvironmentForSkeletonPersistence<T extends { kind?: string; source?: string; available?: boolean; index?: number }>(record: T): T {
+  if (record.kind !== 'localFolder' || (record.source !== undefined && record.source !== 'workspaceFolder')) return cloneSerializable(record);
+  const clone = cloneSerializable(record) as Record<string, unknown>;
+  clone.available = true;
+  delete clone.index;
+  return clone as T;
 }
 
 function cloneClientState(state: ClientState): ClientState {

@@ -13,6 +13,14 @@ const { spawnToolCall } = require('../dist/extension/backend/world/modules/tools
 const { ToolCall } = require('../dist/extension/backend/world/modules/tools/components.js');
 const { Agent } = require('../dist/extension/backend/world/modules/agent/components.js');
 const { hydrateConversationDetail } = require('../dist/extension/backend/application/clientStateHydration.js');
+const { LlmRequest } = require('../dist/extension/backend/world/modules/chat/components.js');
+const {
+  RuntimeContext,
+  RuntimeContextScopeLink,
+  ConversationRuntimeContextSnapshotLink,
+  RunRuntimeContextSnapshotLink
+} = require('../dist/extension/backend/world/modules/runtimeContext/components.js');
+const { RuntimeContextSnapshotSystem } = require('../dist/extension/backend/world/modules/runtimeContext/systems/RuntimeContextSnapshotSystem.js');
 
 function commandSink(world) {
   return {
@@ -70,6 +78,7 @@ test('new core records use stable prefixed ids instead of ECS entity-derived ids
   const invocation = world.get(invocationEntity, LlmInvocation);
   assert.match(invocation.id, /^llmi-/);
   assert.match(invocation.requestId, /^llmreq-/);
+
   assert.notEqual(invocation.id, `llmi${invocationEntity}`);
 
   const toolCallEntity = spawnToolCall(cmd, { modelMessage: messageEntity, name: 'read', argsJson: '{}' });
@@ -77,6 +86,65 @@ test('new core records use stable prefixed ids instead of ECS entity-derived ids
   assert.match(toolCall.id, /^tc-/);
   assert.notEqual(toolCall.id, `tc${toolCallEntity}`);
 });
+
+test('runtime context snapshot links use stable domain record ids instead of ECS entity ids', () => {
+  const world = new MapWorld();
+  const cmd = commandSink(world);
+  const conversation = addConversation(world, 'conversation-stable-runtime');
+  const agent = addAgent(world, 'agent-stable-runtime');
+  const runtimeContext = world.spawn();
+  world.add(runtimeContext, RuntimeContext, {
+    id: 'runtime-context-global',
+    name: 'global runtime',
+    template: 'runtime template'
+  });
+  const runtimeContextLink = world.spawn();
+  world.add(runtimeContextLink, RuntimeContextScopeLink, {
+    id: 'runtime-context-scope:global',
+    scopeKind: 'global',
+    runtimeContext,
+    role: 'active',
+    createdAt: 1,
+    updatedAt: 1
+  });
+
+  const messageEntity = spawnMessage(cmd, {
+    conversation,
+    role: 'user',
+    content: { role: 'user', parts: [{ text: 'hello' }] }
+  });
+  const runEntity = spawnAgentRun(cmd, {
+    id: 'run-stable-runtime',
+    kind: 'chat',
+    agent,
+    conversation,
+    sourceKind: 'user',
+    sourceConversation: conversation,
+    inputMessage: messageEntity,
+    deliveryMode: 'direct_reply',
+    includeTranscript: 'full'
+  });
+  const request = world.spawn();
+  world.add(request, LlmRequest, {
+    id: 'llm-request-stable-runtime',
+    run: runEntity,
+    conversation,
+    modelMessage: messageEntity
+  });
+
+  RuntimeContextSnapshotSystem.run({ world, cmd, events: [] });
+
+  const conversationLinks = world.query(ConversationRuntimeContextSnapshotLink).map((entity) => world.get(entity, ConversationRuntimeContextSnapshotLink));
+  assert.equal(conversationLinks.length, 1);
+  assert.equal(conversationLinks[0].id, 'conversation-runtime-context:conversation-stable-runtime');
+  assert.notEqual(conversationLinks[0].id, `conversation-runtime-context:${conversation}`);
+
+  const runLinks = world.query(RunRuntimeContextSnapshotLink).map((entity) => world.get(entity, RunRuntimeContextSnapshotLink));
+  assert.equal(runLinks.length, 1);
+  assert.match(runLinks[0].id, /^run-runtime-context:run-stable-runtime:runtime-context-snapshot:/);
+  assert.equal(runLinks[0].id.includes(`:${runEntity}:`), false);
+});
+
 
 test('hydrate rejects duplicate message ids instead of silently overwriting', async () => {
   const world = new MapWorld();

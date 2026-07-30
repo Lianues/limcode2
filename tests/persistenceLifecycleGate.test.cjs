@@ -227,6 +227,64 @@ test('render detail 会在慢 skeleton 完成前先预订并启动保存', async
   await persistPromise;
 });
 
+test('skeleton 冲突不会把已成功保存的 render detail 重新放回 pending', async () => {
+  const firstConversationId = 'conversation-skeleton-conflict-a';
+  const secondConversationId = 'conversation-skeleton-conflict-b';
+  const state = createEmptyClientState();
+  state.conversations = [
+    { id: firstConversationId, title: firstConversationId, visibility: 'visible' },
+    { id: secondConversationId, title: secondConversationId, visibility: 'visible' }
+  ];
+  state.messages = [
+    {
+      id: 'message-skeleton-conflict-a',
+      conversationId: firstConversationId,
+      role: 'user',
+      content: { parts: [{ text: 'A 应该正常落盘' }] },
+      status: 'complete',
+      createdAt: 1,
+      seq: 1
+    },
+    {
+      id: 'message-skeleton-conflict-b',
+      conversationId: secondConversationId,
+      role: 'user',
+      content: { parts: [{ text: 'B 也不应被 skeleton 污染' }] },
+      status: 'complete',
+      createdAt: 2,
+      seq: 1
+    }
+  ];
+  const world = new FakeWorld(state);
+  let skeletonAttempts = 0;
+  const storage = makeStorage({
+    saveClientStateSkeleton: async () => {
+      skeletonAttempts += 1;
+      const error = new Error('synthetic skeleton conflict');
+      error.clientStateSkeletonRevisionConflict = true;
+      throw error;
+    }
+  });
+  const persistence = new ClientStatePersistence(world, storage, {
+    renderLoadedConversationIds: () => [firstConversationId, secondConversationId],
+    isConversationHistorySummaryComplete: () => false
+  }, 5);
+  persistence.enable();
+
+  await persistence.persistImmediately({ force: true });
+  assert.equal(skeletonAttempts, 1);
+  assert.deepEqual(storage.calls.filter((call) => call.kind === 'render').map((call) => call.conversationId).sort(), [
+    firstConversationId,
+    secondConversationId
+  ]);
+
+  storage.calls.length = 0;
+  await persistence.persistImmediately();
+  assert.equal(skeletonAttempts, 2);
+  assert.equal(storage.calls.filter((call) => call.kind === 'render').length, 0, '已成功的对话 render detail 不应因 skeleton pending 被反复保存');
+});
+
+
 test('timeline-only 强制保存不等待正在进行的慢 run history', async () => {
   const conversationId = 'conversation-targeted-render';
   const state = makeState(conversationId);

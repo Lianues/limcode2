@@ -201,8 +201,9 @@ function clearRuntimeContextSnapshot(): void {
 function createNewConversation(): void {
   projectDropdownOpen.value = false;
   runtimeContextOpen.value = false;
-  const projectFolderUri = activeProjectUri.value.trim();
-  bridge.request(BridgeMessageType.ConversationCreate, projectFolderUri ? { projectFolderUri } : {});
+  // 新对话应绑定当前 VS Code 窗口的项目目录；不能继承当前打开的旧对话项目。
+  // 不传 projectFolderUri 时后端会使用当前 workspace folder（单根工作区）。
+  bridge.request(BridgeMessageType.ConversationCreate, {});
 }
 
 function requestProjectFolders(): void {

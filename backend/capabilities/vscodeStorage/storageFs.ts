@@ -1,6 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
+import { isNodeFsStorageUri, nodeFsStoragePath } from './localStorageUri';
 
 export interface StorageDeleteOptions {
   recursive?: boolean;
@@ -14,24 +15,24 @@ export interface StorageDeleteOptions {
  * operations on node:fs and retain workspace.fs only for non-file providers.
  */
 export async function ensureStorageDirectory(uri: vscode.Uri): Promise<void> {
-  if (uri.scheme === 'file') {
-    await fs.mkdir(uri.fsPath, { recursive: true });
+  if (isNodeFsStorageUri(uri)) {
+    await fs.mkdir(nodeFsStoragePath(uri), { recursive: true });
     return;
   }
   await vscode.workspace.fs.createDirectory(uri);
 }
 
 export async function readStorageDirectory(uri: vscode.Uri): Promise<[string, vscode.FileType][]> {
-  if (uri.scheme === 'file') {
-    const entries = await fs.readdir(uri.fsPath, { withFileTypes: true });
+  if (isNodeFsStorageUri(uri)) {
+    const entries = await fs.readdir(nodeFsStoragePath(uri), { withFileTypes: true });
     return entries.map((entry) => [entry.name, storageFileType(entry)]);
   }
   return vscode.workspace.fs.readDirectory(uri);
 }
 
 export async function deleteStorageUri(uri: vscode.Uri, options: StorageDeleteOptions = {}): Promise<void> {
-  if (uri.scheme === 'file') {
-    await fs.rm(uri.fsPath, { recursive: options.recursive === true, force: false });
+  if (isNodeFsStorageUri(uri)) {
+    await fs.rm(nodeFsStoragePath(uri), { recursive: options.recursive === true, force: false });
     return;
   }
   await vscode.workspace.fs.delete(uri, {
@@ -41,14 +42,15 @@ export async function deleteStorageUri(uri: vscode.Uri, options: StorageDeleteOp
 }
 
 export async function readStorageFile(uri: vscode.Uri): Promise<Uint8Array> {
-  if (uri.scheme === 'file') return fs.readFile(uri.fsPath);
+  if (isNodeFsStorageUri(uri)) return fs.readFile(nodeFsStoragePath(uri));
   return vscode.workspace.fs.readFile(uri);
 }
 
 export async function writeStorageFile(uri: vscode.Uri, data: Uint8Array): Promise<void> {
-  if (uri.scheme === 'file') {
-    await fs.mkdir(path.dirname(uri.fsPath), { recursive: true });
-    await fs.writeFile(uri.fsPath, data);
+  if (isNodeFsStorageUri(uri)) {
+    const fsPath = nodeFsStoragePath(uri);
+    await fs.mkdir(path.dirname(fsPath), { recursive: true });
+    await fs.writeFile(fsPath, data);
     return;
   }
   await vscode.workspace.fs.writeFile(uri, data);

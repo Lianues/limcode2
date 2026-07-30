@@ -68,12 +68,29 @@ function setDeferredProject(state, suffix) {
   return state;
 }
 
+function localWorkspaceEnvironment(overrides = {}) {
+  return {
+    id: 'work-env-local-same',
+    kind: 'localFolder',
+    source: 'workspaceFolder',
+    name: 'Project',
+    uri: 'file:///project',
+    rootPath: '/project',
+    displayPath: '/project',
+    available: true,
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides
+  };
+}
+
 const restore = installVscodeMock();
 const { createVscodeStoragePaths } = require('../dist/extension/backend/capabilities/vscodeStorage/paths.js');
 const clientStateStore = require('../dist/extension/backend/capabilities/vscodeStorage/clientStateStore.js');
 const skeletonTransaction = require('../dist/extension/backend/capabilities/vscodeStorage/clientStateSkeletonTransaction.js');
 const skeletonPatch = require('../dist/extension/backend/capabilities/vscodeStorage/clientStateSkeletonPatch.js');
 const { createEmptyClientState } = require('../dist/extension/shared/clientStateSchema.js');
+const { STORAGE_VERSION } = require('../dist/extension/backend/capabilities/vscodeStorage/constants.js');
 
 async function commitState(paths, base, next) {
   return clientStateStore.saveClientStateSkeletonToStores(paths, skeletonPatch.createClientStateSkeletonPatch(base, next));
@@ -153,6 +170,101 @@ test('同 id 分叉更新明确冲突，绝不静默 last-writer-wins', async ()
     assert.equal((await loadCurrent(paths)).conversations[0].title, 'A title');
   });
 });
+test('本地 workspaceFolder workEnvironment 并发 upsert 仅窗口态不同不冲突并规范化', async () => {
+  await withTemp('limcode-skeleton-workenv-window-state-', async (paths) => {
+    const base = createEmptyClientState();
+    const windowA = createEmptyClientState();
+    const windowB = createEmptyClientState();
+    windowA.workEnvironments.push(localWorkspaceEnvironment({
+      name: 'Project A',
+      index: 0,
+      available: true,
+      createdAt: 100,
+      updatedAt: 100
+    }));
+    windowB.workEnvironments.push(localWorkspaceEnvironment({
+      name: 'Project B',
+      available: false,
+      createdAt: 200,
+      updatedAt: 200
+    }));
+
+    await commitState(paths, base, windowA);
+    await commitState(paths, base, windowB);
+
+    const loaded = await loadCurrent(paths);
+    assert.equal(loaded.workEnvironments.length, 1);
+    assert.equal(loaded.workEnvironments[0].id, 'work-env-local-same');
+    assert.equal(loaded.workEnvironments[0].uri, 'file:///project');
+    assert.equal(loaded.workEnvironments[0].rootPath, '/project');
+    assert.equal(loaded.workEnvironments[0].available, true);
+    assert.equal(Object.prototype.hasOwnProperty.call(loaded.workEnvironments[0], 'index'), false);
+  });
+});
+
+
+test('本地 workspaceFolder workEnvironment 稳定身份字段不同仍然冲突', async () => {
+  await withTemp('limcode-skeleton-workenv-real-conflict-', async (paths) => {
+    const base = createEmptyClientState();
+    const windowA = createEmptyClientState();
+    const windowB = createEmptyClientState();
+    windowA.workEnvironments.push(localWorkspaceEnvironment({ rootPath: '/project-a', displayPath: '/project-a' }));
+    windowB.workEnvironments.push(localWorkspaceEnvironment({ rootPath: '/project-b', displayPath: '/project-b' }));
+
+    await commitState(paths, base, windowA);
+    await assert.rejects(
+      () => commitState(paths, base, windowB),
+      (error) => error && error.clientStateSkeletonRevisionConflict === true
+    );
+    assert.equal((await loadCurrent(paths)).workEnvironments[0].rootPath, '/project-a');
+  });
+});
+
+
+test('同语义 deterministic skeleton relation 仅时间戳不同应视为幂等并发提交', async () => {
+  await withTemp('limcode-skeleton-semantic-idempotent-', async (paths) => {
+    const base = createEmptyClientState();
+    const windowA = createEmptyClientState();
+    const windowB = createEmptyClientState();
+    const conversationId = 'conversation-idempotent-selection';
+    windowA.conversations.push({ id: conversationId, title: 'A', visibility: 'visible' });
+    windowB.conversations.push({ id: conversationId, title: 'A', visibility: 'visible' });
+    windowA.conversationWorkflowSelections.push({
+      id: `conversation-workflow:global:${conversationId}`,
+      conversationId,
+      scopeKind: 'global',
+      role: 'active',
+      createdAt: 100,
+      updatedAt: 100
+    });
+    windowB.conversationWorkflowSelections.push({
+      id: `conversation-workflow:global:${conversationId}`,
+      conversationId,
+      scopeKind: 'global',
+      role: 'active',
+      createdAt: 200,
+      updatedAt: 200
+    });
+
+    await commitState(paths, base, windowA);
+    await commitState(paths, base, windowB);
+
+    const loaded = await loadCurrent(paths);
+    assert.deepEqual(loaded.conversationWorkflowSelections.map((item) => ({
+      id: item.id,
+      conversationId: item.conversationId,
+      scopeKind: item.scopeKind,
+      role: item.role
+    })), [{
+      id: `conversation-workflow:global:${conversationId}`,
+      conversationId,
+      scopeKind: 'global',
+      role: 'active'
+    }]);
+  });
+});
+
+
 
 test('startup/deferred 使用同一 immutable pin，期间多次 commit 不会让 staged hydration 失败或漂移', async () => {
   await withTemp('limcode-skeleton-pin-', async (paths) => {
@@ -223,6 +335,36 @@ test('live pin 保护任意旧 generation；release 后后续 GC 可回收', asy
     await assert.rejects(() => fs.access(pinnedManifestPath), /ENOENT/);
   });
 });
+
+test('GC 保留 fresh preparing marker 对应的 in-flight generation', async () => {
+  await withTemp('limcode-skeleton-preparing-gc-', async (paths) => {
+    const state = addBundle(createEmptyClientState(), 'base');
+    await commitState(paths, createEmptyClientState(), state);
+
+    const protectedGenerationId = '20260722-010203-004-00000001';
+    const unprotectedGenerationId = '20260722-010203-005-00000002';
+    const preparingRoot = path.join(paths.clientStateSkeletonRootPath, 'preparing');
+    await fs.mkdir(preparingRoot, { recursive: true });
+    await fs.writeFile(path.join(preparingRoot, `${protectedGenerationId}.json`), `${JSON.stringify({
+      kind: 'clientStateSkeleton.preparing',
+      schemaVersion: STORAGE_VERSION,
+      snapshotId: protectedGenerationId,
+      ownerPid: process.pid,
+      startedAt: Date.now()
+    }, null, 2)}\n`, 'utf8');
+
+    const protectedRoot = path.join(paths.conversationOriginLinksRootPath, 'generations', protectedGenerationId);
+    const unprotectedRoot = path.join(paths.conversationOriginLinksRootPath, 'generations', unprotectedGenerationId);
+    await fs.mkdir(protectedRoot, { recursive: true });
+    await fs.mkdir(unprotectedRoot, { recursive: true });
+
+    await skeletonTransaction.garbageCollectClientStateSkeleton(paths);
+
+    await fs.access(protectedRoot);
+    await assert.rejects(() => fs.access(unprotectedRoot), /ENOENT/);
+  });
+});
+
 
 test('语义化 Conversation 删除基于最新 union，能移除调用窗口未 hydrate 的外部 Link', async () => {
   await withTemp('limcode-skeleton-semantic-delete-', async (paths) => {

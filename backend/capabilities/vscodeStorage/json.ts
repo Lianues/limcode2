@@ -1,6 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
+import { isNodeFsStorageUri, nodeFsStoragePath } from './localStorageUri';
 
 export interface ReadJsonOptions {
   throwOnError?: boolean;
@@ -24,8 +25,8 @@ let atomicWriteSequence = 0;
 export async function readJsonStrict<T = unknown>(uri: vscode.Uri): Promise<StrictJsonReadResult<T>> {
   let raw: Uint8Array;
   try {
-    raw = uri.scheme === 'file'
-      ? await fs.readFile(uri.fsPath)
+    raw = isNodeFsStorageUri(uri)
+      ? await fs.readFile(nodeFsStoragePath(uri))
       : await vscode.workspace.fs.readFile(uri);
   } catch (error) {
     return isFileNotFoundError(error)
@@ -61,12 +62,13 @@ export async function readJson<T>(uri: vscode.Uri, options: ReadJsonOptions = {}
 
 export async function writeJson(uri: vscode.Uri, value: unknown): Promise<void> {
   const data = Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  if (uri.scheme === 'file') {
-    await fs.mkdir(path.dirname(uri.fsPath), { recursive: true });
-    const tempPath = `${uri.fsPath}.${process.pid}.${Date.now()}.${atomicWriteSequence++}.tmp`;
+  if (isNodeFsStorageUri(uri)) {
+    const fsPath = nodeFsStoragePath(uri);
+    await fs.mkdir(path.dirname(fsPath), { recursive: true });
+    const tempPath = `${fsPath}.${process.pid}.${Date.now()}.${atomicWriteSequence++}.tmp`;
     try {
       await fs.writeFile(tempPath, data);
-      await renameWithRetry(tempPath, uri.fsPath);
+      await renameWithRetry(tempPath, fsPath);
     } finally {
       await fs.rm(tempPath, { force: true }).catch(() => undefined);
     }

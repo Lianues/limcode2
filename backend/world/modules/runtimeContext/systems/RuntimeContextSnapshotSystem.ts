@@ -107,20 +107,42 @@ export const RuntimeContextSnapshotSystem = defineSystem({
       if (!refreshedRuns.has(data.run) && runRuntimeContextSnapshots(world, data.run).length > 0) continue;
       const snapshot = ensureConversationSnapshot(world, cmd, data.run, data.conversation, refreshedConversations.has(data.conversation));
       if (snapshot === undefined) continue;
-      linkRuntimeContextSnapshotToRun(cmd, { run: data.run, snapshot, id: `run-runtime-context:${data.run}:${snapshot}` });
+      const runLinkId = runRuntimeContextSnapshotLinkId(world, data.run, snapshot.id);
+      if (!runLinkId) continue;
+      linkRuntimeContextSnapshotToRun(cmd, { run: data.run, snapshot: snapshot.entity, id: runLinkId });
     }
   }
 });
 
-function ensureConversationSnapshot(world: WorldReader, cmd: CommandSink, run: Entity | undefined, conversation: Entity, forceRefresh: boolean): Entity | undefined {
+interface EnsuredRuntimeContextSnapshot {
+  entity: Entity;
+  id: string;
+}
+
+function ensureConversationSnapshot(world: WorldReader, cmd: CommandSink, run: Entity | undefined, conversation: Entity, forceRefresh: boolean): EnsuredRuntimeContextSnapshot | undefined {
   const existing = activeRuntimeContextSnapshotForConversation(world, conversation);
-  if (existing && !forceRefresh) return existing.entity;
+  if (existing && !forceRefresh) return { entity: existing.entity, id: existing.data.id };
   const built = buildSnapshot(world, run, conversation);
   if (!built) return undefined;
+  const conversationLinkId = conversationRuntimeContextSnapshotLinkId(world, conversation);
+  if (!conversationLinkId) return undefined;
   const snapshot = spawnRuntimeContextSnapshot(cmd, built);
   clearConversationSnapshotLinks(world, cmd, conversation);
-  linkRuntimeContextSnapshotToConversation(cmd, { conversation, snapshot, id: `conversation-runtime-context:${conversation}` });
-  return snapshot;
+  linkRuntimeContextSnapshotToConversation(cmd, { conversation, snapshot, id: conversationLinkId });
+  return { entity: snapshot, id: built.id };
+}
+
+function conversationRuntimeContextSnapshotLinkId(world: WorldReader, conversation: Entity): string | undefined {
+  const record = world.get(conversation, Conversation);
+  const id = record?.id.trim();
+  return id ? `conversation-runtime-context:${id}` : undefined;
+}
+
+function runRuntimeContextSnapshotLinkId(world: WorldReader, run: Entity, snapshotId: string): string | undefined {
+  const record = world.get(run, AgentRun);
+  const runId = record?.id.trim();
+  const normalizedSnapshotId = snapshotId.trim();
+  return runId && normalizedSnapshotId ? `run-runtime-context:${runId}:${normalizedSnapshotId}` : undefined;
 }
 
 function buildSnapshot(world: WorldReader, run: Entity | undefined, conversation: Entity): Parameters<typeof spawnRuntimeContextSnapshot>[1] | undefined {

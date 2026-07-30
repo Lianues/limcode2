@@ -32,10 +32,12 @@ import { deleteStorageUri, ensureStorageDirectory, readStorageDirectory } from '
 const CURRENT_POINTER_FILE = 'current.json';
 const PREVIOUS_POINTER_FILE = 'previous.json';
 const SNAPSHOTS_DIR = 'snapshots';
+const PREPARING_DIR = 'preparing';
 const PREPARED_DIR = 'prepared';
 const PINS_DIR = 'pins';
 const TRANSACTION_RESOURCE = 'transaction';
 const PIN_STALE_MS = 60 * 60_000;
+const PREPARE_MARKER_STALE_MS = 60 * 60_000;
 const SKELETON_LOCK_STALE_MS = 10_000;
 const SKELETON_LOCK_WAIT_MS = 2 * 60_000;
 
@@ -54,6 +56,15 @@ export interface ClientStateSkeletonSnapshotManifest {
   parentSnapshotId?: string;
   createdAt: string;
   stores: Record<ClientStateSkeletonStoreKey, RecordStoreGenerationRef>;
+}
+
+interface ClientStateSkeletonPreparingMarker {
+  kind: 'clientStateSkeleton.preparing';
+  schemaVersion: typeof STORAGE_VERSION;
+  snapshotId: string;
+  parentSnapshotId?: string;
+  ownerPid: number;
+  startedAt: number;
 }
 
 interface ClientStateSkeletonPreparedMarker {
@@ -240,6 +251,17 @@ async function commitClientStateSkeletonPatchUnlocked(
   }
 
   const snapshotId = createStorageGenerationId();
+  const preparing: ClientStateSkeletonPreparingMarker = {
+    kind: 'clientStateSkeleton.preparing',
+    schemaVersion: STORAGE_VERSION,
+    snapshotId,
+    ...(active ? { parentSnapshotId: active.manifest.snapshotId } : {}),
+    ownerPid: process.pid,
+    startedAt: Date.now()
+  };
+  await ensureStorageDirectory(preparingRootUri(paths));
+  await writeJson(preparingUri(paths, snapshotId), preparing);
+
   const stores = active ? cloneStoreRefs(active.manifest.stores) : {} as Record<ClientStateSkeletonStoreKey, RecordStoreGenerationRef>;
   await Promise.all(changedStores.map(async (key) => {
     const store = descriptorFor(key);
@@ -306,6 +328,11 @@ async function commitClientStateSkeletonPatchUnlocked(
     // current 已发布；marker/GC 清理失败不能把 committed transaction 报成失败。
   }
   try {
+    await deleteStorageUri(preparingUri(paths, snapshotId), { useTrash: false });
+  } catch {
+    // current 已发布；marker/GC 清理失败不能把 committed transaction 报成失败。
+  }
+  try {
     await garbageCollectSkeletonUnlocked(paths);
   } catch (error) {
     console.warn('[LimCode] Client-state skeleton committed, but generation GC failed closed.', error);
@@ -348,6 +375,7 @@ export async function garbageCollectClientStateSkeleton(paths: StoragePaths): Pr
 }
 
 async function garbageCollectSkeletonUnlocked(paths: StoragePaths): Promise<void> {
+  const now = Date.now();
   const retainedSnapshots = new Set<string>();
   const current = await loadSnapshotFromPointerFile(paths, currentPointerUri(paths), true);
   const previous = await loadSnapshotFromPointerFile(paths, previousPointerUri(paths), true);
@@ -360,12 +388,15 @@ async function garbageCollectSkeletonUnlocked(paths: StoragePaths): Promise<void
     const result = await readJsonStrict<unknown>(uri);
     if (result.status !== 'ok') throw new Error(`Unable to validate client-state skeleton pin before GC: ${uri.fsPath}`);
     const pin = parsePin(result.value, uri);
-    if (Date.now() - pin.heartbeatAt > PIN_STALE_MS) {
+    if (now - pin.heartbeatAt > PIN_STALE_MS) {
       await deleteStorageUri(uri, { useTrash: false });
       continue;
     }
     retainedSnapshots.add(pin.snapshotId);
   }
+
+  const protectedMarkers = await scanFreshTransactionMarkers(paths, now);
+  for (const snapshotId of protectedMarkers.retainedSnapshotIds) retainedSnapshots.add(snapshotId);
 
   const retainedManifests = new Map<string, ClientStateSkeletonSnapshotManifest>();
   for (const snapshotId of retainedSnapshots) {
@@ -375,7 +406,7 @@ async function garbageCollectSkeletonUnlocked(paths: StoragePaths): Promise<void
   }
 
   const retainedGenerations = new Map<ClientStateSkeletonStoreKey, Set<string>>();
-  for (const store of CLIENT_STATE_SKELETON_STORES) retainedGenerations.set(store.key, new Set());
+  for (const store of CLIENT_STATE_SKELETON_STORES) retainedGenerations.set(store.key, new Set(protectedMarkers.retainedGenerationIds));
   for (const manifest of retainedManifests.values()) {
     for (const store of CLIENT_STATE_SKELETON_STORES) {
       retainedGenerations.get(store.key)!.add(manifest.stores[store.key].generation);
@@ -394,11 +425,52 @@ async function garbageCollectSkeletonUnlocked(paths: StoragePaths): Promise<void
       await deleteStorageUri(vscode.Uri.joinPath(snapshotsRootUri(paths), name), { useTrash: false });
     }
   }
-  for (const [name, type] of await readDirectoryOrEmpty(preparedRootUri(paths))) {
-    if (type === vscode.FileType.File && name.endsWith('.json')) {
-      await deleteStorageUri(vscode.Uri.joinPath(preparedRootUri(paths), name), { useTrash: false });
-    }
+  for (const uri of protectedMarkers.staleMarkerUris) {
+    await deleteStorageUri(uri, { useTrash: false }).catch((error) => {
+      if (!isFileNotFoundError(error)) throw error;
+    });
   }
+}
+
+interface SkeletonTransactionMarkerScan {
+  retainedSnapshotIds: Set<string>;
+  retainedGenerationIds: Set<string>;
+  staleMarkerUris: vscode.Uri[];
+}
+
+async function scanFreshTransactionMarkers(paths: StoragePaths, now: number): Promise<SkeletonTransactionMarkerScan> {
+  const retainedSnapshotIds = new Set<string>();
+  const retainedGenerationIds = new Set<string>();
+  const staleMarkerUris: vscode.Uri[] = [];
+
+  for (const [name, type] of await readDirectoryOrEmpty(preparingRootUri(paths))) {
+    if (type !== vscode.FileType.File || !name.endsWith('.json')) continue;
+    const uri = vscode.Uri.joinPath(preparingRootUri(paths), name);
+    const result = await readJsonStrict<unknown>(uri);
+    if (result.status !== 'ok') {
+      staleMarkerUris.push(uri);
+      continue;
+    }
+    const marker = parsePreparingMarker(result.value, uri);
+    if (now - marker.startedAt > PREPARE_MARKER_STALE_MS) staleMarkerUris.push(uri);
+    else retainedGenerationIds.add(marker.snapshotId);
+  }
+
+  for (const [name, type] of await readDirectoryOrEmpty(preparedRootUri(paths))) {
+    if (type !== vscode.FileType.File || !name.endsWith('.json')) continue;
+    const uri = vscode.Uri.joinPath(preparedRootUri(paths), name);
+    const result = await readJsonStrict<unknown>(uri);
+    if (result.status !== 'ok') {
+      staleMarkerUris.push(uri);
+      continue;
+    }
+    const marker = parsePreparedMarker(result.value, uri);
+    const preparedAt = Date.parse(marker.preparedAt);
+    if (!Number.isFinite(preparedAt) || now - preparedAt > PREPARE_MARKER_STALE_MS) staleMarkerUris.push(uri);
+    else retainedSnapshotIds.add(marker.snapshotId);
+  }
+
+  return { retainedSnapshotIds, retainedGenerationIds, staleMarkerUris };
 }
 
 async function loadActiveSnapshotWithWholeFallback(paths: StoragePaths): Promise<LoadedSkeletonSnapshot | undefined> {
@@ -440,6 +512,7 @@ async function loadActiveSnapshotWithWholeFallback(paths: StoragePaths): Promise
 async function assertNoSkeletonTracesWithoutPointer(paths: StoragePaths): Promise<void> {
   const coordinatorTraces = [
     ...(await readDirectoryOrEmpty(snapshotsRootUri(paths))).map(([name]) => `${SNAPSHOTS_DIR}/${name}`),
+    ...(await readDirectoryOrEmpty(preparingRootUri(paths))).map(([name]) => `${PREPARING_DIR}/${name}`),
     ...(await readDirectoryOrEmpty(preparedRootUri(paths))).map(([name]) => `${PREPARED_DIR}/${name}`),
     ...(await readDirectoryOrEmpty(pinsRootUri(paths))).map(([name]) => `${PINS_DIR}/${name}`)
   ];
@@ -550,6 +623,52 @@ function parseManifest(value: unknown, uri: vscode.Uri, expectedSnapshotId: stri
   };
 }
 
+function parsePreparingMarker(value: unknown, uri: vscode.Uri): ClientStateSkeletonPreparingMarker {
+  const candidate = asPlainObject(value);
+  const allowed = candidate?.parentSnapshotId === undefined
+    ? ['kind', 'schemaVersion', 'snapshotId', 'ownerPid', 'startedAt']
+    : ['kind', 'schemaVersion', 'snapshotId', 'parentSnapshotId', 'ownerPid', 'startedAt'];
+  if (!candidate || !hasExactKeys(candidate, allowed)
+    || candidate.kind !== 'clientStateSkeleton.preparing' || candidate.schemaVersion !== STORAGE_VERSION
+    || typeof candidate.snapshotId !== 'string' || !isSafeStorageGenerationId(candidate.snapshotId)
+    || (candidate.parentSnapshotId !== undefined && (typeof candidate.parentSnapshotId !== 'string' || !isSafeStorageGenerationId(candidate.parentSnapshotId)))
+    || typeof candidate.ownerPid !== 'number' || !Number.isSafeInteger(candidate.ownerPid) || candidate.ownerPid <= 0
+    || typeof candidate.startedAt !== 'number' || !Number.isFinite(candidate.startedAt)) {
+    throw new Error(`Client-state skeleton preparing marker structure is invalid: ${uri.fsPath}`);
+  }
+  return {
+    kind: 'clientStateSkeleton.preparing',
+    schemaVersion: STORAGE_VERSION,
+    snapshotId: candidate.snapshotId,
+    ...(typeof candidate.parentSnapshotId === 'string' ? { parentSnapshotId: candidate.parentSnapshotId } : {}),
+    ownerPid: candidate.ownerPid,
+    startedAt: candidate.startedAt
+  };
+}
+
+function parsePreparedMarker(value: unknown, uri: vscode.Uri): ClientStateSkeletonPreparedMarker {
+  const candidate = asPlainObject(value);
+  const allowed = candidate?.parentSnapshotId === undefined
+    ? ['kind', 'schemaVersion', 'snapshotId', 'manifestRevision', 'preparedAt']
+    : ['kind', 'schemaVersion', 'snapshotId', 'parentSnapshotId', 'manifestRevision', 'preparedAt'];
+  if (!candidate || !hasExactKeys(candidate, allowed)
+    || candidate.kind !== 'clientStateSkeleton.prepared' || candidate.schemaVersion !== STORAGE_VERSION
+    || typeof candidate.snapshotId !== 'string' || !isSafeStorageGenerationId(candidate.snapshotId)
+    || (candidate.parentSnapshotId !== undefined && (typeof candidate.parentSnapshotId !== 'string' || !isSafeStorageGenerationId(candidate.parentSnapshotId)))
+    || typeof candidate.manifestRevision !== 'string' || !candidate.manifestRevision
+    || typeof candidate.preparedAt !== 'string' || !candidate.preparedAt) {
+    throw new Error(`Client-state skeleton prepared marker structure is invalid: ${uri.fsPath}`);
+  }
+  return {
+    kind: 'clientStateSkeleton.prepared',
+    schemaVersion: STORAGE_VERSION,
+    snapshotId: candidate.snapshotId,
+    ...(typeof candidate.parentSnapshotId === 'string' ? { parentSnapshotId: candidate.parentSnapshotId } : {}),
+    manifestRevision: candidate.manifestRevision,
+    preparedAt: candidate.preparedAt
+  };
+}
+
 function parsePin(value: unknown, uri: vscode.Uri): ClientStateSkeletonPinFile {
   const candidate = asPlainObject(value);
   if (!candidate || !hasExactKeys(candidate, ['kind', 'schemaVersion', 'pinId', 'snapshotId', 'ownerId', 'pid', 'createdAt', 'heartbeatAt'])
@@ -620,6 +739,12 @@ function snapshotsRootUri(paths: StoragePaths): vscode.Uri {
 }
 function snapshotManifestUri(paths: StoragePaths, snapshotId: string): vscode.Uri {
   return vscode.Uri.joinPath(snapshotsRootUri(paths), `${snapshotId}.json`);
+}
+function preparingRootUri(paths: StoragePaths): vscode.Uri {
+  return vscode.Uri.joinPath(paths.clientStateSkeletonRootUri, PREPARING_DIR);
+}
+function preparingUri(paths: StoragePaths, snapshotId: string): vscode.Uri {
+  return vscode.Uri.joinPath(preparingRootUri(paths), `${snapshotId}.json`);
 }
 function preparedRootUri(paths: StoragePaths): vscode.Uri {
   return vscode.Uri.joinPath(paths.clientStateSkeletonRootUri, PREPARED_DIR);

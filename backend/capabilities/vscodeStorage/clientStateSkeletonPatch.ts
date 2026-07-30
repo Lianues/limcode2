@@ -97,20 +97,29 @@ export function applyClientStateSkeletonStorePatch(
   let changed = false;
 
   for (const upsert of patch.upserts) {
-    const current = nextById.get(upsert.record.id);
+    const desiredRecord = canonicalizeSkeletonUpsertRecord(storeKey, upsert.record);
+    const current = nextById.get(desiredRecord.id);
     const actualRevision = current ? createStorageRevision(current) : null;
-    const desiredRevision = createStorageRevision(upsert.record);
+    const desiredRevision = createStorageRevision(desiredRecord);
     if (actualRevision === desiredRevision) continue; // commit 已成功但响应不确定时的幂等重试
+
+    const idempotentRecord = current ? idempotentSkeletonUpsertRecord(storeKey, current, desiredRecord) : undefined;
+    if (idempotentRecord) {
+      nextById.set(desiredRecord.id, idempotentRecord);
+      changed = true;
+      continue;
+    }
+
     if (actualRevision !== upsert.expectedRecordRevision) {
       throw new ClientStateSkeletonRevisionConflictError(
         storeKey,
-        upsert.record.id,
+        desiredRecord.id,
         'upsert',
         upsert.expectedRecordRevision,
         actualRevision
       );
     }
-    nextById.set(upsert.record.id, cloneRecord(upsert.record));
+    nextById.set(desiredRecord.id, cloneRecord(desiredRecord));
     changed = true;
   }
 
@@ -161,6 +170,53 @@ function uniqueRecordMap(records: ClientStateSkeletonRecord[], label: string): M
     result.set(record.id, record);
   }
   return result;
+}
+
+function idempotentSkeletonUpsertRecord(
+  storeKey: ClientStateSkeletonStoreKey,
+  current: ClientStateSkeletonRecord,
+  desired: ClientStateSkeletonRecord
+): ClientStateSkeletonRecord | undefined {
+  if (JSON.stringify(idempotentSemanticRecord(storeKey, current)) !== JSON.stringify(idempotentSemanticRecord(storeKey, desired))) {
+    return undefined;
+  }
+  return cloneRecord(desired);
+}
+
+function idempotentSemanticRecord(storeKey: ClientStateSkeletonStoreKey, record: ClientStateSkeletonRecord): Record<string, unknown> {
+  const clone = withoutTemporalMetadata(record);
+  if (storeKey === 'workEnvironments' && isLocalWorkspaceFolderWorkEnvironment(clone)) {
+    // 本地 VS Code workspaceFolder 的可用性、顺序和展示名都是窗口态。
+    // 多窗口共享同一数据根时，一个窗口不应因为这些字段不同而覆盖/阻塞另一个窗口的全局目录记录。
+    delete clone.available;
+    delete clone.index;
+    delete clone.name;
+  }
+  return clone;
+}
+
+function canonicalizeSkeletonUpsertRecord(
+  storeKey: ClientStateSkeletonStoreKey,
+  record: ClientStateSkeletonRecord
+): ClientStateSkeletonRecord {
+  const clone = cloneRecord(record) as Record<string, unknown>;
+  if (storeKey === 'workEnvironments' && isLocalWorkspaceFolderWorkEnvironment(clone)) {
+    clone.available = true;
+    delete clone.index;
+  }
+  return clone as ClientStateSkeletonRecord;
+}
+
+function isLocalWorkspaceFolderWorkEnvironment(record: Record<string, unknown>): boolean {
+  return record.kind === 'localFolder' && (record.source === undefined || record.source === 'workspaceFolder');
+}
+
+function withoutTemporalMetadata(record: ClientStateSkeletonRecord): Record<string, unknown> {
+  const clone = cloneRecord(record) as Record<string, unknown>;
+  delete clone.createdAt;
+  delete clone.updatedAt;
+  delete clone.refreshedAt;
+  return clone;
 }
 
 function cloneRecord(record: ClientStateSkeletonRecord): ClientStateSkeletonRecord {

@@ -1,4 +1,4 @@
-import type { ClientState, ClientStateTableKey } from '../../../shared/protocol';
+import type { ClientState, ClientStateTableKey, MessageRecord } from '../../../shared/protocol';
 import { createStorageRevision } from './storageRevision';
 
 export const CONVERSATION_TIMELINE_TABLE_KEYS = [
@@ -101,6 +101,7 @@ export function applyConversationTimelinePatch(
       const actual = existing ? createStorageRevision(existing) : null;
       const desired = createStorageRevision(upsert.record);
       if (actual === desired) continue;
+      if (existing && isStaleMessageUpsertDominatedByCurrent(key, existing, upsert.record)) continue;
       if (actual !== upsert.expectedRecordRevision) {
         throw new ConversationTimelineRevisionConflictError(
           conversationId, key, upsert.record.id, upsert.expectedRecordRevision, actual
@@ -159,6 +160,38 @@ function uniqueMap(records: ConversationTimelineRecord[], label: string): Map<st
     result.set(record.id, record);
   }
   return result;
+}
+
+function isStaleMessageUpsertDominatedByCurrent(
+  key: ConversationTimelineTableKey,
+  current: ConversationTimelineRecord,
+  desired: ConversationTimelineRecord
+): boolean {
+  if (key !== 'messages') return false;
+  const currentMessage = current as MessageRecord;
+  const desiredMessage = desired as MessageRecord;
+  if (currentMessage.id !== desiredMessage.id
+    || currentMessage.conversationId !== desiredMessage.conversationId
+    || currentMessage.role !== desiredMessage.role
+    || currentMessage.seq !== desiredMessage.seq) {
+    return false;
+  }
+
+  // 多窗口/延迟 flush 下，旧窗口可能仍试图保存较早的 streaming 片段。
+  // 已终态消息或更长的 streaming 前缀代表磁盘上已经有更新的同一模型输出，不能让旧片段制造冲突或回退内容。
+  if (desiredMessage.status === 'streaming' && currentMessage.status !== 'streaming') return true;
+  if (desiredMessage.status === 'streaming' && currentMessage.status === 'streaming') {
+    const currentText = plainTextContent(currentMessage);
+    const desiredText = plainTextContent(desiredMessage);
+    return !!desiredText && currentText.length >= desiredText.length && currentText.startsWith(desiredText);
+  }
+  return false;
+}
+
+function plainTextContent(message: MessageRecord): string {
+  return message.content.parts
+    .map((part) => 'text' in part && part.thought !== true ? part.text : '')
+    .join('');
 }
 
 function cloneRecord(record: ConversationTimelineRecord): ConversationTimelineRecord {

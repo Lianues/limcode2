@@ -4,6 +4,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { isFileNotFoundError } from './json';
+import { isNodeFsStorageUri, nodeFsStoragePath } from './localStorageUri';
 
 export interface StorageResourceLockFileMetadata {
   ownerToken: string;
@@ -189,7 +190,7 @@ function normalizeNonNegativeInteger(value: number | undefined, fallback: number
 }
 
 function shouldUseLockFile(resourceUri: vscode.Uri, options: NormalizedStorageResourceLockOptions): boolean {
-  return resourceUri.scheme === 'file' || options.lockPath !== undefined;
+  return isNodeFsStorageUri(resourceUri) || options.lockPath !== undefined;
 }
 
 async function enterInProcessLockQueue(resourceKey: string): Promise<() => void> {
@@ -215,7 +216,7 @@ async function acquireLockFile(resourceUri: vscode.Uri, options: NormalizedStora
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
   const ownerToken = randomUUID();
   const resource = getResourceKey(resourceUri);
-  const resourceFsPath = typeof resourceUri.fsPath === 'string' && resourceUri.fsPath ? resourceUri.fsPath : undefined;
+  const resourceFsPath = isNodeFsStorageUri(resourceUri) ? nodeFsStoragePath(resourceUri) : undefined;
   const deadline = Date.now() + options.waitMs;
 
   for (;;) {
@@ -243,9 +244,10 @@ async function acquireLockFile(resourceUri: vscode.Uri, options: NormalizedStora
 }
 
 function resolveLockPath(resourceUri: vscode.Uri, options: NormalizedStorageResourceLockOptions): string {
+  const defaultLockPath = isNodeFsStorageUri(resourceUri) ? `${nodeFsStoragePath(resourceUri)}.lock` : undefined;
   const lockPath = typeof options.lockPath === 'function'
     ? options.lockPath(resourceUri)
-    : options.lockPath ?? `${resourceUri.fsPath}.lock`;
+    : options.lockPath ?? defaultLockPath;
   if (!lockPath || !lockPath.trim()) throw new Error(`Storage resource lock path is empty: ${getResourceKey(resourceUri)}`);
   return path.resolve(lockPath);
 }

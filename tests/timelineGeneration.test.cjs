@@ -868,6 +868,40 @@ test('陈旧窗口只追加新消息时，不会把同 id 已完成流式消息�
   }
 });
 
+test('陈旧窗口保存旧 streaming 片段时不应和已完成消息冲突或回退内容', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-stale-stream-flush-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  const conversationId = 'conv-stale-stream-flush';
+  try {
+    const initial = createEmptyClientState();
+    const streaming = textMessage(conversationId, 'stream-flush-1', 1, 'partial', 'model');
+    streaming.status = 'streaming';
+    initial.messages.push(streaming);
+    await timelineStore.saveConversationTimelineDetail(paths, conversationId, initial);
+
+    const baseA = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    const baseB = JSON.parse(JSON.stringify(baseA));
+
+    const nextA = JSON.parse(JSON.stringify(baseA));
+    nextA.messages[0].content.parts[0].text = 'final answer from active writer';
+    nextA.messages[0].status = 'complete';
+    await timelineStore.commitConversationTimelineRenderDetail(paths, conversationId, baseA, nextA);
+
+    const nextB = JSON.parse(JSON.stringify(baseB));
+    nextB.messages[0].content.parts[0].text = 'stale partial from delayed flush';
+    nextB.messages[0].status = 'streaming';
+    await timelineStore.commitConversationTimelineRenderDetail(paths, conversationId, baseB, nextB);
+
+    const stored = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    assert.equal(stored.messages.length, 1);
+    assert.equal(stored.messages[0].content.parts[0].text, 'final answer from active writer');
+    assert.equal(stored.messages[0].status, 'complete');
+  } finally {
+    await removeTempRoot(tempRoot);
+  }
+});
+
+
 test('两个窗口真正修改同一 timeline record 时明确冲突，不静默覆盖', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-same-record-conflict-'));
   const paths = createVscodeStoragePaths(MockUri.file(tempRoot));

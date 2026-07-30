@@ -7,8 +7,8 @@ const test = require('node:test');
 const Module = require('node:module');
 
 class MockUri {
-  constructor(fsPath) {
-    this.scheme = 'file';
+  constructor(fsPath, scheme = 'file') {
+    this.scheme = scheme;
     this.fsPath = path.resolve(fsPath);
   }
 
@@ -16,12 +16,16 @@ class MockUri {
     return new MockUri(fsPath);
   }
 
+  static userData(fsPath) {
+    return new MockUri(fsPath, 'vscode-userdata');
+  }
+
   static joinPath(base, ...segments) {
-    return new MockUri(path.join(base.fsPath, ...segments));
+    return new MockUri(path.join(base.fsPath, ...segments), base.scheme);
   }
 
   toString() {
-    return `file://${this.fsPath.replace(/\\/g, '/')}`;
+    return `${this.scheme}://${this.fsPath.replace(/\\/g, '/')}`;
   }
 }
 
@@ -185,7 +189,7 @@ if (process.argv[2] === '--lock-worker') {
     });
 } else {
   const restore = installVscodeMock();
-  const { readJsonStrict } = require('../dist/extension/backend/capabilities/vscodeStorage/json.js');
+  const { readJsonStrict, writeJson } = require('../dist/extension/backend/capabilities/vscodeStorage/json.js');
   const { withStorageResourceLock } = require('../dist/extension/backend/capabilities/vscodeStorage/storageResourceLock.js');
   const {
     cleanupInactiveStorageGenerations,
@@ -218,10 +222,26 @@ if (process.argv[2] === '--lock-worker') {
       const ok = await readJsonStrict(MockUri.file(okPath));
       assert.equal(ok.status, 'ok');
       assert.deepEqual(ok.value, { ok: true });
+
     } finally {
       await removeTempRoot(tempRoot);
     }
   });
+
+  test('vscode-userdata 本地 URI 使用 node fs 原子写并自动创建父目录', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-userdata-json-'));
+    try {
+      const uri = MockUri.userData(path.join(tempRoot, 'nested', 'value.json'));
+      await writeJson(uri, { ok: true });
+      assert.deepEqual(JSON.parse(await fs.readFile(uri.fsPath, 'utf8')), { ok: true });
+      const loaded = await readJsonStrict(uri);
+      assert.equal(loaded.status, 'ok');
+      assert.deepEqual(loaded.value, { ok: true });
+    } finally {
+      await removeTempRoot(tempRoot);
+    }
+  });
+
 
   test('通用资源锁在同进程内按资源 URI 串行', async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-lock-inproc-'));
@@ -245,6 +265,24 @@ if (process.argv[2] === '--lock-worker') {
       await removeTempRoot(tempRoot);
     }
   });
+
+  test('vscode-userdata 本地 URI 默认启用跨进程 lockfile', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-userdata-lock-'));
+    try {
+      const resource = MockUri.userData(path.join(tempRoot, 'resource.json'));
+      const lockPath = `${resource.fsPath}.lock`;
+      let lockVisible = false;
+      await withStorageResourceLock(resource, async () => {
+        await fs.access(lockPath);
+        lockVisible = true;
+      }, { waitMs: 1_000, staleMs: 60_000, pollIntervalMs: 5 });
+      assert.equal(lockVisible, true);
+      await assert.rejects(fs.access(lockPath));
+    } finally {
+      await removeTempRoot(tempRoot);
+    }
+  });
+
 
   test('通用资源锁使用 lockfile 跨进程串行', async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-lock-xproc-'));

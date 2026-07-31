@@ -58,7 +58,7 @@ export function registerSidebarEntryView(context: vscode.ExtensionContext, backe
 }
 
 class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
-  private lastScopeKind: SidebarHistoryScopeKind = 'currentProject';
+  private lastScopeKind: SidebarHistoryScopeKind = 'all';
   private lastProjectFolderUri: string | undefined;
   private lastCursor: string | undefined;
   private activeWebview: vscode.Webview | undefined;
@@ -135,12 +135,12 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       }
 
       if (message.type === SIDEBAR_READY_MESSAGE) {
-        this.postSidebarStateWhenReady(webviewView.webview, 'currentProject');
+        this.postSidebarStateWhenReady(webviewView.webview, 'all');
         return;
       }
 
       if (message.type === HISTORY_PAGE_GET_MESSAGE) {
-        this.postSidebarStateWhenReady(webviewView.webview, message.scopeKind ?? 'currentProject', message.cursor, message.limit, message.projectFolderUri);
+        this.postSidebarStateWhenReady(webviewView.webview, message.scopeKind ?? 'all', message.cursor, message.limit, message.projectFolderUri);
       }
     });
 
@@ -168,7 +168,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
     void target.postMessage(message);
   }
 
-  private postSidebarStateWhenReady(webview: vscode.Webview, scopeKind: SidebarHistoryScopeKind = 'currentProject', cursor?: string, limit?: number, projectFolderUri?: string): void {
+  private postSidebarStateWhenReady(webview: vscode.Webview, scopeKind: SidebarHistoryScopeKind = 'all', cursor?: string, limit?: number, projectFolderUri?: string): void {
     this.activeWebview = webview;
     this.ensureConversationHistoryWatcher();
     const requestSeq = ++this.historyRequestSeq;

@@ -248,6 +248,18 @@ export class BackendApplication {
       requestSnapshot: (conversationId) => this.requestSnapshot(conversationId),
       requestPersist: (reason) => this.requestPersistSoon(reason),
       flushConversationTimelinePersistence: (conversationId) => this.persistence.persistConversationRenderDetailImmediately(conversationId, { throwOnError: true }),
+      hydrateConversationTimelineRange: (request) => this.persistence.withConversationTimelineCommittedBeforeRead(
+        request.conversationId,
+        async () => {
+          const detail = await this.env.storage.loadConversationTimelineRange(request);
+          if (!detail) return false;
+          const hydrated = await hydrateConversationDetail(this.world, detail, request.conversationId);
+          if (hydrated) {
+            this.persistence.extendConversationRenderDetailPersistedRange(request.conversationId, detail);
+          }
+          return hydrated;
+        }
+      ),
       ensureConversationDetailLoaded: (conversationId) => this.ensureConversationDetailLoaded(conversationId),
       ensureConversationTailLoaded: (conversationId) => this.ensureConversationTailLoaded(conversationId),
       getProjectFolderCandidates: () => this.getProjectFolderCandidates(),

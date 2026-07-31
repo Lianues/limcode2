@@ -161,6 +161,30 @@ test('hydrate rejects duplicate message ids instead of silently overwriting', as
   );
 });
 
+test('hydrate preserves persisted message requestStartedAt for an exact timeline round-trip', async () => {
+  const world = new MapWorld();
+  addConversation(world, 'conversation-message-timing');
+  const state = createEmptyClientState();
+  state.messages.push({
+    id: 'msg-message-timing',
+    conversationId: 'conversation-message-timing',
+    role: 'model',
+    model: 'test-model',
+    content: { role: 'model', parts: [{ text: 'complete output' }] },
+    status: 'complete',
+    createdAt: 1,
+    requestStartedAt: 2,
+    streamOutputDurationMs: 3,
+    seq: 1
+  });
+
+  await hydrateConversationDetail(world, state, 'conversation-message-timing');
+
+  const messageEntity = world.query(Message).find((entity) => world.get(entity, Message)?.id === 'msg-message-timing');
+  assert.ok(messageEntity !== undefined);
+  assert.equal(world.get(messageEntity, Message).requestStartedAt, 2);
+});
+
 test('hydrate normalizes restored active runs to cancelled', async () => {
   const world = new MapWorld();
   addConversation(world, 'conversation-run-normalize');

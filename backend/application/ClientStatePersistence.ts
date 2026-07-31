@@ -3,7 +3,19 @@ import type { WorldReader } from '../ecs/types';
 import type { ConversationRunHistorySaveMode, StorageCapability } from '../capabilities/types';
 import { StorageStateContributorsKey } from '../world/storageProjection/resources';
 import { projectStorageStateWithCache, type StorageContributorProjectionState } from '../world/storageProjection/projection';
-import type { AgentRunStatus, ClientState, ClientStateTableKey, ConversationOriginLinkRecord, MessageContent, MessageRecord, PersistenceStatusRecord, SidebarConversationHistoryEntry } from '../../shared/protocol';
+import {
+  TERMINAL_TOOL_CALL_STATUSES,
+  type AgentRunStatus,
+  type ClientState,
+  type ClientStateTableKey,
+  type ConversationOriginLinkRecord,
+  type MessageContent,
+  type MessageRecord,
+  type PersistenceStatusRecord,
+  type SidebarConversationHistoryEntry,
+  type ToolCallEventRecord,
+  type ToolCallRecord
+} from '../../shared/protocol';
 import { conversationCreatedAtFromId, displayConversationTitle } from '../../shared/conversationTitle';
 import { collectChangedClientStateConversationIds } from '../../shared/clientStateConversationScope';
 import { createEmptyClientState } from '../../shared/clientStateSchema';
@@ -17,12 +29,21 @@ import { createClientStateSkeletonPatch, isClientStateSkeletonRevisionConflictEr
 import { skeletonStoresForProfile } from '../capabilities/vscodeStorage/clientStateSkeletonStores';
 import {
   CONVERSATION_TIMELINE_TABLE_KEYS,
-  isConversationTimelineRevisionConflictError
+  isConversationTimelineRevisionConflictError,
+  type ConversationTimelineRevisionConflictError,
+  type ConversationTimelineTableKey
 } from '../capabilities/vscodeStorage/conversationTimelinePatch';
+import { createStorageRevision } from '../capabilities/vscodeStorage/storageRevision';
 
 const DEFAULT_PERSIST_DEBOUNCE_MS = 500;
 const DEFAULT_PERSIST_RETRY_DELAYS_MS = [250, 1_000, 3_000] as const;
+const MAX_TIMELINE_CONFLICT_RECOVERY_ATTEMPTS = 3;
 const MUTATION_GATE_CONTEXT = 'client-state-persistence:mutation-gate';
+const MISSING_SIDECAR_REBASE_TABLE_KEYS = new Set<ConversationTimelineTableKey>([
+  'projectContexts',
+  'shadowRepositories',
+  'conversationCheckpointRepositoryLinks'
+]);
 
 const RUN_HISTORY_TABLE_KEYS = [
   'agentRuns',
@@ -76,6 +97,12 @@ interface PendingRunHistoryState {
   readonly mode: ConversationRunHistorySaveMode;
 }
 
+interface CanonicalToolCallOverride {
+  readonly rejectedLocalRevision: string;
+  readonly canonicalRecord: ToolCallRecord;
+  readonly canonicalEvents: readonly ToolCallEventRecord[];
+}
+
 /**
  * Storage 持久化使用独立投影缓存。懒加载后必须把骨架、聊天渲染详情与运行历史分开保存，
  * 避免普通聊天只加载 messages/toolCalls 时把未加载的 runHistory index 覆盖为空。
@@ -90,6 +117,14 @@ export class ClientStatePersistence {
   private readonly lastPersistedRenderDetailJson = new Map<string, string>();
   /** 每个 conversation 上次确认提交的本地 render base；外部 union 不写入该 base。 */
   private readonly lastAcknowledgedLocalRenderDetailState = new Map<string, ClientState>();
+  /**
+   * 多宿主竞争时被 canonical 终态拒绝的本地 ToolCall 快照。
+   *
+   * 在 ECS 仍投影出同一份被拒快照期间，后续强制保存继续使用 canonical 记录；否则刚完成
+   * rebase 的下一次“重试前保存”会把 stale 终态再次覆盖回磁盘。记录删除或 revision 真正推进后
+   * override 自动释放。
+   */
+  private readonly canonicalToolCallOverrides = new Map<string, Map<string, CanonicalToolCallOverride>>();
   private readonly lastPersistedRunHistoryJson = new Map<string, string>();
   private readonly pendingRenderDetailStates = new Map<string, ClientState>();
   private readonly pendingRunHistoryStates = new Map<string, PendingRunHistoryState>();
@@ -150,6 +185,7 @@ export class ClientStatePersistence {
     this.contributorStates = {};
     this.lastPersistedRenderDetailJson.clear();
     this.lastAcknowledgedLocalRenderDetailState.clear();
+    this.canonicalToolCallOverrides.clear();
     this.lastPersistedRunHistoryJson.clear();
     this.markSaved();
   }
@@ -174,8 +210,119 @@ export class ClientStatePersistence {
     const normalizedConversationId = conversationId.trim();
     if (!normalizedConversationId) return;
     const detail = conversationRenderDetailSlice(state, normalizedConversationId);
+    this.canonicalToolCallOverrides.delete(normalizedConversationId);
     this.lastAcknowledgedLocalRenderDetailState.set(normalizedConversationId, cloneClientState(detail));
     this.lastPersistedRenderDetailJson.set(normalizedConversationId, JSON.stringify(detail));
+  }
+
+  /**
+   * 把刚从当前 canonical timeline 读取并成功 hydrate 的局部 range 扩展进已确认 base。
+   *
+   * range 只补充此前未知的 record id，不能覆盖本进程已经确认的版本；否则较早的
+   * range snapshot 可能把较新的本地 CAS base 倒退。调用方必须把“hydrate + 扩展”放在
+   * exclusive mutation gate 内，避免持久化器观察到只 hydrate 了一半的区间。
+   */
+  public extendConversationRenderDetailPersistedRange(conversationId: string, state: ClientState): void {
+    const normalizedConversationId = conversationId.trim();
+    if (!normalizedConversationId) return;
+    const range = conversationRenderDetailSlice(state, normalizedConversationId);
+    const base = this.lastAcknowledgedLocalRenderDetailState.get(normalizedConversationId) ?? createEmptyClientState();
+    const extended = extendAcknowledgedTimelineState(base, range);
+    this.lastAcknowledgedLocalRenderDetailState.set(normalizedConversationId, extended);
+    this.lastPersistedRenderDetailJson.set(normalizedConversationId, JSON.stringify(extended));
+  }
+
+  /**
+   * 对两种可以由 canonical timeline 单义判定的陈旧 CAS base 做有界恢复：
+   *
+   * 1. 旧版本把未落盘 checkpoint sidecar 误记为已确认；
+   * 2. 多 Extension Host 从同一非终态 ToolCall 出发，其中一个已先提交终态。
+   *
+   * 第二种情况必须让磁盘上的首个终态获胜，并连同该 ToolCall 的事件一起刷新本地
+   * acknowledged base。否则另一个宿主会永久拿旧 executing revision 重试。除此之外的
+   * 同 record 并发修改仍明确冲突，不降级为通用 last-writer-wins。
+   */
+  private async saveConversationTimelineWithConflictRecovery(
+    conversationId: string,
+    base: ClientState,
+    next: ClientState,
+    save: (rebasedBase: ClientState, localNext: ClientState) => Promise<ClientState>
+  ): Promise<ClientState> {
+    let candidateBase = base;
+    let candidateNext = next;
+    for (let attempt = 0; attempt < MAX_TIMELINE_CONFLICT_RECOVERY_ATTEMPTS; attempt += 1) {
+      try {
+        return await save(candidateBase, candidateNext);
+      } catch (error) {
+        if (!isConversationTimelineRevisionConflictError(error)) throw error;
+
+        let stored: ClientState | undefined;
+        try {
+          stored = await this.storage.loadConversationDetail(conversationId);
+        } catch (reloadError) {
+          console.warn(`[LimCode] Failed to reload conversation timeline for CAS rebase: ${conversationId}`, reloadError);
+          throw error;
+        }
+        const current = conversationRenderDetailSlice(stored ?? createEmptyClientState(), conversationId);
+
+        if (isRecoverableMissingTimelineSidecarConflict(error, conversationId, candidateNext)) {
+          if (timelineRecordExists(current, error.tableKey, error.recordId)) throw error;
+          if (!requiredTimelineSidecarIds(candidateNext, current, error.tableKey).has(error.recordId)) throw error;
+          const rebasedBase = rebaseMissingTimelineSidecars(candidateBase, candidateNext, current);
+          if (!rebasedBase) throw error;
+          candidateBase = rebasedBase;
+          console.warn(`[LimCode] Rebasing missing conversation timeline sidecar records: ${conversationId}`);
+          continue;
+        }
+
+        const rebasedToolCall = rebaseCanonicalTerminalToolCall(
+          candidateBase,
+          candidateNext,
+          current,
+          error
+        );
+        if (!rebasedToolCall) throw error;
+        candidateBase = rebasedToolCall.base;
+        candidateNext = rebasedToolCall.next;
+        this.rememberCanonicalToolCallOverrides(conversationId, rebasedToolCall.overrides);
+        console.warn(
+          `[LimCode] Rebasing stale ToolCall to canonical terminal state: ${conversationId}/${error.recordId}`
+        );
+      }
+    }
+    throw new Error(`Conversation timeline CAS recovery exceeded its bounded retry limit: ${conversationId}`);
+  }
+
+  private rememberCanonicalToolCallOverrides(
+    conversationId: string,
+    overrides: ReadonlyMap<string, CanonicalToolCallOverride>
+  ): void {
+    if (overrides.size === 0) return;
+    const known = this.canonicalToolCallOverrides.get(conversationId) ?? new Map<string, CanonicalToolCallOverride>();
+    for (const [toolCallId, override] of overrides) known.set(toolCallId, override);
+    this.canonicalToolCallOverrides.set(conversationId, known);
+  }
+
+  private applyCanonicalToolCallOverrides(conversationId: string, local: ClientState): ClientState {
+    const overrides = this.canonicalToolCallOverrides.get(conversationId);
+    if (!overrides || overrides.size === 0) return local;
+
+    let effective = local;
+    let cloned = false;
+    for (const [toolCallId, override] of [...overrides]) {
+      const localRecord = local.toolCalls.find((record) => record.id === toolCallId);
+      if (!localRecord || createStorageRevision(localRecord) !== override.rejectedLocalRevision) {
+        overrides.delete(toolCallId);
+        continue;
+      }
+      if (!cloned) {
+        effective = cloneClientState(local);
+        cloned = true;
+      }
+      replaceToolCallAndEvents(effective, override.canonicalRecord, override.canonicalEvents);
+    }
+    if (overrides.size === 0) this.canonicalToolCallOverrides.delete(conversationId);
+    return effective;
   }
 
   public queuePersist(options: { delayMs?: number } = {}): void {
@@ -270,11 +417,19 @@ export class ClientStatePersistence {
     // 后续消息 truncate 会排在这些旧快照之后，而不会被 skeleton/run-history 慢任务拖到旧快照前面。
     const renderDetailTask = awaitAllPersistTasks(renderDetailStates.map(async ([conversationId, state]) => {
       try {
-        const next = conversationRenderDetailSlice(state, conversationId);
+        const next = this.applyCanonicalToolCallOverrides(
+          conversationId,
+          conversationRenderDetailSlice(state, conversationId)
+        );
         const base = this.lastAcknowledgedLocalRenderDetailState.get(conversationId) ?? createEmptyClientState();
-        await this.storage.saveConversationRenderDetail(conversationId, base, next);
-        this.lastAcknowledgedLocalRenderDetailState.set(conversationId, cloneClientState(next));
-        this.lastPersistedRenderDetailJson.set(conversationId, JSON.stringify(next));
+        const acknowledged = await this.saveConversationTimelineWithConflictRecovery(
+          conversationId,
+          base,
+          next,
+          (rebasedBase, localNext) => this.storage.saveConversationRenderDetail(conversationId, rebasedBase, localNext)
+        );
+        this.lastAcknowledgedLocalRenderDetailState.set(conversationId, cloneClientState(acknowledged));
+        this.lastPersistedRenderDetailJson.set(conversationId, JSON.stringify(acknowledged));
       } catch (error) {
         failedRenderDetailStates.push([conversationId, state]);
         throw error;
@@ -376,13 +531,25 @@ export class ClientStatePersistence {
       return this.persistConversationRenderDetailImmediately(normalizedConversationId, options);
     }
 
-    const state = this.options.projectConversationTimelineState?.(this.world, normalizedConversationId)
-      ?? projectConversationTimelineState(this.world, normalizedConversationId);
+    const state = this.applyCanonicalToolCallOverrides(
+      normalizedConversationId,
+      this.options.projectConversationTimelineState?.(this.world, normalizedConversationId)
+        ?? projectConversationTimelineState(this.world, normalizedConversationId)
+    );
 
     try {
       const base = this.lastAcknowledgedLocalRenderDetailState.get(normalizedConversationId) ?? createEmptyClientState();
-      await this.storage.saveConversationTimelineRenderDetail(normalizedConversationId, base, state);
-      const acknowledged = mergeAcknowledgedTimelineState(base, state);
+      const committedTimeline = await this.saveConversationTimelineWithConflictRecovery(
+        normalizedConversationId,
+        base,
+        state,
+        (rebasedBase, localNext) => this.storage.saveConversationTimelineRenderDetail(
+          normalizedConversationId,
+          rebasedBase,
+          localNext
+        )
+      );
+      const acknowledged = mergeAcknowledgedTimelineState(base, committedTimeline);
       this.lastAcknowledgedLocalRenderDetailState.set(normalizedConversationId, acknowledged);
       this.lastPersistedRenderDetailJson.set(normalizedConversationId, JSON.stringify(acknowledged));
     } catch (error) {
@@ -456,6 +623,7 @@ export class ClientStatePersistence {
     this.pendingHistoryStates.delete(normalizedConversationId);
     this.lastPersistedRenderDetailJson.delete(normalizedConversationId);
     this.lastAcknowledgedLocalRenderDetailState.delete(normalizedConversationId);
+    this.canonicalToolCallOverrides.delete(normalizedConversationId);
     this.lastPersistedRunHistoryJson.delete(normalizedConversationId);
 
     if (this.pendingSkeletonState) {
@@ -834,6 +1002,169 @@ function mergeAcknowledgedTimelineState(base: ClientState, nextTimeline: ClientS
     (merged as unknown as Record<string, unknown>)[key] = cloneSerializable(nextTimeline[key]);
   }
   return merged;
+}
+
+function extendAcknowledgedTimelineState(base: ClientState, persistedRange: ClientState): ClientState {
+  const extended = cloneClientState(base);
+  for (const key of CONVERSATION_TIMELINE_TABLE_KEYS) {
+    const knownRecords = timelineRecords(extended, key);
+    const knownIds = new Set(knownRecords.map((record) => record.id));
+    const additions = timelineRecords(persistedRange, key)
+      .filter((record) => !knownIds.has(record.id))
+      .map((record) => cloneSerializable(record));
+    if (additions.length > 0) assignTimelineRecords(extended, key, [...knownRecords, ...additions]);
+  }
+  return extended;
+}
+
+function isRecoverableMissingTimelineSidecarConflict(
+  error: unknown,
+  conversationId: string,
+  next: ClientState
+): boolean {
+  return isConversationTimelineRevisionConflictError(error)
+    && error.conversationId === conversationId
+    && error.expectedRevision !== null
+    && error.actualRevision === null
+    && MISSING_SIDECAR_REBASE_TABLE_KEYS.has(error.tableKey)
+    && timelineRecordExists(next, error.tableKey, error.recordId);
+}
+
+function rebaseMissingTimelineSidecars(
+  base: ClientState,
+  next: ClientState,
+  current: ClientState
+): ClientState | undefined {
+  const rebased = cloneClientState(base);
+  let changed = false;
+  for (const key of MISSING_SIDECAR_REBASE_TABLE_KEYS) {
+    const requiredIds = requiredTimelineSidecarIds(next, current, key);
+    const currentIds = new Set(timelineRecords(current, key).map((record) => record.id));
+    const baseRecords = timelineRecords(rebased, key);
+    const retained = baseRecords.filter((record) => !requiredIds.has(record.id) || currentIds.has(record.id));
+    if (retained.length === baseRecords.length) continue;
+    assignTimelineRecords(rebased, key, retained);
+    changed = true;
+  }
+  return changed ? rebased : undefined;
+}
+
+/**
+ * 同一非终态 ToolCall 被多个宿主加载后，只接受第一个成功写入 canonical timeline 的终态。
+ * 后到宿主必须同时放弃自己的 ToolCall 状态和关联事件，避免出现 record=error、event=success
+ * 之类的半合并结果。只有 identity 完全相同且 error 中的两侧 revision 都能由重读结果证明时
+ * 才允许 rebase；终态之间基于终态 CAS 的真实并发修改仍继续报错。
+ */
+function rebaseCanonicalTerminalToolCall(
+  base: ClientState,
+  next: ClientState,
+  current: ClientState,
+  error: ConversationTimelineRevisionConflictError
+): { base: ClientState; next: ClientState; overrides: ReadonlyMap<string, CanonicalToolCallOverride> } | undefined {
+  if (error.tableKey !== 'toolCalls' || error.expectedRevision === null || error.actualRevision === null) return undefined;
+
+  const triggeringBase = base.toolCalls.find((record) => record.id === error.recordId);
+  const triggeringNext = next.toolCalls.find((record) => record.id === error.recordId);
+  const triggeringCurrent = current.toolCalls.find((record) => record.id === error.recordId);
+  if (!triggeringBase || !triggeringNext || !triggeringCurrent) return undefined;
+  if (createStorageRevision(triggeringBase) !== error.expectedRevision
+    || createStorageRevision(triggeringCurrent) !== error.actualRevision
+    || TERMINAL_TOOL_CALL_STATUSES.has(triggeringBase.status)
+    || !TERMINAL_TOOL_CALL_STATUSES.has(triggeringCurrent.status)
+    || !sameToolCallIdentity(triggeringBase, triggeringNext)
+    || !sameToolCallIdentity(triggeringBase, triggeringCurrent)) {
+    return undefined;
+  }
+
+  const rebasedBase = cloneClientState(base);
+  const rebasedNext = cloneClientState(next);
+  const currentById = new Map(current.toolCalls.map((record) => [record.id, record]));
+  const overrides = new Map<string, CanonicalToolCallOverride>();
+  let triggerRebased = false;
+
+  for (const baseRecord of base.toolCalls) {
+    const nextRecord = next.toolCalls.find((record) => record.id === baseRecord.id);
+    const currentRecord = currentById.get(baseRecord.id);
+    if (!nextRecord || !currentRecord) continue;
+    if (createStorageRevision(baseRecord) === createStorageRevision(nextRecord)) continue;
+    if (TERMINAL_TOOL_CALL_STATUSES.has(baseRecord.status)
+      || !TERMINAL_TOOL_CALL_STATUSES.has(currentRecord.status)
+      || !sameToolCallIdentity(baseRecord, nextRecord)
+      || !sameToolCallIdentity(baseRecord, currentRecord)) {
+      continue;
+    }
+
+    replaceToolCallAndEvents(rebasedBase, currentRecord, current.toolCallEvents);
+    replaceToolCallAndEvents(rebasedNext, currentRecord, current.toolCallEvents);
+    overrides.set(baseRecord.id, {
+      rejectedLocalRevision: createStorageRevision(nextRecord),
+      canonicalRecord: cloneSerializable(currentRecord),
+      canonicalEvents: current.toolCallEvents
+        .filter((event) => event.toolCallId === baseRecord.id)
+        .map((event) => cloneSerializable(event))
+    });
+    if (baseRecord.id === error.recordId) triggerRebased = true;
+  }
+
+  return triggerRebased ? { base: rebasedBase, next: rebasedNext, overrides } : undefined;
+}
+
+function sameToolCallIdentity(left: ToolCallRecord, right: ToolCallRecord): boolean {
+  return left.id === right.id
+    && left.messageId === right.messageId
+    && left.name === right.name
+    && (left.functionCallId ?? '') === (right.functionCallId ?? '')
+    && left.args === right.args
+    && left.createdAt === right.createdAt;
+}
+
+function replaceToolCallAndEvents(
+  state: ClientState,
+  canonical: ToolCallRecord,
+  currentEvents: readonly ToolCallEventRecord[]
+): void {
+  state.toolCalls = state.toolCalls.map((record) => (
+    record.id === canonical.id ? cloneSerializable(canonical) : record
+  ));
+  state.toolCallEvents = [
+    ...state.toolCallEvents.filter((event) => event.toolCallId !== canonical.id),
+    ...currentEvents
+      .filter((event) => event.toolCallId === canonical.id)
+      .map((event) => cloneSerializable(event))
+  ].sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
+}
+
+function requiredTimelineSidecarIds(
+  next: ClientState,
+  current: ClientState,
+  key: ConversationTimelineTableKey
+): ReadonlySet<string> {
+  if (key === 'shadowRepositories') {
+    return new Set(current.checkpoints.map((checkpoint) => checkpoint.shadowRepositoryId));
+  }
+  if (key === 'projectContexts') {
+    return new Set(current.checkpoints.map((checkpoint) => checkpoint.projectContextId));
+  }
+  if (key === 'conversationCheckpointRepositoryLinks') {
+    const shadowRepositoryIds = new Set(current.checkpoints.map((checkpoint) => checkpoint.shadowRepositoryId));
+    const projectContextIds = new Set(current.checkpoints.map((checkpoint) => checkpoint.projectContextId));
+    return new Set(next.conversationCheckpointRepositoryLinks
+      .filter((link) => shadowRepositoryIds.has(link.shadowRepositoryId) || projectContextIds.has(link.projectContextId))
+      .map((link) => link.id));
+  }
+  return new Set();
+}
+
+function timelineRecordExists(state: ClientState, key: ConversationTimelineTableKey, recordId: string): boolean {
+  return timelineRecords(state, key).some((record) => record.id === recordId);
+}
+
+function timelineRecords(state: ClientState, key: ConversationTimelineTableKey): Array<{ id: string }> {
+  return state[key] as Array<{ id: string }>;
+}
+
+function assignTimelineRecords(state: ClientState, key: ConversationTimelineTableKey, records: Array<{ id: string }>): void {
+  (state as unknown as Record<ConversationTimelineTableKey, Array<{ id: string }>>)[key] = records;
 }
 
 function normalizeWorkEnvironmentForSkeletonPersistence<T extends { kind?: string; source?: string; available?: boolean; index?: number }>(record: T): T {

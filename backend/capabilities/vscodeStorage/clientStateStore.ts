@@ -513,12 +513,12 @@ export async function saveConversationTimelineRenderDetailToStores(
   conversationId: string,
   localBase: ClientState,
   localNext: ClientState
-): Promise<void> {
+): Promise<ClientState> {
   const baseDetail = conversationRenderDetailSlice(localBase, conversationId);
   const nextDetail = conversationRenderDetailSlice(localNext, conversationId);
   assertUniqueClientStateIds(baseDetail, `saveConversationTimelineRenderDetail:${conversationId}:base`);
   assertUniqueClientStateIds(nextDetail, `saveConversationTimelineRenderDetail:${conversationId}:next`);
-  await commitConversationTimelineRenderDetail(paths, conversationId, baseDetail, nextDetail);
+  return commitConversationTimelineRenderDetail(paths, conversationId, baseDetail, nextDetail);
 }
 
 export async function saveConversationRenderDetailToStores(
@@ -526,7 +526,7 @@ export async function saveConversationRenderDetailToStores(
   conversationId: string,
   localBase: ClientState,
   localNext: ClientState
-): Promise<void> {
+): Promise<ClientState> {
   const baseDetail = conversationRenderDetailSlice(localBase, conversationId);
   const nextDetail = conversationRenderDetailSlice(localNext, conversationId);
   assertUniqueClientStateIds(baseDetail, `saveConversationRenderDetail:${conversationId}:base`);
@@ -535,10 +535,14 @@ export async function saveConversationRenderDetailToStores(
   copyCompressionTables(compression, nextDetail);
   const existingCompression = await loadConversationCompressionDetail(paths, conversationId);
   if (existingCompression) preserveKnownCompressionSourceLinks(compression, existingCompression);
-  await Promise.all([
+  const [committedTimeline] = await Promise.all([
     commitConversationTimelineRenderDetail(paths, conversationId, baseDetail, nextDetail),
     saveConversationCompressionDetail(paths, conversationId, compression)
   ]);
+  const acknowledged = createEmptyClientState();
+  mergeRenderDetailTables(acknowledged, committedTimeline);
+  copyCompressionTables(acknowledged, nextDetail);
+  return acknowledged;
 }
 
 export async function saveConversationRunHistoryToStores(
@@ -602,16 +606,29 @@ export function conversationRenderDetailSlice(state: ClientState, conversationId
   detail.toolCalls = state.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId));
   const toolCallIds = new Set(detail.toolCalls.map((toolCall) => toolCall.id));
   detail.toolCallEvents = state.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId));
-  detail.checkpointTimelineAnchors = state.checkpointTimelineAnchors.filter((anchor) => anchor.conversationId === conversationId);
-  const checkpointIds = new Set(detail.checkpointTimelineAnchors.map((anchor) => anchor.checkpointId));
-  detail.checkpoints = state.checkpoints.filter((checkpoint) => checkpoint.status !== 'pending' && (checkpoint.conversationId === conversationId || checkpointIds.has(checkpoint.id)));
+  const conversationCheckpointTimelineAnchors = state.checkpointTimelineAnchors.filter(
+    (anchor) => anchor.conversationId === conversationId
+  );
+  const allAnchoredCheckpointIds = new Set(conversationCheckpointTimelineAnchors.map((anchor) => anchor.checkpointId));
+  const candidateCheckpointTimelineAnchors = conversationCheckpointTimelineAnchors.filter(
+    (anchor) => messageIds.has(anchor.floorMessageId)
+  );
+  const anchoredCheckpointIds = new Set(candidateCheckpointTimelineAnchors.map((anchor) => anchor.checkpointId));
+  detail.checkpoints = state.checkpoints.filter((checkpoint) => checkpoint.status !== 'pending' && (
+    anchoredCheckpointIds.has(checkpoint.id)
+    || (
+      detail.messages.length > 0
+      && checkpoint.conversationId === conversationId
+      && checkpoint.trigger === 'conversation_initial'
+      && !allAnchoredCheckpointIds.has(checkpoint.id)
+    )
+  ));
   const persistedCheckpointIds = new Set(detail.checkpoints.map((checkpoint) => checkpoint.id));
-  detail.checkpointTimelineAnchors = detail.checkpointTimelineAnchors.filter((anchor) => persistedCheckpointIds.has(anchor.checkpointId));
-  for (const checkpoint of detail.checkpoints) checkpointIds.add(checkpoint.id);
+  detail.checkpointTimelineAnchors = candidateCheckpointTimelineAnchors.filter((anchor) => persistedCheckpointIds.has(anchor.checkpointId));
   const shadowRepositoryIds = new Set(detail.checkpoints.map((checkpoint) => checkpoint.shadowRepositoryId));
   const projectContextIds = new Set(detail.checkpoints.map((checkpoint) => checkpoint.projectContextId));
   detail.conversationCheckpointRepositoryLinks = state.conversationCheckpointRepositoryLinks.filter((link) => {
-    const matches = link.conversationId === conversationId || shadowRepositoryIds.has(link.shadowRepositoryId) || projectContextIds.has(link.projectContextId);
+    const matches = shadowRepositoryIds.has(link.shadowRepositoryId) || projectContextIds.has(link.projectContextId);
     if (matches) {
       shadowRepositoryIds.add(link.shadowRepositoryId);
       projectContextIds.add(link.projectContextId);

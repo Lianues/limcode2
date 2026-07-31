@@ -63,6 +63,11 @@ process.on('exit', restore);
 const { ClientStatePersistence } = require('../dist/extension/backend/application/ClientStatePersistence.js');
 const { StorageStateContributorsKey } = require('../dist/extension/backend/world/storageProjection/resources.js');
 const { createEmptyClientState } = require('../dist/extension/shared/clientStateSchema.js');
+const {
+  ConversationTimelineRevisionConflictError,
+  applyConversationTimelinePatch,
+  createConversationTimelinePatch
+} = require('../dist/extension/backend/capabilities/vscodeStorage/conversationTimelinePatch.js');
 
 const fakeResource = { name: 'testProjectionClock' };
 
@@ -103,13 +108,85 @@ function makeStorage(overrides = {}) {
   const calls = [];
   return {
     calls,
+    loadConversationDetail: async () => undefined,
     saveClientStateSkeleton: async (patch) => { calls.push({ kind: 'skeleton', patch: JSON.parse(JSON.stringify(patch)) }); },
-    saveConversationRenderDetail: async (conversationId, base, state) => { calls.push({ kind: 'render', conversationId, base, state }); },
-    saveConversationTimelineRenderDetail: async (conversationId, base, state) => { calls.push({ kind: 'timeline-render', conversationId, base, state }); },
+    saveConversationRenderDetail: async (conversationId, base, state) => {
+      calls.push({ kind: 'render', conversationId, base, state });
+      return state;
+    },
+    saveConversationTimelineRenderDetail: async (conversationId, base, state) => {
+      calls.push({ kind: 'timeline-render', conversationId, base, state });
+      return state;
+    },
     saveConversationRunHistory: async (conversationId, state, options) => { calls.push({ kind: 'runHistory', conversationId, state, options }); },
     upsertConversationHistoryEntry: async (entry) => { calls.push({ kind: 'history', entry }); },
     ...overrides
   };
+}
+
+function addCompletedCheckpointGraph(state, conversationId, updatedAt) {
+  const messageId = `message-${conversationId}`;
+  const projectContextId = `project-${conversationId}`;
+  const shadowRepositoryId = `shadow-${conversationId}`;
+  const linkId = `checkpoint-repository-${conversationId}`;
+  const checkpointId = `checkpoint-${conversationId}`;
+  state.messages.push({
+    id: messageId,
+    conversationId,
+    role: 'user',
+    content: { parts: [{ text: 'checkpoint persistence' }] },
+    status: 'complete',
+    createdAt: 1,
+    seq: 1
+  });
+  state.projectContexts.push({
+    id: projectContextId,
+    kind: 'folder',
+    uri: 'file:///workspace/project',
+    name: 'project',
+    createdAt: 1,
+    updatedAt: 1
+  });
+  state.shadowRepositories.push({
+    id: shadowRepositoryId,
+    storageKey: `storage-${conversationId}`,
+    createdAt: 1,
+    updatedAt
+  });
+  state.conversationCheckpointRepositoryLinks.push({
+    id: linkId,
+    conversationId,
+    projectContextId,
+    shadowRepositoryId,
+    projectUri: 'file:///workspace/project',
+    projectDisplayPath: '/workspace/project',
+    role: 'active',
+    createdAt: 1,
+    updatedAt: 1
+  });
+  state.checkpoints.push({
+    id: checkpointId,
+    conversationId,
+    projectContextId,
+    shadowRepositoryId,
+    trigger: 'user_message_before',
+    status: 'created',
+    projectUri: 'file:///workspace/project',
+    projectDisplayPath: '/workspace/project',
+    createdAt: 1,
+    updatedAt: 2
+  });
+  state.checkpointTimelineAnchors.push({
+    id: `checkpoint-anchor-${conversationId}`,
+    conversationId,
+    checkpointId,
+    floorMessageId: messageId,
+    position: 'before',
+    order: 1,
+    createdAt: 2,
+    updatedAt: 2
+  });
+  return { projectContextId, shadowRepositoryId, linkId };
 }
 
 test('skeleton 不健康时 timeline 仍独立启用并持久化聊天，未启用时强制保存明确失败', async () => {
@@ -184,6 +261,115 @@ test('tail-only hydrate 会作为已知 record base，后续追加不会把旧 t
   assert.deepEqual(render.state.messages.map((message) => message.id), ['stream-tail-base', 'append-after-tail']);
 });
 
+test('按需加载旧 range 会扩展已确认 base，重试前保存不再把旧消息声明为新增', async () => {
+  const conversationId = 'conversation-range-base';
+  const oldRange = makeState(conversationId);
+  oldRange.messages.push({
+    id: 'message-old-range',
+    conversationId,
+    role: 'user',
+    content: { parts: [{ text: 'persisted old message' }] },
+    status: 'complete',
+    createdAt: 1,
+    requestStartedAt: 10,
+    seq: 1
+  });
+  const tail = makeState(conversationId);
+  tail.messages.push({
+    id: 'message-tail-range',
+    conversationId,
+    role: 'model',
+    content: { parts: [{ text: 'persisted tail' }] },
+    status: 'complete',
+    createdAt: 2,
+    seq: 2
+  });
+  const disk = makeState(conversationId);
+  disk.messages = [...oldRange.messages, ...tail.messages];
+  const projected = makeState(conversationId);
+  projected.messages = [...tail.messages, ...oldRange.messages];
+  const projectedWithOldHydrationBug = JSON.parse(JSON.stringify(projected));
+  delete projectedWithOldHydrationBug.messages.find((message) => message.id === 'message-old-range').requestStartedAt;
+
+  assert.throws(
+    () => applyConversationTimelinePatch(
+      conversationId,
+      JSON.parse(JSON.stringify(disk)),
+      createConversationTimelinePatch(tail, projectedWithOldHydrationBug)
+    ),
+    /expected=missing, actual=sha256:/,
+    '旧 range 未进入 base 时应精确复现线上 expected=missing 冲突'
+  );
+
+  const saveAttempts = [];
+  const storage = makeStorage({
+    saveConversationTimelineRenderDetail: async (id, base, state) => {
+      const patch = createConversationTimelinePatch(base, state);
+      saveAttempts.push({
+        id,
+        base: JSON.parse(JSON.stringify(base)),
+        state: JSON.parse(JSON.stringify(state)),
+        patch
+      });
+      applyConversationTimelinePatch(id, JSON.parse(JSON.stringify(disk)), patch);
+      return state;
+    }
+  });
+  const persistence = new ClientStatePersistence(new FakeWorld(projected), storage, {
+    renderLoadedConversationIds: () => [conversationId],
+    isConversationHistorySummaryComplete: () => false,
+    projectConversationTimelineState: () => projected
+  }, 5);
+  persistence.rememberConversationRenderDetailPersisted(conversationId, tail);
+  persistence.extendConversationRenderDetailPersistedRange(conversationId, oldRange);
+  persistence.enable({ skeleton: false });
+
+  await persistence.persistConversationRenderDetailImmediately(conversationId, { throwOnError: true });
+
+  assert.equal(saveAttempts.length, 1);
+  assert.deepEqual(
+    new Set(saveAttempts[0].base.messages.map((message) => message.id)),
+    new Set(['message-old-range', 'message-tail-range'])
+  );
+  assert.deepEqual(saveAttempts[0].patch, {});
+});
+
+test('较早 range 中的同 id record 不会倒退已经确认的 CAS base', async () => {
+  const conversationId = 'conversation-range-stale-overlap';
+  const acknowledged = makeState(conversationId);
+  acknowledged.messages.push({
+    id: 'message-overlap',
+    conversationId,
+    role: 'model',
+    content: { parts: [{ text: 'complete output' }] },
+    status: 'complete',
+    createdAt: 1,
+    seq: 1
+  });
+  const staleRange = JSON.parse(JSON.stringify(acknowledged));
+  staleRange.messages[0].content = { parts: [{ text: 'partial' }] };
+  staleRange.messages[0].status = 'streaming';
+
+  const bases = [];
+  const storage = makeStorage({
+    saveConversationTimelineRenderDetail: async (_id, base, state) => {
+      bases.push(JSON.parse(JSON.stringify(base)));
+      return state;
+    }
+  });
+  const persistence = new ClientStatePersistence(new FakeWorld(acknowledged), storage, {
+    projectConversationTimelineState: () => acknowledged
+  }, 5);
+  persistence.rememberConversationRenderDetailPersisted(conversationId, acknowledged);
+  persistence.extendConversationRenderDetailPersistedRange(conversationId, staleRange);
+  persistence.enable({ skeleton: false });
+
+  await persistence.persistConversationRenderDetailImmediately(conversationId, { throwOnError: true });
+
+  assert.equal(bases[0].messages[0].status, 'complete');
+  assert.equal(bases[0].messages[0].content.parts[0].text, 'complete output');
+});
+
 test('render detail 会在慢 skeleton 完成前先预订并启动保存', async () => {
   const conversationId = 'conversation-render-first';
   const state = makeState(conversationId);
@@ -210,6 +396,7 @@ test('render detail 会在慢 skeleton 完成前先预订并启动保存', async
     saveConversationRenderDetail: async (id, base, snapshot) => {
       storage.calls.push({ kind: 'render-start', conversationId: id, base, state: snapshot });
       renderStarted.resolve();
+      return snapshot;
     }
   });
   const persistence = new ClientStatePersistence(world, storage, {
@@ -282,6 +469,355 @@ test('skeleton 冲突不会把已成功保存的 render detail 重新放回 pend
   await persistence.persistImmediately();
   assert.equal(skeletonAttempts, 2);
   assert.equal(storage.calls.filter((call) => call.kind === 'render').length, 0, '已成功的对话 render detail 不应因 skeleton pending 被反复保存');
+});
+
+test('timeline 缺失已确认 sidecar 时会重读磁盘并有界 rebase，不保留永久 stale base', async () => {
+  const conversationId = 'conversation-missing-sidecar-rebase';
+  const acknowledged = makeState(conversationId);
+  const ids = addCompletedCheckpointGraph(acknowledged, conversationId, 10);
+  const next = JSON.parse(JSON.stringify(acknowledged));
+  next.shadowRepositories[0].updatedAt = 20;
+
+  const disk = JSON.parse(JSON.stringify(acknowledged));
+  disk.projectContexts = [];
+  disk.shadowRepositories = [];
+  disk.conversationCheckpointRepositoryLinks = [];
+
+  const world = new FakeWorld(next);
+  let attempts = 0;
+  let reloads = 0;
+  const saveAttempts = [];
+  const storage = makeStorage({
+    loadConversationDetail: async (id) => {
+      assert.equal(id, conversationId);
+      reloads += 1;
+      return JSON.parse(JSON.stringify(disk));
+    },
+    saveConversationRenderDetail: async (id, base, state) => {
+      attempts += 1;
+      saveAttempts.push({
+        id,
+        base: JSON.parse(JSON.stringify(base)),
+        state: JSON.parse(JSON.stringify(state))
+      });
+      if (attempts === 1) {
+        throw new ConversationTimelineRevisionConflictError(
+          conversationId,
+          'shadowRepositories',
+          ids.shadowRepositoryId,
+          'sha256:stale-local-base',
+          null
+        );
+      }
+      return state;
+    }
+  });
+  const persistence = new ClientStatePersistence(world, storage, {
+    renderLoadedConversationIds: () => [conversationId],
+    isConversationHistorySummaryComplete: () => false
+  }, 5);
+  persistence.rememberConversationRenderDetailPersisted(conversationId, acknowledged);
+  persistence.enable({ skeleton: false });
+
+  await persistence.persistImmediately({ throwOnError: true });
+
+  assert.equal(attempts, 2);
+  assert.equal(reloads, 1);
+  assert.deepEqual(saveAttempts[1].base.projectContexts, []);
+  assert.deepEqual(saveAttempts[1].base.shadowRepositories, []);
+  assert.deepEqual(saveAttempts[1].base.conversationCheckpointRepositoryLinks, []);
+  assert.deepEqual(saveAttempts[1].state.projectContexts.map((record) => record.id), [ids.projectContextId]);
+  assert.deepEqual(saveAttempts[1].state.shadowRepositories.map((record) => record.id), [ids.shadowRepositoryId]);
+  assert.deepEqual(saveAttempts[1].state.conversationCheckpointRepositoryLinks.map((record) => record.id), [ids.linkId]);
+  assert.equal(persistence.statusSnapshot().phase, 'saved');
+
+  await persistence.persistImmediately();
+  assert.equal(attempts, 2, '成功 rebase 后相同状态不应再次保存');
+});
+
+test('消息重试前的 timeline 强制保存也会修复缺失 sidecar base', async () => {
+  const conversationId = 'conversation-retry-mutation-sidecar-rebase';
+  const acknowledged = makeState(conversationId);
+  const ids = addCompletedCheckpointGraph(acknowledged, conversationId, 10);
+  const next = JSON.parse(JSON.stringify(acknowledged));
+  next.shadowRepositories[0].updatedAt = 20;
+
+  const disk = JSON.parse(JSON.stringify(acknowledged));
+  disk.projectContexts = [];
+  disk.shadowRepositories = [];
+  disk.conversationCheckpointRepositoryLinks = [];
+
+  let attempts = 0;
+  let reloads = 0;
+  const saveAttempts = [];
+  const storage = makeStorage({
+    loadConversationDetail: async (id) => {
+      assert.equal(id, conversationId);
+      reloads += 1;
+      return JSON.parse(JSON.stringify(disk));
+    },
+    saveConversationTimelineRenderDetail: async (id, base, state) => {
+      attempts += 1;
+      saveAttempts.push({
+        id,
+        base: JSON.parse(JSON.stringify(base)),
+        state: JSON.parse(JSON.stringify(state))
+      });
+      if (attempts === 1) {
+        throw new ConversationTimelineRevisionConflictError(
+          conversationId,
+          'shadowRepositories',
+          ids.shadowRepositoryId,
+          'sha256:stale-local-base',
+          null
+        );
+      }
+      return state;
+    }
+  });
+  const persistence = new ClientStatePersistence(new FakeWorld(next), storage, {
+    renderLoadedConversationIds: () => [conversationId],
+    isConversationHistorySummaryComplete: () => false,
+    projectConversationTimelineState: () => next
+  }, 5);
+  persistence.rememberConversationRenderDetailPersisted(conversationId, acknowledged);
+  persistence.enable({ skeleton: false });
+
+  await persistence.persistConversationRenderDetailImmediately(conversationId, { throwOnError: true });
+
+  assert.equal(attempts, 2);
+  assert.equal(reloads, 1);
+  assert.deepEqual(saveAttempts[1].base.projectContexts, []);
+  assert.deepEqual(saveAttempts[1].base.shadowRepositories, []);
+  assert.deepEqual(saveAttempts[1].base.conversationCheckpointRepositoryLinks, []);
+  assert.deepEqual(saveAttempts[1].state.projectContexts.map((record) => record.id), [ids.projectContextId]);
+  assert.deepEqual(saveAttempts[1].state.shadowRepositories.map((record) => record.id), [ids.shadowRepositoryId]);
+  assert.deepEqual(saveAttempts[1].state.conversationCheckpointRepositoryLinks.map((record) => record.id), [ids.linkId]);
+});
+
+test('消息重试前遇到已提交 ToolCall 终态时会重读并刷新 stale executing base', async () => {
+  const conversationId = 'conversation-stale-tool-call-rebase';
+  const messageId = 'message-stale-tool-call-rebase';
+  const toolCallId = 'tc-stale-tool-call-rebase';
+  const acknowledged = makeState(conversationId);
+  acknowledged.messages.push({
+    id: messageId,
+    conversationId,
+    role: 'model',
+    content: { parts: [{ text: 'tool call' }] },
+    status: 'complete',
+    createdAt: 1,
+    seq: 1
+  });
+  acknowledged.toolCalls.push({
+    id: toolCallId,
+    messageId,
+    name: 'read',
+    functionCallId: 'function-stale-tool-call-rebase',
+    args: '{"path":"README.md"}',
+    status: 'executing',
+    createdAt: 10,
+    updatedAt: 11
+  });
+  acknowledged.toolCallEvents.push(
+    { id: 'tce-stale-created', toolCallId, seq: 1, kind: 'created', at: 10, status: 'queued' },
+    { id: 'tce-stale-started', toolCallId, seq: 2, kind: 'started', at: 11, status: 'executing' }
+  );
+
+  let projected = JSON.parse(JSON.stringify(acknowledged));
+  projected.toolCalls[0] = {
+    ...projected.toolCalls[0],
+    status: 'error',
+    error: 'late local fallback',
+    updatedAt: 30
+  };
+  projected.toolCallEvents.push({
+    id: 'tce-stale-local-failed',
+    toolCallId,
+    seq: 3,
+    kind: 'failed',
+    at: 30,
+    status: 'error',
+    error: 'late local fallback'
+  });
+
+  let disk = JSON.parse(JSON.stringify(acknowledged));
+  disk.toolCalls[0] = {
+    ...disk.toolCalls[0],
+    status: 'error',
+    error: 'canonical recovery result',
+    updatedAt: 20
+  };
+
+  let attempts = 0;
+  let reloads = 0;
+  const saveAttempts = [];
+  const storage = makeStorage({
+    loadConversationDetail: async () => {
+      reloads += 1;
+      return JSON.parse(JSON.stringify(disk));
+    },
+    saveConversationTimelineRenderDetail: async (id, base, state) => {
+      attempts += 1;
+      saveAttempts.push({
+        base: JSON.parse(JSON.stringify(base)),
+        state: JSON.parse(JSON.stringify(state))
+      });
+      const patch = createConversationTimelinePatch(base, state);
+      const applied = applyConversationTimelinePatch(id, JSON.parse(JSON.stringify(disk)), patch);
+      disk = applied.state;
+      return state;
+    }
+  });
+  const persistence = new ClientStatePersistence(new FakeWorld(projected), storage, {
+    projectConversationTimelineState: () => projected
+  }, 5);
+  persistence.rememberConversationRenderDetailPersisted(conversationId, acknowledged);
+  persistence.enable({ skeleton: false });
+
+  await persistence.persistConversationRenderDetailImmediately(conversationId, { throwOnError: true });
+
+  assert.equal(attempts, 2);
+  assert.equal(reloads, 1);
+  assert.equal(saveAttempts[0].base.toolCalls[0].status, 'executing');
+  assert.equal(saveAttempts[0].state.toolCalls[0].error, 'late local fallback');
+  assert.equal(saveAttempts[1].base.toolCalls[0].error, 'canonical recovery result');
+  assert.equal(saveAttempts[1].state.toolCalls[0].error, 'canonical recovery result');
+  assert.deepEqual(saveAttempts[1].state.toolCallEvents.map((event) => event.id), [
+    'tce-stale-created',
+    'tce-stale-started'
+  ]);
+  assert.equal(disk.toolCalls[0].error, 'canonical recovery result');
+
+  // 相同 stale ECS 快照再次执行“重试前保存”时，不能反向覆盖刚确认的 canonical 终态。
+  await persistence.persistConversationRenderDetailImmediately(conversationId, { throwOnError: true });
+  assert.equal(attempts, 3);
+  assert.equal(reloads, 1);
+  assert.equal(saveAttempts[2].base.toolCalls[0].error, 'canonical recovery result');
+  assert.equal(saveAttempts[2].state.toolCalls[0].error, 'canonical recovery result');
+  assert.equal(disk.toolCalls[0].error, 'canonical recovery result');
+
+  // 真正的 retry/truncate 删除该 ToolCall 后，override 必须释放并按 canonical revision 删除。
+  projected = JSON.parse(JSON.stringify(projected));
+  projected.toolCalls = [];
+  projected.toolCallEvents = [];
+  await persistence.persistConversationRenderDetailImmediately(conversationId, { throwOnError: true });
+  assert.equal(attempts, 4);
+  assert.deepEqual(disk.toolCalls, []);
+  assert.deepEqual(disk.toolCallEvents, []);
+});
+
+test('基于旧终态产生的真实 ToolCall 并发修改仍然明确冲突', async () => {
+  const conversationId = 'conversation-terminal-tool-call-conflict';
+  const messageId = 'message-terminal-tool-call-conflict';
+  const toolCallId = 'tc-terminal-tool-call-conflict';
+  const acknowledged = makeState(conversationId);
+  acknowledged.messages.push({
+    id: messageId,
+    conversationId,
+    role: 'model',
+    content: { parts: [{ text: 'tool call' }] },
+    status: 'complete',
+    createdAt: 1,
+    seq: 1
+  });
+  acknowledged.toolCalls.push({
+    id: toolCallId,
+    messageId,
+    name: 'read',
+    args: '{}',
+    status: 'error',
+    error: 'original terminal result',
+    createdAt: 10,
+    updatedAt: 20
+  });
+  const projected = JSON.parse(JSON.stringify(acknowledged));
+  projected.toolCalls[0] = {
+    ...projected.toolCalls[0],
+    status: 'awaiting_result_submit',
+    updatedAt: 30
+  };
+  const disk = JSON.parse(JSON.stringify(acknowledged));
+  disk.toolCalls[0] = {
+    ...disk.toolCalls[0],
+    status: 'success',
+    result: { ok: true },
+    error: undefined,
+    updatedAt: 25
+  };
+
+  let attempts = 0;
+  let reloads = 0;
+  const storage = makeStorage({
+    loadConversationDetail: async () => {
+      reloads += 1;
+      return JSON.parse(JSON.stringify(disk));
+    },
+    saveConversationTimelineRenderDetail: async (id, base, state) => {
+      attempts += 1;
+      const patch = createConversationTimelinePatch(base, state);
+      applyConversationTimelinePatch(id, JSON.parse(JSON.stringify(disk)), patch);
+      return state;
+    }
+  });
+  const persistence = new ClientStatePersistence(new FakeWorld(projected), storage, {
+    projectConversationTimelineState: () => projected
+  }, 5);
+  persistence.rememberConversationRenderDetailPersisted(conversationId, acknowledged);
+  persistence.enable({ skeleton: false });
+
+  await assert.rejects(
+    persistence.persistConversationRenderDetailImmediately(conversationId, { throwOnError: true }),
+    /Conversation timeline conflict.*tc-terminal-tool-call-conflict/
+  );
+  assert.equal(attempts, 1);
+  assert.equal(reloads, 1);
+});
+
+test('磁盘 checkpoint 也已删除时不自动复活 sidecar', async () => {
+  const conversationId = 'conversation-deleted-checkpoint-conflict';
+  const acknowledged = makeState(conversationId);
+  const ids = addCompletedCheckpointGraph(acknowledged, conversationId, 10);
+  const next = JSON.parse(JSON.stringify(acknowledged));
+  next.shadowRepositories[0].updatedAt = 20;
+  const disk = JSON.parse(JSON.stringify(acknowledged));
+  disk.projectContexts = [];
+  disk.shadowRepositories = [];
+  disk.conversationCheckpointRepositoryLinks = [];
+  disk.checkpoints = [];
+  disk.checkpointTimelineAnchors = [];
+
+  let attempts = 0;
+  let reloads = 0;
+  const storage = makeStorage({
+    loadConversationDetail: async () => {
+      reloads += 1;
+      return disk;
+    },
+    saveConversationRenderDetail: async () => {
+      attempts += 1;
+      throw new ConversationTimelineRevisionConflictError(
+        conversationId,
+        'shadowRepositories',
+        ids.shadowRepositoryId,
+        'sha256:deleted-by-another-writer',
+        null
+      );
+    }
+  });
+  const persistence = new ClientStatePersistence(new FakeWorld(next), storage, {
+    renderLoadedConversationIds: () => [conversationId],
+    isConversationHistorySummaryComplete: () => false
+  }, 5);
+  persistence.rememberConversationRenderDetailPersisted(conversationId, acknowledged);
+  persistence.enable({ skeleton: false });
+
+  await assert.rejects(
+    persistence.persistImmediately({ throwOnError: true }),
+    /Conversation timeline conflict/
+  );
+  assert.equal(attempts, 1);
+  assert.equal(reloads, 1);
 });
 
 
@@ -366,6 +902,7 @@ test('完整上下文读取屏障会先提交 timeline，并阻止 debounce writ
       timelineStarted.resolve();
       await releaseTimeline.promise;
       storage.calls.push({ kind: 'timeline-render-end', conversationId: id });
+      return snapshot;
     }
   });
   const persistence = new ClientStatePersistence(world, storage, {

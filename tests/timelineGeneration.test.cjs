@@ -171,6 +171,72 @@ function makeTimelineState(createEmptyClientState, conversationId, count, option
   return state;
 }
 
+function addCheckpointGraph(state, conversationId, options = {}) {
+  const suffix = options.suffix ?? '1';
+  const projectContextId = options.projectContextId ?? `project-${conversationId}`;
+  const shadowRepositoryId = options.shadowRepositoryId ?? `shadow-${conversationId}`;
+  const linkId = options.linkId ?? `checkpoint-repository-${conversationId}`;
+  const checkpointId = `checkpoint-${conversationId}-${suffix}`;
+  const createdAt = options.createdAt ?? 10;
+  const updatedAt = options.updatedAt ?? createdAt;
+  if (!state.projectContexts.some((record) => record.id === projectContextId)) {
+    state.projectContexts.push({
+      id: projectContextId,
+      kind: 'folder',
+      uri: 'file:///workspace/project',
+      name: 'project',
+      createdAt,
+      updatedAt
+    });
+  }
+  if (!state.shadowRepositories.some((record) => record.id === shadowRepositoryId)) {
+    state.shadowRepositories.push({
+      id: shadowRepositoryId,
+      storageKey: `storage-${conversationId}`,
+      createdAt,
+      updatedAt
+    });
+  }
+  if (!state.conversationCheckpointRepositoryLinks.some((record) => record.id === linkId)) {
+    state.conversationCheckpointRepositoryLinks.push({
+      id: linkId,
+      conversationId,
+      projectContextId,
+      shadowRepositoryId,
+      projectUri: 'file:///workspace/project',
+      projectDisplayPath: '/workspace/project',
+      role: 'active',
+      createdAt,
+      updatedAt
+    });
+  }
+  state.checkpoints.push({
+    id: checkpointId,
+    conversationId,
+    projectContextId,
+    shadowRepositoryId,
+    trigger: options.trigger ?? 'user_message_before',
+    status: options.status ?? 'pending',
+    projectUri: 'file:///workspace/project',
+    projectDisplayPath: '/workspace/project',
+    createdAt,
+    updatedAt
+  });
+  if ((options.status ?? 'pending') !== 'pending') {
+    state.checkpointTimelineAnchors.push({
+      id: `checkpoint-anchor-${conversationId}-${suffix}`,
+      conversationId,
+      checkpointId,
+      floorMessageId: options.floorMessageId ?? state.messages[0].id,
+      position: 'before',
+      order: options.order ?? 1,
+      createdAt,
+      updatedAt
+    });
+  }
+  return { projectContextId, shadowRepositoryId, linkId, checkpointId };
+}
+
 const TIMELINE_TABLE_KEYS = [
   'messages', 'messageRevisions', 'messageCurrentRevisionLinks', 'toolCalls', 'toolCallEvents',
   'projectContexts', 'shadowRepositories', 'conversationCheckpointRepositoryLinks', 'checkpoints',
@@ -197,6 +263,127 @@ const { createVscodeStoragePaths } = require('../dist/extension/backend/capabili
 const timelineStore = require('../dist/extension/backend/capabilities/vscodeStorage/conversationTimelineStore.js');
 const clientStateStore = require('../dist/extension/backend/capabilities/vscodeStorage/clientStateStore.js');
 const { createEmptyClientState } = require('../dist/extension/shared/clientStateSchema.js');
+
+test('pending checkpoint sidecar 不会进入虚假 base，完成后可完整落盘并继续更新', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-pending-checkpoint-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  const conversationId = 'conv-pending-checkpoint';
+  try {
+    const pending = makeTimelineState(createEmptyClientState, conversationId, 1);
+    const ids = addCheckpointGraph(pending, conversationId, { status: 'pending' });
+    const pendingProjection = clientStateStore.conversationRenderDetailSlice(pending, conversationId);
+
+    assert.equal(pendingProjection.messages.length, 1);
+    assert.equal(pendingProjection.checkpoints.length, 0);
+    assert.equal(pendingProjection.projectContexts.length, 0);
+    assert.equal(pendingProjection.shadowRepositories.length, 0);
+    assert.equal(pendingProjection.conversationCheckpointRepositoryLinks.length, 0);
+
+    const acknowledgedPending = await clientStateStore.saveConversationRenderDetailToStores(
+      paths,
+      conversationId,
+      createEmptyClientState(),
+      pending
+    );
+    assert.deepEqual(acknowledgedPending, pendingProjection);
+    const storedPending = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    assert.equal(storedPending.messages.length, 1);
+    assert.equal(storedPending.checkpoints.length, 0);
+    assert.equal(storedPending.shadowRepositories.length, 0);
+
+    const completed = JSON.parse(JSON.stringify(pending));
+    completed.checkpoints[0].status = 'created';
+    completed.checkpoints[0].updatedAt = 20;
+    completed.checkpointTimelineAnchors.push({
+      id: `checkpoint-anchor-${conversationId}-1`,
+      conversationId,
+      checkpointId: ids.checkpointId,
+      floorMessageId: completed.messages[0].id,
+      position: 'before',
+      order: 1,
+      createdAt: 20,
+      updatedAt: 20
+    });
+    const acknowledgedCompleted = await clientStateStore.saveConversationRenderDetailToStores(
+      paths,
+      conversationId,
+      pendingProjection,
+      completed
+    );
+
+    const completedProjection = clientStateStore.conversationRenderDetailSlice(completed, conversationId);
+    assert.deepEqual(acknowledgedCompleted, completedProjection);
+    const storedCompleted = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    assert.equal(storedCompleted.checkpoints.length, 1);
+    assert.equal(storedCompleted.checkpointTimelineAnchors.length, 1);
+    assert.deepEqual(storedCompleted.projectContexts.map((record) => record.id), [ids.projectContextId]);
+    assert.deepEqual(storedCompleted.shadowRepositories.map((record) => record.id), [ids.shadowRepositoryId]);
+    assert.deepEqual(storedCompleted.conversationCheckpointRepositoryLinks.map((record) => record.id), [ids.linkId]);
+
+    const nextCheckpoint = JSON.parse(JSON.stringify(completed));
+    nextCheckpoint.shadowRepositories[0].updatedAt = 30;
+    nextCheckpoint.conversationCheckpointRepositoryLinks[0].updatedAt = 30;
+    addCheckpointGraph(nextCheckpoint, conversationId, {
+      suffix: '2',
+      status: 'pending',
+      projectContextId: ids.projectContextId,
+      shadowRepositoryId: ids.shadowRepositoryId,
+      linkId: ids.linkId,
+      createdAt: 30,
+      updatedAt: 30
+    });
+    const acknowledgedNext = await clientStateStore.saveConversationRenderDetailToStores(
+      paths,
+      conversationId,
+      completedProjection,
+      nextCheckpoint
+    );
+    assert.deepEqual(
+      acknowledgedNext,
+      clientStateStore.conversationRenderDetailSlice(nextCheckpoint, conversationId)
+    );
+
+    const storedNext = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    assert.equal(storedNext.checkpoints.length, 1);
+    assert.equal(storedNext.shadowRepositories[0].updatedAt, 30);
+    assert.equal(storedNext.conversationCheckpointRepositoryLinks[0].updatedAt, 30);
+  } finally {
+    await removeTempRoot(tempRoot);
+  }
+});
+
+test('跨 chunk checkpoint 共享 sidecar 时完整读取保持 record id 唯一', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-shared-sidecar-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  const conversationId = 'conv-shared-sidecar';
+  try {
+    const state = makeTimelineState(createEmptyClientState, conversationId, 201);
+    const ids = addCheckpointGraph(state, conversationId, {
+      suffix: 'first',
+      status: 'created',
+      floorMessageId: 'm-50',
+      order: 1
+    });
+    addCheckpointGraph(state, conversationId, {
+      suffix: 'second',
+      status: 'created',
+      floorMessageId: 'm-150',
+      order: 2,
+      projectContextId: ids.projectContextId,
+      shadowRepositoryId: ids.shadowRepositoryId,
+      linkId: ids.linkId
+    });
+
+    await timelineStore.saveConversationTimelineDetail(paths, conversationId, state);
+    const stored = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    assert.equal(stored.checkpoints.length, 2);
+    assert.deepEqual(stored.projectContexts.map((record) => record.id), [ids.projectContextId]);
+    assert.deepEqual(stored.shadowRepositories.map((record) => record.id), [ids.shadowRepositoryId]);
+    assert.deepEqual(stored.conversationCheckpointRepositoryLinks.map((record) => record.id), [ids.linkId]);
+  } finally {
+    await removeTempRoot(tempRoot);
+  }
+});
 
 test('无关 conversation 的重复 skeleton relation 不阻塞目标 conversation timeline 保存', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-scope-isolation-'));

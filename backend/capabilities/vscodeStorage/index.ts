@@ -391,12 +391,12 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     },
     async saveConversationRenderDetail(conversationId, localBase, localNext) {
       return withSharedDataRoot(async (paths) => {
-        await saveConversationRenderDetailToStores(paths, conversationId, localBase, localNext);
+        return saveConversationRenderDetailToStores(paths, conversationId, localBase, localNext);
       });
     },
     async saveConversationTimelineRenderDetail(conversationId, localBase, localNext) {
       return withSharedDataRoot(async (paths) => {
-        await saveConversationTimelineRenderDetailToStores(paths, conversationId, localBase, localNext);
+        return saveConversationTimelineRenderDetailToStores(paths, conversationId, localBase, localNext);
       });
     },
     async saveConversationRunHistory(conversationId, state, options) {

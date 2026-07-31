@@ -649,6 +649,7 @@ function spawnHydratedMessage(world: World, conversation: Entity, record: Messag
     seq: record.seq,
     createdAt: record.createdAt,
     streamOutputDurationMs: record.streamOutputDurationMs,
+    requestStartedAt: record.requestStartedAt,
     usageMetadata: record.usageMetadata,
     stopReason: record.stopReason
   });

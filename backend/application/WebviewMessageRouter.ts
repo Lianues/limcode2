@@ -72,6 +72,8 @@ import type { ConversationSettingsBridge } from './ConversationSettingsBridge';
 import type { SetConversationProjectFolderInput } from './BackendApplication';
 import type { WebviewClientRegistry } from './WebviewClientRegistry';
 
+type ConversationTimelineRangeRequest = Parameters<StorageCapability['loadConversationTimelineRange']>[0];
+
 export interface WebviewMessageRouterDeps {
   world: World;
   webview: WebviewCapability;
@@ -87,6 +89,7 @@ export interface WebviewMessageRouterDeps {
   requestSnapshot: (conversationId?: string) => void;
   requestPersist?: (reason: string) => void;
   flushConversationTimelinePersistence?: (conversationId: string, reason: string) => Promise<void>;
+  hydrateConversationTimelineRange: (request: ConversationTimelineRangeRequest) => Promise<boolean>;
   ensureConversationDetailLoaded: (conversationId: string) => Promise<void>;
   ensureConversationTailLoaded: (conversationId: string) => Promise<void>;
   getProjectFolderCandidates: () => ProjectFolderCandidateRecord[];
@@ -1021,19 +1024,11 @@ export class WebviewMessageRouter {
   }
 
   private async enqueueAfterTimelineRangeLoaded(
-    request: {
-      conversationId: string;
-      mode: 'suffix' | 'prefix' | 'between';
-      anchorMessageId?: string;
-      startMessageId?: string;
-      endMessageId?: string;
-      contextBeforeChunks?: number;
-    },
+    request: ConversationTimelineRangeRequest,
     action: () => void
   ): Promise<void> {
     try {
-      const detail = await this.deps.storage.loadConversationTimelineRange(request);
-      if (detail) await hydrateConversationDetail(this.deps.world, detail, request.conversationId);
+      await this.deps.hydrateConversationTimelineRange(request);
       action();
     } catch (error) {
       console.warn('[LimCode] Failed to hydrate conversation timeline range before command.', error);

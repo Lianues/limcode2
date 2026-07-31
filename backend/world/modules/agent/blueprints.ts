@@ -58,6 +58,8 @@ export interface BuiltinAgentRegistry {
 export const AgentBlueprintsKey = defineResource<BuiltinAgentRegistry>('AgentBlueprints');
 
 export const DEFAULT_SYSTEM_PROMPT = 'You are LimCode, a concise and helpful AI coding assistant running inside VS Code. Reply in the user\'s language unless asked otherwise.';
+export const DEFAULT_INTEGRATED_SYSTEM_PROMPT_ID = 'system-prompt:global:integrated';
+export const DEFAULT_INTEGRATED_SYSTEM_PROMPT_NAME = 'Integrated Global System Prompt';
 
 export const DEFAULT_INTEGRATED_SYSTEM_PROMPT = [
   'You are {{$agent.name}}, a concise and helpful AI coding assistant running inside VS Code.',

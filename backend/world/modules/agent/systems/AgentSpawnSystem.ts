@@ -1,5 +1,5 @@
 import { defineQuery, defineSystem, type CommandSink, type Entity, type WorldReader } from '../../../../ecs/types';
-import { AgentBlueprintsKey, DEFAULT_INTEGRATED_SYSTEM_PROMPT } from '../blueprints';
+import { AgentBlueprintsKey, DEFAULT_INTEGRATED_SYSTEM_PROMPT, DEFAULT_INTEGRATED_SYSTEM_PROMPT_ID, DEFAULT_INTEGRATED_SYSTEM_PROMPT_NAME } from '../blueprints';
 import {
   AgentFromBlueprintBundle,
   hasAgentId,
@@ -16,9 +16,6 @@ import { Conversation } from '../../chat/components';
 import { SystemPrompt, SystemPromptScopeLink, type SystemPromptScopeLinkData } from '../../workflow/components';
 import { AgentSpawnRequest } from '../requests';
 import type { ConfigScopeKind } from '../../../../../shared/protocol';
-
-const DEFAULT_GLOBAL_SYSTEM_PROMPT_ID = 'system-prompt:global:integrated';
-const DEFAULT_GLOBAL_SYSTEM_PROMPT_NAME = 'Integrated Global System Prompt';
 
 const SpawnRequestsQuery = defineQuery({
   name: 'SpawnRequests',
@@ -106,8 +103,8 @@ export const AgentSpawnSystem = defineSystem({
 function ensureIntegratedGlobalSystemPrompt(world: WorldReader, cmd: CommandSink): void {
   if (hasActiveSystemPromptForScope(world, 'global')) return;
   const prompt = spawnSystemPrompt(cmd, {
-    id: DEFAULT_GLOBAL_SYSTEM_PROMPT_ID,
-    name: DEFAULT_GLOBAL_SYSTEM_PROMPT_NAME,
+    id: DEFAULT_INTEGRATED_SYSTEM_PROMPT_ID,
+    name: DEFAULT_INTEGRATED_SYSTEM_PROMPT_NAME,
     text: DEFAULT_INTEGRATED_SYSTEM_PROMPT
   });
   linkSystemPromptToScope(cmd, { scopeKind: 'global', systemPrompt: prompt });

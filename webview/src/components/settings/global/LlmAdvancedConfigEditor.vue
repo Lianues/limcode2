@@ -310,7 +310,7 @@ function normalizePromptCacheTtl(value: string | undefined): LlmPromptCacheTtl {
 
     <label class="global-settings-field global-settings-field-wide system-prompt-prefix-field">
       <span>前置系统提示词</span>
-      <span class="global-settings-field-hint">不添加任何标题或前缀；非空内容会用一个换行放在现有 [Integrated Global System Prompt] 前。</span>
+      <span class="global-settings-field-hint">不添加任何标题或前缀；非空内容会与内置系统提示词正文空一行后拼接。</span>
       <div class="system-prompt-prefix-shell">
         <textarea
           ref="systemPromptPrefixScroller"

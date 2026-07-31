@@ -10,6 +10,7 @@ import {
   ToolPolicy
 } from '../../workflow/components';
 import { Agent } from '../../agent/components';
+import { DEFAULT_INTEGRATED_SYSTEM_PROMPT_ID } from '../../agent/blueprints';
 import {
   AgentRunInputRevision,
   AgentRunSourceLink,
@@ -423,13 +424,13 @@ function safeJson(value: unknown): string {
 }
 
 
-function composeSystemInstruction(prompts: Array<{ name: string; text: string }>): string {
+export function composeSystemInstruction(prompts: Array<{ id?: string; name: string; text: string }>): string {
   return prompts
     .map((prompt) => {
       const text = prompt.text.trim();
       if (!text) return '';
       const name = prompt.name.trim();
-      return name ? `[${name}]\n${text}` : text;
+      return name && prompt.id !== DEFAULT_INTEGRATED_SYSTEM_PROMPT_ID ? `[${name}]\n${text}` : text;
     })
     .filter(Boolean)
     .join('\n\n');
@@ -440,7 +441,7 @@ export function prependSystemPromptPrefix(systemInstruction: string, prefix: str
   const normalizedPrefix = prefix?.trim() ?? '';
   if (!normalizedPrefix) return normalizedInstruction;
   if (!normalizedInstruction) return normalizedPrefix;
-  return `${normalizedPrefix}\n${normalizedInstruction}`;
+  return `${normalizedPrefix}\n\n${normalizedInstruction}`;
 }
 
 function recordCompressionContextLink(

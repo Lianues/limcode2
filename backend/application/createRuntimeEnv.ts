@@ -142,7 +142,8 @@ async function resolveSnapshotLlmProviderConfig(
     ...(snapshot.stream !== undefined ? { stream: snapshot.stream } : {}),
     ...(snapshot.retryOnError !== undefined ? { retryOnError: snapshot.retryOnError } : {}),
     ...(snapshot.retryMaxAttempts !== undefined ? { retryMaxAttempts: snapshot.retryMaxAttempts } : {}),
-    ...(snapshot.enableMultimodalTools !== undefined ? { enableMultimodalTools: snapshot.enableMultimodalTools } : {})
+    ...(snapshot.enableMultimodalTools !== undefined ? { enableMultimodalTools: snapshot.enableMultimodalTools } : {}),
+    systemPromptPrefix: snapshot.systemPromptPrefix ?? ''
   };
 
   if (snapshot.contextWindowTokens !== undefined) resolved.contextWindowTokens = snapshot.contextWindowTokens;

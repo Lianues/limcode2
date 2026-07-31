@@ -106,6 +106,7 @@ export function createDefaultLlmProviderConfig(input: { name?: string } = {}): L
     retryMaxAttempts: DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     enableMultimodalTools: true,
     contextWindowTokens: DEFAULT_LLM_CONTEXT_WINDOW_TOKENS,
+    systemPromptPrefix: '',
     promptCache: createDefaultLlmPromptCacheConfig('openai-compatible'),
     modelConfigs: [],
     createdAt: now,
@@ -141,6 +142,7 @@ export function normalizeLlmProviderConfig(input: Partial<LlmProviderConfigRecor
     retryMaxAttempts: finiteRetryMaxAttempts(input?.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     enableMultimodalTools: typeof input?.enableMultimodalTools === 'boolean' ? input.enableMultimodalTools : true,
     contextWindowTokens,
+    systemPromptPrefix: normalizeSystemPromptPrefix(input?.systemPromptPrefix),
     promptCache,
     ...(headers ? { headers } : {}),
     ...(generationConfig ? { generationConfig } : {}),
@@ -237,6 +239,7 @@ function normalizeModelConfigs(
       retryMaxAttempts: finiteRetryMaxAttempts(item.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
       enableMultimodalTools: typeof item.enableMultimodalTools === 'boolean' ? item.enableMultimodalTools : true,
       contextWindowTokens: finitePositiveInteger(item.contextWindowTokens) ?? providerDefaultContextWindow(provider),
+      systemPromptPrefix: normalizeSystemPromptPrefix(item.systemPromptPrefix),
       promptCache,
       ...(headers ? { headers } : {}),
       ...(generationConfig ? { generationConfig } : {}),
@@ -271,6 +274,11 @@ function normalizeOpenAIResponsesTransport(value: unknown): LlmOpenAIResponsesTr
 function stringOrDefault(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
+
+function normalizeSystemPromptPrefix(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
 function finiteTimestamp(value: unknown, fallback: number): number {
   const timestamp = Number(value);
   return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : fallback;

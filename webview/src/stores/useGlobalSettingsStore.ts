@@ -233,6 +233,7 @@ function createDefaultProviderConfig(name = '新渠道配置', provider: LlmProv
     retryMaxAttempts: DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     enableMultimodalTools: true,
     contextWindowTokens: providerDefaultContextWindow(provider),
+    systemPromptPrefix: '',
     promptCache: providerDefaultPromptCache(provider),
     headers: {},
     generationConfig: {},
@@ -255,6 +256,7 @@ function createModelConfigFromProviderConfig(config: LlmProviderConfigRecord, mo
     retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     enableMultimodalTools: config.enableMultimodalTools !== false,
     contextWindowTokens: normalizeTokenCount(config.contextWindowTokens) ?? providerDefaultContextWindow(config.provider),
+    systemPromptPrefix: normalizeSystemPromptPrefix(config.systemPromptPrefix),
     promptCache: normalizePromptCacheForUi(config.promptCache, config.provider),
     headers: sanitizeHeaders(config.headers) ?? {},
     generationConfig: normalizeGenerationConfigForUi(config.generationConfig) ?? {},
@@ -304,6 +306,7 @@ function normalizeProviderConfigForUi(config: LlmProviderConfigRecord): LlmProvi
     retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     enableMultimodalTools: config.enableMultimodalTools !== false,
     contextWindowTokens: normalizeTokenCount(config.contextWindowTokens) ?? providerDefaultContextWindow(provider),
+    systemPromptPrefix: normalizeSystemPromptPrefix(config.systemPromptPrefix),
     promptCache: normalizePromptCacheForUi(config.promptCache, provider),
     headers: sanitizeHeaders(config.headers) ?? {},
     generationConfig: normalizeGenerationConfigForUi(config.generationConfig) ?? {},
@@ -356,6 +359,7 @@ function normalizeModelConfigForUi(config: LlmProviderModelConfigRecord, modelId
     retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     enableMultimodalTools: config.enableMultimodalTools !== false,
     contextWindowTokens: normalizeTokenCount(config.contextWindowTokens) ?? providerDefaultContextWindow(provider),
+    systemPromptPrefix: normalizeSystemPromptPrefix(config.systemPromptPrefix),
     promptCache: normalizePromptCacheForUi(config.promptCache, provider),
     headers: sanitizeHeaders(config.headers) ?? {},
     generationConfig: normalizeGenerationConfigForUi(config.generationConfig) ?? {},
@@ -397,6 +401,9 @@ function normalizeRetryMaxAttempts(value: unknown): number | undefined {
   return attempts;
 }
 
+function normalizeSystemPromptPrefix(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
 
 function sanitizeModels(models: LlmProviderModelRecord[]): LlmProviderModelRecord[] {
   const byId = new Map<string, LlmProviderModelRecord>();
@@ -651,6 +658,7 @@ function toPlainProviderConfig(config: LlmProviderConfigRecord): LlmProviderConf
     retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     enableMultimodalTools: config.enableMultimodalTools !== false,
     ...(normalizeTokenCount(config.contextWindowTokens) ? { contextWindowTokens: normalizeTokenCount(config.contextWindowTokens) } : {}),
+    systemPromptPrefix: normalizeSystemPromptPrefix(config.systemPromptPrefix),
     promptCache: sanitizePromptCache(config.promptCache, config.provider),
     ...(sanitizeHeaders(config.headers) ? { headers: sanitizeHeaders(config.headers) } : {}),
     ...(sanitizeGenerationConfig(config.generationConfig) ? { generationConfig: sanitizeGenerationConfig(config.generationConfig) } : {}),
@@ -672,6 +680,7 @@ function toPlainModelConfig(config: LlmProviderModelConfigRecord, provider: LlmP
     retryMaxAttempts: normalizeRetryMaxAttempts(config.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
     enableMultimodalTools: config.enableMultimodalTools !== false,
     ...(normalizeTokenCount(config.contextWindowTokens) ? { contextWindowTokens: normalizeTokenCount(config.contextWindowTokens) ?? providerDefaultContextWindow(provider) } : { contextWindowTokens: providerDefaultContextWindow(provider) }),
+    systemPromptPrefix: normalizeSystemPromptPrefix(config.systemPromptPrefix),
     promptCache: sanitizePromptCache(config.promptCache, provider),
     ...(sanitizeHeaders(config.headers) ? { headers: sanitizeHeaders(config.headers) } : {}),
     ...(sanitizeGenerationConfig(config.generationConfig) ? { generationConfig: sanitizeGenerationConfig(config.generationConfig) } : {}),

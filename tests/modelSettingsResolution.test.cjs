@@ -23,6 +23,7 @@ function providerConfig() {
     retryMaxAttempts: 3,
     enableMultimodalTools: true,
     contextWindowTokens: 372_000,
+    systemPromptPrefix: '渠道前置提示词',
     modelConfigs: [{
       id: 'model-config-55',
       modelId: 'gpt-5.5-codex',
@@ -32,6 +33,7 @@ function providerConfig() {
       retryMaxAttempts: 3,
       enableMultimodalTools: true,
       contextWindowTokens: 272_000,
+      systemPromptPrefix: '模型前置提示词',
       createdAt: 1,
       updatedAt: 1
     }],
@@ -52,6 +54,7 @@ test('显式请求模型优先于可能迟到的 conversation override', () => {
   assert.equal(requested.config.model, 'gpt-5.6-sol-codex');
   const resolved = applyModelSpecificConfig(requested.config);
   assert.equal(resolved.contextWindowTokens, 372_000, '无专属配置模型应使用渠道默认配置');
+  assert.equal(resolved.systemPromptPrefix, '渠道前置提示词');
 });
 
 test('有模型专属配置时整体应用该模型配置', () => {
@@ -66,6 +69,7 @@ test('有模型专属配置时整体应用该模型配置', () => {
   assert.equal(requested.applied, true);
   assert.equal(resolved.model, 'gpt-5.5-codex');
   assert.equal(resolved.contextWindowTokens, 272_000);
+  assert.equal(resolved.systemPromptPrefix, '模型前置提示词');
 });
 
 test('provider 配置未解析或模型不存在时不错误应用显式模型', () => {

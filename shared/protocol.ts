@@ -711,6 +711,8 @@ export interface LlmProviderModelConfigRecord {
   retryMaxAttempts: number;
   enableMultimodalTools: boolean;
   contextWindowTokens?: number;
+  /** 无额外标签地置于已组装系统提示词之前；空字符串表示不注入。 */
+  systemPromptPrefix: string;
   promptCache?: LlmPromptCacheConfigRecord;
   headers?: LlmProviderHeadersRecord;
   generationConfig?: LlmGenerationConfigRecord;
@@ -736,6 +738,8 @@ export interface LlmProviderConfigRecord {
   retryMaxAttempts: number;
   enableMultimodalTools: boolean;
   contextWindowTokens?: number;
+  /** 无额外标签地置于已组装系统提示词之前；空字符串表示不注入。 */
+  systemPromptPrefix: string;
   promptCache?: LlmPromptCacheConfigRecord;
   headers?: LlmProviderHeadersRecord;
   generationConfig?: LlmGenerationConfigRecord;
@@ -767,6 +771,8 @@ export interface LlmInvocationSettingsSnapshotRecord {
   retryMaxAttempts?: number;
   enableMultimodalTools?: boolean;
   contextWindowTokens?: number;
+  /** 本次调用解析后的渠道前置系统提示词；空值不写入快照。 */
+  systemPromptPrefix?: string;
   promptCache?: LlmPromptCacheConfigRecord;
   generationConfig?: LlmGenerationConfigRecord;
   requestBody?: LlmRequestBodyRecord;

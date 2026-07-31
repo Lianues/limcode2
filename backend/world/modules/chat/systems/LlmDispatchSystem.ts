@@ -202,7 +202,7 @@ export function buildLlmStartRequestForRun(world: WorldReader, input: BuildLlmSt
   const tools = buildRuntimeToolSchemas(filteredTools, { world, run: input.run, conversation: context.conversation });
   const contextPolicy = activeContextPolicyForRun(world, input.run);
   const contents = buildRunContextContents(world, { ...context, policy: contextPolicy, settingsSnapshot });
-  const systemText = systemPrompt.trim();
+  const systemText = prependSystemPromptPrefix(systemPrompt, settingsSnapshot?.systemPromptPrefix);
 
   return {
     id: input.requestId ?? `dryrun-${input.run}-${Date.now()}`,
@@ -434,6 +434,15 @@ function composeSystemInstruction(prompts: Array<{ name: string; text: string }>
     .filter(Boolean)
     .join('\n\n');
 }
+
+export function prependSystemPromptPrefix(systemInstruction: string, prefix: string | undefined): string {
+  const normalizedInstruction = systemInstruction.trim();
+  const normalizedPrefix = prefix?.trim() ?? '';
+  if (!normalizedPrefix) return normalizedInstruction;
+  if (!normalizedInstruction) return normalizedPrefix;
+  return `${normalizedPrefix}\n${normalizedInstruction}`;
+}
+
 function recordCompressionContextLink(
   world: WorldReader,
   cmd: CommandSink,

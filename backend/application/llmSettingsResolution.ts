@@ -41,6 +41,7 @@ export function applyModelSpecificConfig(config: LlmProviderConfigRecord): LlmPr
     retryMaxAttempts: modelConfig.retryMaxAttempts,
     enableMultimodalTools: modelConfig.enableMultimodalTools,
     contextWindowTokens: modelConfig.contextWindowTokens,
+    systemPromptPrefix: modelConfig.systemPromptPrefix,
     promptCache: modelConfig.promptCache
   };
 

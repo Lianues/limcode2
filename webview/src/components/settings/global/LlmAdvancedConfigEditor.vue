@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import {
   DEFAULT_LLM_RETRY_MAX_ATTEMPTS,
   DEFAULT_LLM_RETRY_ON_ERROR,
@@ -17,6 +17,7 @@ import {
   type LlmToolCallFormat
 } from '@shared/protocol';
 import LcCheckbox from '@webview/components/ui/LcCheckbox.vue';
+import AdvancedScrollbar from '@webview/components/navigation/AdvancedScrollbar.vue';
 import SettingsDropdown, { type SettingsDropdownOption } from './SettingsDropdown.vue';
 import LlmHeadersSettings from './parameters/LlmHeadersSettings.vue';
 import LlmParameterSettings from './parameters/LlmParameterSettings.vue';
@@ -25,12 +26,14 @@ const TOKEN_STEP = 1_000;
 
 type AdvancedConfigPatch = Partial<Pick<
   LlmProviderConfigRecord,
-  'toolCallFormat' | 'openaiResponsesTransport' | 'stream' | 'retryOnError' | 'retryMaxAttempts' | 'enableMultimodalTools'
+  'toolCallFormat' | 'openaiResponsesTransport' | 'stream' | 'retryOnError' | 'retryMaxAttempts' | 'enableMultimodalTools' | 'systemPromptPrefix'
 >>;
 
 const props = defineProps<{
   config: LlmProviderConfigRecord;
 }>();
+
+const systemPromptPrefixScroller = ref<HTMLTextAreaElement | null>(null);
 
 const emit = defineEmits<{
   (event: 'update-field', patch: AdvancedConfigPatch): void;
@@ -123,6 +126,10 @@ function updateContextWindowTokens(event: Event): void {
 
 function updateRetryMaxAttempts(event: Event): void {
   emit('update-field', { retryMaxAttempts: normalizeRetryMaxAttempts(numericInputValue(event)) });
+}
+
+function updateSystemPromptPrefix(event: Event): void {
+  emit('update-field', { systemPromptPrefix: (event.target as HTMLTextAreaElement).value });
 }
 
 function updateToolCallFormat(value: string): void {
@@ -301,6 +308,22 @@ function normalizePromptCacheTtl(value: string | undefined): LlmPromptCacheTtl {
       />
     </label>
 
+    <label class="global-settings-field global-settings-field-wide system-prompt-prefix-field">
+      <span>前置系统提示词</span>
+      <span class="global-settings-field-hint">不添加任何标题或前缀；非空内容会用一个换行放在现有 [Integrated Global System Prompt] 前。</span>
+      <div class="system-prompt-prefix-shell">
+        <textarea
+          ref="systemPromptPrefixScroller"
+          :value="config.systemPromptPrefix"
+          rows="5"
+          placeholder="默认为空；输入要直接置于模型系统提示词最前面的内容..."
+          spellcheck="false"
+          @input="updateSystemPromptPrefix"
+        ></textarea>
+        <AdvancedScrollbar :scroller="systemPromptPrefixScroller" variant="minimal" />
+      </div>
+    </label>
+
     <LlmParameterSettings
       class="global-settings-field-wide"
       :config="config"
@@ -323,6 +346,35 @@ function normalizePromptCacheTtl(value: string | undefined): LlmPromptCacheTtl {
 
 .stream-field {
   justify-content: start;
+}
+
+.system-prompt-prefix-shell {
+  position: relative;
+  min-height: 112px;
+}
+
+.system-prompt-prefix-shell textarea {
+  width: 100%;
+  min-height: 112px;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  font: 12px/1.5 var(--vscode-editor-font-family, monospace);
+  outline: none;
+  scrollbar-width: none;
+}
+
+.system-prompt-prefix-shell textarea::-webkit-scrollbar {
+  display: none;
+}
+
+.system-prompt-prefix-shell textarea:focus {
+  border-color: var(--vscode-panel-border);
+  background: color-mix(in srgb, var(--vscode-input-background) 94%, var(--vscode-foreground) 6%);
 }
 
 .stream-checkbox-row {

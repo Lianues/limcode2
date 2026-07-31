@@ -1077,12 +1077,76 @@ test('陈旧窗口保存旧 streaming 片段时不应和已完成消息冲突或
     const nextB = JSON.parse(JSON.stringify(baseB));
     nextB.messages[0].content.parts[0].text = 'stale partial from delayed flush';
     nextB.messages[0].status = 'streaming';
-    await timelineStore.commitConversationTimelineRenderDetail(paths, conversationId, baseB, nextB);
+    const acknowledged = await timelineStore.commitConversationTimelineRenderDetail(paths, conversationId, baseB, nextB);
 
+    assert.equal(acknowledged.messages.length, 1);
+    assert.equal(acknowledged.messages[0].content.parts[0].text, 'final answer from active writer');
+    assert.equal(acknowledged.messages[0].status, 'complete');
     const stored = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
     assert.equal(stored.messages.length, 1);
     assert.equal(stored.messages[0].content.parts[0].text, 'final answer from active writer');
     assert.equal(stored.messages[0].status, 'complete');
+  } finally {
+    await removeTempRoot(tempRoot);
+  }
+});
+
+
+test('陈旧 streaming 与新消息同批提交时只发布 accepted delta，ACK 可继续作为删除 base', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-stale-stream-with-append-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  const conversationId = 'conv-stale-stream-with-append';
+  try {
+    const initial = createEmptyClientState();
+    const streaming = textMessage(conversationId, 'stream-with-append-1', 1, 'partial', 'model');
+    streaming.status = 'streaming';
+    initial.messages.push(streaming);
+    await timelineStore.saveConversationTimelineDetail(paths, conversationId, initial);
+
+    const baseA = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    const baseB = JSON.parse(JSON.stringify(baseA));
+    const nextA = JSON.parse(JSON.stringify(baseA));
+    nextA.messages[0].content.parts[0].text = 'canonical final answer';
+    nextA.messages[0].status = 'complete';
+    await timelineStore.commitConversationTimelineRenderDetail(paths, conversationId, baseA, nextA);
+
+    const nextB = JSON.parse(JSON.stringify(baseB));
+    nextB.messages[0].content.parts[0].text = 'stale partial that must not be replayed';
+    nextB.messages[0].status = 'streaming';
+    nextB.messages.push(textMessage(conversationId, 'independent-append', 2, 'independent append'));
+    const acknowledged = await timelineStore.commitConversationTimelineRenderDetail(
+      paths,
+      conversationId,
+      baseB,
+      nextB
+    );
+
+    assert.deepEqual(
+      acknowledged.messages.map((message) => [message.id, message.content.parts[0].text, message.status]),
+      [
+        ['stream-with-append-1', 'canonical final answer', 'complete'],
+        ['independent-append', 'independent append', 'complete']
+      ]
+    );
+    const stored = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    assert.deepEqual(
+      stored.messages.map((message) => [message.id, message.content.parts[0].text, message.status]),
+      [
+        ['stream-with-append-1', 'canonical final answer', 'complete'],
+        ['independent-append', 'independent append', 'complete']
+      ]
+    );
+
+    const afterDelete = JSON.parse(JSON.stringify(acknowledged));
+    afterDelete.messages = afterDelete.messages.filter((message) => message.id !== 'stream-with-append-1');
+    await timelineStore.commitConversationTimelineRenderDetail(
+      paths,
+      conversationId,
+      acknowledged,
+      afterDelete
+    );
+    const storedAfterDelete = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    assert.deepEqual(storedAfterDelete.messages.map((message) => message.id), ['independent-append']);
   } finally {
     await removeTempRoot(tempRoot);
   }

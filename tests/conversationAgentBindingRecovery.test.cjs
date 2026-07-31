@@ -85,6 +85,41 @@ test('缺少 active Selection 时沿用已有 Conversation Agent Link，不擅�
   assert.equal(selection.id, 'conversation-agent:conversation-existing-link:reviewer');
 });
 
+test('active Agent 缺 Link 且已有其他 default Link 时只补 participant，避免双 default', async () => {
+  const world = new MapWorld();
+  const main = addAgent(world, 'main', 'LimCode Agent');
+  const reviewer = addAgent(world, 'reviewer', 'Reviewer');
+  const conversation = addConversation(world, 'conversation-existing-default');
+  const link = world.spawn();
+  world.add(link, AgentConversationLink, {
+    id: 'acl-existing-main',
+    agent: main,
+    conversation,
+    role: 'default',
+    createdAt: 1,
+    updatedAt: 1
+  });
+  const selection = world.spawn();
+  world.add(selection, ConversationAgentSelection, {
+    id: 'conversation-agent:conversation-existing-default:reviewer',
+    conversation,
+    agent: reviewer,
+    role: 'active',
+    createdAt: 2,
+    updatedAt: 2
+  });
+
+  await runSystem(world, ConversationAgentBindingSystem);
+
+  const links = world.query(AgentConversationLink).map((entity) => world.get(entity, AgentConversationLink));
+  const defaults = links.filter((candidate) => candidate.role === 'default');
+  assert.equal(defaults.length, 1);
+  assert.equal(defaults[0].agent, main);
+  assert.equal(links.find((candidate) => candidate.agent === reviewer)?.role, 'participant');
+  assert.equal(world.query(ConversationAgentSelection).length, 1);
+  assert.equal(world.get(selection, ConversationAgentSelection).agent, reviewer);
+});
+
 test('collapsed 子对话不被默认 Agent 修复器改写', async () => {
   const world = new MapWorld();
   addAgent(world, 'main', 'LimCode Agent');

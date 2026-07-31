@@ -37,6 +37,7 @@ import {
   applyConversationTimelinePatch,
   CONVERSATION_TIMELINE_TABLE_KEYS,
   createConversationTimelinePatch,
+  type ConversationTimelineCanonicalRecords,
   type ConversationTimelinePatch
 } from './conversationTimelinePatch';
 
@@ -340,19 +341,24 @@ export async function commitConversationTimelineRenderDetail(
       ? await loadTimelineDetailFromIndexStrict(root, previous.index, { validateProjections: true })
       : createEmptyClientState();
     const applied = applyConversationTimelinePatch(conversationId, current, patch);
-    if (!applied.changed) return committedLocalNext;
+    const acknowledgedLocalNext = reconcileAcknowledgedTimelineDetail(
+      committedLocalNext,
+      applied.canonicalRecords
+    );
+    if (!applied.changed) return acknowledgedLocalNext;
     sortConversationTimelineDetail(applied.state);
 
-    // 无删除的正常 append/stream update 继续复用 tail incremental；CAS 已在完整 current 上完成。
-    if (previous && !timelinePatchHasRemoves(patch)) {
-      const delta = timelinePatchUpsertState(patch);
+    // tail incremental 只能携带 CAS 实际接受的 upsert。原始 patch 还包含 stale-dominated
+    // 记录，直接重放会把 canonical 终态覆盖回旧 streaming 内容。
+    if (previous && !timelinePatchHasRemoves(applied.acceptedPatch)) {
+      const delta = timelinePatchUpsertState(applied.acceptedPatch);
       const tailPlan = await analyzeTailIncrementalPatch(root, previous.index, delta);
       if (tailPlan.kind === 'tail' && await publishTimelineTailIncremental(root, conversationId, previous.index, tailPlan)) {
-        return committedLocalNext;
+        return acknowledgedLocalNext;
       }
     }
     await publishTimelineDetail(paths, root, conversationId, applied.state, previous?.index, 'replace');
-    return committedLocalNext;
+    return acknowledgedLocalNext;
   });
 }
 
@@ -1670,6 +1676,21 @@ function copyTimelineChunkToState(state: ClientState, chunk: ConversationTimelin
   );
   state.checkpoints.push(...chunk.checkpoints);
   state.checkpointTimelineAnchors.push(...chunk.checkpointTimelineAnchors);
+}
+
+function reconcileAcknowledgedTimelineDetail(
+  localNext: ClientState,
+  canonicalRecords: ConversationTimelineCanonicalRecords
+): ClientState {
+  const acknowledged = createEmptyClientState();
+  const readableLocal = localNext as unknown as Record<string, StoreRecord[]>;
+  const writableAcknowledged = acknowledged as unknown as Record<string, StoreRecord[]>;
+  for (const key of TIMELINE_DETAIL_TABLE_KEYS) {
+    const canonicalById = new Map((canonicalRecords[key] ?? []).map((record) => [record.id, record]));
+    writableAcknowledged[key] = (readableLocal[key] ?? []).map((record) => canonicalById.get(record.id) ?? record);
+  }
+  sortConversationTimelineDetail(acknowledged);
+  return acknowledged;
 }
 
 function timelinePatchHasRemoves(patch: ConversationTimelinePatch): boolean {

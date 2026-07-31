@@ -401,11 +401,12 @@ export function ensureVisibleConversationAgentBinding(
   let changed = false;
   if (!links.some((candidate) => candidate.data.agent === selectedAgent)) {
     const link = sink.spawn();
+    const role = links.some((candidate) => candidate.data.role === 'default') ? 'participant' : 'default';
     sink.add(link, AgentConversationLink, {
       id: createStableId('acl'),
       agent: selectedAgent,
       conversation: input.conversation,
-      role: 'default',
+      role,
       createdAt: now,
       updatedAt: now
     });

@@ -33,6 +33,16 @@ export interface ConversationTimelineTablePatch {
 }
 
 export type ConversationTimelinePatch = Partial<Record<ConversationTimelineTableKey, ConversationTimelineTablePatch>>;
+export type ConversationTimelineCanonicalRecords = Partial<Record<ConversationTimelineTableKey, ConversationTimelineRecord[]>>;
+
+export interface ConversationTimelinePatchApplyResult {
+  state: ClientState;
+  changed: boolean;
+  /** 仅包含真正修改 canonical timeline 的操作；被幂等命中或 stale-dominated 的 upsert 不在其中。 */
+  acceptedPatch: ConversationTimelinePatch;
+  /** 本地 upsert 被 canonical 记录压制时，用于把持久化 ACK 对齐到实际磁盘版本。 */
+  canonicalRecords: ConversationTimelineCanonicalRecords;
+}
 
 export class ConversationTimelineRevisionConflictError extends Error {
   public readonly conversationTimelineRevisionConflict = true;
@@ -87,27 +97,39 @@ export function applyConversationTimelinePatch(
   conversationId: string,
   current: ClientState,
   patch: ConversationTimelinePatch
-): { state: ClientState; changed: boolean } {
+): ConversationTimelinePatchApplyResult {
   let changed = false;
+  const acceptedPatch: ConversationTimelinePatch = {};
+  const canonicalRecords: ConversationTimelineCanonicalRecords = {};
   for (const key of CONVERSATION_TIMELINE_TABLE_KEYS) {
     const tablePatch = patch[key];
     if (!tablePatch) continue;
     const currentRecords = recordsFor(current, key);
     const currentById = uniqueMap(currentRecords, `${conversationId}:${key}:current`);
     const nextById = new Map(currentById);
+    const acceptedUpserts: ConversationTimelineRecordUpsert[] = [];
+    const acceptedRemoves: ConversationTimelineRecordRemove[] = [];
+    const tableCanonicalRecords: ConversationTimelineRecord[] = [];
 
     for (const upsert of tablePatch.upserts) {
       const existing = nextById.get(upsert.record.id);
       const actual = existing ? createStorageRevision(existing) : null;
       const desired = createStorageRevision(upsert.record);
       if (actual === desired) continue;
-      if (existing && isStaleMessageUpsertDominatedByCurrent(key, existing, upsert.record)) continue;
+      if (existing && isStaleMessageUpsertDominatedByCurrent(key, existing, upsert.record)) {
+        tableCanonicalRecords.push(cloneRecord(existing));
+        continue;
+      }
       if (actual !== upsert.expectedRecordRevision) {
         throw new ConversationTimelineRevisionConflictError(
           conversationId, key, upsert.record.id, upsert.expectedRecordRevision, actual
         );
       }
       nextById.set(upsert.record.id, cloneRecord(upsert.record));
+      acceptedUpserts.push({
+        record: cloneRecord(upsert.record),
+        expectedRecordRevision: upsert.expectedRecordRevision
+      });
       changed = true;
     }
     for (const remove of tablePatch.removes) {
@@ -118,8 +140,14 @@ export function applyConversationTimelinePatch(
         throw new ConversationTimelineRevisionConflictError(conversationId, key, remove.id, remove.expectedRecordRevision, actual);
       }
       nextById.delete(remove.id);
+      acceptedRemoves.push({ ...remove });
       changed = true;
     }
+
+    if (acceptedUpserts.length > 0 || acceptedRemoves.length > 0) {
+      acceptedPatch[key] = { upserts: acceptedUpserts, removes: acceptedRemoves };
+    }
+    if (tableCanonicalRecords.length > 0) canonicalRecords[key] = tableCanonicalRecords;
 
     const nextRecords: ConversationTimelineRecord[] = [];
     const emitted = new Set<string>();
@@ -138,7 +166,7 @@ export function applyConversationTimelinePatch(
     }
     assignRecords(current, key, nextRecords);
   }
-  return { state: current, changed };
+  return { state: current, changed, acceptedPatch, canonicalRecords };
 }
 
 export function isEmptyConversationTimelinePatch(patch: ConversationTimelinePatch): boolean {

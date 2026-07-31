@@ -372,7 +372,8 @@ function latestCompressionBlockForAnchor(
       return block.conversation === conversation
         && block.anchorMessageId === anchorMessageId
         && block.methodKind === methodKind
-        && (block.status === 'pending' || block.status === 'running' || block.status === 'complete' || block.status === 'error');
+        // cancelled 表示用户已在该锚点显式取消压缩，必须与 error 一样阻止预派发压缩重新触发。
+        && (block.status === 'pending' || block.status === 'running' || block.status === 'complete' || block.status === 'cancelled' || block.status === 'error');
     })
     .sort((left, right) => right.block.createdAt - left.block.createdAt || right.block.id.localeCompare(left.block.id))[0];
 }

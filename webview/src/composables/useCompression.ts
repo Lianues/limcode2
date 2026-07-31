@@ -24,13 +24,13 @@ export function useCompression() {
       logCompressionClientAction('create.skipNoConversation', { input });
       return false;
     }
-    const runningBlocks = conversationTimeline.currentCompressionBlocks.filter((block) => block.status === 'pending' || block.status === 'running');
+    const runningBlocks = runningCompressionBlocks();
     if (runningBlocks.length > 0) {
       logCompressionClientAction('create.cancelRunningBlocks', {
         conversationId,
         blockIds: runningBlocks.map((block) => block.id)
       });
-      for (const block of runningBlocks) deleteCompression(block);
+      for (const block of runningBlocks) cancelCompression(block);
       return true;
     }
     const currentMessages = conversationTimeline.currentMessages;
@@ -62,6 +62,20 @@ export function useCompression() {
       ...compressionTimelineDebugContext(conversationId, input)
     });
     return true;
+  }
+
+  function runningCompressionBlocks(): CompressionBlockRecord[] {
+    return conversationTimeline.currentCompressionBlocks.filter((block) => block.status === 'pending' || block.status === 'running');
+  }
+
+  /**
+   * 取消正在进行的压缩。
+   *
+   * 取消不能用删除实现：删除会把“该锚点已尝试压缩”这条事实一并抹掉，
+   * 后端 AutoCompressionSystem 会在下一 tick 重新判定超阈值并立刻重建压缩块，表现为“取消不掉”。
+   */
+  function cancelCompression(block: CompressionBlockRecord): void {
+    bridge.request(BridgeMessageType.CompressionCancel, { conversationId: block.conversationId, blockId: block.id });
   }
 
   function deleteCompression(block: CompressionBlockRecord): void {
@@ -132,7 +146,7 @@ export function useCompression() {
     };
   }
 
-  return { createCompression, deleteCompression, regenerateCompression, setCompressionEnabled };
+  return { createCompression, cancelCompression, deleteCompression, regenerateCompression, setCompressionEnabled };
 }
 
 function logCompressionClientAction(stage: string, payload: Record<string, unknown>): void {

@@ -460,6 +460,12 @@ export class WebviewMessageRouter {
           }));
         break;
       }
+      case BridgeMessageType.CompressionCancel:
+        if (!this.deps.isHydrated() || !message.payload) return;
+        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
+          this.deps.world.enqueue({ type: CompressionEventType.Cancel, payload: message.payload });
+        });
+        break;
       case BridgeMessageType.CompressionDelete:
         if (!this.deps.isHydrated() || !message.payload) return;
         void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {

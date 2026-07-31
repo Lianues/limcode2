@@ -21,7 +21,7 @@ const props = withDefaults(
 const ui = useConversationUiStore();
 const timeline = useConversationTimelineStore();
 const { retryMessageFrom, deleteMessagesFrom, forkConversationFrom, cancelLlmAutoRetry } = useChat();
-const { createCompression, deleteCompression, regenerateCompression, setCompressionEnabled } = useCompression();
+const { createCompression, cancelCompression, deleteCompression, regenerateCompression, setCompressionEnabled } = useCompression();
 const runHistory = useRunHistoryStore();
 
 const AUTO_LOAD_TOP_THRESHOLD_PX = 480;
@@ -280,6 +280,7 @@ function maybeLoadOlder(): void {
         v-else-if="row.kind === 'compression'"
         :block="row.block"
         :phase="row.phase"
+        @cancel="cancelCompression"
         @delete="deleteCompression"
         @regenerate="regenerateCompression"
         @toggle-enabled="setCompressionEnabled"

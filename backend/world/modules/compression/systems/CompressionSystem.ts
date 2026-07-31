@@ -41,6 +41,7 @@ export const CompressionSystem = defineSystem({
     events: {
       read: [
         CompressionEventType.Create,
+        CompressionEventType.Cancel,
         CompressionEventType.Delete,
         CompressionEventType.Update,
         CompressionEventType.Regenerate,
@@ -59,6 +60,7 @@ export const CompressionSystem = defineSystem({
   },
   run(ctx) {
     const { world, cmd } = ctx;
+    for (const payload of readEvents(ctx, CompressionEventType.Cancel)) cancelCompressionBlock(world, cmd, payload.blockId);
     for (const payload of readEvents(ctx, CompressionEventType.Delete)) deleteCompressionBlock(world, cmd, payload.blockId);
     for (const payload of readEvents(ctx, CompressionEventType.Disable)) setBlockDisabled(world, cmd, payload.blockId, true);
     for (const payload of readEvents(ctx, CompressionEventType.Enable)) setBlockDisabled(world, cmd, payload.blockId, false);
@@ -551,6 +553,61 @@ function setBlockDisabled(world: WorldReader, cmd: CommandSink, blockId: string,
   if (blockEntity === undefined || !block) return;
   const now = Date.now();
   cmd.add(blockEntity, CompressionBlock, { ...block, status: disabled ? 'disabled' : 'complete', updatedAt: now });
+}
+
+/**
+ * 取消压缩：中止正在进行的 compact 请求，并把压缩块落到 cancelled 终态。
+ *
+ * 这里刻意不 despawn 压缩块。"用户在该锚点取消过自动压缩" 本身是一条领域事实：
+ * AutoCompressionSystem / LlmDispatchSystem 都靠 CompressionBlock 是否存在来判断该锚点是否已尝试过压缩，
+ * 一旦删除实体，超阈值的 LlmInvocation 会在下一 tick 立刻被重新判定为"尚未压缩"并重建压缩块，
+ * 表现为"点了取消又自动触发"。保留 cancelled 块即可让这条事实继续压住自动重建，
+ * 同时用户仍可通过重新生成或删除显式改变它。
+ */
+function cancelCompressionBlock(world: WorldReader, cmd: CommandSink, blockId: string): void {
+  const blockEntity = findBlock(world, blockId);
+  const block = blockEntity !== undefined ? world.get(blockEntity, CompressionBlock) : undefined;
+  if (blockEntity === undefined || !block) {
+    debugAutoCompression('compression.cancel.skipBlockNotFound', { blockId });
+    return;
+  }
+  if (block.status !== 'pending' && block.status !== 'running') {
+    debugAutoCompression('compression.cancel.skipNotRunning', { blockId, status: block.status });
+    return;
+  }
+
+  const now = Date.now();
+  cmd.effect({ kind: 'llm.abort', requestId: `compact-${block.id}` });
+  cmd.add(blockEntity, CompressionBlock, {
+    ...block,
+    status: 'cancelled',
+    error: undefined,
+    updatedAt: now,
+    completedAt: now
+  });
+  cancelCompressionInvocation(world, cmd, blockEntity, now);
+  debugAutoCompression('compression.cancel.apply', {
+    blockId,
+    previousStatus: block.status,
+    nextStatus: 'cancelled',
+    anchorMessageId: block.anchorMessageId,
+    anchorSeq: block.anchorSeq
+  });
+}
+
+function cancelCompressionInvocation(world: WorldReader, cmd: CommandSink, block: Entity, cancelledAt: number): void {
+  const invocationEntity = compressionInvocationForBlock(world, block);
+  const invocation = invocationEntity !== undefined ? world.get(invocationEntity, LlmInvocation) : undefined;
+  if (invocationEntity === undefined || !invocation) return;
+  if (invocation.status === 'complete' || invocation.status === 'error' || invocation.status === 'cancelled') return;
+  cmd.add(invocationEntity, LlmInvocation, {
+    ...invocation,
+    status: 'cancelled',
+    retryStatus: 'cancelled',
+    retryDelayMs: undefined,
+    retryUpdatedAt: cancelledAt,
+    completedAt: cancelledAt
+  });
 }
 
 function deleteCompressionBlock(world: WorldReader, cmd: CommandSink, blockId: string): void {

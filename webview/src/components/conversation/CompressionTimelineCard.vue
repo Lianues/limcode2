@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue';
-import { IconCheck, IconChevronRight, IconCopy, IconEye, IconRefresh, IconTrash, IconPlayerPause, IconPlayerPlay } from '@tabler/icons-vue';
+import { IconCheck, IconChevronRight, IconCopy, IconEye, IconRefresh, IconTrash, IconPlayerPause, IconPlayerPlay, IconPlayerStop } from '@tabler/icons-vue';
 import {
   isFileDataPart,
   isFunctionCallPart,
@@ -23,6 +23,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+  (event: 'cancel', block: CompressionBlockRecord): void;
   (event: 'delete', block: CompressionBlockRecord): void;
   (event: 'regenerate', block: CompressionBlockRecord): void;
   (event: 'toggle-enabled', block: CompressionBlockRecord, enabled: boolean): void;
@@ -56,6 +57,7 @@ const statusLabel = computed(() => {
     case 'pending': return '等待中';
     case 'running': return '压缩中';
     case 'complete': return compressionInvocation.value?.retryStatus === 'recovered' ? '重试完成' : '可用';
+    case 'cancelled': return '已取消';
     case 'error': return compressionInvocation.value?.retryStatus === 'exhausted' ? '重试失败' : '失败';
     case 'stale': return '已失效';
     case 'disabled': return '已禁用';
@@ -79,7 +81,7 @@ const compressionInvocation = computed<LlmInvocationRecord | undefined>(() => {
   return link ? clientState.llmInvocations.find((invocation) => invocation.id === link.invocationId) : undefined;
 });
 const retryActive = computed(() => compressionInvocation.value?.retryStatus === 'scheduled' || compressionInvocation.value?.retryStatus === 'retrying');
-const showRetryStatus = computed(() => !!compressionInvocation.value?.retryStatus && props.block.status !== 'stale' && props.block.status !== 'disabled');
+const showRetryStatus = computed(() => !!compressionInvocation.value?.retryStatus && props.block.status !== 'stale' && props.block.status !== 'disabled' && props.block.status !== 'cancelled');
 const isWorking = computed(() => props.block.status === 'pending' || props.block.status === 'running' || retryActive.value);
 const previewText = computed(() => {
   const retryStatus = compressionInvocation.value?.retryStatus;
@@ -88,6 +90,7 @@ const previewText = computed(() => {
   if (props.block.summaryPreview?.trim()) return props.block.summaryPreview.trim();
   if (props.block.status === 'pending') return '已创建压缩占位，等待开始生成摘要...';
   if (props.block.status === 'running') return '正在压缩上下文，摘要生成后会显示在这里...';
+  if (props.block.status === 'cancelled') return '压缩已取消。该锚点不会再自动压缩，可点击重新生成手动重试。';
   if (props.block.status === 'error') return props.block.error || '压缩失败。';
   if (props.block.status === 'stale') return props.block.staleReason || '该压缩块已失效。';
   return '';
@@ -230,7 +233,10 @@ function formatRetryAttempt(attempt: number | undefined, max: number | undefined
       <button type="button" class="compression-action-button" title="查看本次压缩调用详情" aria-label="查看本次压缩调用详情" @click="emit('view-detail', block)">
         <IconEye class="compression-action-icon" size="15" stroke="1.8" />
       </button>
-      <button type="button" class="compression-action-button" :disabled="isWorking" :title="block.status === 'disabled' ? '启用压缩块' : '禁用压缩块'" @click="emit('toggle-enabled', block, block.status === 'disabled')">
+      <button v-if="isWorking" type="button" class="compression-action-button" title="取消本次压缩" aria-label="取消本次压缩" @click="emit('cancel', block)">
+        <IconPlayerStop class="compression-action-icon" size="15" stroke="1.8" />
+      </button>
+      <button v-else type="button" class="compression-action-button" :disabled="block.status === 'cancelled'" :title="block.status === 'disabled' ? '启用压缩块' : '禁用压缩块'" @click="emit('toggle-enabled', block, block.status === 'disabled')">
         <IconPlayerPlay v-if="block.status === 'disabled'" class="compression-action-icon" size="15" stroke="1.8" />
         <IconPlayerPause v-else class="compression-action-icon" size="15" stroke="1.8" />
       </button>
@@ -366,6 +372,7 @@ function formatRetryAttempt(attempt: number | undefined, max: number | undefined
 .compression-status { display: inline-flex; align-items: center; border: 1px solid var(--vscode-panel-border); border-radius: var(--radius-xs); padding: 1px 6px; color: var(--vscode-descriptionForeground); font-size: var(--font-size-xs); }
 .status-error .compression-status { color: var(--vscode-errorForeground); }
 .status-stale,
+.status-cancelled,
 .status-disabled { opacity: 0.72; border-style: dashed; }
 .compression-actions {
   position: absolute;

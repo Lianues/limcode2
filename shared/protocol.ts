@@ -191,6 +191,7 @@ export enum BridgeMessageType {
   CheckpointRestore = 'checkpoint.restore',
   CheckpointRestoreResult = 'checkpoint.restore.result',
   CompressionCreate = 'compression.create',
+  CompressionCancel = 'compression.cancel',
   CompressionDelete = 'compression.delete',
   CompressionUpdate = 'compression.update',
   CompressionRegenerate = 'compression.regenerate',
@@ -1876,7 +1877,7 @@ export interface AgentAnswerTargetLinkRecord {
   updatedAt: number;
 }
 
-export type CompressionBlockStatus = 'pending' | 'running' | 'complete' | 'error' | 'stale' | 'disabled';
+export type CompressionBlockStatus = 'pending' | 'running' | 'complete' | 'cancelled' | 'error' | 'stale' | 'disabled';
 export type CompressionBlockSourceKind = 'message' | 'compressionBlock';
 export type CompressionBlockSourceRole = 'source' | 'retained' | 'anchor';
 export type CompressionContextVariantKind = 'provider_native' | 'provider_neutral_summary';
@@ -1958,6 +1959,7 @@ export interface CompressionCreatePayload {
   trigger?: 'manual' | 'auto';
 }
 
+export interface CompressionCancelPayload { conversationId: string; blockId: string }
 export interface CompressionDeletePayload { conversationId: string; blockId: string }
 export interface CompressionUpdatePayload { conversationId: string; blockId: string; title?: string; summaryPreview?: string; summaryContents?: MessageContent[] }
 export interface CompressionRegeneratePayload { conversationId: string; blockId: string; methodConfigId?: string }
@@ -2828,6 +2830,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.CheckpointDismiss, CheckpointDismissPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointRestore, CheckpointRestorePayload>
   | BridgeEnvelope<BridgeMessageType.CompressionCreate, CompressionCreatePayload>
+  | BridgeEnvelope<BridgeMessageType.CompressionCancel, CompressionCancelPayload>
   | BridgeEnvelope<BridgeMessageType.CompressionDelete, CompressionDeletePayload>
   | BridgeEnvelope<BridgeMessageType.CompressionUpdate, CompressionUpdatePayload>
   | BridgeEnvelope<BridgeMessageType.CompressionRegenerate, CompressionRegeneratePayload>

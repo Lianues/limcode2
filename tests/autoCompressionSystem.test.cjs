@@ -20,6 +20,12 @@ const {
   CompressionBlock
 } = require('../dist/extension/backend/world/modules/compression/components.js');
 const {
+  CompressionEventType
+} = require('../dist/extension/backend/world/modules/compression/events.js');
+const {
+  CompressionSystem
+} = require('../dist/extension/backend/world/modules/compression/systems/CompressionSystem.js');
+const {
   AutoCompressionSystem
 } = require('../dist/extension/backend/world/modules/compression/systems/AutoCompressionSystem.js');
 const {
@@ -125,6 +131,22 @@ function runAutoCompression(world) {
   console.warn = () => undefined;
   try {
     AutoCompressionSystem.run({ world, cmd: commandSink(world, effects, events), events: [] });
+  } finally {
+    console.info = originalInfo;
+    console.warn = originalWarn;
+  }
+  return { effects, events };
+}
+
+function runCompressionSystem(world, worldEvents) {
+  const effects = [];
+  const events = [];
+  const originalInfo = console.info;
+  const originalWarn = console.warn;
+  console.info = () => undefined;
+  console.warn = () => undefined;
+  try {
+    CompressionSystem.run({ world, cmd: commandSink(world, effects, events), events: worldEvents });
   } finally {
     console.info = originalInfo;
     console.warn = originalWarn;
@@ -251,6 +273,57 @@ test('漏触发后存在后续闭合工具回合时选择最新工具结果而�
   runAutoCompression(world);
   assert.equal(blocks(world).length, 1);
   assert.equal(blocks(world)[0].anchorMessageId, 'tool-response-4');
+});
+
+test('取消自动压缩后保留 cancelled 块，不会在同一锚点被立刻重建', () => {
+  const world = new MapWorld();
+  const conversation = addConversation(world);
+  addMessage(world, conversation, { id: 'user-1', seq: 100_000, role: 'user', parts: [{ text: '问题' }] });
+  const model = addMessage(world, conversation, { id: 'model-1', seq: 200_000, role: 'model', model: 'gpt-test', parts: [{ text: '回答' }] });
+  addCompleteInvocation(world, model);
+
+  runAutoCompression(world);
+  assert.equal(blocks(world).length, 1);
+  const created = blocks(world)[0];
+  assert.equal(created.status, 'running');
+
+  const cancelled = runCompressionSystem(world, [
+    { type: CompressionEventType.Cancel, payload: { conversationId: 'conversation-1', blockId: created.id } }
+  ]);
+  assert.deepEqual(cancelled.effects, [{ kind: 'llm.abort', requestId: `compact-${created.id}` }]);
+  assert.equal(blocks(world).length, 1, '取消不能删除压缩块，否则自动压缩会重新判定为未压缩');
+  assert.equal(blocks(world)[0].status, 'cancelled');
+  assert.equal(blocks(world)[0].anchorMessageId, 'model-1');
+  assert.equal(blocks(world)[0].endSeq, 200_000);
+
+  const afterCancel = runAutoCompression(world);
+  assert.equal(blocks(world).length, 1, '取消后同一锚点不应被自动压缩重建');
+  assert.equal(blocks(world)[0].status, 'cancelled');
+  assert.deepEqual(afterCancel.effects, []);
+
+  // 会话继续增长并再次超阈值时，仍然允许在更新的锚点自动压缩。
+  const nextModel = addMessage(world, conversation, { id: 'model-2', seq: 300_000, role: 'model', model: 'gpt-test', parts: [{ text: '新回答' }] });
+  addCompleteInvocation(world, nextModel, { id: 'invocation-next', createdAt: 5, completedAt: 6 });
+  runAutoCompression(world);
+  const anchors = blocks(world).map((block) => block.anchorMessageId).sort();
+  assert.deepEqual(anchors, ['model-1', 'model-2']);
+});
+
+test('删除压缩块仍然彻底移除记录，取消与删除语义互不混淆', () => {
+  const world = new MapWorld();
+  const conversation = addConversation(world);
+  const model = addMessage(world, conversation, { id: 'model-1', seq: 100_000, role: 'model', model: 'gpt-test', parts: [{ text: '回答' }] });
+  addCompleteInvocation(world, model);
+
+  runAutoCompression(world);
+  const created = blocks(world)[0];
+  assert.equal(created.status, 'running');
+
+  const deleted = runCompressionSystem(world, [
+    { type: CompressionEventType.Delete, payload: { conversationId: 'conversation-1', blockId: created.id } }
+  ]);
+  assert.deepEqual(deleted.effects, [{ kind: 'llm.abort', requestId: `compact-${created.id}` }]);
+  assert.equal(blocks(world).length, 0);
 });
 
 test('未闭合工具调用不会成为压缩边界，低于阈值或 manual 配置也不会自动压缩', () => {

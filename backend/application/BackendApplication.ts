@@ -28,6 +28,7 @@ import {
 } from '../world/modules';
 import type { AgentSpawnRequestData } from '../world/modules/agent/requests';
 import { Agent, AgentConversationLink, AgentKind, AgentStatus as AgentStatusComponent, ConversationAgentSelection } from '../world/modules/agent/components';
+import { ensureVisibleConversationAgentBinding as ensureVisibleConversationAgentBindingInWorld } from '../world/modules/agent/bundles';
 import {
   Conversation,
   ConversationBranchLink,
@@ -247,6 +248,18 @@ export class BackendApplication {
       requestSnapshot: (conversationId) => this.requestSnapshot(conversationId),
       requestPersist: (reason) => this.requestPersistSoon(reason),
       flushConversationTimelinePersistence: (conversationId) => this.persistence.persistConversationRenderDetailImmediately(conversationId, { throwOnError: true }),
+      hydrateConversationTimelineRange: (request) => this.persistence.withConversationTimelineCommittedBeforeRead(
+        request.conversationId,
+        async () => {
+          const detail = await this.env.storage.loadConversationTimelineRange(request);
+          if (!detail) return false;
+          const hydrated = await hydrateConversationDetail(this.world, detail, request.conversationId);
+          if (hydrated) {
+            this.persistence.extendConversationRenderDetailPersistedRange(request.conversationId, detail);
+          }
+          return hydrated;
+        }
+      ),
       ensureConversationDetailLoaded: (conversationId) => this.ensureConversationDetailLoaded(conversationId),
       ensureConversationTailLoaded: (conversationId) => this.ensureConversationTailLoaded(conversationId),
       getProjectFolderCandidates: () => this.getProjectFolderCandidates(),
@@ -448,14 +461,18 @@ export class BackendApplication {
     if (existing !== undefined) {
       const current = this.world.get(existing, Conversation);
       const nextTitle = title?.trim() ? normalizeConversationTitle(title) : undefined;
+      let changed = false;
       if (current && nextTitle && !current.title) {
         this.world.add(existing, Conversation, { ...current, title: nextTitle });
+        changed = true;
+      }
+      if (this.ensureVisibleConversationAgentBinding(existing)) changed = true;
+      if (changed) {
         this.requestSnapshot();
         this.requestSnapshot(normalizedConversationId);
         this.persistence.queuePersist();
-        return true;
       }
-      return false;
+      return changed;
     }
 
     const now = Date.now();
@@ -1264,6 +1281,7 @@ export class BackendApplication {
       const hasPreHydrationMessages = this.world.query(Message).length > 0;
       if (restored && await hydrateClientStateSkeleton(this.world, restored, { resetMessageSeq: !hasPreHydrationMessages })) {
         this.persistence.rememberPersistedState(restored);
+        this.ensureVisibleConversationAgentBindings();
       } else if (this.world.query(Agent).length > 0 || this.world.query(Conversation).length > 0) {
         // Early chat.send may have created the minimal ECS target before startup skeleton finished.
       } else {
@@ -1662,6 +1680,18 @@ export class BackendApplication {
   private findDefaultAgent(): Entity | undefined {
     return findUniqueById(this.world, Agent, DEFAULT_AGENT_ID)
       ?? this.world.query(Agent)[0];
+  }
+
+  private ensureVisibleConversationAgentBindings(): void {
+    for (const conversation of this.world.query(Conversation)) {
+      this.ensureVisibleConversationAgentBinding(conversation);
+    }
+  }
+
+  private ensureVisibleConversationAgentBinding(conversation: Entity): boolean {
+    const defaultAgent = findUniqueById(this.world, Agent, DEFAULT_AGENT_ID);
+    if (defaultAgent === undefined) return false;
+    return ensureVisibleConversationAgentBindingInWorld(this.world, this.world, { conversation, defaultAgent });
   }
 
   private findAgentEntity(agentId: string): Entity | undefined {

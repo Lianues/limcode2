@@ -302,7 +302,9 @@ export async function truncateConversationTimeline(paths: StoragePaths, request:
 }
 
 export async function saveConversationTimelineDetail(paths: StoragePaths, conversationId: string, detail: ClientState): Promise<void> {
-  const storageDetail = await externalizeClientStateAttachments(paths, detail);
+  const storageDetail = projectPersistableConversationTimelineDetail(
+    await externalizeClientStateAttachments(paths, detail)
+  );
   sortConversationTimelineDetail(storageDetail);
   const root = conversationTimelineRoot(paths, conversationId);
   await withStorageResourceLock(root, async () => {
@@ -316,34 +318,41 @@ export async function commitConversationTimelineRenderDetail(
   conversationId: string,
   localBase: ClientState,
   localNext: ClientState
-): Promise<void> {
+): Promise<ClientState> {
   const root = conversationTimelineRoot(paths, conversationId);
-  await withStorageResourceLock(root, async () => {
+  return withStorageResourceLock(root, async () => {
     // attachment externalization 是存储语义的一部分；base/next 必须先归一化到同一语义再计算 hash/CAS。
-    const [storageBase, storageNext] = await Promise.all([
-      externalizeClientStateAttachments(paths, localBase),
-      externalizeClientStateAttachments(paths, localNext)
+    const committedLocalBase = projectPersistableConversationTimelineDetail(localBase);
+    const committedLocalNext = projectPersistableConversationTimelineDetail(localNext);
+    const [externalizedBase, externalizedNext] = await Promise.all([
+      externalizeClientStateAttachments(paths, committedLocalBase),
+      externalizeClientStateAttachments(paths, committedLocalNext)
     ]);
+    const storageBase = externalizedBase;
+    const storageNext = externalizedNext;
     sortConversationTimelineDetail(storageBase);
     sortConversationTimelineDetail(storageNext);
     const patch = createConversationTimelinePatch(storageBase, storageNext);
-    if (Object.keys(patch).length === 0) return;
+    if (Object.keys(patch).length === 0) return committedLocalNext;
 
     const previous = await loadTimelineIndexManifestForWrite(root, conversationId, { allowMissing: true });
     const current = previous
       ? await loadTimelineDetailFromIndexStrict(root, previous.index, { validateProjections: true })
       : createEmptyClientState();
     const applied = applyConversationTimelinePatch(conversationId, current, patch);
-    if (!applied.changed) return;
+    if (!applied.changed) return committedLocalNext;
     sortConversationTimelineDetail(applied.state);
 
     // 无删除的正常 append/stream update 继续复用 tail incremental；CAS 已在完整 current 上完成。
     if (previous && !timelinePatchHasRemoves(patch)) {
       const delta = timelinePatchUpsertState(patch);
       const tailPlan = await analyzeTailIncrementalPatch(root, previous.index, delta);
-      if (tailPlan.kind === 'tail' && await publishTimelineTailIncremental(root, conversationId, previous.index, tailPlan)) return;
+      if (tailPlan.kind === 'tail' && await publishTimelineTailIncremental(root, conversationId, previous.index, tailPlan)) {
+        return committedLocalNext;
+      }
     }
     await publishTimelineDetail(paths, root, conversationId, applied.state, previous?.index, 'replace');
+    return committedLocalNext;
   });
 }
 
@@ -359,7 +368,9 @@ export async function mutateConversationTimelineDetailInStore(
       ? await loadTimelineDetailFromIndexStrict(root, previous.index, { validateProjections: true })
       : createEmptyClientState();
     await mutate(detail);
-    const storageDetail = await externalizeClientStateAttachments(paths, detail);
+    const storageDetail = projectPersistableConversationTimelineDetail(
+      await externalizeClientStateAttachments(paths, detail)
+    );
     sortConversationTimelineDetail(storageDetail);
     await publishTimelineDetail(paths, root, conversationId, storageDetail, previous?.index, 'replace');
   });
@@ -1499,7 +1510,9 @@ function conversationTimelineChunks(detail: ClientState): ConversationTimelineCh
   const orderedMessages = [...detail.messages].sort(compareMessagesBySeq);
   const anchoredCheckpointIds = new Set(detail.checkpointTimelineAnchors.map((anchor) => anchor.checkpointId));
   const initialCheckpoints = detail.checkpoints.filter((checkpoint) =>
-    checkpoint.trigger === 'conversation_initial' && !anchoredCheckpointIds.has(checkpoint.id)
+    checkpoint.status !== 'pending'
+    && checkpoint.trigger === 'conversation_initial'
+    && !anchoredCheckpointIds.has(checkpoint.id)
   );
 
   for (let offset = 0; offset < orderedMessages.length; offset += CONVERSATION_TIMELINE_CHUNK_SIZE) {
@@ -1513,10 +1526,10 @@ function conversationTimelineChunks(detail: ClientState): ConversationTimelineCh
     const toolCallEvents = detail.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId));
     const checkpointTimelineAnchors = detail.checkpointTimelineAnchors.filter((anchor) => messageIds.has(anchor.floorMessageId));
     const checkpointIds = new Set(checkpointTimelineAnchors.map((anchor) => anchor.checkpointId));
-    const checkpoints = detail.checkpoints.filter((checkpoint) =>
+    const checkpoints = detail.checkpoints.filter((checkpoint) => checkpoint.status !== 'pending' && (
       checkpointIds.has(checkpoint.id)
       || (offset === 0 && initialCheckpoints.some((candidate) => candidate.id === checkpoint.id))
-    );
+    ));
     for (const checkpoint of checkpoints) checkpointIds.add(checkpoint.id);
     const shadowRepositoryIds = new Set(checkpoints.map((checkpoint) => checkpoint.shadowRepositoryId));
     const projectContextIds = new Set(checkpoints.map((checkpoint) => checkpoint.projectContextId));
@@ -1547,6 +1560,54 @@ function conversationTimelineChunks(detail: ClientState): ConversationTimelineCh
   return chunks;
 }
 
+/**
+ * 返回 timeline chunk/sidecar 格式实际能够 round-trip 的逻辑状态。
+ *
+ * 持久化调用方必须用这份投影推进 CAS base，不能把尚未被 message chunk 引用的
+ * pending checkpoint sidecar 当成已经提交。跨 chunk 重复出现的共享 sidecar 在这里
+ * 按稳定 record id 合并成一份逻辑记录。
+ */
+export function projectPersistableConversationTimelineDetail(detail: ClientState): ClientState {
+  const projected = createEmptyClientState();
+  if (detail.messages.length === 0) return projected;
+
+  projected.messages = [...detail.messages];
+  const messageIds = new Set(projected.messages.map((message) => message.id));
+  projected.messageRevisions = detail.messageRevisions.filter((revision) => messageIds.has(revision.messageId));
+  const revisionIds = new Set(projected.messageRevisions.map((revision) => revision.id));
+  projected.messageCurrentRevisionLinks = detail.messageCurrentRevisionLinks.filter(
+    (link) => messageIds.has(link.messageId) || revisionIds.has(link.revisionId)
+  );
+  projected.toolCalls = detail.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId));
+  const toolCallIds = new Set(projected.toolCalls.map((toolCall) => toolCall.id));
+  projected.toolCallEvents = detail.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId));
+
+  const allAnchoredCheckpointIds = new Set(detail.checkpointTimelineAnchors.map((anchor) => anchor.checkpointId));
+  const candidateAnchors = detail.checkpointTimelineAnchors.filter((anchor) => messageIds.has(anchor.floorMessageId));
+  const candidateCheckpointIds = new Set(candidateAnchors.map((anchor) => anchor.checkpointId));
+  projected.checkpoints = detail.checkpoints.filter((checkpoint) => checkpoint.status !== 'pending' && (
+    candidateCheckpointIds.has(checkpoint.id)
+    || (checkpoint.trigger === 'conversation_initial' && !allAnchoredCheckpointIds.has(checkpoint.id))
+  ));
+  const checkpointIds = new Set(projected.checkpoints.map((checkpoint) => checkpoint.id));
+  projected.checkpointTimelineAnchors = candidateAnchors.filter((anchor) => checkpointIds.has(anchor.checkpointId));
+
+  const shadowRepositoryIds = new Set(projected.checkpoints.map((checkpoint) => checkpoint.shadowRepositoryId));
+  const projectContextIds = new Set(projected.checkpoints.map((checkpoint) => checkpoint.projectContextId));
+  projected.conversationCheckpointRepositoryLinks = detail.conversationCheckpointRepositoryLinks.filter((link) => {
+    const matches = shadowRepositoryIds.has(link.shadowRepositoryId) || projectContextIds.has(link.projectContextId);
+    if (matches) {
+      shadowRepositoryIds.add(link.shadowRepositoryId);
+      projectContextIds.add(link.projectContextId);
+    }
+    return matches;
+  });
+  projected.projectContexts = detail.projectContexts.filter((projectContext) => projectContextIds.has(projectContext.id));
+  projected.shadowRepositories = detail.shadowRepositories.filter((repository) => shadowRepositoryIds.has(repository.id));
+  sortConversationTimelineDetail(projected);
+  return projected;
+}
+
 function filterTimelineChunkByMessageIds(chunk: ConversationTimelineChunkData, messageIds: ReadonlySet<string>): ConversationTimelineChunkData {
   const messages = chunk.messages.filter((message) => messageIds.has(message.id));
   const keptMessageIds = new Set(messages.map((message) => message.id));
@@ -1558,7 +1619,10 @@ function filterTimelineChunkByMessageIds(chunk: ConversationTimelineChunkData, m
   const toolCallEvents = chunk.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId));
   const checkpointTimelineAnchors = chunk.checkpointTimelineAnchors.filter((anchor) => keptMessageIds.has(anchor.floorMessageId));
   const checkpointIds = new Set(checkpointTimelineAnchors.map((anchor) => anchor.checkpointId));
-  const checkpoints = chunk.checkpoints.filter((checkpoint) => checkpointIds.has(checkpoint.id) || (messages.length > 0 && checkpoint.trigger === 'conversation_initial'));
+  const checkpoints = chunk.checkpoints.filter((checkpoint) => checkpoint.status !== 'pending' && (
+    checkpointIds.has(checkpoint.id)
+    || (messages.length > 0 && checkpoint.trigger === 'conversation_initial')
+  ));
   const shadowRepositoryIds = new Set(checkpoints.map((checkpoint) => checkpoint.shadowRepositoryId));
   const projectContextIds = new Set(checkpoints.map((checkpoint) => checkpoint.projectContextId));
   const conversationCheckpointRepositoryLinks = chunk.conversationCheckpointRepositoryLinks.filter((link) => {
@@ -1598,9 +1662,12 @@ function copyTimelineChunkToState(state: ClientState, chunk: ConversationTimelin
   state.messageCurrentRevisionLinks.push(...chunk.messageCurrentRevisionLinks);
   state.toolCalls.push(...chunk.toolCalls);
   state.toolCallEvents.push(...chunk.toolCallEvents);
-  state.projectContexts.push(...chunk.projectContexts);
-  state.shadowRepositories.push(...chunk.shadowRepositories);
-  state.conversationCheckpointRepositoryLinks.push(...chunk.conversationCheckpointRepositoryLinks);
+  state.projectContexts = upsertTimelineRecordsById(state.projectContexts, chunk.projectContexts);
+  state.shadowRepositories = upsertTimelineRecordsById(state.shadowRepositories, chunk.shadowRepositories);
+  state.conversationCheckpointRepositoryLinks = upsertTimelineRecordsById(
+    state.conversationCheckpointRepositoryLinks,
+    chunk.conversationCheckpointRepositoryLinks
+  );
   state.checkpoints.push(...chunk.checkpoints);
   state.checkpointTimelineAnchors.push(...chunk.checkpointTimelineAnchors);
 }

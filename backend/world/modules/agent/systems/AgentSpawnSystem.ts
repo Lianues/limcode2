@@ -7,9 +7,12 @@ import {
   linkSystemPromptToScope,
   spawnAgentFromBlueprint,
   spawnAgentProfileFromBlueprint,
+  spawnConversationForAgent,
   spawnWorkflowFromDefinition,
   spawnSystemPrompt
 } from '../bundles';
+import { Agent } from '../components';
+import { Conversation } from '../../chat/components';
 import { SystemPrompt, SystemPromptScopeLink, type SystemPromptScopeLinkData } from '../../workflow/components';
 import { AgentSpawnRequest } from '../requests';
 import type { ConfigScopeKind } from '../../../../../shared/protocol';
@@ -38,7 +41,7 @@ export const AgentSpawnSystem = defineSystem({
   },
   access: {
     queries: [SpawnRequestsQuery],
-    reads: { components: [SystemPrompt, SystemPromptScopeLink] },
+    reads: { components: [Agent, Conversation, SystemPrompt, SystemPromptScopeLink] },
     resources: { read: [AgentBlueprintsKey] },
     bundles: [AgentFromBlueprintBundle]
   },
@@ -67,11 +70,22 @@ export const AgentSpawnSystem = defineSystem({
 
       const agentId = request.agentId ?? definition.id;
       const conversationId = request.conversationId ?? `${agentId}-conversation`;
-      if (!hasAgentId(world, agentId)) {
+      const existingAgent = world.query(Agent).find((candidate) => world.get(candidate, Agent)?.id === agentId);
+      if (existingAgent === undefined) {
         spawnAgentFromBlueprint(cmd, {
           definition,
           agentId,
           agentName: request.agentName,
+          conversationId,
+          conversationTitle: request.conversationTitle,
+          initialMessage: request.initialMessage
+        });
+      } else if (!world.query(Conversation).some((candidate) => world.get(candidate, Conversation)?.id === conversationId)) {
+        // Agent 可能在请求排队期间由 startup hydration 恢复。复用已有 Agent，
+        // 但仍必须完成这次请求所拥有的 Conversation/Link/Selection 创建。
+        spawnConversationForAgent(cmd, {
+          agent: existingAgent,
+          agentId,
           conversationId,
           conversationTitle: request.conversationTitle,
           initialMessage: request.initialMessage

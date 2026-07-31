@@ -391,12 +391,12 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     },
     async saveConversationRenderDetail(conversationId, localBase, localNext) {
       return withSharedDataRoot(async (paths) => {
-        await saveConversationRenderDetailToStores(paths, conversationId, localBase, localNext);
+        return saveConversationRenderDetailToStores(paths, conversationId, localBase, localNext);
       });
     },
     async saveConversationTimelineRenderDetail(conversationId, localBase, localNext) {
       return withSharedDataRoot(async (paths) => {
-        await saveConversationTimelineRenderDetailToStores(paths, conversationId, localBase, localNext);
+        return saveConversationTimelineRenderDetailToStores(paths, conversationId, localBase, localNext);
       });
     },
     async saveConversationRunHistory(conversationId, state, options) {
@@ -632,7 +632,8 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
           }
           if (result.status !== 'ok') throw strictConversationSettingsReadError(conversationId, section, result);
           const settings = parseConversationLlmSettings(conversationId, uri, result.value);
-          return { conversationId, section, settings: normalizeConversationLlmSettings(conversationId, settings), filePath: uri.fsPath };
+          const resolved = await repairStaleConversationLlmProviderReference(paths, conversationId, uri, settings);
+          return { conversationId, section, settings: resolved, filePath: uri.fsPath };
         }
         if (result.status === 'missing') return undefined;
         if (result.status !== 'ok') throw strictConversationSettingsReadError(conversationId, section, result);
@@ -726,6 +727,53 @@ async function createFrozenConversationLlmSettings(
   const activeProviderConfigId = (global.settings as LlmSettingsRecord).activeProviderConfigId;
   const activeConfig = configs.find((config) => config.id === activeProviderConfigId) ?? configs[0];
   return normalizeConversationLlmSettings(conversationId, { activeProviderConfigId: activeConfig?.id ?? '' });
+}
+
+/**
+ * 渠道删除后，旧对话文件可能仍指向已不存在的 provider config。运行时此前会临时回退到
+ * 全局渠道，但设置快照仍把失效 id 发给 Webview，导致每次重载都显示成未选择。
+ * 只在确认引用失效时进入资源锁重读，并把实际采用的全局 fallback 原子写回。
+ */
+async function repairStaleConversationLlmProviderReference(
+  paths: StoragePaths,
+  conversationId: string,
+  uri: vscode.Uri,
+  input: ConversationLlmSettingsRecord
+): Promise<ConversationLlmSettingsRecord> {
+  const normalized = normalizeConversationLlmSettings(conversationId, input);
+  const initialConfigs = (await loadLlmProviderConfigsSettings(paths)).settings.configs;
+  if (initialConfigs.some((config) => config.id === normalized.activeProviderConfigId)) return normalized;
+
+  return withStorageResourceLock(uri, async () => {
+    const current = await readJsonStrict<unknown>(uri);
+    if (current.status === 'missing') {
+      const frozen = await createFrozenConversationLlmSettings(paths, conversationId);
+      await writeJson(uri, toPlainConversationSettings(frozen));
+      return frozen;
+    }
+    if (current.status !== 'ok') throw strictConversationSettingsReadError(conversationId, 'llm', current);
+
+    const latest = normalizeConversationLlmSettings(
+      conversationId,
+      parseConversationLlmSettings(conversationId, uri, current.value)
+    );
+    const configs = (await loadLlmProviderConfigsSettings(paths)).settings.configs;
+    if (configs.some((config) => config.id === latest.activeProviderConfigId)) return latest;
+
+    const global = await loadNormalizedLlmGlobalSettings(paths);
+    const globalProviderConfigId = (global.settings as LlmSettingsRecord).activeProviderConfigId;
+    const fallback = configs.find((config) => config.id === globalProviderConfigId) ?? configs[0];
+    const validConfigIds = new Set(configs.map((config) => config.id));
+    const modelOverrides = latest.modelOverrides
+      ? Object.fromEntries(Object.entries(latest.modelOverrides).filter(([configId]) => validConfigIds.has(configId)))
+      : undefined;
+    const repaired = normalizeConversationLlmSettings(conversationId, {
+      activeProviderConfigId: fallback?.id ?? '',
+      ...(modelOverrides && Object.keys(modelOverrides).length > 0 ? { modelOverrides } : {})
+    });
+    await writeJson(uri, toPlainConversationSettings(repaired));
+    return repaired;
+  });
 }
 
 function normalizeConversationLlmSettings(

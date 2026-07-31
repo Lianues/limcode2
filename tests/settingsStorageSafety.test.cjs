@@ -157,6 +157,49 @@ test('conversation llm missing freezes current global default', async () => {
   }
 });
 
+test('conversation llm stale provider reference is repaired to the persisted global fallback', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-settings-conv-stale-provider-'));
+  let context;
+  try {
+    context = createContext(tempRoot);
+    const storage = createVsCodeStorageCapability(context);
+    const providers = await storage.loadGlobalSettings('llmProviderConfigs');
+    const previous = providers.settings.configs[0];
+    const replacement = {
+      ...previous,
+      id: 'provider-replacement',
+      name: 'Replacement',
+      updatedAt: previous.updatedAt + 1
+    };
+    await storage.saveConversationSettings('llm', {
+      conversationId: 'conv-stale',
+      activeProviderConfigId: previous.id,
+      modelOverrides: {
+        [previous.id]: 'removed-model',
+        [replacement.id]: 'preserved-model'
+      }
+    });
+    await storage.saveGlobalSettings(
+      'llmProviderConfigs',
+      { configs: [replacement] },
+      providers.revision
+    );
+
+    const loaded = await storage.loadConversationSettings('conv-stale', 'llm');
+    assert.deepEqual(loaded.settings, {
+      conversationId: 'conv-stale',
+      activeProviderConfigId: replacement.id,
+      modelOverrides: { [replacement.id]: 'preserved-model' }
+    });
+
+    const file = JSON.parse(await fs.readFile(path.join(tempRoot, 'settings', 'conversation-conv-stale-llm.json'), 'utf8'));
+    assert.deepEqual(file, loaded.settings);
+  } finally {
+    context?.subscriptions.forEach((item) => item.dispose());
+    await removeTempRoot(tempRoot);
+  }
+});
+
 test('conversation settings invalid structures reject without overwrite', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-settings-conv-invalid-'));
   let context;

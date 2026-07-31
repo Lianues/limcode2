@@ -78,6 +78,7 @@ function createRouterFixture(role = 'model') {
       flushStarted.resolve();
       await allowFlush.promise;
     },
+    hydrateConversationTimelineRange: async () => false,
     ensureConversationDetailLoaded: async () => undefined,
     ensureConversationTailLoaded: async () => undefined,
     getProjectFolderCandidates: () => [],

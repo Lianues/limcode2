@@ -53,6 +53,13 @@ export const AgentFromBlueprintBundle = defineBundle({
   despawns: true
 });
 
+export const ConversationAgentBindingBundle = defineBundle({
+  name: 'ConversationAgentBindingBundle',
+  writes: [AgentConversationLink, ConversationAgentSelection],
+  mutationMode: 'create',
+  spawns: true
+});
+
 export interface SpawnAgentProfileInput {
   definition: BuiltinAgentDefinition;
   agentId?: string;
@@ -187,17 +194,41 @@ export function spawnWorkflowFromDefinition(cmd: CommandSink, definition: Builti
 
 export function spawnAgentFromBlueprint(cmd: CommandSink, input: SpawnAgentWithConversationInput): SpawnAgentWithConversationResult {
   const agent = spawnAgentProfileFromBlueprint(cmd, input);
+  return spawnConversationForAgent(cmd, {
+    agent,
+    agentId: input.agentId ?? input.definition.id,
+    conversationId: input.conversationId,
+    conversationTitle: input.conversationTitle,
+    initialMessage: input.initialMessage
+  });
+}
+
+export function spawnConversationForAgent(
+  cmd: CommandSink,
+  input: {
+    agent: Entity;
+    agentId: string;
+    conversationId: string;
+    initialMessage?: string;
+    conversationTitle?: string;
+  }
+): SpawnAgentWithConversationResult {
   const conversation = spawnConversation(cmd, { id: input.conversationId, title: input.conversationTitle });
   spawnConversationOriginLink(cmd, { conversation, originKind: 'user', sourceKind: 'user' });
-  const link = linkAgentToConversation(cmd, { agent, conversation, role: 'default' });
-  const selection = selectAgentForConversation(cmd, { agent, conversation, conversationId: input.conversationId, agentId: input.agentId ?? input.definition.id });
+  const link = linkAgentToConversation(cmd, { agent: input.agent, conversation, role: 'default' });
+  const selection = selectAgentForConversation(cmd, {
+    agent: input.agent,
+    conversation,
+    conversationId: input.conversationId,
+    agentId: input.agentId
+  });
   selectDefaultWorkflowForConversation(cmd, conversation, input.conversationId);
 
   if (input.initialMessage?.trim()) {
     spawnUserMessage(cmd, conversation, input.initialMessage.trim());
   }
 
-  return { agent, conversation, link, selection };
+  return { agent: input.agent, conversation, link, selection };
 }
 
 export function linkAgentToConversation(
@@ -323,6 +354,76 @@ export function ensureConversationAgentSelection(
     updatedAt: now
   });
   return entity;
+}
+
+/**
+ * visible Conversation 的持久 Agent 绑定不变量：优先保留已有 active selection，
+ * 其次沿用已有 default/participant Link；两者都缺失时才绑定内置 main Agent。
+ * 该函数只补缺失事实，不覆盖用户已经选择的 Agent。
+ */
+export function ensureVisibleConversationAgentBinding(
+  world: WorldReader,
+  sink: Pick<CommandSink, 'spawn' | 'add'>,
+  input: { conversation: Entity; defaultAgent: Entity }
+): boolean {
+  const conversation = world.get(input.conversation, Conversation);
+  if (!conversation || (conversation.visibility ?? 'visible') !== 'visible') return false;
+
+  const selections = world.query(ConversationAgentSelection)
+    .map((entity) => ({ entity, data: world.get(entity, ConversationAgentSelection) }))
+    .filter((candidate): candidate is { entity: Entity; data: NonNullable<typeof candidate.data> } =>
+      !!candidate.data
+      && candidate.data.role === 'active'
+      && candidate.data.conversation === input.conversation
+      && !!world.get(candidate.data.agent, Agent)
+    )
+    .sort((left, right) =>
+      right.data.updatedAt - left.data.updatedAt
+      || right.data.createdAt - left.data.createdAt
+      || right.entity - left.entity
+    );
+  const links = world.query(AgentConversationLink)
+    .map((entity) => ({ entity, data: world.get(entity, AgentConversationLink) }))
+    .filter((candidate): candidate is { entity: Entity; data: NonNullable<typeof candidate.data> } =>
+      !!candidate.data
+      && candidate.data.conversation === input.conversation
+      && !!world.get(candidate.data.agent, Agent)
+    );
+
+  const selectedAgent = selections[0]?.data.agent
+    ?? links.find((candidate) => candidate.data.role === 'default')?.data.agent
+    ?? links[0]?.data.agent
+    ?? input.defaultAgent;
+  const selectedAgentId = world.get(selectedAgent, Agent)?.id;
+  if (!selectedAgentId) return false;
+
+  const now = Date.now();
+  let changed = false;
+  if (!links.some((candidate) => candidate.data.agent === selectedAgent)) {
+    const link = sink.spawn();
+    sink.add(link, AgentConversationLink, {
+      id: createStableId('acl'),
+      agent: selectedAgent,
+      conversation: input.conversation,
+      role: 'default',
+      createdAt: now,
+      updatedAt: now
+    });
+    changed = true;
+  }
+  if (selections.length === 0) {
+    const selection = sink.spawn();
+    sink.add(selection, ConversationAgentSelection, {
+      id: conversationAgentSelectionId(conversation.id, selectedAgentId),
+      conversation: input.conversation,
+      agent: selectedAgent,
+      role: 'active',
+      createdAt: now,
+      updatedAt: now
+    });
+    changed = true;
+  }
+  return changed;
 }
 
 export function spawnSystemPrompt(cmd: CommandSink, input: { id: string; name: string; text: string }): Entity {

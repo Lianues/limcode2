@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { IconAdjustmentsAlt, IconChevronRight, IconEdit, IconListDetails, IconMessage, IconPlayerStop, IconRobot, IconSettings, IconTrash } from '@tabler/icons-vue';
-import type {
-  ConversationHistoryPageInfo,
-  ConversationHistoryPageRecord,
-  ConversationOriginLinkRecord,
-  OpenConversationPanelRecord
+import {
+  DEFAULT_SIDEBAR_HISTORY_SCOPE_KIND,
+  type ConversationHistoryPageInfo,
+  type ConversationHistoryPageRecord,
+  type ConversationOriginLinkRecord,
+  type OpenConversationPanelRecord
 } from '@shared/protocol';
 import { displayConversationTitle as formatConversationTitle } from '@shared/conversationTitle';
 import {
@@ -54,7 +55,7 @@ const entries = ref<SidebarConversationHistoryEntry[]>([]);
 const originLinks = ref<ConversationOriginLinkRecord[]>([]);
 const expandedConversationIds = ref<Set<string>>(new Set());
 const projectFolders = ref<ProjectFolderCandidateRecord[]>([]);
-const activeScopeKind = ref<SidebarHistoryScopeKind>('all');
+const activeScopeKind = ref<SidebarHistoryScopeKind>(DEFAULT_SIDEBAR_HISTORY_SCOPE_KIND);
 const activeProjectFolderUri = ref<string | undefined>();
 const currentProjectScope = ref<ConversationHistoryScope>({ kind: 'unbound' });
 const openConversations = ref<OpenConversationPanelRecord[]>([]);

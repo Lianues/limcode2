@@ -273,6 +273,7 @@ export type ConversationHistoryScope =
   | { kind: 'all' };
 
 export type SidebarHistoryScopeKind = 'currentProject' | 'project' | 'unbound' | 'all';
+export const DEFAULT_SIDEBAR_HISTORY_SCOPE_KIND: SidebarHistoryScopeKind = 'currentProject';
 
 export interface ConversationHistoryPageRequest {
   scope: ConversationHistoryScope;

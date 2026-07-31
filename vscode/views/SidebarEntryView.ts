@@ -2,12 +2,13 @@ import * as vscode from 'vscode';
 import { MainPanel } from '../panels/MainPanel';
 import { getWebviewHtml } from '../webview/getWebviewHtml';
 import type { BackendApplication } from '../../backend/application/BackendApplication';
-import type {
-  ConversationHistoryPageRecord,
-  ConversationHistoryScope,
-  OpenConversationPanelRecord,
-  ProjectFolderCandidateRecord,
-  SidebarHistoryScopeKind
+import {
+  DEFAULT_SIDEBAR_HISTORY_SCOPE_KIND,
+  type ConversationHistoryPageRecord,
+  type ConversationHistoryScope,
+  type OpenConversationPanelRecord,
+  type ProjectFolderCandidateRecord,
+  type SidebarHistoryScopeKind
 } from '../../shared/protocol';
 
 const SIDEBAR_ENTRY_VIEW_ID = 'limcode-entry-view';
@@ -58,7 +59,7 @@ export function registerSidebarEntryView(context: vscode.ExtensionContext, backe
 }
 
 class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
-  private lastScopeKind: SidebarHistoryScopeKind = 'all';
+  private lastScopeKind: SidebarHistoryScopeKind = DEFAULT_SIDEBAR_HISTORY_SCOPE_KIND;
   private lastProjectFolderUri: string | undefined;
   private lastCursor: string | undefined;
   private activeWebview: vscode.Webview | undefined;
@@ -135,12 +136,12 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
       }
 
       if (message.type === SIDEBAR_READY_MESSAGE) {
-        this.postSidebarStateWhenReady(webviewView.webview, 'all');
+        this.postSidebarStateWhenReady(webviewView.webview, DEFAULT_SIDEBAR_HISTORY_SCOPE_KIND);
         return;
       }
 
       if (message.type === HISTORY_PAGE_GET_MESSAGE) {
-        this.postSidebarStateWhenReady(webviewView.webview, message.scopeKind ?? 'all', message.cursor, message.limit, message.projectFolderUri);
+        this.postSidebarStateWhenReady(webviewView.webview, message.scopeKind ?? DEFAULT_SIDEBAR_HISTORY_SCOPE_KIND, message.cursor, message.limit, message.projectFolderUri);
       }
     });
 
@@ -168,7 +169,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
     void target.postMessage(message);
   }
 
-  private postSidebarStateWhenReady(webview: vscode.Webview, scopeKind: SidebarHistoryScopeKind = 'all', cursor?: string, limit?: number, projectFolderUri?: string): void {
+  private postSidebarStateWhenReady(webview: vscode.Webview, scopeKind: SidebarHistoryScopeKind = DEFAULT_SIDEBAR_HISTORY_SCOPE_KIND, cursor?: string, limit?: number, projectFolderUri?: string): void {
     this.activeWebview = webview;
     this.ensureConversationHistoryWatcher();
     const requestSeq = ++this.historyRequestSeq;

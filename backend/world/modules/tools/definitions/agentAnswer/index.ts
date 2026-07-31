@@ -55,7 +55,8 @@ export const readAgentAnswerTool: ToolDefinition = {
       type: 'object',
       properties: {
         answerBridgeId: { type: 'string', description: 'The answerBridgeId returned by run_agent or submit_agent_answer.' }
-      }
+      },
+      required: ['answerBridgeId']
     },
     metadata: {
       category: 'agent',

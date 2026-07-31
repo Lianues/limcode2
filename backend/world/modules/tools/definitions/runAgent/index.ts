@@ -90,7 +90,8 @@ Do NOT poll read_agent_answer in a loop in the same response. Do NOT use tools t
           enum: ['parallel', 'serial'],
           description: 'Tool-call scheduling mode. Defaults to parallel. Use serial when this task may interfere with other tool calls.'
         }
-      }
+      },
+      required: ['prompt']
     },
     metadata: {
       category: 'agent',

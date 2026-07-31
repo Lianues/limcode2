@@ -66,6 +66,7 @@ const SAFE_LLM_ERROR_METADATA_FIELDS = [
   'receivedServerEvent',
   'attempt',
   'maxAttempts',
+  'transportAttemptsExhausted',
   'retryable',
   'code',
   'status',
@@ -558,20 +559,8 @@ function truncateForSummary(value: string): string {
 
 export function isRetryableLlmRawError(rawError: LlmRawErrorInfoRecord | undefined): boolean {
   if (rawError?.retryable === false) return false;
-  if (rawError?.transport !== 'websocket') return true;
-
-  const attempt = positiveInteger(rawError.attempt);
-  const maxAttempts = positiveInteger(rawError.maxAttempts);
-  // maxAttempts=1 表示 provider 将单次慢失败交给 LimCode 重试。
-  // 大于 1 且已经用尽时，provider 已完成自己的连接恢复，不能再叠加外层重试。
-  return maxAttempts === undefined
-    || maxAttempts <= 1
-    || attempt === undefined
-    || attempt < maxAttempts;
-}
-
-function positiveInteger(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
+  if (rawError?.transportAttemptsExhausted === true) return false;
+  return true;
 }
 
 function retryDelayForAttempt(retryAttempt: number): number {

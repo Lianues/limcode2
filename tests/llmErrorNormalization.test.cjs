@@ -59,6 +59,7 @@ test('Error 转纯数据仅保留安全的 WebSocket 诊断字段', () => {
     receivedServerEvent: false,
     attempt: 3,
     maxAttempts: 3,
+    transportAttemptsExhausted: true,
     retryable: true,
     code: 'network_changed',
     apiKey: 'must-not-leak',
@@ -72,6 +73,7 @@ test('Error 转纯数据仅保留安全的 WebSocket 诊断字段', () => {
   assert.equal(raw.closeReason, 'upstream websocket proxy failed');
   assert.equal(raw.attempt, 3);
   assert.equal(raw.maxAttempts, 3);
+  assert.equal(raw.transportAttemptsExhausted, true);
   assert.equal(raw.retryable, true);
   assert.equal(raw.code, 'network_changed');
   assert.equal(raw.apiKey, undefined);
@@ -84,25 +86,27 @@ test('LimCode 外层重试尊重 provider 的明确 retryable=false', () => {
   assert.equal(isRetryableLlmRawError(undefined), true);
 });
 
-test('WebSocket provider 已用尽多次连接尝试后不再叠加 LimCode 外层重试', () => {
+test('底层传输已明确耗尽内部尝试时不再叠加 LimCode 外层重试', () => {
   assert.equal(isRetryableLlmRawError({
     transport: 'websocket',
     retryable: true,
     attempt: 3,
-    maxAttempts: 3
+    maxAttempts: 3,
+    transportAttemptsExhausted: true
   }), false);
 });
 
-test('WebSocket provider 只执行单次尝试时仍交给 LimCode 外层重试', () => {
+test('快速断线后第二次超时但传输预算未耗尽时仍交给 LimCode 外层重试', () => {
   assert.equal(isRetryableLlmRawError({
     transport: 'websocket',
     retryable: true,
-    attempt: 1,
-    maxAttempts: 1
+    attempt: 2,
+    maxAttempts: 3,
+    transportAttemptsExhausted: false
   }), true);
 });
 
-test('非 WebSocket 错误不受 provider 连接尝试次数影响', () => {
+test('仅有 attempt/maxAttempts 而没有明确耗尽事实时不阻止外层重试', () => {
   assert.equal(isRetryableLlmRawError({
     transport: 'http',
     retryable: true,

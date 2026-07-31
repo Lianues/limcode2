@@ -2400,6 +2400,8 @@ export interface LlmRawErrorInfoRecord {
   rawResponse?: unknown;
   data?: unknown;
   message?: string;
+  /** 返回当前错误时，底层传输是否已经实际耗尽内部尝试预算。 */
+  transportAttemptsExhausted?: boolean;
   [key: string]: unknown;
 }
 

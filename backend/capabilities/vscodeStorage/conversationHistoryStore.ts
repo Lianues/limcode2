@@ -97,6 +97,8 @@ interface ConversationHistoryGenerationManifestPayload {
   schemaVersion: typeof STORAGE_VERSION;
   savedAt: string;
   generation: string;
+  /** 在 history root lock 内单调递增；恢复顺序不能依赖可能回拨的墙钟 generation id。 */
+  commitSequence: number;
   pageSize: number;
   total: number;
   pages: ConversationHistoryPageIndexRecord[];
@@ -121,6 +123,7 @@ interface ConversationHistoryCanonicalProjection {
   entries: SidebarConversationHistoryEntry[];
   originLinks: ConversationOriginLinkRecord[];
   generation?: string;
+  commitSequence?: number;
 }
 
 interface ConversationHistoryScopedProjection {
@@ -140,6 +143,8 @@ export interface ConversationHistoryStoreTestHookContext {
 }
 
 export interface ConversationHistoryStoreTestHooks {
+  /** 测试专用：覆盖下一代 generation id，用于模拟系统时钟回拨。 */
+  createGenerationId?: () => string;
   /** 测试专用：页面完整写入后、根 index 原子发布前触发。抛错可模拟 index 发布失败。 */
   beforePublishIndex?: (context: ConversationHistoryStoreTestHookContext) => void | Promise<void>;
   /** 测试专用：根 index 已发布、committed marker 写入前触发。抛错可模拟提交点失败。 */
@@ -340,7 +345,7 @@ async function indexGenerationChanged(rootUri: vscode.Uri, generation: string): 
 interface LoadProjectionFromIndexOptions {
   /**
    * salvage 模式：跳过所有读不出来的页，尽力拼出剩下的内容。
-   * 只能用于恢复展示，结果绝不能当作写入基线（会永久丢失坏页里的会话）。
+   * 结果只能与已提交旧快照合并并按当前 manifest.entryIds 过滤，不能单独直接发布。
    */
   skipUnreadablePages?: boolean;
 }
@@ -393,7 +398,7 @@ async function loadProjectionFromIndex(
     }
   }
 
-  return { entries, originLinks, generation: index.generation };
+  return { entries, originLinks, generation: index.generation, commitSequence: manifest.commitSequence };
 }
 
 async function recoverProjectionAfterUnreadableIndexedPages(
@@ -414,7 +419,7 @@ async function recoverProjectionAfterUnreadableIndexedPages(
     ? mergeConversationHistoryProjections(retained, partial)
     : retained ?? partial ?? { entries: [], originLinks: [], generation: index.generation };
   // 当前 manifest 的 entryIds 是删除语义的唯一可信依据，防止旧快照中的已删除会话被复活。
-  return filterProjectionToEntryIds(merged, manifest.entryIds, index.generation);
+  return filterProjectionToEntryIds(merged, manifest.entryIds, index.generation, manifest.commitSequence);
 }
 
 async function loadPartialProjectionFromIndex(
@@ -434,13 +439,19 @@ async function loadLatestCommittedGenerationProjection(
   rootUri: vscode.Uri,
   excludedGeneration?: string
 ): Promise<ConversationHistoryCanonicalProjection | undefined> {
-  const generations = await listStorageGenerations(rootUri);
-  for (const generation of generations.reverse()) {
+  let latest: ConversationHistoryCanonicalProjection | undefined;
+  for (const generation of await listStorageGenerations(rootUri)) {
     if (generation.id === excludedGeneration) continue;
     const projection = await tryLoadCommittedGenerationProjection(rootUri, generation.id);
-    if (projection) return projection;
+    if (!projection) continue;
+    if (!latest
+      || (projection.commitSequence ?? 0) > (latest.commitSequence ?? 0)
+      || (projection.commitSequence === latest.commitSequence
+        && (projection.generation ?? '').localeCompare(latest.generation ?? '') > 0)) {
+      latest = projection;
+    }
   }
-  return undefined;
+  return latest;
 }
 
 async function tryLoadCommittedGenerationProjection(
@@ -468,7 +479,7 @@ async function tryLoadCommittedGenerationProjection(
       originLinks.push(...page.originLinks);
     }
     if (entries.length !== manifest.total || !sameStringSet(seenEntryIds, manifest.entryIds)) return undefined;
-    return { entries, originLinks, generation };
+    return { entries, originLinks, generation, commitSequence: manifest.commitSequence };
   } catch (error) {
     console.warn(`[LimCode] Failed to read committed conversation history generation ${generation}:`, error);
     return undefined;
@@ -488,7 +499,8 @@ function mergeConversationHistoryProjections(
     originLinks: [...base.originLinks, ...overlay.originLinks]
       .filter((link) => entryIds.has(link.conversationId))
       .map((link) => ({ ...link })),
-    generation: base.generation ?? overlay.generation
+    generation: base.generation ?? overlay.generation,
+    commitSequence: Math.max(base.commitSequence ?? 0, overlay.commitSequence ?? 0) || undefined
   };
 }
 
@@ -509,7 +521,11 @@ async function writeCanonicalProjection(
 ): Promise<void> {
   const rootUri = paths.conversationHistoryRootUri;
   const savedAt = new Date().toISOString();
-  const generation = createStorageGenerationLocation(rootUri);
+  const testGenerationId = __conversationHistoryStoreTestHooks.createGenerationId?.();
+  const generation = testGenerationId
+    ? createStorageGenerationLocation(rootUri, testGenerationId)
+    : createStorageGenerationLocation(rootUri);
+  const commitSequence = nextCommitSequence(projection.commitSequence);
   const pagesRoot = vscode.Uri.joinPath(generation.rootUri, PAGES_DIR);
   await ensureStorageDirectory(pagesRoot);
 
@@ -551,6 +567,7 @@ async function writeCanonicalProjection(
     schemaVersion: STORAGE_VERSION,
     savedAt,
     generation: generation.id,
+    commitSequence,
     pageSize: DEFAULT_PAGE_SIZE,
     total: entries.length,
     pages,
@@ -718,13 +735,17 @@ function parseGenerationManifest(
 ): ConversationHistoryGenerationManifest {
   const manifest = value as Partial<ConversationHistoryGenerationManifest> | undefined;
   if (!isPlainObject(manifest)) throw new Error(`Conversation history generation manifest must be an object: ${uri.fsPath}`);
-  if (!hasOnlyKeys(manifest, ['kind', 'schemaVersion', 'savedAt', 'generation', 'pageSize', 'total', 'pages', 'entryIds', 'revision'])) {
+  if (!hasOnlyKeys(manifest, ['kind', 'schemaVersion', 'savedAt', 'generation', 'commitSequence', 'pageSize', 'total', 'pages', 'entryIds', 'revision'])) {
     throw new Error(`Conversation history generation manifest has unknown fields: ${uri.fsPath}`);
   }
   if (manifest.kind !== 'conversationHistory.generation') throw new Error(`Conversation history generation manifest kind is invalid: ${uri.fsPath}`);
   if (manifest.generation !== expectedGeneration) throw new Error(`Conversation history generation manifest generation mismatch: ${uri.fsPath}`);
   if (typeof manifest.revision !== 'string' || !isStorageRevision(manifest.revision)) {
     throw new Error(`Conversation history generation manifest revision is invalid: ${uri.fsPath}`);
+  }
+  const commitSequence = manifest.commitSequence;
+  if (!Number.isSafeInteger(commitSequence) || (commitSequence ?? 0) < 1) {
+    throw new Error(`Conversation history generation manifest commitSequence is invalid: ${uri.fsPath}`);
   }
   if (!Array.isArray(manifest.entryIds)
     || manifest.entryIds.some((id) => typeof id !== 'string' || !id.trim())
@@ -749,6 +770,7 @@ function parseGenerationManifest(
     schemaVersion: STORAGE_VERSION,
     savedAt: normalized.savedAt,
     generation: normalized.generation,
+    commitSequence: commitSequence!,
     pageSize: normalized.pageSize,
     total: normalized.total,
     pages: normalized.pages,
@@ -798,7 +820,8 @@ function parseGenerationCommit(
 function filterProjectionToEntryIds(
   projection: ConversationHistoryCanonicalProjection,
   expectedEntryIds: readonly string[],
-  generation: string
+  generation: string,
+  commitSequence: number
 ): ConversationHistoryCanonicalProjection {
   const expected = new Set(expectedEntryIds);
   const entries = projection.entries.filter((entry) => expected.has(entry.id)).map((entry) => ({ ...entry }));
@@ -808,8 +831,17 @@ function filterProjectionToEntryIds(
     originLinks: projection.originLinks
       .filter((link) => recoveredIds.has(link.conversationId))
       .map((link) => ({ ...link })),
-    generation
+    generation,
+    commitSequence
   };
+}
+
+function nextCommitSequence(previous: number | undefined): number {
+  const current = previous ?? 0;
+  if (!Number.isSafeInteger(current) || current < 0 || current >= Number.MAX_SAFE_INTEGER) {
+    throw new Error(`Conversation history commit sequence is invalid: ${String(previous)}`);
+  }
+  return current + 1;
 }
 
 function sameStringSet(actual: ReadonlySet<string>, expected: readonly string[]): boolean {

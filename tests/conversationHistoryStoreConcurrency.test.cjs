@@ -108,6 +108,8 @@ async function readCanonicalProjection(rootPath) {
   assert.deepEqual(commit.manifest, manifestPayload);
   assert.equal(manifest.total, index.total);
   assert.deepEqual(manifest.pages, index.pages);
+  assert.equal(Number.isSafeInteger(manifest.commitSequence), true);
+  assert.equal(manifest.commitSequence >= 1, true);
 
   const entries = [];
   const originLinks = [];
@@ -124,7 +126,7 @@ async function readCanonicalProjection(rootPath) {
     originLinks.push(...page.originLinks);
   }
   assert.equal(entries.length, index.total);
-  return { index, entries, originLinks };
+  return { index, manifest, commit, entries, originLinks };
 }
 
 async function listGenerationIds(rootPath) {
@@ -647,6 +649,36 @@ if (process.argv[2] === '--worker') {
         new Set(['seed-0', 'seed-1', 'seed-2', 'after-zeroed-index'])
       );
     } finally {
+      await removeTempRoot(tempRoot);
+    }
+  });
+
+  test('系统时钟回拨后按 commitSequence 恢复真正最新的已提交 generation', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-history-'));
+    const generationIds = [
+      '20990101-000000-000-aaaaaaaa',
+      '20200101-000000-000-bbbbbbbb'
+    ];
+    try {
+      const paths = makePaths(tempRoot);
+      __conversationHistoryStoreTestHooks.createGenerationId = () => generationIds.shift();
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('clock-before-rollback', 1));
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('clock-after-rollback', 2));
+      __conversationHistoryStoreTestHooks.createGenerationId = undefined;
+
+      const before = await readCanonicalProjection(tempRoot);
+      assert.equal(before.index.generation, '20200101-000000-000-bbbbbbbb');
+      assert.equal(before.manifest.commitSequence, 2);
+
+      const indexPath = historyIndexPath(tempRoot);
+      await fs.writeFile(indexPath, Buffer.alloc((await fs.stat(indexPath)).size, 0));
+      const recovered = await loadConversationHistoryPageFromStore(paths, { scope: { kind: 'all' }, limit: 10 });
+      assert.deepEqual(
+        new Set(recovered.entries.map((entry) => entry.id)),
+        new Set(['clock-before-rollback', 'clock-after-rollback'])
+      );
+    } finally {
+      __conversationHistoryStoreTestHooks.createGenerationId = undefined;
       await removeTempRoot(tempRoot);
     }
   });

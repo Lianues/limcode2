@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
 import * as vscode from 'vscode';
+import { writeFileAtomicDurable } from './durableWrite';
 import { isNodeFsStorageUri, nodeFsStoragePath } from './localStorageUri';
 
 export interface ReadJsonOptions {
@@ -14,8 +14,6 @@ export type StrictJsonReadResult<T> =
   | { status: 'missing'; uri: vscode.Uri; error: unknown }
   | { status: 'invalid'; uri: vscode.Uri; error: unknown }
   | { status: 'ioError'; uri: vscode.Uri; error: unknown };
-
-let atomicWriteSequence = 0;
 
 /**
  * Strict JSON reader for storage code that must distinguish missing files,
@@ -63,40 +61,10 @@ export async function readJson<T>(uri: vscode.Uri, options: ReadJsonOptions = {}
 export async function writeJson(uri: vscode.Uri, value: unknown): Promise<void> {
   const data = Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
   if (isNodeFsStorageUri(uri)) {
-    const fsPath = nodeFsStoragePath(uri);
-    await fs.mkdir(path.dirname(fsPath), { recursive: true });
-    const tempPath = `${fsPath}.${process.pid}.${Date.now()}.${atomicWriteSequence++}.tmp`;
-    try {
-      await fs.writeFile(tempPath, data);
-      await renameWithRetry(tempPath, fsPath);
-    } finally {
-      await fs.rm(tempPath, { force: true }).catch(() => undefined);
-    }
+    await writeFileAtomicDurable(nodeFsStoragePath(uri), data);
     return;
   }
   await vscode.workspace.fs.writeFile(uri, data);
-}
-
-async function renameWithRetry(source: string, target: string): Promise<void> {
-  const maxAttempts = 4;
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await fs.rename(source, target);
-      return;
-    } catch (error) {
-      if (attempt >= maxAttempts || !isTransientRenameError(error)) throw error;
-      await delay(10 * (2 ** (attempt - 1)));
-    }
-  }
-}
-
-function isTransientRenameError(error: unknown): boolean {
-  const code = (error as { code?: unknown }).code;
-  return code === 'EPERM' || code === 'EACCES' || code === 'EBUSY';
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 interface FileSystemLikeError {

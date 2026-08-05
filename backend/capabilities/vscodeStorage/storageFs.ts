@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
 import * as vscode from 'vscode';
+import { writeFileAtomicDurable } from './durableWrite';
 import { isNodeFsStorageUri, nodeFsStoragePath } from './localStorageUri';
 
 export interface StorageDeleteOptions {
@@ -46,11 +46,13 @@ export async function readStorageFile(uri: vscode.Uri): Promise<Uint8Array> {
   return vscode.workspace.fs.readFile(uri);
 }
 
+/**
+ * 原先这里是就地覆盖写：崩溃时目标文件可能被截断或写成半截内容。改为原子 + fsync
+ * 发布，保证读到的永远是某一次完整写入的结果。
+ */
 export async function writeStorageFile(uri: vscode.Uri, data: Uint8Array): Promise<void> {
   if (isNodeFsStorageUri(uri)) {
-    const fsPath = nodeFsStoragePath(uri);
-    await fs.mkdir(path.dirname(fsPath), { recursive: true });
-    await fs.writeFile(fsPath, data);
+    await writeFileAtomicDurable(nodeFsStoragePath(uri), data);
     return;
   }
   await vscode.workspace.fs.writeFile(uri, data);

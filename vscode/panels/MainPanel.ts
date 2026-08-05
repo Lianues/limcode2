@@ -9,7 +9,7 @@ import {
   type WebviewToExtensionMessage
 } from '../../shared/protocol';
 import { displayConversationTitle, displayConversationTitleFromText } from '../../shared/conversationTitle';
-import { getWebviewHtml } from '../webview/getWebviewHtml';
+import { getWebviewHtml, getWebviewLocalResourceRoots } from '../webview/getWebviewHtml';
 import type { BackendApplication } from '../../backend/application/BackendApplication';
 
 export interface MainPanelOptions {
@@ -101,7 +101,7 @@ export class MainPanel {
     return {
       enableScripts: true,
       retainContextWhenHidden: true,
-      localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'dist', 'webview')],
+      localResourceRoots: getWebviewLocalResourceRoots(extensionUri),
       portMapping: [{ webviewPort: 31819, extensionHostPort: 31819 }]
     };
   }

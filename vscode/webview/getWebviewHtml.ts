@@ -2,6 +2,8 @@ import * as fs from 'node:fs';
 import * as vscode from 'vscode';
 
 const WEBVIEW_DEV_SERVER_ENV = 'VSCODE_WEBVIEW_DEV_SERVER';
+const WINDOWS_DRIVE_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const LOCAL_RESOURCE_BASE_META_NAME = 'limcode-local-resource-base';
 
 export interface WebviewHtmlOptions {
   htmlFileName?: string;
@@ -20,9 +22,10 @@ export function getWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri
   const nonce = getNonce();
   const devServerUrl = getWebviewDevServerUrl();
   const csp = createContentSecurityPolicy(webview, nonce, devServerUrl);
+  const localResourceBase = getLocalResourceBase(webview);
 
   if (devServerUrl) {
-    return getDevServerHtml(devServerUrl, csp, nonce, { title, devEntry, rootId });
+    return getDevServerHtml(devServerUrl, csp, nonce, localResourceBase, { title, devEntry, rootId });
   }
 
   if (!fs.existsSync(indexUri.fsPath)) {
@@ -48,13 +51,16 @@ export function getWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri
 
   html = injectLoadingTransition(html, { title, rootId });
 
-  const cspMeta = `<meta http-equiv="Content-Security-Policy" content="${csp}">`;
+  const headMeta = [
+    `<meta http-equiv="Content-Security-Policy" content="${csp}">`,
+    createLocalResourceBaseMeta(localResourceBase)
+  ].join('\n    ');
 
   if (html.includes('http-equiv="Content-Security-Policy"')) {
-    return html.replace(/<meta http-equiv="Content-Security-Policy" content=".*?">/, cspMeta);
+    return html.replace(/<meta http-equiv="Content-Security-Policy" content=".*?">/, headMeta);
   }
 
-  return html.replace('<head>', `<head>\n    ${cspMeta}`);
+  return html.replace('<head>', `<head>\n    ${headMeta}`);
 }
 
 function createContentSecurityPolicy(
@@ -78,6 +84,41 @@ function createContentSecurityPolicy(
   ]
     .filter(Boolean)
     .join(' ');
+}
+
+/**
+ * Markdown 允许直接引用本机图片（例如 `![](F:/shots/a.png)`），
+ * 因此 webview 需要具备读取本地文件的权限。VS Code 只放行 localResourceRoots
+ * 列出的目录，这里把磁盘根与工作区一并加入，让本地图片开箱即用。
+ */
+export function getWebviewLocalResourceRoots(extensionUri: vscode.Uri): vscode.Uri[] {
+  const roots = [vscode.Uri.joinPath(extensionUri, 'dist', 'webview')];
+
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    roots.push(folder.uri);
+  }
+
+  if (process.platform === 'win32') {
+    for (const letter of WINDOWS_DRIVE_LETTERS) {
+      roots.push(vscode.Uri.file(`${letter}:/`));
+    }
+  } else {
+    roots.push(vscode.Uri.file('/'));
+  }
+
+  return roots;
+}
+
+/**
+ * webview 内部拿不到 asWebviewUri，这里把本地文件基址注入 HTML，
+ * 前端据此将本地路径拼成 webview 可加载的资源地址。
+ */
+function getLocalResourceBase(webview: vscode.Webview): string {
+  return webview.asWebviewUri(vscode.Uri.file('/')).toString();
+}
+
+function createLocalResourceBaseMeta(localResourceBase: string): string {
+  return `<meta name="${LOCAL_RESOURCE_BASE_META_NAME}" content="${escapeHtml(localResourceBase)}">`;
 }
 
 function getWebviewDevServerUrl(): string | undefined {
@@ -123,6 +164,7 @@ function getDevServerHtml(
   devServerUrl: string,
   csp: string,
   nonce: string,
+  localResourceBase: string,
   options: { title: string; devEntry: string; rootId: string }
 ): string {
   const devEntry = options.devEntry.startsWith('/') ? options.devEntry : `/${options.devEntry}`;
@@ -132,6 +174,7 @@ function getDevServerHtml(
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="${csp}">
+  ${createLocalResourceBaseMeta(localResourceBase)}
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${escapeHtml(options.title)}</title>
 ${createLoadingTransitionStyle()}

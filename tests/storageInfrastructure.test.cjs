@@ -197,7 +197,8 @@ if (process.argv[2] === '--lock-worker') {
     createStorageGenerationLocation,
     getStorageGenerationRelativePath,
     isSafeStorageGenerationId,
-    listStorageGenerations
+    listStorageGenerations,
+    parseStorageGenerationTimestamp
   } = require('../dist/extension/backend/capabilities/vscodeStorage/storageGeneration.js');
   const { loadRecordStore } = require('../dist/extension/backend/capabilities/vscodeStorage/recordStore.js');
 
@@ -493,6 +494,59 @@ if (process.argv[2] === '--lock-worker') {
       await fs.access(active.rootUri.fsPath);
       await assert.rejects(fs.access(inactive.rootUri.fsPath));
       await fs.access(path.join(tempRoot, 'generations', 'unsafe-generation'));
+    } finally {
+      await removeTempRoot(tempRoot);
+    }
+  });
+
+  test('generation 时间戳拒绝日历 rollover', () => {
+    assert.equal(parseStorageGenerationTimestamp('20261301-120000-000-00000000'), undefined);
+    assert.equal(parseStorageGenerationTimestamp('20260231-120000-000-00000000'), undefined);
+    assert.equal(parseStorageGenerationTimestamp('20260229-120000-000-00000000'), undefined);
+    assert.equal(
+      new Date(parseStorageGenerationTimestamp('20240229-120000-000-00000000')).toISOString(),
+      '2024-02-29T12:00:00.000Z'
+    );
+  });
+
+  test('generation retention 按显式时间桶保留跨时间 checkpoint', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-generation-buckets-'));
+    try {
+      const root = MockUri.file(tempRoot);
+      const now = Date.UTC(2026, 7, 5, 12, 0, 0, 0);
+      const createAtAge = async (ageMs) => {
+        const id = createStorageGenerationId(new Date(now - ageMs));
+        await fs.mkdir(createStorageGenerationLocation(root, id).rootUri.fsPath, { recursive: true });
+        return id;
+      };
+      const activeId = await createAtAge(0);
+      const recent30s = await createAtAge(30_000);
+      const recent55s = await createAtAge(55_000);
+      const fiveMinutes = await createAtAge(5 * 60_000);
+      const nineMinutes = await createAtAge(9 * 60_000);
+      const thirtyMinutes = await createAtAge(30 * 60_000);
+      const fiftyFiveMinutes = await createAtAge(55 * 60_000);
+      const twoHours = await createAtAge(2 * 60 * 60_000);
+      const twentyThreeHours = await createAtAge(23 * 60 * 60_000);
+      const expired = await createAtAge(25 * 60 * 60_000);
+      const future = createStorageGenerationId(new Date(now + 60 * 60_000));
+      await fs.mkdir(createStorageGenerationLocation(root, future).rootUri.fsPath, { recursive: true });
+
+      const eligible = new Set([
+        recent30s, recent55s, fiveMinutes, nineMinutes, thirtyMinutes,
+        fiftyFiveMinutes, twoHours, twentyThreeHours, expired, future
+      ]);
+      await cleanupInactiveStorageGenerations(root, [activeId], {
+        now,
+        retentionBucketsMs: [60_000, 10 * 60_000, 60 * 60_000, 24 * 60 * 60_000],
+        retentionEligibleGenerationIds: eligible
+      });
+
+      const remaining = new Set((await listStorageGenerations(root)).map((generation) => generation.id));
+      assert.deepEqual(remaining, new Set([activeId, recent55s, nineMinutes, fiftyFiveMinutes, twentyThreeHours]));
+      for (const removed of [recent30s, fiveMinutes, thirtyMinutes, twoHours, expired, future]) {
+        assert.equal(remaining.has(removed), false);
+      }
     } finally {
       await removeTempRoot(tempRoot);
     }

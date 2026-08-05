@@ -26,20 +26,19 @@ export interface StorageGenerationCleanupResult {
 }
 
 export interface StorageGenerationCleanupOptions extends StorageGenerationOptions {
-  /** 宽限期：这段时间内发布的 generation 即使已不再被索引引用也保留。传 0 关闭。 */
-  retentionMs?: number;
-  /** 宽限期内最多额外保留多少份，防止高频发布时无上限堆积。 */
-  retentionLimit?: number;
+  /**
+   * 各 store 显式声明的保留时间桶上界。每个桶只保留一份最老 generation，避免高频写入
+   * 把所有备份都集中在几秒内。例如 [1m, 10m, 1h, 24h] 最多保留四个跨时间 checkpoint。
+   */
+  retentionBucketsMs?: readonly number[];
+  /** 只有这些已确认发布的 generation 才能进入时间桶；未传时默认所有 generation 均可。 */
+  retentionEligibleGenerationIds?: Iterable<string>;
+  /** 允许 generation 时间略微领先当前时钟的容差；超过后视为异常目录。 */
+  futureToleranceMs?: number;
   now?: number;
 }
 
-/**
- * 只保留 current + previous 两份时，两份可能只相隔几秒（事故中是 8 秒），一次掭电
- * 就能把它们同时写坏，于是整层数据无路可退。改成时间窗口后，崩溃时总能找到一份已经
- * fsync 落盘很久、不可能还在页缓存里的历史副本。
- */
-export const DEFAULT_STORAGE_GENERATION_RETENTION_MS = 24 * 60 * 60 * 1000;
-export const DEFAULT_STORAGE_GENERATION_RETENTION_LIMIT = 8;
+const DEFAULT_STORAGE_GENERATION_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
 
 const STORAGE_GENERATION_ID_PATTERN = /^\d{8}-\d{6}-\d{3}-[a-f0-9]{8}$/;
 const STORAGE_GENERATION_CONTAINER_PATTERN = /^[a-z0-9][a-z0-9._-]*$/i;
@@ -107,25 +106,27 @@ export async function listStorageGenerations(baseRootUri: vscode.Uri, options: S
 /** generation id 本身就是 UTC 时间戳，无需额外 stat 就能拿到发布时间。 */
 export function parseStorageGenerationTimestamp(id: string): number | undefined {
   if (!isSafeStorageGenerationId(id)) return undefined;
+  const year = Number(id.slice(0, 4));
   const month = Number(id.slice(4, 6));
   const day = Number(id.slice(6, 8));
   const hour = Number(id.slice(9, 11));
   const minute = Number(id.slice(11, 13));
   const second = Number(id.slice(13, 15));
-  // Date.UTC 会把越界字段静默 rollover（20261301 会滞成 2027-01）。id 格式校验只管位数，
-  // 损坏或伪造的 id 就能拿到一个未来时间戳，从而永久占用一个宽限期名额，因此显式拒掉。
-  if (month < 1 || month > 12 || day < 1 || day > 31) return undefined;
+  const millisecond = Number(id.slice(16, 19));
+  if (year < 1000 || month < 1 || month > 12 || day < 1 || day > 31) return undefined;
   if (hour > 23 || minute > 59 || second > 59) return undefined;
-  const timestamp = Date.UTC(
-    Number(id.slice(0, 4)),
-    month - 1,
-    day,
-    hour,
-    minute,
-    second,
-    Number(id.slice(16, 19))
-  );
-  return Number.isFinite(timestamp) ? timestamp : undefined;
+  const timestamp = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
+  if (!Number.isFinite(timestamp)) return undefined;
+  const parsed = new Date(timestamp);
+  // Date.UTC 会把 2 月 31 日、非闰年 2 月 29 日等静默 rollover，必须逐字段回读确认。
+  if (parsed.getUTCFullYear() !== year
+    || parsed.getUTCMonth() !== month - 1
+    || parsed.getUTCDate() !== day
+    || parsed.getUTCHours() !== hour
+    || parsed.getUTCMinutes() !== minute
+    || parsed.getUTCSeconds() !== second
+    || parsed.getUTCMilliseconds() !== millisecond) return undefined;
+  return timestamp;
 }
 
 export async function cleanupInactiveStorageGenerations(
@@ -161,24 +162,37 @@ function graceRetainedGenerationIds(
   active: ReadonlySet<string>,
   options: StorageGenerationCleanupOptions
 ): Set<string> {
-  const retentionMs = options.retentionMs ?? DEFAULT_STORAGE_GENERATION_RETENTION_MS;
-  const retentionLimit = options.retentionLimit ?? DEFAULT_STORAGE_GENERATION_RETENTION_LIMIT;
+  const buckets = normalizeRetentionBuckets(options.retentionBucketsMs);
   const grace = new Set<string>();
-  if (retentionMs <= 0 || retentionLimit <= 0) return grace;
+  if (buckets.length === 0) return grace;
 
   const now = options.now ?? Date.now();
-  // listStorageGenerations 已按 id 升序，倒序遍历即从最新开始取。
-  for (let index = generations.length - 1; index >= 0 && grace.size < retentionLimit; index -= 1) {
-    const generation = generations[index]!;
-    if (active.has(generation.id)) continue;
+  const futureToleranceMs = Math.max(0, options.futureToleranceMs ?? DEFAULT_STORAGE_GENERATION_FUTURE_TOLERANCE_MS);
+  const eligible = options.retentionEligibleGenerationIds
+    ? new Set(options.retentionEligibleGenerationIds)
+    : undefined;
+  const selected = new Map<number, { generation: StorageGenerationLocation; ageMs: number }>();
+  for (const generation of generations) {
+    if (active.has(generation.id) || eligible && !eligible.has(generation.id)) continue;
     const publishedAt = parseStorageGenerationTimestamp(generation.id);
-    // 时间戳解不出来时不保留，避免异常目录永久占用名额。
-    if (publishedAt === undefined) continue;
-    // 早于宽限期的都更旧，可以直接停止扫描。
-    if (now - publishedAt > retentionMs) break;
-    grace.add(generation.id);
+    if (publishedAt === undefined || publishedAt > now + futureToleranceMs) continue;
+    const ageMs = Math.max(0, now - publishedAt);
+    const bucketIndex = buckets.findIndex((upperBoundMs) => ageMs <= upperBoundMs);
+    if (bucketIndex < 0) continue;
+    const current = selected.get(bucketIndex);
+    // 每个时间桶选择最老的一份，让 checkpoint 尽量靠近桶上界，而不是都挤在“刚刚”。
+    if (!current || ageMs > current.ageMs) selected.set(bucketIndex, { generation, ageMs });
   }
+  for (const checkpoint of selected.values()) grace.add(checkpoint.generation.id);
   return grace;
+}
+
+function normalizeRetentionBuckets(value: readonly number[] | undefined): number[] {
+  if (!value?.length) return [];
+  return [...new Set(value
+    .filter((candidate) => Number.isFinite(candidate) && candidate > 0)
+    .map((candidate) => Math.floor(candidate)))]
+    .sort((a, b) => a - b);
 }
 
 function normalizeGenerationsDir(value: string | undefined): string {

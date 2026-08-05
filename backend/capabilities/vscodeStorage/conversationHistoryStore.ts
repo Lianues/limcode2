@@ -16,6 +16,7 @@ import { isFileNotFoundError, readJsonStrict, writeJson } from './json';
 import type { StoragePaths } from './clientStateStore';
 import { withStorageResourceLock } from './storageResourceLock';
 import { ensureStorageDirectory, readStorageDirectory } from './storageFs';
+import { createStorageRevision } from './storageRevision';
 import {
   cleanupInactiveStorageGenerations,
   createStorageGenerationLocation,
@@ -26,8 +27,15 @@ import {
 
 const DEFAULT_PAGE_SIZE = 50;
 const PAGES_DIR = 'pages';
+const GENERATION_MANIFEST_FILE = 'manifest.json';
+const GENERATION_COMMIT_FILE = 'committed.json';
 const READER_MAX_ATTEMPTS = 3;
-const HISTORY_PAGE_FILE_PATTERN = /^\d{6}\.json$/;
+const HISTORY_GENERATION_RETENTION_BUCKETS_MS = [
+  60_000,
+  10 * 60_000,
+  60 * 60_000,
+  24 * 60 * 60_000
+] as const;
 
 /**
  * 索引引用的页读不出来的原因。
@@ -38,18 +46,27 @@ const HISTORY_PAGE_FILE_PATTERN = /^\d{6}\.json$/;
  */
 type UnreadableIndexedHistoryPageReason = 'missing' | 'invalid' | 'ioError';
 
-class UnreadableIndexedConversationHistoryPageError extends Error {
-  public readonly pageUri: vscode.Uri;
+type ConversationHistoryIndexedResourceKind = 'index' | 'manifest' | 'page';
+
+class UnreadableIndexedConversationHistoryResourceError extends Error {
+  public readonly resourceKind: ConversationHistoryIndexedResourceKind;
+  public readonly resourceUri: vscode.Uri;
   public readonly reason: UnreadableIndexedHistoryPageReason;
 
-  public constructor(pageUri: vscode.Uri, reason: UnreadableIndexedHistoryPageReason) {
+  public constructor(
+    resourceKind: ConversationHistoryIndexedResourceKind,
+    resourceUri: vscode.Uri,
+    reason: UnreadableIndexedHistoryPageReason
+  ) {
+    const label = resourceKind === 'page' ? 'page' : resourceKind;
     super(
       reason === 'missing'
-        ? `Indexed conversation history page is missing: ${pageUri.fsPath}`
-        : `Indexed conversation history page is unreadable (${reason}): ${pageUri.fsPath}`
+        ? `Indexed conversation history ${label} is missing: ${resourceUri.fsPath}`
+        : `Indexed conversation history ${label} is unreadable (${reason}): ${resourceUri.fsPath}`
     );
-    this.name = 'UnreadableIndexedConversationHistoryPageError';
-    this.pageUri = pageUri;
+    this.name = 'UnreadableIndexedConversationHistoryResourceError';
+    this.resourceKind = resourceKind;
+    this.resourceUri = resourceUri;
     this.reason = reason;
   }
 }
@@ -58,6 +75,7 @@ interface ConversationHistoryIndexFile {
   schemaVersion: typeof STORAGE_VERSION;
   savedAt: string;
   generation: string;
+  manifestRevision: string;
   pageSize: number;
   total: number;
   pages: ConversationHistoryPageIndexRecord[];
@@ -77,6 +95,29 @@ interface ConversationHistoryPageFile {
   generation: string;
   entries: SidebarConversationHistoryEntry[];
   originLinks: ConversationOriginLinkRecord[];
+}
+
+interface ConversationHistoryGenerationManifestPayload {
+  kind: 'conversationHistory.generation';
+  schemaVersion: typeof STORAGE_VERSION;
+  savedAt: string;
+  generation: string;
+  pageSize: number;
+  total: number;
+  pages: ConversationHistoryPageIndexRecord[];
+  entryIds: string[];
+}
+
+interface ConversationHistoryGenerationManifest extends ConversationHistoryGenerationManifestPayload {
+  revision: string;
+}
+
+interface ConversationHistoryGenerationCommitFile {
+  kind: 'conversationHistory.generationCommit';
+  schemaVersion: typeof STORAGE_VERSION;
+  generation: string;
+  manifestRevision: string;
+  committedAt: string;
 }
 
 interface ConversationHistoryCanonicalProjection {
@@ -164,47 +205,48 @@ async function mutateCanonicalProjection(
 }
 
 async function loadCanonicalProjectionForWrite(paths: StoragePaths): Promise<ConversationHistoryCanonicalProjection> {
-  const indexUri = vscode.Uri.joinPath(paths.conversationHistoryRootUri, INDEX_FILE);
+  const rootUri = paths.conversationHistoryRootUri;
+  const indexUri = vscode.Uri.joinPath(rootUri, INDEX_FILE);
   const result = await readJsonStrict<unknown>(indexUri);
   if (result.status === 'missing') {
-    const traces = await findExistingHistoryProjectionTraces(paths.conversationHistoryRootUri);
-    if (traces.length) {
-      throw new Error(`Conversation history index is missing but storage contains projection traces: ${traces.join(', ')}`);
-    }
-    return { entries: [], originLinks: [] };
-  }
-  if (result.status === 'ioError') {
-    // 读取本身失败（文件被占用、句柄耗尽、瞬时坏道）时 index 内容很可能完好，重试就能读到。
-    // 此时拿历史副本当写入基线会把这一代的增量永久删掉，所以维持 fail-closed 交给上层重试。
-    throw new Error(`Failed to read conversation history index: ${indexUri.fsPath}`);
-  }
-  if (result.status === 'invalid') {
-    // 内容已毁，重试无意义。此前这里直接抛错，导致写入永久瘫痪、侧边栏永久空白，
-    // 且不留任何自愈机会。改为回退到保留期内的完整 generation 作为写入基线；连一份完整
-    // 副本都找不到时才维持 fail-closed，避免把空数据发布成新一代、抹掉仍然完好的会话列表。
-    const recovered = await loadLatestCompleteGenerationProjection(paths.conversationHistoryRootUri);
+    const traces = await findExistingHistoryProjectionTraces(rootUri);
+    if (traces.length === 0) return { entries: [], originLinks: [] };
+    const recovered = await loadLatestCommittedGenerationProjection(rootUri);
     if (recovered) {
-      console.warn(`[LimCode] Conversation history index JSON is invalid; rebuilt write baseline from retained generation ${recovered.generation}: ${indexUri.fsPath}`);
+      console.warn(`[LimCode] Conversation history index is missing; rebuilt write baseline from committed generation ${recovered.generation}: ${indexUri.fsPath}`);
       return recovered;
     }
-    throw new Error(`Conversation history index JSON is invalid: ${indexUri.fsPath}`);
+    throw new Error(`Conversation history index is missing but storage contains no recoverable committed generation: ${traces.join(', ')}`);
+  }
+  if (result.status === 'ioError') {
+    // 读取本身失败时 index 内容可能完好，必须 fail-closed 交给上层重试。
+    throw new Error(`Failed to read conversation history index: ${indexUri.fsPath}`);
   }
 
-  const snapshot = parseCanonicalIndex(result.value, indexUri);
+  let snapshot: ConversationHistoryIndexSnapshot;
   try {
-    return await loadProjectionFromIndex(paths.conversationHistoryRootUri, snapshot.index);
+    if (result.status === 'invalid') throw result.error;
+    snapshot = parseCanonicalIndex(result.value, indexUri);
   } catch (error) {
-    if (!isUnreadableIndexedHistoryPageError(error)) throw error;
-    // ioError 意味着页文件本身可能完好，只是这一刻读不到（杀软扫描、句柄耗尽等瞬时故障）。
-    // 跳过它拼出来的基线会把本可以读回来的会话永久删掉，必须维持 fail-closed 交给重试。
+    const recovered = await loadLatestCommittedGenerationProjection(rootUri);
+    if (recovered) {
+      console.warn(`[LimCode] Conversation history index content is invalid; rebuilt write baseline from committed generation ${recovered.generation}: ${indexUri.fsPath}`, error);
+      return recovered;
+    }
+    throw new Error(`Conversation history index content is invalid: ${indexUri.fsPath}`);
+  }
+
+  try {
+    const projection = await loadProjectionFromIndex(rootUri, snapshot.index);
+    // 根 index 已经证明该 generation 成功发布；若上次在写 committed marker 前崩溃，写路径补齐它。
+    await ensureGenerationCommitMarker(rootUri, snapshot.index);
+    return projection;
+  } catch (error) {
+    if (!isUnreadableIndexedHistoryResourceError(error)) throw error;
     if (error.reason === 'ioError') throw error;
-    // 缺页或内容损坏：用「保留副本 ∪ 当前 index 里还读得出来的页」合并出基线，恢复面最大。
-    const recovered = await recoverProjectionAfterUnreadableIndexedPages(paths.conversationHistoryRootUri, snapshot.index);
-    // 一条都恢复不出来时不能发布：空投影作为新一代会抹掉整份会话列表。
+    const recovered = await recoverProjectionAfterUnreadableIndexedPages(rootUri, snapshot.index);
     if (recovered.entries.length === 0 && snapshot.index.total > 0) throw error;
-    // 记下恢复前后的条目数：大面积损坏时（比如 6 页坏了 5 页）仍然会发布恢复结果，
-    // 但日志里能直接看出丢了多少，而不是静默缩水。
-    console.warn(`[LimCode] Conversation history page is ${error.reason}; rebuilt write baseline with ${recovered.entries.length} of ${snapshot.index.total} entries. ${formatErrorMessage(error)}`);
+    console.warn(`[LimCode] Conversation history ${error.resourceKind} is ${error.reason}; rebuilt write baseline with ${recovered.entries.length} of ${snapshot.index.total} entries. ${formatErrorMessage(error)}`);
     return recovered;
   }
 }
@@ -215,9 +257,9 @@ async function loadCanonicalProjectionForUi(paths: StoragePaths): Promise<Conver
     const initial = await tryLoadCanonicalIndexForUi(rootUri);
     if (initial.kind === 'missing') return undefined;
     if (initial.kind === 'unreadable') {
-      // 没有可用 index 时仍然可以直接扫保留期内的 generation：它们自带完整性校验
-      // （页序连续 + JSON 可读 + entry id 不重），比让侧边栏直接空白好得多。
-      const recovered = await loadLatestCompleteGenerationProjection(rootUri);
+      // 没有可用 index 时只扫描带 committed marker 的 generation，并按 manifest 的精确页清单
+      // 校验总数、revision 与 entry id；未提交或连续前缀残留不会进入恢复候选。
+      const recovered = await loadLatestCommittedGenerationProjection(rootUri);
       if (recovered) {
         console.warn(`[LimCode] Conversation history index is unreadable; using retained generation ${recovered.generation} for UI.`);
         return recovered;
@@ -237,7 +279,7 @@ async function loadCanonicalProjectionForUi(paths: StoragePaths): Promise<Conver
       projection = await loadProjectionFromIndex(rootUri, initialIndex);
     } catch (error) {
       if (attempt < READER_MAX_ATTEMPTS && await indexGenerationChanged(rootUri, initialIndex.generation)) continue;
-      if (isUnreadableIndexedHistoryPageError(error)) {
+      if (isUnreadableIndexedHistoryResourceError(error)) {
         console.warn(`[LimCode] Conversation history index references an unreadable page; using recovered projection for UI. ${formatErrorMessage(error)}`);
         return recoverProjectionAfterUnreadableIndexedPages(rootUri, initialIndex);
       }
@@ -312,6 +354,7 @@ async function loadProjectionFromIndex(
   index: ConversationHistoryIndexFile,
   options: LoadProjectionFromIndexOptions = {}
 ): Promise<ConversationHistoryCanonicalProjection> {
+  const manifest = await loadIndexedGenerationManifest(rootUri, index);
   const entries: SidebarConversationHistoryEntry[] = [];
   const originLinks: ConversationOriginLinkRecord[] = [];
   const seenEntryIds = new Set<string>();
@@ -322,12 +365,21 @@ async function loadProjectionFromIndex(
     const result = await readJsonStrict<unknown>(pageUri);
     if (result.status !== 'ok') {
       if (options.skipUnreadablePages) continue;
-      throw new UnreadableIndexedConversationHistoryPageError(pageUri, result.status);
+      throw new UnreadableIndexedConversationHistoryResourceError('page', pageUri, result.status);
     }
 
-    const page = parseCanonicalPage(result.value, pageUri, index.generation, pageRecord);
+    let page: ConversationHistoryPageFile;
+    try {
+      page = parseCanonicalPage(result.value, pageUri, index.generation, pageRecord);
+      if (page.entries.some((entry) => seenEntryIds.has(entry.id))) {
+        throw new Error(`Duplicate conversation history entry id in canonical projection: ${pageUri.fsPath}`);
+      }
+    } catch {
+      if (options.skipUnreadablePages) continue;
+      throw new UnreadableIndexedConversationHistoryResourceError('page', pageUri, 'invalid');
+    }
+
     for (const entry of page.entries) {
-      if (seenEntryIds.has(entry.id)) throw new Error(`Duplicate conversation history entry id in canonical projection: ${entry.id}`);
       seenEntryIds.add(entry.id);
       entries.push(entry);
     }
@@ -335,8 +387,14 @@ async function loadProjectionFromIndex(
     totalFromPages += page.entries.length;
   }
 
-  if (totalFromPages !== index.total && !options.skipUnreadablePages) {
-    throw new Error(`Conversation history index total does not match pages: ${index.total} !== ${totalFromPages}`);
+  if (!options.skipUnreadablePages) {
+    if (totalFromPages !== index.total || !sameStringSet(seenEntryIds, manifest.entryIds)) {
+      throw new UnreadableIndexedConversationHistoryResourceError(
+        'index',
+        vscode.Uri.joinPath(rootUri, INDEX_FILE),
+        'invalid'
+      );
+    }
   }
 
   return { entries, originLinks, generation: index.generation };
@@ -346,12 +404,21 @@ async function recoverProjectionAfterUnreadableIndexedPages(
   rootUri: vscode.Uri,
   index: ConversationHistoryIndexFile
 ): Promise<ConversationHistoryCanonicalProjection> {
-  const retained = await loadLatestCompleteGenerationProjection(rootUri, index.generation);
+  const retained = await loadLatestCommittedGenerationProjection(rootUri, index.generation);
+  let manifest: ConversationHistoryGenerationManifest | undefined;
+  try {
+    manifest = await loadIndexedGenerationManifest(rootUri, index);
+  } catch {
+    // manifest 本身损坏时无法判断当前 generation 的删除集合，只能保守回退到上一份已提交快照。
+    return retained ?? { entries: [], originLinks: [], generation: index.generation };
+  }
+
   const partial = await loadPartialProjectionFromIndex(rootUri, index);
-  if (retained && partial) return mergeConversationHistoryProjections(retained, partial);
-  if (retained) return retained;
-  if (partial) return partial;
-  return { entries: [], originLinks: [], generation: index.generation };
+  const merged = retained && partial
+    ? mergeConversationHistoryProjections(retained, partial)
+    : retained ?? partial ?? { entries: [], originLinks: [], generation: index.generation };
+  // 当前 manifest 的 entryIds 是删除语义的唯一可信依据，防止旧快照中的已删除会话被复活。
+  return filterProjectionToEntryIds(merged, manifest.entryIds, index.generation);
 }
 
 async function loadPartialProjectionFromIndex(
@@ -367,50 +434,37 @@ async function loadPartialProjectionFromIndex(
   }
 }
 
-async function loadLatestCompleteGenerationProjection(
+async function loadLatestCommittedGenerationProjection(
   rootUri: vscode.Uri,
   excludedGeneration?: string
 ): Promise<ConversationHistoryCanonicalProjection | undefined> {
   const generations = await listStorageGenerations(rootUri);
   for (const generation of generations.reverse()) {
     if (generation.id === excludedGeneration) continue;
-    const projection = await tryLoadProjectionFromGenerationPages(rootUri, generation.id);
+    const projection = await tryLoadCommittedGenerationProjection(rootUri, generation.id);
     if (projection) return projection;
   }
   return undefined;
 }
 
-async function tryLoadProjectionFromGenerationPages(
+async function tryLoadCommittedGenerationProjection(
   rootUri: vscode.Uri,
   generation: string
 ): Promise<ConversationHistoryCanonicalProjection | undefined> {
-  const pagesRoot = vscode.Uri.joinPath(rootUri, STORAGE_GENERATIONS_DIR, generation, PAGES_DIR);
-  let directoryEntries: [string, vscode.FileType][];
   try {
-    directoryEntries = await readStorageDirectory(pagesRoot);
-  } catch (error) {
-    if (isFileNotFoundError(error)) return undefined;
-    throw error;
-  }
+    const manifest = await tryLoadGenerationManifest(rootUri, generation);
+    if (!manifest) return undefined;
+    const commit = await tryLoadGenerationCommit(rootUri, generation);
+    if (!commit || commit.manifestRevision !== manifest.revision) return undefined;
 
-  const files = directoryEntries
-    .filter(([name, type]) => type === vscode.FileType.File && HISTORY_PAGE_FILE_PATTERN.test(name))
-    .map(([name]) => name)
-    .sort();
-  if (files.length === 0) return undefined;
-  for (let index = 0; index < files.length; index += 1) {
-    if (files[index] !== `${index.toString().padStart(6, '0')}.json`) return undefined;
-  }
-
-  const entries: SidebarConversationHistoryEntry[] = [];
-  const originLinks: ConversationOriginLinkRecord[] = [];
-  const seenEntryIds = new Set<string>();
-  try {
-    for (const file of files) {
-      const pageUri = vscode.Uri.joinPath(pagesRoot, file);
+    const entries: SidebarConversationHistoryEntry[] = [];
+    const originLinks: ConversationOriginLinkRecord[] = [];
+    const seenEntryIds = new Set<string>();
+    for (const pageRecord of manifest.pages) {
+      const pageUri = vscode.Uri.joinPath(rootUri, ...pageRecord.file.split('/'));
       const result = await readJsonStrict<unknown>(pageUri);
       if (result.status !== 'ok') return undefined;
-      const page = parseStandaloneGenerationPage(result.value, pageUri, generation);
+      const page = parseCanonicalPage(result.value, pageUri, generation, pageRecord);
       for (const entry of page.entries) {
         if (seenEntryIds.has(entry.id)) return undefined;
         seenEntryIds.add(entry.id);
@@ -418,12 +472,12 @@ async function tryLoadProjectionFromGenerationPages(
       }
       originLinks.push(...page.originLinks);
     }
+    if (entries.length !== manifest.total || !sameStringSet(seenEntryIds, manifest.entryIds)) return undefined;
+    return { entries, originLinks, generation };
   } catch (error) {
-    console.warn(`[LimCode] Failed to read retained conversation history generation ${generation}:`, error);
+    console.warn(`[LimCode] Failed to read committed conversation history generation ${generation}:`, error);
     return undefined;
   }
-
-  return { entries, originLinks, generation };
 }
 
 function mergeConversationHistoryProjections(
@@ -443,8 +497,8 @@ function mergeConversationHistoryProjections(
   };
 }
 
-function isUnreadableIndexedHistoryPageError(error: unknown): error is UnreadableIndexedConversationHistoryPageError {
-  return error instanceof UnreadableIndexedConversationHistoryPageError;
+function isUnreadableIndexedHistoryResourceError(error: unknown): error is UnreadableIndexedConversationHistoryResourceError {
+  return error instanceof UnreadableIndexedConversationHistoryResourceError;
 }
 
 function formatErrorMessage(error: unknown): string {
@@ -497,16 +551,42 @@ async function writeCanonicalProjection(
     });
   }
 
-  await __conversationHistoryStoreTestHooks.beforePublishIndex?.({ rootUri, generation: generation.id });
-
-  await writeJson(vscode.Uri.joinPath(rootUri, INDEX_FILE), {
+  const manifestPayload: ConversationHistoryGenerationManifestPayload = {
+    kind: 'conversationHistory.generation',
     schemaVersion: STORAGE_VERSION,
     savedAt,
     generation: generation.id,
     pageSize: DEFAULT_PAGE_SIZE,
     total: entries.length,
+    pages,
+    entryIds: [...entryIds].sort()
+  };
+  const manifestRevision = createStorageRevision(manifestPayload);
+  await writeJson(generationManifestUri(rootUri, generation.id), {
+    ...manifestPayload,
+    revision: manifestRevision
+  } satisfies ConversationHistoryGenerationManifest);
+
+  await __conversationHistoryStoreTestHooks.beforePublishIndex?.({ rootUri, generation: generation.id });
+
+  const index: ConversationHistoryIndexFile = {
+    schemaVersion: STORAGE_VERSION,
+    savedAt,
+    generation: generation.id,
+    manifestRevision,
+    pageSize: DEFAULT_PAGE_SIZE,
+    total: entries.length,
     pages
-  } satisfies ConversationHistoryIndexFile);
+  };
+  await writeJson(vscode.Uri.joinPath(rootUri, INDEX_FILE), index);
+
+  try {
+    await writeGenerationCommitMarker(rootUri, index);
+  } catch (error) {
+    // 根 index 已经是提交点，不能把成功提交伪装成失败；保留所有旧 generation，等待下一次写补标记。
+    console.warn(`[LimCode] Conversation history index was published but generation commit marker failed: ${generation.id}`, error);
+    return;
+  }
 
   await cleanupOldGenerationsAfterPublish(rootUri, generation.id, previousGeneration);
 }
@@ -519,13 +599,207 @@ async function cleanupOldGenerationsAfterPublish(
   try {
     const retained = new Set<string>([currentGeneration]);
     if (previousGeneration && isSafeStorageGenerationId(previousGeneration)) retained.add(previousGeneration);
-    const result = await cleanupInactiveStorageGenerations(rootUri, retained);
+    const committedGenerationIds = await listCommittedGenerationIds(rootUri);
+    const result = await cleanupInactiveStorageGenerations(rootUri, retained, {
+      retentionBucketsMs: HISTORY_GENERATION_RETENTION_BUCKETS_MS,
+      retentionEligibleGenerationIds: committedGenerationIds
+    });
     for (const failure of result.failed) {
       console.warn(`[LimCode] Failed to prune conversation history generation: ${failure.generation.id}`, failure.error);
     }
   } catch (error) {
     console.warn('[LimCode] Failed to prune inactive conversation history generations:', error);
   }
+}
+
+async function loadIndexedGenerationManifest(
+  rootUri: vscode.Uri,
+  index: ConversationHistoryIndexFile
+): Promise<ConversationHistoryGenerationManifest> {
+  const uri = generationManifestUri(rootUri, index.generation);
+  const result = await readJsonStrict<unknown>(uri);
+  if (result.status !== 'ok') {
+    throw new UnreadableIndexedConversationHistoryResourceError('manifest', uri, result.status);
+  }
+  try {
+    const manifest = parseGenerationManifest(result.value, uri, index.generation);
+    if (manifest.revision !== index.manifestRevision
+      || manifest.savedAt !== index.savedAt
+      || manifest.pageSize !== index.pageSize
+      || manifest.total !== index.total
+      || createStorageRevision(manifest.pages) !== createStorageRevision(index.pages)) {
+      throw new Error(`Conversation history index and manifest mismatch: ${uri.fsPath}`);
+    }
+    return manifest;
+  } catch {
+    throw new UnreadableIndexedConversationHistoryResourceError('manifest', uri, 'invalid');
+  }
+}
+
+async function tryLoadGenerationManifest(
+  rootUri: vscode.Uri,
+  generation: string
+): Promise<ConversationHistoryGenerationManifest | undefined> {
+  const uri = generationManifestUri(rootUri, generation);
+  const result = await readJsonStrict<unknown>(uri);
+  if (result.status !== 'ok') return undefined;
+  try {
+    return parseGenerationManifest(result.value, uri, generation);
+  } catch {
+    return undefined;
+  }
+}
+
+async function tryLoadGenerationCommit(
+  rootUri: vscode.Uri,
+  generation: string
+): Promise<ConversationHistoryGenerationCommitFile | undefined> {
+  const uri = generationCommitUri(rootUri, generation);
+  const result = await readJsonStrict<unknown>(uri);
+  if (result.status !== 'ok') return undefined;
+  try {
+    return parseGenerationCommit(result.value, uri, generation);
+  } catch {
+    return undefined;
+  }
+}
+
+async function ensureGenerationCommitMarker(rootUri: vscode.Uri, index: ConversationHistoryIndexFile): Promise<void> {
+  const existing = await tryLoadGenerationCommit(rootUri, index.generation);
+  if (existing?.manifestRevision === index.manifestRevision) return;
+  await writeGenerationCommitMarker(rootUri, index);
+}
+
+async function writeGenerationCommitMarker(rootUri: vscode.Uri, index: ConversationHistoryIndexFile): Promise<void> {
+  await writeJson(generationCommitUri(rootUri, index.generation), {
+    kind: 'conversationHistory.generationCommit',
+    schemaVersion: STORAGE_VERSION,
+    generation: index.generation,
+    manifestRevision: index.manifestRevision,
+    committedAt: new Date().toISOString()
+  } satisfies ConversationHistoryGenerationCommitFile);
+}
+
+async function listCommittedGenerationIds(rootUri: vscode.Uri): Promise<Set<string>> {
+  const committed = new Set<string>();
+  for (const generation of await listStorageGenerations(rootUri)) {
+    // marker 在根 index 发布后才写入，因此仅凭 manifest + marker 即可排除截断和未提交 generation。
+    const manifest = await tryLoadGenerationManifest(rootUri, generation.id);
+    const marker = await tryLoadGenerationCommit(rootUri, generation.id);
+    if (manifest && marker?.manifestRevision === manifest.revision) committed.add(generation.id);
+  }
+  return committed;
+}
+
+function parseGenerationManifest(
+  value: unknown,
+  uri: vscode.Uri,
+  expectedGeneration: string
+): ConversationHistoryGenerationManifest {
+  const manifest = value as Partial<ConversationHistoryGenerationManifest> | undefined;
+  if (!isPlainObject(manifest)) throw new Error(`Conversation history generation manifest must be an object: ${uri.fsPath}`);
+  if (!hasOnlyKeys(manifest, ['kind', 'schemaVersion', 'savedAt', 'generation', 'pageSize', 'total', 'pages', 'entryIds', 'revision'])) {
+    throw new Error(`Conversation history generation manifest has unknown fields: ${uri.fsPath}`);
+  }
+  if (manifest.kind !== 'conversationHistory.generation') throw new Error(`Conversation history generation manifest kind is invalid: ${uri.fsPath}`);
+  if (manifest.generation !== expectedGeneration) throw new Error(`Conversation history generation manifest generation mismatch: ${uri.fsPath}`);
+  if (typeof manifest.revision !== 'string' || !isStorageRevision(manifest.revision)) {
+    throw new Error(`Conversation history generation manifest revision is invalid: ${uri.fsPath}`);
+  }
+  if (!Array.isArray(manifest.entryIds)
+    || manifest.entryIds.some((id) => typeof id !== 'string' || !id.trim())
+    || new Set(manifest.entryIds).size !== manifest.entryIds.length) {
+    throw new Error(`Conversation history generation manifest entryIds are invalid: ${uri.fsPath}`);
+  }
+
+  const normalized = parseCanonicalIndex({
+    schemaVersion: manifest.schemaVersion,
+    savedAt: manifest.savedAt,
+    generation: manifest.generation,
+    manifestRevision: manifest.revision,
+    pageSize: manifest.pageSize,
+    total: manifest.total,
+    pages: manifest.pages
+  }, uri).index;
+  if (manifest.entryIds.length !== normalized.total) {
+    throw new Error(`Conversation history generation manifest entryIds total mismatch: ${uri.fsPath}`);
+  }
+  const payload: ConversationHistoryGenerationManifestPayload = {
+    kind: 'conversationHistory.generation',
+    schemaVersion: STORAGE_VERSION,
+    savedAt: normalized.savedAt,
+    generation: normalized.generation,
+    pageSize: normalized.pageSize,
+    total: normalized.total,
+    pages: normalized.pages,
+    entryIds: [...manifest.entryIds].sort()
+  };
+  if (createStorageRevision(payload) !== manifest.revision) {
+    throw new Error(`Conversation history generation manifest revision mismatch: ${uri.fsPath}`);
+  }
+  return { ...payload, revision: manifest.revision };
+}
+
+function parseGenerationCommit(
+  value: unknown,
+  uri: vscode.Uri,
+  expectedGeneration: string
+): ConversationHistoryGenerationCommitFile {
+  const commit = value as Partial<ConversationHistoryGenerationCommitFile> | undefined;
+  if (!isPlainObject(commit)) throw new Error(`Conversation history generation commit must be an object: ${uri.fsPath}`);
+  if (!hasOnlyKeys(commit, ['kind', 'schemaVersion', 'generation', 'manifestRevision', 'committedAt'])) {
+    throw new Error(`Conversation history generation commit has unknown fields: ${uri.fsPath}`);
+  }
+  if (commit.kind !== 'conversationHistory.generationCommit'
+    || commit.schemaVersion !== STORAGE_VERSION
+    || commit.generation !== expectedGeneration
+    || typeof commit.manifestRevision !== 'string'
+    || !isStorageRevision(commit.manifestRevision)
+    || typeof commit.committedAt !== 'string'
+    || !commit.committedAt.trim()) {
+    throw new Error(`Conversation history generation commit is invalid: ${uri.fsPath}`);
+  }
+  return {
+    kind: 'conversationHistory.generationCommit',
+    schemaVersion: STORAGE_VERSION,
+    generation: expectedGeneration,
+    manifestRevision: commit.manifestRevision,
+    committedAt: commit.committedAt
+  };
+}
+
+function filterProjectionToEntryIds(
+  projection: ConversationHistoryCanonicalProjection,
+  expectedEntryIds: readonly string[],
+  generation: string
+): ConversationHistoryCanonicalProjection {
+  const expected = new Set(expectedEntryIds);
+  const entries = projection.entries.filter((entry) => expected.has(entry.id)).map((entry) => ({ ...entry }));
+  const recoveredIds = new Set(entries.map((entry) => entry.id));
+  return {
+    entries,
+    originLinks: projection.originLinks
+      .filter((link) => recoveredIds.has(link.conversationId))
+      .map((link) => ({ ...link })),
+    generation
+  };
+}
+
+function sameStringSet(actual: ReadonlySet<string>, expected: readonly string[]): boolean {
+  if (actual.size !== expected.length) return false;
+  return expected.every((value) => actual.has(value));
+}
+
+function isStorageRevision(value: string): boolean {
+  return /^sha256:[a-f0-9]{64}$/.test(value);
+}
+
+function generationManifestUri(rootUri: vscode.Uri, generation: string): vscode.Uri {
+  return vscode.Uri.joinPath(rootUri, STORAGE_GENERATIONS_DIR, generation, GENERATION_MANIFEST_FILE);
+}
+
+function generationCommitUri(rootUri: vscode.Uri, generation: string): vscode.Uri {
+  return vscode.Uri.joinPath(rootUri, STORAGE_GENERATIONS_DIR, generation, GENERATION_COMMIT_FILE);
 }
 
 function pageRecordFromScopedProjection(
@@ -585,7 +859,7 @@ function entryMatchesScope(entry: SidebarConversationHistoryEntry, scope: Conver
 function parseCanonicalIndex(value: unknown, uri: vscode.Uri): ConversationHistoryIndexSnapshot {
   const index = value as Partial<ConversationHistoryIndexFile> | undefined;
   if (!isPlainObject(index)) throw new Error(`Conversation history index must be an object: ${uri.fsPath}`);
-  if (!hasOnlyKeys(index, ['schemaVersion', 'savedAt', 'generation', 'pageSize', 'total', 'pages'])) {
+  if (!hasOnlyKeys(index, ['schemaVersion', 'savedAt', 'generation', 'manifestRevision', 'pageSize', 'total', 'pages'])) {
     throw new Error(`Conversation history index has unknown fields: ${uri.fsPath}`);
   }
   if (index.schemaVersion !== STORAGE_VERSION) throw new Error(`Unsupported conversation history index schema: ${uri.fsPath}`);
@@ -594,6 +868,10 @@ function parseCanonicalIndex(value: unknown, uri: vscode.Uri): ConversationHisto
     throw new Error(`Conversation history index generation is invalid: ${uri.fsPath}`);
   }
   const generation = index.generation;
+  const manifestRevision = index.manifestRevision;
+  if (typeof manifestRevision !== 'string' || !isStorageRevision(manifestRevision)) {
+    throw new Error(`Conversation history index manifestRevision is invalid: ${uri.fsPath}`);
+  }
   const pageSize = index.pageSize;
   if (typeof pageSize !== 'number' || !Number.isSafeInteger(pageSize) || pageSize <= 0) {
     throw new Error(`Conversation history index pageSize is invalid: ${uri.fsPath}`);
@@ -642,6 +920,7 @@ function parseCanonicalIndex(value: unknown, uri: vscode.Uri): ConversationHisto
       schemaVersion: STORAGE_VERSION,
       savedAt: index.savedAt,
       generation,
+      manifestRevision,
       pageSize,
       total,
       pages
@@ -690,43 +969,6 @@ function parseCanonicalPage(
     originLinks
   };
 }
-
-function parseStandaloneGenerationPage(
-  value: unknown,
-  uri: vscode.Uri,
-  generation: string
-): ConversationHistoryPageFile {
-  const page = value as Partial<ConversationHistoryPageFile> | undefined;
-  if (!isPlainObject(page)) throw new Error(`Conversation history page must be an object: ${uri.fsPath}`);
-  if (!hasOnlyKeys(page, ['schemaVersion', 'savedAt', 'generation', 'entries', 'originLinks'])) {
-    throw new Error(`Conversation history page has unknown fields: ${uri.fsPath}`);
-  }
-  if (page.schemaVersion !== STORAGE_VERSION) throw new Error(`Unsupported conversation history page schema: ${uri.fsPath}`);
-  if (typeof page.savedAt !== 'string' || !page.savedAt.trim()) throw new Error(`Conversation history page savedAt is invalid: ${uri.fsPath}`);
-  if (page.generation !== generation) throw new Error(`Conversation history page generation mismatch: ${uri.fsPath}`);
-  if (!Array.isArray(page.entries)) throw new Error(`Conversation history page entries are invalid: ${uri.fsPath}`);
-  if (!Array.isArray(page.originLinks)) throw new Error(`Conversation history page originLinks are invalid: ${uri.fsPath}`);
-
-  const entries: SidebarConversationHistoryEntry[] = [];
-  for (const entry of page.entries) {
-    if (!isSidebarConversationHistoryEntry(entry)) throw new Error(`Conversation history page entry is invalid: ${uri.fsPath}`);
-    entries.push({ ...entry });
-  }
-  const originLinks: ConversationOriginLinkRecord[] = [];
-  for (const link of page.originLinks) {
-    if (!isConversationOriginLinkRecord(link)) throw new Error(`Conversation history page origin link is invalid: ${uri.fsPath}`);
-    originLinks.push({ ...link });
-  }
-
-  return {
-    schemaVersion: STORAGE_VERSION,
-    savedAt: page.savedAt,
-    generation,
-    entries,
-    originLinks
-  };
-}
-
 
 async function findExistingHistoryProjectionTraces(rootUri: vscode.Uri): Promise<string[]> {
   try {

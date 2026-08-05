@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { MainPanel } from '../panels/MainPanel';
-import { getWebviewHtml } from '../webview/getWebviewHtml';
+import { getWebviewHtml, getWebviewLocalResourceRoots } from '../webview/getWebviewHtml';
 import type { BackendApplication } from '../../backend/application/BackendApplication';
 import {
   DEFAULT_SIDEBAR_HISTORY_SCOPE_KIND,
@@ -82,9 +82,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.options = {
       enableScripts: true,
-      localResourceRoots: [
-        vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview')
-      ]
+      localResourceRoots: getWebviewLocalResourceRoots(this.extensionUri)
     };
 
     this.ensureConversationHistoryWatcher();

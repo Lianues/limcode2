@@ -22,6 +22,7 @@ import {
   createStorageGenerationLocation,
   isSafeStorageGenerationId,
   listStorageGenerations,
+  STANDARD_STORAGE_GENERATION_RETENTION_BUCKETS_MS,
   STORAGE_GENERATIONS_DIR
 } from './storageGeneration';
 
@@ -30,12 +31,6 @@ const PAGES_DIR = 'pages';
 const GENERATION_MANIFEST_FILE = 'manifest.json';
 const GENERATION_COMMIT_FILE = 'committed.json';
 const READER_MAX_ATTEMPTS = 3;
-const HISTORY_GENERATION_RETENTION_BUCKETS_MS = [
-  60_000,
-  10 * 60_000,
-  60 * 60_000,
-  24 * 60 * 60_000
-] as const;
 
 /**
  * 索引引用的页读不出来的原因。
@@ -46,7 +41,7 @@ const HISTORY_GENERATION_RETENTION_BUCKETS_MS = [
  */
 type UnreadableIndexedHistoryPageReason = 'missing' | 'invalid' | 'ioError';
 
-type ConversationHistoryIndexedResourceKind = 'index' | 'manifest' | 'page';
+type ConversationHistoryIndexedResourceKind = 'index' | 'commit' | 'manifest' | 'page';
 
 class UnreadableIndexedConversationHistoryResourceError extends Error {
   public readonly resourceKind: ConversationHistoryIndexedResourceKind;
@@ -118,6 +113,8 @@ interface ConversationHistoryGenerationCommitFile {
   generation: string;
   manifestRevision: string;
   committedAt: string;
+  /** manifest 的冗余副本，避免 manifest.json 单点损坏让整代完好 pages 不可恢复。 */
+  manifest: ConversationHistoryGenerationManifestPayload;
 }
 
 interface ConversationHistoryCanonicalProjection {
@@ -145,6 +142,8 @@ export interface ConversationHistoryStoreTestHookContext {
 export interface ConversationHistoryStoreTestHooks {
   /** 测试专用：页面完整写入后、根 index 原子发布前触发。抛错可模拟 index 发布失败。 */
   beforePublishIndex?: (context: ConversationHistoryStoreTestHookContext) => void | Promise<void>;
+  /** 测试专用：根 index 已发布、committed marker 写入前触发。抛错可模拟提交点失败。 */
+  beforeCommitGeneration?: (context: ConversationHistoryStoreTestHookContext) => void | Promise<void>;
   /** 测试专用：reader 首次读取 index 后、读取 pages 前触发。可用于制造 generation 变化。 */
   afterReadIndexBeforePages?: (context: ConversationHistoryStoreTestHookContext) => void | Promise<void>;
 }
@@ -237,10 +236,7 @@ async function loadCanonicalProjectionForWrite(paths: StoragePaths): Promise<Con
   }
 
   try {
-    const projection = await loadProjectionFromIndex(rootUri, snapshot.index);
-    // 根 index 已经证明该 generation 成功发布；若上次在写 committed marker 前崩溃，写路径补齐它。
-    await ensureGenerationCommitMarker(rootUri, snapshot.index);
-    return projection;
+    return await loadProjectionFromIndex(rootUri, snapshot.index);
   } catch (error) {
     if (!isUnreadableIndexedHistoryResourceError(error)) throw error;
     if (error.reason === 'ioError') throw error;
@@ -409,7 +405,7 @@ async function recoverProjectionAfterUnreadableIndexedPages(
   try {
     manifest = await loadIndexedGenerationManifest(rootUri, index);
   } catch {
-    // manifest 本身损坏时无法判断当前 generation 的删除集合，只能保守回退到上一份已提交快照。
+    // committed marker 本身损坏或丢失时无法证明当前 generation 已提交，只能回退到上一份已提交快照。
     return retained ?? { entries: [], originLinks: [], generation: index.generation };
   }
 
@@ -452,10 +448,9 @@ async function tryLoadCommittedGenerationProjection(
   generation: string
 ): Promise<ConversationHistoryCanonicalProjection | undefined> {
   try {
-    const manifest = await tryLoadGenerationManifest(rootUri, generation);
-    if (!manifest) return undefined;
     const commit = await tryLoadGenerationCommit(rootUri, generation);
-    if (!commit || commit.manifestRevision !== manifest.revision) return undefined;
+    if (!commit) return undefined;
+    const manifest = await resolveManifestFromCommit(rootUri, commit);
 
     const entries: SidebarConversationHistoryEntry[] = [];
     const originLinks: ConversationOriginLinkRecord[] = [];
@@ -579,15 +574,11 @@ async function writeCanonicalProjection(
     pages
   };
   await writeJson(vscode.Uri.joinPath(rootUri, INDEX_FILE), index);
+  await __conversationHistoryStoreTestHooks.beforeCommitGeneration?.({ rootUri, generation: generation.id });
 
-  try {
-    await writeGenerationCommitMarker(rootUri, index);
-  } catch (error) {
-    // 根 index 已经是提交点，不能把成功提交伪装成失败；保留所有旧 generation，等待下一次写补标记。
-    console.warn(`[LimCode] Conversation history index was published but generation commit marker failed: ${generation.id}`, error);
-    return;
-  }
-
+  // committed marker 是提交点：它在根 index 之后写入，并冗余携带 manifest。
+  // marker 写失败时本次 mutation 必须报告失败；后续 reader 会把无 marker 的根 index 当作未提交并回退。
+  await writeGenerationCommitMarker(rootUri, index, manifestPayload);
   await cleanupOldGenerationsAfterPublish(rootUri, generation.id, previousGeneration);
 }
 
@@ -601,7 +592,7 @@ async function cleanupOldGenerationsAfterPublish(
     if (previousGeneration && isSafeStorageGenerationId(previousGeneration)) retained.add(previousGeneration);
     const committedGenerationIds = await listCommittedGenerationIds(rootUri);
     const result = await cleanupInactiveStorageGenerations(rootUri, retained, {
-      retentionBucketsMs: HISTORY_GENERATION_RETENTION_BUCKETS_MS,
+      retentionBucketsMs: STANDARD_STORAGE_GENERATION_RETENTION_BUCKETS_MS,
       retentionEligibleGenerationIds: committedGenerationIds
     });
     for (const failure of result.failed) {
@@ -616,23 +607,24 @@ async function loadIndexedGenerationManifest(
   rootUri: vscode.Uri,
   index: ConversationHistoryIndexFile
 ): Promise<ConversationHistoryGenerationManifest> {
-  const uri = generationManifestUri(rootUri, index.generation);
-  const result = await readJsonStrict<unknown>(uri);
-  if (result.status !== 'ok') {
-    throw new UnreadableIndexedConversationHistoryResourceError('manifest', uri, result.status);
+  const commitUri = generationCommitUri(rootUri, index.generation);
+  const commitResult = await readJsonStrict<unknown>(commitUri);
+  if (commitResult.status !== 'ok') {
+    // committed marker 是提交点；根 index 存在但 marker 缺失时，该 generation 仍属于未提交状态。
+    throw new UnreadableIndexedConversationHistoryResourceError('commit', commitUri, commitResult.status);
   }
+
   try {
-    const manifest = parseGenerationManifest(result.value, uri, index.generation);
-    if (manifest.revision !== index.manifestRevision
-      || manifest.savedAt !== index.savedAt
-      || manifest.pageSize !== index.pageSize
-      || manifest.total !== index.total
-      || createStorageRevision(manifest.pages) !== createStorageRevision(index.pages)) {
-      throw new Error(`Conversation history index and manifest mismatch: ${uri.fsPath}`);
+    const commit = parseGenerationCommit(commitResult.value, commitUri, index.generation);
+    if (commit.manifestRevision !== index.manifestRevision) {
+      throw new Error(`Conversation history index and commit mismatch: ${commitUri.fsPath}`);
     }
+    const manifest = await resolveManifestFromCommit(rootUri, commit);
+    assertManifestMatchesIndex(manifest, index, commitUri);
     return manifest;
-  } catch {
-    throw new UnreadableIndexedConversationHistoryResourceError('manifest', uri, 'invalid');
+  } catch (error) {
+    if (isUnreadableIndexedHistoryResourceError(error)) throw error;
+    throw new UnreadableIndexedConversationHistoryResourceError('commit', commitUri, 'invalid');
   }
 }
 
@@ -664,29 +656,57 @@ async function tryLoadGenerationCommit(
   }
 }
 
-async function ensureGenerationCommitMarker(rootUri: vscode.Uri, index: ConversationHistoryIndexFile): Promise<void> {
-  const existing = await tryLoadGenerationCommit(rootUri, index.generation);
-  if (existing?.manifestRevision === index.manifestRevision) return;
-  await writeGenerationCommitMarker(rootUri, index);
+async function resolveManifestFromCommit(
+  rootUri: vscode.Uri,
+  commit: ConversationHistoryGenerationCommitFile
+): Promise<ConversationHistoryGenerationManifest> {
+  const fileManifest = await tryLoadGenerationManifest(rootUri, commit.generation);
+  if (fileManifest?.revision === commit.manifestRevision) return fileManifest;
+  return { ...commit.manifest, revision: commit.manifestRevision };
 }
 
-async function writeGenerationCommitMarker(rootUri: vscode.Uri, index: ConversationHistoryIndexFile): Promise<void> {
+function assertManifestMatchesIndex(
+  manifest: ConversationHistoryGenerationManifest,
+  index: ConversationHistoryIndexFile,
+  uri: vscode.Uri
+): void {
+  if (manifest.revision !== index.manifestRevision
+    || manifest.savedAt !== index.savedAt
+    || manifest.pageSize !== index.pageSize
+    || manifest.total !== index.total
+    || createStorageRevision(manifest.pages) !== createStorageRevision(index.pages)) {
+    throw new Error(`Conversation history index and committed manifest mismatch: ${uri.fsPath}`);
+  }
+}
+
+async function writeGenerationCommitMarker(
+  rootUri: vscode.Uri,
+  index: ConversationHistoryIndexFile,
+  manifest: ConversationHistoryGenerationManifestPayload
+): Promise<void> {
   await writeJson(generationCommitUri(rootUri, index.generation), {
     kind: 'conversationHistory.generationCommit',
     schemaVersion: STORAGE_VERSION,
     generation: index.generation,
     manifestRevision: index.manifestRevision,
-    committedAt: new Date().toISOString()
+    committedAt: new Date().toISOString(),
+    manifest
   } satisfies ConversationHistoryGenerationCommitFile);
 }
 
 async function listCommittedGenerationIds(rootUri: vscode.Uri): Promise<Set<string>> {
   const committed = new Set<string>();
   for (const generation of await listStorageGenerations(rootUri)) {
-    // marker 在根 index 发布后才写入，因此仅凭 manifest + marker 即可排除截断和未提交 generation。
-    const manifest = await tryLoadGenerationManifest(rootUri, generation.id);
-    const marker = await tryLoadGenerationCommit(rootUri, generation.id);
-    if (manifest && marker?.manifestRevision === manifest.revision) committed.add(generation.id);
+    const uri = generationCommitUri(rootUri, generation.id);
+    const result = await readJsonStrict<unknown>(uri);
+    if (result.status === 'ioError') throw result.error;
+    if (result.status !== 'ok') continue;
+    try {
+      parseGenerationCommit(result.value, uri, generation.id);
+      committed.add(generation.id);
+    } catch {
+      // missing/invalid marker 代表未提交或已损坏，不得占用 retention 时间桶。
+    }
   }
   return committed;
 }
@@ -747,7 +767,7 @@ function parseGenerationCommit(
 ): ConversationHistoryGenerationCommitFile {
   const commit = value as Partial<ConversationHistoryGenerationCommitFile> | undefined;
   if (!isPlainObject(commit)) throw new Error(`Conversation history generation commit must be an object: ${uri.fsPath}`);
-  if (!hasOnlyKeys(commit, ['kind', 'schemaVersion', 'generation', 'manifestRevision', 'committedAt'])) {
+  if (!hasOnlyKeys(commit, ['kind', 'schemaVersion', 'generation', 'manifestRevision', 'committedAt', 'manifest'])) {
     throw new Error(`Conversation history generation commit has unknown fields: ${uri.fsPath}`);
   }
   if (commit.kind !== 'conversationHistory.generationCommit'
@@ -756,15 +776,22 @@ function parseGenerationCommit(
     || typeof commit.manifestRevision !== 'string'
     || !isStorageRevision(commit.manifestRevision)
     || typeof commit.committedAt !== 'string'
-    || !commit.committedAt.trim()) {
+    || !commit.committedAt.trim()
+    || !isPlainObject(commit.manifest)) {
     throw new Error(`Conversation history generation commit is invalid: ${uri.fsPath}`);
   }
+  const embedded = parseGenerationManifest({
+    ...commit.manifest,
+    revision: commit.manifestRevision
+  }, uri, expectedGeneration);
+  const { revision: _revision, ...manifest } = embedded;
   return {
     kind: 'conversationHistory.generationCommit',
     schemaVersion: STORAGE_VERSION,
     generation: expectedGeneration,
     manifestRevision: commit.manifestRevision,
-    committedAt: commit.committedAt
+    committedAt: commit.committedAt,
+    manifest
   };
 }
 

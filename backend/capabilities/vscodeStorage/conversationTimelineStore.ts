@@ -28,6 +28,7 @@ import {
   cleanupInactiveStorageGenerations,
   createStorageGenerationLocation,
   isSafeStorageGenerationId,
+  STANDARD_STORAGE_GENERATION_RETENTION_BUCKETS_MS,
   STORAGE_GENERATIONS_DIR
 } from './storageGeneration';
 import { BUILTIN_TIMELINE_PROJECTIONS, type ConversationTimelineChunkData, type TimelineProjectionSpec } from './timelineProjections';
@@ -1369,7 +1370,9 @@ async function cleanupOldTimelineGenerationsAfterPublish(
       ...generationsReferencedByIndex(currentIndex),
       ...(previousIndex ? generationsReferencedByIndex(previousIndex) : [])
     ]);
-    const result = await cleanupInactiveStorageGenerations(root, retained);
+    const result = await cleanupInactiveStorageGenerations(root, retained, {
+      retentionBucketsMs: STANDARD_STORAGE_GENERATION_RETENTION_BUCKETS_MS
+    });
     for (const failure of result.failed) {
       console.warn(`[LimCode] Failed to prune conversation timeline generation: ${failure.generation.id}`, failure.error);
     }

@@ -104,6 +104,8 @@ async function readCanonicalProjection(rootPath) {
   const commit = JSON.parse(await fs.readFile(path.join(generationRoot, 'committed.json'), 'utf8'));
   assert.equal(manifest.revision, index.manifestRevision);
   assert.equal(commit.manifestRevision, index.manifestRevision);
+  const { revision: _revision, ...manifestPayload } = manifest;
+  assert.deepEqual(commit.manifest, manifestPayload);
   assert.equal(manifest.total, index.total);
   assert.deepEqual(manifest.pages, index.pages);
 
@@ -552,21 +554,65 @@ if (process.argv[2] === '--worker') {
     }
   });
 
-  test('根 index 已发布但 committed marker 丢失时，下一次写入会补齐标记', async () => {
+  test('根 index 已写但 committed marker 提交失败时拒绝 mutation 并回退上一代', async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-history-'));
     try {
       const paths = makePaths(tempRoot);
-      await upsertConversationHistoryEntryInStore(paths, makeEntry('marker-seed', 1));
-      const before = await readCanonicalProjection(tempRoot);
-      const markerPath = path.join(historyRoot(tempRoot), 'generations', before.index.generation, 'committed.json');
-      await fs.rm(markerPath, { force: true });
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('marker-committed', 1));
+      const committed = await readCanonicalProjection(tempRoot);
+
+      __conversationHistoryStoreTestHooks.beforeCommitGeneration = () => {
+        throw new Error('injected committed marker publish failure');
+      };
+      await assert.rejects(
+        upsertConversationHistoryEntryInStore(paths, makeEntry('marker-uncommitted', 2)),
+        /injected committed marker publish failure/i
+      );
+      __conversationHistoryStoreTestHooks.beforeCommitGeneration = undefined;
+
+      const uncommittedIndex = JSON.parse(await fs.readFile(historyIndexPath(tempRoot), 'utf8'));
+      const uncommittedRoot = path.join(historyRoot(tempRoot), 'generations', uncommittedIndex.generation);
+      await assert.rejects(fs.access(path.join(uncommittedRoot, 'committed.json')));
 
       const page = await loadConversationHistoryPageFromStore(paths, { scope: { kind: 'all' }, limit: 10 });
-      assert.deepEqual(page.entries.map((entry) => entry.id), ['marker-seed']);
-      await upsertConversationHistoryEntryInStore(paths, makeEntry('marker-after', 2));
-      await fs.access(markerPath);
+      assert.deepEqual(page.entries.map((entry) => entry.id), ['marker-committed']);
+      assert.equal(page.entries.some((entry) => entry.id === 'marker-uncommitted'), false);
+
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('marker-after-recovery', 3));
       const healed = await readCanonicalProjection(tempRoot);
-      assert.deepEqual(new Set(healed.entries.map((entry) => entry.id)), new Set(['marker-seed', 'marker-after']));
+      assert.deepEqual(
+        new Set(healed.entries.map((entry) => entry.id)),
+        new Set(['marker-committed', 'marker-after-recovery'])
+      );
+      assert.notEqual(healed.index.generation, committed.index.generation);
+      await assert.rejects(fs.access(uncommittedRoot));
+    } finally {
+      __conversationHistoryStoreTestHooks.beforeCommitGeneration = undefined;
+      await removeTempRoot(tempRoot);
+    }
+  });
+
+  test('committed marker 内嵌 manifest 可在 manifest.json 损坏时恢复完整当前代', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-history-'));
+    try {
+      const paths = makePaths(tempRoot);
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('embedded-manifest-0', 1));
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('embedded-manifest-1', 2));
+      const before = await readCanonicalProjection(tempRoot);
+      const manifestPath = path.join(historyRoot(tempRoot), 'generations', before.index.generation, 'manifest.json');
+      await fs.writeFile(manifestPath, 'not-json{{{', 'utf8');
+
+      const page = await loadConversationHistoryPageFromStore(paths, { scope: { kind: 'all' }, limit: 10 });
+      assert.deepEqual(
+        new Set(page.entries.map((entry) => entry.id)),
+        new Set(['embedded-manifest-0', 'embedded-manifest-1'])
+      );
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('embedded-manifest-after', 3));
+      const healed = await readCanonicalProjection(tempRoot);
+      assert.deepEqual(
+        new Set(healed.entries.map((entry) => entry.id)),
+        new Set(['embedded-manifest-0', 'embedded-manifest-1', 'embedded-manifest-after'])
+      );
     } finally {
       await removeTempRoot(tempRoot);
     }
@@ -807,6 +853,35 @@ if (process.argv[2] === '--worker') {
       assert.equal(page.pageInfo.total, 2);
     } finally {
       __conversationHistoryStoreTestHooks.afterReadIndexBeforePages = undefined;
+      await removeTempRoot(tempRoot);
+    }
+  });
+
+  test('generation 清理读取 committed marker 遇 ioError 时 fail-closed，不删除任何候选', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-history-'));
+    const originalReadFile = fs.readFile;
+    try {
+      const paths = makePaths(tempRoot);
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('cleanup-io-1', 1));
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('cleanup-io-2', 2));
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('cleanup-io-3', 3));
+      const oldestGeneration = (await listGenerationIds(tempRoot))[0];
+      const blockedMarker = path.resolve(path.join(historyRoot(tempRoot), 'generations', oldestGeneration, 'committed.json'));
+
+      fs.readFile = async function patchedReadFile(target, ...rest) {
+        if (path.resolve(String(target)) === blockedMarker) {
+          const error = new Error('injected committed marker ioError');
+          error.code = 'EIO';
+          throw error;
+        }
+        return originalReadFile.call(this, target, ...rest);
+      };
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('cleanup-io-4', 4));
+      fs.readFile = originalReadFile;
+
+      await fs.access(path.join(historyRoot(tempRoot), 'generations', oldestGeneration));
+    } finally {
+      fs.readFile = originalReadFile;
       await removeTempRoot(tempRoot);
     }
   });

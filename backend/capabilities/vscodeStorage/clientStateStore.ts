@@ -73,6 +73,7 @@ import {
   cleanupInactiveStorageGenerations,
   createStorageGenerationLocation,
   isSafeStorageGenerationId,
+  STANDARD_STORAGE_GENERATION_RETENTION_BUCKETS_MS,
   STORAGE_GENERATIONS_DIR
 } from './storageGeneration';
 import { loadConversationCompressionDetail, saveConversationCompressionDetail } from './compressionStore';
@@ -1306,7 +1307,9 @@ async function cleanupOldRunHistoryGenerationsAfterPublish(
       ...runHistoryGenerationsReferencedByIndex(currentIndex),
       ...(previousIndex ? runHistoryGenerationsReferencedByIndex(previousIndex) : [])
     ]);
-    const result = await cleanupInactiveStorageGenerations(root, retained);
+    const result = await cleanupInactiveStorageGenerations(root, retained, {
+      retentionBucketsMs: STANDARD_STORAGE_GENERATION_RETENTION_BUCKETS_MS
+    });
     for (const failure of result.failed) {
       console.warn(`[LimCode] Failed to prune run history generation: ${failure.generation.id}`, failure.error);
     }

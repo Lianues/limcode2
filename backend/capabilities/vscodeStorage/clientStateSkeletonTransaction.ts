@@ -25,7 +25,12 @@ import {
   type RecordStoreGenerationRef
 } from './recordStore';
 import { withStorageResourceLock } from './storageResourceLock';
-import { cleanupInactiveStorageGenerations, createStorageGenerationId, isSafeStorageGenerationId } from './storageGeneration';
+import {
+  cleanupInactiveStorageGenerations,
+  createStorageGenerationId,
+  isSafeStorageGenerationId,
+  STANDARD_STORAGE_GENERATION_RETENTION_BUCKETS_MS
+} from './storageGeneration';
 import { createStorageRevision } from './storageRevision';
 import { deleteStorageUri, ensureStorageDirectory, readStorageDirectory } from './storageFs';
 
@@ -415,7 +420,9 @@ async function garbageCollectSkeletonUnlocked(paths: StoragePaths): Promise<void
 
   // 所有 retained manifest 已完整校验后才开始删除，任一损坏都会 fail closed。
   for (const store of CLIENT_STATE_SKELETON_STORES) {
-    await cleanupInactiveStorageGenerations(store.root(paths), retainedGenerations.get(store.key)!);
+    await cleanupInactiveStorageGenerations(store.root(paths), retainedGenerations.get(store.key)!, {
+      retentionBucketsMs: STANDARD_STORAGE_GENERATION_RETENTION_BUCKETS_MS
+    });
   }
 
   for (const [name, type] of await readDirectoryOrEmpty(snapshotsRootUri(paths))) {

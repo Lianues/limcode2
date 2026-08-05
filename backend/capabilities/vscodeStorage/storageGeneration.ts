@@ -33,12 +33,16 @@ export interface StorageGenerationCleanupOptions extends StorageGenerationOption
   retentionBucketsMs?: readonly number[];
   /** 只有这些已确认发布的 generation 才能进入时间桶；未传时默认所有 generation 均可。 */
   retentionEligibleGenerationIds?: Iterable<string>;
-  /** 允许 generation 时间略微领先当前时钟的容差；超过后视为异常目录。 */
-  futureToleranceMs?: number;
   now?: number;
 }
 
-const DEFAULT_STORAGE_GENERATION_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
+/** 各 generation store 必须显式选择是否使用该标准恢复深度。 */
+export const STANDARD_STORAGE_GENERATION_RETENTION_BUCKETS_MS = [
+  60_000,
+  10 * 60_000,
+  60 * 60_000,
+  24 * 60 * 60_000
+] as const;
 
 const STORAGE_GENERATION_ID_PATTERN = /^\d{8}-\d{6}-\d{3}-[a-f0-9]{8}$/;
 const STORAGE_GENERATION_CONTAINER_PATTERN = /^[a-z0-9][a-z0-9._-]*$/i;
@@ -167,7 +171,6 @@ function graceRetainedGenerationIds(
   if (buckets.length === 0) return grace;
 
   const now = options.now ?? Date.now();
-  const futureToleranceMs = Math.max(0, options.futureToleranceMs ?? DEFAULT_STORAGE_GENERATION_FUTURE_TOLERANCE_MS);
   const eligible = options.retentionEligibleGenerationIds
     ? new Set(options.retentionEligibleGenerationIds)
     : undefined;
@@ -175,7 +178,8 @@ function graceRetainedGenerationIds(
   for (const generation of generations) {
     if (active.has(generation.id) || eligible && !eligible.has(generation.id)) continue;
     const publishedAt = parseStorageGenerationTimestamp(generation.id);
-    if (publishedAt === undefined || publishedAt > now + futureToleranceMs) continue;
+    if (publishedAt === undefined) continue;
+    // 时钟回拨时把未来 generation 视为刚发布；每桶仍只保留一份，不会无上限占用名额。
     const ageMs = Math.max(0, now - publishedAt);
     const bucketIndex = buckets.findIndex((upperBoundMs) => ageMs <= upperBoundMs);
     if (bucketIndex < 0) continue;

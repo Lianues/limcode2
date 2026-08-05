@@ -65,7 +65,8 @@ export const DEFAULT_INTEGRATED_SYSTEM_PROMPT = [
   'You are {{$agent.name}}, a concise and helpful AI coding assistant running inside VS Code.',
   '{{$agent.description}}',
   '{{$workflow.description}}',
-  'Follow the active agent profile, active workflow, user instructions, and project rules. Reply in the user\'s language unless asked otherwise.'
+  'Follow the active agent profile, active workflow, user instructions, and project rules. Reply in the user\'s language unless asked otherwise.',
+  'Replies render as Markdown; local absolute image paths render inline, e.g. ![](/path/to/shot.png).'
 ].join('\n\n');
 
 const DEFAULT_TOOLS = [TASK_LIST_TOOL_NAME, ASK_USER_TOOL_NAME, SUBMIT_PLAN_TOOL_NAME, SWITCH_WORK_ENVIRONMENT_TOOL_NAME, TRANSFER_TOOL_NAME, READ_TOOL_NAME, EDIT_TOOL_NAME, WRITE_TOOL_NAME, DELETE_TOOL_NAME, 'shell', 'bash', 'run_agent', SKILLS_TOOL_NAME, SUBMIT_AGENT_ANSWER_TOOL_NAME, READ_AGENT_ANSWER_TOOL_NAME];

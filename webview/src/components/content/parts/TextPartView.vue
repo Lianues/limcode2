@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, shallowRef, watch } from 'vue';
+import { LOCAL_FILE_LINK_DATA_ATTRIBUTE } from '@shared/localFileResources';
+import { BridgeMessageType } from '@shared/protocol';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
+import { bridge } from '@webview/transport';
 import CodeBlockViewer from '../CodeBlockViewer.vue';
 import StreamingIndicatorTail from '../StreamingIndicatorTail.vue';
 import { useSmoothStreamingText } from '../useSmoothStreamingText';
@@ -59,13 +62,23 @@ function markdownPartKey(part: MarkdownRenderedPart, index: number): string {
   const content = part.kind === 'html' ? part.html : `${part.language}\n${part.code}`;
   return `${part.kind}-${index}-${content.length}`;
 }
+
+function handleMarkdownClick(event: MouseEvent): void {
+  const element = event.target instanceof Element ? event.target : undefined;
+  const link = element?.closest(`a[${LOCAL_FILE_LINK_DATA_ATTRIBUTE}]`);
+  const source = link?.getAttribute(LOCAL_FILE_LINK_DATA_ATTRIBUTE)?.trim();
+  if (!source) return;
+  event.preventDefault();
+  event.stopPropagation();
+  bridge.request(BridgeMessageType.LocalFileOpen, { source });
+}
 </script>
 
 <template>
   <div v-if="markdownReady" class="rc-markdown-shell" :class="{ streaming, replacing: replaceAnimating }">
     <template v-if="renderedParts.length">
       <template v-for="(part, index) in renderedParts" :key="markdownPartKey(part, index)">
-        <div v-if="part.kind === 'html'" class="rc-markdown" v-html="part.html"></div>
+        <div v-if="part.kind === 'html'" class="rc-markdown" v-html="part.html" @click="handleMarkdownClick"></div>
         <CodeBlockViewer v-else class="rc-code-block" :code="part.code" :language="part.language" :info="part.info" />
       </template>
     </template>

@@ -136,6 +136,7 @@ export enum BridgeMessageType {
   PlanProposalOpen = 'planProposal.open',
   PlanProposalExport = 'planProposal.export',
   CheckpointDiffOpen = 'checkpoint.diff.open',
+  LocalFileOpen = 'localFile.open',
   AttachmentOpen = 'attachment.open',
   AttachmentReload = 'attachment.reload',
   AttachmentReloadResult = 'attachment.reload.result',
@@ -2712,6 +2713,10 @@ export interface WorkEnvironmentPolicyScopeClearPayload {
   scopeId?: string;
 }
 
+export interface LocalFileOpenPayload {
+  source: string;
+}
+
 export interface AttachmentOpenPayload {
   attachmentId?: string;
   sourcePath?: string;
@@ -2816,6 +2821,7 @@ export type WebviewToExtensionMessage =
   | BridgeEnvelope<BridgeMessageType.PlanProposalOpen, PlanProposalOpenPayload>
   | BridgeEnvelope<BridgeMessageType.PlanProposalExport, PlanProposalExportPayload>
   | BridgeEnvelope<BridgeMessageType.CheckpointDiffOpen, CheckpointDiffOpenPayload>
+  | BridgeEnvelope<BridgeMessageType.LocalFileOpen, LocalFileOpenPayload>
   | BridgeEnvelope<BridgeMessageType.AttachmentOpen, AttachmentOpenPayload>
   | BridgeEnvelope<BridgeMessageType.AttachmentReload, AttachmentReloadPayload>
   | BridgeEnvelope<BridgeMessageType.ClientResync, ClientResyncPayload>

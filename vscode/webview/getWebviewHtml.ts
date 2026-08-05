@@ -1,15 +1,22 @@
 import * as fs from 'node:fs';
 import * as vscode from 'vscode';
+import {
+  LOCAL_RESOURCE_MAPPINGS_META_NAME,
+  localFilePathStartsWith,
+  normalizeLocalFileSource,
+  type WebviewLocalResourceMapping
+} from '../../shared/localFileResources';
 
 const WEBVIEW_DEV_SERVER_ENV = 'VSCODE_WEBVIEW_DEV_SERVER';
 const WINDOWS_DRIVE_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-const LOCAL_RESOURCE_BASE_META_NAME = 'limcode-local-resource-base';
 
 export interface WebviewHtmlOptions {
   htmlFileName?: string;
   devEntry?: string;
   title?: string;
   rootId?: string;
+  /** 仅聊天/计划详情等会渲染本地 Markdown 资源的页面启用。 */
+  enableLocalFileResources?: boolean;
 }
 
 export function getWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri, options: WebviewHtmlOptions = {}): string {
@@ -22,10 +29,12 @@ export function getWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri
   const nonce = getNonce();
   const devServerUrl = getWebviewDevServerUrl();
   const csp = createContentSecurityPolicy(webview, nonce, devServerUrl);
-  const localResourceBase = getLocalResourceBase(webview);
+  const localResourceMappings = options.enableLocalFileResources
+    ? getWebviewLocalResourceMappings(webview, extensionUri)
+    : [];
 
   if (devServerUrl) {
-    return getDevServerHtml(devServerUrl, csp, nonce, localResourceBase, { title, devEntry, rootId });
+    return getDevServerHtml(devServerUrl, csp, nonce, localResourceMappings, { title, devEntry, rootId });
   }
 
   if (!fs.existsSync(indexUri.fsPath)) {
@@ -53,8 +62,8 @@ export function getWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri
 
   const headMeta = [
     `<meta http-equiv="Content-Security-Policy" content="${csp}">`,
-    createLocalResourceBaseMeta(localResourceBase)
-  ].join('\n    ');
+    createLocalResourceMappingsMeta(localResourceMappings)
+  ].filter(Boolean).join('\n    ');
 
   if (html.includes('http-equiv="Content-Security-Policy"')) {
     return html.replace(/<meta http-equiv="Content-Security-Policy" content=".*?">/, headMeta);
@@ -86,39 +95,115 @@ function createContentSecurityPolicy(
     .join(' ');
 }
 
+/** settings/sidebar 等不渲染本地 Markdown 的页面只获得构建产物目录权限。 */
+export function getWebviewStaticResourceRoots(extensionUri: vscode.Uri): vscode.Uri[] {
+  return [vscode.Uri.joinPath(extensionUri, 'dist', 'webview')];
+}
+
 /**
- * Markdown 允许直接引用本机图片（例如 `![](F:/shots/a.png)`），
- * 因此 webview 需要具备读取本地文件的权限。VS Code 只放行 localResourceRoots
- * 列出的目录，这里把磁盘根与工作区一并加入，让本地图片开箱即用。
+ * 聊天 Markdown 允许引用扩展主机文件系统中的绝对路径。Remote SSH / WSL / Container
+ * 必须使用对应 remote scheme + authority 的根，不能拿 file:/// 根冒充远程资源授权。
  */
 export function getWebviewLocalResourceRoots(extensionUri: vscode.Uri): vscode.Uri[] {
-  const roots = [vscode.Uri.joinPath(extensionUri, 'dist', 'webview')];
+  return dedupeUris([
+    ...getWebviewStaticResourceRoots(extensionUri),
+    ...getLocalResourceRootDescriptors(extensionUri).map((descriptor) => descriptor.rootUri)
+  ]);
+}
 
-  for (const folder of vscode.workspace.workspaceFolders ?? []) {
-    roots.push(folder.uri);
-  }
+/** 将 Markdown 本地文件来源解析为当前扩展主机文件系统中的 URI，供 vscode.open 使用。 */
+export function resolveLocalFileSourceUri(source: string, extensionUri: vscode.Uri): vscode.Uri | undefined {
+  const normalized = normalizeLocalFileSource(source);
+  if (!normalized) return undefined;
+  const descriptor = getLocalResourceRootDescriptors(extensionUri)
+    .sort((left, right) => right.pathPrefix.length - left.pathPrefix.length)
+    .find((candidate) => localFilePathStartsWith(normalized, candidate));
+  if (!descriptor) return undefined;
+  const relative = normalized.slice(descriptor.pathPrefix.length).replace(/^\/+/, '');
+  return relative
+    ? vscode.Uri.joinPath(descriptor.rootUri, ...relative.split('/'))
+    : descriptor.rootUri;
+}
 
+interface LocalResourceRootDescriptor {
+  rootUri: vscode.Uri;
+  pathPrefix: string;
+  caseSensitive: boolean;
+}
+
+function getWebviewLocalResourceMappings(webview: vscode.Webview, extensionUri: vscode.Uri): WebviewLocalResourceMapping[] {
+  return getLocalResourceRootDescriptors(extensionUri).map((descriptor) => ({
+    pathPrefix: descriptor.pathPrefix,
+    caseSensitive: descriptor.caseSensitive,
+    resourceBase: webview.asWebviewUri(descriptor.rootUri).toString()
+  }));
+}
+
+function getLocalResourceRootDescriptors(extensionUri: vscode.Uri): LocalResourceRootDescriptor[] {
+  const primary = primaryFileSystemUri(extensionUri);
+  const descriptors: LocalResourceRootDescriptor[] = [];
   if (process.platform === 'win32') {
     for (const letter of WINDOWS_DRIVE_LETTERS) {
-      roots.push(vscode.Uri.file(`${letter}:/`));
+      descriptors.push({
+        rootUri: primary.scheme === 'file'
+          ? vscode.Uri.file(`${letter}:/`)
+          : vscode.Uri.from({ scheme: primary.scheme, authority: primary.authority, path: `/${letter}:/` }),
+        pathPrefix: `${letter}:/`,
+        caseSensitive: false
+      });
     }
   } else {
-    roots.push(vscode.Uri.file('/'));
+    descriptors.push({
+      rootUri: primary.scheme === 'file'
+        ? vscode.Uri.file('/')
+        : vscode.Uri.from({ scheme: primary.scheme, authority: primary.authority, path: '/' }),
+      pathPrefix: '/',
+      caseSensitive: true
+    });
   }
 
-  return roots;
+  // Windows 的任意盘符根无法覆盖 UNC authority；已打开的 UNC workspace 单独授权并映射。
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    if (folder.uri.scheme !== 'file' || !folder.uri.authority) continue;
+    const pathPrefix = normalizeLocalFileSource(`file://${folder.uri.authority}${folder.uri.path}`);
+    if (!pathPrefix) continue;
+    descriptors.push({ rootUri: folder.uri, pathPrefix, caseSensitive: false });
+  }
+  return dedupeDescriptors(descriptors);
 }
 
-/**
- * webview 内部拿不到 asWebviewUri，这里把本地文件基址注入 HTML，
- * 前端据此将本地路径拼成 webview 可加载的资源地址。
- */
-function getLocalResourceBase(webview: vscode.Webview): string {
-  return webview.asWebviewUri(vscode.Uri.file('/')).toString();
+function primaryFileSystemUri(extensionUri: vscode.Uri): vscode.Uri {
+  const remoteWorkspace = (vscode.workspace.workspaceFolders ?? [])
+    .map((folder) => folder.uri)
+    .find((uri) => uri.scheme === 'vscode-remote');
+  if (remoteWorkspace) return remoteWorkspace;
+  if (extensionUri.scheme === 'vscode-remote') return extensionUri;
+  return vscode.Uri.file(process.platform === 'win32' ? 'C:/' : '/');
 }
 
-function createLocalResourceBaseMeta(localResourceBase: string): string {
-  return `<meta name="${LOCAL_RESOURCE_BASE_META_NAME}" content="${escapeHtml(localResourceBase)}">`;
+function dedupeDescriptors(descriptors: readonly LocalResourceRootDescriptor[]): LocalResourceRootDescriptor[] {
+  const seen = new Set<string>();
+  return descriptors.filter((descriptor) => {
+    const key = `${descriptor.rootUri.toString()}\u0000${descriptor.pathPrefix.toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function dedupeUris(uris: readonly vscode.Uri[]): vscode.Uri[] {
+  const seen = new Set<string>();
+  return uris.filter((uri) => {
+    const key = uri.toString();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function createLocalResourceMappingsMeta(mappings: readonly WebviewLocalResourceMapping[]): string {
+  if (mappings.length === 0) return '';
+  return `<meta name="${LOCAL_RESOURCE_MAPPINGS_META_NAME}" content="${escapeHtml(JSON.stringify(mappings))}">`;
 }
 
 function getWebviewDevServerUrl(): string | undefined {
@@ -164,7 +249,7 @@ function getDevServerHtml(
   devServerUrl: string,
   csp: string,
   nonce: string,
-  localResourceBase: string,
+  localResourceMappings: readonly WebviewLocalResourceMapping[],
   options: { title: string; devEntry: string; rootId: string }
 ): string {
   const devEntry = options.devEntry.startsWith('/') ? options.devEntry : `/${options.devEntry}`;
@@ -174,7 +259,7 @@ function getDevServerHtml(
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="${csp}">
-  ${createLocalResourceBaseMeta(localResourceBase)}
+  ${createLocalResourceMappingsMeta(localResourceMappings)}
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${escapeHtml(options.title)}</title>
 ${createLoadingTransitionStyle()}

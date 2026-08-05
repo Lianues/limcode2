@@ -9,7 +9,12 @@ import {
   type WebviewToExtensionMessage
 } from '../../shared/protocol';
 import { displayConversationTitle, displayConversationTitleFromText } from '../../shared/conversationTitle';
-import { getWebviewHtml, getWebviewLocalResourceRoots } from '../webview/getWebviewHtml';
+import {
+  getWebviewHtml,
+  getWebviewLocalResourceRoots,
+  getWebviewStaticResourceRoots,
+  resolveLocalFileSourceUri
+} from '../webview/getWebviewHtml';
 import type { BackendApplication } from '../../backend/application/BackendApplication';
 
 export interface MainPanelOptions {
@@ -78,7 +83,7 @@ export class MainPanel {
       MainPanel.viewType,
       panelTitle(options, backendApp),
       column,
-      MainPanel.webviewPanelOptions(extensionUri)
+      MainPanel.webviewPanelOptions(extensionUri, panelKind(options))
     );
     // VS Code does not expose iconPath in createWebviewPanel options, so apply it immediately.
     panel.iconPath = MainPanel.panelIconPath(extensionUri);
@@ -97,11 +102,13 @@ export class MainPanel {
     MainPanel.notifyConversationPanelStateChanged();
   }
 
-  private static webviewPanelOptions(extensionUri: vscode.Uri): vscode.WebviewPanelOptions & vscode.WebviewOptions {
+  private static webviewPanelOptions(extensionUri: vscode.Uri, kind: MainPanelKind): vscode.WebviewPanelOptions & vscode.WebviewOptions {
     return {
       enableScripts: true,
       retainContextWhenHidden: true,
-      localResourceRoots: getWebviewLocalResourceRoots(extensionUri),
+      localResourceRoots: supportsLocalFileResources(kind)
+        ? getWebviewLocalResourceRoots(extensionUri)
+        : getWebviewStaticResourceRoots(extensionUri),
       portMapping: [{ webviewPort: 31819, extensionHostPort: 31819 }]
     };
   }
@@ -127,7 +134,7 @@ export class MainPanel {
 
     this.panel.iconPath = MainPanel.panelIconPath(this.extensionUri);
     this.refreshTitle(options.title);
-    this.panel.webview.options = MainPanel.webviewPanelOptions(this.extensionUri);
+    this.panel.webview.options = MainPanel.webviewPanelOptions(this.extensionUri, this.kind);
     this.clientId = this.backendApp.attachWebview(panel.webview, {
       kind: this.kind === 'globalSettings' ? 'globalSettings' : this.kind === 'workflowSettings' ? 'workflowSettings' : this.kind === 'agentSettings' ? 'agentSettings' : this.kind === 'planDetail' ? 'planDetail' : 'mainPanel',
       panelId: this.panelId,
@@ -137,7 +144,9 @@ export class MainPanel {
       ...(this.planProposalId ? { planProposalId: this.planProposalId } : {})
     });
 
-    this.panel.webview.html = getWebviewHtml(this.panel.webview, this.extensionUri);
+    this.panel.webview.html = getWebviewHtml(this.panel.webview, this.extensionUri, {
+      enableLocalFileResources: supportsLocalFileResources(this.kind)
+    });
 
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     this.panel.onDidChangeViewState(() => MainPanel.notifyConversationPanelStateChanged(), null, this.disposables);
@@ -163,6 +172,10 @@ export class MainPanel {
           this.openPlanProposalFromPanel(message.payload);
           return;
         }
+        if (message.type === BridgeMessageType.LocalFileOpen && message.payload?.source) {
+          this.openLocalFileFromPanel(message.payload.source);
+          return;
+        }
         this.backendApp.handleWebviewMessage(this.clientId, message);
         this.refreshTitleFromOutgoingMessage(message);
       },
@@ -180,6 +193,19 @@ export class MainPanel {
       const disposable = this.disposables.pop();
       disposable?.dispose();
     }
+  }
+
+  private openLocalFileFromPanel(source: string): void {
+    if (!supportsLocalFileResources(this.kind)) return;
+    const uri = resolveLocalFileSourceUri(source, this.extensionUri);
+    if (!uri) {
+      void vscode.window.showWarningMessage(`无法解析本地文件路径：${source}`);
+      return;
+    }
+    void vscode.commands.executeCommand('vscode.open', uri).then(undefined, (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      void vscode.window.showWarningMessage(`无法打开本地文件：${message}`);
+    });
   }
 
   private createConversationFromPanel(projectFolderUri?: string): void {
@@ -306,6 +332,10 @@ function panelTitle(options: MainPanelOptions, backendApp: BackendApplication): 
 
 function isDefaultConversationTitle(title: string): boolean {
   return title === '新对话' || title === '默认对话' || title === 'LimCode' || title.startsWith('LimCode: ');
+}
+
+function supportsLocalFileResources(kind: MainPanelKind): boolean {
+  return kind === 'chat' || kind === 'planDetail';
 }
 
 function optionsFromSerializedState(state: unknown, fallbackTitle: string): MainPanelOptions {

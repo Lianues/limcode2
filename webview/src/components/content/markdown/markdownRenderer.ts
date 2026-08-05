@@ -1,6 +1,7 @@
 import MarkdownIt from 'markdown-it';
 import * as katex from 'katex';
 import texmath from 'markdown-it-texmath';
+import { LOCAL_FILE_LINK_DATA_ATTRIBUTE, normalizeLocalFileSource } from '@shared/localFileResources';
 import { toWebviewImageSrc } from './localImageSource';
 
 type MarkdownToken = {
@@ -177,16 +178,23 @@ function createParser(MarkdownItCtor: MarkdownItConstructor): MarkdownParser {
   // 显式 Markdown 链接（[text](url)）仍由 markdown-it 正常处理。
   parser.linkify?.set({ fuzzyLink: false, fuzzyIP: false });
 
-  // markdown-it 默认把 file: 归入 BAD_PROTO_RE 并直接拒绝，导致 ![](file:///F:/a.png)
-  // 退化成纯文本。本地图片最终会由 toWebviewImageSrc 转成 asWebviewUri，
-  // 因此只额外放行 file:，javascript: / vbscript: 仍然被拦下。
+  // markdown-it 默认把 file: 归入 BAD_PROTO_RE 并直接拒绝。本地图片会转换成 Webview 资源 URI，
+  // 本地文件链接则由点击事件转交 Extension Host 使用 vscode.open；javascript:/vbscript: 仍被拦下。
   const defaultValidateLink = parser.validateLink.bind(parser);
   parser.validateLink = (url: string) => /^file:/i.test(url.trim()) || defaultValidateLink(url);
 
   const defaultLinkOpen = parser.renderer.rules.link_open;
   parser.renderer.rules.link_open = (tokens, index, options, env, self) => {
-    setTokenAttr(tokens[index], 'target', '_blank');
-    setTokenAttr(tokens[index], 'rel', 'noreferrer noopener');
+    const hrefIndex = tokens[index].attrIndex('href');
+    const currentHref = hrefIndex >= 0 ? tokens[index].attrs?.[hrefIndex]?.[1] : undefined;
+    if (typeof currentHref === 'string' && normalizeLocalFileSource(currentHref)) {
+      setTokenAttr(tokens[index], LOCAL_FILE_LINK_DATA_ATTRIBUTE, currentHref);
+      // Webview 宿主不会直接打开 file:，使用可聚焦的占位 href，并由 TextPartView 阻止默认导航。
+      setTokenAttr(tokens[index], 'href', '#');
+    } else {
+      setTokenAttr(tokens[index], 'target', '_blank');
+      setTokenAttr(tokens[index], 'rel', 'noreferrer noopener');
+    }
     return defaultLinkOpen ? defaultLinkOpen(tokens, index, options, env, self) : self.renderToken(tokens, index, options);
   };
 

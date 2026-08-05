@@ -1,5 +1,5 @@
 import * as fs from 'node:fs';
-import { isTransientFileBusyError, retryTransientFileOperationSync, sleepSync, writeFileAtomicDurableSync } from './durableWrite';
+import { isTransientFileBusyError, retryTransientFileOperationSync, sleepSync, writeFileAtomicSync } from './durableWrite';
 
 export { isTransientFileBusyError, retryTransientFileOperationSync, sleepSync };
 
@@ -32,7 +32,7 @@ export function readJsonFileStrictSync<T = unknown>(filePath: string): SyncJsonR
 }
 
 export function writeJsonFileAtomicSync(filePath: string, value: unknown): void {
-  writeFileAtomicDurableSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
+  writeFileAtomicSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 export function unlinkWithRetrySync(filePath: string, ignoreMissing = false): void {

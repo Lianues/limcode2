@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as vscode from 'vscode';
-import { writeFileAtomicDurable } from './durableWrite';
+import { writeFileAtomic } from './durableWrite';
 import { isNodeFsStorageUri, nodeFsStoragePath } from './localStorageUri';
 
 export interface StorageDeleteOptions {
@@ -47,12 +47,12 @@ export async function readStorageFile(uri: vscode.Uri): Promise<Uint8Array> {
 }
 
 /**
- * 原先这里是就地覆盖写：崩溃时目标文件可能被截断或写成半截内容。改为原子 + fsync
- * 发布，保证读到的永远是某一次完整写入的结果。
+ * 二进制业务文件至少通过临时文件原子发布，避免进程崩溃留下半截目标文件。
+ * 当前调用方是可从 canonical attachment blob 重建的 opened 缓存，因此不强制 fsync。
  */
 export async function writeStorageFile(uri: vscode.Uri, data: Uint8Array): Promise<void> {
   if (isNodeFsStorageUri(uri)) {
-    await writeFileAtomicDurable(nodeFsStoragePath(uri), data);
+    await writeFileAtomic(nodeFsStoragePath(uri), data);
     return;
   }
   await vscode.workspace.fs.writeFile(uri, data);

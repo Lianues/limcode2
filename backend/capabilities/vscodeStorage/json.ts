@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as vscode from 'vscode';
-import { writeFileAtomicDurable } from './durableWrite';
+import { writeFileAtomic, writeFileAtomicDurable } from './durableWrite';
 import { isNodeFsStorageUri, nodeFsStoragePath } from './localStorageUri';
 
 export interface ReadJsonOptions {
@@ -59,9 +59,22 @@ export async function readJson<T>(uri: vscode.Uri, options: ReadJsonOptions = {}
 }
 
 export async function writeJson(uri: vscode.Uri, value: unknown): Promise<void> {
+  return writeJsonWith(uri, value, writeFileAtomicDurable);
+}
+
+/** heartbeat、lease 等可再生协调数据只要求原子替换，不强制刷盘。 */
+export async function writeJsonAtomic(uri: vscode.Uri, value: unknown): Promise<void> {
+  return writeJsonWith(uri, value, writeFileAtomic);
+}
+
+async function writeJsonWith(
+  uri: vscode.Uri,
+  value: unknown,
+  writeLocalFile: (fsPath: string, data: Uint8Array) => Promise<void>
+): Promise<void> {
   const data = Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
   if (isNodeFsStorageUri(uri)) {
-    await writeFileAtomicDurable(nodeFsStoragePath(uri), data);
+    await writeLocalFile(nodeFsStoragePath(uri), data);
     return;
   }
   await vscode.workspace.fs.writeFile(uri, data);

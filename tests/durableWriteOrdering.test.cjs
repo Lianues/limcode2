@@ -6,10 +6,13 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
+  writeFileAtomic,
   writeFileAtomicDurable,
   writeFileAtomicDurableSync,
+  writeFileAtomicSync,
   writeFileDurable
 } = require('../dist/extension/backend/capabilities/vscodeStorage/durableWrite.js');
+const { writeJsonFileAtomicSync } = require('../dist/extension/backend/capabilities/vscodeStorage/syncJson.js');
 
 async function makeTempDir() {
   return fsp.mkdtemp(path.join(os.tmpdir(), 'limcode-durable-'));
@@ -75,6 +78,74 @@ function trackSyncDurability() {
     }
   };
 }
+
+test('非持久化原子写不调用 fsync，适用于 heartbeat 与可再生缓存', async () => {
+  const tempRoot = await makeTempDir();
+  const originalOpen = fsp.open;
+  const originalFsync = fs.fsyncSync;
+  let asyncOpenCount = 0;
+  let syncFsyncCount = 0;
+  try {
+    fsp.open = async function patchedOpen(...args) {
+      asyncOpenCount += 1;
+      return originalOpen.apply(this, args);
+    };
+    fs.fsyncSync = function patchedFsync(...args) {
+      syncFsyncCount += 1;
+      return originalFsync.apply(this, args);
+    };
+
+    const asyncTarget = path.join(tempRoot, 'heartbeat.json');
+    await writeFileAtomic(asyncTarget, JSON.stringify({ heartbeat: 1 }));
+    assert.equal(asyncOpenCount, 0, '非持久化异步原子写不应为 fsync 重新打开文件');
+
+    const syncTarget = path.join(tempRoot, 'background-command.json');
+    writeFileAtomicSync(syncTarget, JSON.stringify({ output: 1 }));
+    writeJsonFileAtomicSync(path.join(tempRoot, 'background-command-index.json'), { records: [] });
+    assert.equal(syncFsyncCount, 0, '高频同步 JSON 持久化不应调用 fsyncSync');
+  } finally {
+    fsp.open = originalOpen;
+    fs.fsyncSync = originalFsync;
+    await removeTempDir(tempRoot);
+  }
+});
+
+test('durable writer 会重试临时文件的瞬时 reopen 失败', async () => {
+  const tempRoot = await makeTempDir();
+  const originalAsyncOpen = fsp.open;
+  const originalSyncOpen = fs.openSync;
+  let asyncFailures = 0;
+  let syncFailures = 0;
+  try {
+    fsp.open = async function patchedOpen(openTarget, ...rest) {
+      if (String(openTarget).endsWith('.tmp') && asyncFailures++ === 0) {
+        const error = new Error('injected async reopen busy');
+        error.code = 'EACCES';
+        throw error;
+      }
+      return originalAsyncOpen.call(this, openTarget, ...rest);
+    };
+    const asyncTarget = path.join(tempRoot, 'async-reopen.json');
+    await writeFileAtomicDurable(asyncTarget, JSON.stringify({ ok: true }));
+    assert.ok(asyncFailures >= 2);
+
+    fs.openSync = function patchedOpenSync(openTarget, ...rest) {
+      if (String(openTarget).endsWith('.tmp') && syncFailures++ === 0) {
+        const error = new Error('injected sync reopen busy');
+        error.code = 'EACCES';
+        throw error;
+      }
+      return originalSyncOpen.call(this, openTarget, ...rest);
+    };
+    const syncTarget = path.join(tempRoot, 'sync-reopen.json');
+    writeFileAtomicDurableSync(syncTarget, JSON.stringify({ ok: true }));
+    assert.ok(syncFailures >= 2);
+  } finally {
+    fsp.open = originalAsyncOpen;
+    fs.openSync = originalSyncOpen;
+    await removeTempDir(tempRoot);
+  }
+});
 
 test('原子写在 rename 之前 fsync 数据文件', async () => {
   const tempRoot = await makeTempDir();
@@ -153,6 +224,125 @@ test('平台不支持 fsync 时写入仍然成功，不把可写变成硬失败'
     assert.ok(rejectedSyncCount >= 2, '两次写入都应该尝试过 fsync');
   } finally {
     fsp.open = originalOpen;
+    await removeTempDir(tempRoot);
+  }
+});
+
+test('真实 fsync I/O 错误会阻止异步原子发布并保留旧文件', async () => {
+  const tempRoot = await makeTempDir();
+  const originalOpen = fsp.open;
+  try {
+    const target = path.join(tempRoot, 'eio.json');
+    await fsp.writeFile(target, JSON.stringify({ existing: true }), 'utf8');
+
+    fsp.open = async function patchedOpen(openTarget, ...rest) {
+      const handle = await originalOpen.call(this, openTarget, ...rest);
+      handle.sync = async () => {
+        const error = new Error('injected fsync I/O failure');
+        error.code = 'EIO';
+        throw error;
+      };
+      return handle;
+    };
+
+    await assert.rejects(
+      writeFileAtomicDurable(target, JSON.stringify({ replacement: true })),
+      (error) => error.code === 'EIO'
+    );
+    assert.deepEqual(JSON.parse(await fsp.readFile(target, 'utf8')), { existing: true });
+  } finally {
+    fsp.open = originalOpen;
+    await removeTempDir(tempRoot);
+  }
+});
+
+test('POSIX 目录 fsync 的真实 I/O 错误会向上传递', { skip: process.platform === 'win32' }, async () => {
+  const tempRoot = await makeTempDir();
+  const originalOpen = fsp.open;
+  try {
+    const target = path.join(tempRoot, 'directory-eio.json');
+    fsp.open = async function patchedOpen(openTarget, ...rest) {
+      const handle = await originalOpen.call(this, openTarget, ...rest);
+      if (path.resolve(String(openTarget)) === path.resolve(tempRoot)) {
+        handle.sync = async () => {
+          const error = new Error('injected directory fsync I/O failure');
+          error.code = 'EIO';
+          throw error;
+        };
+      }
+      return handle;
+    };
+
+    await assert.rejects(
+      writeFileAtomicDurable(target, JSON.stringify({ published: true })),
+      (error) => error.code === 'EIO'
+    );
+    assert.deepEqual(JSON.parse(await fsp.readFile(target, 'utf8')), { published: true });
+  } finally {
+    fsp.open = originalOpen;
+    await removeTempDir(tempRoot);
+  }
+});
+
+test('真实 fsync I/O 错误会阻止同步原子发布并保留旧文件', async () => {
+  const tempRoot = await makeTempDir();
+  const originalFsync = fs.fsyncSync;
+  try {
+    const target = path.join(tempRoot, 'sync-eio.json');
+    fs.writeFileSync(target, JSON.stringify({ existing: true }), 'utf8');
+
+    fs.fsyncSync = () => {
+      const error = new Error('injected sync fsync I/O failure');
+      error.code = 'EIO';
+      throw error;
+    };
+
+    assert.throws(
+      () => writeFileAtomicDurableSync(target, JSON.stringify({ replacement: true })),
+      (error) => error.code === 'EIO'
+    );
+    assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf8')), { existing: true });
+  } finally {
+    fs.fsyncSync = originalFsync;
+    await removeTempDir(tempRoot);
+  }
+});
+
+test('同步失败路径会重试清理临时文件', async () => {
+  const tempRoot = await makeTempDir();
+  const originalRename = fs.renameSync;
+  const originalRm = fs.rmSync;
+  let cleanupAttempts = 0;
+  try {
+    const target = path.join(tempRoot, 'sync-cleanup.json');
+    fs.writeFileSync(target, JSON.stringify({ existing: true }), 'utf8');
+
+    fs.renameSync = function patchedRename(from, to) {
+      if (path.resolve(String(to)) === path.resolve(target)) {
+        const error = new Error('injected rename failure');
+        error.code = 'EACCES';
+        throw error;
+      }
+      return originalRename.call(this, from, to);
+    };
+    fs.rmSync = function patchedRm(rmTarget, options) {
+      if (String(rmTarget).endsWith('.tmp') && cleanupAttempts++ === 0) {
+        const error = new Error('injected cleanup busy');
+        error.code = 'EBUSY';
+        throw error;
+      }
+      return originalRm.call(this, rmTarget, options);
+    };
+
+    assert.throws(
+      () => writeFileAtomicDurableSync(target, JSON.stringify({ replacement: true })),
+      (error) => error.code === 'EACCES'
+    );
+    assert.ok(cleanupAttempts >= 2, '临时文件清理遇到 EBUSY 后应重试');
+    assert.deepEqual(fs.readdirSync(tempRoot).filter((name) => name.endsWith('.tmp')), []);
+  } finally {
+    fs.renameSync = originalRename;
+    fs.rmSync = originalRm;
     await removeTempDir(tempRoot);
   }
 });

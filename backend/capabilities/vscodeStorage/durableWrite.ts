@@ -23,8 +23,8 @@ import * as path from 'node:path';
 
 let atomicWriteSequence = 0;
 
-const RENAME_MAX_ATTEMPTS = 4;
-const RENAME_BASE_DELAY_MS = 10;
+const TRANSIENT_FILE_OPERATION_MAX_ATTEMPTS = 4;
+const TRANSIENT_FILE_OPERATION_BASE_DELAY_MS = 10;
 
 export function isTransientFileBusyError(error: unknown): boolean {
   const code = (error as { code?: unknown } | null | undefined)?.code;
@@ -35,8 +35,32 @@ function createAtomicTempPath(fsPath: string): string {
   return `${fsPath}.${process.pid}.${Date.now()}.${atomicWriteSequence++}.tmp`;
 }
 
+/** 不强制刷盘的原子写，适用于 heartbeat、lease 与可再生缓存。 */
+export async function writeFileAtomic(fsPath: string, data: Uint8Array | string): Promise<void> {
+  await fsp.mkdir(path.dirname(fsPath), { recursive: true });
+  const tempPath = createAtomicTempPath(fsPath);
+  try {
+    await fsp.writeFile(tempPath, data);
+    await renameWithRetry(tempPath, fsPath);
+  } finally {
+    await removeAtomicTempBestEffort(tempPath);
+  }
+}
+
+/** writeFileAtomic 的同步版本；不执行 fsync，避免高频 heartbeat 阻塞 Extension Host。 */
+export function writeFileAtomicSync(fsPath: string, data: Uint8Array | string): void {
+  fs.mkdirSync(path.dirname(fsPath), { recursive: true });
+  const tempPath = createAtomicTempPath(fsPath);
+  try {
+    fs.writeFileSync(tempPath, data);
+    renameWithRetrySync(tempPath, fsPath);
+  } finally {
+    removeAtomicTempBestEffortSync(tempPath);
+  }
+}
+
 /**
- * 原子发布一次写入，数据在 rename 前已 fsync 落盘。
+ * 原子发布一次持久化写入，数据在 rename 前已 fsync 落盘。
  *
  * 失败时一律清理临时文件：没有任何恢复逻辑会去读带随机 pid/序号后缀的 .tmp，
  * 而频繁写入的索引一旦遇到持续的 rename 失败（杀软锁定等）会让它们快速堆积。
@@ -48,9 +72,9 @@ export async function writeFileAtomicDurable(fsPath: string, data: Uint8Array | 
     await writeFileDurable(tempPath, data);
     await renameWithRetry(tempPath, fsPath);
   } finally {
-    await fsp.rm(tempPath, { force: true }).catch(() => undefined);
+    await removeAtomicTempBestEffort(tempPath);
   }
-  await syncDirectoryBestEffort(path.dirname(fsPath));
+  await syncDirectoryAfterRename(path.dirname(fsPath));
 }
 
 /** writeFileAtomicDurable 的同步版本，供 shutdown 路径等无法 await 的场景使用。 */
@@ -61,13 +85,9 @@ export function writeFileAtomicDurableSync(fsPath: string, data: Uint8Array | st
     writeFileDurableSync(tempPath, data);
     renameWithRetrySync(tempPath, fsPath);
   } finally {
-    try {
-      fs.rmSync(tempPath, { force: true });
-    } catch {
-      // 清理失败不应掩盖写入阶段的原始错误。
-    }
+    removeAtomicTempBestEffortSync(tempPath);
   }
-  syncDirectoryBestEffortSync(path.dirname(fsPath));
+  syncDirectoryAfterRenameSync(path.dirname(fsPath));
 }
 
 /**
@@ -79,9 +99,16 @@ export function writeFileAtomicDurableSync(fsPath: string, data: Uint8Array | st
  */
 export async function writeFileDurable(fsPath: string, data: Uint8Array | string): Promise<void> {
   await fsp.writeFile(fsPath, data);
-  const handle = await fsp.open(fsPath, 'r+');
+  let handle: fsp.FileHandle;
   try {
-    await fsyncHandleBestEffort(handle, fsPath);
+    handle = await openFileHandleWithRetry(fsPath, 'r+');
+  } catch (error) {
+    if (!isFsyncUnsupportedError(error)) throw error;
+    warnFsyncUnsupported(fsPath, error);
+    return;
+  }
+  try {
+    await syncFileHandle(handle, fsPath);
   } finally {
     await handle.close().catch(() => undefined);
   }
@@ -89,9 +116,16 @@ export async function writeFileDurable(fsPath: string, data: Uint8Array | string
 
 function writeFileDurableSync(fsPath: string, data: Uint8Array | string): void {
   fs.writeFileSync(fsPath, data);
-  const fd = fs.openSync(fsPath, 'r+');
+  let fd: number;
   try {
-    fsyncFdBestEffort(fd, fsPath);
+    fd = retryTransientFileOperationSync(() => fs.openSync(fsPath, 'r+'));
+  } catch (error) {
+    if (!isFsyncUnsupportedError(error)) throw error;
+    warnFsyncUnsupported(fsPath, error);
+    return;
+  }
+  try {
+    syncFileDescriptor(fd, fsPath);
   } finally {
     try {
       fs.closeSync(fd);
@@ -102,56 +136,49 @@ function writeFileDurableSync(fsPath: string, data: Uint8Array | string): void {
 }
 
 /**
- * fsync 失败不往上抛：部分挂载点（网络盘、某些 WSL / 容器 overlay）并不实现 fsync。
- * 若在这里抛错会把“持久化变弱”升级为“写入直接失败”，比改造前更糟。失败时退化回
- * 原有行为并告警一次，保证该改动只增不减。
+ * 只有文件系统明确不实现 fsync 时才允许退化为原来的 OS 回写语义。
+ * EIO 等真实磁盘错误必须原样抛出，使原子写在 rename 前终止并保留旧目标文件。
  */
-async function fsyncHandleBestEffort(handle: fsp.FileHandle, fsPath?: string): Promise<void> {
+async function syncFileHandle(handle: fsp.FileHandle, fsPath?: string): Promise<void> {
   try {
     await handle.sync();
   } catch (error) {
-    warnFsyncFailed(fsPath, error);
+    if (!isFsyncUnsupportedError(error)) throw error;
+    warnFsyncUnsupported(fsPath, error);
   }
 }
 
-function fsyncFdBestEffort(fd: number, fsPath?: string): void {
+function syncFileDescriptor(fd: number, fsPath?: string): void {
   try {
     fs.fsyncSync(fd);
   } catch (error) {
-    warnFsyncFailed(fsPath, error);
+    if (!isFsyncUnsupportedError(error)) throw error;
+    warnFsyncUnsupported(fsPath, error);
   }
 }
 
 let fsyncUnsupportedWarned = false;
 
-/** 挂载点根本不实现 fsync 时返回的错误码：这是固定结论，告警一次就够了。 */
+/** 挂载点根本不实现 fsync 时可能返回的错误码。 */
 const FSYNC_UNSUPPORTED_CODES = new Set(['EINVAL', 'ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'ENOTTY', 'EPERM']);
 
-function warnFsyncFailed(fsPath: string | undefined, error: unknown): void {
+function isFsyncUnsupportedError(error: unknown): boolean {
   const code = (error as { code?: unknown } | null | undefined)?.code;
-  if (typeof code === 'string' && FSYNC_UNSUPPORTED_CODES.has(code)) {
-    if (fsyncUnsupportedWarned) return;
-    fsyncUnsupportedWarned = true;
-  }
-  // EIO 之类是真实的磁盘故障，必须每次都说出来；若与「平台不支持」共用一个
-  // warn-once 开关，用户会在数据实际已经不安全的状态下只收到过一条提示。
+  return typeof code === 'string' && FSYNC_UNSUPPORTED_CODES.has(code);
+}
+
+function warnFsyncUnsupported(fsPath: string | undefined, error: unknown): void {
+  if (fsyncUnsupportedWarned) return;
+  fsyncUnsupportedWarned = true;
   console.warn(
-    `[LimCode] fsync failed for storage write${fsPath ? ` (${fsPath})` : ''}; `
+    `[LimCode] fsync is unsupported for storage write${fsPath ? ` (${fsPath})` : ''}; `
       + 'data durability falls back to OS flushing and may be lost on power failure.',
     error
   );
 }
 
 export async function renameWithRetry(source: string, target: string): Promise<void> {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await fsp.rename(source, target);
-      return;
-    } catch (error) {
-      if (attempt >= RENAME_MAX_ATTEMPTS || !isTransientFileBusyError(error)) throw error;
-      await delay(RENAME_BASE_DELAY_MS * (2 ** (attempt - 1)));
-    }
-  }
+  return retryTransientFileOperation(() => fsp.rename(source, target));
 }
 
 export function renameWithRetrySync(source: string, target: string): void {
@@ -176,34 +203,35 @@ export function sleepSync(milliseconds: number): void {
 }
 
 /**
- * 目录 fsync 能把 rename 产生的目录项变更落盘，但 Windows 上没有收益：对目录句柄调用
- * fsync 实测恒定返回 EPERM，等于每次写入都多一次注定失败的 open + fsync + catch。
- * NTFS 的 rename 元数据本身由 $LogFile 保证，真正不能省的是数据 fsync，而那一步已经
- * 在 writeFileDurable 里做过了。因此按平台门控：Windows 跳过，POSIX 正常做。
+ * 目录 fsync 能把 rename 产生的目录项变更落盘。Windows 对目录句柄调用 fsync 会返回
+ * EPERM，因此按平台门控跳过；POSIX 下只有明确“不支持 fsync”的错误允许降级，EIO 等
+ * 真实故障会向上传递，避免上层在提交不确定时继续清理旧 generation。
  */
 const DIRECTORY_FSYNC_SUPPORTED = process.platform !== 'win32';
 
-async function syncDirectoryBestEffort(dirPath: string): Promise<void> {
+async function syncDirectoryAfterRename(dirPath: string): Promise<void> {
   if (!DIRECTORY_FSYNC_SUPPORTED) return;
   let handle: fsp.FileHandle | undefined;
   try {
-    handle = await fsp.open(dirPath, 'r');
+    handle = await openFileHandleWithRetry(dirPath, 'r');
     await handle.sync();
-  } catch {
-    // 目录不可打开或不支持 fsync 时退化为无目录持久化保证。
+  } catch (error) {
+    if (!isFsyncUnsupportedError(error)) throw error;
+    warnFsyncUnsupported(dirPath, error);
   } finally {
     await handle?.close().catch(() => undefined);
   }
 }
 
-function syncDirectoryBestEffortSync(dirPath: string): void {
+function syncDirectoryAfterRenameSync(dirPath: string): void {
   if (!DIRECTORY_FSYNC_SUPPORTED) return;
   let fd: number | undefined;
   try {
-    fd = fs.openSync(dirPath, 'r');
+    fd = retryTransientFileOperationSync(() => fs.openSync(dirPath, 'r'));
     fs.fsyncSync(fd);
-  } catch {
-    // 同上。
+  } catch (error) {
+    if (!isFsyncUnsupportedError(error)) throw error;
+    warnFsyncUnsupported(dirPath, error);
   } finally {
     if (fd !== undefined) {
       try {
@@ -212,6 +240,33 @@ function syncDirectoryBestEffortSync(dirPath: string): void {
         // ignore
       }
     }
+  }
+}
+
+async function openFileHandleWithRetry(fsPath: string, flags: string): Promise<fsp.FileHandle> {
+  return retryTransientFileOperation(() => fsp.open(fsPath, flags));
+}
+
+async function retryTransientFileOperation<T>(action: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await action();
+    } catch (error) {
+      if (attempt >= TRANSIENT_FILE_OPERATION_MAX_ATTEMPTS || !isTransientFileBusyError(error)) throw error;
+      await delay(TRANSIENT_FILE_OPERATION_BASE_DELAY_MS * (2 ** (attempt - 1)));
+    }
+  }
+}
+
+async function removeAtomicTempBestEffort(tempPath: string): Promise<void> {
+  await retryTransientFileOperation(() => fsp.rm(tempPath, { force: true })).catch(() => undefined);
+}
+
+function removeAtomicTempBestEffortSync(tempPath: string): void {
+  try {
+    retryTransientFileOperationSync(() => fs.rmSync(tempPath, { force: true }));
+  } catch {
+    // 清理失败不应掩盖写入阶段的原始错误。
   }
 }
 

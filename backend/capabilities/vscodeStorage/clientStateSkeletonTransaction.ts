@@ -18,7 +18,7 @@ import {
   type ClientStateSkeletonRecord,
   type ClientStateSkeletonStoreKey
 } from './clientStateSkeletonStores';
-import { isFileNotFoundError, readJsonStrict, writeJson } from './json';
+import { isFileNotFoundError, readJsonStrict, writeJson, writeJsonAtomic } from './json';
 import {
   loadRecordStoreGeneration,
   prepareRecordStoreGeneration,
@@ -135,7 +135,7 @@ export async function openClientStateSkeletonSnapshot(
       heartbeatAt: now
     };
     await ensureStorageDirectory(pinsRootUri(paths));
-    await writeJson(pinUri(paths, pinId), pin);
+    await writeJsonAtomic(pinUri(paths, pinId), pin);
     return {
       pinId,
       snapshotId: active.manifest.snapshotId,
@@ -152,7 +152,7 @@ export async function refreshClientStateSkeletonPin(paths: StoragePaths, pin: Pi
     if (result.status !== 'ok') throw new Error(`Client-state skeleton pin is unavailable: ${uri.fsPath}`);
     const current = parsePin(result.value, uri);
     if (current.snapshotId !== pin.snapshotId) throw new Error(`Client-state skeleton pin snapshot mismatch: ${pin.pinId}`);
-    await writeJson(uri, { ...current, heartbeatAt: Date.now() } satisfies ClientStateSkeletonPinFile);
+    await writeJsonAtomic(uri, { ...current, heartbeatAt: Date.now() } satisfies ClientStateSkeletonPinFile);
   });
 }
 

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import * as vscode from 'vscode';
 import { STORAGE_VERSION } from './constants';
 import { sameFsPath } from './globalStatus';
-import { isFileNotFoundError, readJsonStrict, writeJson } from './json';
+import { isFileNotFoundError, readJsonStrict, writeJsonAtomic } from './json';
 
 const DATA_ROOT_LEASES_DIR = '.limcode-data-root-leases';
 const DATA_ROOT_MIGRATION_LOCK_FILE = '.limcode-data-root-migration';
@@ -127,7 +127,7 @@ export class DataRootProcessLease {
       activeRootPath: this.activeRootPath(),
       ...(this.activeOperation ? { activeOperation: this.activeOperation } : {})
     };
-    await writeJson(leaseUri(this.context, this.instanceId), record);
+    await writeJsonAtomic(leaseUri(this.context, this.instanceId), record);
     this.lastError = undefined;
   }
 }

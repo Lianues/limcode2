@@ -247,7 +247,11 @@ function handleMarkdownClick(event: MouseEvent): void {
 }
 
 .rc-markdown :deep(img) {
-  max-width: 100%;
+  display: block;
+  width: auto;
+  max-width: min(100%, 50vw);
+  max-height: 50vh;
   height: auto;
+  object-fit: contain;
 }
 </style>

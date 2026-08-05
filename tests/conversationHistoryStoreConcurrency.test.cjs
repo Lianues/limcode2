@@ -355,7 +355,9 @@ if (process.argv[2] === '--worker') {
     }
   });
 
-  test('损坏或未知结构的 index 拒绝写入且 UI 读取仅告警返回空', async () => {
+  // 注意：这里刻意不创建任何 generation 副本。index 损坏且无副本可回退时，
+  // 行为仍然是「拒绝写入 + UI 告警返回空」；有副本可回退的场景见下方两个恢复用例。
+  test('损坏或未知结构的 index 且无副本可回退时拒绝写入且 UI 读取仅告警返回空', async () => {
     for (const [label, content, pattern] of [
       ['损坏 JSON', 'not-json{{{', /index JSON is invalid/i],
       ['未知结构', JSON.stringify({ schemaVersion: 1, savedAt: '2026-07-22T00:00:00.000Z', scope: { kind: 'all' }, pages: [] }), /index.*(generation|structure|invalid|unknown)/i]
@@ -418,7 +420,7 @@ if (process.argv[2] === '--worker') {
     }
   });
 
-  test('index 引用的页面损坏时拒绝写入，UI 读取告警返回空且不回写', async () => {
+  test('index 引用的页面损坏时用保留 generation 恢复而不是永久拒写', async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-history-'));
     try {
       const paths = makePaths(tempRoot);
@@ -427,28 +429,147 @@ if (process.argv[2] === '--worker') {
       }
       const before = await readCanonicalProjection(tempRoot);
       const pagePath = path.join(historyRoot(tempRoot), ...before.index.pages[0].file.split('/'));
+      // 掉电后 rename 的元数据已落盘、内容还在页缓存里的典型形态：文件在，但内容不是合法 JSON。
       await fs.writeFile(pagePath, 'not-json{{{', 'utf8');
-
-      await assert.rejects(
-        upsertConversationHistoryEntryInStore(paths, makeEntry('new-after-corrupt-page', 100)),
-        /page JSON is invalid/i
-      );
-      const indexAfter = JSON.parse(await fs.readFile(historyIndexPath(tempRoot), 'utf8'));
-      assert.equal(indexAfter.generation, before.index.generation);
-      assert.equal(indexAfter.total, 3);
 
       let warned = false;
       const originalWarn = console.warn;
       console.warn = (...args) => { warned = true; originalWarn(...args); };
       try {
         const page = await loadConversationHistoryPageFromStore(paths, { scope: { kind: 'all' }, limit: 10 });
-        assert.deepEqual(page.entries, []);
-        assert.equal(page.pageInfo.total, 0);
+        // 当前一代整页读不出来时回退到上一代仍然完好的副本，而不是把侧边栏刷成空白。
+        assert.deepEqual(page.entries.map((entry) => entry.id).sort(), ['seed-0', 'seed-1']);
         assert.equal(warned, true);
       } finally {
         console.warn = originalWarn;
       }
-      assert.equal(JSON.parse(await fs.readFile(historyIndexPath(tempRoot), 'utf8')).generation, before.index.generation);
+
+      // 写入也不再永久瘫痪：基于恢复出来的基线继续发布新一代。
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('new-after-corrupt-page', 100));
+      const healed = await readCanonicalProjection(tempRoot);
+      assert.notEqual(healed.index.generation, before.index.generation);
+      assert.deepEqual(
+        new Set(healed.entries.map((entry) => entry.id)),
+        new Set(['seed-0', 'seed-1', 'new-after-corrupt-page'])
+      );
+    } finally {
+      await removeTempRoot(tempRoot);
+    }
+  });
+
+  test('index.json 被掉电写成全零时仍能从保留 generation 自愈', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-history-'));
+    try {
+      const paths = makePaths(tempRoot);
+      for (let index = 0; index < 3; index += 1) {
+        await upsertConversationHistoryEntryInStore(paths, makeEntry(`seed-${index}`, index));
+      }
+      const before = await readCanonicalProjection(tempRoot);
+
+      // 复刻真实事故：文件大小不变，内容被 NUL 填满。此前这会让侧边栏永久空白且写入永久报错。
+      const indexPath = historyIndexPath(tempRoot);
+      const originalSize = (await fs.stat(indexPath)).size;
+      await fs.writeFile(indexPath, Buffer.alloc(originalSize, 0));
+
+      const page = await loadConversationHistoryPageFromStore(paths, { scope: { kind: 'all' }, limit: 10 });
+      // 只有 index 坏了，generation 里的页还是完整的，应该一条都不丢。
+      assert.deepEqual(
+        new Set(page.entries.map((entry) => entry.id)),
+        new Set(['seed-0', 'seed-1', 'seed-2'])
+      );
+
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('after-zeroed-index', 100));
+      const healed = await readCanonicalProjection(tempRoot);
+      assert.notEqual(healed.index.generation, before.index.generation);
+      assert.deepEqual(
+        new Set(healed.entries.map((entry) => entry.id)),
+        new Set(['seed-0', 'seed-1', 'seed-2', 'after-zeroed-index'])
+      );
+    } finally {
+      await removeTempRoot(tempRoot);
+    }
+  });
+
+  test('没有任何完好副本可用时维持 fail-closed，不拿空列表覆盖', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-history-'));
+    try {
+      const paths = makePaths(tempRoot);
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('only-seed', 1));
+      const before = await readCanonicalProjection(tempRoot);
+      const pagePath = path.join(historyRoot(tempRoot), ...before.index.pages[0].file.split('/'));
+      await fs.writeFile(pagePath, 'not-json{{{', 'utf8');
+
+      // 唯一一代的页坏了、又没有更早的副本可合并：宁可拒写，也不能把空列表发布成新一代。
+      await assert.rejects(
+        upsertConversationHistoryEntryInStore(paths, makeEntry('must-not-publish', 2)),
+        /page is unreadable/i
+      );
+      const indexAfter = JSON.parse(await fs.readFile(historyIndexPath(tempRoot), 'utf8'));
+      assert.equal(indexAfter.generation, before.index.generation);
+      assert.equal(indexAfter.total, 1);
+    } finally {
+      await removeTempRoot(tempRoot);
+    }
+  });
+
+  test('页面读取瞬时失败（ioError）时维持 fail-closed，恢复后一条不丢', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-history-'));
+    try {
+      const paths = makePaths(tempRoot);
+      for (let index = 0; index < 3; index += 1) {
+        await upsertConversationHistoryEntryInStore(paths, makeEntry(`seed-${index}`, index));
+      }
+      const before = await readCanonicalProjection(tempRoot);
+      const pagePath = path.join(historyRoot(tempRoot), ...before.index.pages[0].file.split('/'));
+      const pageBackup = await fs.readFile(pagePath);
+
+      // 用同名目录顶替页文件，制造真实的读取失败（EISDIR / EPERM）。这类故障与内容损坏
+      // 有本质区别：页本体完好，只是这一刻读不到（杀软扫描、句柄耗尽都是同类场景）。
+      await fs.rm(pagePath, { force: true });
+      await fs.mkdir(pagePath, { recursive: true });
+
+      // 绝不能拿「跳过坏页」拼出来的投影当写入基线：那会把本可以读回来的会话永久删掉。
+      await assert.rejects(
+        upsertConversationHistoryEntryInStore(paths, makeEntry('must-not-publish', 100)),
+        /page is unreadable \(ioError\)/i
+      );
+      const indexAfter = JSON.parse(await fs.readFile(historyIndexPath(tempRoot), 'utf8'));
+      assert.equal(indexAfter.generation, before.index.generation);
+      assert.equal(indexAfter.total, 3);
+
+      // 瞬时故障消失后写入恢复正常，三条种子全在 —— 这正是 fail-closed 保住的东西。
+      await fs.rm(pagePath, { recursive: true, force: true });
+      await fs.writeFile(pagePath, pageBackup);
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('after-transient-io-error', 100));
+      const healed = await readCanonicalProjection(tempRoot);
+      assert.deepEqual(
+        new Set(healed.entries.map((entry) => entry.id)),
+        new Set(['seed-0', 'seed-1', 'seed-2', 'after-transient-io-error'])
+      );
+    } finally {
+      await removeTempRoot(tempRoot);
+    }
+  });
+
+  test('缺页且无任何完好副本时也维持 fail-closed', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-history-'));
+    try {
+      const paths = makePaths(tempRoot);
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('only-seed', 1));
+      const before = await readCanonicalProjection(tempRoot);
+      assert.equal(before.index.total, 1);
+
+      // 唯一一代的页丢了，也没有更早的副本可合并：此时恢复结果为空，
+      // 而 index.total 却是 1 —— 把空列表发布成新一代等于抹掉整份会话列表。
+      await fs.rm(path.join(historyRoot(tempRoot), ...before.index.pages[0].file.split('/')), { force: true });
+
+      await assert.rejects(
+        upsertConversationHistoryEntryInStore(paths, makeEntry('must-not-publish', 2)),
+        /page is missing/i
+      );
+      const indexAfter = JSON.parse(await fs.readFile(historyIndexPath(tempRoot), 'utf8'));
+      assert.equal(indexAfter.generation, before.index.generation);
+      assert.equal(indexAfter.total, 1);
     } finally {
       await removeTempRoot(tempRoot);
     }
@@ -474,7 +595,9 @@ if (process.argv[2] === '--worker') {
       const healed = await readCanonicalProjection(tempRoot);
       assert.deepEqual(new Set(healed.entries.map((entry) => entry.id)), new Set(['retained-before-missing', 'after-missing-page']));
       assert.notEqual(healed.index.generation, broken.index.generation);
-      assert.equal((await listGenerationIds(tempRoot)).includes(broken.index.generation), false);
+      // 缺页的 generation 会留在宽限期内：它是排障与二次恢复的素材，而
+      // tryLoadProjectionFromGenerationPages 的页序连续性校验会让恢复逻辑自动跳过它。
+      assert.equal((await listGenerationIds(tempRoot)).includes(broken.index.generation), true);
     } finally {
       await removeTempRoot(tempRoot);
     }
@@ -536,7 +659,7 @@ if (process.argv[2] === '--worker') {
     }
   });
 
-  test('generation 清理至少保留当前与前一代并删除更旧 generation', async () => {
+  test('generation 清理保留宽限期内的历史副本并删除过期 generation', async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-history-'));
     try {
       const paths = makePaths(tempRoot);
@@ -547,10 +670,20 @@ if (process.argv[2] === '--worker') {
       assert.notEqual(gen2, gen1);
       assert.deepEqual(new Set(await listGenerationIds(tempRoot)), new Set([gen1, gen2]));
 
+      // 一次掉电能同时写坏 current 与 previous（事故中两者只相隔 8 秒），
+      // 因此宽限期内发布过的 generation 都要留作退路，而不是只留两份。
       await upsertConversationHistoryEntryInStore(paths, makeEntry('gen-3', 3));
       const gen3 = (await readCanonicalProjection(tempRoot)).index.generation;
       assert.notEqual(gen3, gen2);
-      assert.deepEqual(new Set(await listGenerationIds(tempRoot)), new Set([gen2, gen3]));
+      assert.deepEqual(new Set(await listGenerationIds(tempRoot)), new Set([gen1, gen2, gen3]));
+
+      // 宽限期之外的 generation 仍然照常清理，避免无限堆积。
+      const expiredGeneration = '20260101-010203-004-000000ff';
+      await fs.mkdir(path.join(historyRoot(tempRoot), 'generations', expiredGeneration, 'pages'), { recursive: true });
+      await upsertConversationHistoryEntryInStore(paths, makeEntry('gen-4', 4));
+      const remaining = new Set(await listGenerationIds(tempRoot));
+      assert.equal(remaining.has(expiredGeneration), false);
+      assert.equal(remaining.has(gen3), true);
     } finally {
       await removeTempRoot(tempRoot);
     }

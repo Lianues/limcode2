@@ -29,13 +29,28 @@ const PAGES_DIR = 'pages';
 const READER_MAX_ATTEMPTS = 3;
 const HISTORY_PAGE_FILE_PATTERN = /^\d{6}\.json$/;
 
-class MissingIndexedConversationHistoryPageError extends Error {
-  public readonly pageUri: vscode.Uri;
+/**
+ * 索引引用的页读不出来的原因。
+ * - missing：文件不在了，页内容仍可能存在于其他 generation。
+ * - invalid：文件在、但内容不是合法 JSON。掉电时 rename 的元数据先落盘、内容还在页缓存，
+ *   重启后就会出现「文件存在、大小正确、内容全零」，这是本地实际发生过的事故形态。
+ * - ioError：读取本身失败（权限、占用、坏道等）。
+ */
+type UnreadableIndexedHistoryPageReason = 'missing' | 'invalid' | 'ioError';
 
-  public constructor(pageUri: vscode.Uri) {
-    super(`Indexed conversation history page is missing: ${pageUri.fsPath}`);
-    this.name = 'MissingIndexedConversationHistoryPageError';
+class UnreadableIndexedConversationHistoryPageError extends Error {
+  public readonly pageUri: vscode.Uri;
+  public readonly reason: UnreadableIndexedHistoryPageReason;
+
+  public constructor(pageUri: vscode.Uri, reason: UnreadableIndexedHistoryPageReason) {
+    super(
+      reason === 'missing'
+        ? `Indexed conversation history page is missing: ${pageUri.fsPath}`
+        : `Indexed conversation history page is unreadable (${reason}): ${pageUri.fsPath}`
+    );
+    this.name = 'UnreadableIndexedConversationHistoryPageError';
     this.pageUri = pageUri;
+    this.reason = reason;
   }
 }
 
@@ -158,20 +173,39 @@ async function loadCanonicalProjectionForWrite(paths: StoragePaths): Promise<Con
     }
     return { entries: [], originLinks: [] };
   }
-  if (result.status === 'invalid') {
-    throw new Error(`Conversation history index JSON is invalid: ${indexUri.fsPath}`);
-  }
   if (result.status === 'ioError') {
+    // 读取本身失败（文件被占用、句柄耗尽、瞬时坏道）时 index 内容很可能完好，重试就能读到。
+    // 此时拿历史副本当写入基线会把这一代的增量永久删掉，所以维持 fail-closed 交给上层重试。
     throw new Error(`Failed to read conversation history index: ${indexUri.fsPath}`);
+  }
+  if (result.status === 'invalid') {
+    // 内容已毁，重试无意义。此前这里直接抛错，导致写入永久瘫痪、侧边栏永久空白，
+    // 且不留任何自愈机会。改为回退到保留期内的完整 generation 作为写入基线；连一份完整
+    // 副本都找不到时才维持 fail-closed，避免把空数据发布成新一代、抹掉仍然完好的会话列表。
+    const recovered = await loadLatestCompleteGenerationProjection(paths.conversationHistoryRootUri);
+    if (recovered) {
+      console.warn(`[LimCode] Conversation history index JSON is invalid; rebuilt write baseline from retained generation ${recovered.generation}: ${indexUri.fsPath}`);
+      return recovered;
+    }
+    throw new Error(`Conversation history index JSON is invalid: ${indexUri.fsPath}`);
   }
 
   const snapshot = parseCanonicalIndex(result.value, indexUri);
   try {
     return await loadProjectionFromIndex(paths.conversationHistoryRootUri, snapshot.index);
   } catch (error) {
-    if (!isMissingIndexedHistoryPageError(error)) throw error;
-    console.warn(`[LimCode] Conversation history index references a missing page; rebuilding from retained generations. ${formatErrorMessage(error)}`);
-    return recoverProjectionAfterMissingIndexedPages(paths.conversationHistoryRootUri, snapshot.index);
+    if (!isUnreadableIndexedHistoryPageError(error)) throw error;
+    // ioError 意味着页文件本身可能完好，只是这一刻读不到（杀软扫描、句柄耗尽等瞬时故障）。
+    // 跳过它拼出来的基线会把本可以读回来的会话永久删掉，必须维持 fail-closed 交给重试。
+    if (error.reason === 'ioError') throw error;
+    // 缺页或内容损坏：用「保留副本 ∪ 当前 index 里还读得出来的页」合并出基线，恢复面最大。
+    const recovered = await recoverProjectionAfterUnreadableIndexedPages(paths.conversationHistoryRootUri, snapshot.index);
+    // 一条都恢复不出来时不能发布：空投影作为新一代会抹掉整份会话列表。
+    if (recovered.entries.length === 0 && snapshot.index.total > 0) throw error;
+    // 记下恢复前后的条目数：大面积损坏时（比如 6 页坏了 5 页）仍然会发布恢复结果，
+    // 但日志里能直接看出丢了多少，而不是静默缩水。
+    console.warn(`[LimCode] Conversation history page is ${error.reason}; rebuilt write baseline with ${recovered.entries.length} of ${snapshot.index.total} entries. ${formatErrorMessage(error)}`);
+    return recovered;
   }
 }
 
@@ -179,70 +213,98 @@ async function loadCanonicalProjectionForUi(paths: StoragePaths): Promise<Conver
   const rootUri = paths.conversationHistoryRootUri;
   for (let attempt = 1; attempt <= READER_MAX_ATTEMPTS; attempt += 1) {
     const initial = await tryLoadCanonicalIndexForUi(rootUri);
-    if (!initial) return undefined;
+    if (initial.kind === 'missing') return undefined;
+    if (initial.kind === 'unreadable') {
+      // 没有可用 index 时仍然可以直接扫保留期内的 generation：它们自带完整性校验
+      // （页序连续 + JSON 可读 + entry id 不重），比让侧边栏直接空白好得多。
+      const recovered = await loadLatestCompleteGenerationProjection(rootUri);
+      if (recovered) {
+        console.warn(`[LimCode] Conversation history index is unreadable; using retained generation ${recovered.generation} for UI.`);
+        return recovered;
+      }
+      return undefined;
+    }
 
+    const initialIndex = initial.snapshot.index;
     await __conversationHistoryStoreTestHooks.afterReadIndexBeforePages?.({
       rootUri,
-      generation: initial.index.generation,
+      generation: initialIndex.generation,
       attempt
     });
 
     let projection: ConversationHistoryCanonicalProjection;
     try {
-      projection = await loadProjectionFromIndex(rootUri, initial.index);
+      projection = await loadProjectionFromIndex(rootUri, initialIndex);
     } catch (error) {
-      if (attempt < READER_MAX_ATTEMPTS && await indexGenerationChanged(rootUri, initial.index.generation)) continue;
-      if (isMissingIndexedHistoryPageError(error)) {
-        console.warn(`[LimCode] Conversation history index references a missing page; using recovered projection for UI. ${formatErrorMessage(error)}`);
-        return recoverProjectionAfterMissingIndexedPages(rootUri, initial.index);
+      if (attempt < READER_MAX_ATTEMPTS && await indexGenerationChanged(rootUri, initialIndex.generation)) continue;
+      if (isUnreadableIndexedHistoryPageError(error)) {
+        console.warn(`[LimCode] Conversation history index references an unreadable page; using recovered projection for UI. ${formatErrorMessage(error)}`);
+        return recoverProjectionAfterUnreadableIndexedPages(rootUri, initialIndex);
       }
       console.warn('[LimCode] Failed to load conversation history pages:', error);
       return undefined;
     }
 
     const confirmed = await tryLoadCanonicalIndexForUi(rootUri);
-    if (!confirmed) return undefined;
-    if (confirmed.index.generation === initial.index.generation) return projection;
+    if (confirmed.kind === 'missing') return undefined;
+    // 确认读碰上 index 损坏时，projection 已经是从有效 index 完整读出来的，比丢掉它更安全。
+    if (confirmed.kind === 'unreadable') return projection;
+    if (confirmed.snapshot.index.generation === initialIndex.generation) return projection;
   }
 
   console.warn('[LimCode] Conversation history generation changed while reading; giving up after limited retries.');
   return undefined;
 }
 
-async function tryLoadCanonicalIndexForUi(rootUri: vscode.Uri): Promise<ConversationHistoryIndexSnapshot | undefined> {
+/**
+ * UI 读取 index 的结果。必须区分 missing 与 unreadable：
+ * missing 是首次安装的正常形态，unreadable 是损坏，后者应该去走恢复而不是直接返回空列表。
+ */
+type ConversationHistoryIndexReadResult =
+  | { kind: 'ok'; snapshot: ConversationHistoryIndexSnapshot }
+  | { kind: 'missing' }
+  | { kind: 'unreadable' };
+
+async function tryLoadCanonicalIndexForUi(rootUri: vscode.Uri): Promise<ConversationHistoryIndexReadResult> {
   const indexUri = vscode.Uri.joinPath(rootUri, INDEX_FILE);
   const result = await readJsonStrict<unknown>(indexUri);
   if (result.status === 'missing') {
     const traces = await findExistingHistoryProjectionTracesForUi(rootUri);
     if (traces.length) {
       console.warn(`[LimCode] Conversation history index is missing while projection traces exist: ${traces.join(', ')}`);
+      // 磁盘上还有投影遗迹，说明不是首次安装，而是 index 丢了，同样应该去走恢复。
+      return { kind: 'unreadable' };
     }
-    return undefined;
+    return { kind: 'missing' };
   }
   if (result.status === 'invalid') {
     console.warn(`[LimCode] Conversation history index JSON is invalid: ${indexUri.fsPath}`, result.error);
-    return undefined;
+    return { kind: 'unreadable' };
   }
   if (result.status === 'ioError') {
     console.warn(`[LimCode] Failed to read conversation history index: ${indexUri.fsPath}`, result.error);
-    return undefined;
+    return { kind: 'unreadable' };
   }
 
   try {
-    return parseCanonicalIndex(result.value, indexUri);
+    return { kind: 'ok', snapshot: parseCanonicalIndex(result.value, indexUri) };
   } catch (error) {
     console.warn('[LimCode] Conversation history index structure is invalid:', error);
-    return undefined;
+    return { kind: 'unreadable' };
   }
 }
 
 async function indexGenerationChanged(rootUri: vscode.Uri, generation: string): Promise<boolean> {
   const current = await tryLoadCanonicalIndexForUi(rootUri);
-  return !!current && current.index.generation !== generation;
+  return current.kind === 'ok' && current.snapshot.index.generation !== generation;
 }
 
 interface LoadProjectionFromIndexOptions {
-  allowMissingPages?: boolean;
+  /**
+   * salvage 模式：跳过所有读不出来的页，尽力拼出剩下的内容。
+   * 只能用于恢复展示，结果绝不能当作写入基线（会永久丢失坏页里的会话）。
+   */
+  skipUnreadablePages?: boolean;
 }
 
 async function loadProjectionFromIndex(
@@ -258,12 +320,10 @@ async function loadProjectionFromIndex(
   for (const pageRecord of index.pages) {
     const pageUri = vscode.Uri.joinPath(rootUri, ...pageRecord.file.split('/'));
     const result = await readJsonStrict<unknown>(pageUri);
-    if (result.status === 'missing') {
-      if (options.allowMissingPages) continue;
-      throw new MissingIndexedConversationHistoryPageError(pageUri);
+    if (result.status !== 'ok') {
+      if (options.skipUnreadablePages) continue;
+      throw new UnreadableIndexedConversationHistoryPageError(pageUri, result.status);
     }
-    if (result.status === 'invalid') throw new Error(`Indexed conversation history page JSON is invalid: ${pageUri.fsPath}`);
-    if (result.status === 'ioError') throw new Error(`Failed to read indexed conversation history page: ${pageUri.fsPath}`);
 
     const page = parseCanonicalPage(result.value, pageUri, index.generation, pageRecord);
     for (const entry of page.entries) {
@@ -275,14 +335,14 @@ async function loadProjectionFromIndex(
     totalFromPages += page.entries.length;
   }
 
-  if (totalFromPages !== index.total && !options.allowMissingPages) {
+  if (totalFromPages !== index.total && !options.skipUnreadablePages) {
     throw new Error(`Conversation history index total does not match pages: ${index.total} !== ${totalFromPages}`);
   }
 
   return { entries, originLinks, generation: index.generation };
 }
 
-async function recoverProjectionAfterMissingIndexedPages(
+async function recoverProjectionAfterUnreadableIndexedPages(
   rootUri: vscode.Uri,
   index: ConversationHistoryIndexFile
 ): Promise<ConversationHistoryCanonicalProjection> {
@@ -299,7 +359,7 @@ async function loadPartialProjectionFromIndex(
   index: ConversationHistoryIndexFile
 ): Promise<ConversationHistoryCanonicalProjection | undefined> {
   try {
-    const projection = await loadProjectionFromIndex(rootUri, index, { allowMissingPages: true });
+    const projection = await loadProjectionFromIndex(rootUri, index, { skipUnreadablePages: true });
     return projection.entries.length > 0 || projection.originLinks.length > 0 ? projection : undefined;
   } catch (error) {
     console.warn('[LimCode] Failed to salvage remaining conversation history pages from indexed generation:', error);
@@ -309,7 +369,7 @@ async function loadPartialProjectionFromIndex(
 
 async function loadLatestCompleteGenerationProjection(
   rootUri: vscode.Uri,
-  excludedGeneration: string
+  excludedGeneration?: string
 ): Promise<ConversationHistoryCanonicalProjection | undefined> {
   const generations = await listStorageGenerations(rootUri);
   for (const generation of generations.reverse()) {
@@ -383,8 +443,8 @@ function mergeConversationHistoryProjections(
   };
 }
 
-function isMissingIndexedHistoryPageError(error: unknown): error is MissingIndexedConversationHistoryPageError {
-  return error instanceof MissingIndexedConversationHistoryPageError;
+function isUnreadableIndexedHistoryPageError(error: unknown): error is UnreadableIndexedConversationHistoryPageError {
+  return error instanceof UnreadableIndexedConversationHistoryPageError;
 }
 
 function formatErrorMessage(error: unknown): string {

@@ -5,7 +5,6 @@ const MarkdownIt = require('markdown-it');
 const {
   LOCAL_FILE_LINK_DATA_ATTRIBUTE,
   LOCAL_RESOURCE_MAPPINGS_META_NAME,
-  localFileSourceToUriPath,
   normalizeLocalFileSource,
   toMappedWebviewResourceUri
 } = require('../dist/extension/shared/localFileResources.js');
@@ -19,7 +18,6 @@ test('Windows Markdown token 会先解码反斜杠再识别绝对路径', () => 
   assert.equal(normalizeLocalFileSource('F:%5Ca%5Cb.png'), 'F:/a/b.png');
   assert.equal(normalizeLocalFileSource('f:\\Shots\\a b.png'), 'F:/Shots/a b.png');
   assert.equal(normalizeLocalFileSource('file:///F:/Shots/a%20b.png'), 'F:/Shots/a b.png');
-  assert.equal(localFileSourceToUriPath('F:%5Ca%5Cb.png'), '/F:/a/b.png');
 });
 
 test('实际 markdown-it token 的 Windows 与 UNC 编码结果可被识别', () => {

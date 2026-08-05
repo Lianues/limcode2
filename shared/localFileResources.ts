@@ -59,13 +59,6 @@ export function encodeRelativeFilePath(relativePath: string): string {
     .join('/');
 }
 
-export function localFileSourceToUriPath(source: string): string | undefined {
-  const normalized = normalizeLocalFileSource(source);
-  if (!normalized) return undefined;
-  if (/^[a-zA-Z]:\//.test(normalized)) return `/${normalized}`;
-  return normalized;
-}
-
 function normalizeFileUrl(source: string): string | undefined {
   try {
     const parsed = new URL(source);

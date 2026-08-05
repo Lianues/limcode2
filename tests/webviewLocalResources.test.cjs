@@ -49,7 +49,7 @@ const remoteAuthority = 'ssh-remote+example';
 const remoteWorkspace = MockUri.from({
   scheme: 'vscode-remote',
   authority: remoteAuthority,
-  path: process.platform === 'win32' ? '/C:/workspace/project' : '/workspace/project'
+  path: '/workspace/project'
 });
 const vscodeMock = {
   Uri: MockUri,
@@ -80,16 +80,32 @@ test('设置页静态资源权限不包含整盘或远程根', () => {
   assert.equal(roots[0].toString(), 'vscode-remote://ssh-remote+example/home/user/.vscode/extensions/limcode/dist/webview');
 });
 
-test('Remote 工作区外绝对路径使用同 scheme/authority 的资源根和打开 URI', () => {
+test('Remote POSIX 路径按远程 workspace 形态判断，不受本地 process.platform 干扰', () => {
   const roots = getWebviewLocalResourceRoots(extensionUri);
-  const source = process.platform === 'win32' ? 'C:/outside/shot.png' : '/tmp/shot.png';
-  const resolved = resolveLocalFileSourceUri(source, extensionUri);
+  const resolved = resolveLocalFileSourceUri('/tmp/shot.png', extensionUri);
 
-  assert.ok(roots.some((uri) => uri.scheme === 'vscode-remote' && uri.authority === remoteAuthority));
+  assert.ok(roots.some((uri) => uri.scheme === 'vscode-remote' && uri.authority === remoteAuthority && uri.path === '/'));
   assert.equal(roots.some((uri) => uri.scheme === 'file'), false);
   assert.equal(resolved?.scheme, 'vscode-remote');
   assert.equal(resolved?.authority, remoteAuthority);
-  assert.equal(resolved?.path, process.platform === 'win32' ? '/C:/outside/shot.png' : '/tmp/shot.png');
+  assert.equal(resolved?.path, '/tmp/shot.png');
+});
+
+test('Remote Windows 路径按远程 workspace 盘符形态创建 drive roots', () => {
+  const previousFolders = vscodeMock.workspace.workspaceFolders;
+  vscodeMock.workspace.workspaceFolders = [{
+    uri: MockUri.from({ scheme: 'vscode-remote', authority: remoteAuthority, path: '/C:/workspace/project' })
+  }];
+  try {
+    const roots = getWebviewLocalResourceRoots(extensionUri);
+    const resolved = resolveLocalFileSourceUri('C:/outside/shot.png', extensionUri);
+    assert.ok(roots.some((uri) => uri.scheme === 'vscode-remote' && uri.authority === remoteAuthority && uri.path === '/C:/'));
+    assert.equal(resolved?.scheme, 'vscode-remote');
+    assert.equal(resolved?.authority, remoteAuthority);
+    assert.equal(resolved?.path, '/C:/outside/shot.png');
+  } finally {
+    vscodeMock.workspace.workspaceFolders = previousFolders;
+  }
 });
 
 test('UNC workspace 使用 authority 对应的授权根并可解析 markdown-it 编码路径', () => {

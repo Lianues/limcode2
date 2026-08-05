@@ -141,8 +141,9 @@ function getWebviewLocalResourceMappings(webview: vscode.Webview, extensionUri: 
 
 function getLocalResourceRootDescriptors(extensionUri: vscode.Uri): LocalResourceRootDescriptor[] {
   const primary = primaryFileSystemUri(extensionUri);
+  const windowsFileSystem = isWindowsFileSystem(primary);
   const descriptors: LocalResourceRootDescriptor[] = [];
-  if (process.platform === 'win32') {
+  if (windowsFileSystem) {
     for (const letter of WINDOWS_DRIVE_LETTERS) {
       descriptors.push({
         rootUri: primary.scheme === 'file'
@@ -179,6 +180,16 @@ function primaryFileSystemUri(extensionUri: vscode.Uri): vscode.Uri {
   if (remoteWorkspace) return remoteWorkspace;
   if (extensionUri.scheme === 'vscode-remote') return extensionUri;
   return vscode.Uri.file(process.platform === 'win32' ? 'C:/' : '/');
+}
+
+function isWindowsFileSystem(primary: vscode.Uri): boolean {
+  if (primary.scheme === 'vscode-remote') {
+    const matchingWorkspace = (vscode.workspace.workspaceFolders ?? [])
+      .map((folder) => folder.uri)
+      .find((uri) => uri.scheme === primary.scheme && uri.authority === primary.authority);
+    if (matchingWorkspace) return /^\/[a-zA-Z]:\//.test(matchingWorkspace.path);
+  }
+  return process.platform === 'win32';
 }
 
 function dedupeDescriptors(descriptors: readonly LocalResourceRootDescriptor[]): LocalResourceRootDescriptor[] {

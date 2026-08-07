@@ -104,6 +104,13 @@ function makeState(conversationId) {
   return state;
 }
 
+let testTimelineCommitSeq = 0;
+
+function timelineSaveResult(state) {
+  testTimelineCommitSeq += 1;
+  return { state, commitSeq: testTimelineCommitSeq, committedAt: 1_700_000_000_000 + testTimelineCommitSeq };
+}
+
 function makeStorage(overrides = {}) {
   const calls = [];
   return {
@@ -112,11 +119,11 @@ function makeStorage(overrides = {}) {
     saveClientStateSkeleton: async (patch) => { calls.push({ kind: 'skeleton', patch: JSON.parse(JSON.stringify(patch)) }); },
     saveConversationRenderDetail: async (conversationId, base, state) => {
       calls.push({ kind: 'render', conversationId, base, state });
-      return state;
+      return timelineSaveResult(state);
     },
     saveConversationTimelineRenderDetail: async (conversationId, base, state) => {
       calls.push({ kind: 'timeline-render', conversationId, base, state });
-      return state;
+      return timelineSaveResult(state);
     },
     saveConversationRunHistory: async (conversationId, state, options) => { calls.push({ kind: 'runHistory', conversationId, state, options }); },
     upsertConversationHistoryEntry: async (entry) => { calls.push({ kind: 'history', entry }); },
@@ -312,7 +319,7 @@ test('按需加载旧 range 会扩展已确认 base，重试前保存不再把�
         patch
       });
       applyConversationTimelinePatch(id, JSON.parse(JSON.stringify(disk)), patch);
-      return state;
+      return timelineSaveResult(state);
     }
   });
   const persistence = new ClientStatePersistence(new FakeWorld(projected), storage, {
@@ -354,7 +361,7 @@ test('较早 range 中的同 id record 不会倒退已经确认的 CAS base', as
   const storage = makeStorage({
     saveConversationTimelineRenderDetail: async (_id, base, state) => {
       bases.push(JSON.parse(JSON.stringify(base)));
-      return state;
+      return timelineSaveResult(state);
     }
   });
   const persistence = new ClientStatePersistence(new FakeWorld(acknowledged), storage, {
@@ -396,7 +403,7 @@ test('render detail 会在慢 skeleton 完成前先预订并启动保存', async
     saveConversationRenderDetail: async (id, base, snapshot) => {
       storage.calls.push({ kind: 'render-start', conversationId: id, base, state: snapshot });
       renderStarted.resolve();
-      return snapshot;
+      return timelineSaveResult(snapshot);
     }
   });
   const persistence = new ClientStatePersistence(world, storage, {
@@ -509,7 +516,7 @@ test('timeline 缺失已确认 sidecar 时会重读磁盘并有界 rebase，不�
           null
         );
       }
-      return state;
+      return timelineSaveResult(state);
     }
   });
   const persistence = new ClientStatePersistence(world, storage, {
@@ -572,7 +579,7 @@ test('消息重试前的 timeline 强制保存也会修复缺失 sidecar base', 
           null
         );
       }
-      return state;
+      return timelineSaveResult(state);
     }
   });
   const persistence = new ClientStatePersistence(new FakeWorld(next), storage, {
@@ -666,7 +673,7 @@ test('消息重试前遇到已提交 ToolCall 终态时会重读并刷新 stale 
       const patch = createConversationTimelinePatch(base, state);
       const applied = applyConversationTimelinePatch(id, JSON.parse(JSON.stringify(disk)), patch);
       disk = applied.state;
-      return state;
+      return timelineSaveResult(state);
     }
   });
   const persistence = new ClientStatePersistence(new FakeWorld(projected), storage, {
@@ -757,7 +764,7 @@ test('基于旧终态产生的真实 ToolCall 并发修改仍然明确冲突', a
       attempts += 1;
       const patch = createConversationTimelinePatch(base, state);
       applyConversationTimelinePatch(id, JSON.parse(JSON.stringify(disk)), patch);
-      return state;
+      return timelineSaveResult(state);
     }
   });
   const persistence = new ClientStatePersistence(new FakeWorld(projected), storage, {
@@ -902,7 +909,7 @@ test('完整上下文读取屏障会先提交 timeline，并阻止 debounce writ
       timelineStarted.resolve();
       await releaseTimeline.promise;
       storage.calls.push({ kind: 'timeline-render-end', conversationId: id });
-      return snapshot;
+      return timelineSaveResult(snapshot);
     }
   });
   const persistence = new ClientStatePersistence(world, storage, {
@@ -1082,6 +1089,101 @@ test('explicit persist inside exclusive mutation gate does not deadlock', async 
 
   assert.equal(storage.calls.filter((call) => call.kind === 'skeleton').length, 1);
   assert.equal(storage.calls[0].patch.conversations.upserts[0].record.id, 'conversation-safe');
+});
+
+test('timeline 结构元数据不变时，sidecar-only 提交仍会逐次发布精确 patch', async () => {
+  const conversationId = 'conversation-sidecar-patch';
+  const base = makeState(conversationId);
+  base.messages.push({
+    id: 'message-sidecar-patch',
+    conversationId,
+    role: 'user',
+    content: { parts: [{ text: 'sidecar patch' }] },
+    status: 'complete',
+    createdAt: 1,
+    seq: 1
+  });
+  base.compressionBlocks.push({
+    id: 'compression-sidecar-patch',
+    conversationId,
+    title: 'summary',
+    status: 'complete',
+    methodKind: 'llm_summary',
+    anchorSeq: 1,
+    endSeq: 1,
+    summaryPreview: 'v1',
+    createdAt: 1,
+    updatedAt: 1
+  });
+
+  const next = JSON.parse(JSON.stringify(base));
+  next.compressionBlocks[0].summaryPreview = 'v2';
+  next.compressionBlocks[0].updatedAt = 2;
+  const world = new FakeWorld(next);
+  const publishedPatches = [];
+  const publishedMeta = [];
+  const metadata = {
+    conversationId,
+    commitSeq: 0,
+    revision: 'same-message-index-revision',
+    totalChunks: 1,
+    totalMessages: 1,
+    oldestChunk: { id: '000000', index: 0, startSeq: 1, endSeq: 1, messageCount: 1, messageOffsetStart: 1, messageOffsetEnd: 1, toolCallCount: 0, toolCallEventCount: 0 },
+    newestChunk: { id: '000000', index: 0, startSeq: 1, endSeq: 1, messageCount: 1, messageOffsetStart: 1, messageOffsetEnd: 1, toolCallCount: 0, toolCallEventCount: 0 },
+    committedAt: 1
+  };
+  const storage = makeStorage({ loadConversationTimelineMeta: async () => metadata });
+  const persistence = new ClientStatePersistence(world, storage, {
+    renderLoadedConversationIds: () => [conversationId],
+    isConversationHistorySummaryComplete: () => false,
+    onConversationTimelinePatched: (payload) => publishedPatches.push(payload),
+    onConversationTimelineCommitted: (payload) => publishedMeta.push(payload)
+  }, 5);
+  persistence.rememberConversationRenderDetailPersisted(conversationId, base);
+  persistence.enable({ skeleton: false });
+
+  await persistence.persistImmediately({ force: true, throwOnError: true });
+  const latest = JSON.parse(JSON.stringify(next));
+  latest.compressionBlocks[0].summaryPreview = 'v3';
+  latest.compressionBlocks[0].updatedAt = 3;
+  world.setState(latest);
+  await persistence.persistImmediately({ force: true, throwOnError: true });
+
+  assert.equal(publishedPatches.length, 2);
+  assert.ok(publishedPatches[0].commitSeq < publishedPatches[1].commitSeq);
+  assert.deepEqual(
+    publishedPatches.map((payload) => payload.patches.map((patch) => patch.kind)),
+    [['compressionBlock.upsert'], ['compressionBlock.upsert']]
+  );
+  assert.equal(publishedMeta.length, 1, '结构相同的 meta 可以去重，但不能吞掉 sidecar patch');
+});
+
+test('timeline meta 读取失败不会吞掉已提交的精确 patch', async () => {
+  const conversationId = 'conversation-patch-before-meta';
+  const base = makeState(conversationId);
+  base.messages.push({ id: 'message-patch-before-meta', conversationId, role: 'user', content: { parts: [{ text: 'v1' }] }, status: 'complete', createdAt: 1, seq: 1 });
+  const next = JSON.parse(JSON.stringify(base));
+  next.messages[0].content = { parts: [{ text: 'v2' }] };
+  const patches = [];
+  const metadata = [];
+  const storage = makeStorage({
+    loadConversationTimelineMeta: async () => { throw new Error('meta unavailable'); }
+  });
+  const persistence = new ClientStatePersistence(new FakeWorld(next), storage, {
+    renderLoadedConversationIds: () => [conversationId],
+    isConversationHistorySummaryComplete: () => false,
+    onConversationTimelinePatched: (payload) => patches.push(payload),
+    onConversationTimelineCommitted: (payload) => metadata.push(payload)
+  }, 5);
+  persistence.rememberConversationRenderDetailPersisted(conversationId, base);
+  persistence.enable({ skeleton: false });
+
+  await persistence.persistImmediately({ force: true, throwOnError: true });
+
+  assert.equal(patches.length, 1);
+  assert.deepEqual(patches[0].patches.map((patch) => patch.kind), ['message.upsert']);
+  assert.equal(metadata.length, 0);
+  assert.equal(persistence.statusSnapshot().phase, 'saved');
 });
 
 test('立即 queue 会暴露 pending/saving/saved，失败后按有限退避自动重试', async () => {

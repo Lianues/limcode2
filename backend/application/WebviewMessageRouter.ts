@@ -592,9 +592,11 @@ export class WebviewMessageRouter {
         break;
       case BridgeMessageType.CheckpointDismiss:
         if (!this.deps.isHydrated() || !message.payload) return;
-        this.deps.world.enqueue({ type: CheckpointEventType.DismissRequested, payload: { checkpointId: message.payload.checkpointId } });
-        this.deps.requestSnapshot(message.payload.conversationId);
-        this.deps.requestSnapshot();
+        void this.enqueueAfterConversationLoaded(message.payload.conversationId, () => {
+          this.deps.world.enqueue({ type: CheckpointEventType.DismissRequested, payload: { checkpointId: message.payload!.checkpointId } });
+          this.deps.requestSnapshot(message.payload!.conversationId);
+          this.deps.requestSnapshot();
+        });
         break;
       case BridgeMessageType.CheckpointRestore:
         if (message.payload) void this.handleCheckpointRestore(clientId, message.payload, message.id);
@@ -1071,7 +1073,13 @@ export class WebviewMessageRouter {
       });
     } catch (error) {
       console.warn('[LimCode] Failed to load conversation timeline page.', error);
-      this.postRequestError(clientId, BridgeMessageType.ConversationTimelinePageGet, '无法加载对话消息分页。', correlationId);
+      this.postRequestError(
+        clientId,
+        BridgeMessageType.ConversationTimelinePageGet,
+        '无法加载对话消息分页。',
+        correlationId,
+        payload.conversationId
+      );
     }
   }
 
@@ -1626,13 +1634,20 @@ export class WebviewMessageRouter {
     if (!result.ok && result.message) this.postRequestError(clientId, result.operation, result.message, correlationId);
   }
 
-  private postRequestError(clientId: BridgeClientId, requestType: string, message: string, correlationId?: string): void {
+  private postRequestError(
+    clientId: BridgeClientId,
+    requestType: string,
+    message: string,
+    correlationId?: string,
+    conversationId?: string
+  ): void {
     this.deps.webview.post(clientId, {
       id: createMessageId(),
       type: BridgeMessageType.Error,
       channel: 'diagnostics',
       correlationId,
-      payload: { requestType, message }
+      ...(conversationId ? { scope: { kind: 'conversation' as const, id: conversationId } } : {}),
+      payload: { requestType, message, ...(conversationId ? { conversationId } : {}) }
     });
   }
 }

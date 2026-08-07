@@ -167,7 +167,7 @@ function scheduleInitialConversationBottomScroll(): void {
 
   const timeline = currentTimeline.value;
   const rowCount = conversationUi.timelineRows.length;
-  const hasTimelinePage = timeline.loadedChunkIds.length > 0 || timeline.pageInfo !== undefined;
+  const hasTimelinePage = timeline.hasPageSnapshot;
   if (timeline.status === 'loadingInitial' && rowCount === 0) return;
   if (!hasTimelinePage && rowCount === 0) return;
 

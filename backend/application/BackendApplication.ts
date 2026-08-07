@@ -102,6 +102,7 @@ import type {
   ConversationLlmSettingsRecord,
   ConversationSettingsRecord,
   ConversationTimelineMetaRecord,
+  ConversationTimelinePatchPayload,
   LlmProviderConfigsRecord,
   LlmProviderKind,
   LlmSettingsRecord,
@@ -219,7 +220,8 @@ export class BackendApplication {
       runHistoryLoadedConversationIds: () => this.runHistoryLoadedConversationDetails,
       isConversationHistorySummaryComplete: (conversationId) => this.isConversationHistorySummaryComplete(conversationId),
       onStatusChange: (status) => this.broadcastPersistenceStatus(status),
-      onConversationTimelineCommitted: (metadata) => this.broadcastConversationTimelineMeta(metadata)
+      onConversationTimelineCommitted: (metadata) => this.broadcastConversationTimelineMeta(metadata),
+      onConversationTimelinePatched: (payload) => this.broadcastConversationTimelinePatch(payload)
     });
     this.globalSettingsBridge = new GlobalSettingsBridge({
       storage: this.env.storage,
@@ -1375,6 +1377,16 @@ export class BackendApplication {
       channel: 'state',
       scope: { kind: 'conversation', id: metadata.conversationId },
       payload: metadata
+    });
+  }
+
+  private broadcastConversationTimelinePatch(payload: ConversationTimelinePatchPayload): void {
+    this.env.webview.broadcastToStream(conversationTimelineStreamId(payload.conversationId), {
+      id: createMessageId(),
+      type: BridgeMessageType.ConversationTimelinePatch,
+      channel: 'state',
+      scope: { kind: 'conversation', id: payload.conversationId },
+      payload
     });
   }
 

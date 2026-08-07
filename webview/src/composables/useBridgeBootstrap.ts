@@ -185,7 +185,7 @@ export function useBridgeBootstrap(): void {
 
   disposers.push(
     bridge.on(BridgeMessageType.ConversationTimelinePageSnapshot, (message) => {
-      if (message.payload) conversationTimeline.applyPageSnapshot(message.payload);
+      if (message.payload) conversationTimeline.applyPageSnapshot(message.payload, message.correlationId);
     })
   );
 
@@ -266,7 +266,11 @@ export function useBridgeBootstrap(): void {
           correlationId: message.correlationId
         });
       } else if (message.payload?.requestType === BridgeMessageType.ConversationTimelinePageGet) {
-        conversationTimeline.setError(clientState.currentConversationId, message.payload.message);
+        conversationTimeline.setPageRequestError(
+          message.correlationId,
+          message.payload.conversationId,
+          message.payload.message
+        );
       } else if (message.payload?.requestType === BridgeMessageType.RunHistoryPageGet || message.payload?.requestType === BridgeMessageType.RunHistoryDetailGet || message.payload?.requestType === BridgeMessageType.LlmDryRunGet) {
         runHistory.setError(message.payload.message);
       }
@@ -301,7 +305,7 @@ export function useBridgeBootstrap(): void {
         if ((session.viewKind !== 'chat' && session.viewKind !== 'planDetail') || !conversationId) return;
         conversationTimeline.setCurrentConversation(conversationId);
         ensureConversationStream(conversationId);
-        if (session.viewKind === 'chat' && conversationTimeline.ensureTimeline(conversationId).pageInfo === undefined) {
+        if (session.viewKind === 'chat' && !conversationTimeline.ensureTimeline(conversationId).hasPageSnapshot) {
           conversationTimeline.requestInitial(conversationId);
         }
         conversationSettings.request(conversationId);

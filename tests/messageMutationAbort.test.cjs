@@ -64,7 +64,10 @@ function createRouterFixture(role = 'model') {
   const router = new WebviewMessageRouter({
     world,
     storage,
-    webview: { post: (clientId, message) => posted.push({ clientId, message }) },
+    webview: {
+      post: (clientId, message) => posted.push({ clientId, message }),
+      subscribe: () => undefined
+    },
     clients: {},
     fs: {},
     llm: { cancelRetry: () => undefined },
@@ -89,7 +92,7 @@ function createRouterFixture(role = 'model') {
     saveRuleFile: async () => undefined
   });
 
-  return { world, router, flushStarted, allowFlush, truncateStarted, allowTruncate, posted };
+  return { world, router, storage, flushStarted, allowFlush, truncateStarted, allowTruncate, posted };
 }
 
 async function settle() {
@@ -112,6 +115,30 @@ function abortMessage(id = 'abort-request') {
     payload: { conversationId: 'conversation-1' }
   };
 }
+
+test('timeline page 错误保留原请求 correlationId 与 conversation scope', async () => {
+  const fixture = createRouterFixture('model');
+  fixture.storage.loadConversationTimelinePage = async () => {
+    throw new Error('synthetic page failure');
+  };
+
+  fixture.router.handle('client-1', {
+    id: 'timeline-page-request-a',
+    type: BridgeMessageType.ConversationTimelinePageGet,
+    channel: 'state',
+    payload: { conversationId: 'conversation-a', direction: 'initial', chunkCount: 2 }
+  });
+  await settle();
+
+  const error = fixture.posted.find(({ message }) =>
+    message.type === BridgeMessageType.Error
+      && message.payload?.requestType === BridgeMessageType.ConversationTimelinePageGet
+  )?.message;
+  assert.ok(error);
+  assert.equal(error.correlationId, 'timeline-page-request-a');
+  assert.equal(error.payload.conversationId, 'conversation-a');
+  assert.deepEqual(error.scope, { kind: 'conversation', id: 'conversation-a' });
+});
 
 test('删除严格等待 timeline 持久化与 truncate 后才提交 ECS', async () => {
   const fixture = createRouterFixture('model');

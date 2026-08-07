@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { WorldReader } from '../ecs/types';
-import type { ConversationRunHistorySaveMode, StorageCapability } from '../capabilities/types';
+import type { ConversationRunHistorySaveMode, ConversationTimelineSaveResult, StorageCapability } from '../capabilities/types';
 import { StorageStateContributorsKey } from '../world/storageProjection/resources';
 import { projectStorageStateWithCache, type StorageContributorProjectionState } from '../world/storageProjection/projection';
 import {
@@ -10,6 +10,7 @@ import {
   type ClientStateTableKey,
   type ConversationOriginLinkRecord,
   type ConversationTimelineMetaRecord,
+  type ConversationTimelinePatchPayload,
   type MessageContent,
   type MessageRecord,
   type PersistenceStatusRecord,
@@ -20,6 +21,7 @@ import {
 import { conversationCreatedAtFromId, displayConversationTitle } from '../../shared/conversationTitle';
 import { collectChangedClientStateConversationIds } from '../../shared/clientStateConversationScope';
 import { createEmptyClientState } from '../../shared/clientStateSchema';
+import { createPersistedConversationTimelineClientPatches } from './conversationTimelineClientPatch';
 import { stripConversationFromClientState } from '../utils/clientStateConversationCascade';
 import { conversationRenderDetailSlice, conversationRunHistorySlice } from '../capabilities/vscodeStorage/clientStateStore';
 import { projectChatState } from '../world/modules/chat/stateProjection';
@@ -91,6 +93,8 @@ export interface ClientStatePersistenceOptions {
   onStatusChange?: (status: PersistenceStatusRecord) => void;
   /** conversation timeline 成功提交后发布最新 chunk index 元数据。 */
   onConversationTimelineCommitted?: (metadata: ConversationTimelineMetaRecord) => void;
+  /** 精确同步已提交的 page-owned record upsert/remove。 */
+  onConversationTimelinePatched?: (payload: ConversationTimelinePatchPayload) => void;
   /** 测试可缩短；生产默认 250ms / 1s / 3s，耗尽后保留 error 状态等待下一次变更。 */
   retryDelaysMs?: readonly number[];
 }
@@ -251,8 +255,8 @@ export class ClientStatePersistence {
     conversationId: string,
     base: ClientState,
     next: ClientState,
-    save: (rebasedBase: ClientState, localNext: ClientState) => Promise<ClientState>
-  ): Promise<ClientState> {
+    save: (rebasedBase: ClientState, localNext: ClientState) => Promise<ConversationTimelineSaveResult>
+  ): Promise<ConversationTimelineSaveResult> {
     let candidateBase = base;
     let candidateNext = next;
     for (let attempt = 0; attempt < MAX_TIMELINE_CONFLICT_RECOVERY_ATTEMPTS; attempt += 1) {
@@ -427,15 +431,17 @@ export class ClientStatePersistence {
           conversationRenderDetailSlice(state, conversationId)
         );
         const base = this.lastAcknowledgedLocalRenderDetailState.get(conversationId) ?? createEmptyClientState();
-        const acknowledged = await this.saveConversationTimelineWithConflictRecovery(
+        const committed = await this.saveConversationTimelineWithConflictRecovery(
           conversationId,
           base,
           next,
           (rebasedBase, localNext) => this.storage.saveConversationRenderDetail(conversationId, rebasedBase, localNext)
         );
+        const acknowledged = committed.state;
         this.lastAcknowledgedLocalRenderDetailState.set(conversationId, cloneClientState(acknowledged));
-        this.lastPersistedRenderDetailJson.set(conversationId, JSON.stringify(acknowledged));
-        await this.publishConversationTimelineMeta(conversationId);
+        // dedupe 比较的是本地投影；canonical ACK 可能补回 page 未加载的 compression sidecar。
+        this.lastPersistedRenderDetailJson.set(conversationId, JSON.stringify(next));
+        await this.publishConversationTimelineCommit(conversationId, base, acknowledged, committed);
       } catch (error) {
         failedRenderDetailStates.push([conversationId, state]);
         throw error;
@@ -545,7 +551,7 @@ export class ClientStatePersistence {
 
     try {
       const base = this.lastAcknowledgedLocalRenderDetailState.get(normalizedConversationId) ?? createEmptyClientState();
-      const committedTimeline = await this.saveConversationTimelineWithConflictRecovery(
+      const committed = await this.saveConversationTimelineWithConflictRecovery(
         normalizedConversationId,
         base,
         state,
@@ -555,10 +561,10 @@ export class ClientStatePersistence {
           localNext
         )
       );
-      const acknowledged = mergeAcknowledgedTimelineState(base, committedTimeline);
+      const acknowledged = mergeAcknowledgedTimelineState(base, committed.state);
       this.lastAcknowledgedLocalRenderDetailState.set(normalizedConversationId, acknowledged);
-      this.lastPersistedRenderDetailJson.set(normalizedConversationId, JSON.stringify(acknowledged));
-      await this.publishConversationTimelineMeta(normalizedConversationId);
+      this.lastPersistedRenderDetailJson.set(normalizedConversationId, JSON.stringify(state));
+      await this.publishConversationTimelineCommit(normalizedConversationId, base, acknowledged, committed);
     } catch (error) {
       console.warn(`[LimCode] Failed to persist conversation timeline before mutation: ${normalizedConversationId}`, error);
       if (options.throwOnError) throw error;
@@ -650,7 +656,27 @@ export class ClientStatePersistence {
     }
   }
 
-  private async publishConversationTimelineMeta(conversationId: string): Promise<void> {
+  private async publishConversationTimelineCommit(
+    conversationId: string,
+    previous: ClientState,
+    acknowledged: ClientState,
+    commit: Pick<ConversationTimelineSaveResult, 'commitSeq' | 'committedAt'>
+  ): Promise<void> {
+    if (!this.options.onConversationTimelineCommitted && !this.options.onConversationTimelinePatched) return;
+    const patches = createPersistedConversationTimelineClientPatches(previous, acknowledged);
+    if (patches.length > 0 && this.options.onConversationTimelinePatched) {
+      try {
+        this.options.onConversationTimelinePatched({
+          conversationId,
+          commitSeq: commit.commitSeq,
+          committedAt: commit.committedAt,
+          patches
+        });
+      } catch (error) {
+        console.warn(`[LimCode] Failed to publish conversation timeline patch: ${conversationId}`, error);
+      }
+    }
+
     if (!this.options.onConversationTimelineCommitted) return;
     try {
       const metadata = await this.storage.loadConversationTimelineMeta(conversationId);
@@ -659,7 +685,7 @@ export class ClientStatePersistence {
       this.lastPublishedTimelineMetaSignature.set(conversationId, signature);
       this.options.onConversationTimelineCommitted(metadata);
     } catch (error) {
-      // timeline 正文已经成功提交，元数据通知失败不能反向把持久化标记为失败。
+      // timeline 正文已经成功提交，meta 通知失败不能反向把持久化标记为失败。
       console.warn(`[LimCode] Failed to publish conversation timeline metadata: ${conversationId}`, error);
     }
   }

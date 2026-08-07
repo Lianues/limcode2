@@ -55,6 +55,16 @@ function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
 async function removeTempRoot(target) {
   for (let attempt = 1; ; attempt += 1) {
     try {
@@ -262,6 +272,9 @@ const restore = installVscodeMock();
 const { createVscodeStoragePaths } = require('../dist/extension/backend/capabilities/vscodeStorage/paths.js');
 const timelineStore = require('../dist/extension/backend/capabilities/vscodeStorage/conversationTimelineStore.js');
 const clientStateStore = require('../dist/extension/backend/capabilities/vscodeStorage/clientStateStore.js');
+const compressionStore = require('../dist/extension/backend/capabilities/vscodeStorage/compressionStore.js');
+const timelineCommitStore = require('../dist/extension/backend/capabilities/vscodeStorage/conversationTimelineCommit.js');
+const { createPersistedConversationTimelineClientPatches } = require('../dist/extension/backend/application/conversationTimelineClientPatch.js');
 const { createEmptyClientState } = require('../dist/extension/shared/clientStateSchema.js');
 
 test('timeline metadata 只读取 index 并准确报告 chunk 边界', async () => {
@@ -297,7 +310,7 @@ test('timeline metadata 只读取 index 并准确报告 chunk 边界', async () 
   }
 });
 
-test('newer 分页会重读 cursor 尾 chunk 并接入后续 chunk', async () => {
+test('newer 分页在 chunkCount=1 时仍会重读 cursor 并前进到后续 chunk', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-newer-refresh-'));
   const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
   const conversationId = 'conv-newer-refresh';
@@ -325,7 +338,7 @@ test('newer 分页会重读 cursor 尾 chunk 并接入后续 chunk', async () =>
       conversationId,
       direction: 'newer',
       cursor: initial.chunks[0].id,
-      chunkCount: 2
+      chunkCount: 1
     });
 
     assert.deepEqual(newer.chunks.map((item) => item.index), [1, 2]);
@@ -333,7 +346,361 @@ test('newer 分页会重读 cursor 尾 chunk 并接入后续 chunk', async () =>
     assert.equal(newer.chunks[1].endSeq, 250);
     assert.equal(newer.state.messages[0].seq, 101);
     assert.equal(newer.state.messages[newer.state.messages.length - 1].seq, 250);
+
+    const newestRefresh = await timelineStore.loadConversationTimelinePage(paths, {
+      conversationId,
+      direction: 'newer',
+      cursor: newer.chunks[1].id,
+      chunkCount: 1
+    });
+    assert.deepEqual(newestRefresh.chunks.map((item) => item.index), [2]);
+
+    const missingCursor = await timelineStore.loadConversationTimelinePage(paths, {
+      conversationId,
+      direction: 'newer',
+      cursor: 'missing-chunk',
+      chunkCount: 1
+    });
+    assert.deepEqual(missingCursor.chunks.map((item) => item.index), [2]);
   } finally {
+    await removeTempRoot(tempRoot);
+  }
+});
+
+test('compression canonical ACK 保留磁盘 sidecar，且 compression-only 提交推进统一 commitSeq', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-compression-canonical-ack-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  const conversationId = 'conv-compression-canonical-ack';
+  let releaseCompressionSave;
+  try {
+    const initial = makeTimelineState(createEmptyClientState, conversationId, 1);
+    initial.compressionBlocks.push({
+      id: 'compression-canonical',
+      conversationId,
+      title: 'summary',
+      status: 'complete',
+      methodKind: 'llm_summary',
+      anchorMessageId: initial.messages[0].id,
+      anchorSeq: 1,
+      endSeq: 1,
+      summaryPreview: 'v1',
+      createdAt: 1,
+      updatedAt: 1
+    });
+    initial.compressionBlockSourceLinks.push({
+      id: 'compression-source-canonical',
+      blockId: 'compression-canonical',
+      sourceKind: 'message',
+      sourceId: initial.messages[0].id,
+      role: 'source',
+      order: 1,
+      createdAt: 1,
+      updatedAt: 1
+    });
+    initial.compressionContextVariants.push({
+      id: 'compression-variant-canonical',
+      blockId: 'compression-canonical',
+      kind: 'provider_neutral_summary',
+      contents: [{ role: 'model', parts: [{ text: 'summary v1' }] }],
+      createdAt: 1,
+      updatedAt: 1
+    });
+    initial.compressionBlockLlmInvocationLinks.push({
+      id: 'compression-invocation-link-canonical',
+      blockId: 'compression-canonical',
+      invocationId: 'compression-invocation-canonical',
+      role: 'compact',
+      createdAt: 1,
+      updatedAt: 1
+    });
+    initial.llmInvocations.push({
+      id: 'compression-invocation-canonical',
+      requestId: 'compression-request-canonical',
+      status: 'complete',
+      createdAt: 1,
+      completedAt: 1
+    });
+
+    const first = await clientStateStore.saveConversationRenderDetailToStores(
+      paths,
+      conversationId,
+      createEmptyClientState(),
+      initial
+    );
+    assert.equal(first.commitSeq, 1);
+    const firstPage = await clientStateStore.loadConversationTimelinePageFromStores(paths, {
+      conversationId,
+      direction: 'initial',
+      chunkCount: 1
+    });
+    assert.equal(firstPage.commitSeq, 1);
+
+    const partialBase = JSON.parse(JSON.stringify(first.state));
+    partialBase.compressionBlockSourceLinks = [];
+    partialBase.compressionContextVariants = [];
+    partialBase.compressionBlockLlmInvocationLinks = [];
+    partialBase.llmInvocations = [];
+    const partialNext = JSON.parse(JSON.stringify(partialBase));
+    partialNext.compressionBlocks[0].summaryPreview = 'v2';
+    partialNext.compressionBlocks[0].updatedAt = 2;
+
+    const compressionSaveEntered = deferred();
+    releaseCompressionSave = deferred();
+    let shouldBlockCompressionSave = true;
+    compressionStore.__compressionStoreTestHooks.afterGenerationStorePrepare = async ({ conversationId: id, store }) => {
+      if (!shouldBlockCompressionSave || id !== conversationId || store !== 'blocks') return;
+      shouldBlockCompressionSave = false;
+      compressionSaveEntered.resolve();
+      await releaseCompressionSave.promise;
+    };
+
+    const secondPromise = clientStateStore.saveConversationRenderDetailToStores(
+      paths,
+      conversationId,
+      partialBase,
+      partialNext
+    );
+    await compressionSaveEntered.promise;
+    let concurrentPageResolved = false;
+    const concurrentPagePromise = clientStateStore.loadConversationTimelinePageFromStores(paths, {
+      conversationId,
+      direction: 'initial',
+      chunkCount: 1
+    }).then((page) => {
+      concurrentPageResolved = true;
+      return page;
+    });
+    await delay(30);
+    assert.equal(concurrentPageResolved, false, 'page reader 必须等待 timeline+compression 统一提交完成');
+    releaseCompressionSave.resolve();
+    const [second, secondPage] = await Promise.all([secondPromise, concurrentPagePromise]);
+    assert.equal(second.commitSeq, 2);
+    assert.deepEqual(second.state.compressionBlockSourceLinks.map((record) => record.id), ['compression-source-canonical']);
+    assert.deepEqual(second.state.compressionContextVariants.map((record) => record.id), ['compression-variant-canonical']);
+    assert.deepEqual(second.state.compressionBlockLlmInvocationLinks.map((record) => record.id), ['compression-invocation-link-canonical']);
+    assert.deepEqual(second.state.llmInvocations.map((record) => record.id), ['compression-invocation-canonical']);
+
+    const patches = createPersistedConversationTimelineClientPatches(first.state, second.state);
+    assert.equal(patches.some((patch) => patch.kind.endsWith('.remove')), false);
+    assert.deepEqual(patches.map((patch) => patch.kind), ['compressionBlock.upsert']);
+    assert.equal(secondPage.commitSeq, 2);
+    assert.equal(secondPage.state.compressionBlocks[0].summaryPreview, 'v2');
+    assert.ok(firstPage.commitSeq < secondPage.commitSeq, '旧 page 可由统一 commitSeq 明确判定为 stale');
+  } finally {
+    releaseCompressionSave?.resolve();
+    compressionStore.__compressionStoreTestHooks.afterGenerationStorePrepare = undefined;
+    await removeTempRoot(tempRoot);
+  }
+});
+
+test('子快照或根指针失败时保持上一组 committed pair，不复用 commitSeq 标记混合快照', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-pair-atomic-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  const conversationId = 'conv-timeline-pair-atomic';
+  try {
+    const initial = makeTimelineState(createEmptyClientState, conversationId, 1);
+    initial.compressionBlocks.push({
+      id: 'compression-pair-atomic',
+      conversationId,
+      title: 'pair atomic',
+      status: 'complete',
+      methodKind: 'llm_summary',
+      anchorMessageId: initial.messages[0].id,
+      anchorSeq: 1,
+      endSeq: 1,
+      summaryPreview: 'v1',
+      createdAt: 1,
+      updatedAt: 1
+    });
+    const first = await clientStateStore.saveConversationRenderDetailToStores(
+      paths,
+      conversationId,
+      createEmptyClientState(),
+      initial
+    );
+    assert.equal(first.commitSeq, 1);
+
+    const next = JSON.parse(JSON.stringify(first.state));
+    next.messages.push(textMessage(conversationId, 'm-2', 2, 'message 2', 'model'));
+    next.compressionBlocks[0].summaryPreview = 'v2';
+    next.compressionBlocks[0].updatedAt = 2;
+
+    let failedCompressionGeneration = false;
+    compressionStore.__compressionStoreTestHooks.afterGenerationStorePrepare = ({ conversationId: id, store }) => {
+      if (id !== conversationId || store !== 'blocks' || failedCompressionGeneration) return;
+      failedCompressionGeneration = true;
+      throw new Error('synthetic compression generation failure');
+    };
+    await assert.rejects(
+      clientStateStore.saveConversationRenderDetailToStores(paths, conversationId, first.state, next),
+      /Failed to prepare complete conversation timeline snapshot pair/
+    );
+    compressionStore.__compressionStoreTestHooks.afterGenerationStorePrepare = undefined;
+
+    let page = await clientStateStore.loadConversationTimelinePageFromStores(paths, {
+      conversationId,
+      direction: 'initial',
+      chunkCount: 1
+    });
+    assert.equal(page.commitSeq, 1);
+    assert.deepEqual(page.state.messages.map((message) => message.id), ['m-1']);
+    assert.equal(page.state.compressionBlocks[0].summaryPreview, 'v1');
+
+    let failedTimelineGeneration = false;
+    timelineStore.__conversationTimelineStoreTestHooks.beforePublishIndex = ({ conversationId: id }) => {
+      if (id !== conversationId || failedTimelineGeneration) return;
+      failedTimelineGeneration = true;
+      throw new Error('synthetic timeline generation failure');
+    };
+    await assert.rejects(
+      clientStateStore.saveConversationRenderDetailToStores(paths, conversationId, first.state, next),
+      /Failed to prepare complete conversation timeline snapshot pair/
+    );
+    timelineStore.__conversationTimelineStoreTestHooks.beforePublishIndex = undefined;
+
+    page = await clientStateStore.loadConversationTimelinePageFromStores(paths, {
+      conversationId,
+      direction: 'initial',
+      chunkCount: 1
+    });
+    assert.equal(page.commitSeq, 1);
+    assert.deepEqual(page.state.messages.map((message) => message.id), ['m-1']);
+    assert.equal(page.state.compressionBlocks[0].summaryPreview, 'v1');
+
+    let failedRootCommit = false;
+    timelineCommitStore.__conversationTimelineCommitTestHooks.beforeCommitWrite = (record) => {
+      if (record.conversationId !== conversationId || failedRootCommit) return;
+      failedRootCommit = true;
+      throw new Error('synthetic root commit failure');
+    };
+    await assert.rejects(
+      clientStateStore.saveConversationRenderDetailToStores(paths, conversationId, first.state, next),
+      /synthetic root commit failure/
+    );
+    timelineCommitStore.__conversationTimelineCommitTestHooks.beforeCommitWrite = undefined;
+
+    page = await clientStateStore.loadConversationTimelinePageFromStores(paths, {
+      conversationId,
+      direction: 'initial',
+      chunkCount: 1
+    });
+    assert.equal(page.commitSeq, 1);
+    assert.deepEqual(page.state.messages.map((message) => message.id), ['m-1']);
+    assert.equal(page.state.compressionBlocks[0].summaryPreview, 'v1');
+
+    const second = await clientStateStore.saveConversationRenderDetailToStores(paths, conversationId, first.state, next);
+    assert.equal(second.commitSeq, 2, '失败的准备/根发布不能消耗或复用可见 commitSeq');
+    page = await clientStateStore.loadConversationTimelinePageFromStores(paths, {
+      conversationId,
+      direction: 'initial',
+      chunkCount: 1
+    });
+    assert.equal(page.commitSeq, 2);
+    assert.deepEqual(page.state.messages.map((message) => message.id), ['m-1', 'm-2']);
+    assert.equal(page.state.compressionBlocks[0].summaryPreview, 'v2');
+  } finally {
+    compressionStore.__compressionStoreTestHooks.afterGenerationStorePrepare = undefined;
+    timelineStore.__conversationTimelineStoreTestHooks.beforePublishIndex = undefined;
+    timelineCommitStore.__conversationTimelineCommitTestHooks.beforeCommitWrite = undefined;
+    await removeTempRoot(tempRoot);
+  }
+});
+
+test('延迟的旧 cleanup 会在根锁内重读最新 refs，不删除当前 pair 或 tail prefix generation', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-cleanup-race-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  const conversationId = 'conv-timeline-cleanup-race';
+  const entered = [deferred(), deferred(), deferred()];
+  const release = [deferred(), deferred(), deferred()];
+  let cleanupIndex = 0;
+  try {
+    clientStateStore.__conversationTimelineGenerationCleanupTestHooks.beforeCleanup = async ({ conversationId: id }) => {
+      if (id !== conversationId) return;
+      const index = cleanupIndex++;
+      if (!entered[index] || !release[index]) return;
+      entered[index].resolve();
+      await release[index].promise;
+    };
+
+    const firstState = makeTimelineState(createEmptyClientState, conversationId, 101);
+    firstState.compressionBlocks.push({
+      id: 'compression-cleanup-race',
+      conversationId,
+      title: 'cleanup race',
+      status: 'complete',
+      methodKind: 'llm_summary',
+      anchorMessageId: firstState.messages[0].id,
+      anchorSeq: 1,
+      endSeq: 100,
+      summaryPreview: 'v1',
+      createdAt: 1,
+      updatedAt: 1
+    });
+    const firstPromise = clientStateStore.saveConversationRenderDetailToStores(
+      paths,
+      conversationId,
+      createEmptyClientState(),
+      firstState
+    );
+    await entered[0].promise;
+
+    const secondState = JSON.parse(JSON.stringify(firstState));
+    secondState.messages.push(textMessage(conversationId, 'm-102', 102, 'message 102', 'model'));
+    secondState.compressionBlocks[0].summaryPreview = 'v2';
+    secondState.compressionBlocks[0].updatedAt = 2;
+    const secondPromise = clientStateStore.saveConversationRenderDetailToStores(
+      paths,
+      conversationId,
+      firstState,
+      secondState
+    );
+    await entered[1].promise;
+
+    const thirdState = JSON.parse(JSON.stringify(secondState));
+    thirdState.messages.push(textMessage(conversationId, 'm-103', 103, 'message 103', 'user'));
+    thirdState.compressionBlocks[0].summaryPreview = 'v3';
+    thirdState.compressionBlocks[0].updatedAt = 3;
+    const thirdPromise = clientStateStore.saveConversationRenderDetailToStores(
+      paths,
+      conversationId,
+      secondState,
+      thirdState
+    );
+    await entered[2].promise;
+
+    // A 的 cleanup 此时最陈旧；它必须重新获取根锁并读取 seq=3 refs，而不是按 seq=1 清理。
+    release[0].resolve();
+    const first = await firstPromise;
+    assert.equal(first.commitSeq, 1);
+
+    let page = await clientStateStore.loadConversationTimelinePageFromStores(paths, {
+      conversationId,
+      direction: 'initial',
+      chunkCount: 2
+    });
+    assert.equal(page.commitSeq, 3);
+    assert.equal(page.state.messages.length, 103);
+    assert.equal(page.state.compressionBlocks[0].summaryPreview, 'v3');
+
+    release[1].resolve();
+    release[2].resolve();
+    const [second, third] = await Promise.all([secondPromise, thirdPromise]);
+    assert.equal(second.commitSeq, 2);
+    assert.equal(third.commitSeq, 3);
+
+    const detail = await clientStateStore.loadConversationDetailFromStores(paths, conversationId);
+    assert.ok(detail);
+    assert.equal(detail.messages.length, 103);
+    assert.equal(detail.compressionBlocks[0].summaryPreview, 'v3');
+    page = await clientStateStore.loadConversationTimelinePageFromStores(paths, {
+      conversationId,
+      direction: 'initial',
+      chunkCount: 2
+    });
+    assert.equal(page.commitSeq, 3);
+  } finally {
+    clientStateStore.__conversationTimelineGenerationCleanupTestHooks.beforeCleanup = undefined;
+    for (const gate of release) gate.resolve();
     await removeTempRoot(tempRoot);
   }
 });
@@ -359,8 +726,9 @@ test('pending checkpoint sidecar 不会进入虚假 base，完成后可完整落
       createEmptyClientState(),
       pending
     );
-    assert.deepEqual(acknowledgedPending, pendingProjection);
-    const storedPending = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    assert.deepEqual(acknowledgedPending.state, pendingProjection);
+    assert.equal(acknowledgedPending.commitSeq, 1);
+    const storedPending = await clientStateStore.loadConversationDetailFromStores(paths, conversationId);
     assert.equal(storedPending.messages.length, 1);
     assert.equal(storedPending.checkpoints.length, 0);
     assert.equal(storedPending.shadowRepositories.length, 0);
@@ -386,8 +754,9 @@ test('pending checkpoint sidecar 不会进入虚假 base，完成后可完整落
     );
 
     const completedProjection = clientStateStore.conversationRenderDetailSlice(completed, conversationId);
-    assert.deepEqual(acknowledgedCompleted, completedProjection);
-    const storedCompleted = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    assert.deepEqual(acknowledgedCompleted.state, completedProjection);
+    assert.equal(acknowledgedCompleted.commitSeq, 2);
+    const storedCompleted = await clientStateStore.loadConversationDetailFromStores(paths, conversationId);
     assert.equal(storedCompleted.checkpoints.length, 1);
     assert.equal(storedCompleted.checkpointTimelineAnchors.length, 1);
     assert.deepEqual(storedCompleted.projectContexts.map((record) => record.id), [ids.projectContextId]);
@@ -413,11 +782,12 @@ test('pending checkpoint sidecar 不会进入虚假 base，完成后可完整落
       nextCheckpoint
     );
     assert.deepEqual(
-      acknowledgedNext,
+      acknowledgedNext.state,
       clientStateStore.conversationRenderDetailSlice(nextCheckpoint, conversationId)
     );
+    assert.equal(acknowledgedNext.commitSeq, 3);
 
-    const storedNext = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    const storedNext = await clientStateStore.loadConversationDetailFromStores(paths, conversationId);
     assert.equal(storedNext.checkpoints.length, 1);
     assert.equal(storedNext.shadowRepositories[0].updatedAt, 30);
     assert.equal(storedNext.conversationCheckpointRepositoryLinks[0].updatedAt, 30);
@@ -488,7 +858,7 @@ test('无关 conversation 的重复 skeleton relation 不阻塞目标 conversati
 
     await clientStateStore.saveConversationRenderDetailToStores(paths, conversationId, base, next);
 
-    const saved = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    const saved = await clientStateStore.loadConversationDetailFromStores(paths, conversationId);
     assert.equal(saved.messages.length, 1);
     assert.equal(saved.messages[0].conversationId, conversationId);
   } finally {
@@ -592,7 +962,7 @@ test('并发 message writers 通过 timeline root lock 合并且不丢消息', a
       const seq = index + 1;
       return clientStateStore.saveMessageRecord(paths, conversationId, textMessage(conversationId, `m-${seq}`, seq, `message ${seq}`));
     }));
-    const detail = await timelineStore.loadConversationTimelineDetail(paths, conversationId);
+    const detail = await clientStateStore.loadConversationDetailFromStores(paths, conversationId);
     assert.equal(detail.messages.length, 12);
     assert.deepEqual(detail.messages.map((message) => message.id).sort(), Array.from({ length: 12 }, (_, index) => `m-${index + 1}`).sort());
   } finally {
@@ -657,7 +1027,12 @@ test('loadConversationDetailFromStores 返回合法空 detail 而不是把存在
   const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
   const conversationId = 'conv-empty-detail';
   try {
-    await timelineStore.saveConversationTimelineDetail(paths, conversationId, createEmptyClientState());
+    await clientStateStore.saveConversationTimelineRenderDetailToStores(
+      paths,
+      conversationId,
+      createEmptyClientState(),
+      createEmptyClientState()
+    );
     const detail = await clientStateStore.loadConversationDetailFromStores(paths, conversationId);
     assert.ok(detail);
     assert.equal(detail.messages.length, 0);

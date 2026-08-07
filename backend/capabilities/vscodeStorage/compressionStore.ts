@@ -4,16 +4,49 @@ import type { ClientState, CompressionBlockLlmInvocationLinkRecord, CompressionB
 import { createEmptyClientState } from '../../../shared/clientStateSchema';
 import { INDEX_FILE, STORAGE_VERSION } from './constants';
 import type { StoragePaths } from './clientStateStore';
-import { loadRecordStoreWithDiagnostics, saveRecordStore, withRecordStoreTransaction, type RecordStoreDiagnosticsResult } from './recordStore';
+import {
+  loadRecordStoreGeneration,
+  loadRecordStoreWithDiagnostics,
+  prepareRecordStoreGeneration,
+  saveRecordStore,
+  withRecordStoreTransaction,
+  type RecordStoreDiagnosticsResult,
+  type RecordStoreGenerationRef
+} from './recordStore';
 import { readJsonStrict, writeJson } from './json';
 import { assertUniqueClientStateIds, assertUniqueRecords } from '../../utils/uniqueIds';
 import { readStorageDirectory } from './storageFs';
+import {
+  cleanupInactiveStorageGenerations,
+  createStorageGenerationId,
+  isSafeStorageGenerationId,
+  STANDARD_STORAGE_GENERATION_RETENTION_BUCKETS_MS
+} from './storageGeneration';
 
 const CONVERSATIONS_DIR = 'conversations';
 const COMPRESSION_MANIFEST_FILE = 'compression-manifest.json';
 const COMPRESSION_MANIFEST_KIND = 'conversationCompression.manifest';
 
 type CompressionStoreKey = 'blocks' | 'sourceLinks' | 'variants' | 'invocationLinks' | 'invocations';
+
+const COMPRESSION_GENERATION_STORE_KEYS: Record<CompressionStoreKey, string> = {
+  blocks: 'conversationCompression.blocks',
+  sourceLinks: 'conversationCompression.sourceLinks',
+  variants: 'conversationCompression.variants',
+  invocationLinks: 'conversationCompression.invocationLinks',
+  invocations: 'conversationCompression.invocations'
+};
+
+export interface ConversationCompressionGenerationRef {
+  generation: string;
+  stores: Record<CompressionStoreKey, RecordStoreGenerationRef>;
+}
+
+export interface PreparedConversationCompressionDetail {
+  state: ClientState;
+  ref?: ConversationCompressionGenerationRef;
+}
+
 
 type CompressionManifestState = 'writing' | 'committed';
 
@@ -31,6 +64,8 @@ interface CompressionStoreManifest {
 export interface CompressionStoreTestHooks {
   afterManifestWrite?: (manifest: CompressionStoreManifest) => void | Promise<void>;
   afterStoreSave?: (context: { conversationId: string; txId: string; store: CompressionStoreKey }) => void | Promise<void>;
+  /** 测试专用：不可变 generation 的单个 store 准备完成后触发。 */
+  afterGenerationStorePrepare?: (context: { conversationId: string; generation: string; store: CompressionStoreKey }) => void | Promise<void>;
 }
 
 export const __compressionStoreTestHooks: CompressionStoreTestHooks = {};
@@ -124,12 +159,176 @@ async function loadConversationCompressionDetailUnlocked(
   return hasCompression ? state : undefined;
 }
 
-export async function saveConversationCompressionDetail(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
+export async function loadConversationCompressionDetailFromGeneration(
+  paths: StoragePaths,
+  conversationId: string,
+  ref: ConversationCompressionGenerationRef,
+  options: LoadConversationCompressionDetailOptions = {}
+): Promise<ClientState | undefined> {
+  assertCompressionGenerationRef(ref);
+  const includeSourceLinks = options.includeSourceLinks ?? true;
+  const [blocks, sourceLinks, variants, invocationLinks, invocations] = await Promise.all([
+    loadRecordStoreGeneration<CompressionBlockRecord, 'block'>(
+      conversationScopedRoot(paths.compressionBlocksRootUri, conversationId),
+      ref.stores.blocks,
+      'block',
+      COMPRESSION_GENERATION_STORE_KEYS.blocks
+    ),
+    includeSourceLinks
+      ? loadRecordStoreGeneration<CompressionBlockSourceLinkRecord, 'link'>(
+        conversationScopedRoot(paths.compressionBlockSourceLinksRootUri, conversationId),
+        ref.stores.sourceLinks,
+        'link',
+        COMPRESSION_GENERATION_STORE_KEYS.sourceLinks
+      )
+      : Promise.resolve({ records: [] as CompressionBlockSourceLinkRecord[], revision: ref.stores.sourceLinks.revision }),
+    loadRecordStoreGeneration<CompressionContextVariantRecord, 'variant'>(
+      conversationScopedRoot(paths.compressionContextVariantsRootUri, conversationId),
+      ref.stores.variants,
+      'variant',
+      COMPRESSION_GENERATION_STORE_KEYS.variants
+    ),
+    loadRecordStoreGeneration<CompressionBlockLlmInvocationLinkRecord, 'link'>(
+      conversationScopedRoot(paths.compressionBlockLlmInvocationLinksRootUri, conversationId),
+      ref.stores.invocationLinks,
+      'link',
+      COMPRESSION_GENERATION_STORE_KEYS.invocationLinks
+    ),
+    loadRecordStoreGeneration<LlmInvocationRecord, 'invocation'>(
+      conversationScopedRoot(paths.compressionLlmInvocationsRootUri, conversationId),
+      ref.stores.invocations,
+      'invocation',
+      COMPRESSION_GENERATION_STORE_KEYS.invocations
+    )
+  ]);
+
+  const state = createEmptyClientState();
+  const now = Date.now();
+  state.compressionBlocks = blocks.records
+    .filter((block) => block.conversationId === conversationId)
+    .map((block) => normalizeLoadedCompressionBlock(block, now));
+  const blockIds = new Set(state.compressionBlocks.map((block) => block.id));
+  if (includeSourceLinks) {
+    state.compressionBlockSourceLinks = sourceLinks.records.filter((link) => blockIds.has(link.blockId));
+  }
+  state.compressionContextVariants = variants.records.filter((variant) => blockIds.has(variant.blockId));
+  state.compressionBlockLlmInvocationLinks = invocationLinks.records.filter((link) => blockIds.has(link.blockId));
+  const invocationIds = new Set(state.compressionBlockLlmInvocationLinks.map((link) => link.invocationId));
+  state.llmInvocations = invocations.records
+    .filter((invocation) => invocationIds.has(invocation.id))
+    .map((invocation) => normalizeLoadedLlmInvocation(invocation, now));
+  assertUniqueClientStateIds(state, `compressionGeneration:${conversationId}:${ref.generation}`);
+  return hasCompressionRecords(state) ? state : undefined;
+}
+
+export async function prepareConversationCompressionDetail(
+  paths: StoragePaths,
+  conversationId: string,
+  currentRef: ConversationCompressionGenerationRef | undefined,
+  next: ClientState
+): Promise<PreparedConversationCompressionDetail> {
+  assertUniqueClientStateIds(next, `prepareCompressionDetail:${conversationId}:next`);
+  const current = currentRef
+    ? await loadConversationCompressionDetailFromGeneration(paths, conversationId, currentRef, { includeSourceLinks: true }) ?? createEmptyClientState()
+    : createEmptyClientState();
+  const canonical = canonicalConversationCompressionDetail(conversationId, current, next);
+  if (!hasCompressionRecords(canonical)) return { state: canonical };
+
+  const generation = createStorageGenerationId();
+  const tasks = {
+    blocks: prepareCompressionGenerationStore(
+      paths.compressionBlocksRootUri,
+      conversationId,
+      generation,
+      'blocks',
+      canonical.compressionBlocks,
+      'block',
+      (record: CompressionBlockRecord) => record.title || record.id
+    ),
+    sourceLinks: prepareCompressionGenerationStore(
+      paths.compressionBlockSourceLinksRootUri,
+      conversationId,
+      generation,
+      'sourceLinks',
+      canonical.compressionBlockSourceLinks,
+      'link',
+      (record: CompressionBlockSourceLinkRecord) => record.id
+    ),
+    variants: prepareCompressionGenerationStore(
+      paths.compressionContextVariantsRootUri,
+      conversationId,
+      generation,
+      'variants',
+      canonical.compressionContextVariants,
+      'variant',
+      (record: CompressionContextVariantRecord) => record.id
+    ),
+    invocationLinks: prepareCompressionGenerationStore(
+      paths.compressionBlockLlmInvocationLinksRootUri,
+      conversationId,
+      generation,
+      'invocationLinks',
+      canonical.compressionBlockLlmInvocationLinks,
+      'link',
+      (record: CompressionBlockLlmInvocationLinkRecord) => record.id
+    ),
+    invocations: prepareCompressionGenerationStore(
+      paths.compressionLlmInvocationsRootUri,
+      conversationId,
+      generation,
+      'invocations',
+      canonical.llmInvocations,
+      'invocation',
+      (record: LlmInvocationRecord) => record.id
+    )
+  };
+  const entries = Object.entries(tasks) as Array<[CompressionStoreKey, Promise<RecordStoreGenerationRef>]>;
+  const settled = await Promise.allSettled(entries.map(([, task]) => task));
+  const failures = settled
+    .map((result, index) => result.status === 'rejected' ? { store: entries[index][0], error: result.reason } : undefined)
+    .filter((failure): failure is { store: CompressionStoreKey; error: unknown } => failure !== undefined);
+  if (failures.length > 0) {
+    const error = new Error(`Failed to prepare compression generation stores: ${failures.map((failure) => failure.store).join(', ')}`) as Error & { errors?: unknown[] };
+    error.errors = failures.map((failure) => failure.error);
+    throw error;
+  }
+  const refs = Object.fromEntries(settled.map((result, index) => [
+    entries[index][0],
+    (result as PromiseFulfilledResult<RecordStoreGenerationRef>).value
+  ])) as Record<CompressionStoreKey, RecordStoreGenerationRef>;
+  return { state: canonical, ref: { generation, stores: refs } };
+}
+
+export async function cleanupConversationCompressionGenerations(
+  paths: StoragePaths,
+  conversationId: string,
+  ref?: ConversationCompressionGenerationRef
+): Promise<void> {
+  const roots: Record<CompressionStoreKey, vscode.Uri> = {
+    blocks: paths.compressionBlocksRootUri,
+    sourceLinks: paths.compressionBlockSourceLinksRootUri,
+    variants: paths.compressionContextVariantsRootUri,
+    invocationLinks: paths.compressionBlockLlmInvocationLinksRootUri,
+    invocations: paths.compressionLlmInvocationsRootUri
+  };
+  for (const [store, root] of Object.entries(roots) as Array<[CompressionStoreKey, vscode.Uri]>) {
+    const active = ref ? [ref.stores[store].generation] : [];
+    const result = await cleanupInactiveStorageGenerations(conversationScopedRoot(root, conversationId), active, {
+      retentionBucketsMs: STANDARD_STORAGE_GENERATION_RETENTION_BUCKETS_MS
+    });
+    for (const failure of result.failed) {
+      console.warn(`[LimCode] Failed to prune compression generation ${store}: ${failure.generation.id}`, failure.error);
+    }
+  }
+}
+
+
+export async function saveConversationCompressionDetail(paths: StoragePaths, conversationId: string, state: ClientState): Promise<ClientState> {
   assertUniqueClientStateIds(state, `saveCompressionDetail:${conversationId}:source`);
   return withRecordStoreTransaction(compressionTransactionUri(paths, conversationId), () => saveConversationCompressionDetailUnlocked(paths, conversationId, state));
 }
 
-async function saveConversationCompressionDetailUnlocked(paths: StoragePaths, conversationId: string, state: ClientState): Promise<void> {
+async function saveConversationCompressionDetailUnlocked(paths: StoragePaths, conversationId: string, state: ClientState): Promise<ClientState> {
   const txId = randomUUID();
   const startedAt = new Date().toISOString();
   await writeCompressionManifest(paths, conversationId, { state: 'writing', txId, startedAt });
@@ -177,6 +376,15 @@ async function saveConversationCompressionDetailUnlocked(paths: StoragePaths, co
       invocations: { count: invocations.length }
     }
   });
+
+  const canonical = createEmptyClientState();
+  canonical.compressionBlocks = blocks;
+  canonical.compressionBlockSourceLinks = links;
+  canonical.compressionContextVariants = variants;
+  canonical.compressionBlockLlmInvocationLinks = invocationLinks;
+  canonical.llmInvocations = invocations;
+  assertUniqueClientStateIds(canonical, `saveCompressionDetail:${conversationId}:canonical`);
+  return canonical;
 }
 
 async function saveCompressionRecordStore<TRecord extends { id: string }, TKey extends string>(
@@ -191,6 +399,76 @@ async function saveCompressionRecordStore<TRecord extends { id: string }, TKey e
   await saveRecordStore(conversationScopedRoot(root, conversationId), conversationScopedIndex(root, conversationId), records, recordKey, labelForRecord, { pruneMissing: true });
   await __compressionStoreTestHooks.afterStoreSave?.({ conversationId, txId, store });
 }
+
+async function prepareCompressionGenerationStore<TRecord extends { id: string }, TKey extends string>(
+  root: vscode.Uri,
+  conversationId: string,
+  generation: string,
+  store: CompressionStoreKey,
+  records: TRecord[],
+  recordKey: TKey,
+  labelForRecord: (record: TRecord) => string
+): Promise<RecordStoreGenerationRef> {
+  const ref = await prepareRecordStoreGeneration(
+    conversationScopedRoot(root, conversationId),
+    records,
+    recordKey,
+    labelForRecord,
+    { storeKey: COMPRESSION_GENERATION_STORE_KEYS[store], generation }
+  );
+  await __compressionStoreTestHooks.afterGenerationStorePrepare?.({ conversationId, generation, store });
+  return ref;
+}
+
+function canonicalConversationCompressionDetail(
+  conversationId: string,
+  current: ClientState,
+  next: ClientState
+): ClientState {
+  const canonical = createEmptyClientState();
+  canonical.compressionBlocks = next.compressionBlocks.filter((block) => block.conversationId === conversationId);
+  const blockIds = new Set(canonical.compressionBlocks.map((block) => block.id));
+  canonical.compressionBlockSourceLinks = mergeRecordsById(
+    current.compressionBlockSourceLinks.filter((link) => blockIds.has(link.blockId)),
+    next.compressionBlockSourceLinks.filter((link) => blockIds.has(link.blockId))
+  );
+  canonical.compressionContextVariants = mergeRecordsById(
+    current.compressionContextVariants.filter((variant) => blockIds.has(variant.blockId)),
+    next.compressionContextVariants.filter((variant) => blockIds.has(variant.blockId))
+  );
+  canonical.compressionBlockLlmInvocationLinks = mergeRecordsById(
+    current.compressionBlockLlmInvocationLinks.filter((link) => blockIds.has(link.blockId)),
+    next.compressionBlockLlmInvocationLinks.filter((link) => blockIds.has(link.blockId))
+  );
+  const invocationIds = new Set(canonical.compressionBlockLlmInvocationLinks.map((link) => link.invocationId));
+  canonical.llmInvocations = mergeRecordsById(
+    current.llmInvocations.filter((invocation) => invocationIds.has(invocation.id)),
+    next.llmInvocations.filter((invocation) => invocationIds.has(invocation.id))
+  );
+  assertUniqueClientStateIds(canonical, `canonicalCompressionDetail:${conversationId}`);
+  return canonical;
+}
+
+function hasCompressionRecords(state: ClientState): boolean {
+  return state.compressionBlocks.length > 0
+    || state.compressionBlockSourceLinks.length > 0
+    || state.compressionContextVariants.length > 0
+    || state.compressionBlockLlmInvocationLinks.length > 0
+    || state.llmInvocations.length > 0;
+}
+
+function assertCompressionGenerationRef(ref: ConversationCompressionGenerationRef): void {
+  if (!isSafeStorageGenerationId(ref.generation)) throw new Error(`Invalid compression generation: ${ref.generation}`);
+  const stores = ref.stores;
+  if (!stores || Object.keys(stores).length !== 5) throw new Error(`Invalid compression generation stores: ${ref.generation}`);
+  for (const key of ['blocks', 'sourceLinks', 'variants', 'invocationLinks', 'invocations'] as const) {
+    const storeRef = stores[key];
+    if (!storeRef || storeRef.generation !== ref.generation || !storeRef.revision) {
+      throw new Error(`Invalid compression generation store ref: ${ref.generation}/${key}`);
+    }
+  }
+}
+
 
 async function writeCompressionManifest(
   paths: StoragePaths,

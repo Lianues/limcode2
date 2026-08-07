@@ -2375,6 +2375,9 @@ export interface ConversationTimelinePageInfo {
 
 export interface ConversationTimelinePageRecord {
   conversationId: string;
+  /** timeline chunks + compression 统一提交序号；用于拒绝乱序旧 page。 */
+  commitSeq: number;
+  committedAt: number;
   applyMode: ConversationTimelinePageApplyMode;
   chunks: ConversationTimelineChunkSummaryRecord[];
   pageInfo: ConversationTimelinePageInfo;
@@ -2390,6 +2393,8 @@ export interface ConversationTimelinePageRecord {
  */
 export interface ConversationTimelineMetaRecord {
   conversationId: string;
+  /** timeline chunks + compression 统一提交序号。 */
+  commitSeq: number;
   revision: string;
   totalChunks: number;
   totalMessages: number;
@@ -2400,9 +2405,9 @@ export interface ConversationTimelineMetaRecord {
 
 export interface ConversationTimelinePatchPayload {
   conversationId: string;
-  streamSeq: number;
+  commitSeq: number;
+  committedAt: number;
   patches: ClientPatchOp[];
-  pageInfo?: Partial<ConversationTimelinePageInfo>;
 }
 
 export interface ClientSnapshotPayload {
@@ -2889,6 +2894,7 @@ export type ExtensionToWebviewMessage =
       message: string;
       code?: 'settings_revision_conflict';
       actualRevision?: string;
+      conversationId?: string;
     }>
   | BridgeEnvelope<BridgeMessageType.OperationResult, OperationResult>
   | BridgeEnvelope<BridgeMessageType.ClientSnapshot, ClientSnapshotPayload>

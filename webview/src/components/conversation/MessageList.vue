@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, watch } from 'vue';
 import type { CheckpointRecord, CompressionBlockRecord, MessageRecord } from '@shared/protocol';
+import { conversationTimelinePrependAnchorCanRestore } from '@shared/conversationTimelineWindow';
 import { useConversationUiStore, type ConversationTimelineViewRow, type LlmErrorBlockRecord, type MessageViewRow } from '@webview/stores/useConversationUiStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
 import { useChat } from '@webview/composables/useChat';
 import { useRunHistoryStore } from '@webview/stores/useRunHistoryStore';
 import { useCompression } from '@webview/composables/useCompression';
+import { USER_SCROLL_INTENT_EVENT, userScrollIntentDetail } from '@webview/composables/scrollIntent';
 import CompressionTimelineCard from './CompressionTimelineCard.vue';
 import MessageItem from './MessageItem.vue';
 import TimelineActivityRow from './TimelineActivityRow.vue';
@@ -30,15 +32,21 @@ const AUTO_LOAD_UNDERFILLED_THRESHOLD_PX = 240;
 let attachedScroller: HTMLElement | null = null;
 let autoLoadFrame: number | undefined;
 let anchorRestoreFrame: number | undefined;
+let anchorSettleObserver: ResizeObserver | undefined;
+let anchorSettleTimer: number | undefined;
 let pendingTimelineAnchor: TimelineRowAnchor | undefined;
 let pendingPrependRevision = 0;
 
 interface TimelineRowAnchor {
+  conversationId: string;
+  requestRevision: number;
   key: string;
   top: number;
+  scrollTop: number;
 }
 
 watch(() => props.scroller, attachScroller, { immediate: true, flush: 'post' });
+watch(() => timeline.currentConversationId, clearPendingTimelineAnchor, { flush: 'sync' });
 watch(
   () => `${timeline.currentTimeline.status}:${timeline.currentHasOlder}:${timeline.currentTimeline.loadedChunkIds.join('\u0001')}:${ui.timelineRows.length}`,
   () => void nextTick(scheduleAutoLoadOlder),
@@ -160,17 +168,26 @@ function rowKey(row: ConversationTimelineViewRow): string {
 
 const rowKeySignature = computed(() => ui.timelineRows.map(rowKey).join('\u0001'));
 const isLoadingOlder = computed(() => timeline.currentTimeline.status === 'loadingOlder');
+const pageLoadError = computed(() => timeline.currentTimeline.failedPageRequest ? timeline.currentTimeline.error : undefined);
+
+function retryFailedPage(): void {
+  timeline.retryFailedPage();
+}
 
 watch(
   () => timeline.currentTimeline.status,
   (status, previous) => {
+    const current = timeline.currentTimeline;
     if (status === 'loadingOlder' && previous !== 'loadingOlder') {
-      pendingTimelineAnchor = captureTimelineAnchor();
-      pendingPrependRevision = 0;
-      cancelAnchorRestoreFrame();
+      clearPendingTimelineAnchor();
+      pendingTimelineAnchor = captureTimelineAnchor(current.conversationId, current.olderRequestRevision);
       return;
     }
-    if (status === 'error' && previous === 'loadingOlder') clearPendingTimelineAnchor();
+    if (previous === 'loadingOlder'
+      && pendingTimelineAnchor
+      && current.prependRevision < pendingTimelineAnchor.requestRevision) {
+      clearPendingTimelineAnchor();
+    }
   },
   { flush: 'sync' }
 );
@@ -178,6 +195,13 @@ watch(
   () => timeline.currentTimeline.prependRevision,
   (revision, previous) => {
     if (revision <= previous) return;
+    const anchor = pendingTimelineAnchor;
+    if (!anchor
+      || anchor.conversationId !== timeline.currentConversationId
+      || anchor.requestRevision !== revision) {
+      clearPendingTimelineAnchor();
+      return;
+    }
     pendingPrependRevision = revision;
     schedulePrependAnchorRestore(revision);
   },
@@ -189,9 +213,9 @@ watch(rowKeySignature, () => {
   void nextTick(() => finishPrependAnchorRestore(revision));
 }, { flush: 'pre' });
 
-function captureTimelineAnchor(): TimelineRowAnchor | undefined {
+function captureTimelineAnchor(conversationId: string, requestRevision: number): TimelineRowAnchor | undefined {
   const scroller = props.scroller;
-  if (!scroller) return undefined;
+  if (!scroller || !conversationId || requestRevision <= 0) return undefined;
 
   const scrollerTop = scroller.getBoundingClientRect().top;
   const rows = Array.from(scroller.querySelectorAll<HTMLElement>('[data-timeline-row-key]'));
@@ -199,23 +223,36 @@ function captureTimelineAnchor(): TimelineRowAnchor | undefined {
   const key = anchorElement?.dataset.timelineRowKey;
   if (!anchorElement || !key) return undefined;
 
-  return { key, top: anchorElement.getBoundingClientRect().top };
+  return {
+    conversationId,
+    requestRevision,
+    key,
+    top: anchorElement.getBoundingClientRect().top,
+    scrollTop: scroller.scrollTop
+  };
 }
 
-function restoreTimelineAnchor(): void {
+function restoreTimelineAnchor(revision: number): boolean {
   const anchor = pendingTimelineAnchor;
-  pendingTimelineAnchor = undefined;
   const scroller = props.scroller;
-  if (!anchor || !scroller) return;
+  if (!anchor || !scroller || anchor.requestRevision !== revision) return false;
+  // 加载期间用户已经滚动、切换会话或响应不属于本次 older 请求时，以当前视图为准。
+  if (!conversationTimelinePrependAnchorCanRestore(
+    anchor,
+    timeline.currentConversationId,
+    timeline.currentTimeline.prependRevision,
+    scroller.scrollTop
+  )) return false;
 
   const anchorElement = Array.from(scroller.querySelectorAll<HTMLElement>('[data-timeline-row-key]')).find(
     (element) => element.dataset.timelineRowKey === anchor.key
   );
-  if (!anchorElement) return;
+  if (!anchorElement) return false;
 
   const delta = anchorElement.getBoundingClientRect().top - anchor.top;
-  if (Math.abs(delta) <= 0.5) return;
-  scroller.scrollTop += delta;
+  if (Math.abs(delta) > 0.5) scroller.scrollTop += delta;
+  anchor.scrollTop = scroller.scrollTop;
+  return true;
 }
 
 function schedulePrependAnchorRestore(revision: number): void {
@@ -231,8 +268,11 @@ function schedulePrependAnchorRestore(revision: number): void {
 function finishPrependAnchorRestore(revision: number): void {
   if (revision !== pendingPrependRevision) return;
   cancelAnchorRestoreFrame();
-  restoreTimelineAnchor();
-  pendingPrependRevision = 0;
+  if (!restoreTimelineAnchor(revision)) {
+    clearPendingTimelineAnchor();
+    return;
+  }
+  if (!anchorSettleObserver) beginAnchorSettle(revision);
   scheduleAutoLoadOlder();
 }
 
@@ -242,10 +282,39 @@ function cancelAnchorRestoreFrame(): void {
   anchorRestoreFrame = undefined;
 }
 
+function beginAnchorSettle(revision: number): void {
+  anchorSettleObserver?.disconnect();
+  if (anchorSettleTimer !== undefined) window.clearTimeout(anchorSettleTimer);
+  const scroller = props.scroller;
+  if (!scroller || !pendingTimelineAnchor) return;
+
+  anchorSettleObserver = new ResizeObserver(() => {
+    if (revision !== pendingPrependRevision) return;
+    schedulePrependAnchorRestore(revision);
+  });
+  anchorSettleObserver.observe(scroller);
+  const content = scroller.firstElementChild;
+  if (content instanceof HTMLElement) anchorSettleObserver.observe(content);
+  anchorSettleTimer = window.setTimeout(clearPendingTimelineAnchor, 600);
+}
+
 function clearPendingTimelineAnchor(): void {
   cancelAnchorRestoreFrame();
+  anchorSettleObserver?.disconnect();
+  anchorSettleObserver = undefined;
+  if (anchorSettleTimer !== undefined) window.clearTimeout(anchorSettleTimer);
+  anchorSettleTimer = undefined;
   pendingTimelineAnchor = undefined;
   pendingPrependRevision = 0;
+}
+
+function cancelPendingAnchorFromWheel(event: WheelEvent): void {
+  if (Math.abs(event.deltaY) > 0) clearPendingTimelineAnchor();
+}
+
+function cancelPendingAnchorFromScrollIntent(event: Event): void {
+  const detail = userScrollIntentDetail(event);
+  if (detail && detail.direction !== 'none') clearPendingTimelineAnchor();
 }
 
 function attachScroller(element: HTMLElement | null | undefined): void {
@@ -253,11 +322,17 @@ function attachScroller(element: HTMLElement | null | undefined): void {
   if (!element) return;
   attachedScroller = element;
   element.addEventListener('scroll', scheduleAutoLoadOlder, { passive: true });
+  element.addEventListener('wheel', cancelPendingAnchorFromWheel, { passive: true });
+  element.addEventListener(USER_SCROLL_INTENT_EVENT, cancelPendingAnchorFromScrollIntent);
   scheduleAutoLoadOlder();
 }
 
 function detachScroller(): void {
-  if (attachedScroller) attachedScroller.removeEventListener('scroll', scheduleAutoLoadOlder);
+  if (attachedScroller) {
+    attachedScroller.removeEventListener('scroll', scheduleAutoLoadOlder);
+    attachedScroller.removeEventListener('wheel', cancelPendingAnchorFromWheel);
+    attachedScroller.removeEventListener(USER_SCROLL_INTENT_EVENT, cancelPendingAnchorFromScrollIntent);
+  }
   attachedScroller = null;
   if (autoLoadFrame !== undefined) window.cancelAnimationFrame(autoLoadFrame);
   autoLoadFrame = undefined;
@@ -277,7 +352,8 @@ function maybeLoadOlder(): void {
   if (!scroller) return;
   const current = timeline.currentTimeline;
   const status = current.status;
-  const hasTimelinePage = current.pageInfo !== undefined;
+  const hasTimelinePage = current.hasPageSnapshot;
+  if (current.failedPageRequest) return;
   if (status === 'loadingOlder' || (status === 'loadingInitial' && !hasTimelinePage)) return;
 
   if (!hasTimelinePage) {
@@ -301,6 +377,12 @@ function maybeLoadOlder(): void {
       <div class="message-list-loading-pill">
         <span class="message-list-loading-spinner" aria-hidden="true"></span>
         <span>正在加载更早消息…</span>
+      </div>
+    </div>
+    <div v-else-if="pageLoadError" class="message-list-loading-layer" role="alert">
+      <div class="message-list-loading-pill message-list-error-pill">
+        <span>{{ pageLoadError }}</span>
+        <button type="button" class="message-list-retry-button" @click="retryFailedPage">重新加载</button>
       </div>
     </div>
     <div
@@ -383,6 +465,28 @@ function maybeLoadOlder(): void {
   color: var(--vscode-descriptionForeground);
   font-size: var(--font-size-xs);
   line-height: 1.4;
+}
+
+.message-list-error-pill {
+  max-width: min(520px, calc(100% - 24px));
+  pointer-events: auto;
+  background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-foreground) 8%);
+  border: 1px solid color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
+}
+
+.message-list-retry-button {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  color: var(--vscode-foreground);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--vscode-foreground) 24%, transparent);
+  cursor: pointer;
+}
+
+.message-list-retry-button:hover,
+.message-list-retry-button:focus-visible {
+  background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+  outline: none;
 }
 
 .message-list-loading-spinner {

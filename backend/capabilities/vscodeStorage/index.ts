@@ -52,7 +52,9 @@ import {
   loadConversationDetailFromStores,
   loadConversationRunDetailFromStores,
   loadConversationRunHistoryPageFromStores,
+  loadConversationTimelineMetaFromStores,
   loadConversationTimelinePageFromStores,
+  loadConversationTimelineProjectionContextFromStores,
   loadConversationTimelineRangeFromStores,
   resolveConversationRunIdForMessageFromStores,
   removeMessageRecord,
@@ -64,7 +66,6 @@ import {
   saveToolCallRecord,
   truncateConversationTimelineFromStores
 } from './clientStateStore';
-import { loadConversationTimelineMeta, loadTimelineProjectionContext } from './conversationTimelineStore';
 import {
   commitClientStateSkeletonConversationDeletion,
   openClientStateSkeletonSnapshot,
@@ -375,10 +376,10 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       });
     },
     async loadConversationTimelineProjectionContext(conversationId, projectionKey, chunkId) {
-      return withSharedDataRoot((paths) => loadTimelineProjectionContext(paths, conversationId, projectionKey, chunkId));
+      return withSharedDataRoot((paths) => loadConversationTimelineProjectionContextFromStores(paths, conversationId, projectionKey, chunkId));
     },
     async loadConversationTimelineMeta(conversationId) {
-      return withSharedDataRoot((paths) => loadConversationTimelineMeta(paths, conversationId));
+      return withSharedDataRoot((paths) => loadConversationTimelineMetaFromStores(paths, conversationId));
     },
     async loadConversationTimelinePage(request) {
       return withSharedDataRoot((paths) => loadConversationTimelinePageFromStores(paths, request));

@@ -19,6 +19,12 @@ export interface ConversationStreamMessageRemovalClassification {
   semanticMessageIds: Set<string>;
 }
 
+export interface ConversationTimelinePrependAnchorIdentity {
+  conversationId: string;
+  requestRevision: number;
+  scrollTop: number;
+}
+
 /**
  * 由已加载 chunk 构造展示窗口。chunk 可以非连续；实时尾部是独立附着关系，
  * 不能再通过 pageInfo.hasNewer 反向推断。
@@ -44,6 +50,108 @@ export function seqInConversationTimelineWindow(seq: number, window: Conversatio
   return window.tailAttached && window.tailStartSeq !== undefined && seq > window.tailStartSeq;
 }
 
+/**
+ * 按已加载 chunk 窗口原地裁剪 conversation timeline 状态，并同步清理 checkpoint、
+ * compression 及其 project/shadow/invocation 关系闭包。
+ */
+export function pruneConversationTimelineStateToWindow(
+  state: ClientState,
+  conversationId: string,
+  chunks: readonly ConversationTimelineChunkSummaryRecord[],
+  tailAttached: boolean
+): void {
+  const window = createConversationTimelineSeqWindow(chunks, tailAttached);
+  if (!window) return;
+
+  state.messages = state.messages.filter((message) =>
+    message.conversationId !== conversationId || seqInConversationTimelineWindow(message.seq, window)
+  );
+  const messageIds = new Set(state.messages.map((message) => message.id));
+  const conversationMessageIds = new Set(
+    state.messages
+      .filter((message) => message.conversationId === conversationId)
+      .map((message) => message.id)
+  );
+
+  state.messageRevisions = state.messageRevisions.filter((revision) =>
+    revision.conversationId !== conversationId || messageIds.has(revision.messageId)
+  );
+  const revisionIds = new Set(state.messageRevisions.map((revision) => revision.id));
+  state.messageCurrentRevisionLinks = state.messageCurrentRevisionLinks.filter((link) =>
+    messageIds.has(link.messageId) || revisionIds.has(link.revisionId)
+  );
+  const runIds = new Set(state.agentRuns.map((run) => run.id));
+  // 对话流会额外投影关联子 Run 的当前工具；它们的 message 属于子对话，不能按当前消息窗口裁掉。
+  const runToolCallIds = new Set(
+    state.toolCallRunLinks
+      .filter((link) => runIds.has(link.runId))
+      .map((link) => link.toolCallId)
+  );
+  state.toolCalls = state.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId) || runToolCallIds.has(toolCall.id));
+  const toolCallIds = new Set(state.toolCalls.map((toolCall) => toolCall.id));
+  state.toolCallEvents = state.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId));
+  state.toolCallRunLinks = state.toolCallRunLinks.filter((link) => toolCallIds.has(link.toolCallId));
+  state.messageRunLinks = state.messageRunLinks.filter((link) => messageIds.has(link.messageId));
+  state.messageLlmInvocationLinks = state.messageLlmInvocationLinks.filter((link) => messageIds.has(link.messageId));
+
+  state.checkpointTimelineAnchors = state.checkpointTimelineAnchors.filter((anchor) =>
+    anchor.conversationId !== conversationId || conversationMessageIds.has(anchor.floorMessageId)
+  );
+  const anchoredCheckpointIds = new Set(
+    state.checkpointTimelineAnchors
+      .filter((anchor) => anchor.conversationId === conversationId)
+      .map((anchor) => anchor.checkpointId)
+  );
+  state.checkpoints = state.checkpoints.filter((checkpoint) => {
+    if (checkpoint.conversationId !== conversationId) return true;
+    if (checkpoint.status === 'pending' || anchoredCheckpointIds.has(checkpoint.id)) return true;
+    // storage 会把未锚定的 conversation_initial checkpoint 作为共享 sidecar 投影到每个非空 chunk。
+    return conversationMessageIds.size > 0 && checkpoint.trigger === 'conversation_initial';
+  });
+
+  const conversationCheckpoints = state.checkpoints.filter(
+    (checkpoint) => checkpoint.conversationId === conversationId
+  );
+  const checkpointProjectContextIds = new Set(conversationCheckpoints.map((checkpoint) => checkpoint.projectContextId));
+  const checkpointShadowRepositoryIds = new Set(conversationCheckpoints.map((checkpoint) => checkpoint.shadowRepositoryId));
+  state.conversationCheckpointRepositoryLinks = state.conversationCheckpointRepositoryLinks.filter((link) => {
+    if (link.conversationId !== conversationId) return true;
+    return checkpointProjectContextIds.has(link.projectContextId)
+      || checkpointShadowRepositoryIds.has(link.shadowRepositoryId);
+  });
+
+  const referencedProjectContextIds = new Set(state.conversationProjectLinks.map((link) => link.projectContextId));
+  const referencedShadowRepositoryIds = new Set<string>();
+  for (const checkpoint of state.checkpoints) {
+    referencedProjectContextIds.add(checkpoint.projectContextId);
+    referencedShadowRepositoryIds.add(checkpoint.shadowRepositoryId);
+  }
+  for (const link of state.conversationCheckpointRepositoryLinks) {
+    referencedProjectContextIds.add(link.projectContextId);
+    referencedShadowRepositoryIds.add(link.shadowRepositoryId);
+  }
+  state.projectContexts = state.projectContexts.filter((record) => referencedProjectContextIds.has(record.id));
+  state.shadowRepositories = state.shadowRepositories.filter((record) => referencedShadowRepositoryIds.has(record.id));
+
+  state.compressionBlocks = state.compressionBlocks.filter((block) => {
+    if (block.conversationId !== conversationId) return true;
+    const seq = block.anchorSeq ?? block.endSeq;
+    return seq !== undefined && seqInConversationTimelineWindow(seq, window);
+  });
+  const compressionBlockIds = new Set(state.compressionBlocks.map((block) => block.id));
+  state.compressionBlockSourceLinks = state.compressionBlockSourceLinks.filter((link) => compressionBlockIds.has(link.blockId));
+  state.compressionBlockLlmInvocationLinks = state.compressionBlockLlmInvocationLinks.filter((link) => compressionBlockIds.has(link.blockId));
+  state.compressionContextVariants = state.compressionContextVariants.filter((variant) => compressionBlockIds.has(variant.blockId));
+  state.runCompressionBlockLinks = state.runCompressionBlockLinks.filter((link) => compressionBlockIds.has(link.blockId));
+
+  const invocationIds = new Set([
+    ...state.messageLlmInvocationLinks.map((link) => link.invocationId),
+    ...state.runLlmInvocationLinks.map((link) => link.invocationId),
+    ...state.compressionBlockLlmInvocationLinks.map((link) => link.invocationId)
+  ]);
+  state.llmInvocations = state.llmInvocations.filter((invocation) => invocationIds.has(invocation.id));
+}
+
 export function timelineHasOlderChunks(chunks: readonly ConversationTimelineChunkSummaryRecord[]): boolean {
   const oldest = [...chunks].sort((left, right) => left.index - right.index || left.id.localeCompare(right.id))[0];
   return !!oldest && oldest.index > 0;
@@ -56,6 +164,22 @@ export function timelineHasNewerChunks(
   if (totalChunks <= 0) return false;
   const newest = [...chunks].sort((left, right) => right.index - left.index || right.id.localeCompare(left.id))[0];
   return !newest || newest.index < totalChunks - 1;
+}
+
+export function conversationTimelineCommitCanApply(incomingCommitSeq: number, latestCommitSeq: number): boolean {
+  return incomingCommitSeq >= latestCommitSeq;
+}
+
+export function conversationTimelinePrependAnchorCanRestore(
+  anchor: ConversationTimelinePrependAnchorIdentity,
+  currentConversationId: string,
+  prependRevision: number,
+  currentScrollTop: number,
+  scrollTolerancePx = 2
+): boolean {
+  return anchor.conversationId === currentConversationId
+    && anchor.requestRevision === prependRevision
+    && Math.abs(currentScrollTop - anchor.scrollTop) <= scrollTolerancePx;
 }
 
 /**
@@ -135,7 +259,12 @@ export function conversationTimelineStateForMessageIds(
   const blockIds = new Set(result.compressionBlocks.map((block) => block.id));
   result.compressionBlockSourceLinks = state.compressionBlockSourceLinks.filter((link) => blockIds.has(link.blockId));
   result.compressionContextVariants = state.compressionContextVariants.filter((variant) => blockIds.has(variant.blockId));
+  result.runCompressionBlockLinks = state.runCompressionBlockLinks.filter((link) =>
+    runIds.has(link.runId) || blockIds.has(link.blockId)
+  );
   result.compressionBlockLlmInvocationLinks = state.compressionBlockLlmInvocationLinks.filter((link) => blockIds.has(link.blockId));
+  for (const link of result.compressionBlockLlmInvocationLinks) invocationIds.add(link.invocationId);
+  result.llmInvocations = state.llmInvocations.filter((invocation) => invocationIds.has(invocation.id));
 
   return result;
 }

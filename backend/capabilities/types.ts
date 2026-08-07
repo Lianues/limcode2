@@ -645,6 +645,12 @@ export interface DeleteConversationDataResult {
   errors: string[];
 }
 
+export interface ConversationTimelineSaveResult {
+  state: ClientState;
+  commitSeq: number;
+  committedAt: number;
+}
+
 export interface ResolvedAttachmentForClientResult {
   part: InlineDataPart;
   status: AttachmentAvailabilityStatus;
@@ -696,10 +702,10 @@ export interface StorageCapability {
   saveClientStateSkeleton(
     patch: import('./vscodeStorage/clientStateSkeletonPatch').ClientStateSkeletonPatch
   ): Promise<import('./vscodeStorage/clientStateSkeletonTransaction').ClientStateSkeletonCommitResult>;
-  /** 返回存储格式实际接受的本地投影；不包含磁盘中其它窗口提交的 union records。 */
-  saveConversationRenderDetail(conversationId: string, localBase: ClientState, localNext: ClientState): Promise<ClientState>;
-  /** 返回存储格式实际接受的 timeline-only 本地投影。 */
-  saveConversationTimelineRenderDetail(conversationId: string, localBase: ClientState, localNext: ClientState): Promise<ClientState>;
+  /** 返回存储格式实际接受的本地投影和本次 timeline+compression 统一提交序号。 */
+  saveConversationRenderDetail(conversationId: string, localBase: ClientState, localNext: ClientState): Promise<ConversationTimelineSaveResult>;
+  /** 返回存储格式实际接受的 timeline-only 本地投影和本次统一提交序号。 */
+  saveConversationTimelineRenderDetail(conversationId: string, localBase: ClientState, localNext: ClientState): Promise<ConversationTimelineSaveResult>;
   saveConversationRunHistory(conversationId: string, state: ClientState, options: { mode: ConversationRunHistorySaveMode }): Promise<void>;
   loadConversationRunHistoryPage(request: ConversationRunHistoryPageRequest): Promise<ConversationRunHistoryPageRecord>;
   loadConversationRunDetail(request: ConversationRunDetailRequest): Promise<ConversationRunDetailRecord | undefined>;

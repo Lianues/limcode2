@@ -19,6 +19,7 @@ import type {
   ConversationRunDetailRecord,
   ConversationRunHistoryPageRecord,
   ConversationRunSummaryRecord,
+  ConversationTimelineMetaRecord,
   ConversationTimelinePageRecord,
   ConversationTimelinePageRequest,
   ConversationOriginLinkRecord,
@@ -59,13 +60,14 @@ import { createVscodeStoragePaths } from './paths';
 import { isFileNotFoundError as isStorageFileNotFoundError, readJsonStrict, writeJson } from './json';
 import { loadGlobalSettingsFile } from './globalSettings';
 import {
-  loadConversationTimelinePage,
-  loadConversationTimelineRange,
-  commitConversationTimelineRenderDetail,
-  loadConversationTimelineDetail,
-  mutateConversationTimelineDetailInStore,
-  saveConversationTimelineDetail,
-  truncateConversationTimeline
+  cleanupConversationTimelineGenerations,
+  loadConversationTimelineDetailFromGeneration,
+  loadConversationTimelineMetaFromGeneration,
+  loadConversationTimelinePageFromGeneration,
+  loadConversationTimelineRangeFromGeneration,
+  loadTimelineProjectionContextFromGeneration,
+  prepareConversationTimelineRenderDetail,
+  prepareConversationTimelineTruncate
 } from './conversationTimelineStore';
 import { withStorageResourceLock } from './storageResourceLock';
 import { deleteStorageUri, ensureStorageDirectory, readStorageDirectory } from './storageFs';
@@ -76,9 +78,17 @@ import {
   STANDARD_STORAGE_GENERATION_RETENTION_BUCKETS_MS,
   STORAGE_GENERATIONS_DIR
 } from './storageGeneration';
-import { loadConversationCompressionDetail, saveConversationCompressionDetail } from './compressionStore';
+import {
+  cleanupConversationCompressionGenerations,
+  loadConversationCompressionDetailFromGeneration,
+  prepareConversationCompressionDetail
+} from './compressionStore';
+import {
+  commitConversationTimelineMutation,
+  readConversationTimelineCommittedSnapshot
+} from './conversationTimelineCommit';
 import { assertUniqueClientStateIds, assertUniqueRecords } from '../../utils/uniqueIds';
-import type { DeleteConversationDataResult } from '../types';
+import type { ConversationTimelineSaveResult, DeleteConversationDataResult } from '../types';
 import {
   commitClientStateSkeletonPatch,
   loadPinnedClientStateSkeletonStore,
@@ -110,6 +120,13 @@ export interface ClientStateSkeletonStoreTestHooks {
 }
 
 export const __clientStateSkeletonStoreTestHooks: ClientStateSkeletonStoreTestHooks = {};
+
+export interface ConversationTimelineGenerationCleanupTestHooks {
+  /** 测试专用：根提交已发布、重新获取根锁读取最新 refs 前触发。 */
+  beforeCleanup?: (context: { conversationId: string }) => void | Promise<void>;
+}
+
+export const __conversationTimelineGenerationCleanupTestHooks: ConversationTimelineGenerationCleanupTestHooks = {};
 
 type StoreKey = string;
 type StoreRecord = { id: string };
@@ -262,16 +279,25 @@ export async function loadConversationDetailFromStores(
   options: LoadConversationDetailOptions = {}
 ): Promise<ClientState | undefined> {
   const includeRunHistory = options.includeRunHistory ?? false;
-  const timeline = await loadConversationTimelineDetail(paths, conversationId);
-  const state = timeline ?? createEmptyClientState();
-  let hasExplicitDetail = timeline !== undefined;
-  const compression = await loadConversationCompressionDetail(paths, conversationId, {
-    knownMessageIds: new Set(state.messages.map((message) => message.id))
+  const snapshot = await readConversationTimelineCommittedSnapshot(paths, conversationId, async (committed) => {
+    const timeline = committed.timeline
+      ? await loadConversationTimelineDetailFromGeneration(paths, conversationId, committed.timeline)
+      : undefined;
+    const state = timeline ?? createEmptyClientState();
+    let hasExplicitDetail = timeline !== undefined;
+    const compression = committed.compression
+      ? await loadConversationCompressionDetailFromGeneration(paths, conversationId, committed.compression, {
+        knownMessageIds: new Set(state.messages.map((message) => message.id))
+      })
+      : undefined;
+    if (compression) {
+      copyCompressionTables(state, compression);
+      hasExplicitDetail = true;
+    }
+    return { state, hasExplicitDetail };
   });
-  if (compression) {
-    copyCompressionTables(state, compression);
-    hasExplicitDetail = true;
-  }
+  const state = snapshot.value.state;
+  let hasExplicitDetail = snapshot.value.hasExplicitDetail || snapshot.commitSeq > 0;
 
   if (includeRunHistory) {
     const runHistory = await loadConversationRunHistoryFromStores(paths, conversationId);
@@ -285,15 +311,94 @@ export async function loadConversationDetailFromStores(
   return hasExplicitDetail || hasAnyState(state) ? state : undefined;
 }
 
+export async function loadConversationTimelineProjectionContextFromStores(
+  paths: StoragePaths,
+  conversationId: string,
+  projectionKey: string,
+  chunkId?: string
+): Promise<import('../../../shared/timelineProjection').TimelineProjectionContextRecord | undefined> {
+  const snapshot = await readConversationTimelineCommittedSnapshot(paths, conversationId, (committed) =>
+    committed.timeline
+      ? loadTimelineProjectionContextFromGeneration(paths, conversationId, committed.timeline, projectionKey, chunkId)
+      : Promise.resolve(undefined)
+  );
+  return snapshot.value;
+}
+
+export async function loadConversationTimelineMetaFromStores(
+  paths: StoragePaths,
+  conversationId: string
+): Promise<import('../../../shared/protocol').ConversationTimelineMetaRecord> {
+  const snapshot = await readConversationTimelineCommittedSnapshot(
+    paths,
+    conversationId,
+    (committed) => committed.timeline
+      ? loadConversationTimelineMetaFromGeneration(paths, conversationId, committed.timeline)
+      : Promise.resolve(emptyConversationTimelineMeta(conversationId))
+  );
+  return {
+    ...snapshot.value,
+    commitSeq: snapshot.commitSeq,
+    committedAt: snapshot.commitSeq > 0 ? snapshot.committedAt : snapshot.value.committedAt
+  };
+}
+
 export async function loadConversationTimelinePageFromStores(paths: StoragePaths, request: ConversationTimelinePageRequest): Promise<ConversationTimelinePageRecord> {
-  const page = await loadConversationTimelinePage(paths, request);
-  const compression = await loadConversationCompressionDetail(paths, request.conversationId, { includeSourceLinks: false });
-  if (compression) {
-    copyCompressionTables(page.state, compression);
-    pruneCompressionTablesToTimelinePage(page.state, page.pageInfo.startSeq, page.pageInfo.endSeq);
-  }
-  assertUniqueClientStateIds(page.state, `conversationTimelinePage:${request.conversationId}`);
-  return page;
+  const snapshot = await readConversationTimelineCommittedSnapshot(paths, request.conversationId, async (committed) => {
+    const page = committed.timeline
+      ? await loadConversationTimelinePageFromGeneration(paths, request, committed.timeline)
+      : emptyConversationTimelinePage(request);
+    const compression = committed.compression
+      ? await loadConversationCompressionDetailFromGeneration(paths, request.conversationId, committed.compression, { includeSourceLinks: false })
+      : undefined;
+    if (compression) {
+      copyCompressionTables(page.state, compression);
+      pruneCompressionTablesToTimelinePage(page.state, page.pageInfo.startSeq, page.pageInfo.endSeq);
+    }
+    assertUniqueClientStateIds(page.state, `conversationTimelinePage:${request.conversationId}`);
+    return page;
+  });
+  return {
+    ...snapshot.value,
+    commitSeq: snapshot.commitSeq,
+    committedAt: snapshot.commitSeq > 0 ? snapshot.committedAt : snapshot.value.committedAt
+  };
+}
+
+function emptyConversationTimelineMeta(conversationId: string): ConversationTimelineMetaRecord {
+  return {
+    conversationId,
+    commitSeq: 0,
+    revision: '',
+    totalChunks: 0,
+    totalMessages: 0,
+    committedAt: Date.now()
+  };
+}
+
+function emptyConversationTimelinePage(request: ConversationTimelinePageRequest): ConversationTimelinePageRecord {
+  const applyMode: ConversationTimelinePageRecord['applyMode'] = request.direction === 'older'
+    ? 'prepend'
+    : request.direction === 'newer'
+      ? 'append'
+      : 'replace';
+  return {
+    conversationId: request.conversationId,
+    commitSeq: 0,
+    committedAt: Date.now(),
+    applyMode,
+    chunks: [],
+    pageInfo: {
+      conversationId: request.conversationId,
+      chunkIds: [],
+      totalChunks: 0,
+      totalMessages: 0,
+      hasOlder: false,
+      hasNewer: false,
+      loadedAt: Date.now()
+    },
+    state: createEmptyClientState()
+  };
 }
 
 export async function loadConversationTimelineRangeFromStores(paths: StoragePaths, request: {
@@ -304,10 +409,18 @@ export async function loadConversationTimelineRangeFromStores(paths: StoragePath
   endMessageId?: string;
   contextBeforeChunks?: number;
 }): Promise<ClientState | undefined> {
-  const state = await loadConversationTimelineRange(paths, request);
+  const snapshot = await readConversationTimelineCommittedSnapshot(paths, request.conversationId, async (committed) => {
+    if (!committed.timeline) return undefined;
+    const state = await loadConversationTimelineRangeFromGeneration(paths, request, committed.timeline);
+    if (!state) return undefined;
+    const compression = committed.compression
+      ? await loadConversationCompressionDetailFromGeneration(paths, request.conversationId, committed.compression)
+      : undefined;
+    if (compression) copyCompressionTables(state, compression);
+    return state;
+  });
+  const state = snapshot.value;
   if (!state) return undefined;
-  const compression = await loadConversationCompressionDetail(paths, request.conversationId);
-  if (compression) copyCompressionTables(state, compression);
   const runHistory = await loadConversationRunHistoryForMessagesFromStores(
     paths,
     request.conversationId,
@@ -323,7 +436,20 @@ export async function truncateConversationTimelineFromStores(paths: StoragePaths
   anchorMessageId: string;
   keepAnchor: boolean;
 }): Promise<{ conversationId: string; removedMessageIds: string[] }> {
-  return truncateConversationTimeline(paths, request);
+  const committed = await commitConversationTimelineMutation(
+    paths,
+    request.conversationId,
+    async (current) => {
+      const prepared = await prepareConversationTimelineTruncate(paths, request, current.timeline);
+      return {
+        value: { conversationId: request.conversationId, removedMessageIds: prepared.removedMessageIds },
+        ...(prepared.ref ? { timeline: prepared.ref } : {}),
+        ...(current.compression ? { compression: current.compression } : {})
+      };
+    }
+  );
+  await cleanupCommittedConversationTimelineGenerations(paths, request.conversationId);
+  return committed.value;
 }
 
 
@@ -514,12 +640,27 @@ export async function saveConversationTimelineRenderDetailToStores(
   conversationId: string,
   localBase: ClientState,
   localNext: ClientState
-): Promise<ClientState> {
-  const baseDetail = conversationRenderDetailSlice(localBase, conversationId);
-  const nextDetail = conversationRenderDetailSlice(localNext, conversationId);
-  assertUniqueClientStateIds(baseDetail, `saveConversationTimelineRenderDetail:${conversationId}:base`);
-  assertUniqueClientStateIds(nextDetail, `saveConversationTimelineRenderDetail:${conversationId}:next`);
-  return commitConversationTimelineRenderDetail(paths, conversationId, baseDetail, nextDetail);
+): Promise<ConversationTimelineSaveResult> {
+  const committed = await commitConversationTimelineMutation(paths, conversationId, async (current) => {
+    const baseDetail = conversationRenderDetailSlice(localBase, conversationId);
+    const nextDetail = conversationRenderDetailSlice(localNext, conversationId);
+    assertUniqueClientStateIds(baseDetail, `saveConversationTimelineRenderDetail:${conversationId}:base`);
+    assertUniqueClientStateIds(nextDetail, `saveConversationTimelineRenderDetail:${conversationId}:next`);
+    const prepared = await prepareConversationTimelineRenderDetail(
+      paths,
+      conversationId,
+      current.timeline,
+      baseDetail,
+      nextDetail
+    );
+    return {
+      value: prepared.state,
+      ...(prepared.ref ? { timeline: prepared.ref } : {}),
+      ...(current.compression ? { compression: current.compression } : {})
+    };
+  });
+  await cleanupCommittedConversationTimelineGenerations(paths, conversationId);
+  return { state: committed.value, commitSeq: committed.commitSeq, committedAt: committed.committedAt };
 }
 
 export async function saveConversationRenderDetailToStores(
@@ -527,23 +668,39 @@ export async function saveConversationRenderDetailToStores(
   conversationId: string,
   localBase: ClientState,
   localNext: ClientState
-): Promise<ClientState> {
-  const baseDetail = conversationRenderDetailSlice(localBase, conversationId);
-  const nextDetail = conversationRenderDetailSlice(localNext, conversationId);
-  assertUniqueClientStateIds(baseDetail, `saveConversationRenderDetail:${conversationId}:base`);
-  assertUniqueClientStateIds(nextDetail, `saveConversationRenderDetail:${conversationId}:next`);
-  const compression = createEmptyClientState();
-  copyCompressionTables(compression, nextDetail);
-  const existingCompression = await loadConversationCompressionDetail(paths, conversationId);
-  if (existingCompression) preserveKnownCompressionSourceLinks(compression, existingCompression);
-  const [committedTimeline] = await Promise.all([
-    commitConversationTimelineRenderDetail(paths, conversationId, baseDetail, nextDetail),
-    saveConversationCompressionDetail(paths, conversationId, compression)
-  ]);
-  const acknowledged = createEmptyClientState();
-  mergeRenderDetailTables(acknowledged, committedTimeline);
-  copyCompressionTables(acknowledged, nextDetail);
-  return acknowledged;
+): Promise<ConversationTimelineSaveResult> {
+  const committed = await commitConversationTimelineMutation(paths, conversationId, async (current) => {
+    const baseDetail = conversationRenderDetailSlice(localBase, conversationId);
+    const nextDetail = conversationRenderDetailSlice(localNext, conversationId);
+    assertUniqueClientStateIds(baseDetail, `saveConversationRenderDetail:${conversationId}:base`);
+    assertUniqueClientStateIds(nextDetail, `saveConversationRenderDetail:${conversationId}:next`);
+    const compression = createEmptyClientState();
+    copyCompressionTables(compression, nextDetail);
+
+    // 两个子快照均为不可变 generation；必须等待全部 settle，只有全部成功才返回给根提交发布。
+    const settled = await Promise.allSettled([
+      prepareConversationTimelineRenderDetail(paths, conversationId, current.timeline, baseDetail, nextDetail),
+      prepareConversationCompressionDetail(paths, conversationId, current.compression, compression)
+    ]);
+    const failures = settled.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failures.length > 0) {
+      const error = new Error('Failed to prepare complete conversation timeline snapshot pair.') as Error & { errors?: unknown[] };
+      error.errors = failures.map((failure) => failure.reason);
+      throw error;
+    }
+    const preparedTimeline = (settled[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof prepareConversationTimelineRenderDetail>>>).value;
+    const preparedCompression = (settled[1] as PromiseFulfilledResult<Awaited<ReturnType<typeof prepareConversationCompressionDetail>>>).value;
+    const acknowledged = createEmptyClientState();
+    mergeRenderDetailTables(acknowledged, preparedTimeline.state);
+    copyCompressionTables(acknowledged, preparedCompression.state);
+    return {
+      value: acknowledged,
+      ...(preparedTimeline.ref ? { timeline: preparedTimeline.ref } : {}),
+      ...(preparedCompression.ref ? { compression: preparedCompression.ref } : {})
+    };
+  });
+  await cleanupCommittedConversationTimelineGenerations(paths, conversationId);
+  return { state: committed.value, commitSeq: committed.commitSeq, committedAt: committed.committedAt };
 }
 
 export async function saveConversationRunHistoryToStores(
@@ -568,14 +725,69 @@ export async function saveConversationRunHistoryToStores(
   await writeRunHistoryIndexAndPages(paths, conversationId, summaries, options);
 }
 
+async function mutateCommittedConversationTimeline(
+  paths: StoragePaths,
+  conversationId: string,
+  mutate: (detail: ClientState) => void | Promise<void>
+): Promise<void> {
+  const committed = await commitConversationTimelineMutation(paths, conversationId, async (current) => {
+    const base = current.timeline
+      ? await loadConversationTimelineDetailFromGeneration(paths, conversationId, current.timeline)
+      : createEmptyClientState();
+    const next = cloneClientStateForStorageMutation(base);
+    await mutate(next);
+    const prepared = await prepareConversationTimelineRenderDetail(
+      paths,
+      conversationId,
+      current.timeline,
+      base,
+      next
+    );
+    return {
+      value: undefined,
+      ...(prepared.ref ? { timeline: prepared.ref } : {}),
+      ...(current.compression ? { compression: current.compression } : {})
+    };
+  });
+  await cleanupCommittedConversationTimelineGenerations(paths, conversationId);
+}
+
+async function cleanupCommittedConversationTimelineGenerations(
+  paths: StoragePaths,
+  conversationId: string
+): Promise<void> {
+  try {
+    await __conversationTimelineGenerationCleanupTestHooks.beforeCleanup?.({ conversationId });
+    await readConversationTimelineCommittedSnapshot(paths, conversationId, async (latest) => {
+      const results = await Promise.allSettled([
+        cleanupConversationTimelineGenerations(paths, conversationId, latest.timeline),
+        cleanupConversationCompressionGenerations(paths, conversationId, latest.compression)
+      ]);
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          console.warn(`[LimCode] Failed to clean committed timeline generations for ${conversationId}:`, result.reason);
+        }
+      }
+    });
+  } catch (error) {
+    // 根提交已可见后，GC 永远是 best-effort，不能把成功保存反报为失败。
+    console.warn(`[LimCode] Failed to enter committed timeline generation cleanup for ${conversationId}:`, error);
+  }
+}
+
+function cloneClientStateForStorageMutation(state: ClientState): ClientState {
+  if (typeof structuredClone === 'function') return structuredClone(state);
+  return JSON.parse(JSON.stringify(state)) as ClientState;
+}
+
 export async function saveMessageRecord(paths: StoragePaths, conversationId: string, message: MessageRecord): Promise<void> {
-  await mutateConversationTimelineDetailInStore(paths, conversationId, (detail) => {
+  await mutateCommittedConversationTimeline(paths, conversationId, (detail) => {
     detail.messages = upsertById(detail.messages, { ...message, conversationId });
   });
 }
 
 export async function removeMessageRecord(paths: StoragePaths, conversationId: string, messageId: string): Promise<void> {
-  await mutateConversationTimelineDetailInStore(paths, conversationId, (detail) => {
+  await mutateCommittedConversationTimeline(paths, conversationId, (detail) => {
     const toolCallIds = new Set(detail.toolCalls.filter((toolCall) => toolCall.messageId === messageId).map((toolCall) => toolCall.id));
     detail.messages = detail.messages.filter((message) => message.id !== messageId);
     detail.messageRevisions = detail.messageRevisions.filter((revision) => revision.messageId !== messageId);
@@ -586,13 +798,13 @@ export async function removeMessageRecord(paths: StoragePaths, conversationId: s
 }
 
 export async function saveToolCallRecord(paths: StoragePaths, conversationId: string, toolCall: ToolCallRecord): Promise<void> {
-  await mutateConversationTimelineDetailInStore(paths, conversationId, (detail) => {
+  await mutateCommittedConversationTimeline(paths, conversationId, (detail) => {
     detail.toolCalls = upsertById(detail.toolCalls, toolCall);
   });
 }
 
 export async function appendToolCallEventRecord(paths: StoragePaths, conversationId: string, event: ToolCallEventRecord): Promise<void> {
-  await mutateConversationTimelineDetailInStore(paths, conversationId, (detail) => {
+  await mutateCommittedConversationTimeline(paths, conversationId, (detail) => {
     detail.toolCallEvents = upsertById(detail.toolCallEvents, event);
   });
 }
@@ -729,13 +941,6 @@ function mergeCompressionTables(target: ClientState, source: ClientState): void 
   ] as const;
   mergeClientStateTables(target, source, keys);
 }
-
-function preserveKnownCompressionSourceLinks(target: ClientState, existing: ClientState): void {
-  const blockIds = new Set(target.compressionBlocks.map((block) => block.id));
-  const sourceLinks = existing.compressionBlockSourceLinks.filter((link) => blockIds.has(link.blockId));
-  target.compressionBlockSourceLinks = upsertManyById(sourceLinks, target.compressionBlockSourceLinks);
-}
-
 
 function copyRunHistoryTables(target: ClientState, source: ClientState): void {
   target.agentRuns = source.agentRuns;

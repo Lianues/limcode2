@@ -20,14 +20,17 @@ import {
   type ConversationTimelinePageDirection,
   type ConversationTimelinePageInfo,
   type ConversationTimelinePageRecord,
+  type ConversationTimelinePageRequest,
   type ConversationTimelinePatchPayload,
   type LlmInvocationRecord,
   type MessageRecord
 } from '@shared/protocol';
 import type { TimelineProjectionContextRecord } from '@shared/timelineProjection';
 import {
+  conversationTimelineCommitCanApply,
   conversationTimelineStateForMessageIds,
   createConversationTimelineSeqWindow,
+  pruneConversationTimelineStateToWindow,
   seqInConversationTimelineWindow,
   timelineHasNewerChunks,
   timelineHasOlderChunks
@@ -48,11 +51,21 @@ export interface ConversationTimelineState {
   chunkById: Record<string, ConversationTimelineChunkSummaryRecord>;
   pageInfo?: ConversationTimelinePageInfo;
   meta?: ConversationTimelineMetaRecord;
+  /** 已应用的 timeline+compression 统一提交序号。 */
+  latestCommitSeq: number;
+  /** 当前 pageState 对应的统一提交序号。 */
+  pageCommitSeq: number;
+  hasPageSnapshot: boolean;
+  pendingPageRequestId?: string;
   pendingPageDirection?: ConversationTimelinePageDirection;
+  failedPageRequest?: TimelinePageRequestDescriptor;
   initialRefreshPending: boolean;
   historyExpanded: boolean;
   tailAttached: boolean;
   tailCatchupPending: boolean;
+  /** 每次 older 请求递增，用于把 prepend 锚点绑定到唯一请求。 */
+  olderRequestRevision: number;
+  /** 最近一次实际 prepend 成功的 older 请求序号。 */
   prependRevision: number;
   streamSeq: number;
   /**
@@ -68,6 +81,8 @@ export interface ConversationTimelineState {
    * 因此需要单独保留 stream overlay，并在 page replace 后重新覆盖回展示 state。
    */
   pageState: ClientState;
+  /** recent stream 窗口淘汰时保留的关系闭包，避免 page 未携带的 run/link 数据丢失。 */
+  retainedState: ClientState;
   streamState: ClientState;
   state: ClientState;
   projections: Record<string, TimelineProjectionContextRecord>;
@@ -100,6 +115,13 @@ const PAGE_OWNED_TABLE_KEYS = [
   'llmInvocations'
 ] as const satisfies readonly ClientStateTableKey[];
 
+interface TimelinePageRequestDescriptor {
+  request: ConversationTimelinePageRequest;
+  direction: ConversationTimelinePageDirection;
+  requestRevision: number;
+  staleRetryCount: number;
+}
+
 interface PendingClientStatePatchBatch {
   streamId: string;
   streamSeq: number;
@@ -109,6 +131,8 @@ interface PendingClientStatePatchBatch {
 }
 
 const pendingClientStatePatchBatches = new Map<string, PendingClientStatePatchBatch>();
+const pendingTimelinePageRequests = new Map<string, TimelinePageRequestDescriptor>();
+const MAX_STALE_PAGE_RETRIES = 2;
 
 export const useConversationTimelineStore = defineStore('conversationTimeline', {
   state: (): ConversationTimelineStoreState => ({
@@ -187,7 +211,11 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
     },
     currentTotalMessages(): number {
       const loadedMax = Math.max(0, ...Object.values(this.currentMessageFloorById));
-      return Math.max(this.currentTimeline.pageInfo?.totalMessages ?? 0, loadedMax);
+      return Math.max(
+        this.currentTimeline.meta?.totalMessages ?? 0,
+        this.currentTimeline.pageInfo?.totalMessages ?? 0,
+        loadedMax
+      );
     },
     currentTaskListProjection(): TimelineProjectionContextRecord | undefined {
       return this.currentTimeline.projections['task-list'];
@@ -207,6 +235,50 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       this.currentConversationId = conversationId;
       if (conversationId) this.ensureTimeline(conversationId);
     },
+    sendTimelinePageRequest(descriptor: TimelinePageRequestDescriptor): string {
+      const request = plainTimelinePageRequest(descriptor.request);
+      const normalized: TimelinePageRequestDescriptor = {
+        request,
+        direction: descriptor.direction,
+        requestRevision: descriptor.requestRevision,
+        staleRetryCount: descriptor.staleRetryCount
+      };
+      const requestId = bridge.request(
+        BridgeMessageType.ConversationTimelinePageGet,
+        request,
+        { channel: 'state', scope: { kind: 'conversation', id: request.conversationId } }
+      );
+      pendingTimelinePageRequests.set(requestId, normalized);
+      const timeline = this.ensureTimeline(request.conversationId);
+      timeline.pendingPageRequestId = requestId;
+      timeline.pendingPageDirection = normalized.direction;
+      return requestId;
+    },
+    retryFailedPage(conversationId?: string): void {
+      const targetConversationId = conversationId || this.currentConversationId;
+      if (!targetConversationId) return;
+      const timeline = this.ensureTimeline(targetConversationId);
+      const failed = timeline.failedPageRequest;
+      if (!failed || isTimelineLoading(timeline.status)) return;
+      timeline.failedPageRequest = undefined;
+      timeline.error = undefined;
+      timeline.status = timelineStatusForDirection(failed.direction);
+      this.sendTimelinePageRequest({ ...failed, staleRetryCount: 0 });
+    },
+    setPageRequestError(correlationId: string | undefined, conversationId: string | undefined, message: string): void {
+      const pending = correlationId ? pendingTimelinePageRequests.get(correlationId) : undefined;
+      if (correlationId) pendingTimelinePageRequests.delete(correlationId);
+      const targetConversationId = pending?.request.conversationId ?? conversationId?.trim();
+      if (!targetConversationId) return;
+      const timeline = this.ensureTimeline(targetConversationId);
+      if (correlationId && timeline.pendingPageRequestId && timeline.pendingPageRequestId !== correlationId) return;
+      timeline.pendingPageRequestId = undefined;
+      timeline.pendingPageDirection = undefined;
+      timeline.initialRefreshPending = false;
+      timeline.failedPageRequest = pending ?? initialPageRequestDescriptor(targetConversationId);
+      timeline.status = 'error';
+      timeline.error = message;
+    },
     requestInitial(
       conversationId: string,
       chunkCount = DEFAULT_INITIAL_CHUNK_COUNT,
@@ -214,7 +286,7 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
     ): void {
       if (!conversationId) return;
       const timeline = this.ensureTimeline(conversationId);
-      if (timeline.pageInfo !== undefined && !options.force) {
+      if (timeline.hasPageSnapshot && !options.force) {
         timeline.status = 'idle';
         timeline.error = undefined;
         this.maybeRequestTailCatchup(conversationId);
@@ -225,15 +297,15 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
         return;
       }
       timeline.initialRefreshPending = false;
+      timeline.failedPageRequest = undefined;
       timeline.status = 'loadingInitial';
-      timeline.pendingPageDirection = 'initial';
       timeline.error = undefined;
-      bridge.request(BridgeMessageType.ConversationTimelinePageGet, {
-        conversationId,
+      this.sendTimelinePageRequest({
+        request: { conversationId, direction: 'initial', chunkCount, includeProjections: TIMELINE_PROJECTIONS },
         direction: 'initial',
-        chunkCount,
-        includeProjections: TIMELINE_PROJECTIONS
-      }, { channel: 'state' });
+        requestRevision: 0,
+        staleRetryCount: 0
+      });
     },
     requestOlder(conversationId?: string): void {
       const targetConversationId = conversationId || this.currentConversationId;
@@ -242,16 +314,22 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       if (isTimelineLoading(timeline.status) || !timelineHasOlder(timeline)) return;
       const oldest = oldestLoadedChunk(timeline);
       timeline.historyExpanded = true;
+      timeline.olderRequestRevision += 1;
+      timeline.failedPageRequest = undefined;
       timeline.status = 'loadingOlder';
-      timeline.pendingPageDirection = 'older';
       timeline.error = undefined;
-      bridge.request(BridgeMessageType.ConversationTimelinePageGet, {
-        conversationId: targetConversationId,
+      this.sendTimelinePageRequest({
+        request: {
+          conversationId: targetConversationId,
+          direction: 'older',
+          cursor: oldest?.id,
+          chunkCount: DEFAULT_INCREMENTAL_CHUNK_COUNT,
+          includeProjections: TIMELINE_PROJECTIONS
+        },
         direction: 'older',
-        cursor: oldest?.id,
-        chunkCount: DEFAULT_INCREMENTAL_CHUNK_COUNT,
-        includeProjections: TIMELINE_PROJECTIONS
-      }, { channel: 'state' });
+        requestRevision: timeline.olderRequestRevision,
+        staleRetryCount: 0
+      });
     },
     requestNewer(conversationId?: string, options: { force?: boolean } = {}): void {
       const targetConversationId = conversationId || this.currentConversationId;
@@ -261,39 +339,71 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       if (!options.force && !timelineHasNewer(timeline)) return;
       const newest = newestLoadedChunk(timeline);
       if (!newest) return;
+      timeline.failedPageRequest = undefined;
       timeline.status = 'loadingNewer';
-      timeline.pendingPageDirection = 'newer';
       timeline.tailCatchupPending = false;
       timeline.error = undefined;
-      bridge.request(BridgeMessageType.ConversationTimelinePageGet, {
-        conversationId: targetConversationId,
+      this.sendTimelinePageRequest({
+        request: {
+          conversationId: targetConversationId,
+          direction: 'newer',
+          cursor: newest.id,
+          chunkCount: DEFAULT_INCREMENTAL_CHUNK_COUNT,
+          includeProjections: TIMELINE_PROJECTIONS
+        },
         direction: 'newer',
-        cursor: newest.id,
-        chunkCount: DEFAULT_INCREMENTAL_CHUNK_COUNT,
-        includeProjections: TIMELINE_PROJECTIONS
-      }, { channel: 'state' });
+        requestRevision: 0,
+        staleRetryCount: 0
+      });
     },
     requestAround(conversationId: string, messageId: string): void {
       if (!conversationId || !messageId) return;
       const timeline = this.ensureTimeline(conversationId);
       if (isTimelineLoading(timeline.status)) return;
       timeline.historyExpanded = true;
+      timeline.failedPageRequest = undefined;
       timeline.status = 'loadingInitial';
-      timeline.pendingPageDirection = 'around';
       timeline.error = undefined;
-      bridge.request(BridgeMessageType.ConversationTimelinePageGet, {
-        conversationId,
+      this.sendTimelinePageRequest({
+        request: {
+          conversationId,
+          direction: 'around',
+          anchorMessageId: messageId,
+          chunkCount: DEFAULT_INCREMENTAL_CHUNK_COUNT,
+          includeProjections: TIMELINE_PROJECTIONS
+        },
         direction: 'around',
-        anchorMessageId: messageId,
-        chunkCount: DEFAULT_INCREMENTAL_CHUNK_COUNT,
-        includeProjections: TIMELINE_PROJECTIONS
-      }, { channel: 'state' });
+        requestRevision: 0,
+        staleRetryCount: 0
+      });
     },
-    applyPageSnapshot(page: ConversationTimelinePageRecord): void {
+    applyPageSnapshot(page: ConversationTimelinePageRecord, correlationId?: string): void {
+      const pending = correlationId ? pendingTimelinePageRequests.get(correlationId) : undefined;
+      if (correlationId) pendingTimelinePageRequests.delete(correlationId);
       const timeline = this.ensureTimeline(page.conversationId);
-      const previousNewest = newestLoadedChunk(timeline);
-      const direction = timeline.pendingPageDirection ?? directionForApplyMode(page.applyMode);
+      if (correlationId && timeline.pendingPageRequestId && timeline.pendingPageRequestId !== correlationId) return;
+      timeline.pendingPageRequestId = undefined;
+      const direction = pending?.direction ?? timeline.pendingPageDirection ?? directionForApplyMode(page.applyMode);
       timeline.pendingPageDirection = undefined;
+
+      if (!conversationTimelineCommitCanApply(page.commitSeq, timeline.latestCommitSeq)) {
+        if (pending && pending.staleRetryCount < MAX_STALE_PAGE_RETRIES) {
+          timeline.status = timelineStatusForDirection(direction);
+          this.sendTimelinePageRequest({ ...pending, staleRetryCount: pending.staleRetryCount + 1 });
+        } else {
+          timeline.initialRefreshPending = false;
+          timeline.failedPageRequest = pending ?? initialPageRequestDescriptor(page.conversationId);
+          timeline.status = 'error';
+          timeline.error = '对话消息在分页读取期间已更新，请重试加载。';
+        }
+        return;
+      }
+
+      timeline.latestCommitSeq = Math.max(timeline.latestCommitSeq, page.commitSeq);
+      timeline.pageCommitSeq = page.commitSeq;
+      timeline.failedPageRequest = undefined;
+      const previousNewest = newestLoadedChunk(timeline);
+      timeline.hasPageSnapshot = true;
 
       if (page.applyMode === 'replace') {
         timeline.pageState = createEmptyClientState();
@@ -314,20 +424,21 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       if (direction === 'newer') trimAutomaticTailChunks(timeline);
       timeline.pageInfo = mergePageInfo(timeline, page.pageInfo);
       pruneClientStateToTimelineWindow(timeline, timeline.pageState, false);
+      pruneClientStateToTimelineWindow(timeline, timeline.retainedState, timeline.tailAttached);
 
       // Page 只拥有已加载 chunk；stream 只作为覆盖层。prepend older 时绝不能
       // 根据持久化 hasNewer 把实时尾部从展示 state 中裁掉。
-      mergeClientState(timeline.state, timeline.pageState);
       if (timeline.hasStreamSnapshot) {
         removeStaleConversationStreamMessages(timeline, page.conversationId, timeline.streamState, {
           rawConversationMessageCount: timeline.streamState.messages.filter((message) => message.conversationId === page.conversationId).length,
           rawHasConversation: false
         });
       }
-      mergeClientState(timeline.state, timeline.streamState);
-      pruneClientStateToTimelineWindow(timeline, timeline.state, timeline.tailAttached);
+      rebuildTimelineState(timeline);
       timeline.projections = { ...timeline.projections, ...(page.projections ?? {}) };
-      if (direction === 'older' && page.chunks.length > 0) timeline.prependRevision += 1;
+      if (direction === 'older' && page.chunks.length > 0) {
+        timeline.prependRevision = pending?.requestRevision ?? timeline.olderRequestRevision;
+      }
       timeline.status = 'idle';
       timeline.error = undefined;
       if (timeline.initialRefreshPending) {
@@ -340,23 +451,31 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
     },
     applyTimelinePatch(payload: ConversationTimelinePatchPayload): void {
       const timeline = this.ensureTimeline(payload.conversationId);
-      if (payload.streamSeq > 0 && payload.streamSeq <= timeline.streamSeq) return;
-      createClientStateDb(timeline.state).applyPatches(payload.patches);
-      if (payload.streamSeq > 0) timeline.streamSeq = payload.streamSeq;
-      if (payload.pageInfo) timeline.pageInfo = mergePageInfo(
-        timeline,
-        { ...(timeline.pageInfo ?? createEmptyPageInfo(payload.conversationId)), ...payload.pageInfo }
-      );
-      pruneClientStateToTimelineWindow(timeline, timeline.state, timeline.tailAttached);
+      if (!conversationTimelineCommitCanApply(payload.commitSeq, timeline.latestCommitSeq)) return;
+      timeline.latestCommitSeq = Math.max(timeline.latestCommitSeq, payload.commitSeq);
+
+      // 这是 storage 成功提交后的权威 timeline patch。page/retained 两层都必须同步，
+      // 否则已离开 recent stream 的 checkpoint/compression 删除会一直残留并在 merge 时复活。
+      // streamState 仍由 ECS recent projection 独立负责；不能把 timeline sidecar remove 误解释成
+      // ProjectContext/ShadowRepository 等共享领域对象的全局删除。
+      createClientStateDb(timeline.pageState).applyPatches(payload.patches);
+      createClientStateDb(timeline.retainedState).applyPatches(payload.patches);
+      pruneClientStateToTimelineWindow(timeline, timeline.pageState, false);
+      pruneClientStateToTimelineWindow(timeline, timeline.retainedState, timeline.tailAttached);
+      rebuildTimelineState(timeline);
     },
     applyTimelineMeta(metadata: ConversationTimelineMetaRecord): void {
       const timeline = this.ensureTimeline(metadata.conversationId);
-      if (timeline.meta?.revision === metadata.revision) return;
-      if (timeline.meta && metadata.committedAt < timeline.meta.committedAt) return;
+      if (!conversationTimelineCommitCanApply(metadata.commitSeq, timeline.latestCommitSeq)) return;
+      timeline.latestCommitSeq = Math.max(timeline.latestCommitSeq, metadata.commitSeq);
+      if (timeline.meta?.revision === metadata.revision && timeline.meta.commitSeq === metadata.commitSeq) return;
+      if (timeline.meta && metadata.commitSeq === timeline.meta.commitSeq && metadata.committedAt < timeline.meta.committedAt) return;
       const previousTotalChunks = knownTimelineTotalChunks(timeline);
       const previousTotalMessages = knownTimelineTotalMessages(timeline);
       timeline.meta = cloneValue(metadata);
-      timeline.pageInfo = mergePageInfoWithMeta(timeline, timeline.pageInfo, metadata);
+      if (timeline.hasPageSnapshot) {
+        timeline.pageInfo = mergePageInfoWithMeta(timeline, timeline.pageInfo, metadata);
+      }
 
       const timelineShrank = metadata.totalChunks < previousTotalChunks
         || metadata.totalMessages < previousTotalMessages;
@@ -392,19 +511,16 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       mergeClientState(timeline.streamState, state);
       timeline.hasStreamSnapshot = true;
 
-      // stream snapshot 只精确覆盖最近窗口；窗口 floor 之前的 page/已保留尾部记录不能按“快照缺失”删除。
-      if (timeline.loadedChunkIds.length === 0) {
-        timeline.state = createEmptyClientState();
-      } else {
+      // stream snapshot 只精确覆盖最近窗口；窗口 floor 之前的 page/retained 记录不能按“快照缺失”删除。
+      if (timeline.loadedChunkIds.length > 0) {
         removeStaleConversationStreamMessages(timeline, conversationId, timeline.streamState, {
           rawConversationMessageCount,
           rawHasConversation
         });
       }
-      mergeClientState(timeline.state, timeline.streamState);
-      pruneClientStateToTimelineWindow(timeline, timeline.state, timeline.tailAttached);
+      rebuildTimelineState(timeline);
       timeline.streamSeq = streamSeq;
-      if (timeline.pageInfo === undefined && timeline.status !== 'loadingInitial') {
+      if (!timeline.hasPageSnapshot && !timeline.failedPageRequest && timeline.status !== 'loadingInitial') {
         this.requestInitial(conversationId);
       } else {
         this.maybeRequestTailCatchup(conversationId);
@@ -446,33 +562,36 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       const windowStable = areTimelineWindowStablePatches(patches);
       if (windowStable) {
         createClientStateDb(timeline.streamState).applyPatches(patches);
-        createClientStateDb(timeline.state).applyPatches(patches);
+        rebuildTimelineState(timeline);
         timeline.streamSeq = batch.streamSeq;
         return;
       }
 
       const evictedMessageIds = new Set(batch.windowEvictedMessageIds);
       // 从固定 240 条的 previous stream window 提取，避免用户已展开大量历史后每条新消息都扫描完整页面状态。
-      const retainedState = conversationTimelineStateForMessageIds(timeline.streamState, evictedMessageIds);
+      const evictedState = conversationTimelineStateForMessageIds(timeline.streamState, evictedMessageIds);
       createClientStateDb(timeline.streamState).applyPatches(patches);
 
-      // pageState 只接受删除；实时 upsert/mutation 仍由 stream 覆盖。窗口淘汰关联的
-      // remove 在应用后重新恢复，真正的编辑/删除/重试则会永久清理 page-owned 数据。
+      // pageState/retainedState 都接受真实删除；窗口淘汰关联的 remove 在应用后重新恢复。
+      // page 只接收持久化表，stream 独有的 run/link 闭包进入 retained overlay。
       const removalPatches = patches.filter(isGenericClientRemovePatch);
       createClientStateDb(timeline.pageState).applyPatches(removalPatches);
-      mergeClientStateTables(timeline.pageState, retainedState, PAGE_OWNED_TABLE_KEYS);
+      createClientStateDb(timeline.retainedState).applyPatches(removalPatches);
+      mergeClientStateTables(timeline.pageState, evictedState, PAGE_OWNED_TABLE_KEYS);
+      mergeClientState(timeline.retainedState, evictedState);
       pruneClientStateToTimelineWindow(timeline, timeline.pageState, false);
+      pruneClientStateToTimelineWindow(timeline, timeline.retainedState, timeline.tailAttached);
 
-      createClientStateDb(timeline.state).applyPatches(patches);
-      mergeClientState(timeline.state, retainedState);
-      pruneClientStateToTimelineWindow(timeline, timeline.state, timeline.tailAttached);
+      rebuildTimelineState(timeline);
       timeline.streamSeq = batch.streamSeq;
       this.maybeRequestTailCatchup(conversationId);
     },
     setError(conversationId: string | undefined, message: string): void {
       const target = conversationId ? this.ensureTimeline(conversationId) : this.currentTimeline;
-      target.status = 'error';
-      target.pendingPageDirection = undefined;
+      if (!isTimelineLoading(target.status)) {
+        target.status = 'error';
+        target.pendingPageDirection = undefined;
+      }
       target.error = message;
     },
     ensureTimeline(conversationId: string): ConversationTimelineState {
@@ -498,14 +617,19 @@ function createTimelineState(conversationId: string): ConversationTimelineState 
     status: 'idle',
     loadedChunkIds: [],
     chunkById: {},
+    latestCommitSeq: 0,
+    pageCommitSeq: 0,
     initialRefreshPending: false,
     historyExpanded: false,
     tailAttached: false,
     tailCatchupPending: false,
+    olderRequestRevision: 0,
     prependRevision: 0,
     streamSeq: 0,
+    hasPageSnapshot: false,
     hasStreamSnapshot: false,
     pageState: createEmptyClientState(),
+    retainedState: createEmptyClientState(),
     streamState: createEmptyClientState(),
     state: createEmptyClientState(),
     projections: {}
@@ -529,45 +653,12 @@ function pruneClientStateToTimelineWindow(
   state: ClientState,
   tailAttached: boolean
 ): void {
-  const window = createConversationTimelineSeqWindow(loadedChunks(timeline), tailAttached);
-  if (!window) return;
-
-  state.messages = state.messages.filter((message) =>
-    message.conversationId !== timeline.conversationId || seqInConversationTimelineWindow(message.seq, window)
+  pruneConversationTimelineStateToWindow(
+    state,
+    timeline.conversationId,
+    loadedChunks(timeline),
+    tailAttached
   );
-  const messageIds = new Set(state.messages.map((message) => message.id));
-
-  state.messageRevisions = state.messageRevisions.filter((revision) =>
-    revision.conversationId !== timeline.conversationId || messageIds.has(revision.messageId)
-  );
-  const revisionIds = new Set(state.messageRevisions.map((revision) => revision.id));
-  state.messageCurrentRevisionLinks = state.messageCurrentRevisionLinks.filter((link) =>
-    messageIds.has(link.messageId) || revisionIds.has(link.revisionId)
-  );
-  const runIds = new Set(state.agentRuns.map((run) => run.id));
-  // 对话流会额外投影关联子 Run 的当前工具；它们的 message 属于子对话，不能按当前消息窗口裁掉。
-  const runToolCallIds = new Set(
-    state.toolCallRunLinks
-      .filter((link) => runIds.has(link.runId))
-      .map((link) => link.toolCallId)
-  );
-  state.toolCalls = state.toolCalls.filter((toolCall) => messageIds.has(toolCall.messageId) || runToolCallIds.has(toolCall.id));
-  const toolCallIds = new Set(state.toolCalls.map((toolCall) => toolCall.id));
-  state.toolCallEvents = state.toolCallEvents.filter((event) => toolCallIds.has(event.toolCallId));
-  state.toolCallRunLinks = state.toolCallRunLinks.filter((link) => toolCallIds.has(link.toolCallId));
-  state.messageRunLinks = state.messageRunLinks.filter((link) => messageIds.has(link.messageId));
-  state.messageLlmInvocationLinks = state.messageLlmInvocationLinks.filter((link) => messageIds.has(link.messageId));
-
-  state.compressionBlocks = state.compressionBlocks.filter((block) => {
-    if (block.conversationId !== timeline.conversationId) return true;
-    const seq = block.anchorSeq ?? block.endSeq;
-    return seq !== undefined && seqInConversationTimelineWindow(seq, window);
-  });
-  const compressionBlockIds = new Set(state.compressionBlocks.map((block) => block.id));
-  state.compressionBlockSourceLinks = state.compressionBlockSourceLinks.filter((link) => compressionBlockIds.has(link.blockId));
-  state.compressionBlockLlmInvocationLinks = state.compressionBlockLlmInvocationLinks.filter((link) => compressionBlockIds.has(link.blockId));
-  state.compressionContextVariants = state.compressionContextVariants.filter((variant) => compressionBlockIds.has(variant.blockId));
-  state.runCompressionBlockLinks = state.runCompressionBlockLinks.filter((link) => compressionBlockIds.has(link.blockId));
 }
 
 function removeStaleConversationStreamMessages(
@@ -589,8 +680,18 @@ function removeStaleConversationStreamMessages(
 
   const patches = staleIds.map((id): ClientPatchOp => ({ kind: 'message.remove', id }));
   createClientStateDb(timeline.pageState).applyPatches(patches);
+  createClientStateDb(timeline.retainedState).applyPatches(patches);
   pruneClientStateToTimelineWindow(timeline, timeline.pageState, false);
-  createClientStateDb(timeline.state).applyPatches(patches);
+  pruneClientStateToTimelineWindow(timeline, timeline.retainedState, timeline.tailAttached);
+}
+
+function rebuildTimelineState(timeline: ConversationTimelineState): void {
+  const next = createEmptyClientState();
+  mergeClientState(next, timeline.retainedState);
+  mergeClientState(next, timeline.pageState);
+  mergeClientState(next, timeline.streamState);
+  pruneClientStateToTimelineWindow(timeline, next, timeline.tailAttached);
+  timeline.state = next;
 }
 
 function staleMessageIdsCoveredByStream(existingMessages: MessageRecord[], incomingMessages: MessageRecord[]): string[] {
@@ -625,7 +726,7 @@ function knownTimelineTotalMessages(timeline: ConversationTimelineState): number
   const pageInfo = timeline.pageInfo;
   const metadata = timeline.meta;
   if (!metadata) return pageInfo?.totalMessages ?? 0;
-  if (!pageInfo || metadata.committedAt >= pageInfo.loadedAt) return metadata.totalMessages;
+  if (!pageInfo || metadata.commitSeq >= timeline.pageCommitSeq) return metadata.totalMessages;
   return pageInfo.totalMessages;
 }
 
@@ -633,7 +734,7 @@ function knownTimelineTotalChunks(timeline: ConversationTimelineState): number {
   const pageInfo = timeline.pageInfo;
   const metadata = timeline.meta;
   if (!metadata) return pageInfo?.totalChunks ?? 0;
-  if (!pageInfo || metadata.committedAt >= pageInfo.loadedAt) return metadata.totalChunks;
+  if (!pageInfo || metadata.commitSeq >= timeline.pageCommitSeq) return metadata.totalChunks;
   return pageInfo.totalChunks;
 }
 
@@ -660,6 +761,37 @@ function didNewestChunkAdvance(
 
 function isTimelineLoading(status: ConversationTimelineStatus): boolean {
   return status === 'loadingInitial' || status === 'loadingOlder' || status === 'loadingNewer';
+}
+
+function initialPageRequestDescriptor(conversationId: string): TimelinePageRequestDescriptor {
+  return {
+    request: {
+      conversationId,
+      direction: 'initial',
+      chunkCount: DEFAULT_INITIAL_CHUNK_COUNT,
+      includeProjections: [...TIMELINE_PROJECTIONS]
+    },
+    direction: 'initial',
+    requestRevision: 0,
+    staleRetryCount: 0
+  };
+}
+
+function timelineStatusForDirection(direction: ConversationTimelinePageDirection): ConversationTimelineStatus {
+  if (direction === 'older') return 'loadingOlder';
+  if (direction === 'newer') return 'loadingNewer';
+  return 'loadingInitial';
+}
+
+function plainTimelinePageRequest(request: ConversationTimelinePageRequest): ConversationTimelinePageRequest {
+  return {
+    conversationId: request.conversationId,
+    ...(request.direction ? { direction: request.direction } : {}),
+    ...(request.cursor ? { cursor: request.cursor } : {}),
+    ...(request.anchorMessageId ? { anchorMessageId: request.anchorMessageId } : {}),
+    ...(request.chunkCount !== undefined ? { chunkCount: request.chunkCount } : {}),
+    ...(request.includeProjections ? { includeProjections: [...request.includeProjections] } : {})
+  };
 }
 
 function directionForApplyMode(mode: ConversationTimelinePageRecord['applyMode']): ConversationTimelinePageDirection {

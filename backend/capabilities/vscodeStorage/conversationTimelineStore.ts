@@ -23,6 +23,7 @@ import type { TimelineProjectionContextRecord, TimelineProjectionRefRecord } fro
 import { INDEX_FILE, STORAGE_VERSION } from './constants';
 import { createVscodeStoragePaths } from './paths';
 import { isFileNotFoundError, readJsonStrict, writeJson } from './json';
+import { createStorageRevision } from './storageRevision';
 import { withStorageResourceLock } from './storageResourceLock';
 import { ensureStorageDirectory, readStorageDirectory } from './storageFs';
 import {
@@ -157,6 +158,27 @@ interface ConversationTimelineIndexSnapshot {
   uri: vscode.Uri;
 }
 
+export interface ConversationTimelineGenerationRef {
+  generation: string;
+  revision: string;
+}
+
+export interface PreparedConversationTimelineRenderDetail {
+  state: ClientState;
+  ref?: ConversationTimelineGenerationRef;
+}
+
+export interface PreparedConversationTimelineTruncate {
+  conversationId: string;
+  removedMessageIds: string[];
+  ref?: ConversationTimelineGenerationRef;
+}
+
+interface PreparedConversationTimelineIndex {
+  index: ConversationTimelineIndexFile;
+  ref: ConversationTimelineGenerationRef;
+}
+
 interface TimelineLoadOptions {
   validateProjections?: boolean;
 }
@@ -254,8 +276,11 @@ export async function loadConversationTimelinePage(paths: StoragePaths, request:
       projections[projectionKey] = await loadTimelineProjectionContextFromIndexStrict(root, index, projectionKey, projectionChunk.id);
     }
 
+    const committedAt = Date.parse(index.savedAt);
     return {
       conversationId: request.conversationId,
+      commitSeq: 0,
+      committedAt: Number.isFinite(committedAt) ? committedAt : Date.now(),
       applyMode: applyModeForDirection(request.direction),
       chunks: selected.map(chunkSummary),
       pageInfo: timelinePageInfo(request.conversationId, index.chunks, selected),
@@ -287,6 +312,103 @@ export async function loadConversationTimelineRange(paths: StoragePaths, request
   });
 }
 
+export async function loadConversationTimelineDetailFromGeneration(
+  paths: StoragePaths,
+  conversationId: string,
+  ref: ConversationTimelineGenerationRef
+): Promise<ClientState> {
+  const root = conversationTimelineRoot(paths, conversationId);
+  const index = await loadPreparedTimelineIndexStrict(root, conversationId, ref);
+  const state = await loadTimelineDetailFromIndexStrict(root, index);
+  markClientStateAttachmentsForClient(state);
+  return state;
+}
+
+export async function loadConversationTimelineMetaFromGeneration(
+  paths: StoragePaths,
+  conversationId: string,
+  ref: ConversationTimelineGenerationRef
+): Promise<ConversationTimelineMetaRecord> {
+  const root = conversationTimelineRoot(paths, conversationId);
+  return timelineMetaFromIndex(await loadPreparedTimelineIndexStrict(root, conversationId, ref));
+}
+
+export async function loadConversationTimelinePageFromGeneration(
+  paths: StoragePaths,
+  request: ConversationTimelinePageRequest,
+  ref: ConversationTimelineGenerationRef
+): Promise<ConversationTimelinePageRecord> {
+  const root = conversationTimelineRoot(paths, request.conversationId);
+  const index = await loadPreparedTimelineIndexStrict(root, request.conversationId, ref);
+  if (index.chunks.length === 0) return emptyTimelinePage(request.conversationId, applyModeForDirection(request.direction));
+
+  const selected = selectTimelinePageChunks(index.chunks, request);
+  const state = createEmptyClientState();
+  const chunkFiles = await Promise.all(selected.map((chunk) => readConversationTimelineChunkStrict(root, chunk)));
+  for (const chunk of chunkFiles) copyTimelineChunkToState(state, chunk);
+  sortConversationTimelineDetail(state);
+  markClientStateAttachmentsForClient(state);
+
+  const projections: Record<string, TimelineProjectionContextRecord> = {};
+  const projectionChunk = selected[0];
+  for (const projectionKey of request.includeProjections ?? []) {
+    if (!projectionChunk) continue;
+    if (!BUILTIN_TIMELINE_PROJECTIONS.some((candidate) => candidate.key === projectionKey)) continue;
+    projections[projectionKey] = await loadTimelineProjectionContextFromIndexStrict(root, index, projectionKey, projectionChunk.id);
+  }
+
+  const committedAt = Date.parse(index.savedAt);
+  return {
+    conversationId: request.conversationId,
+    commitSeq: 0,
+    committedAt: Number.isFinite(committedAt) ? committedAt : Date.now(),
+    applyMode: applyModeForDirection(request.direction),
+    chunks: selected.map(chunkSummary),
+    pageInfo: timelinePageInfo(request.conversationId, index.chunks, selected),
+    state,
+    ...(Object.keys(projections).length > 0 ? { projections } : {})
+  };
+}
+
+export async function loadConversationTimelineRangeFromGeneration(
+  paths: StoragePaths,
+  request: {
+    conversationId: string;
+    mode: 'suffix' | 'prefix' | 'between';
+    anchorMessageId?: string;
+    startMessageId?: string;
+    endMessageId?: string;
+    contextBeforeChunks?: number;
+  },
+  ref: ConversationTimelineGenerationRef
+): Promise<ClientState | undefined> {
+  const root = conversationTimelineRoot(paths, request.conversationId);
+  const index = await loadPreparedTimelineIndexStrict(root, request.conversationId, ref);
+  if (index.chunks.length === 0) return undefined;
+  const selected = selectTimelineRangeChunks(index.chunks, request);
+  if (selected.length === 0) return undefined;
+  const state = createEmptyClientState();
+  const chunkFiles = await Promise.all(selected.map((chunk) => readConversationTimelineChunkStrict(root, chunk)));
+  for (const chunk of chunkFiles) copyTimelineChunkToState(state, chunk);
+  sortConversationTimelineDetail(state);
+  markClientStateAttachmentsForClient(state);
+  return state;
+}
+
+export async function loadTimelineProjectionContextFromGeneration(
+  paths: StoragePaths,
+  conversationId: string,
+  ref: ConversationTimelineGenerationRef,
+  projectionKey: string,
+  chunkId?: string
+): Promise<TimelineProjectionContextRecord | undefined> {
+  const root = conversationTimelineRoot(paths, conversationId);
+  const index = await loadPreparedTimelineIndexStrict(root, conversationId, ref);
+  if (index.chunks.length === 0) return undefined;
+  if (!BUILTIN_TIMELINE_PROJECTIONS.some((candidate) => candidate.key === projectionKey)) return undefined;
+  return loadTimelineProjectionContextFromIndexStrict(root, index, projectionKey, chunkId);
+}
+
 export async function truncateConversationTimeline(paths: StoragePaths, request: {
   conversationId: string;
   anchorMessageId: string;
@@ -294,24 +416,32 @@ export async function truncateConversationTimeline(paths: StoragePaths, request:
 }): Promise<{ conversationId: string; removedMessageIds: string[] }> {
   const root = conversationTimelineRoot(paths, request.conversationId);
   return withStorageResourceLock(root, async () => {
-    // index 已保存每个 chunk 的 messageIds。截断只需要读取并重写锚点 chunk；
-    // 锚点之前的完整 chunk 直接复用，后缀只从新 index 移除，避免长会话全量读取、校验和重写。
     const previous = await loadTimelineIndexManifestForWrite(root, request.conversationId, { allowMissing: true });
-    if (!previous || previous.index.chunks.length === 0) return { conversationId: request.conversationId, removedMessageIds: [] };
+    const result = await prepareTimelineTruncateAgainstIndex(root, request, previous?.index);
+    if (result.prepared) {
+      await publishTimelineIndex(root, result.prepared.index, previous?.index);
+      await cleanupOldTimelineGenerationsAfterPublish(root, result.prepared.index, previous?.index);
+    }
+    return { conversationId: request.conversationId, removedMessageIds: result.removedMessageIds };
+  });
+}
 
-    const anchorChunkIndex = previous.index.chunks.findIndex((chunk) => chunk.messageIds.includes(request.anchorMessageId));
-    if (anchorChunkIndex < 0) return { conversationId: request.conversationId, removedMessageIds: [] };
-    const anchorChunkRecord = previous.index.chunks[anchorChunkIndex]!;
-    const anchorMessageIndex = anchorChunkRecord.messageIds.indexOf(request.anchorMessageId);
-    const keepCountInAnchorChunk = request.keepAnchor ? anchorMessageIndex + 1 : anchorMessageIndex;
-    const removedMessageIds = [
-      ...anchorChunkRecord.messageIds.slice(keepCountInAnchorChunk),
-      ...previous.index.chunks.slice(anchorChunkIndex + 1).flatMap((chunk) => chunk.messageIds)
-    ];
-    if (removedMessageIds.length === 0) return { conversationId: request.conversationId, removedMessageIds: [] };
-
-    await publishTimelineTruncateIncremental(root, request.conversationId, previous.index, anchorChunkIndex, keepCountInAnchorChunk);
-    return { conversationId: request.conversationId, removedMessageIds };
+export async function prepareConversationTimelineTruncate(
+  paths: StoragePaths,
+  request: { conversationId: string; anchorMessageId: string; keepAnchor: boolean },
+  currentRef?: ConversationTimelineGenerationRef
+): Promise<PreparedConversationTimelineTruncate> {
+  const root = conversationTimelineRoot(paths, request.conversationId);
+  return withStorageResourceLock(root, async () => {
+    const previousIndex = currentRef
+      ? await loadPreparedTimelineIndexStrict(root, request.conversationId, currentRef, { validateReferences: true })
+      : undefined;
+    const result = await prepareTimelineTruncateAgainstIndex(root, request, previousIndex);
+    return {
+      conversationId: request.conversationId,
+      removedMessageIds: result.removedMessageIds,
+      ...(result.prepared?.ref ? { ref: result.prepared.ref } : currentRef ? { ref: currentRef } : {})
+    };
   });
 }
 
@@ -335,45 +465,125 @@ export async function commitConversationTimelineRenderDetail(
 ): Promise<ClientState> {
   const root = conversationTimelineRoot(paths, conversationId);
   return withStorageResourceLock(root, async () => {
-    // attachment externalization 是存储语义的一部分；base/next 必须先归一化到同一语义再计算 hash/CAS。
-    const committedLocalBase = projectPersistableConversationTimelineDetail(localBase);
-    const committedLocalNext = projectPersistableConversationTimelineDetail(localNext);
-    const [externalizedBase, externalizedNext] = await Promise.all([
-      externalizeClientStateAttachments(paths, committedLocalBase),
-      externalizeClientStateAttachments(paths, committedLocalNext)
-    ]);
-    const storageBase = externalizedBase;
-    const storageNext = externalizedNext;
-    sortConversationTimelineDetail(storageBase);
-    sortConversationTimelineDetail(storageNext);
-    const patch = createConversationTimelinePatch(storageBase, storageNext);
-    if (Object.keys(patch).length === 0) return committedLocalNext;
-
     const previous = await loadTimelineIndexManifestForWrite(root, conversationId, { allowMissing: true });
-    const current = previous
-      ? await loadTimelineDetailFromIndexStrict(root, previous.index, { validateProjections: true })
-      : createEmptyClientState();
-    const applied = applyConversationTimelinePatch(conversationId, current, patch);
-    const acknowledgedLocalNext = reconcileAcknowledgedTimelineDetail(
-      committedLocalNext,
-      applied.canonicalRecords
+    const result = await prepareTimelineRenderDetailAgainstIndex(
+      paths,
+      root,
+      conversationId,
+      previous?.index,
+      localBase,
+      localNext
     );
-    if (!applied.changed) return acknowledgedLocalNext;
-    sortConversationTimelineDetail(applied.state);
-
-    // tail incremental 只能携带 CAS 实际接受的 upsert。原始 patch 还包含 stale-dominated
-    // 记录，直接重放会把 canonical 终态覆盖回旧 streaming 内容。
-    if (previous && !timelinePatchHasRemoves(applied.acceptedPatch)) {
-      const delta = timelinePatchUpsertState(applied.acceptedPatch);
-      const tailPlan = await analyzeTailIncrementalPatch(root, previous.index, delta);
-      if (tailPlan.kind === 'tail' && await publishTimelineTailIncremental(root, conversationId, previous.index, tailPlan)) {
-        return acknowledgedLocalNext;
-      }
+    if (result.prepared) {
+      await publishTimelineIndex(root, result.prepared.index, previous?.index);
+      await cleanupOldTimelineGenerationsAfterPublish(root, result.prepared.index, previous?.index);
     }
-    await publishTimelineDetail(paths, root, conversationId, applied.state, previous?.index, 'replace');
-    return acknowledgedLocalNext;
+    return result.acknowledged;
   });
 }
+
+export async function prepareConversationTimelineRenderDetail(
+  paths: StoragePaths,
+  conversationId: string,
+  currentRef: ConversationTimelineGenerationRef | undefined,
+  localBase: ClientState,
+  localNext: ClientState
+): Promise<PreparedConversationTimelineRenderDetail> {
+  const root = conversationTimelineRoot(paths, conversationId);
+  return withStorageResourceLock(root, async () => {
+    const previousIndex = currentRef
+      ? await loadPreparedTimelineIndexStrict(root, conversationId, currentRef, { validateReferences: true })
+      : undefined;
+    const result = await prepareTimelineRenderDetailAgainstIndex(
+      paths,
+      root,
+      conversationId,
+      previousIndex,
+      localBase,
+      localNext
+    );
+    return {
+      state: result.acknowledged,
+      ...(result.prepared?.ref ? { ref: result.prepared.ref } : currentRef ? { ref: currentRef } : {})
+    };
+  });
+}
+
+interface PreparedTimelineRenderDetailResult {
+  acknowledged: ClientState;
+  prepared?: PreparedConversationTimelineIndex;
+}
+
+async function prepareTimelineRenderDetailAgainstIndex(
+  paths: StoragePaths,
+  root: vscode.Uri,
+  conversationId: string,
+  previousIndex: ConversationTimelineIndexFile | undefined,
+  localBase: ClientState,
+  localNext: ClientState
+): Promise<PreparedTimelineRenderDetailResult> {
+  // attachment externalization 是存储语义的一部分；base/next 必须先归一化到同一语义再计算 hash/CAS。
+  const committedLocalBase = projectPersistableConversationTimelineDetail(localBase);
+  const committedLocalNext = projectPersistableConversationTimelineDetail(localNext);
+  const [storageBase, storageNext] = await Promise.all([
+    externalizeClientStateAttachments(paths, committedLocalBase),
+    externalizeClientStateAttachments(paths, committedLocalNext)
+  ]);
+  sortConversationTimelineDetail(storageBase);
+  sortConversationTimelineDetail(storageNext);
+  const patch = createConversationTimelinePatch(storageBase, storageNext);
+  if (Object.keys(patch).length === 0) return { acknowledged: committedLocalNext };
+
+  const current = previousIndex
+    ? await loadTimelineDetailFromIndexStrict(root, previousIndex, { validateProjections: true })
+    : createEmptyClientState();
+  const applied = applyConversationTimelinePatch(conversationId, current, patch);
+  const acknowledged = reconcileAcknowledgedTimelineDetail(committedLocalNext, applied.canonicalRecords);
+  if (!applied.changed) return { acknowledged };
+  sortConversationTimelineDetail(applied.state);
+
+  // tail incremental 只能携带 CAS 实际接受的 upsert。原始 patch 还包含 stale-dominated
+  // 记录，直接重放会把 canonical 终态覆盖回旧 streaming 内容。
+  if (previousIndex && !timelinePatchHasRemoves(applied.acceptedPatch)) {
+    const delta = timelinePatchUpsertState(applied.acceptedPatch);
+    const tailPlan = await analyzeTailIncrementalPatch(root, previousIndex, delta);
+    if (tailPlan.kind === 'tail') {
+      const prepared = await prepareTimelineTailIncremental(root, conversationId, previousIndex, tailPlan);
+      if (prepared) return { acknowledged, prepared };
+    }
+  }
+  const prepared = await prepareTimelineDetail(root, conversationId, applied.state, previousIndex, 'replace');
+  return { acknowledged, prepared };
+}
+
+async function prepareTimelineTruncateAgainstIndex(
+  root: vscode.Uri,
+  request: { conversationId: string; anchorMessageId: string; keepAnchor: boolean },
+  previousIndex: ConversationTimelineIndexFile | undefined
+): Promise<{ removedMessageIds: string[]; prepared?: PreparedConversationTimelineIndex }> {
+  if (!previousIndex || previousIndex.chunks.length === 0) return { removedMessageIds: [] };
+  const anchorChunkIndex = previousIndex.chunks.findIndex((chunk) => chunk.messageIds.includes(request.anchorMessageId));
+  if (anchorChunkIndex < 0) return { removedMessageIds: [] };
+  const anchorChunkRecord = previousIndex.chunks[anchorChunkIndex]!;
+  const anchorMessageIndex = anchorChunkRecord.messageIds.indexOf(request.anchorMessageId);
+  const keepCountInAnchorChunk = request.keepAnchor ? anchorMessageIndex + 1 : anchorMessageIndex;
+  const removedMessageIds = [
+    ...anchorChunkRecord.messageIds.slice(keepCountInAnchorChunk),
+    ...previousIndex.chunks.slice(anchorChunkIndex + 1).flatMap((chunk) => chunk.messageIds)
+  ];
+  if (removedMessageIds.length === 0) return { removedMessageIds };
+  return {
+    removedMessageIds,
+    prepared: await prepareTimelineTruncateIncremental(
+      root,
+      request.conversationId,
+      previousIndex,
+      anchorChunkIndex,
+      keepCountInAnchorChunk
+    )
+  };
+}
+
 
 export async function mutateConversationTimelineDetailInStore(
   paths: StoragePaths,
@@ -651,13 +861,13 @@ type TailIncrementalPatchAnalysis =
   | { kind: 'tail'; suffixStartIndex: number; patch: ClientState }
   | { kind: 'fallback'; reason: string };
 
-async function publishTimelineTruncateIncremental(
+async function prepareTimelineTruncateIncremental(
   root: vscode.Uri,
   conversationId: string,
   previousIndex: ConversationTimelineIndexFile,
   anchorChunkIndex: number,
   keepCountInAnchorChunk: number
-): Promise<void> {
+): Promise<PreparedConversationTimelineIndex> {
   const anchorRecord = previousIndex.chunks[anchorChunkIndex];
   if (!anchorRecord) throw new Error(`Conversation timeline truncate anchor chunk is missing: ${anchorChunkIndex}`);
   if (keepCountInAnchorChunk < 0 || keepCountInAnchorChunk > anchorRecord.messageIds.length) {
@@ -712,31 +922,29 @@ async function publishTimelineTruncateIncremental(
     chunks: indexChunks
   };
 
-  await __conversationTimelineStoreTestHooks.beforePublishIndex?.({ rootUri: root, conversationId, generation: generation.id });
-  await publishTimelineIndex(root, nextIndex, previousIndex);
-  await cleanupOldTimelineGenerationsAfterPublish(root, nextIndex, previousIndex);
+  return finalizePreparedTimelineIndex(root, nextIndex);
 }
 
-async function publishTimelineTailIncremental(
+async function prepareTimelineTailIncremental(
   root: vscode.Uri,
   conversationId: string,
   previousIndex: ConversationTimelineIndexFile,
   plan: Extract<TailIncrementalPatchAnalysis, { kind: 'tail' }>
-): Promise<boolean> {
+): Promise<PreparedConversationTimelineIndex | undefined> {
   const patch = plan.patch;
   const prefixChunks = previousIndex.chunks.slice(0, plan.suffixStartIndex);
   const previousSuffixRecord = previousIndex.chunks[plan.suffixStartIndex];
-  if (!previousSuffixRecord) return false;
+  if (!previousSuffixRecord) return undefined;
 
   const previousSuffix = await readConversationTimelineChunkStrict(root, previousSuffixRecord, { validateProjections: true });
   const suffixState = timelineChunkDataToClientState(previousSuffix);
   mergeTimelineDetailTables(suffixState, patch);
   sortConversationTimelineDetail(suffixState);
   const suffixChunks = conversationTimelineChunks(suffixState);
-  if (!canReuseTimelinePrefixForSuffix(prefixChunks, suffixChunks)) return false;
+  if (!canReuseTimelinePrefixForSuffix(prefixChunks, suffixChunks)) return undefined;
 
   const projectionStates = await createProjectionRuntimeStatesFromPrefix(root, prefixChunks);
-  if (!projectionStates) return false;
+  if (!projectionStates) return undefined;
 
   const savedAt = new Date().toISOString();
   const generation = createStorageGenerationLocation(root);
@@ -780,11 +988,7 @@ async function publishTimelineTailIncremental(
   };
 
   assertMergePreservesPreviousTimeline(previousIndex, nextIndex);
-  await __conversationTimelineStoreTestHooks.beforePublishIndex?.({ rootUri: root, conversationId, generation: generation.id });
-
-  await publishTimelineIndex(root, nextIndex, previousIndex);
-  await cleanupOldTimelineGenerationsAfterPublish(root, nextIndex, previousIndex);
-  return true;
+  return finalizePreparedTimelineIndex(root, nextIndex);
 }
 
 async function analyzeTailIncrementalPatch(
@@ -1217,13 +1421,25 @@ async function loadTimelineProjectionContextFromIndexStrict(
 }
 
 async function publishTimelineDetail(
-  paths: StoragePaths,
+  _paths: StoragePaths,
   root: vscode.Uri,
   conversationId: string,
   detail: ClientState,
   previousIndex: ConversationTimelineIndexFile | undefined,
   operation: ConversationTimelineIndexOperation
 ): Promise<void> {
+  const prepared = await prepareTimelineDetail(root, conversationId, detail, previousIndex, operation);
+  await publishTimelineIndex(root, prepared.index, previousIndex);
+  await cleanupOldTimelineGenerationsAfterPublish(root, prepared.index, previousIndex);
+}
+
+async function prepareTimelineDetail(
+  root: vscode.Uri,
+  conversationId: string,
+  detail: ClientState,
+  previousIndex: ConversationTimelineIndexFile | undefined,
+  operation: ConversationTimelineIndexOperation
+): Promise<PreparedConversationTimelineIndex> {
   const savedAt = new Date().toISOString();
   const generation = createStorageGenerationLocation(root);
   await ensureTimelineGenerationRoots(generation.rootUri);
@@ -1263,10 +1479,7 @@ async function publishTimelineDetail(
   };
 
   if (previousIndex && operation === 'merge') assertMergePreservesPreviousTimeline(previousIndex, nextIndex);
-  await __conversationTimelineStoreTestHooks.beforePublishIndex?.({ rootUri: root, conversationId, generation: generation.id });
-
-  await publishTimelineIndex(root, nextIndex, previousIndex);
-  await cleanupOldTimelineGenerationsAfterPublish(root, nextIndex, previousIndex);
+  return finalizePreparedTimelineIndex(root, nextIndex);
 }
 
 async function writeTimelineChunkIndexRecord(input: {
@@ -1348,6 +1561,74 @@ async function ensureTimelineGenerationRoots(generationRoot: vscode.Uri): Promis
     ...BUILTIN_TIMELINE_PROJECTIONS.map((spec) => ensureStorageDirectory(vscode.Uri.joinPath(generationRoot, CONVERSATION_TIMELINE_PROJECTIONS_DIR, safeProjectionKey(spec.key))))
   ]);
 }
+
+async function finalizePreparedTimelineIndex(
+  root: vscode.Uri,
+  index: ConversationTimelineIndexFile
+): Promise<PreparedConversationTimelineIndex> {
+  await __conversationTimelineStoreTestHooks.beforePublishIndex?.({
+    rootUri: root,
+    conversationId: index.conversationId,
+    generation: index.generation
+  });
+  const uri = preparedTimelineIndexUri(root, index.generation);
+  await writeJson(uri, index);
+  return {
+    index,
+    ref: {
+      generation: index.generation,
+      revision: createStorageRevision(index)
+    }
+  };
+}
+
+async function loadPreparedTimelineIndexStrict(
+  root: vscode.Uri,
+  conversationId: string,
+  ref: ConversationTimelineGenerationRef,
+  options: { validateReferences?: boolean } = {}
+): Promise<ConversationTimelineIndexFile> {
+  if (!isSafeStorageGenerationId(ref.generation) || !ref.revision) {
+    throw new Error(`Conversation timeline generation ref is invalid: ${conversationId}`);
+  }
+  const uri = preparedTimelineIndexUri(root, ref.generation);
+  const result = await readJsonStrict<unknown>(uri);
+  if (result.status !== 'ok') throw new Error(`Prepared conversation timeline index is unavailable: ${uri.fsPath}`);
+  const snapshot = parseTimelineIndex(result.value, uri, conversationId);
+  if (snapshot.index.generation !== ref.generation) {
+    throw new Error(`Prepared conversation timeline generation mismatch: ${uri.fsPath}`);
+  }
+  const revision = createStorageRevision(snapshot.index);
+  if (revision !== ref.revision) {
+    throw new Error(`Prepared conversation timeline revision mismatch: expected=${ref.revision}, actual=${revision}`);
+  }
+  if (options.validateReferences) await validateTimelineIndexReferencesForWrite(root, snapshot.index);
+  return snapshot.index;
+}
+
+export async function cleanupConversationTimelineGenerations(
+  paths: StoragePaths,
+  conversationId: string,
+  ref?: ConversationTimelineGenerationRef
+): Promise<void> {
+  const root = conversationTimelineRoot(paths, conversationId);
+  let retained: string[] = [];
+  if (ref) {
+    const index = await loadPreparedTimelineIndexStrict(root, conversationId, ref);
+    retained = generationsReferencedByIndex(index);
+  }
+  const result = await cleanupInactiveStorageGenerations(root, retained, {
+    retentionBucketsMs: STANDARD_STORAGE_GENERATION_RETENTION_BUCKETS_MS
+  });
+  for (const failure of result.failed) {
+    console.warn(`[LimCode] Failed to prune conversation timeline generation: ${failure.generation.id}`, failure.error);
+  }
+}
+
+function preparedTimelineIndexUri(root: vscode.Uri, generation: string): vscode.Uri {
+  return vscode.Uri.joinPath(root, STORAGE_GENERATIONS_DIR, generation, INDEX_FILE);
+}
+
 
 async function publishTimelineIndex(
   root: vscode.Uri,
@@ -1779,9 +2060,11 @@ function selectTimelinePageChunks(
   }
   if (direction === 'newer') {
     // append 时重读 cursor chunk：当前尾 chunk 可能在首次加载后继续增长。
-    // 与下一 chunk 一起返回，可把 stream 中累计的尾部消息正式移交给 chunk page ownership。
+    // chunkCount 表示请求预算，但只要 cursor 后仍有 chunk，就至少返回 cursor + 1 个新 chunk，
+    // 避免 chunkCount=1 时永远只重读 cursor、分页无法前进。
     const start = cursorIndex >= 0 ? cursorIndex : Math.max(0, total - count);
-    return chunks.slice(start, Math.min(total, start + count));
+    const selectedCount = cursorIndex >= 0 && cursorIndex < total - 1 ? Math.max(2, count) : count;
+    return chunks.slice(start, Math.min(total, start + selectedCount));
   }
 
   const center = cursorIndex >= 0 ? cursorIndex : Math.max(0, total - 1);
@@ -1809,6 +2092,7 @@ function applyModeForDirection(direction: ConversationTimelinePageRequest['direc
 function emptyTimelineMeta(conversationId: string): ConversationTimelineMetaRecord {
   return {
     conversationId,
+    commitSeq: 0,
     revision: '',
     totalChunks: 0,
     totalMessages: 0,
@@ -1822,6 +2106,7 @@ function timelineMetaFromIndex(index: ConversationTimelineIndexFile): Conversati
   const committedAt = Date.parse(index.savedAt);
   return {
     conversationId: index.conversationId,
+    commitSeq: 0,
     revision: index.generation,
     totalChunks: index.chunks.length,
     totalMessages: index.chunks.reduce((sum, chunk) => sum + chunk.messageCount, 0),
@@ -1834,6 +2119,8 @@ function timelineMetaFromIndex(index: ConversationTimelineIndexFile): Conversati
 function emptyTimelinePage(conversationId: string, applyMode: ConversationTimelinePageRecord['applyMode']): ConversationTimelinePageRecord {
   return {
     conversationId,
+    commitSeq: 0,
+    committedAt: Date.now(),
     applyMode,
     chunks: [],
     pageInfo: {

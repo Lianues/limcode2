@@ -40,7 +40,8 @@ const autoDismissTimers = new Map<string, number>();
 const bottomStickyScroller = useBottomStickyScroller(scroller);
 let pendingInitialBottomConversationId = '';
 let initialBottomScrollFrame: number | undefined;
-let timelineSyncFrame: number | undefined;
+let timelineSyncQueued = false;
+let timelineSyncDisposed = false;
 let pendingTimelineSync: Parameters<typeof conversationUi.syncTimeline> | undefined;
 
 const loadingDetail = computed(() => !!currentConversationId.value && currentTimeline.value.status === 'loadingInitial' && currentMessages.value.length === 0);
@@ -141,24 +142,21 @@ watch(
 onBeforeUnmount(() => {
   clearCheckpointAutoDismissTimers();
   cancelInitialBottomScrollFrame();
-  cancelTimelineSyncFrame();
+  timelineSyncDisposed = true;
+  pendingTimelineSync = undefined;
 });
 
 function scheduleTimelineSync(...args: Parameters<typeof conversationUi.syncTimeline>): void {
   pendingTimelineSync = args;
-  if (timelineSyncFrame !== undefined) return;
-  timelineSyncFrame = window.requestAnimationFrame(() => {
-    timelineSyncFrame = undefined;
+  if (timelineSyncQueued) return;
+  timelineSyncQueued = true;
+  queueMicrotask(() => {
+    timelineSyncQueued = false;
+    if (timelineSyncDisposed) return;
     const next = pendingTimelineSync;
     pendingTimelineSync = undefined;
     if (next) conversationUi.syncTimeline(...next);
   });
-}
-
-function cancelTimelineSyncFrame(): void {
-  if (timelineSyncFrame !== undefined) window.cancelAnimationFrame(timelineSyncFrame);
-  timelineSyncFrame = undefined;
-  pendingTimelineSync = undefined;
 }
 
 function scheduleInitialConversationBottomScroll(): void {

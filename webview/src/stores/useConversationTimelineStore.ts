@@ -561,8 +561,10 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       const patches = compactClientPatchOps(batch.patches);
       const windowStable = areTimelineWindowStablePatches(patches);
       if (windowStable) {
+        // 这些 mutation 不改变 timeline window 或记录归属。直接同步更新 stream overlay
+        // 与已物化展示 state，保留其余表、记录和消息对象引用，避免每批 token 都重建 81 张表。
         createClientStateDb(timeline.streamState).applyPatches(patches);
-        rebuildTimelineState(timeline);
+        createClientStateDb(timeline.state).applyPatches(patches);
         timeline.streamSeq = batch.streamSeq;
         return;
       }

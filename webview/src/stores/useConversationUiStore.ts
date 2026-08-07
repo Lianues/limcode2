@@ -148,7 +148,7 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     floorByMessageId: Readonly<Record<string, number>> = {},
     totalMessageCount = messages.length
   ): void {
-    lastTimelineSnapshot = {
+    const nextSnapshot: TimelineSyncSnapshot = {
       messages: [...messages],
       anchorMessages: [...anchorMessages],
       checkpoints: [...checkpoints],
@@ -158,6 +158,13 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
       floorByMessageId: { ...floorByMessageId },
       totalMessageCount
     };
+    const canReuseRows = initializedMessages && canReuseTimelineRows(lastTimelineSnapshot, nextSnapshot);
+    lastTimelineSnapshot = nextSnapshot;
+
+    // 流式文本、思考耗时和普通状态 mutation 会原地更新同一条 message。
+    // 当行结构、记录引用和楼层映射均未变化时，现有 row 已持有最新 reactive record，
+    // 无需再次构建整条 timelineRows，也避免所有历史 MessageItem 重收 props。
+    if (canReuseRows) return;
 
     const hiddenMessageIds = new Set(activityRows.map((row) => row.hiddenMessageId).filter((id): id is string => !!id));
     const currentIds = new Set(messages.map((message) => message.id));
@@ -462,6 +469,42 @@ export const useConversationUiStore = defineStore('conversationUi', () => {
     markLlmRetryCancelPending
   };
 });
+
+function canReuseTimelineRows(previous: TimelineSyncSnapshot, next: TimelineSyncSnapshot): boolean {
+  return sameRecordReferences(previous.messages, next.messages)
+    && sameRecordReferences(previous.anchorMessages, next.anchorMessages)
+    && sameRecordReferences(previous.checkpoints, next.checkpoints)
+    && sameRecordReferences(previous.checkpointAnchors, next.checkpointAnchors)
+    && sameRecordReferences(previous.compressionBlocks, next.compressionBlocks)
+    && sameActivityRows(previous.activityRows, next.activityRows)
+    && sameNumberRecord(previous.floorByMessageId, next.floorByMessageId)
+    && previous.totalMessageCount === next.totalMessageCount;
+}
+
+function sameRecordReferences<T>(previous: readonly T[], next: readonly T[]): boolean {
+  if (previous.length !== next.length) return false;
+  return previous.every((record, index) => record === next[index]);
+}
+
+function sameActivityRows(previous: readonly ActivityTimelineRowInput[], next: readonly ActivityTimelineRowInput[]): boolean {
+  if (previous.length !== next.length) return false;
+  return previous.every((row, index) => {
+    const candidate = next[index];
+    return candidate !== undefined
+      && row.id === candidate.id
+      && row.conversationId === candidate.conversationId
+      && row.runId === candidate.runId
+      && row.hiddenMessageId === candidate.hiddenMessageId
+      && row.activityKind === candidate.activityKind;
+  });
+}
+
+function sameNumberRecord(previous: Readonly<Record<string, number>>, next: Readonly<Record<string, number>>): boolean {
+  const previousKeys = Object.keys(previous);
+  const nextKeys = Object.keys(next);
+  if (previousKeys.length !== nextKeys.length) return false;
+  return previousKeys.every((key) => previous[key] === next[key]);
+}
 
 function visibleMessageText(message: MessageRecord): string {
   return message.content.parts

@@ -18,10 +18,13 @@ import {
 } from '@shared/protocol';
 import { compactClientPatchOps } from './clientPatchCompaction';
 
+export type ClientStateDbChangeSet = Map<ClientStateTableKey, Set<string>>;
+
 export interface ClientStateDb {
   applySnapshot(streamId: string, state: ClientState): boolean;
   applyPatch(patch: ClientPatchOp): void;
   applyPatches(patches: readonly ClientPatchOp[]): void;
+  applyPatchesTracked(patches: readonly ClientPatchOp[]): ClientStateDbChangeSet;
 }
 
 type ClientStateMutableRecord = { id: string; [key: string]: unknown };
@@ -36,6 +39,7 @@ class ClientStateDbImpl implements ClientStateDb {
   private readonly indexCache = new Map<ClientStateTableKey, { list: ClientStateMutableRecord[]; indexById: Map<string, number> }>();
   private sortDeferDepth = 0;
   private readonly pendingSortTables = new Set<ClientStateTableKey>();
+  private activeChangeSet: ClientStateDbChangeSet | undefined;
 
   public constructor(private readonly clientState: ClientState) {}
 
@@ -80,6 +84,22 @@ class ClientStateDbImpl implements ClientStateDb {
   }
 
   public applyPatches(patches: readonly ClientPatchOp[]): void {
+    this.applyPatchesInternal(patches);
+  }
+
+  public applyPatchesTracked(patches: readonly ClientPatchOp[]): ClientStateDbChangeSet {
+    const previousChangeSet = this.activeChangeSet;
+    const changes: ClientStateDbChangeSet = new Map();
+    this.activeChangeSet = changes;
+    try {
+      this.applyPatchesInternal(patches);
+    } finally {
+      this.activeChangeSet = previousChangeSet;
+    }
+    return changes;
+  }
+
+  private applyPatchesInternal(patches: readonly ClientPatchOp[]): void {
     const compacted = compactClientPatchOps(patches);
     if (compacted.length === 0) return;
 
@@ -119,10 +139,12 @@ class ClientStateDbImpl implements ClientStateDb {
     const operation = GENERIC_CLIENT_MUTATION_APPLY_BY_KIND[patch.kind];
     if (!operation) return false;
 
-    const record = this.recordById(operation.tableKey, (patch as { id: string }).id);
+    const id = (patch as { id: string }).id;
+    const record = this.recordById(operation.tableKey, id);
     if (!record) return true;
 
     applyMutation(record, patch as unknown as Record<string, unknown>, operation.apply);
+    this.markRecordChanged(operation.tableKey, id);
     return true;
   }
 
@@ -146,6 +168,7 @@ class ClientStateDbImpl implements ClientStateDb {
         for (const childId of childIds) this.removeRegisteredRecord(cascade.table, childId, visited);
       } else if (removeWhere(childRecords, (record) => cascadeMatchesRecord(cascade, record, id))) {
         this.invalidateIndex(cascade.table);
+        for (const childId of childIds) this.markRecordChanged(cascade.table, childId);
       }
     }
 
@@ -159,7 +182,10 @@ class ClientStateDbImpl implements ClientStateDb {
       if (!scope || scopeReplaceMode(scope) === 'upsertOnly') continue;
       const ids = scopedIds.get(tableKey);
       if (!ids || ids.size === 0) continue;
-      if (removeWhere(this.records(tableKey), (record) => ids.has(record.id))) this.invalidateIndex(tableKey);
+      if (removeWhere(this.records(tableKey), (record) => ids.has(record.id))) {
+        this.invalidateIndex(tableKey);
+        for (const id of ids) this.markRecordChanged(tableKey, id);
+      }
     }
   }
 
@@ -237,10 +263,12 @@ class ClientStateDbImpl implements ClientStateDb {
     const index = indexById.get(record.id);
     if (index !== undefined) {
       list[index] = next;
+      this.markRecordChanged(tableKey, record.id);
       return;
     }
     indexById.set(record.id, list.length);
     list.push(next);
+    this.markRecordChanged(tableKey, record.id);
   }
 
   private recordById(tableKey: ClientStateTableKey, id: string): ClientStateMutableRecord | undefined {
@@ -253,6 +281,14 @@ class ClientStateDbImpl implements ClientStateDb {
     if (index === undefined) return;
     this.records(tableKey).splice(index, 1);
     this.invalidateIndex(tableKey);
+    this.markRecordChanged(tableKey, id);
+  }
+
+  private markRecordChanged(tableKey: ClientStateTableKey, id: string): void {
+    if (!this.activeChangeSet) return;
+    const ids = this.activeChangeSet.get(tableKey);
+    if (ids) ids.add(id);
+    else this.activeChangeSet.set(tableKey, new Set([id]));
   }
 
   private indexById(tableKey: ClientStateTableKey): Map<string, number> {

@@ -36,7 +36,7 @@ import {
   timelineHasOlderChunks
 } from '@shared/conversationTimelineWindow';
 import { bridge } from '@webview/transport';
-import { createClientStateDb } from './clientStateDb';
+import { createClientStateDb, type ClientStateDbChangeSet } from './clientStateDb';
 import { areTimelineWindowStablePatches, compactClientPatchOps } from './clientPatchCompaction';
 
 export type ConversationTimelineStatus = 'idle' | 'loadingInitial' | 'loadingOlder' | 'loadingNewer' | 'error';
@@ -458,11 +458,19 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       // 否则已离开 recent stream 的 checkpoint/compression 删除会一直残留并在 merge 时复活。
       // streamState 仍由 ECS recent projection 独立负责；不能把 timeline sidecar remove 误解释成
       // ProjectContext/ShadowRepository 等共享领域对象的全局删除。
-      createClientStateDb(timeline.pageState).applyPatches(payload.patches);
-      createClientStateDb(timeline.retainedState).applyPatches(payload.patches);
-      pruneClientStateToTimelineWindow(timeline, timeline.pageState, false);
-      pruneClientStateToTimelineWindow(timeline, timeline.retainedState, timeline.tailAttached);
-      rebuildTimelineState(timeline);
+      const pageChanges = createClientStateDb(timeline.pageState).applyPatchesTracked(payload.patches);
+      const retainedChanges = createClientStateDb(timeline.retainedState).applyPatchesTracked(payload.patches);
+      const windowStable = areTimelineWindowStablePatches(payload.patches);
+      if (!windowStable) {
+        pruneClientStateToTimelineWindow(timeline, timeline.pageState, false);
+        pruneClientStateToTimelineWindow(timeline, timeline.retainedState, timeline.tailAttached);
+      }
+      reconcileMaterializedClientState(
+        timeline,
+        mergeClientStateChangeSets(pageChanges, retainedChanges),
+        !windowStable
+      );
+      if (!windowStable) pruneClientStateToTimelineWindow(timeline, timeline.state, timeline.tailAttached);
     },
     applyTimelineMeta(metadata: ConversationTimelineMetaRecord): void {
       const timeline = this.ensureTimeline(metadata.conversationId);
@@ -694,6 +702,82 @@ function rebuildTimelineState(timeline: ConversationTimelineState): void {
   mergeClientState(next, timeline.streamState);
   pruneClientStateToTimelineWindow(timeline, next, timeline.tailAttached);
   timeline.state = next;
+}
+
+function mergeClientStateChangeSets(...changeSets: readonly ClientStateDbChangeSet[]): ClientStateDbChangeSet {
+  const merged: ClientStateDbChangeSet = new Map();
+  for (const changeSet of changeSets) {
+    for (const [tableKey, ids] of changeSet) {
+      const targetIds = merged.get(tableKey);
+      if (targetIds) {
+        for (const id of ids) targetIds.add(id);
+      } else {
+        merged.set(tableKey, new Set(ids));
+      }
+    }
+  }
+  return merged;
+}
+
+function reconcileMaterializedClientState(
+  timeline: ConversationTimelineState,
+  changes: ClientStateDbChangeSet,
+  allowInsert: boolean
+): void {
+  for (const [tableKey, ids] of changes) {
+    const materialized = timeline.state[tableKey] as ClientStateRecord[];
+    const indexById = new Map<string, number>();
+    materialized.forEach((record, index) => indexById.set(record.id, index));
+    let shouldSort = false;
+
+    for (const id of ids) {
+      const streamRecord = findClientStateRecord(timeline.streamState, tableKey, id);
+      const index = indexById.get(id);
+      if (streamRecord) {
+        // stream overlay 拥有最高优先级。timeline sidecar 更新的是 page/retained，
+        // 已存在的 materialized stream record 不能重复应用 append 或被低优先级记录覆盖。
+        if (index === undefined && allowInsert) {
+          indexById.set(id, materialized.length);
+          materialized.push(cloneRecord(streamRecord));
+          shouldSort = true;
+        }
+        continue;
+      }
+
+      const source = findClientStateRecord(timeline.pageState, tableKey, id)
+        ?? findClientStateRecord(timeline.retainedState, tableKey, id);
+      if (source) {
+        const next = cloneRecord(source);
+        if (index === undefined) {
+          if (!allowInsert) continue;
+          indexById.set(id, materialized.length);
+          materialized.push(next);
+        } else {
+          materialized[index] = next;
+        }
+        shouldSort = true;
+        continue;
+      }
+
+      if (index === undefined) continue;
+      materialized.splice(index, 1);
+      indexById.delete(id);
+      for (let nextIndex = index; nextIndex < materialized.length; nextIndex += 1) {
+        indexById.set(materialized[nextIndex].id, nextIndex);
+      }
+      shouldSort = true;
+    }
+
+    if (shouldSort) sortTable(tableKey, materialized);
+  }
+}
+
+function findClientStateRecord(
+  state: ClientState,
+  tableKey: ClientStateTableKey,
+  id: string
+): ClientStateRecord | undefined {
+  return (state[tableKey] as ClientStateRecord[]).find((record) => record.id === id);
 }
 
 function staleMessageIdsCoveredByStream(existingMessages: MessageRecord[], incomingMessages: MessageRecord[]): string[] {

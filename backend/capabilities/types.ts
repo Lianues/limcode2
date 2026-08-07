@@ -10,6 +10,7 @@ import type {
   ConversationRunDetailRequest,
   ConversationRunHistoryPageRecord,
   ConversationRunHistoryPageRequest,
+  ConversationTimelineMetaRecord,
   ConversationTimelinePageRecord,
   ConversationTimelinePageRequest,
   ConversationSettingsSection,
@@ -677,6 +678,7 @@ export interface StorageCapability {
     projectionKey: string,
     chunkId?: string
   ): Promise<TimelineProjectionContextRecord | undefined>;
+  loadConversationTimelineMeta(conversationId: string): Promise<ConversationTimelineMetaRecord>;
   loadConversationTimelinePage(request: ConversationTimelinePageRequest): Promise<ConversationTimelinePageRecord>;
   loadConversationTimelineRange(request: {
     conversationId: string;

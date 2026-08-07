@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import {
   CLIENT_STATE_TABLES,
   CLIENT_STATE_TABLE_KEYS,
+  GENERIC_CLIENT_PATCH_APPLY_BY_KIND,
   createEmptyClientState,
   type ClientStateSortSpec
 } from '@shared/clientStateSchema';
@@ -15,6 +16,8 @@ import {
   type ClientStateTableKey,
   type CompressionBlockRecord,
   type ConversationTimelineChunkSummaryRecord,
+  type ConversationTimelineMetaRecord,
+  type ConversationTimelinePageDirection,
   type ConversationTimelinePageInfo,
   type ConversationTimelinePageRecord,
   type ConversationTimelinePatchPayload,
@@ -22,6 +25,13 @@ import {
   type MessageRecord
 } from '@shared/protocol';
 import type { TimelineProjectionContextRecord } from '@shared/timelineProjection';
+import {
+  conversationTimelineStateForMessageIds,
+  createConversationTimelineSeqWindow,
+  seqInConversationTimelineWindow,
+  timelineHasNewerChunks,
+  timelineHasOlderChunks
+} from '@shared/conversationTimelineWindow';
 import { bridge } from '@webview/transport';
 import { createClientStateDb } from './clientStateDb';
 import { areTimelineWindowStablePatches, compactClientPatchOps } from './clientPatchCompaction';
@@ -37,6 +47,13 @@ export interface ConversationTimelineState {
   loadedChunkIds: string[];
   chunkById: Record<string, ConversationTimelineChunkSummaryRecord>;
   pageInfo?: ConversationTimelinePageInfo;
+  meta?: ConversationTimelineMetaRecord;
+  pendingPageDirection?: ConversationTimelinePageDirection;
+  initialRefreshPending: boolean;
+  historyExpanded: boolean;
+  tailAttached: boolean;
+  tailCatchupPending: boolean;
+  prependRevision: number;
   streamSeq: number;
   /**
    * 是否已收到 conversation client stream 的完整快照。
@@ -50,6 +67,7 @@ export interface ConversationTimelineState {
    * timeline page 来自持久化分页，打开正在运行的 AgentRun 对话时可能比 live stream 更旧；
    * 因此需要单独保留 stream overlay，并在 page replace 后重新覆盖回展示 state。
    */
+  pageState: ClientState;
   streamState: ClientState;
   state: ClientState;
   projections: Record<string, TimelineProjectionContextRecord>;
@@ -62,12 +80,31 @@ interface ConversationTimelineStoreState {
 
 const DEFAULT_INITIAL_CHUNK_COUNT = 2;
 const DEFAULT_INCREMENTAL_CHUNK_COUNT = 2;
+const MAX_TAIL_RESIDENT_CHUNKS = 4;
 const TIMELINE_PROJECTIONS = ['task-list'];
+const PAGE_OWNED_TABLE_KEYS = [
+  'messages',
+  'messageRevisions',
+  'messageCurrentRevisionLinks',
+  'toolCalls',
+  'toolCallEvents',
+  'projectContexts',
+  'shadowRepositories',
+  'conversationCheckpointRepositoryLinks',
+  'checkpoints',
+  'checkpointTimelineAnchors',
+  'compressionBlocks',
+  'compressionBlockSourceLinks',
+  'compressionContextVariants',
+  'compressionBlockLlmInvocationLinks',
+  'llmInvocations'
+] as const satisfies readonly ClientStateTableKey[];
 
 interface PendingClientStatePatchBatch {
   streamId: string;
   streamSeq: number;
   patches: ClientPatchOp[];
+  windowEvictedMessageIds: string[];
   frameId?: number;
 }
 
@@ -114,10 +151,14 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
     },
     currentCompressionBlocks(): CompressionBlockRecord[] {
       const timeline = this.currentTimeline;
-      const window = timelineSeqWindow(timeline);
+      const window = createConversationTimelineSeqWindow(loadedChunks(timeline), timeline.tailAttached);
       return timeline.state.compressionBlocks
         .filter((block) => block.conversationId === this.currentConversationId)
-        .filter((block) => !window || compressionBlockInTimelineWindow(block, window))
+        .filter((block) => {
+          if (!window) return true;
+          const seq = block.anchorSeq ?? block.endSeq;
+          return seq !== undefined && seqInConversationTimelineWindow(seq, window);
+        })
         .sort((left, right) => (left.anchorSeq ?? left.endSeq ?? 0) - (right.anchorSeq ?? right.endSeq ?? 0) || left.createdAt - right.createdAt || left.id.localeCompare(right.id));
     },
     currentMessageFloorById(): Record<string, number> {
@@ -155,10 +196,10 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       return this.currentMessages.length;
     },
     currentHasOlder(): boolean {
-      return this.currentTimeline.pageInfo?.hasOlder === true;
+      return timelineHasOlder(this.currentTimeline);
     },
     currentHasNewer(): boolean {
-      return this.currentTimeline.pageInfo?.hasNewer === true;
+      return timelineHasNewer(this.currentTimeline);
     }
   },
   actions: {
@@ -166,16 +207,26 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       this.currentConversationId = conversationId;
       if (conversationId) this.ensureTimeline(conversationId);
     },
-    requestInitial(conversationId: string, chunkCount = DEFAULT_INITIAL_CHUNK_COUNT): void {
+    requestInitial(
+      conversationId: string,
+      chunkCount = DEFAULT_INITIAL_CHUNK_COUNT,
+      options: { force?: boolean } = {}
+    ): void {
       if (!conversationId) return;
       const timeline = this.ensureTimeline(conversationId);
-      if (timeline.pageInfo !== undefined) {
+      if (timeline.pageInfo !== undefined && !options.force) {
         timeline.status = 'idle';
         timeline.error = undefined;
+        this.maybeRequestTailCatchup(conversationId);
         return;
       }
-      if (timeline.status === 'loadingInitial') return;
+      if (isTimelineLoading(timeline.status)) {
+        if (options.force) timeline.initialRefreshPending = true;
+        return;
+      }
+      timeline.initialRefreshPending = false;
       timeline.status = 'loadingInitial';
+      timeline.pendingPageDirection = 'initial';
       timeline.error = undefined;
       bridge.request(BridgeMessageType.ConversationTimelinePageGet, {
         conversationId,
@@ -186,10 +237,13 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
     },
     requestOlder(conversationId?: string): void {
       const targetConversationId = conversationId || this.currentConversationId;
+      if (!targetConversationId) return;
       const timeline = this.ensureTimeline(targetConversationId);
-      if (!targetConversationId || timeline.status === 'loadingOlder' || timeline.pageInfo?.hasOlder === false) return;
+      if (isTimelineLoading(timeline.status) || !timelineHasOlder(timeline)) return;
       const oldest = oldestLoadedChunk(timeline);
+      timeline.historyExpanded = true;
       timeline.status = 'loadingOlder';
+      timeline.pendingPageDirection = 'older';
       timeline.error = undefined;
       bridge.request(BridgeMessageType.ConversationTimelinePageGet, {
         conversationId: targetConversationId,
@@ -199,17 +253,22 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
         includeProjections: TIMELINE_PROJECTIONS
       }, { channel: 'state' });
     },
-    requestNewer(conversationId?: string): void {
+    requestNewer(conversationId?: string, options: { force?: boolean } = {}): void {
       const targetConversationId = conversationId || this.currentConversationId;
+      if (!targetConversationId) return;
       const timeline = this.ensureTimeline(targetConversationId);
-      if (!targetConversationId || timeline.status === 'loadingNewer' || timeline.pageInfo?.hasNewer === false) return;
+      if (isTimelineLoading(timeline.status)) return;
+      if (!options.force && !timelineHasNewer(timeline)) return;
       const newest = newestLoadedChunk(timeline);
+      if (!newest) return;
       timeline.status = 'loadingNewer';
+      timeline.pendingPageDirection = 'newer';
+      timeline.tailCatchupPending = false;
       timeline.error = undefined;
       bridge.request(BridgeMessageType.ConversationTimelinePageGet, {
         conversationId: targetConversationId,
         direction: 'newer',
-        cursor: newest?.id,
+        cursor: newest.id,
         chunkCount: DEFAULT_INCREMENTAL_CHUNK_COUNT,
         includeProjections: TIMELINE_PROJECTIONS
       }, { channel: 'state' });
@@ -217,7 +276,10 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
     requestAround(conversationId: string, messageId: string): void {
       if (!conversationId || !messageId) return;
       const timeline = this.ensureTimeline(conversationId);
+      if (isTimelineLoading(timeline.status)) return;
+      timeline.historyExpanded = true;
       timeline.status = 'loadingInitial';
+      timeline.pendingPageDirection = 'around';
       timeline.error = undefined;
       bridge.request(BridgeMessageType.ConversationTimelinePageGet, {
         conversationId,
@@ -229,40 +291,94 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
     },
     applyPageSnapshot(page: ConversationTimelinePageRecord): void {
       const timeline = this.ensureTimeline(page.conversationId);
+      const previousNewest = newestLoadedChunk(timeline);
+      const direction = timeline.pendingPageDirection ?? directionForApplyMode(page.applyMode);
+      timeline.pendingPageDirection = undefined;
+
       if (page.applyMode === 'replace') {
+        timeline.pageState = createEmptyClientState();
         timeline.state = createEmptyClientState();
         timeline.loadedChunkIds = [];
         timeline.chunkById = {};
         timeline.projections = {};
+        timeline.historyExpanded = direction === 'around';
+        timeline.tailAttached = direction === 'initial';
+        timeline.tailCatchupPending = false;
       }
-      mergeClientState(timeline.state, page.state);
+
+      mergeClientState(timeline.pageState, page.state);
       for (const chunk of page.chunks) timeline.chunkById[chunk.id] = chunk;
       timeline.loadedChunkIds = Object.values(timeline.chunkById)
         .sort((left, right) => left.index - right.index || left.id.localeCompare(right.id))
         .map((chunk) => chunk.id);
+      if (direction === 'newer') trimAutomaticTailChunks(timeline);
       timeline.pageInfo = mergePageInfo(timeline, page.pageInfo);
-      pruneClientStateToTimelineWindow(timeline, timeline.streamState);
+      pruneClientStateToTimelineWindow(timeline, timeline.pageState, false);
+
+      // Page 只拥有已加载 chunk；stream 只作为覆盖层。prepend older 时绝不能
+      // 根据持久化 hasNewer 把实时尾部从展示 state 中裁掉。
+      mergeClientState(timeline.state, timeline.pageState);
       if (timeline.hasStreamSnapshot) {
         removeStaleConversationStreamMessages(timeline, page.conversationId, timeline.streamState, {
           rawConversationMessageCount: timeline.streamState.messages.filter((message) => message.conversationId === page.conversationId).length,
           rawHasConversation: false
         });
       }
-      // 持久化分页可能晚于 live conversation stream 到达。重新叠加 streamState，避免
-      // AgentRun 新对话里已经显示的实时消息被空/陈旧的 replace page 快照清掉。
       mergeClientState(timeline.state, timeline.streamState);
-      pruneClientStateToTimelineWindow(timeline, timeline.state);
+      pruneClientStateToTimelineWindow(timeline, timeline.state, timeline.tailAttached);
       timeline.projections = { ...timeline.projections, ...(page.projections ?? {}) };
+      if (direction === 'older' && page.chunks.length > 0) timeline.prependRevision += 1;
       timeline.status = 'idle';
       timeline.error = undefined;
+      if (timeline.initialRefreshPending) {
+        this.requestInitial(page.conversationId, DEFAULT_INITIAL_CHUNK_COUNT, { force: true });
+        return;
+      }
+      const newerAdvanced = direction !== 'newer' || didNewestChunkAdvance(previousNewest, newestLoadedChunk(timeline));
+      timeline.tailCatchupPending = timeline.tailAttached && timelineHasNewer(timeline) && newerAdvanced;
+      if (timeline.tailCatchupPending) this.maybeRequestTailCatchup(page.conversationId);
     },
     applyTimelinePatch(payload: ConversationTimelinePatchPayload): void {
       const timeline = this.ensureTimeline(payload.conversationId);
       if (payload.streamSeq > 0 && payload.streamSeq <= timeline.streamSeq) return;
       createClientStateDb(timeline.state).applyPatches(payload.patches);
-      timeline.streamSeq = payload.streamSeq;
-      if (payload.pageInfo) timeline.pageInfo = { ...(timeline.pageInfo ?? createEmptyPageInfo(payload.conversationId)), ...payload.pageInfo };
-      pruneClientStateToTimelineWindow(timeline, timeline.state);
+      if (payload.streamSeq > 0) timeline.streamSeq = payload.streamSeq;
+      if (payload.pageInfo) timeline.pageInfo = mergePageInfo(
+        timeline,
+        { ...(timeline.pageInfo ?? createEmptyPageInfo(payload.conversationId)), ...payload.pageInfo }
+      );
+      pruneClientStateToTimelineWindow(timeline, timeline.state, timeline.tailAttached);
+    },
+    applyTimelineMeta(metadata: ConversationTimelineMetaRecord): void {
+      const timeline = this.ensureTimeline(metadata.conversationId);
+      if (timeline.meta?.revision === metadata.revision) return;
+      if (timeline.meta && metadata.committedAt < timeline.meta.committedAt) return;
+      const previousTotalChunks = knownTimelineTotalChunks(timeline);
+      const previousTotalMessages = knownTimelineTotalMessages(timeline);
+      timeline.meta = cloneValue(metadata);
+      timeline.pageInfo = mergePageInfoWithMeta(timeline, timeline.pageInfo, metadata);
+
+      const timelineShrank = metadata.totalChunks < previousTotalChunks
+        || metadata.totalMessages < previousTotalMessages;
+      if (timelineShrank && timeline.loadedChunkIds.length > 0) {
+        timeline.tailAttached = true;
+        timeline.tailCatchupPending = false;
+        this.requestInitial(metadata.conversationId, DEFAULT_INITIAL_CHUNK_COUNT, { force: true });
+        return;
+      }
+
+      timeline.tailCatchupPending = timeline.tailAttached && timelineHasNewer(timeline);
+      this.maybeRequestTailCatchup(metadata.conversationId);
+    },
+    maybeRequestTailCatchup(conversationId: string): void {
+      const timeline = this.ensureTimeline(conversationId);
+      if (!timeline.tailAttached || !timelineHasNewer(timeline)) {
+        timeline.tailCatchupPending = false;
+        return;
+      }
+      timeline.tailCatchupPending = true;
+      if (isTimelineLoading(timeline.status)) return;
+      this.requestNewer(conversationId, { force: true });
     },
     applyClientStateSnapshot(streamId: string, streamSeq: number, state: ClientState): void {
       const conversationId = conversationIdFromClientStateStreamId(streamId);
@@ -274,9 +390,9 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       const rawHasConversation = state.conversations.some((conversation) => conversation.id === conversationId);
       timeline.streamState = createEmptyClientState();
       mergeClientState(timeline.streamState, state);
-      pruneClientStateToTimelineWindow(timeline, timeline.streamState);
       timeline.hasStreamSnapshot = true;
-      // Page snapshots own chunk cursors and global floor offsets; stream snapshots only overlay live ECS state.
+
+      // stream snapshot 只精确覆盖最近窗口；窗口 floor 之前的 page/已保留尾部记录不能按“快照缺失”删除。
       if (timeline.loadedChunkIds.length === 0) {
         timeline.state = createEmptyClientState();
       } else {
@@ -286,13 +402,20 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
         });
       }
       mergeClientState(timeline.state, timeline.streamState);
-      pruneClientStateToTimelineWindow(timeline, timeline.state);
+      pruneClientStateToTimelineWindow(timeline, timeline.state, timeline.tailAttached);
       timeline.streamSeq = streamSeq;
       if (timeline.pageInfo === undefined && timeline.status !== 'loadingInitial') {
         this.requestInitial(conversationId);
+      } else {
+        this.maybeRequestTailCatchup(conversationId);
       }
     },
-    applyClientStatePatch(streamId: string, streamSeq: number, patches: ClientPatchOp[]): void {
+    applyClientStatePatch(
+      streamId: string,
+      streamSeq: number,
+      patches: ClientPatchOp[],
+      windowEvictedMessageIds: readonly string[] = []
+    ): void {
       const conversationId = conversationIdFromClientStateStreamId(streamId);
       if (!conversationId) return;
       const timeline = this.ensureTimeline(conversationId);
@@ -300,9 +423,10 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       const latestSeq = pending?.streamSeq ?? timeline.streamSeq;
       if (streamSeq > 0 && streamSeq <= latestSeq) return;
 
-      const batch = pending ?? { streamId, streamSeq: timeline.streamSeq, patches: [] };
+      const batch = pending ?? { streamId, streamSeq: timeline.streamSeq, patches: [], windowEvictedMessageIds: [] };
       batch.streamSeq = streamSeq;
       batch.patches.push(...patches);
+      batch.windowEvictedMessageIds.push(...windowEvictedMessageIds);
       pendingClientStatePatchBatches.set(streamId, batch);
       if (batch.frameId !== undefined) return;
       batch.frameId = window.requestAnimationFrame(() => {
@@ -320,15 +444,35 @@ export const useConversationTimelineStore = defineStore('conversationTimeline', 
       if (batch.streamSeq > 0 && batch.streamSeq <= timeline.streamSeq) return;
       const patches = compactClientPatchOps(batch.patches);
       const windowStable = areTimelineWindowStablePatches(patches);
+      if (windowStable) {
+        createClientStateDb(timeline.streamState).applyPatches(patches);
+        createClientStateDb(timeline.state).applyPatches(patches);
+        timeline.streamSeq = batch.streamSeq;
+        return;
+      }
+
+      const evictedMessageIds = new Set(batch.windowEvictedMessageIds);
+      // 从固定 240 条的 previous stream window 提取，避免用户已展开大量历史后每条新消息都扫描完整页面状态。
+      const retainedState = conversationTimelineStateForMessageIds(timeline.streamState, evictedMessageIds);
       createClientStateDb(timeline.streamState).applyPatches(patches);
-      if (!windowStable) pruneClientStateToTimelineWindow(timeline, timeline.streamState);
+
+      // pageState 只接受删除；实时 upsert/mutation 仍由 stream 覆盖。窗口淘汰关联的
+      // remove 在应用后重新恢复，真正的编辑/删除/重试则会永久清理 page-owned 数据。
+      const removalPatches = patches.filter(isGenericClientRemovePatch);
+      createClientStateDb(timeline.pageState).applyPatches(removalPatches);
+      mergeClientStateTables(timeline.pageState, retainedState, PAGE_OWNED_TABLE_KEYS);
+      pruneClientStateToTimelineWindow(timeline, timeline.pageState, false);
+
       createClientStateDb(timeline.state).applyPatches(patches);
-      if (!windowStable) pruneClientStateToTimelineWindow(timeline, timeline.state);
+      mergeClientState(timeline.state, retainedState);
+      pruneClientStateToTimelineWindow(timeline, timeline.state, timeline.tailAttached);
       timeline.streamSeq = batch.streamSeq;
+      this.maybeRequestTailCatchup(conversationId);
     },
     setError(conversationId: string | undefined, message: string): void {
       const target = conversationId ? this.ensureTimeline(conversationId) : this.currentTimeline;
       target.status = 'error';
+      target.pendingPageDirection = undefined;
       target.error = message;
     },
     ensureTimeline(conversationId: string): ConversationTimelineState {
@@ -354,8 +498,14 @@ function createTimelineState(conversationId: string): ConversationTimelineState 
     status: 'idle',
     loadedChunkIds: [],
     chunkById: {},
+    initialRefreshPending: false,
+    historyExpanded: false,
+    tailAttached: false,
+    tailCatchupPending: false,
+    prependRevision: 0,
     streamSeq: 0,
     hasStreamSnapshot: false,
+    pageState: createEmptyClientState(),
     streamState: createEmptyClientState(),
     state: createEmptyClientState(),
     projections: {}
@@ -374,30 +524,16 @@ function createEmptyPageInfo(conversationId: string): ConversationTimelinePageIn
   };
 }
 
-interface TimelineSeqWindow {
-  startSeq: number;
-  endSeq: number;
-  includesTail: boolean;
-}
-
-function timelineSeqWindow(timeline: ConversationTimelineState): TimelineSeqWindow | undefined {
-  const chunks = timeline.loadedChunkIds
-    .map((id) => timeline.chunkById[id])
-    .filter((chunk): chunk is ConversationTimelineChunkSummaryRecord => !!chunk);
-  if (chunks.length === 0) return undefined;
-  return {
-    startSeq: Math.min(...chunks.map((chunk) => chunk.startSeq)),
-    endSeq: Math.max(...chunks.map((chunk) => chunk.endSeq)),
-    includesTail: timeline.pageInfo?.hasNewer === false
-  };
-}
-
-function pruneClientStateToTimelineWindow(timeline: ConversationTimelineState, state: ClientState): void {
-  const window = timelineSeqWindow(timeline);
+function pruneClientStateToTimelineWindow(
+  timeline: ConversationTimelineState,
+  state: ClientState,
+  tailAttached: boolean
+): void {
+  const window = createConversationTimelineSeqWindow(loadedChunks(timeline), tailAttached);
   if (!window) return;
 
   state.messages = state.messages.filter((message) =>
-    message.conversationId !== timeline.conversationId || seqInTimelineWindow(message.seq, window)
+    message.conversationId !== timeline.conversationId || seqInConversationTimelineWindow(message.seq, window)
   );
   const messageIds = new Set(state.messages.map((message) => message.id));
 
@@ -422,9 +558,11 @@ function pruneClientStateToTimelineWindow(timeline: ConversationTimelineState, s
   state.messageRunLinks = state.messageRunLinks.filter((link) => messageIds.has(link.messageId));
   state.messageLlmInvocationLinks = state.messageLlmInvocationLinks.filter((link) => messageIds.has(link.messageId));
 
-  state.compressionBlocks = state.compressionBlocks.filter((block) =>
-    block.conversationId !== timeline.conversationId || compressionBlockInTimelineWindow(block, window)
-  );
+  state.compressionBlocks = state.compressionBlocks.filter((block) => {
+    if (block.conversationId !== timeline.conversationId) return true;
+    const seq = block.anchorSeq ?? block.endSeq;
+    return seq !== undefined && seqInConversationTimelineWindow(seq, window);
+  });
   const compressionBlockIds = new Set(state.compressionBlocks.map((block) => block.id));
   state.compressionBlockSourceLinks = state.compressionBlockSourceLinks.filter((link) => compressionBlockIds.has(link.blockId));
   state.compressionBlockLlmInvocationLinks = state.compressionBlockLlmInvocationLinks.filter((link) => compressionBlockIds.has(link.blockId));
@@ -449,7 +587,10 @@ function removeStaleConversationStreamMessages(
       : [];
   if (staleIds.length === 0) return;
 
-  createClientStateDb(timeline.state).applyPatches(staleIds.map((id): ClientPatchOp => ({ kind: 'message.remove', id })));
+  const patches = staleIds.map((id): ClientPatchOp => ({ kind: 'message.remove', id }));
+  createClientStateDb(timeline.pageState).applyPatches(patches);
+  pruneClientStateToTimelineWindow(timeline, timeline.pageState, false);
+  createClientStateDb(timeline.state).applyPatches(patches);
 }
 
 function staleMessageIdsCoveredByStream(existingMessages: MessageRecord[], incomingMessages: MessageRecord[]): string[] {
@@ -460,18 +601,87 @@ function staleMessageIdsCoveredByStream(existingMessages: MessageRecord[], incom
     .map((message) => message.id);
 }
 
-function seqInTimelineWindow(seq: number, window: TimelineSeqWindow): boolean {
-  if (seq >= window.startSeq && seq <= window.endSeq) return true;
-  return window.includesTail && seq > window.endSeq;
+function loadedChunks(timeline: ConversationTimelineState): ConversationTimelineChunkSummaryRecord[] {
+  return timeline.loadedChunkIds
+    .map((id) => timeline.chunkById[id])
+    .filter((chunk): chunk is ConversationTimelineChunkSummaryRecord => !!chunk)
+    .sort((left, right) => left.index - right.index || left.id.localeCompare(right.id));
 }
 
-function compressionBlockInTimelineWindow(block: CompressionBlockRecord, window: TimelineSeqWindow): boolean {
-  const seq = block.anchorSeq ?? block.endSeq;
-  return seq !== undefined && seqInTimelineWindow(seq, window);
+function timelineHasOlder(timeline: ConversationTimelineState): boolean {
+  const chunks = loadedChunks(timeline);
+  return chunks.length > 0 ? timelineHasOlderChunks(chunks) : timeline.pageInfo?.hasOlder === true;
+}
+
+function timelineHasNewer(timeline: ConversationTimelineState): boolean {
+  const chunks = loadedChunks(timeline);
+  const totalChunks = knownTimelineTotalChunks(timeline);
+  return chunks.length > 0
+    ? timelineHasNewerChunks(chunks, totalChunks)
+    : timeline.pageInfo?.hasNewer === true;
+}
+
+function knownTimelineTotalMessages(timeline: ConversationTimelineState): number {
+  const pageInfo = timeline.pageInfo;
+  const metadata = timeline.meta;
+  if (!metadata) return pageInfo?.totalMessages ?? 0;
+  if (!pageInfo || metadata.committedAt >= pageInfo.loadedAt) return metadata.totalMessages;
+  return pageInfo.totalMessages;
+}
+
+function knownTimelineTotalChunks(timeline: ConversationTimelineState): number {
+  const pageInfo = timeline.pageInfo;
+  const metadata = timeline.meta;
+  if (!metadata) return pageInfo?.totalChunks ?? 0;
+  if (!pageInfo || metadata.committedAt >= pageInfo.loadedAt) return metadata.totalChunks;
+  return pageInfo.totalChunks;
+}
+
+function trimAutomaticTailChunks(timeline: ConversationTimelineState): void {
+  if (timeline.historyExpanded || !timeline.tailAttached) return;
+  const chunks = loadedChunks(timeline);
+  const removeCount = Math.max(0, chunks.length - MAX_TAIL_RESIDENT_CHUNKS);
+  if (removeCount <= 0) return;
+  for (const chunk of chunks.slice(0, removeCount)) delete timeline.chunkById[chunk.id];
+  timeline.loadedChunkIds = loadedChunks(timeline).map((chunk) => chunk.id);
+}
+
+function didNewestChunkAdvance(
+  previous: ConversationTimelineChunkSummaryRecord | undefined,
+  next: ConversationTimelineChunkSummaryRecord | undefined
+): boolean {
+  if (!next) return false;
+  if (!previous) return true;
+  return next.index > previous.index
+    || next.id !== previous.id
+    || next.endSeq > previous.endSeq
+    || next.messageCount > previous.messageCount;
+}
+
+function isTimelineLoading(status: ConversationTimelineStatus): boolean {
+  return status === 'loadingInitial' || status === 'loadingOlder' || status === 'loadingNewer';
+}
+
+function directionForApplyMode(mode: ConversationTimelinePageRecord['applyMode']): ConversationTimelinePageDirection {
+  if (mode === 'prepend') return 'older';
+  if (mode === 'append') return 'newer';
+  return 'initial';
+}
+
+function isGenericClientRemovePatch(patch: ClientPatchOp): boolean {
+  return GENERIC_CLIENT_PATCH_APPLY_BY_KIND[patch.kind]?.operation === 'remove';
 }
 
 function mergeClientState(target: ClientState, source: ClientState): void {
-  for (const key of CLIENT_STATE_TABLE_KEYS) {
+  mergeClientStateTables(target, source, CLIENT_STATE_TABLE_KEYS);
+}
+
+function mergeClientStateTables(
+  target: ClientState,
+  source: ClientState,
+  tableKeys: readonly ClientStateTableKey[]
+): void {
+  for (const key of tableKeys) {
     const targetList = target[key] as ClientStateRecord[];
     const sourceList = source[key] as ClientStateRecord[];
     upsertAll(targetList, sourceList);
@@ -501,7 +711,11 @@ function upsertAll<T extends { id: string }>(target: T[], source: T[]): void {
 }
 
 function cloneRecord<T extends { id: string }>(record: T): T {
-  return JSON.parse(JSON.stringify(record)) as T;
+  return cloneValue(record);
+}
+
+function cloneValue<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function sortTable(tableKey: ClientStateTableKey, list: ClientStateRecord[]): void {
@@ -527,10 +741,7 @@ function compareValues(left: unknown, right: unknown): number {
 }
 
 function mergePageInfo(timeline: ConversationTimelineState, incoming: ConversationTimelinePageInfo): ConversationTimelinePageInfo {
-  const chunks = timeline.loadedChunkIds
-    .map((id) => timeline.chunkById[id])
-    .filter((chunk): chunk is ConversationTimelineChunkSummaryRecord => !!chunk)
-    .sort((left, right) => left.index - right.index);
+  const chunks = loadedChunks(timeline);
   const first = chunks[0];
   const last = chunks[chunks.length - 1];
   return {
@@ -538,23 +749,30 @@ function mergePageInfo(timeline: ConversationTimelineState, incoming: Conversati
     chunkIds: chunks.map((chunk) => chunk.id),
     ...(first ? { startSeq: first.startSeq, oldestChunkId: first.id, previousCursor: first.id } : {}),
     ...(last ? { endSeq: last.endSeq, newestChunkId: last.id, nextCursor: last.id } : {}),
-    hasOlder: first ? first.index > 0 : incoming.hasOlder,
-    hasNewer: last ? last.index < incoming.totalChunks - 1 : incoming.hasNewer
+    hasOlder: chunks.length > 0 ? timelineHasOlderChunks(chunks) : incoming.hasOlder,
+    hasNewer: chunks.length > 0 ? timelineHasNewerChunks(chunks, incoming.totalChunks) : incoming.hasNewer
   };
 }
 
+function mergePageInfoWithMeta(
+  timeline: ConversationTimelineState,
+  current: ConversationTimelinePageInfo | undefined,
+  metadata: ConversationTimelineMetaRecord
+): ConversationTimelinePageInfo {
+  return mergePageInfo(timeline, {
+    ...(current ?? createEmptyPageInfo(metadata.conversationId)),
+    totalChunks: metadata.totalChunks,
+    totalMessages: metadata.totalMessages,
+    loadedAt: Math.max(current?.loadedAt ?? 0, metadata.committedAt)
+  });
+}
+
 function oldestLoadedChunk(timeline: ConversationTimelineState): ConversationTimelineChunkSummaryRecord | undefined {
-  return timeline.loadedChunkIds
-    .map((id) => timeline.chunkById[id])
-    .filter((chunk): chunk is ConversationTimelineChunkSummaryRecord => !!chunk)
-    .sort((left, right) => left.index - right.index)[0];
+  return loadedChunks(timeline)[0];
 }
 
 function newestLoadedChunk(timeline: ConversationTimelineState): ConversationTimelineChunkSummaryRecord | undefined {
-  return timeline.loadedChunkIds
-    .map((id) => timeline.chunkById[id])
-    .filter((chunk): chunk is ConversationTimelineChunkSummaryRecord => !!chunk)
-    .sort((left, right) => right.index - left.index)[0];
+  return loadedChunks(timeline).sort((left, right) => right.index - left.index || right.id.localeCompare(left.id))[0];
 }
 
 function compareMessages(left: MessageRecord, right: MessageRecord): number {

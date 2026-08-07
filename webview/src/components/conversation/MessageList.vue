@@ -29,7 +29,9 @@ const AUTO_LOAD_BOTTOM_GUARD_PX = 16;
 const AUTO_LOAD_UNDERFILLED_THRESHOLD_PX = 240;
 let attachedScroller: HTMLElement | null = null;
 let autoLoadFrame: number | undefined;
+let anchorRestoreFrame: number | undefined;
 let pendingTimelineAnchor: TimelineRowAnchor | undefined;
+let pendingPrependRevision = 0;
 
 interface TimelineRowAnchor {
   key: string;
@@ -159,10 +161,32 @@ function rowKey(row: ConversationTimelineViewRow): string {
 const rowKeySignature = computed(() => ui.timelineRows.map(rowKey).join('\u0001'));
 const isLoadingOlder = computed(() => timeline.currentTimeline.status === 'loadingOlder');
 
+watch(
+  () => timeline.currentTimeline.status,
+  (status, previous) => {
+    if (status === 'loadingOlder' && previous !== 'loadingOlder') {
+      pendingTimelineAnchor = captureTimelineAnchor();
+      pendingPrependRevision = 0;
+      cancelAnchorRestoreFrame();
+      return;
+    }
+    if (status === 'error' && previous === 'loadingOlder') clearPendingTimelineAnchor();
+  },
+  { flush: 'sync' }
+);
+watch(
+  () => timeline.currentTimeline.prependRevision,
+  (revision, previous) => {
+    if (revision <= previous) return;
+    pendingPrependRevision = revision;
+    schedulePrependAnchorRestore(revision);
+  },
+  { flush: 'post' }
+);
 watch(rowKeySignature, () => {
-  pendingTimelineAnchor = captureTimelineAnchor();
-  if (!pendingTimelineAnchor) return;
-  void nextTick(restoreTimelineAnchor);
+  if (!pendingTimelineAnchor || pendingPrependRevision <= 0) return;
+  const revision = pendingPrependRevision;
+  void nextTick(() => finishPrependAnchorRestore(revision));
 }, { flush: 'pre' });
 
 function captureTimelineAnchor(): TimelineRowAnchor | undefined {
@@ -194,6 +218,36 @@ function restoreTimelineAnchor(): void {
   scroller.scrollTop += delta;
 }
 
+function schedulePrependAnchorRestore(revision: number): void {
+  cancelAnchorRestoreFrame();
+  anchorRestoreFrame = window.requestAnimationFrame(() => {
+    anchorRestoreFrame = window.requestAnimationFrame(() => {
+      anchorRestoreFrame = undefined;
+      void nextTick(() => finishPrependAnchorRestore(revision));
+    });
+  });
+}
+
+function finishPrependAnchorRestore(revision: number): void {
+  if (revision !== pendingPrependRevision) return;
+  cancelAnchorRestoreFrame();
+  restoreTimelineAnchor();
+  pendingPrependRevision = 0;
+  scheduleAutoLoadOlder();
+}
+
+function cancelAnchorRestoreFrame(): void {
+  if (anchorRestoreFrame === undefined) return;
+  window.cancelAnimationFrame(anchorRestoreFrame);
+  anchorRestoreFrame = undefined;
+}
+
+function clearPendingTimelineAnchor(): void {
+  cancelAnchorRestoreFrame();
+  pendingTimelineAnchor = undefined;
+  pendingPrependRevision = 0;
+}
+
 function attachScroller(element: HTMLElement | null | undefined): void {
   detachScroller();
   if (!element) return;
@@ -207,6 +261,7 @@ function detachScroller(): void {
   attachedScroller = null;
   if (autoLoadFrame !== undefined) window.cancelAnimationFrame(autoLoadFrame);
   autoLoadFrame = undefined;
+  clearPendingTimelineAnchor();
 }
 
 function scheduleAutoLoadOlder(): void {

@@ -91,7 +91,7 @@ import { CLIENT_STATE_TABLE_KEYS } from '../../shared/clientStateSchema';
 import { EffectHandlerRegistry, registerApplicationEffectHandlers } from './effectHandlers';
 import { flushEffects, flushEffectsWhere } from './executeEffects';
 import type { RuntimeEnv } from './RuntimeEnv';
-import { BridgeMessageType, GLOBAL_SETTINGS_SECTIONS, conversationClientStateStreamId, createMessageId, type GlobalSettingsSection } from '../../shared/protocol';
+import { BridgeMessageType, GLOBAL_SETTINGS_SECTIONS, conversationClientStateStreamId, conversationTimelineStreamId, createMessageId, type GlobalSettingsSection } from '../../shared/protocol';
 import type {
   AgentRunStatus,
   CheckpointMaintenanceSettingsRecord,
@@ -101,6 +101,7 @@ import type {
   ClientState,
   ConversationLlmSettingsRecord,
   ConversationSettingsRecord,
+  ConversationTimelineMetaRecord,
   LlmProviderConfigsRecord,
   LlmProviderKind,
   LlmSettingsRecord,
@@ -217,7 +218,8 @@ export class BackendApplication {
       renderLoadedConversationIds: () => this.persistableRenderDetailConversationIds(),
       runHistoryLoadedConversationIds: () => this.runHistoryLoadedConversationDetails,
       isConversationHistorySummaryComplete: (conversationId) => this.isConversationHistorySummaryComplete(conversationId),
-      onStatusChange: (status) => this.broadcastPersistenceStatus(status)
+      onStatusChange: (status) => this.broadcastPersistenceStatus(status),
+      onConversationTimelineCommitted: (metadata) => this.broadcastConversationTimelineMeta(metadata)
     });
     this.globalSettingsBridge = new GlobalSettingsBridge({
       storage: this.env.storage,
@@ -1364,6 +1366,16 @@ export class BackendApplication {
         console.warn('[LimCode] Failed to auto-clean unused shadow worktrees.', error);
       }
     })();
+  }
+
+  private broadcastConversationTimelineMeta(metadata: ConversationTimelineMetaRecord): void {
+    this.env.webview.broadcastToStream(conversationTimelineStreamId(metadata.conversationId), {
+      id: createMessageId(),
+      type: BridgeMessageType.ConversationTimelineMetaSnapshot,
+      channel: 'state',
+      scope: { kind: 'conversation', id: metadata.conversationId },
+      payload: metadata
+    });
   }
 
   private broadcastPersistenceStatus(status: PersistenceStatusRecord): void {

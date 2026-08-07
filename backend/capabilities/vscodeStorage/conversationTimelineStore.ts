@@ -5,6 +5,7 @@ import type {
   CheckpointTimelineAnchorRecord,
   ConversationCheckpointRepositoryLinkRecord,
   ConversationTimelineChunkSummaryRecord,
+  ConversationTimelineMetaRecord,
   ConversationTimelinePageRecord,
   ConversationTimelinePageRequest,
   ClientState,
@@ -218,6 +219,17 @@ export async function loadConversationTimelineDetail(paths: StoragePaths, conver
     markClientStateAttachmentsForClient(state);
     return state;
   }, { strictErrors: true });
+}
+
+export async function loadConversationTimelineMeta(paths: StoragePaths, conversationId: string): Promise<ConversationTimelineMetaRecord> {
+  const root = conversationTimelineRoot(paths, conversationId);
+  return loadTimelineForUi(
+    root,
+    conversationId,
+    'conversation timeline metadata',
+    emptyTimelineMeta(conversationId),
+    async (index) => timelineMetaFromIndex(index)
+  );
 }
 
 export async function loadConversationTimelinePage(paths: StoragePaths, request: ConversationTimelinePageRequest): Promise<ConversationTimelinePageRecord> {
@@ -1766,7 +1778,9 @@ function selectTimelinePageChunks(
     return chunks.slice(Math.max(0, end - count), end);
   }
   if (direction === 'newer') {
-    const start = cursorIndex >= 0 ? cursorIndex + 1 : Math.max(0, total - count);
+    // append 时重读 cursor chunk：当前尾 chunk 可能在首次加载后继续增长。
+    // 与下一 chunk 一起返回，可把 stream 中累计的尾部消息正式移交给 chunk page ownership。
+    const start = cursorIndex >= 0 ? cursorIndex : Math.max(0, total - count);
     return chunks.slice(start, Math.min(total, start + count));
   }
 
@@ -1790,6 +1804,31 @@ function applyModeForDirection(direction: ConversationTimelinePageRequest['direc
     default:
       return 'replace';
   }
+}
+
+function emptyTimelineMeta(conversationId: string): ConversationTimelineMetaRecord {
+  return {
+    conversationId,
+    revision: '',
+    totalChunks: 0,
+    totalMessages: 0,
+    committedAt: Date.now()
+  };
+}
+
+function timelineMetaFromIndex(index: ConversationTimelineIndexFile): ConversationTimelineMetaRecord {
+  const oldest = index.chunks[0];
+  const newest = index.chunks[index.chunks.length - 1];
+  const committedAt = Date.parse(index.savedAt);
+  return {
+    conversationId: index.conversationId,
+    revision: index.generation,
+    totalChunks: index.chunks.length,
+    totalMessages: index.chunks.reduce((sum, chunk) => sum + chunk.messageCount, 0),
+    ...(oldest ? { oldestChunk: chunkSummary(oldest) } : {}),
+    ...(newest ? { newestChunk: chunkSummary(newest) } : {}),
+    committedAt: Number.isFinite(committedAt) ? committedAt : Date.now()
+  };
 }
 
 function emptyTimelinePage(conversationId: string, applyMode: ConversationTimelinePageRecord['applyMode']): ConversationTimelinePageRecord {

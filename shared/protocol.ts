@@ -2382,6 +2382,22 @@ export interface ConversationTimelinePageRecord {
   projections?: Record<string, TimelineProjectionContextRecord>;
 }
 
+/**
+ * 已提交 conversation timeline index 的轻量元数据。
+ *
+ * 只描述 chunk 目录，不携带消息正文；运行中的 Webview 用它发现新 chunk，
+ * 再通过 conversationTimeline.page.get 按 cursor 拉取具体数据。
+ */
+export interface ConversationTimelineMetaRecord {
+  conversationId: string;
+  revision: string;
+  totalChunks: number;
+  totalMessages: number;
+  oldestChunk?: ConversationTimelineChunkSummaryRecord;
+  newestChunk?: ConversationTimelineChunkSummaryRecord;
+  committedAt: number;
+}
+
 export interface ConversationTimelinePatchPayload {
   conversationId: string;
   streamSeq: number;
@@ -2398,6 +2414,8 @@ export interface ClientPatchPayload {
   streamId: string;
   streamSeq: number;
   patches: ClientPatchOp[];
+  /** 仍存在于完整状态、仅因 conversation recent window 滑动而离开 stream 的消息。 */
+  windowEvictedMessageIds?: string[];
 }
 
 export interface LlmRawErrorInfoRecord {
@@ -2878,7 +2896,7 @@ export type ExtensionToWebviewMessage =
   | BridgeEnvelope<BridgeMessageType.PersistenceStatusSnapshot, PersistenceStatusRecord>
   | BridgeEnvelope<BridgeMessageType.ConversationTimelinePageSnapshot, ConversationTimelinePageRecord>
   | BridgeEnvelope<BridgeMessageType.ConversationTimelinePatch, ConversationTimelinePatchPayload>
-  | BridgeEnvelope<BridgeMessageType.ConversationTimelineMetaSnapshot, ConversationTimelinePageRecord>
+  | BridgeEnvelope<BridgeMessageType.ConversationTimelineMetaSnapshot, ConversationTimelineMetaRecord>
   | BridgeEnvelope<BridgeMessageType.RunHistoryPageSnapshot, ConversationRunHistoryPageRecord>
   | BridgeEnvelope<BridgeMessageType.RunHistoryDetailSnapshot, ConversationRunDetailRecord>
   | BridgeEnvelope<BridgeMessageType.LlmDryRunSnapshot, LlmDryRunSnapshotPayload>

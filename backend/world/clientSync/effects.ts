@@ -14,6 +14,7 @@ export interface ClientPatchEffect {
   /** 当前 state stream 的顺序号，不是协议版本。 */
   streamSeq: number;
   patches: ClientPatchOp[];
+  windowEvictedMessageIds?: string[];
 }
 
 export interface ClientTransientNoticeEffect {

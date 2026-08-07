@@ -264,6 +264,80 @@ const timelineStore = require('../dist/extension/backend/capabilities/vscodeStor
 const clientStateStore = require('../dist/extension/backend/capabilities/vscodeStorage/clientStateStore.js');
 const { createEmptyClientState } = require('../dist/extension/shared/clientStateSchema.js');
 
+test('timeline metadata 只读取 index 并准确报告 chunk 边界', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-meta-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  const conversationId = 'conv-meta';
+  try {
+    await timelineStore.saveConversationTimelineDetail(
+      paths,
+      conversationId,
+      makeTimelineState(createEmptyClientState, conversationId, 250)
+    );
+
+    const metadata = await timelineStore.loadConversationTimelineMeta(paths, conversationId);
+    assert.ok(metadata.revision);
+    assert.equal(metadata.totalChunks, 3);
+    assert.equal(metadata.totalMessages, 250);
+    assert.equal(metadata.oldestChunk.index, 0);
+    assert.equal(metadata.oldestChunk.startSeq, 1);
+    assert.equal(metadata.newestChunk.index, 2);
+    assert.equal(metadata.newestChunk.endSeq, 250);
+
+    const root = timelineRoot(paths, conversationId);
+    const index = await readJsonFile(path.join(root, 'index.json'));
+    await fs.writeFile(path.join(root, index.chunks[index.chunks.length - 1].file), '{broken-chunk', 'utf8');
+
+    const metadataAfterChunkDamage = await timelineStore.loadConversationTimelineMeta(paths, conversationId);
+    assert.equal(metadataAfterChunkDamage.revision, metadata.revision);
+    assert.equal(metadataAfterChunkDamage.totalChunks, 3);
+    assert.equal(metadataAfterChunkDamage.totalMessages, 250);
+  } finally {
+    await removeTempRoot(tempRoot);
+  }
+});
+
+test('newer 分页会重读 cursor 尾 chunk 并接入后续 chunk', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-newer-refresh-'));
+  const paths = createVscodeStoragePaths(MockUri.file(tempRoot));
+  const conversationId = 'conv-newer-refresh';
+  try {
+    await timelineStore.saveConversationTimelineDetail(
+      paths,
+      conversationId,
+      makeTimelineState(createEmptyClientState, conversationId, 150)
+    );
+    const initial = await timelineStore.loadConversationTimelinePage(paths, {
+      conversationId,
+      direction: 'initial',
+      chunkCount: 1
+    });
+    assert.equal(initial.chunks.length, 1);
+    assert.equal(initial.chunks[0].index, 1);
+    assert.equal(initial.chunks[0].endSeq, 150);
+
+    await timelineStore.saveConversationTimelineDetail(
+      paths,
+      conversationId,
+      makeTimelineState(createEmptyClientState, conversationId, 250)
+    );
+    const newer = await timelineStore.loadConversationTimelinePage(paths, {
+      conversationId,
+      direction: 'newer',
+      cursor: initial.chunks[0].id,
+      chunkCount: 2
+    });
+
+    assert.deepEqual(newer.chunks.map((item) => item.index), [1, 2]);
+    assert.equal(newer.chunks[0].endSeq, 200);
+    assert.equal(newer.chunks[1].endSeq, 250);
+    assert.equal(newer.state.messages[0].seq, 101);
+    assert.equal(newer.state.messages[newer.state.messages.length - 1].seq, 250);
+  } finally {
+    await removeTempRoot(tempRoot);
+  }
+});
+
 test('pending checkpoint sidecar 不会进入虚假 base，完成后可完整落盘并继续更新', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-timeline-pending-checkpoint-'));
   const paths = createVscodeStoragePaths(MockUri.file(tempRoot));

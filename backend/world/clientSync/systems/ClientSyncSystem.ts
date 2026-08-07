@@ -10,6 +10,10 @@ import {
 } from '../../../../shared/protocol';
 import { clientStateWithTables, createEmptyClientState, GLOBAL_CLIENT_STATE_TABLE_KEYS } from '../../../../shared/clientStateSchema';
 import { collectChangedClientStateConversationIds } from '../../../../shared/clientStateConversationScope';
+import {
+  CONVERSATION_STREAM_RECENT_MESSAGE_LIMIT,
+  classifyConversationStreamMessageRemovals
+} from '../../../../shared/conversationTimelineWindow';
 import { defineSystem, type AccessDeclaration, type WorldReader } from '../../../ecs/types';
 import { readEvents } from '../../events';
 import { LlmRequest, Message } from '../../modules/chat/components';
@@ -19,8 +23,6 @@ import { ClientSyncEventType } from '../events';
 import { ClientStateContributorsKey, ClientStateDirtyConversationIdsKey, ClientSyncFastPatchStateKey, ClientSyncStateKey, type ClientStreamState, type ClientSyncFastPatchState, type ClientSyncState } from '../resources';
 import { projectClientStateWithCache } from '../projection';
 import { contributorClock } from '../../projection/cache';
-
-const CONVERSATION_STREAM_RECENT_MESSAGE_LIMIT = 240;
 
 export const ClientSyncSystem = defineSystem({
   name: 'ClientSyncSystem',
@@ -131,7 +133,14 @@ export const ClientSyncSystem = defineSystem({
         didUpdateStreams = true;
         continue;
       }
-      const updated = emitPatchIfChanged(cmd, contributors, streamId, existing, next);
+      const windowEvictedMessageIds = [
+        ...classifyConversationStreamMessageRemovals(
+          existing.lastState.messages,
+          next.messages,
+          nextFull.messages
+        ).evictedMessageIds
+      ];
+      const updated = emitPatchIfChanged(cmd, contributors, streamId, existing, next, windowEvictedMessageIds);
       if (updated) {
         streams[streamId] = updated;
         didUpdateStreams = true;
@@ -215,13 +224,20 @@ function emitPatchIfChanged(
   contributors: ClientStateContributor[],
   streamId: string,
   current: ClientStreamState,
-  next: ClientState
+  next: ClientState,
+  windowEvictedMessageIds: readonly string[] = []
 ): ClientStreamState | undefined {
   if (!current.lastState) return emitSnapshot(cmd, streamId, current, next);
   const patches = diffClientState(contributors, current.lastState, next);
   if (patches.length === 0) return undefined;
   const stream: ClientStreamState = { streamSeq: current.streamSeq + 1, lastState: next };
-  cmd.effect({ kind: 'client.patch', streamId, streamSeq: stream.streamSeq, patches });
+  cmd.effect({
+    kind: 'client.patch',
+    streamId,
+    streamSeq: stream.streamSeq,
+    patches,
+    ...(windowEvictedMessageIds.length > 0 ? { windowEvictedMessageIds: [...windowEvictedMessageIds] } : {})
+  });
   return stream;
 }
 

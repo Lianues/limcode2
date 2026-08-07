@@ -64,7 +64,7 @@ import {
   saveToolCallRecord,
   truncateConversationTimelineFromStores
 } from './clientStateStore';
-import { loadTimelineProjectionContext } from './conversationTimelineStore';
+import { loadConversationTimelineMeta, loadTimelineProjectionContext } from './conversationTimelineStore';
 import {
   commitClientStateSkeletonConversationDeletion,
   openClientStateSkeletonSnapshot,
@@ -376,6 +376,9 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     },
     async loadConversationTimelineProjectionContext(conversationId, projectionKey, chunkId) {
       return withSharedDataRoot((paths) => loadTimelineProjectionContext(paths, conversationId, projectionKey, chunkId));
+    },
+    async loadConversationTimelineMeta(conversationId) {
+      return withSharedDataRoot((paths) => loadConversationTimelineMeta(paths, conversationId));
     },
     async loadConversationTimelinePage(request) {
       return withSharedDataRoot((paths) => loadConversationTimelinePageFromStores(paths, request));

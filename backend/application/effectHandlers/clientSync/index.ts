@@ -32,7 +32,10 @@ export function registerClientSyncEffectHandlers(registry: EffectHandlerRegistry
         payload: {
           streamId: effect.streamId,
           streamSeq: effect.streamSeq,
-          patches: effect.patches
+          patches: effect.patches,
+          ...(effect.windowEvictedMessageIds?.length
+            ? { windowEvictedMessageIds: [...effect.windowEvictedMessageIds] }
+            : {})
         }
       });
     }

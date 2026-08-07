@@ -167,7 +167,12 @@ export function useBridgeBootstrap(): void {
       );
       if (debug) logCompressionClientDebug('clientPatch.applyResult', { streamId: message.payload.streamId, streamSeq: message.payload.streamSeq, applied });
       if (applied) {
-        conversationTimeline.applyClientStatePatch(message.payload.streamId, message.payload.streamSeq, message.payload.patches);
+        conversationTimeline.applyClientStatePatch(
+          message.payload.streamId,
+          message.payload.streamSeq,
+          message.payload.patches,
+          message.payload.windowEvictedMessageIds ?? []
+        );
         systemPromptStore.reconcilePendingSave();
         runtimeContextStore.reconcilePendingSave();
       }
@@ -187,6 +192,12 @@ export function useBridgeBootstrap(): void {
   disposers.push(
     bridge.on(BridgeMessageType.ConversationTimelinePatch, (message) => {
       if (message.payload) conversationTimeline.applyTimelinePatch(message.payload);
+    })
+  );
+
+  disposers.push(
+    bridge.on(BridgeMessageType.ConversationTimelineMetaSnapshot, (message) => {
+      if (message.payload) conversationTimeline.applyTimelineMeta(message.payload);
     })
   );
 

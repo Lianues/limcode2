@@ -9,6 +9,7 @@ import {
   type ClientState,
   type ClientStateTableKey,
   type ConversationOriginLinkRecord,
+  type ConversationTimelineMetaRecord,
   type MessageContent,
   type MessageRecord,
   type PersistenceStatusRecord,
@@ -88,6 +89,8 @@ export interface ClientStatePersistenceOptions {
   /** 测试/宿主可覆盖；默认直接从 ECS 投影目标 conversation 的 timeline-only 数据。 */
   projectConversationTimelineState?: (world: WorldReader, conversationId: string) => ClientState;
   onStatusChange?: (status: PersistenceStatusRecord) => void;
+  /** conversation timeline 成功提交后发布最新 chunk index 元数据。 */
+  onConversationTimelineCommitted?: (metadata: ConversationTimelineMetaRecord) => void;
   /** 测试可缩短；生产默认 250ms / 1s / 3s，耗尽后保留 error 状态等待下一次变更。 */
   retryDelaysMs?: readonly number[];
 }
@@ -115,6 +118,7 @@ export class ClientStatePersistence {
   private lastAcknowledgedLocalSkeletonState: ClientState | undefined;
   private pendingSkeletonState: ClientState | undefined;
   private readonly lastPersistedRenderDetailJson = new Map<string, string>();
+  private readonly lastPublishedTimelineMetaSignature = new Map<string, string>();
   /** 每个 conversation 上次确认提交的本地 render base；外部 union 不写入该 base。 */
   private readonly lastAcknowledgedLocalRenderDetailState = new Map<string, ClientState>();
   /**
@@ -184,6 +188,7 @@ export class ClientStatePersistence {
     this.projectionClock = '';
     this.contributorStates = {};
     this.lastPersistedRenderDetailJson.clear();
+    this.lastPublishedTimelineMetaSignature.clear();
     this.lastAcknowledgedLocalRenderDetailState.clear();
     this.canonicalToolCallOverrides.clear();
     this.lastPersistedRunHistoryJson.clear();
@@ -430,6 +435,7 @@ export class ClientStatePersistence {
         );
         this.lastAcknowledgedLocalRenderDetailState.set(conversationId, cloneClientState(acknowledged));
         this.lastPersistedRenderDetailJson.set(conversationId, JSON.stringify(acknowledged));
+        await this.publishConversationTimelineMeta(conversationId);
       } catch (error) {
         failedRenderDetailStates.push([conversationId, state]);
         throw error;
@@ -552,6 +558,7 @@ export class ClientStatePersistence {
       const acknowledged = mergeAcknowledgedTimelineState(base, committedTimeline);
       this.lastAcknowledgedLocalRenderDetailState.set(normalizedConversationId, acknowledged);
       this.lastPersistedRenderDetailJson.set(normalizedConversationId, JSON.stringify(acknowledged));
+      await this.publishConversationTimelineMeta(normalizedConversationId);
     } catch (error) {
       console.warn(`[LimCode] Failed to persist conversation timeline before mutation: ${normalizedConversationId}`, error);
       if (options.throwOnError) throw error;
@@ -622,6 +629,7 @@ export class ClientStatePersistence {
     this.pendingRunHistoryStates.delete(normalizedConversationId);
     this.pendingHistoryStates.delete(normalizedConversationId);
     this.lastPersistedRenderDetailJson.delete(normalizedConversationId);
+    this.lastPublishedTimelineMetaSignature.delete(normalizedConversationId);
     this.lastAcknowledgedLocalRenderDetailState.delete(normalizedConversationId);
     this.canonicalToolCallOverrides.delete(normalizedConversationId);
     this.lastPersistedRunHistoryJson.delete(normalizedConversationId);
@@ -639,6 +647,20 @@ export class ClientStatePersistence {
         normalizedConversationId
       );
       this.lastPersistedSkeletonJson = JSON.stringify(this.lastAcknowledgedLocalSkeletonState);
+    }
+  }
+
+  private async publishConversationTimelineMeta(conversationId: string): Promise<void> {
+    if (!this.options.onConversationTimelineCommitted) return;
+    try {
+      const metadata = await this.storage.loadConversationTimelineMeta(conversationId);
+      const signature = timelineMetaStructuralSignature(metadata);
+      if (this.lastPublishedTimelineMetaSignature.get(conversationId) === signature) return;
+      this.lastPublishedTimelineMetaSignature.set(conversationId, signature);
+      this.options.onConversationTimelineCommitted(metadata);
+    } catch (error) {
+      // timeline 正文已经成功提交，元数据通知失败不能反向把持久化标记为失败。
+      console.warn(`[LimCode] Failed to publish conversation timeline metadata: ${conversationId}`, error);
     }
   }
 
@@ -924,6 +946,23 @@ export class ClientStatePersistence {
       changedTableKeys: changedStorageTableKeys(projection.changedContributorKeys, projection.contributorStates)
     };
   }
+}
+
+function timelineMetaStructuralSignature(metadata: ConversationTimelineMetaRecord): string {
+  const oldest = metadata.oldestChunk;
+  const newest = metadata.newestChunk;
+  return [
+    metadata.totalChunks,
+    metadata.totalMessages,
+    oldest?.id ?? '',
+    oldest?.startSeq ?? '',
+    oldest?.endSeq ?? '',
+    oldest?.messageCount ?? '',
+    newest?.id ?? '',
+    newest?.startSeq ?? '',
+    newest?.endSeq ?? '',
+    newest?.messageCount ?? ''
+  ].join(':');
 }
 
 async function awaitAllPersistTasks(tasks: Promise<void>[]): Promise<void> {

@@ -48,6 +48,7 @@ import type {
   LlmPromptCacheConfigRecord,
   LlmPromptCacheMode,
   LlmPromptCacheTtl,
+  LlmRequestBodyJsonValue,
   LlmRequestBodyRecord,
   LlmToolCallFormat,
   LlmRawErrorInfoRecord,
@@ -57,6 +58,9 @@ import type {
 
 export const DEFAULT_LLM_BASE_URL = 'https://api.openai.com/v1';
 const COMPRESSION_DEBUG_PREFIX = '[LimCode][CompressionDebug]';
+const OPENAI_RESPONSES_REMOTE_COMPACTION_HEADER = 'x-codex-beta-features';
+const OPENAI_RESPONSES_REMOTE_COMPACTION_FEATURE = 'remote_compaction_v2';
+const OPENAI_RESPONSES_REMOTE_COMPACTION_IMPLEMENTATION = 'responses_compaction_v2';
 const SAFE_LLM_ERROR_METADATA_FIELDS = [
   'transport',
   'phase',
@@ -82,7 +86,6 @@ type UnifiedContent = import('unified-llm-provider').Content;
 type UnifiedPart = import('unified-llm-provider').Part;
 type UnifiedLLMRequest = import('unified-llm-provider').LLMRequest;
 type UnifiedLLMResponse = import('unified-llm-provider').LLMResponse;
-type UnifiedLLMCompactResponse = import('unified-llm-provider').LLMCompactResponse;
 type UnifiedLLMStreamChunk = import('unified-llm-provider').LLMStreamChunk;
 type UnifiedFunctionDeclaration = import('unified-llm-provider').FunctionDeclaration;
 type UnifiedModelCatalogEntry = import('unified-llm-provider').ModelCatalogEntry;
@@ -994,7 +997,10 @@ async function compactWithOpenAIResponses(
   const registry = unified.createBootstrapExtensionRegistry();
   const proxy = normalizeOptionalString(await resolveMaybe(options.proxy));
   const proxyFetch = proxy ? createProxyFetch(proxy) : undefined;
-  const headers = mergeHeaders(await resolveMaybe(options.headers), settings.headers);
+  const headers = headersWithOpenAIResponsesRemoteCompaction(
+    mergeHeaders(await resolveMaybe(options.headers), settings.headers)
+  );
+  const requestBody = requestBodyWithOpenAIResponsesRemoteCompaction(settings.requestBody);
   logCompressionDebug('provider.compact.openaiResponses.settings', {
     ...compactRequestDebugInfo(request),
     providerConfigId: settings.id,
@@ -1005,8 +1011,8 @@ async function compactWithOpenAIResponses(
     methodConfigId: methodConfig.id,
     methodConfigKind: methodConfig.kind,
     hasProxy: !!proxy,
-    headerKeys: headers ? Object.keys(headers) : [],
-    hasRequestBody: !!settings.requestBody
+    headerKeys: Object.keys(headers),
+    hasRequestBody: Object.keys(requestBody).length > 0
   });
   const provider = unified.createLLMFromConfig({
     provider: settings.provider,
@@ -1014,36 +1020,51 @@ async function compactWithOpenAIResponses(
     apiKey: settings.apiKey,
     baseUrl: settings.baseUrl,
     ...(settings.contextWindowTokens ? { contextWindow: settings.contextWindowTokens } : {}),
-    ...(headers ? { headers } : {}),
-    ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
-    ...unifiedPromptCacheConfigEntry(settings),
+    headers,
+    requestBody,
     ...(proxy ? { proxy, fetch: proxyFetch } : {})
-  }, registry.llmProviders) as unknown as { compact?: (request: unknown, options?: unknown) => Promise<UnifiedLLMCompactResponse> };
+  }, registry.llmProviders) as unknown as {
+    chatStream<T>(request: unknown, options: { inputFormat: 'unified'; outputFormat: 'unified'; signal?: AbortSignal }): AsyncIterable<T>;
+  };
 
-  if (typeof provider.compact !== 'function') {
-    throw new Error('当前 unified-llm-provider 不支持 provider.compact。');
-  }
-
-  let compacted: UnifiedLLMCompactResponse;
+  const remoteCompactionContents = [
+    ...normalizedContext.contents,
+    openAIResponsesRemoteCompactionTriggerContent()
+  ];
+  const compactedContents = new Map<string, MessageContent>();
+  const rawCompactionItems = new Map<string, unknown>();
+  let latestUsageMetadata: LlmUsageMetadataRecord | undefined;
   try {
     logCompressionDebug('provider.compact.openaiResponses.request', {
       ...compactRequestDebugInfo(request),
       normalizedContentCount: normalizedContext.contents.length,
+      requestContentCount: remoteCompactionContents.length,
       signalAborted: signal?.aborted === true
     });
-    compacted = await provider.compact(
-      { contents: normalizedContext.contents.map(toUnifiedContent) },
+    for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(
+      { contents: remoteCompactionContents.map(toUnifiedContent) },
       { inputFormat: 'unified', outputFormat: 'unified', signal }
-    );
-    if (hasUnifiedError(compacted)) {
-      throw new LlmAttemptFailureError(failureFromProviderError(compacted.error, { rawResponse: compacted.rawResponse ?? compacted }));
+    )) {
+      if (signal?.aborted) throw createAbortError(`Aborted LLM compact request: ${request.id}`);
+      if (hasUnifiedError(chunk)) {
+        throw new LlmAttemptFailureError(failureFromProviderError(chunk.error, { rawChunk: chunk.rawChunk ?? chunk }));
+      }
+      const chunkUsageMetadata = usageMetadataFromChunk(chunk);
+      if (chunkUsageMetadata) latestUsageMetadata = mergeUsageMetadata(latestUsageMetadata, chunkUsageMetadata);
+      for (const unifiedPart of chunk.partsDelta ?? []) {
+        const captured = captureOpenAIResponsesCompactionPart(unifiedPart);
+        if (!captured) continue;
+        compactedContents.set(captured.key, captured.content);
+        rawCompactionItems.set(captured.key, captured.rawItem);
+      }
+    }
+    if (compactedContents.size === 0) {
+      throw new Error('OpenAI 原生压缩未返回 compaction item。');
     }
     logCompressionDebug('provider.compact.openaiResponses.response', {
       ...compactRequestDebugInfo(request),
-      responseId: compacted.id,
-      object: compacted.object,
-      contentCount: compacted.contents?.length ?? 0,
-      hasUsage: compacted.usageMetadata !== undefined
+      contentCount: compactedContents.size,
+      hasUsage: latestUsageMetadata !== undefined
     });
   } catch (error) {
     logCompressionDebug('provider.compact.openaiResponses.throw', {
@@ -1056,16 +1077,113 @@ async function compactWithOpenAIResponses(
     throw error;
   }
 
+  const rawItems = [...rawCompactionItems.values()];
   return {
-    id: compacted.id,
-    object: compacted.object,
-    createdAt: compacted.createdAt,
-    contents: (compacted.contents ?? []).map(fromUnifiedContent),
-    usageMetadata: usageMetadataFromCompact(compacted.usageMetadata),
+    object: 'response',
+    contents: [...compactedContents.values()],
+    ...(latestUsageMetadata ? { usageMetadata: latestUsageMetadata } : {}),
     settingsSnapshot: snapshotFromSettings(settings, methodConfig),
-    rawResponse: compacted.rawResponse,
+    rawResponse: rawItems.length === 1 ? rawItems[0] : rawItems,
     methodConfig
   };
+}
+
+function headersWithOpenAIResponsesRemoteCompaction(headers: LlmProviderHeadersRecord | undefined): LlmProviderHeadersRecord {
+  const result: LlmProviderHeadersRecord = { ...(headers ?? {}) };
+  const existingKey = Object.keys(result).find((key) => key.toLowerCase() === OPENAI_RESPONSES_REMOTE_COMPACTION_HEADER);
+  const existingFeatures = existingKey
+    ? result[existingKey].split(',').map((feature) => feature.trim()).filter(Boolean)
+    : [];
+  if (!existingFeatures.some((feature) => feature.toLowerCase() === OPENAI_RESPONSES_REMOTE_COMPACTION_FEATURE)) {
+    existingFeatures.push(OPENAI_RESPONSES_REMOTE_COMPACTION_FEATURE);
+  }
+  if (existingKey) delete result[existingKey];
+  result[OPENAI_RESPONSES_REMOTE_COMPACTION_HEADER] = existingFeatures.join(', ');
+  return result;
+}
+
+function requestBodyWithOpenAIResponsesRemoteCompaction(requestBody: LlmRequestBodyRecord | undefined): LlmRequestBodyRecord {
+  const result: LlmRequestBodyRecord = { ...(requestBody ?? {}) };
+  // remote compaction v2 必须由本地完整 input + 末尾 trigger 驱动，并保持普通 SSE 请求。
+  // 高级请求体仍可提供其他字段，但不能覆盖这些协议关键字段。
+  delete result.model;
+  delete result.input;
+  delete result.stream;
+  delete result.store;
+  delete result.previous_response_id;
+  delete result.background;
+  delete result.context_management;
+  const metadata = isRecord(result.metadata)
+    ? { ...(result.metadata as Record<string, LlmRequestBodyJsonValue>) }
+    : {};
+  result.metadata = {
+    ...metadata,
+    implementation: OPENAI_RESPONSES_REMOTE_COMPACTION_IMPLEMENTATION
+  };
+  return result;
+}
+
+function openAIResponsesRemoteCompactionTriggerContent(): MessageContent {
+  return {
+    role: 'model',
+    parts: [{
+      providerContext: {
+        provider: 'openai',
+        format: 'openai-responses',
+        endpoint: 'responses',
+        itemType: 'compaction_trigger',
+        rawItem: { type: 'compaction_trigger' }
+      }
+    }]
+  };
+}
+
+interface CapturedOpenAIResponsesCompactionPart {
+  key: string;
+  content: MessageContent;
+  rawItem: unknown;
+}
+
+function captureOpenAIResponsesCompactionPart(part: UnifiedPart): CapturedOpenAIResponsesCompactionPart | undefined {
+  const converted = fromUnifiedPart(part);
+  if (!converted || !isProviderContextPart(converted)) return undefined;
+  const context = converted.providerContext;
+  if (context.format !== 'openai-responses') return undefined;
+
+  const rawRecord = isRecord(context.rawItem) ? context.rawItem : undefined;
+  const itemType = context.itemType ?? (typeof rawRecord?.type === 'string' ? rawRecord.type : undefined);
+  if (itemType !== 'compaction') return undefined;
+  if (rawRecord?.type !== undefined && rawRecord.type !== 'compaction') return undefined;
+
+  const encryptedContent = typeof rawRecord?.encrypted_content === 'string'
+    ? rawRecord.encrypted_content
+    : context.encryptedContent;
+  if (!encryptedContent) return undefined;
+  const rawItem = {
+    ...(rawRecord ?? {}),
+    type: 'compaction',
+    encrypted_content: encryptedContent
+  };
+  const providerContext = {
+    ...context,
+    provider: context.provider || 'openai',
+    format: 'openai-responses',
+    endpoint: 'responses',
+    itemType: 'compaction',
+    encryptedContent,
+    rawItem
+  };
+  return {
+    key: openAIResponsesCompactionItemKey(rawItem),
+    content: { role: 'model', parts: [{ providerContext }] },
+    rawItem
+  };
+}
+
+function openAIResponsesCompactionItemKey(rawItem: Record<string, unknown>): string {
+  const id = typeof rawItem.id === 'string' ? rawItem.id.trim() : '';
+  if (id) return `id:${id}`;
+  return `sha256:${createHash('sha256').update(stringifyJson(rawItem)).digest('hex')}`;
 }
 
 function isContextLengthExceededError(error: unknown): boolean {
@@ -1342,13 +1460,6 @@ function normalizeCompressionConfig(input: LlmCompressionConfigRecord | undefine
     ...(input?.llmSummary ? { llmSummary: input.llmSummary } : {}),
     createdAt: input?.createdAt ?? now,
     updatedAt: input?.updatedAt ?? now
-  };
-}
-
-function fromUnifiedContent(content: UnifiedContent): MessageContent {
-  return {
-    role: content.role === 'model' ? 'model' : 'user',
-    parts: (content.parts ?? []).map(fromUnifiedPart).filter((part): part is ContentPart => part !== undefined)
   };
 }
 

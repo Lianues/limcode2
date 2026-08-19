@@ -427,7 +427,7 @@ function completeCompressionBlock(world: WorldReader, cmd: CommandSink, payload:
     block: blockEntity,
     kind: isNative ? 'provider_native' : 'provider_neutral_summary',
     contents: compactedContents,
-    compatibility: isNative ? { provider: 'openai-responses', format: 'openai-responses', endpoint: 'responses.compact' } : undefined,
+    compatibility: isNative ? { provider: 'openai-responses', format: 'openai-responses', endpoint: 'responses' } : undefined,
     ...(payload.result.usageMetadata ? { usageMetadata: payload.result.usageMetadata } : {}),
     ...(payload.result.rawResponse !== undefined ? { rawResponse: payload.result.rawResponse } : {}),
     createdAt: now,

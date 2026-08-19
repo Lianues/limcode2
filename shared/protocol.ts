@@ -1566,6 +1566,7 @@ export interface ProviderContextPart {
     format: string;
     endpoint?: string;
     itemType?: string;
+    id?: string;
     encryptedContent?: string;
     rawItem?: unknown;
   };

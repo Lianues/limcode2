@@ -113,6 +113,8 @@ export interface LoadClientStateSkeletonOptions {
 
 export interface SaveConversationRunHistoryOptions {
   mode: 'merge' | 'replace';
+  /** Internal one-time migration path: preserve already-persisted history even if new writes are disabled. */
+  force?: boolean;
 }
 
 export interface ClientStateSkeletonStoreTestHooks {
@@ -710,7 +712,7 @@ export async function saveConversationRunHistoryToStores(
   options: SaveConversationRunHistoryOptions
 ): Promise<void> {
   const settings = (await loadGlobalSettingsFile(paths.settingsRootUri, 'runHistory')).settings as RunHistorySettingsRecord;
-  if (!settings.detailPersistenceEnabled) return;
+  if (!options.force && !settings.detailPersistenceEnabled) return;
 
   assertUniqueClientStateIds(state, `saveConversationRunHistory:${conversationId}:source`);
   const detail = conversationRunHistorySlice(state, conversationId);

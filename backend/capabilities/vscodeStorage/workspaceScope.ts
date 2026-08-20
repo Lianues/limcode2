@@ -5,14 +5,16 @@ import {
   SETTINGS_ROOT_DIR,
   WORKSPACE_RUNTIMES_ROOT_DIR
 } from './constants';
-import { isFileNotFoundError, readJsonStrict, writeJson } from './json';
+import { isFileNotFoundError } from './json';
 import { withStorageResourceLock } from './storageResourceLock';
 import { ensureStorageDirectory } from './storageFs';
+import {
+  LEGACY_PARTITION_ID,
+  resolveLegacyPartition
+} from './legacyPartition';
 
 const SCOPES_DIR = 'scopes';
-const LEGACY_OWNER_FILE = 'legacy-owner.json';
-const LEGACY_OWNER_KIND = 'limcode.workspaceRuntimeLegacyOwner';
-const LEGACY_OWNER_SCHEMA_VERSION = 1;
+const LEGACY_PARTITION_MANIFEST_FILE = `${LEGACY_PARTITION_ID}.json`;
 
 export interface WorkspaceScopeUri {
   readonly scheme?: string;
@@ -33,15 +35,8 @@ export interface WorkspaceScopeIdentity {
   /** SHA-256 only; filesystem paths and remote authority are never placed in directory names. */
   scopeKey: string;
   source: WorkspaceScopeSource;
-  /** Only an actual saved workspace file or workspace folder set may claim legacy runtime data. */
+  /** Only an actual saved workspace file or workspace folder set may start/resume legacy partitioning. */
   canClaimLegacy: boolean;
-}
-
-interface LegacyOwnerFile {
-  kind: typeof LEGACY_OWNER_KIND;
-  schemaVersion: typeof LEGACY_OWNER_SCHEMA_VERSION;
-  scopeKey: string;
-  claimedAt: string;
 }
 
 /** Pure, order-independent workspace identity calculation. Freeze its result once per Extension Host. */
@@ -68,10 +63,15 @@ export function workspaceScopedRuntimeRoot(configurationRootUri: vscode.Uri, sco
   return vscode.Uri.joinPath(configurationRootUri, WORKSPACE_RUNTIMES_ROOT_DIR, SCOPES_DIR, scopeKey);
 }
 
+export function workspaceLegacyPartitionManifestUri(configurationRootUri: vscode.Uri): vscode.Uri {
+  return vscode.Uri.joinPath(configurationRootUri, WORKSPACE_RUNTIMES_ROOT_DIR, LEGACY_PARTITION_MANIFEST_FILE);
+}
+
 /**
- * Resolve the frozen scope to either its isolated runtime tree or the legacy data root.
- * The first non-empty workspace that observes real legacy runtime data records ownership under
- * a cross-process lock. Empty windows and fresh installs never create an owner record.
+ * Resolve a frozen workspace scope. If pre-scope runtime data exists, the first non-empty Workspace
+ * records the immutable firstWorkspaceScopeKey and partitions every non-empty Conversation exactly
+ * once. Empty windows never start the migration. The legacy root remains an untouched rollback
+ * archive after the atomic manifest commit.
  */
 export async function resolveWorkspaceRuntimeRoot(
   configurationRootUri: vscode.Uri,
@@ -79,29 +79,15 @@ export async function resolveWorkspaceRuntimeRoot(
 ): Promise<vscode.Uri> {
   const scopedRoot = workspaceScopedRuntimeRoot(configurationRootUri, scope.scopeKey);
   const managementRoot = vscode.Uri.joinPath(configurationRootUri, WORKSPACE_RUNTIMES_ROOT_DIR);
-  const ownerUri = vscode.Uri.joinPath(managementRoot, LEGACY_OWNER_FILE);
+  const manifestUri = workspaceLegacyPartitionManifestUri(configurationRootUri);
 
   await ensureStorageDirectory(managementRoot);
-  return withStorageResourceLock(ownerUri, async () => {
-    const ownerRead = await readJsonStrict<unknown>(ownerUri);
-    if (ownerRead.status === 'ok') {
-      const owner = parseLegacyOwner(ownerRead.value, ownerUri);
-      return owner.scopeKey === scope.scopeKey ? configurationRootUri : scopedRoot;
-    }
-    if (ownerRead.status !== 'missing') {
-      throw new Error(`Failed to read workspace runtime legacy owner: ${ownerUri.fsPath}: ${String(ownerRead.error)}`);
-    }
-    if (!scope.canClaimLegacy || !await hasLegacyRuntimeData(configurationRootUri)) return scopedRoot;
-
-    const owner: LegacyOwnerFile = {
-      kind: LEGACY_OWNER_KIND,
-      schemaVersion: LEGACY_OWNER_SCHEMA_VERSION,
-      scopeKey: scope.scopeKey,
-      claimedAt: new Date().toISOString()
-    };
-    await writeJson(ownerUri, owner);
-    return configurationRootUri;
-  });
+  return withStorageResourceLock(manifestUri, () => resolveLegacyPartition({
+    configurationRootUri,
+    managementRootUri: managementRoot,
+    manifestUri,
+    scopedRootUri: scopedRoot
+  }, scope, () => hasLegacyRuntimeData(configurationRootUri)));
 }
 
 function scopeIdentity(source: WorkspaceScopeSource, canonicalIdentity: string, canClaimLegacy: boolean): WorkspaceScopeIdentity {
@@ -114,26 +100,6 @@ function scopeIdentity(source: WorkspaceScopeSource, canonicalIdentity: string, 
 
 function canonicalUri(uri: WorkspaceScopeUri): string {
   return uri.toString(true);
-}
-
-function parseLegacyOwner(value: unknown, uri: vscode.Uri): LegacyOwnerFile {
-  if (!value || typeof value !== 'object') throw invalidLegacyOwner(uri);
-  const candidate = value as Partial<LegacyOwnerFile>;
-  if (
-    candidate.kind !== LEGACY_OWNER_KIND
-    || candidate.schemaVersion !== LEGACY_OWNER_SCHEMA_VERSION
-    || typeof candidate.scopeKey !== 'string'
-    || !/^[a-f0-9]{64}$/.test(candidate.scopeKey)
-    || typeof candidate.claimedAt !== 'string'
-    || !Number.isFinite(Date.parse(candidate.claimedAt))
-  ) {
-    throw invalidLegacyOwner(uri);
-  }
-  return candidate as LegacyOwnerFile;
-}
-
-function invalidLegacyOwner(uri: vscode.Uri): Error {
-  return new Error(`Invalid workspace runtime legacy owner: ${uri.fsPath}`);
 }
 
 async function hasLegacyRuntimeData(configurationRootUri: vscode.Uri): Promise<boolean> {

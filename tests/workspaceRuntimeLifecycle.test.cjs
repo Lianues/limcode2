@@ -173,7 +173,7 @@ function resetHarnessState() {
   registeredProvider = undefined;
 }
 
-test('Sidebar waits for admission before any provisional root write and then binds the legacy winner root', async () => {
+test('Sidebar waits for admission before any provisional write and then binds the partitioned workspace root', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-workspace-runtime-legacy-lifecycle-'));
   let context;
   try {
@@ -199,7 +199,7 @@ test('Sidebar waits for admission before any provisional root write and then bin
     await waitFor(() => storage.isDataRootReady() && watchers.length === 1, 'Sidebar watcher did not bind after storage admission');
 
     const resolvedRoot = storage.paths.conversationHistoryRootUri.fsPath;
-    assert.equal(resolvedRoot, path.join(tempRoot, 'conversation-history'));
+    assert.equal(resolvedRoot, provisionalRoot, 'legacy partition publishes into the frozen workspace scope');
     assert.equal(watchers[0].pattern.base.fsPath, resolvedRoot);
     assert.ok(createDirectoryCalls.includes(resolvedRoot));
   } finally {
@@ -257,7 +257,8 @@ test('a second-window Sidebar resolving behind migration fence performs no old-r
     await migration;
     await waitFor(() => storageB.isDataRootReady() && watchers.length === 1, 'second-window Sidebar did not bind after migration');
     assert.equal(storageB.paths.globalStoragePath, path.resolve(newRoot));
-    assert.equal(watchers[0].pattern.base.fsPath, path.join(newRoot, 'conversation-history'));
+    assert.equal(watchers[0].pattern.base.fsPath, storageB.paths.conversationHistoryRootUri.fsPath);
+    assert.match(watchers[0].pattern.base.fsPath, /\.limcode-workspace-runtimes[\\/]scopes[\\/]/);
   } finally {
     vscodeMock.workspace.fs.copy = originalCopy;
     releaseCopy.resolve();

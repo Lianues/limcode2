@@ -159,73 +159,87 @@ export interface VscodeStorageUris {
   agentAnswerTargetLinksIndexUri: vscode.Uri;
   backgroundCommandsRootUri: vscode.Uri;
   backgroundCommandsIndexUri: vscode.Uri;
+  /** Shared configuration root (models, MCP, proxy, appearance and global status-derived settings). */
   settingsRootUri: vscode.Uri;
+  /** Workspace runtime-local settings, currently used by conversation-specific overrides. */
+  conversationSettingsRootUri: vscode.Uri;
+  workspaceRuntimeRootUri: vscode.Uri;
+  configurationRootUri: vscode.Uri;
   llmSettingsUri: vscode.Uri;
 }
 
-function root(globalStorageUri: vscode.Uri, dir: string): { rootUri: vscode.Uri; indexUri: vscode.Uri } {
-  const rootUri = vscode.Uri.joinPath(globalStorageUri, dir);
+function root(baseRootUri: vscode.Uri, dir: string): { rootUri: vscode.Uri; indexUri: vscode.Uri } {
+  const rootUri = vscode.Uri.joinPath(baseRootUri, dir);
   return { rootUri, indexUri: vscode.Uri.joinPath(rootUri, INDEX_FILE) };
 }
 
-export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimePaths & VscodeStorageUris {
-  const agents = root(globalStorageUri, AGENTS_ROOT_DIR);
-  const workflows = root(globalStorageUri, WORKFLOWS_ROOT_DIR);
-  const planReviewPolicies = root(globalStorageUri, PLAN_REVIEW_POLICIES_ROOT_DIR);
-  const planReviewPolicyScopeLinks = root(globalStorageUri, PLAN_REVIEW_POLICY_SCOPE_LINKS_ROOT_DIR);
-  const toolPolicies = root(globalStorageUri, TOOL_POLICIES_ROOT_DIR);
-  const toolPolicyScopeLinks = root(globalStorageUri, TOOL_POLICY_SCOPE_LINKS_ROOT_DIR);
-  const skillPolicies = root(globalStorageUri, SKILL_POLICIES_ROOT_DIR);
-  const skillPolicyScopeLinks = root(globalStorageUri, SKILL_POLICY_SCOPE_LINKS_ROOT_DIR);
-  const systemPrompts = root(globalStorageUri, SYSTEM_PROMPTS_ROOT_DIR);
-  const runtimeContexts = root(globalStorageUri, RUNTIME_CONTEXTS_ROOT_DIR);
-  const runtimeContextScopeLinks = root(globalStorageUri, RUNTIME_CONTEXT_SCOPE_LINKS_ROOT_DIR);
-  const runtimeContextSnapshots = root(globalStorageUri, RUNTIME_CONTEXT_SNAPSHOTS_ROOT_DIR);
-  const conversationRuntimeContextSnapshotLinks = root(globalStorageUri, CONVERSATION_RUNTIME_CONTEXT_SNAPSHOT_LINKS_ROOT_DIR);
-  const runRuntimeContextSnapshotLinks = root(globalStorageUri, RUN_RUNTIME_CONTEXT_SNAPSHOT_LINKS_ROOT_DIR);
-  const modelProfiles = root(globalStorageUri, MODEL_PROFILES_ROOT_DIR);
-  const conversations = root(globalStorageUri, CONVERSATIONS_ROOT_DIR);
-  const conversationReuseLinks = root(globalStorageUri, CONVERSATION_REUSE_LINKS_ROOT_DIR);
-  const conversationBranchLinks = root(globalStorageUri, CONVERSATION_BRANCH_LINKS_ROOT_DIR);
-  const conversationOriginLinks = root(globalStorageUri, CONVERSATION_ORIGIN_LINKS_ROOT_DIR);
-  const clientStateSkeletonRootUri = vscode.Uri.joinPath(globalStorageUri, CLIENT_STATE_SKELETON_ROOT_DIR);
-  const conversationHistory = root(globalStorageUri, CONVERSATION_HISTORY_ROOT_DIR);
-  const attachments = root(globalStorageUri, ATTACHMENTS_ROOT_DIR);
-  const projectContexts = root(globalStorageUri, PROJECT_CONTEXTS_ROOT_DIR);
-  const conversationProjectLinks = root(globalStorageUri, CONVERSATION_PROJECT_LINKS_ROOT_DIR);
-  const workEnvironments = root(globalStorageUri, WORK_ENVIRONMENTS_ROOT_DIR);
-  const workEnvironmentPolicies = root(globalStorageUri, WORK_ENVIRONMENT_POLICIES_ROOT_DIR);
-  const workEnvironmentPolicyScopeLinks = root(globalStorageUri, WORK_ENVIRONMENT_POLICY_SCOPE_LINKS_ROOT_DIR);
-  const conversationWorkEnvironmentLinks = root(globalStorageUri, CONVERSATION_WORK_ENVIRONMENT_LINKS_ROOT_DIR);
-  const runWorkEnvironmentLinks = root(globalStorageUri, RUN_WORK_ENVIRONMENT_LINKS_ROOT_DIR);
-  const checkpointPolicies = root(globalStorageUri, CHECKPOINT_POLICIES_ROOT_DIR);
-  const checkpointPolicyScopeLinks = root(globalStorageUri, CHECKPOINT_POLICY_SCOPE_LINKS_ROOT_DIR);
-  const shadowRepositories = root(globalStorageUri, SHADOW_REPOSITORIES_ROOT_DIR);
-  const conversationCheckpointRepositoryLinks = root(globalStorageUri, CONVERSATION_CHECKPOINT_REPOSITORY_LINKS_ROOT_DIR);
-  const checkpoints = root(globalStorageUri, CHECKPOINTS_ROOT_DIR);
-  const checkpointTimelineAnchors = root(globalStorageUri, CHECKPOINT_TIMELINE_ANCHORS_ROOT_DIR);
-  const checkpointShadowWorktreesRootUri = vscode.Uri.joinPath(globalStorageUri, CHECKPOINT_SHADOW_WORKTREES_ROOT_DIR);
-  const compressionBlocks = root(globalStorageUri, COMPRESSION_BLOCKS_ROOT_DIR);
-  const compressionBlockSourceLinks = root(globalStorageUri, COMPRESSION_BLOCK_SOURCE_LINKS_ROOT_DIR);
-  const compressionContextVariants = root(globalStorageUri, COMPRESSION_CONTEXT_VARIANTS_ROOT_DIR);
-  const compressionBlockLlmInvocationLinks = root(globalStorageUri, COMPRESSION_BLOCK_LLM_INVOCATION_LINKS_ROOT_DIR);
-  const compressionLlmInvocations = root(globalStorageUri, COMPRESSION_LLM_INVOCATIONS_ROOT_DIR);
-  const links = root(globalStorageUri, AGENT_CONVERSATION_LINKS_ROOT_DIR);
-  const systemPromptScopeLinks = root(globalStorageUri, SYSTEM_PROMPT_SCOPE_LINKS_ROOT_DIR);
-  const modelProfileScopeLinks = root(globalStorageUri, MODEL_PROFILE_SCOPE_LINKS_ROOT_DIR);
-  const conversationWorkflowSelections = root(globalStorageUri, CONVERSATION_WORKFLOW_SELECTIONS_ROOT_DIR);
-  const conversationAgentSelections = root(globalStorageUri, CONVERSATION_AGENT_SELECTIONS_ROOT_DIR);
-  const runHistory = root(globalStorageUri, RUN_HISTORY_ROOT_DIR);
-  const agentAnswers = root(globalStorageUri, AGENT_ANSWERS_ROOT_DIR);
-  const agentAnswerSubmissionLinks = root(globalStorageUri, AGENT_ANSWER_SUBMISSION_LINKS_ROOT_DIR);
-  const agentAnswerTargetLinks = root(globalStorageUri, AGENT_ANSWER_TARGET_LINKS_ROOT_DIR);
-  const backgroundCommands = root(globalStorageUri, BACKGROUND_COMMANDS_ROOT_DIR);
-  const settingsRootUri = vscode.Uri.joinPath(globalStorageUri, SETTINGS_ROOT_DIR);
+export function createVscodeStoragePaths(
+  workspaceRuntimeRootUri: vscode.Uri,
+  configurationRootUri: vscode.Uri = workspaceRuntimeRootUri
+): RuntimePaths & VscodeStorageUris {
+  const agents = root(workspaceRuntimeRootUri, AGENTS_ROOT_DIR);
+  const workflows = root(workspaceRuntimeRootUri, WORKFLOWS_ROOT_DIR);
+  const planReviewPolicies = root(workspaceRuntimeRootUri, PLAN_REVIEW_POLICIES_ROOT_DIR);
+  const planReviewPolicyScopeLinks = root(workspaceRuntimeRootUri, PLAN_REVIEW_POLICY_SCOPE_LINKS_ROOT_DIR);
+  const toolPolicies = root(workspaceRuntimeRootUri, TOOL_POLICIES_ROOT_DIR);
+  const toolPolicyScopeLinks = root(workspaceRuntimeRootUri, TOOL_POLICY_SCOPE_LINKS_ROOT_DIR);
+  const skillPolicies = root(workspaceRuntimeRootUri, SKILL_POLICIES_ROOT_DIR);
+  const skillPolicyScopeLinks = root(workspaceRuntimeRootUri, SKILL_POLICY_SCOPE_LINKS_ROOT_DIR);
+  const systemPrompts = root(workspaceRuntimeRootUri, SYSTEM_PROMPTS_ROOT_DIR);
+  const runtimeContexts = root(workspaceRuntimeRootUri, RUNTIME_CONTEXTS_ROOT_DIR);
+  const runtimeContextScopeLinks = root(workspaceRuntimeRootUri, RUNTIME_CONTEXT_SCOPE_LINKS_ROOT_DIR);
+  const runtimeContextSnapshots = root(workspaceRuntimeRootUri, RUNTIME_CONTEXT_SNAPSHOTS_ROOT_DIR);
+  const conversationRuntimeContextSnapshotLinks = root(workspaceRuntimeRootUri, CONVERSATION_RUNTIME_CONTEXT_SNAPSHOT_LINKS_ROOT_DIR);
+  const runRuntimeContextSnapshotLinks = root(workspaceRuntimeRootUri, RUN_RUNTIME_CONTEXT_SNAPSHOT_LINKS_ROOT_DIR);
+  const modelProfiles = root(workspaceRuntimeRootUri, MODEL_PROFILES_ROOT_DIR);
+  const conversations = root(workspaceRuntimeRootUri, CONVERSATIONS_ROOT_DIR);
+  const conversationReuseLinks = root(workspaceRuntimeRootUri, CONVERSATION_REUSE_LINKS_ROOT_DIR);
+  const conversationBranchLinks = root(workspaceRuntimeRootUri, CONVERSATION_BRANCH_LINKS_ROOT_DIR);
+  const conversationOriginLinks = root(workspaceRuntimeRootUri, CONVERSATION_ORIGIN_LINKS_ROOT_DIR);
+  const clientStateSkeletonRootUri = vscode.Uri.joinPath(workspaceRuntimeRootUri, CLIENT_STATE_SKELETON_ROOT_DIR);
+  const conversationHistory = root(workspaceRuntimeRootUri, CONVERSATION_HISTORY_ROOT_DIR);
+  const attachments = root(workspaceRuntimeRootUri, ATTACHMENTS_ROOT_DIR);
+  const projectContexts = root(workspaceRuntimeRootUri, PROJECT_CONTEXTS_ROOT_DIR);
+  const conversationProjectLinks = root(workspaceRuntimeRootUri, CONVERSATION_PROJECT_LINKS_ROOT_DIR);
+  const workEnvironments = root(workspaceRuntimeRootUri, WORK_ENVIRONMENTS_ROOT_DIR);
+  const workEnvironmentPolicies = root(workspaceRuntimeRootUri, WORK_ENVIRONMENT_POLICIES_ROOT_DIR);
+  const workEnvironmentPolicyScopeLinks = root(workspaceRuntimeRootUri, WORK_ENVIRONMENT_POLICY_SCOPE_LINKS_ROOT_DIR);
+  const conversationWorkEnvironmentLinks = root(workspaceRuntimeRootUri, CONVERSATION_WORK_ENVIRONMENT_LINKS_ROOT_DIR);
+  const runWorkEnvironmentLinks = root(workspaceRuntimeRootUri, RUN_WORK_ENVIRONMENT_LINKS_ROOT_DIR);
+  const checkpointPolicies = root(workspaceRuntimeRootUri, CHECKPOINT_POLICIES_ROOT_DIR);
+  const checkpointPolicyScopeLinks = root(workspaceRuntimeRootUri, CHECKPOINT_POLICY_SCOPE_LINKS_ROOT_DIR);
+  const shadowRepositories = root(workspaceRuntimeRootUri, SHADOW_REPOSITORIES_ROOT_DIR);
+  const conversationCheckpointRepositoryLinks = root(workspaceRuntimeRootUri, CONVERSATION_CHECKPOINT_REPOSITORY_LINKS_ROOT_DIR);
+  const checkpoints = root(workspaceRuntimeRootUri, CHECKPOINTS_ROOT_DIR);
+  const checkpointTimelineAnchors = root(workspaceRuntimeRootUri, CHECKPOINT_TIMELINE_ANCHORS_ROOT_DIR);
+  const checkpointShadowWorktreesRootUri = vscode.Uri.joinPath(workspaceRuntimeRootUri, CHECKPOINT_SHADOW_WORKTREES_ROOT_DIR);
+  const compressionBlocks = root(workspaceRuntimeRootUri, COMPRESSION_BLOCKS_ROOT_DIR);
+  const compressionBlockSourceLinks = root(workspaceRuntimeRootUri, COMPRESSION_BLOCK_SOURCE_LINKS_ROOT_DIR);
+  const compressionContextVariants = root(workspaceRuntimeRootUri, COMPRESSION_CONTEXT_VARIANTS_ROOT_DIR);
+  const compressionBlockLlmInvocationLinks = root(workspaceRuntimeRootUri, COMPRESSION_BLOCK_LLM_INVOCATION_LINKS_ROOT_DIR);
+  const compressionLlmInvocations = root(workspaceRuntimeRootUri, COMPRESSION_LLM_INVOCATIONS_ROOT_DIR);
+  const links = root(workspaceRuntimeRootUri, AGENT_CONVERSATION_LINKS_ROOT_DIR);
+  const systemPromptScopeLinks = root(workspaceRuntimeRootUri, SYSTEM_PROMPT_SCOPE_LINKS_ROOT_DIR);
+  const modelProfileScopeLinks = root(workspaceRuntimeRootUri, MODEL_PROFILE_SCOPE_LINKS_ROOT_DIR);
+  const conversationWorkflowSelections = root(workspaceRuntimeRootUri, CONVERSATION_WORKFLOW_SELECTIONS_ROOT_DIR);
+  const conversationAgentSelections = root(workspaceRuntimeRootUri, CONVERSATION_AGENT_SELECTIONS_ROOT_DIR);
+  const runHistory = root(workspaceRuntimeRootUri, RUN_HISTORY_ROOT_DIR);
+  const agentAnswers = root(workspaceRuntimeRootUri, AGENT_ANSWERS_ROOT_DIR);
+  const agentAnswerSubmissionLinks = root(workspaceRuntimeRootUri, AGENT_ANSWER_SUBMISSION_LINKS_ROOT_DIR);
+  const agentAnswerTargetLinks = root(workspaceRuntimeRootUri, AGENT_ANSWER_TARGET_LINKS_ROOT_DIR);
+  const backgroundCommands = root(workspaceRuntimeRootUri, BACKGROUND_COMMANDS_ROOT_DIR);
+  const settingsRootUri = vscode.Uri.joinPath(configurationRootUri, SETTINGS_ROOT_DIR);
+  const conversationSettingsRootUri = vscode.Uri.joinPath(workspaceRuntimeRootUri, SETTINGS_ROOT_DIR);
   const llmSettingsUri = vscode.Uri.joinPath(settingsRootUri, LLM_SETTINGS_FILE);
 
   return {
-    globalStorageUri,
-    globalStoragePath: globalStorageUri.fsPath,
+    // Preserve the public data-root contract while deriving runtime stores from workspaceRuntimeRootUri.
+    globalStorageUri: configurationRootUri,
+    globalStoragePath: configurationRootUri.fsPath,
+    workspaceRuntimeRootUri,
+    workspaceRuntimeRootPath: workspaceRuntimeRootUri.fsPath,
+    configurationRootUri,
+    configurationRootPath: configurationRootUri.fsPath,
     agentsRootUri: agents.rootUri,
     agentsRootPath: agents.rootUri.fsPath,
     agentsIndexUri: agents.indexUri,
@@ -428,6 +442,8 @@ export function createVscodeStoragePaths(globalStorageUri: vscode.Uri): RuntimeP
     backgroundCommandsIndexPath: backgroundCommands.indexUri.fsPath,
     settingsRootUri,
     settingsRootPath: settingsRootUri.fsPath,
+    conversationSettingsRootUri,
+    conversationSettingsRootPath: conversationSettingsRootUri.fsPath,
     llmSettingsUri,
     llmSettingsPath: llmSettingsUri.fsPath
   };

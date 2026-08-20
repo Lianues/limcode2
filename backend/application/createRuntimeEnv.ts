@@ -30,7 +30,11 @@ export interface RuntimeEnvSetup {
  */
 export function createRuntimeEnv(context: vscode.ExtensionContext): RuntimeEnvSetup {
   const storage = createVsCodeStorageCapability(context);
-  const command = createCommandCapability({ paths: () => storage.isDataRootMutationActive?.() ? undefined : storage.paths });
+  const command = createCommandCapability({
+    paths: () => storage.isDataRootReady?.() !== true || storage.isDataRootMutationActive?.() === true
+      ? undefined
+      : storage.paths
+  });
   const workEnvironment = createWorkEnvironmentRuntimeCapability();
   const registry = createToolRegistry(command);
   const mcp = new McpRuntimeManager(storage);

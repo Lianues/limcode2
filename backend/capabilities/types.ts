@@ -387,7 +387,13 @@ export interface RuntimePaths {
   /** 当前 active data root；未配置自定义目录时等于 VS Code context.globalStorageUri。 */
   globalStorageUri: vscode.Uri;
   globalStoragePath: string;
-  /** Agent 数据根目录：<dataRoot>/agents */
+  /** 当前冻结 workspace 的 runtime root；legacy owner 可能等于 globalStorageUri。 */
+  workspaceRuntimeRootUri: vscode.Uri;
+  workspaceRuntimeRootPath: string;
+  /** 模型渠道、MCP、代理、外观等共享配置所在根。 */
+  configurationRootUri: vscode.Uri;
+  configurationRootPath: string;
+  /** Agent 数据根目录：<workspaceRuntimeRoot>/agents */
   agentsRootUri: vscode.Uri;
   agentsRootPath: string;
   agentsIndexUri: vscode.Uri;
@@ -627,10 +633,13 @@ export interface RuntimePaths {
   backgroundCommandsRootPath: string;
   backgroundCommandsIndexUri: vscode.Uri;
   backgroundCommandsIndexPath: string;
-  /** 通用设置根目录：<dataRoot>/settings */
+  /** 共享通用设置根目录：<configurationRoot>/settings */
   settingsRootUri: vscode.Uri;
   settingsRootPath: string;
-  /** LLM 设置文件：<dataRoot>/settings/llm.json */
+  /** Conversation 专属设置根目录：<workspaceRuntimeRoot>/settings */
+  conversationSettingsRootUri: vscode.Uri;
+  conversationSettingsRootPath: string;
+  /** LLM 设置文件：<configurationRoot>/settings/llm.json */
   llmSettingsUri: vscode.Uri;
   llmSettingsPath: string;
 }
@@ -672,6 +681,10 @@ export interface GlobalSettingsStoreResult {
 export interface StorageCapability {
   /** 当前 active data root 派生出的路径；数据目录切换后 getter 会返回新路径。 */
   readonly paths: RuntimePaths;
+  /** provisional workspace root 被 owner resolution 修正，或 data root 提交切换后触发。 */
+  onDidChangeStorageRoot?(listener: () => void): vscode.Disposable;
+  /** 同步 paths 可读不代表业务已完成跨进程 admission；早期写入方必须检查此状态。 */
+  isDataRootReady?(): boolean;
   isDataRootMutationActive?(): boolean;
   ensureReady(): Promise<void>;
   loadClientStateSkeleton(options?: { profile?: 'startup' | 'deferred' | 'full' }): Promise<ClientState | undefined>;

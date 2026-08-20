@@ -31,14 +31,19 @@ import {
 } from './globalStatus';
 import { cleanupMigratedStorageRoot, copyStorageRootForMigration } from './migration';
 import { createVscodeStoragePaths } from './paths';
+import {
+  createWorkspaceScopeIdentity,
+  resolveWorkspaceRuntimeRoot,
+  workspaceScopedRuntimeRoot
+} from './workspaceScope';
 import { readJsonStrict, writeJson, type StrictJsonReadResult } from './json';
 import { withStorageResourceLock } from './storageResourceLock';
 import { deleteStorageUri, ensureStorageDirectory } from './storageFs';
 import {
   assertNoOtherLiveInstanceUsingDataRoot,
   createDataRootProcessLease,
-  dataRootMigrationLockUri,
-  DATA_ROOT_MIGRATION_OPERATION
+  DATA_ROOT_MIGRATION_OPERATION,
+  withDataRootAdmissionFence
 } from './dataRootProcessLease';
 import {
   materializeAttachmentFileUri as materializeAttachmentFileUriFromStore,
@@ -159,12 +164,26 @@ class DataRootMutationGate {
 }
 
 export function createVsCodeStorageCapability(context: vscode.ExtensionContext): StorageCapability {
-  let currentPaths = createVscodeStoragePaths(resolveDataRootUri(context));
+  // Workspace identity is intentionally frozen at activation. Folder changes during this
+  // Extension Host lifetime must not split one runtime across two roots.
+  const workspaceScope = createWorkspaceScopeIdentity({
+    workspaceFileUri: vscode.workspace.workspaceFile,
+    workspaceFolderUris: vscode.workspace.workspaceFolders?.map((folder) => folder.uri),
+    storageUri: context.storageUri
+  });
+  let currentConfigurationRootUri = resolveDataRootUri(context);
+  let currentPaths = createVscodeStoragePaths(
+    workspaceScopedRuntimeRoot(currentConfigurationRootUri, workspaceScope.scopeKey),
+    currentConfigurationRootUri
+  );
+  let currentPathsResolved = false;
+  const storageRootChangeListeners = new Set<() => void>();
   const dataRootGate = new DataRootMutationGate();
   const processLease = createDataRootProcessLease(context, () => resolveDataRootUri(context).fsPath);
+  let admissionPromise: Promise<void> | undefined;
+  let admitted = false;
   let stagedSkeletonPin: PinnedClientStateSkeletonSnapshot | undefined;
   let stagedSkeletonOpened = false;
-  processLease.start();
   context.subscriptions.push({ dispose: () => processLease.dispose() });
   context.subscriptions.push({
     dispose: () => {
@@ -180,21 +199,75 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
   registerShadowDiffProvider(context);
 
   function getPaths(): StoragePaths {
-    currentPaths = createVscodeStoragePaths(resolveDataRootUri(context));
+    const configurationRootUri = resolveDataRootUri(context);
+    if (!sameFsPath(configurationRootUri.fsPath, currentConfigurationRootUri.fsPath)) {
+      updateCurrentPaths(
+        configurationRootUri,
+        createVscodeStoragePaths(workspaceScopedRuntimeRoot(configurationRootUri, workspaceScope.scopeKey), configurationRootUri),
+        false
+      );
+    }
     return currentPaths;
+  }
+
+  function updateCurrentPaths(configurationRootUri: vscode.Uri, nextPaths: StoragePaths, resolved: boolean): void {
+    const previousIdentity = storageRootIdentity(currentPaths);
+    currentConfigurationRootUri = configurationRootUri;
+    currentPaths = nextPaths;
+    currentPathsResolved = resolved;
+    if (storageRootIdentity(nextPaths) === previousIdentity) return;
+    for (const listener of [...storageRootChangeListeners]) {
+      try {
+        listener();
+      } catch (error) {
+        console.warn('[LimCode] Storage-root change listener failed.', error);
+      }
+    }
+  }
+
+  async function ensureCurrentPathsResolved(configurationRootUri = resolveDataRootUri(context)): Promise<StoragePaths> {
+    if (
+      currentPathsResolved
+      && sameFsPath(configurationRootUri.fsPath, currentConfigurationRootUri.fsPath)
+    ) return currentPaths;
+    const runtimeRootUri = await resolveWorkspaceRuntimeRoot(configurationRootUri, workspaceScope);
+    updateCurrentPaths(configurationRootUri, createVscodeStoragePaths(runtimeRootUri, configurationRootUri), true);
+    return currentPaths;
+  }
+
+  function ensureDataRootAdmission(): Promise<void> {
+    if (admitted) return Promise.resolve();
+    if (!admissionPromise) {
+      admissionPromise = withDataRootAdmissionFence(context, async () => {
+        // The canonical status and workspace owner are resolved before the first lease is
+        // published. A migration holding the same fence therefore cannot miss a newcomer
+        // that later enters its source root.
+        await loadCommittedGlobalStatus(context);
+        await ensureCurrentPathsResolved();
+        await processLease.heartbeat();
+        processLease.start();
+        admitted = true;
+      }).catch((error) => {
+        admissionPromise = undefined;
+        throw error;
+      });
+    }
+    return admissionPromise;
   }
 
   function withSharedDataRoot<T>(action: (paths: StoragePaths) => Promise<T>): Promise<T> {
     return dataRootGate.runShared(async () => {
+      await ensureDataRootAdmission();
       await processLease.heartbeat();
-      return action(getPaths());
+      return action(await ensureCurrentPathsResolved());
     });
   }
 
   function withExclusiveDataRoot<T>(action: (paths: StoragePaths) => Promise<T>): Promise<T> {
     return dataRootGate.runExclusive(async () => {
+      await ensureDataRootAdmission();
       await processLease.heartbeat();
-      return action(getPaths());
+      return action(await ensureCurrentPathsResolved());
     });
   }
 
@@ -219,7 +292,7 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       const targetRootUri = resolveDataRootUri(context, targetDataRootPath);
       await processLease.setActiveOperation({ kind: DATA_ROOT_MIGRATION_OPERATION, targetRootPath: targetRootUri.fsPath });
       try {
-        return await withStorageResourceLock(dataRootMigrationLockUri(context), async () => {
+        return await withDataRootAdmissionFence(context, async () => {
           const currentStatus = await loadCommittedGlobalStatus(context);
           const actualRevision = globalStatusRevision(currentStatus);
           if (actualRevision !== expectedRevision) {
@@ -262,6 +335,7 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
         migratedAt: migration.migratedAt
       }
     );
+    await ensureCurrentPathsResolved(resolveDataRootUri(context, nextStatus.dataRootPath));
     await processLease.heartbeat();
     if (!migration.skipped) {
       const activeRootAfterSave = resolveDataRootUri(context, nextStatus.dataRootPath);
@@ -293,7 +367,10 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
 
   async function copyStorageRootAfterLeaseCheck(sourceRootUri: vscode.Uri, targetRootUri: vscode.Uri) {
     if (!sameFsPath(sourceRootUri.fsPath, targetRootUri.fsPath)) {
-      await assertNoOtherLiveInstanceUsingDataRoot(context, processLease.instanceId, sourceRootUri.fsPath);
+      // Both checks run after the cross-process admission fence is held. New instances cannot
+      // publish a source/target lease until copy, commit, and cleanup have all completed.
+      await assertNoOtherLiveInstanceUsingDataRoot(context, processLease.instanceId, sourceRootUri.fsPath, 'source');
+      await assertNoOtherLiveInstanceUsingDataRoot(context, processLease.instanceId, targetRootUri.fsPath, 'target');
     }
     return copyStorageRootForMigration(sourceRootUri, targetRootUri);
   }
@@ -318,10 +395,13 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
 
   return {
     get paths() { return getPaths(); },
+    onDidChangeStorageRoot(listener) {
+      storageRootChangeListeners.add(listener);
+      return { dispose: () => storageRootChangeListeners.delete(listener) };
+    },
+    isDataRootReady() { return admitted; },
     isDataRootMutationActive() { return dataRootGate.isExclusiveActive; },
     async ensureReady() {
-      // 先从跨 Extension Host 共享的 canonical status 恢复 active data root，再允许任何业务读写。
-      await loadCommittedGlobalStatus(context);
       return withSharedDataRoot(async () => {
         // 业务 settings 仍按需懒加载，避免阻塞侧边栏首屏。
       });
@@ -647,7 +727,7 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     },
     async saveConversationSettings(section, settings) {
       return withSharedDataRoot(async (paths) => {
-        await ensureStorageDirectory(paths.settingsRootUri);
+        await ensureStorageDirectory(paths.conversationSettingsRootUri);
         const conversationId = (settings as ConversationSettingsRecord | ConversationLlmSettingsRecord).conversationId;
         const normalized = section === 'llm'
           ? normalizeConversationLlmSettings(conversationId, settings as Partial<ConversationLlmSettingsRecord>)
@@ -660,6 +740,10 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       });
     }
   };
+}
+
+function storageRootIdentity(paths: StoragePaths): string {
+  return `${paths.globalStoragePath}\n${paths.conversationHistoryRootPath}`;
 }
 
 async function collectDeleteStep(result: DeleteConversationDataResult, step: () => Thenable<void> | Promise<void>, label: string, ignoreNotFound = false): Promise<void> {
@@ -678,7 +762,7 @@ function isFileNotFoundError(error: unknown): boolean {
 }
 
 function conversationSettingsUri(paths: StoragePaths, conversationId: string, section: string): vscode.Uri {
-  return vscode.Uri.joinPath(paths.settingsRootUri, `conversation-${safeFileName(conversationId)}-${section}.json`);
+  return vscode.Uri.joinPath(paths.conversationSettingsRootUri, `conversation-${safeFileName(conversationId)}-${section}.json`);
 }
 
 function safeFileName(input: string): string {

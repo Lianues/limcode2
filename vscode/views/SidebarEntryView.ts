@@ -47,6 +47,7 @@ interface SidebarStateMessage {
 export function registerSidebarEntryView(context: vscode.ExtensionContext, backendApp: BackendApplication): void {
   const provider = new SidebarEntryViewProvider(context.extensionUri, backendApp);
 
+  context.subscriptions.push(provider);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(SIDEBAR_ENTRY_VIEW_ID, provider, {
       webviewOptions: {
@@ -56,9 +57,10 @@ export function registerSidebarEntryView(context: vscode.ExtensionContext, backe
   );
   context.subscriptions.push(MainPanel.onDidChangeConversationPanelState(() => provider.refreshOpenConversationPanelStates()));
   context.subscriptions.push(backendApp.onDidChangeConversationHistory(() => provider.refreshConversationHistory()));
+  context.subscriptions.push(backendApp.onDidChangeStorageRoot(() => provider.refreshStorageRoot()));
 }
 
-class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
+class SidebarEntryViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private lastScopeKind: SidebarHistoryScopeKind = DEFAULT_SIDEBAR_HISTORY_SCOPE_KIND;
   private lastProjectFolderUri: string | undefined;
   private lastCursor: string | undefined;
@@ -66,6 +68,8 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
   private historyWatcher: vscode.FileSystemWatcher | undefined;
   private historyWatcherRoot: string | undefined;
   private historyRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  private historyWatcherAdmission: Promise<void> | undefined;
+  private disposed = false;
   private historyRequestSeq = 0;
   private lastStateMessage: SidebarStateMessage | undefined;
 
@@ -75,6 +79,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
   ) {}
 
   public resolveWebviewView(webviewView: vscode.WebviewView): void {
+    if (this.disposed) return;
     this.activeWebview = webviewView.webview;
     webviewView.onDidDispose(() => {
       if (this.activeWebview === webviewView.webview) this.activeWebview = undefined;
@@ -151,7 +156,25 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  public dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.activeWebview = undefined;
+    this.historyWatcher?.dispose();
+    this.historyWatcher = undefined;
+    this.historyWatcherRoot = undefined;
+    this.historyWatcherAdmission = undefined;
+    if (this.historyRefreshTimer !== undefined) clearTimeout(this.historyRefreshTimer);
+    this.historyRefreshTimer = undefined;
+  }
+
   public refreshConversationHistory(): void {
+    this.scheduleConversationHistoryRefresh();
+  }
+
+  public refreshStorageRoot(): void {
+    if (!this.activeWebview && !this.historyWatcher) return;
+    this.ensureConversationHistoryWatcher();
     this.scheduleConversationHistoryRefresh();
   }
 
@@ -176,6 +199,24 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
   }
 
   private ensureConversationHistoryWatcher(): void {
+    if (this.disposed) return;
+    if (!this.backendApp.isStorageReady()) {
+      if (!this.historyWatcherAdmission) {
+        const pending = this.backendApp.waitUntilStorageReady()
+          .then(() => {
+            if (!this.disposed) this.ensureConversationHistoryWatcher();
+          })
+          .catch((error: unknown) => {
+            if (!this.disposed) console.warn('[LimCode] Failed to wait for storage admission before creating conversation history watcher.', error);
+          })
+          .finally(() => {
+            if (this.historyWatcherAdmission === pending) this.historyWatcherAdmission = undefined;
+          });
+        this.historyWatcherAdmission = pending;
+      }
+      return;
+    }
+
     const root = this.backendApp.getConversationHistoryRootUri();
     const rootKey = root.toString();
     if (this.historyWatcher && this.historyWatcherRoot === rootKey) return;
@@ -195,9 +236,11 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider {
   }
 
   private scheduleConversationHistoryRefresh(): void {
+    if (this.disposed) return;
     if (this.historyRefreshTimer !== undefined) clearTimeout(this.historyRefreshTimer);
     this.historyRefreshTimer = setTimeout(() => {
       this.historyRefreshTimer = undefined;
+      if (this.disposed) return;
       const target = this.activeWebview;
       if (!target) return;
       this.postSidebarStateWhenReady(target, this.lastScopeKind, this.lastCursor, undefined, this.lastProjectFolderUri);

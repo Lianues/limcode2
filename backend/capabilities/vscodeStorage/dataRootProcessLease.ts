@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { STORAGE_VERSION } from './constants';
 import { sameFsPath } from './globalStatus';
 import { isFileNotFoundError, readJsonStrict, writeJsonAtomic } from './json';
+import { withStorageResourceLock } from './storageResourceLock';
 
 const DATA_ROOT_LEASES_DIR = '.limcode-data-root-leases';
 const DATA_ROOT_MIGRATION_LOCK_FILE = '.limcode-data-root-migration';
@@ -140,17 +141,30 @@ export function createDataRootProcessLease(context: vscode.ExtensionContext, act
   return new DataRootProcessLease(context, activeRootPath);
 }
 
+/**
+ * Startup admission and migration use the same cross-process fence. A new Extension Host
+ * must publish its first lease while holding this fence; migration holds it through
+ * lease revalidation, copy, status commit, and source cleanup.
+ */
+export function withDataRootAdmissionFence<T>(
+  context: vscode.ExtensionContext,
+  action: () => Promise<T>
+): Promise<T> {
+  return withStorageResourceLock(dataRootMigrationLockUri(context), action);
+}
+
 export async function assertNoOtherLiveInstanceUsingDataRoot(
   context: vscode.ExtensionContext,
   selfInstanceId: string,
-  sourceRootPath: string
+  rootPath: string,
+  role: 'source' | 'target' = 'source'
 ): Promise<void> {
   const blockers: DataRootProcessLeaseRecord[] = [];
   const leases = await listDataRootProcessLeases(context);
   for (const lease of leases) {
     if (lease.record.instanceId === selfInstanceId) continue;
     const activeRootPath = lease.record.activeRootPath;
-    if (!activeRootPath || !sameFsPath(activeRootPath, sourceRootPath)) continue;
+    if (!activeRootPath || !sameFsPath(activeRootPath, rootPath)) continue;
     if (!isLeaseLive(lease.record)) {
       await deleteLeaseUri(lease.uri);
       continue;
@@ -162,7 +176,8 @@ export async function assertNoOtherLiveInstanceUsingDataRoot(
   const details = blockers
     .map((lease) => `instance=${lease.instanceId.slice(0, 8)} pid=${lease.pid} activeRoot=${lease.activeRootPath}`)
     .join('; ');
-  throw new Error(`数据目录迁移已中止：检测到其它 LimCode/VS Code 窗口仍在使用源数据目录，请关闭其它窗口后重试。${details ? ` (${details})` : ''}`);
+  const label = role === 'target' ? '目标数据目录' : '源数据目录';
+  throw new Error(`数据目录迁移已中止：检测到其它 LimCode/VS Code 窗口仍在使用${label}，请关闭其它窗口后重试。${details ? ` (${details})` : ''}`);
 }
 
 async function listDataRootProcessLeases(context: vscode.ExtensionContext): Promise<ListedDataRootProcessLease[]> {

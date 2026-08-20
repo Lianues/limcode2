@@ -149,7 +149,7 @@ test('conversation llm missing freezes current global default', async () => {
     assert.equal(typeof loaded.settings.activeProviderConfigId, 'string');
     assert.ok(loaded.settings.activeProviderConfigId.length > 0);
 
-    const file = JSON.parse(await fs.readFile(path.join(tempRoot, 'settings', 'conversation-conv-a-llm.json'), 'utf8'));
+    const file = JSON.parse(await fs.readFile(loaded.filePath, 'utf8'));
     assert.deepEqual(file, loaded.settings);
   } finally {
     context?.subscriptions.forEach((item) => item.dispose());
@@ -192,7 +192,7 @@ test('conversation llm stale provider reference is repaired to the persisted glo
       modelOverrides: { [replacement.id]: 'preserved-model' }
     });
 
-    const file = JSON.parse(await fs.readFile(path.join(tempRoot, 'settings', 'conversation-conv-stale-llm.json'), 'utf8'));
+    const file = JSON.parse(await fs.readFile(loaded.filePath, 'utf8'));
     assert.deepEqual(file, loaded.settings);
   } finally {
     context?.subscriptions.forEach((item) => item.dispose());
@@ -204,12 +204,13 @@ test('conversation settings invalid structures reject without overwrite', async 
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-settings-conv-invalid-'));
   let context;
   try {
-    const settingsRoot = path.join(tempRoot, 'settings');
+    context = createContext(tempRoot);
+    const storage = createVsCodeStorageCapability(context);
+    await storage.ensureReady();
+    const settingsRoot = storage.paths.conversationSettingsRootUri.fsPath;
     await fs.mkdir(settingsRoot, { recursive: true });
     const llmPath = path.join(settingsRoot, 'conversation-conv-b-llm.json');
     await fs.writeFile(llmPath, JSON.stringify({ conversationId: 'conv-b', modelOverrides: {} }), 'utf8');
-    context = createContext(tempRoot);
-    const storage = createVsCodeStorageCapability(context);
     await assert.rejects(() => storage.loadConversationSettings('conv-b', 'llm'), /Invalid conversation LLM settings file/);
     assert.deepEqual(JSON.parse(await fs.readFile(llmPath, 'utf8')), { conversationId: 'conv-b', modelOverrides: {} });
 

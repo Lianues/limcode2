@@ -37,6 +37,8 @@ export interface WorkspaceScopeIdentity {
   source: WorkspaceScopeSource;
   /** Only an actual saved workspace file or workspace folder set may start/resume legacy partitioning. */
   canClaimLegacy: boolean;
+  /** Frozen actual folder set used to lazily bind ownerUri to this real Workspace identity. */
+  workspaceFolderUris: readonly string[];
 }
 
 /** Pure, order-independent workspace identity calculation. Freeze its result once per Extension Host. */
@@ -44,13 +46,13 @@ export function createWorkspaceScopeIdentity(input: WorkspaceScopeIdentityInput)
   const savedWorkspaceFile = input.workspaceFileUri?.scheme !== 'untitled'
     ? input.workspaceFileUri
     : undefined;
+  const folders = [...new Set((input.workspaceFolderUris ?? []).map(canonicalUri))].sort();
   if (savedWorkspaceFile) {
-    return scopeIdentity('workspaceFile', `workspace-file\n${canonicalUri(savedWorkspaceFile)}`, true);
+    return scopeIdentity('workspaceFile', `workspace-file\n${canonicalUri(savedWorkspaceFile)}`, true, folders);
   }
 
-  const folders = [...new Set((input.workspaceFolderUris ?? []).map(canonicalUri))].sort();
   if (folders.length > 0) {
-    return scopeIdentity('workspaceFolders', `workspace-folders\n${folders.join('\n')}`, true);
+    return scopeIdentity('workspaceFolders', `workspace-folders\n${folders.join('\n')}`, true, folders);
   }
 
   if (input.storageUri) {
@@ -90,11 +92,17 @@ export async function resolveWorkspaceRuntimeRoot(
   }, scope, () => hasLegacyRuntimeData(configurationRootUri)));
 }
 
-function scopeIdentity(source: WorkspaceScopeSource, canonicalIdentity: string, canClaimLegacy: boolean): WorkspaceScopeIdentity {
+function scopeIdentity(
+  source: WorkspaceScopeSource,
+  canonicalIdentity: string,
+  canClaimLegacy: boolean,
+  workspaceFolderUris: readonly string[] = []
+): WorkspaceScopeIdentity {
   return {
     scopeKey: createHash('sha256').update(canonicalIdentity).digest('hex'),
     source,
-    canClaimLegacy
+    canClaimLegacy,
+    workspaceFolderUris
   };
 }
 

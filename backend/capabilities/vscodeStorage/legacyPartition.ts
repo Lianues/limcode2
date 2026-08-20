@@ -30,14 +30,15 @@ import { loadManagedAttachmentData } from './attachmentStore';
 import { createVscodeStoragePaths } from './paths';
 import { isFileNotFoundError, readJsonStrict, writeJsonAtomic } from './json';
 import { deleteStorageUri, ensureStorageDirectory } from './storageFs';
+import { sanitizeShadowStorageKey } from './shadowWorktreeLock';
 
 export const LEGACY_PARTITION_ID = 'legacy-partition-v1';
 const MANIFEST_KIND = 'limcode.workspaceRuntimeLegacyPartition';
-const MANIFEST_SCHEMA_VERSION = 1;
+const MANIFEST_SCHEMA_VERSION = 2;
 const STAGING_DIR = 'legacy-partition-v1-staging';
 const SCOPES_DIR = 'scopes';
 
-type ConversationClassification = 'matched' | 'unboundAssignedToFirst' | 'discardedEmpty' | 'failed';
+type ConversationClassification = 'pendingOwner' | 'unboundAssignedToFirst' | 'discardedEmpty' | 'failed';
 type ConversationPhase = 'classified' | 'copied' | 'verified' | 'discardedEmpty' | 'failed';
 
 export interface LegacyPartitionConversationRecord {
@@ -85,6 +86,7 @@ export interface LegacyPartitionManifest {
 export interface LegacyPartitionScopeIdentity {
   scopeKey: string;
   canClaimLegacy: boolean;
+  workspaceFolderUris: readonly string[];
 }
 
 export interface LegacyPartitionLocations {
@@ -111,10 +113,11 @@ export async function resolveLegacyPartition(
   const existing = await readManifest(locations.manifestUri);
   if (existing?.status === 'committed') return locations.scopedRootUri;
   if (!existing && (!scope.canClaimLegacy || !await hasLegacyRuntimeData())) return locations.scopedRootUri;
-  if (!scope.canClaimLegacy && !existing) return locations.scopedRootUri;
+  if (!scope.canClaimLegacy) return locations.scopedRootUri;
 
   const manifest = existing ?? await prepareManifest(locations, scope.scopeKey);
-  await executeManifest(locations, manifest);
+  bindCurrentWorkspace(manifest, scope);
+  await executeManifest(locations, manifest, scope.scopeKey);
   return locations.scopedRootUri;
 }
 
@@ -148,9 +151,8 @@ async function prepareManifest(locations: LegacyPartitionLocations, firstWorkspa
         conversations.push(owner ? {
           conversationId: conversation.id,
           messageCount: meta.totalMessages,
-          classification: 'matched',
+          classification: 'pendingOwner',
           phase: 'classified',
-          targetScopeKey: owner.scopeKey,
           ownershipSource: owner.source,
           ownershipUri: owner.uri
         } : {
@@ -194,51 +196,69 @@ async function prepareManifest(locations: LegacyPartitionLocations, firstWorkspa
   }
 }
 
-async function executeManifest(locations: LegacyPartitionLocations, manifest: LegacyPartitionManifest): Promise<void> {
-  if (manifest.audit.failed > 0) {
-    throw new Error(`Legacy workspace partition classification failed for ${manifest.audit.failed} conversation(s).`);
+function bindCurrentWorkspace(manifest: LegacyPartitionManifest, scope: LegacyPartitionScopeIdentity): void {
+  const folders = scope.workspaceFolderUris.map(canonicalUri);
+  for (const record of manifest.conversations) {
+    if (record.classification !== 'pendingOwner' || record.targetScopeKey || !record.ownershipUri) continue;
+    if (folders.some((folder) => uriContains(folder, record.ownershipUri!))) record.targetScopeKey = scope.scopeKey;
   }
-  const sourcePaths = createVscodeStoragePaths(locations.configurationRootUri, locations.configurationRootUri);
-  const pin = await openClientStateSkeletonSnapshot(sourcePaths, `${LEGACY_PARTITION_ID}:copy`);
-  const skeleton = pin ? await loadClientStateSkeletonSnapshotFromStores(sourcePaths, pin) : undefined;
-  try {
-    const fullState = skeleton ?? createEmptyClientState();
-    const history = await loadAllHistory(sourcePaths);
-    const valid = manifest.conversations.filter((record) => record.classification !== 'discardedEmpty' && record.classification !== 'failed');
-    const validIds = new Set(valid.map((record) => record.conversationId));
-    const detailByConversation = new Map<string, ClientState>();
+}
 
-    for (const record of valid) {
-      const detail = await loadConversationDetailFromStores(sourcePaths, record.conversationId, { includeRunHistory: true });
-      if (!detail) throw new Error(`Legacy conversation detail is missing: ${record.conversationId}`);
-      await hydrateManagedAttachments(sourcePaths, detail);
-      detailByConversation.set(record.conversationId, detail);
-      mergeClientState(fullState, detail);
-    }
+async function executeManifest(locations: LegacyPartitionLocations, manifest: LegacyPartitionManifest, scopeKey: string): Promise<void> {
+  const scopeRecords = manifest.conversations.filter((record) =>
+    record.targetScopeKey === scopeKey
+    && record.classification !== 'discardedEmpty'
+    && record.classification !== 'failed'
+  );
+  const pendingRecords = scopeRecords.filter((record) => record.phase !== 'verified');
+  if (pendingRecords.length > 0) {
+    const sourcePaths = createVscodeStoragePaths(locations.configurationRootUri, locations.configurationRootUri);
+    const pin = await openClientStateSkeletonSnapshot(sourcePaths, `${LEGACY_PARTITION_ID}:copy`);
+    const skeleton = pin ? await loadClientStateSkeletonSnapshotFromStores(sourcePaths, pin) : undefined;
+    try {
+      const fullState = skeleton ?? createEmptyClientState();
+      const history = await loadAllHistory(sourcePaths);
+      const validIds = new Set(manifest.conversations
+        .filter((record) => record.classification !== 'discardedEmpty' && record.classification !== 'failed')
+        .map((record) => record.conversationId));
+      const detailByConversation = new Map<string, ClientState>();
+      for (const record of pendingRecords) {
+        const detail = await loadConversationDetailFromStores(sourcePaths, record.conversationId, { includeRunHistory: true });
+        if (!detail) throw new Error(`Legacy conversation detail is missing: ${record.conversationId}`);
+        await hydrateManagedAttachments(sourcePaths, detail);
+        detailByConversation.set(record.conversationId, detail);
+        mergeClientState(fullState, detail);
+      }
 
-    const scopeKeys = [...new Set(valid.map((record) => record.targetScopeKey!))].sort();
-    for (const scopeKey of scopeKeys) {
-      const scopeRecords = valid.filter((record) => record.targetScopeKey === scopeKey);
       const expectedCounts = new Map(scopeRecords.map((record) => [record.conversationId, record.messageCount]));
       const targetRoot = vscode.Uri.joinPath(locations.managementRootUri, SCOPES_DIR, scopeKey);
       if (!await verifyPublishedScope(targetRoot, locations.configurationRootUri, expectedCounts)) {
+        if (await exists(targetRoot)) throw new Error(`Legacy target scope already exists and does not match: ${scopeKey}`);
         await rebuildScope(locations, manifest, scopeKey, fullState, history, validIds, detailByConversation);
       }
       for (const record of scopeRecords) record.phase = 'verified';
+      manifest.crossScopeOrigins = collectCrossScopeOrigins(fullState, manifest.conversations);
       manifest.updatedAt = new Date().toISOString();
       await writeJsonAtomic(locations.manifestUri, manifest);
       await __legacyPartitionTestHooks.afterScopePublished?.(scopeKey, clone(manifest));
+    } finally {
+      if (pin) await releaseClientStateSkeletonSnapshot(sourcePaths, pin);
     }
-
-    await __legacyPartitionTestHooks.beforeManifestCommitted?.(clone(manifest));
-    manifest.status = 'committed';
-    manifest.committedAt = new Date().toISOString();
-    manifest.updatedAt = manifest.committedAt;
-    await writeJsonAtomic(locations.manifestUri, manifest);
-    console.info(`[LimCode] Legacy workspace partition committed: ${JSON.stringify(manifest.audit)}`);
-  } finally {
-    if (pin) await releaseClientStateSkeletonSnapshot(sourcePaths, pin);
   }
+
+  const unfinished = manifest.conversations.some((record) =>
+    record.classification !== 'discardedEmpty'
+    && record.classification !== 'failed'
+    && record.phase !== 'verified'
+  );
+  if (unfinished) return;
+  await __legacyPartitionTestHooks.beforeManifestCommitted?.(clone(manifest));
+  manifest.status = 'committed';
+  manifest.committedAt = new Date().toISOString();
+  manifest.updatedAt = manifest.committedAt;
+  manifest.audit = auditFor(manifest.conversations);
+  await writeJsonAtomic(locations.manifestUri, manifest);
+  console.info(`[LimCode] Legacy workspace partition committed: ${JSON.stringify(manifest.audit)}`);
 }
 
 async function rebuildScope(
@@ -299,7 +319,7 @@ async function rebuildScope(
   if (!await verifyPublishedScope(stagingRoot, locations.configurationRootUri, expectedCounts)) {
     throw new Error(`Legacy workspace partition verification failed for scope ${scopeKey}.`);
   }
-  await deleteIfExists(targetRoot);
+  if (await exists(targetRoot)) throw new Error(`Legacy target scope already exists: ${scopeKey}`);
   await ensureStorageDirectory(vscode.Uri.joinPath(locations.managementRootUri, SCOPES_DIR));
   await vscode.workspace.fs.rename(stagingRoot, targetRoot, { overwrite: false });
   for (const record of manifest.conversations) {
@@ -379,40 +399,46 @@ async function inferConversationOwner(
   state: ClientState,
   conversationId: string,
   historyEntry: SidebarConversationHistoryEntry | undefined
-): Promise<{ scopeKey: string; source: 'conversationProjectLinks' | 'conversationWorkEnvironmentLinks' | 'historyProjectFolderUri'; uri: string } | undefined> {
+): Promise<{ source: 'conversationProjectLinks' | 'conversationWorkEnvironmentLinks' | 'historyProjectFolderUri'; uri: string } | undefined> {
   const projectById = new Map(state.projectContexts.map((context) => [context.id, context]));
   for (const link of state.conversationProjectLinks.filter((candidate) => candidate.conversationId === conversationId)) {
     const uri = projectById.get(link.projectContextId)?.uri;
-    const scopeKey = uri ? await scopeKeyForReliableUri(uri) : undefined;
-    if (scopeKey) return { scopeKey, source: 'conversationProjectLinks', uri: uri! };
+    if (!uri) throw new Error(`Legacy project ownership is incomplete: ${conversationId}`);
+    return { source: 'conversationProjectLinks', uri: canonicalUri(uri) };
   }
 
   const environmentById = new Map(state.workEnvironments.map((environment) => [environment.id, environment]));
   for (const link of state.conversationWorkEnvironmentLinks.filter((candidate) => candidate.conversationId === conversationId)) {
     const environment = environmentById.get(link.workEnvironmentId);
-    if (environment?.kind !== 'localFolder' || !environment.uri) continue;
-    const scopeKey = await scopeKeyForReliableUri(environment.uri);
-    if (scopeKey) return { scopeKey, source: 'conversationWorkEnvironmentLinks', uri: environment.uri };
+    if (!environment || environment.kind !== 'localFolder' || !environment.uri) {
+      throw new Error(`Legacy work-environment ownership is incomplete: ${conversationId}`);
+    }
+    return { source: 'conversationWorkEnvironmentLinks', uri: canonicalUri(environment.uri) };
   }
 
-  if (historyEntry?.projectFolderUri) {
-    const scopeKey = await scopeKeyForReliableUri(historyEntry.projectFolderUri);
-    if (scopeKey) return { scopeKey, source: 'historyProjectFolderUri', uri: historyEntry.projectFolderUri };
-  }
+  if (historyEntry?.projectFolderUri) return { source: 'historyProjectFolderUri', uri: canonicalUri(historyEntry.projectFolderUri) };
   return undefined;
 }
 
-async function scopeKeyForReliableUri(value: string): Promise<string | undefined> {
-  let uri: vscode.Uri;
-  try {
-    uri = vscode.Uri.parse(value, true);
-    const stat = await vscode.workspace.fs.stat(uri);
-    if ((stat.type & vscode.FileType.Directory) === 0) return undefined;
-  } catch {
-    return undefined;
-  }
-  const canonical = uri.toString(true);
-  return createHash('sha256').update(`workspace-folders\n${canonical}`).digest('hex');
+function canonicalUri(value: string): string {
+  const uri = vscode.Uri.parse(value, true);
+  if (!uri.scheme || !(uri.path || uri.fsPath)) throw new Error(`Invalid legacy ownership URI: ${value}`);
+  return uri.toString(true);
+}
+
+function uriContains(folderValue: string, ownerValue: string): boolean {
+  const folder = vscode.Uri.parse(folderValue, true);
+  const owner = vscode.Uri.parse(ownerValue, true);
+  if (folder.scheme.toLowerCase() !== owner.scheme.toLowerCase()
+    || (folder.authority ?? '').toLowerCase() !== (owner.authority ?? '').toLowerCase()) return false;
+  const insensitive = folder.scheme === 'file' && process.platform === 'win32';
+  const normalize = (value: string) => {
+    const normalized = value.replace(/\\/g, '/').replace(/\/+$/, '');
+    return insensitive ? normalized.toLowerCase() : normalized;
+  };
+  const parent = normalize(folder.path || folder.fsPath);
+  const child = normalize(owner.path || owner.fsPath);
+  return child === parent || child.startsWith(`${parent}/`);
 }
 
 async function loadAllHistory(paths: ReturnType<typeof createVscodeStoragePaths>): Promise<{
@@ -463,8 +489,10 @@ async function copyReachableShadowWorktrees(
   state: ClientState
 ): Promise<void> {
   for (const repository of state.shadowRepositories) {
-    const sourceUri = vscode.Uri.joinPath(source.checkpointShadowWorktreesRootUri, repository.storageKey);
-    const targetUri = vscode.Uri.joinPath(target.checkpointShadowWorktreesRootUri, repository.storageKey);
+    const storageKey = sanitizeShadowStorageKey(repository.storageKey);
+    if (!storageKey) throw new Error(`Invalid legacy shadow worktree storageKey: ${repository.storageKey}`);
+    const sourceUri = vscode.Uri.joinPath(source.checkpointShadowWorktreesRootUri, storageKey);
+    const targetUri = vscode.Uri.joinPath(target.checkpointShadowWorktreesRootUri, storageKey);
     if (!await exists(sourceUri)) continue;
     await ensureStorageDirectory(target.checkpointShadowWorktreesRootUri);
     await vscode.workspace.fs.copy(sourceUri, targetUri, { overwrite: false });
@@ -513,7 +541,7 @@ function sourceRevision(skeletonRevision: string | undefined, conversations: rea
 
 function auditFor(conversations: readonly LegacyPartitionConversationRecord[]): LegacyPartitionAudit {
   return {
-    matched: conversations.filter((record) => record.classification === 'matched').length,
+    matched: conversations.filter((record) => record.classification === 'pendingOwner').length,
     unboundAssignedToFirst: conversations.filter((record) => record.classification === 'unboundAssignedToFirst').length,
     discardedEmpty: conversations.filter((record) => record.classification === 'discardedEmpty').length,
     failed: conversations.filter((record) => record.classification === 'failed').length

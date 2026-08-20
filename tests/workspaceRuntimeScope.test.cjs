@@ -118,7 +118,7 @@ async function loadSkeleton(paths) {
   }
 }
 
-async function seedLegacyFixture(rootPath) {
+async function seedLegacyFixture(rootPath, options = {}) {
   const workspaceA = path.join(rootPath, 'workspace-a');
   const workspaceB = path.join(rootPath, 'workspace-b');
   await Promise.all([fs.mkdir(workspaceA, { recursive: true }), fs.mkdir(workspaceB, { recursive: true })]);
@@ -141,6 +141,13 @@ async function seedLegacyFixture(rootPath) {
     id: 'cross-scope-branch', sourceConversationId: 'conversation-a', targetConversationId: 'conversation-b',
     branchFromMessageId: 'message-a', createdAt: 1, updatedAt: 1
   });
+  if (options.shadowStorageKey) {
+    state.shadowRepositories.push({ id: 'shadow-a', storageKey: options.shadowStorageKey, createdAt: 1, updatedAt: 1 });
+    state.conversationCheckpointRepositoryLinks.push({
+      id: 'shadow-link-a', conversationId: 'conversation-a', projectContextId: 'project-a', shadowRepositoryId: 'shadow-a',
+      projectUri: MockUri.file(workspaceA).toString(), projectDisplayPath: workspaceA, role: 'active', createdAt: 1, updatedAt: 1
+    });
+  }
   await saveSkeleton(paths, state);
 
   const details = new Map([
@@ -229,13 +236,13 @@ test('legacy partition assigns matched and unbound non-empty conversations and f
     const runtimeB = await resolveWorkspaceRuntimeRoot(fixture.root, scopeB);
     assert.equal(runtimeA.fsPath, workspaceScopedRuntimeRoot(fixture.root, scopeA.scopeKey).fsPath);
     assert.equal(runtimeB.fsPath, workspaceScopedRuntimeRoot(fixture.root, scopeB.scopeKey).fsPath);
-    assert.deepEqual(await scopeConversationIds(fixture.root, scopeA), ['conversation-a', 'conversation-invalid', 'conversation-unbound']);
+    assert.deepEqual(await scopeConversationIds(fixture.root, scopeA), ['conversation-a', 'conversation-unbound']);
     assert.deepEqual(await scopeConversationIds(fixture.root, scopeB), ['conversation-b']);
 
     const manifest = JSON.parse(await fs.readFile(workspaceLegacyPartitionManifestUri(fixture.root).fsPath, 'utf8'));
-    assert.equal(manifest.status, 'committed');
+    assert.equal(manifest.status, 'preparing', 'unreachable owned conversations remain pending instead of being guessed');
     assert.equal(manifest.firstWorkspaceScopeKey, scopeA.scopeKey);
-    assert.deepEqual(manifest.audit, { matched: 2, unboundAssignedToFirst: 2, discardedEmpty: 1, failed: 0 });
+    assert.deepEqual(manifest.audit, { matched: 3, unboundAssignedToFirst: 1, discardedEmpty: 1, failed: 0 });
     assert.equal(manifest.crossScopeOrigins.length, 1);
     assert.equal(await exists(path.join(runtimeA.fsPath, 'settings', 'conversation-conversation-empty-common.json')), false);
     assert.equal(await exists(path.join(runtimeB.fsPath, 'settings', 'conversation-conversation-empty-common.json')), false);
@@ -250,8 +257,8 @@ test('legacy partition assigns matched and unbound non-empty conversations and f
       await resolveWorkspaceRuntimeRoot(fixture.root, restart % 2 ? scopeB : scopeA);
     }
     const afterRestart = JSON.parse(await fs.readFile(workspaceLegacyPartitionManifestUri(fixture.root).fsPath, 'utf8'));
-    assert.equal(afterRestart.committedAt, manifest.committedAt);
-    assert.deepEqual(await scopeConversationIds(fixture.root, scopeA), ['conversation-a', 'conversation-invalid', 'conversation-unbound']);
+    assert.equal(afterRestart.updatedAt, manifest.updatedAt, 'resolved scopes are not rewritten on restart');
+    assert.deepEqual(await scopeConversationIds(fixture.root, scopeA), ['conversation-a', 'conversation-unbound']);
   } finally {
     await fs.rm(rootPath, { recursive: true, force: true });
   }
@@ -278,9 +285,9 @@ test('empty window cannot become first workspace and crash recovery keeps frozen
     legacyPartition.__legacyPartitionTestHooks.afterScopePublished = undefined;
     await resolveWorkspaceRuntimeRoot(fixture.root, folderScope(fixture.workspaceB));
     const committed = JSON.parse(await fs.readFile(workspaceLegacyPartitionManifestUri(fixture.root).fsPath, 'utf8'));
-    assert.equal(committed.status, 'committed');
+    assert.equal(committed.status, 'preparing');
     assert.equal(committed.firstWorkspaceScopeKey, scopeA.scopeKey);
-    assert.deepEqual(await scopeConversationIds(fixture.root, scopeA), ['conversation-a', 'conversation-invalid', 'conversation-unbound']);
+    assert.deepEqual(await scopeConversationIds(fixture.root, scopeA), ['conversation-a', 'conversation-unbound']);
   } finally {
     legacyPartition.__legacyPartitionTestHooks.afterScopePublished = undefined;
     await fs.rm(rootPath, { recursive: true, force: true });
@@ -299,7 +306,7 @@ test('first workspace competition is atomic across real child processes', async 
     childA.child.send('go'); childB.child.send('go');
     const results = await Promise.all([childA.result, childB.result]);
     const manifest = JSON.parse(await fs.readFile(workspaceLegacyPartitionManifestUri(fixture.root).fsPath, 'utf8'));
-    assert.equal(manifest.status, 'committed');
+    assert.equal(manifest.status, 'preparing');
     assert.ok(results.some((result) => result.scopeKey === manifest.firstWorkspaceScopeKey));
     const first = results.find((result) => result.scopeKey === manifest.firstWorkspaceScopeKey);
     const firstState = await loadSkeleton(createVscodeStoragePaths(MockUri.file(first.runtimePath), fixture.root));
@@ -331,6 +338,48 @@ test('data-root migration includes committed partition manifest and scoped runti
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
+});
+
+test('saved workspace and multi-root identities lazily claim only matching owner folders', async () => {
+  const rootPath = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-saved-workspace-'));
+  try {
+    const fixture = await seedLegacyFixture(rootPath);
+    const single = createWorkspaceScopeIdentity({
+      workspaceFileUri: MockUri.file(path.join(rootPath, 'single.code-workspace')),
+      workspaceFolderUris: [MockUri.file(fixture.workspaceA)]
+    });
+    await resolveWorkspaceRuntimeRoot(fixture.root, single);
+    assert.deepEqual(await scopeConversationIds(fixture.root, single), ['conversation-a', 'conversation-unbound']);
+
+    const multi = createWorkspaceScopeIdentity({
+      workspaceFileUri: MockUri.file(path.join(rootPath, 'multi.code-workspace')),
+      workspaceFolderUris: [MockUri.file(fixture.workspaceA), MockUri.file(fixture.workspaceB)]
+    });
+    await resolveWorkspaceRuntimeRoot(fixture.root, multi);
+    assert.deepEqual(await scopeConversationIds(fixture.root, multi), ['conversation-b']);
+  } finally { await fs.rm(rootPath, { recursive: true, force: true }); }
+});
+
+test('existing target scope is never deleted or overwritten', async () => {
+  const rootPath = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-existing-target-'));
+  try {
+    const fixture = await seedLegacyFixture(rootPath);
+    const scope = folderScope(fixture.workspaceA);
+    const target = workspaceScopedRuntimeRoot(fixture.root, scope.scopeKey).fsPath;
+    await fs.mkdir(target, { recursive: true });
+    await fs.writeFile(path.join(target, 'sentinel.txt'), 'keep');
+    await assert.rejects(() => resolveWorkspaceRuntimeRoot(fixture.root, scope), /target scope already exists/);
+    assert.equal(await fs.readFile(path.join(target, 'sentinel.txt'), 'utf8'), 'keep');
+  } finally { await fs.rm(rootPath, { recursive: true, force: true }); }
+});
+
+test('malicious shadow storageKey is rejected without path traversal', async () => {
+  const rootPath = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-shadow-path-'));
+  try {
+    const fixture = await seedLegacyFixture(rootPath, { shadowStorageKey: '../escape' });
+    await assert.rejects(() => resolveWorkspaceRuntimeRoot(fixture.root, folderScope(fixture.workspaceA)), /Invalid legacy shadow worktree storageKey/);
+    assert.equal(await exists(path.join(rootPath, '.limcode-workspace-runtimes', 'escape')), false);
+  } finally { await fs.rm(rootPath, { recursive: true, force: true }); }
 });
 
 test('restore vscode mock', () => { Module._load = originalLoad; });

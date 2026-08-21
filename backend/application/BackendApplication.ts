@@ -213,6 +213,8 @@ export class BackendApplication {
   public constructor(context: vscode.ExtensionContext) {
     const { env, toolSchemas, toolDefinitions } = createRuntimeEnv(context);
     this.env = env;
+    const storageRootSubscription = this.env.storage.onDidChangeStorageRoot?.(() => this.storageRootChangedEmitter.fire());
+    if (storageRootSubscription) this.disposables.push(storageRootSubscription);
     this.world.setResource(OpenConversationPanelIdsKey, []);
     this.env.mcp.setStateChangeListener(() => this.syncMcpRuntimeResources());
     this.persistence = new ClientStatePersistence(this.world, this.env.storage, {
@@ -657,6 +659,16 @@ export class BackendApplication {
 
   public getConversationHistoryRootUri(): vscode.Uri {
     return this.env.storage.paths.conversationHistoryRootUri;
+  }
+
+  /** Sidebar 等同步 paths 消费端用它区分“可读 provisional path”和“允许受控 I/O”。 */
+  public isStorageReady(): boolean {
+    return this.env.storage.isDataRootReady?.() === true;
+  }
+
+  /** 等待 storage 完成跨进程 admission；幂等，不改变同步 paths API。 */
+  public waitUntilStorageReady(): Promise<void> {
+    return this.env.storage.ensureReady();
   }
 
   /** 重新读盘并把某个全局设置 section 的最新值广播给所有订阅者。幂等纯读操作。 */
@@ -1496,9 +1508,6 @@ export class BackendApplication {
 
   private async afterGlobalSettingsCommit(event: GlobalSettingsCommitEvent): Promise<void> {
     const { request, stored } = event;
-    // watcher 重绑是 data-root commit 的生命周期动作，必须先于任何可能失败的运行时刷新。
-    if (stored.dataRootChanged) this.storageRootChangedEmitter.fire();
-
     const tasks: Array<{ label: string; run: () => Promise<void> }> = [];
     if (request.section === 'llm') {
       tasks.push({

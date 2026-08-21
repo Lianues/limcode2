@@ -316,6 +316,55 @@ test('attachment operations queue while migration is active', async () => {
   }
 });
 
+test('source admission started after lease check waits for migration fence and enters committed target', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-migration-admission-fence-'));
+  const oldRoot = path.join(tempRoot, 'old');
+  const newRoot = path.join(tempRoot, 'new');
+  const copyGate = deferred();
+  const copyStarted = deferred();
+  const sharedValues = new Map();
+  const createVsCodeStorageCapability = reloadStorageModule({
+    beforeCopy: async () => {
+      copyStarted.resolve();
+      await copyGate.promise;
+    }
+  });
+  let contextA;
+  let contextB;
+  try {
+    await seedRegisteredRoot(oldRoot);
+    contextA = createContext(oldRoot, { values: sharedValues });
+    const storageA = createVsCodeStorageCapability(contextA);
+    const revision = (await storageA.loadGlobalSettings('common')).revision;
+    const migration = storageA.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' }, revision);
+    await copyStarted.promise;
+
+    contextB = createContext(oldRoot, { values: sharedValues });
+    const storageB = createVsCodeStorageCapability(contextB);
+    let admitted = false;
+    const ready = storageB.ensureReady().then(() => { admitted = true; });
+    await delay(40);
+    assert.equal(admitted, false, 'new Extension Host must not publish a source lease while migration holds the fence');
+
+    copyGate.resolve();
+    await Promise.all([migration, ready]);
+    assert.equal(storageB.paths.globalStoragePath, path.resolve(newRoot));
+    assert.equal(await fileExists(path.join(oldRoot, 'agents', 'agent-a.json')), false);
+    assert.ok(await fileExists(path.join(newRoot, 'agents', 'agent-a.json')));
+
+    const leaseFiles = await fs.readdir(path.join(oldRoot, '.limcode-data-root-leases'));
+    const leases = await Promise.all(leaseFiles.filter((name) => name.endsWith('.json')).map(async (name) =>
+      JSON.parse(await fs.readFile(path.join(oldRoot, '.limcode-data-root-leases', name), 'utf8'))
+    ));
+    assert.ok(leases.length >= 2);
+    assert.ok(leases.every((lease) => path.resolve(lease.activeRootPath) === path.resolve(newRoot)));
+  } finally {
+    disposeContext(contextA);
+    disposeContext(contextB);
+    await removeTempRoot(tempRoot);
+  }
+});
+
 test('migration refuses when another live instance still uses source root', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-migration-live-lease-'));
   const oldRoot = path.join(tempRoot, 'old');
@@ -341,6 +390,62 @@ test('migration refuses when another live instance still uses source root', asyn
   } finally {
     disposeContext(contextA);
     disposeContext(contextB);
+    await removeTempRoot(tempRoot);
+  }
+});
+
+test('migration refuses a non-empty registered target without overwriting target data', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-migration-nonempty-target-'));
+  const oldRoot = path.join(tempRoot, 'old');
+  const newRoot = path.join(tempRoot, 'new');
+  const createVsCodeStorageCapability = reloadStorageModule();
+  let context;
+  try {
+    await seedRegisteredRoot(oldRoot, 'source-agent');
+    await seedRegisteredRoot(newRoot, 'target-agent');
+    context = createContext(oldRoot);
+    const storage = createVsCodeStorageCapability(context);
+    const revision = (await storage.loadGlobalSettings('common')).revision;
+
+    await assert.rejects(
+      () => storage.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' }, revision),
+      /目标数据目录已包含 LimCode 注册数据/
+    );
+    assert.equal(JSON.parse(await fs.readFile(path.join(newRoot, 'agents', 'target-agent.json'), 'utf8')).id, 'target-agent');
+    assert.ok(await fileExists(path.join(oldRoot, 'agents', 'source-agent.json')));
+    assert.equal(await fileExists(path.join(newRoot, 'agents', 'source-agent.json')), false);
+  } finally {
+    disposeContext(context);
+    await removeTempRoot(tempRoot);
+  }
+});
+
+test('migration refuses when another live lease uses the target root', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-migration-live-target-'));
+  const oldRoot = path.join(tempRoot, 'old');
+  const newRoot = path.join(tempRoot, 'new');
+  const createVsCodeStorageCapability = reloadStorageModule();
+  let context;
+  let targetLease;
+  try {
+    await seedRegisteredRoot(oldRoot);
+    context = createContext(oldRoot);
+    const storage = createVsCodeStorageCapability(context);
+    await storage.ensureReady();
+    const { createDataRootProcessLease } = require('../dist/extension/backend/capabilities/vscodeStorage/dataRootProcessLease.js');
+    targetLease = createDataRootProcessLease(context, () => newRoot);
+    await targetLease.heartbeat();
+    const revision = (await storage.loadGlobalSettings('common')).revision;
+
+    await assert.rejects(
+      () => storage.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' }, revision),
+      /其它 LimCode\/VS Code 窗口仍在使用目标数据目录/
+    );
+    assert.ok(await fileExists(path.join(oldRoot, 'agents', 'agent-a.json')));
+    assert.equal(await fileExists(path.join(newRoot, 'agents', 'agent-a.json')), false);
+  } finally {
+    targetLease?.dispose();
+    disposeContext(context);
     await removeTempRoot(tempRoot);
   }
 });
@@ -373,8 +478,7 @@ test('simultaneous migration requests across instances are serialized by stable 
 
     contextA = createContext(oldRoot, { values: sharedValues });
     const storageA = createVsCodeStorageCapability(contextA);
-    const secondRevision = (await storageA.loadGlobalSettings('common')).revision;
-    const second = storageA.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' }, secondRevision)
+    const second = storageA.saveGlobalSettings('common', { dataFilePath: newRoot, proxy: '' }, firstRevision)
       .then(() => undefined, (error) => error);
     await delay(30);
     assert.deepEqual(order, ['copy-start']);

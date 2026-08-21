@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { REGISTERED_STORAGE_ROOT_DIRS } from './constants';
+import { REGISTERED_STORAGE_ROOT_DIRS, WORKSPACE_RUNTIMES_ROOT_DIR } from './constants';
 import { comparableFsPath, sameFsPath } from './globalStatus';
 
 export interface StorageRootMigrationResult {
@@ -33,6 +33,7 @@ export async function copyStorageRootForMigration(sourceRoot: vscode.Uri, target
   }
 
   assertSafeMigrationRoots(fromPath, toPath);
+  await assertTargetHasNoRegisteredData(targetRoot);
   await vscode.workspace.fs.createDirectory(targetRoot);
 
   const copiedEntries: string[] = [];
@@ -40,7 +41,13 @@ export async function copyStorageRootForMigration(sourceRoot: vscode.Uri, target
     const source = vscode.Uri.joinPath(sourceRoot, name);
     const target = vscode.Uri.joinPath(targetRoot, name);
     if (!await isDirectory(source)) continue;
-    await vscode.workspace.fs.copy(source, target, { overwrite: true });
+    // Scope management is created eagerly for locking. An empty tree has no owner/runtime data
+    // and should not turn a migration into an extra copy operation.
+    if (name === WORKSPACE_RUNTIMES_ROOT_DIR && !await directoryHasEntries(source)) continue;
+    await deleteEmptyRegisteredTarget(target);
+    // Never overwrite owner metadata, settings, or any other registered target data. If an
+    // external writer races validation, overwrite=false turns that race into an explicit failure.
+    await vscode.workspace.fs.copy(source, target, { overwrite: false });
     copiedEntries.push(name);
   }
 
@@ -75,10 +82,61 @@ function isNestedPath(parent: string, child: string): boolean {
   return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
+async function assertTargetHasNoRegisteredData(targetRoot: vscode.Uri): Promise<void> {
+  const occupied: string[] = [];
+  for (const name of REGISTERED_STORAGE_ROOT_DIRS) {
+    const target = vscode.Uri.joinPath(targetRoot, name);
+    let stat: vscode.FileStat;
+    try {
+      stat = await vscode.workspace.fs.stat(target);
+    } catch (error) {
+      if (isFileNotFound(error)) continue;
+      throw new Error(`无法确认目标数据目录是否为空，已中止迁移：${target.fsPath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if ((stat.type & vscode.FileType.Directory) === 0) {
+      occupied.push(name);
+      continue;
+    }
+    try {
+      if ((await vscode.workspace.fs.readDirectory(target)).length > 0) occupied.push(name);
+    } catch (error) {
+      throw new Error(`无法确认目标数据目录是否为空，已中止迁移：${target.fsPath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (occupied.length > 0) {
+    throw new Error(`数据目录迁移已中止：目标数据目录已包含 LimCode 注册数据，拒绝覆盖：${occupied.join(', ')}`);
+  }
+}
+
+async function deleteEmptyRegisteredTarget(uri: vscode.Uri): Promise<void> {
+  try {
+    const stat = await vscode.workspace.fs.stat(uri);
+    if ((stat.type & vscode.FileType.Directory) === 0) {
+      throw new Error(`目标 registered path 不是目录，拒绝覆盖：${uri.fsPath}`);
+    }
+    if ((await vscode.workspace.fs.readDirectory(uri)).length > 0) {
+      throw new Error(`目标 registered path 在迁移期间变为非空，拒绝覆盖：${uri.fsPath}`);
+    }
+    await vscode.workspace.fs.delete(uri, { recursive: false, useTrash: false });
+  } catch (error) {
+    if (isFileNotFound(error)) return;
+    throw error;
+  }
+}
+
 async function isDirectory(uri: vscode.Uri): Promise<boolean> {
   try {
     const stat = await vscode.workspace.fs.stat(uri);
     return (stat.type & vscode.FileType.Directory) !== 0;
+  } catch (error) {
+    if (isFileNotFound(error)) return false;
+    throw error;
+  }
+}
+
+async function directoryHasEntries(uri: vscode.Uri): Promise<boolean> {
+  try {
+    return (await vscode.workspace.fs.readDirectory(uri)).length > 0;
   } catch (error) {
     if (isFileNotFound(error)) return false;
     throw error;

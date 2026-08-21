@@ -48,7 +48,6 @@ import type {
   LlmPromptCacheConfigRecord,
   LlmPromptCacheMode,
   LlmPromptCacheTtl,
-  LlmRequestBodyJsonValue,
   LlmRequestBodyRecord,
   LlmToolCallFormat,
   LlmRawErrorInfoRecord,
@@ -60,7 +59,6 @@ export const DEFAULT_LLM_BASE_URL = 'https://api.openai.com/v1';
 const COMPRESSION_DEBUG_PREFIX = '[LimCode][CompressionDebug]';
 const OPENAI_RESPONSES_REMOTE_COMPACTION_HEADER = 'x-codex-beta-features';
 const OPENAI_RESPONSES_REMOTE_COMPACTION_FEATURE = 'remote_compaction_v2';
-const OPENAI_RESPONSES_REMOTE_COMPACTION_IMPLEMENTATION = 'responses_compaction_v2';
 const SAFE_LLM_ERROR_METADATA_FIELDS = [
   'transport',
   'phase',
@@ -1113,13 +1111,6 @@ function requestBodyWithOpenAIResponsesRemoteCompaction(requestBody: LlmRequestB
   delete result.previous_response_id;
   delete result.background;
   delete result.context_management;
-  const metadata = isRecord(result.metadata)
-    ? { ...(result.metadata as Record<string, LlmRequestBodyJsonValue>) }
-    : {};
-  result.metadata = {
-    ...metadata,
-    implementation: OPENAI_RESPONSES_REMOTE_COMPACTION_IMPLEMENTATION
-  };
   return result;
 }
 

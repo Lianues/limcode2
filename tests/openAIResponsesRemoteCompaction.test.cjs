@@ -154,10 +154,6 @@ test('OpenAI 原生压缩通过普通 /responses SSE 触发 remote compaction v2
       (event) => events.push(event),
       {
         settings: providerConfig(baseUrl, {
-          metadata: {
-            trace_id: 'trace-1',
-            implementation: 'responses_compact'
-          },
           model: '不应覆盖压缩模型',
           input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: '不应进入请求' }] }],
           stream: false,
@@ -195,10 +191,7 @@ test('OpenAI 原生压缩通过普通 /responses SSE 触发 remote compaction v2
   assert.equal(captured.body.background, undefined);
   assert.equal(captured.body.context_management, undefined);
   assert.equal(captured.body.user, 'limcode-test');
-  assert.deepEqual(captured.body.metadata, {
-    trace_id: 'trace-1',
-    implementation: 'responses_compaction_v2'
-  });
+  assert.equal(captured.body.metadata, undefined);
   assert.equal(Array.isArray(captured.body.input), true);
   assert.equal(captured.body.input.length, 3);
   assert.deepEqual(captured.body.input.at(-1), { type: 'compaction_trigger' });

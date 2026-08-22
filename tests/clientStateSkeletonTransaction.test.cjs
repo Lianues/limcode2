@@ -315,6 +315,37 @@ test('current pointer 发布前 crash 仍完整读取 old；发布后 crash 只�
   });
 });
 
+
+test('派生共享 skeleton 首次提交在 storesPrepared 后中断时可安全清理并重新初始化', async () => {
+  await withTemp('limcode-skeleton-initial-recovery-', async (paths) => {
+    const interrupted = addBundle(createEmptyClientState(), 'interrupted');
+    skeletonTransaction.__clientStateSkeletonTransactionTestHooks.afterPhase = async (phase) => {
+      if (phase === 'storesPrepared') throw new Error('crash-before-first-snapshot');
+    };
+    await assert.rejects(
+      () => commitState(paths, createEmptyClientState(), interrupted),
+      /crash-before-first-snapshot/
+    );
+    await assert.rejects(
+      () => skeletonTransaction.openClientStateSkeletonSnapshot(paths, 'strict-reader'),
+      /pointer is missing while storage traces still exist/
+    );
+
+    const recovered = await skeletonTransaction.openClientStateSkeletonSnapshot(
+      paths,
+      'recovering-reader',
+      { recoverAbandonedInitialCommit: true }
+    );
+    assert.equal(recovered, undefined);
+
+    skeletonTransaction.__clientStateSkeletonTransactionTestHooks.afterPhase = undefined;
+    const replacement = addBundle(createEmptyClientState(), 'replacement');
+    await commitState(paths, createEmptyClientState(), replacement);
+    assert.deepEqual((await loadCurrent(paths)).conversations.map((item) => item.id), ['conversation-replacement']);
+  });
+});
+
+
 test('live pin 保护任意旧 generation；release 后后续 GC 可回收', async () => {
   await withTemp('limcode-skeleton-pin-gc-', async (paths) => {
     const one = addBundle(createEmptyClientState(), 'one');

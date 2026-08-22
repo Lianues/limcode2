@@ -469,7 +469,11 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
           }
           stagedSharedConfigurationPin = undefined;
           stagedSharedConfigurationOpened = false;
-          const pin = await openClientStateSkeletonSnapshot(sharedPaths, `${processLease.instanceId}:shared-configuration`);
+          const pin = await openClientStateSkeletonSnapshot(
+            sharedPaths,
+            `${processLease.instanceId}:shared-configuration`,
+            { recoverAbandonedInitialCommit: true }
+          );
           try {
             const state = pin
               ? await loadClientStateSkeletonSnapshotFromStores(sharedPaths, pin, { profile: 'startup' })
@@ -498,7 +502,11 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
           }
         }
 
-        const pin = await openClientStateSkeletonSnapshot(sharedPaths, `${processLease.instanceId}:shared-configuration`);
+        const pin = await openClientStateSkeletonSnapshot(
+          sharedPaths,
+          `${processLease.instanceId}:shared-configuration`,
+          { recoverAbandonedInitialCommit: true }
+        );
         if (!pin) return undefined;
         try {
           return await loadClientStateSkeletonSnapshotFromStores(sharedPaths, pin, { profile: 'full' });

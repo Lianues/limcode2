@@ -61,7 +61,7 @@ function defaultPolicy(scopeKind: CheckpointPolicyScopeKind, scopeId?: string): 
   return {
     id: policyIdForScope(scopeKind, scopeId),
     name: scopeKind === 'global' ? '全局默认存档点策略' : '存档点策略',
-    enabled: true,
+    enabled: false,
     initialSnapshotMaxBytes: 50 * 1024 * 1024,
     preserveEmptyDirectories: true,
     useGitignore: true,

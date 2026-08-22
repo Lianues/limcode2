@@ -173,8 +173,8 @@ function resetHarnessState() {
   registeredProvider = undefined;
 }
 
-test('Sidebar waits for admission before any provisional write and then binds the partitioned workspace root', async () => {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-workspace-runtime-legacy-lifecycle-'));
+test('Sidebar waits for admission before any provisional write and then binds the scoped workspace root', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-workspace-runtime-lifecycle-'));
   let context;
   try {
     resetHarnessState();
@@ -199,7 +199,7 @@ test('Sidebar waits for admission before any provisional write and then binds th
     await waitFor(() => storage.isDataRootReady() && watchers.length === 1, 'Sidebar watcher did not bind after storage admission');
 
     const resolvedRoot = storage.paths.conversationHistoryRootUri.fsPath;
-    assert.equal(resolvedRoot, provisionalRoot, 'legacy partition publishes into the frozen workspace scope');
+    assert.equal(resolvedRoot, provisionalRoot, 'admission keeps the frozen workspace scope');
     assert.equal(watchers[0].pattern.base.fsPath, resolvedRoot);
     assert.ok(createDirectoryCalls.includes(resolvedRoot));
   } finally {

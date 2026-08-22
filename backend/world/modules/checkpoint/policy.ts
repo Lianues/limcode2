@@ -36,7 +36,7 @@ export function normalizeCheckpointPolicy(input: Partial<CheckpointPolicyRecord>
   return {
     id: input.id,
     name: input.name.trim() || '存档点策略',
-    enabled: input.enabled ?? true,
+    enabled: input.enabled ?? false,
     initialSnapshotMaxBytes: normalizeByteLimit(input.initialSnapshotMaxBytes),
     preserveEmptyDirectories: input.preserveEmptyDirectories ?? true,
     useGitignore: input.useGitignore ?? true,

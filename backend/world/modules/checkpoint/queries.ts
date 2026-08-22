@@ -152,7 +152,7 @@ function fallbackCheckpointPolicy(): CheckpointPolicyRecord {
   return normalizeCheckpointPolicy({
     id: 'checkpoint-policy:global:global',
     name: '全局默认存档点策略',
-    enabled: true,
+    enabled: false,
     initialSnapshotMaxBytes: 50 * 1024 * 1024,
     preserveEmptyDirectories: true,
     useGitignore: true,

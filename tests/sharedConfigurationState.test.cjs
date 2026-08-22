@@ -58,11 +58,20 @@ test('shared configuration contains reusable domains and every config scope link
   assert.deepEqual(workspace.conversations.map((conversation) => conversation.id), ['conversation-a']);
 });
 
-test('shared state is canonical while existing workspace-only configuration is adopted by id union', () => {
+test('shared state is the only configuration source while workspace contributes runtime data only', () => {
   const workspace = createEmptyClientState();
   workspace.agents.push(
-    { id: 'agent-existing', name: 'Existing', kind: 'worker', source: 'user', status: 'done' },
-    { id: 'agent-shared', name: 'Stale', kind: 'main', source: 'user', status: 'error' }
+    { id: 'agent-existing', name: 'Ignored legacy agent', kind: 'worker', source: 'user', status: 'done' },
+    { id: 'agent-shared', name: 'Stale', kind: 'main', source: 'user', status: 'error' },
+    {
+      id: 'agent-mirror',
+      name: 'Runtime mirror',
+      kind: 'worker',
+      source: 'builtin',
+      status: 'running',
+      runtimeRole: 'mirror',
+      typeAgentId: 'worker'
+    }
   );
   workspace.conversations.push({ id: 'conversation-workspace', title: 'Workspace conversation' });
   workspace.systemPrompts.push({ id: 'prompt-workspace', name: 'Workspace prompt', text: 'workspace' });
@@ -79,12 +88,12 @@ test('shared state is canonical while existing workspace-only configuration is a
 
   const merged = mergeSharedConfigurationAndWorkspaceRuntime(shared, workspace);
   assert.deepEqual(merged.agents.map((agent) => [agent.id, agent.name]), [
-    ['agent-existing', 'Existing'],
-    ['agent-shared', 'Canonical']
+    ['agent-shared', 'Canonical'],
+    ['agent-mirror', 'Runtime mirror']
   ]);
   assert.deepEqual(merged.conversations.map((conversation) => conversation.id), ['conversation-workspace']);
-  assert.deepEqual(merged.systemPrompts.map((prompt) => prompt.id), ['prompt-workspace']);
-  assert.deepEqual(merged.systemPromptScopeLinks.map((link) => link.scopeId), ['conversation-workspace']);
+  assert.deepEqual(merged.systemPrompts, []);
+  assert.deepEqual(merged.systemPromptScopeLinks, []);
 });
 
 test('configuration links keep stable scopeId when their conversation is outside the current workspace', async () => {

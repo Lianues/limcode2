@@ -55,6 +55,34 @@ function createConversationWithGlobalPolicy(policyInput) {
   return { world, conversation, policyEntity };
 }
 
+test('Checkpoint Policy 缺省为关闭', () => {
+  const policy = normalizeCheckpointPolicy({
+    id: 'checkpoint-policy-default-disabled',
+    name: '默认关闭策略',
+    createdAt: 1,
+    updatedAt: 1
+  });
+  assert.equal(policy.enabled, false);
+});
+
+test('未配置 Checkpoint Policy 时使用关闭的 fallback', () => {
+  const world = new MapWorld();
+  const conversation = world.spawn();
+  world.add(conversation, Conversation, { id: 'conversation-checkpoint-fallback' });
+  const cmd = createImmediateCommand(world);
+
+  materializeUserInputMessage(
+    world,
+    cmd,
+    conversation,
+    'conversation-checkpoint-fallback',
+    { role: 'user', parts: [{ text: 'checkpoint fallback disabled' }] }
+  );
+
+  assert.equal(world.query(CheckpointBarrier).length, 0);
+  assert.deepEqual(cmd.events, []);
+});
+
 test('Checkpoint Policy 整体关闭时，新消息不创建 barrier 且不发送自动 Requested', () => {
   const { world, conversation } = createConversationWithGlobalPolicy({ enabled: false });
   const cmd = createImmediateCommand(world);

@@ -28,10 +28,8 @@ import { withStorageResourceLock } from './storageResourceLock';
 import {
   cleanupInactiveStorageGenerations,
   createStorageGenerationId,
-  getStorageGenerationRootUri,
   isSafeStorageGenerationId,
-  STANDARD_STORAGE_GENERATION_RETENTION_BUCKETS_MS,
-  STORAGE_GENERATIONS_DIR
+  STANDARD_STORAGE_GENERATION_RETENTION_BUCKETS_MS
 } from './storageGeneration';
 import { createStorageRevision } from './storageRevision';
 import { deleteStorageUri, ensureStorageDirectory, readStorageDirectory } from './storageFs';
@@ -107,14 +105,6 @@ export interface ClientStateSkeletonCommitResult {
   changedStores: ClientStateSkeletonStoreKey[];
 }
 
-export interface OpenClientStateSkeletonSnapshotOptions {
-  /**
-   * 仅用于可由其它 canonical 数据重新生成的新派生 skeleton。首次提交若在 current
-   * pointer 发布前中断，清理与 preparing marker 完全对应的未发布 generations。
-   */
-  recoverAbandonedInitialCommit?: boolean;
-}
-
 interface LoadedSkeletonSnapshot {
   pointer: ClientStateSkeletonPointerFile;
   manifest: ClientStateSkeletonSnapshotManifest;
@@ -132,11 +122,9 @@ export const __clientStateSkeletonTransactionTestHooks: ClientStateSkeletonTrans
  */
 export async function openClientStateSkeletonSnapshot(
   paths: StoragePaths,
-  ownerId: string,
-  options: OpenClientStateSkeletonSnapshotOptions = {}
+  ownerId: string
 ): Promise<PinnedClientStateSkeletonSnapshot | undefined> {
   return withSkeletonCoordinatorLock(paths, async () => {
-    if (options.recoverAbandonedInitialCommit) await recoverAbandonedInitialCommit(paths);
     const active = await loadActiveSnapshotWithWholeFallback(paths);
     if (!active) return undefined;
     const pinId = randomUUID();
@@ -528,46 +516,6 @@ async function loadActiveSnapshotWithWholeFallback(paths: StoragePaths): Promise
  * current/previous 都缺失只能表示真正的空存储。只要 immutable snapshot、prepared、pin
  * 或任一领域 generation 仍存在，就不能把“指针丢失/提交中断”误判为空并初始化默认值。
  */
-async function recoverAbandonedInitialCommit(paths: StoragePaths): Promise<boolean> {
-  if (await tryLoadPointer(currentPointerUri(paths)) || await tryLoadPointer(previousPointerUri(paths))) return false;
-  if ((await readDirectoryOrEmpty(snapshotsRootUri(paths))).length > 0) return false;
-  if ((await readDirectoryOrEmpty(preparedRootUri(paths))).length > 0) return false;
-  if ((await readDirectoryOrEmpty(pinsRootUri(paths))).length > 0) return false;
-
-  const preparingEntries = await readDirectoryOrEmpty(preparingRootUri(paths));
-  if (preparingEntries.length === 0) return false;
-  const markerIds = new Set<string>();
-  for (const [name, type] of preparingEntries) {
-    if (type !== vscode.FileType.File || !name.endsWith('.json')) return false;
-    const uri = vscode.Uri.joinPath(preparingRootUri(paths), name);
-    const result = await readJsonStrict<unknown>(uri);
-    if (result.status !== 'ok') return false;
-    const marker = parsePreparingMarker(result.value, uri);
-    if (marker.parentSnapshotId !== undefined) return false;
-    markerIds.add(marker.snapshotId);
-  }
-
-  for (const store of CLIENT_STATE_SKELETON_STORES) {
-    const generationsRoot = vscode.Uri.joinPath(store.root(paths), STORAGE_GENERATIONS_DIR);
-    for (const [name, type] of await readDirectoryOrEmpty(generationsRoot)) {
-      if (type !== vscode.FileType.Directory || !markerIds.has(name)) return false;
-    }
-  }
-
-  for (const store of CLIENT_STATE_SKELETON_STORES) {
-    for (const snapshotId of markerIds) {
-      await deleteStorageUri(getStorageGenerationRootUri(store.root(paths), snapshotId), { recursive: true, useTrash: false })
-        .catch((error) => { if (!isFileNotFoundError(error)) throw error; });
-    }
-  }
-  for (const snapshotId of markerIds) {
-    await deleteStorageUri(preparingUri(paths, snapshotId), { useTrash: false })
-      .catch((error) => { if (!isFileNotFoundError(error)) throw error; });
-  }
-  console.warn(`[LimCode] Recovered abandoned initial client-state skeleton commit(s): ${[...markerIds].join(', ')}`);
-  return true;
-}
-
 async function assertNoSkeletonTracesWithoutPointer(paths: StoragePaths): Promise<void> {
   const coordinatorTraces = [
     ...(await readDirectoryOrEmpty(snapshotsRootUri(paths))).map(([name]) => `${SNAPSHOTS_DIR}/${name}`),
@@ -577,7 +525,7 @@ async function assertNoSkeletonTracesWithoutPointer(paths: StoragePaths): Promis
   ];
   const generationTraces: string[] = [];
   for (const store of CLIENT_STATE_SKELETON_STORES) {
-    const generationsRoot = vscode.Uri.joinPath(store.root(paths), STORAGE_GENERATIONS_DIR);
+    const generationsRoot = vscode.Uri.joinPath(store.root(paths), 'generations');
     for (const [name] of await readDirectoryOrEmpty(generationsRoot)) {
       generationTraces.push(`${store.key}/generations/${name}`);
       if (generationTraces.length >= 3) break;

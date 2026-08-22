@@ -57,18 +57,14 @@ export function workspaceRuntimeState(state: ClientState): ClientState {
 }
 
 /**
- * 共享 skeleton 为 canonical；workspace 中仍存在的共享表只作为首次规范化来源。
- * 不同 id 做 union，同 id 由共享 skeleton 覆盖。
+ * 共享 skeleton 是唯一 canonical 配置源；workspace skeleton 只提供 runtime 数据。
  */
 export function mergeSharedConfigurationAndWorkspaceRuntime(
   sharedState: ClientState | undefined,
   workspaceState: ClientState | undefined
 ): ClientState {
-  const workspace = workspaceState ?? createEmptyClientState();
-  const shared = sharedState ?? createEmptyClientState();
-  const legacyShared = sharedConfigurationState(workspace);
-  const canonicalShared = mergeSharedConfigurationStates(legacyShared, sharedConfigurationState(shared));
-  const result = workspaceRuntimeState(workspace);
+  const canonicalShared = sharedConfigurationState(sharedState ?? createEmptyClientState());
+  const result = workspaceRuntimeState(workspaceState ?? createEmptyClientState());
 
   result.agents = [
     ...canonicalShared.agents.map((agent) => cloneSerializable(agent)),
@@ -76,15 +72,6 @@ export function mergeSharedConfigurationAndWorkspaceRuntime(
   ];
   for (const key of FULLY_SHARED_CONFIGURATION_TABLE_KEYS) {
     assignTable(result, key, recordsForTable(canonicalShared, key));
-  }
-  return result;
-}
-
-export function mergeSharedConfigurationStates(base: ClientState, incoming: ClientState): ClientState {
-  const result = sharedConfigurationState(base);
-  result.agents = mergeRecords(result.agents, incoming.agents.map(normalizeSharedAgentRecord));
-  for (const key of FULLY_SHARED_CONFIGURATION_TABLE_KEYS) {
-    assignTable(result, key, mergeRecords(recordsForTable(result, key), recordsForTable(incoming, key)));
   }
   return result;
 }
@@ -107,22 +94,6 @@ function recordsForTable(state: ClientState, key: SharedConfigurationTableKey): 
 
 function assignTable(state: ClientState, key: SharedConfigurationTableKey, records: Array<{ id: string }>): void {
   (state as unknown as Record<SharedConfigurationTableKey, Array<{ id: string }>>)[key] = cloneSerializable(records);
-}
-
-function mergeRecords<TRecord extends { id: string }>(base: readonly TRecord[], incoming: readonly TRecord[]): TRecord[] {
-  const records = base.map((record) => cloneSerializable(record));
-  const indexById = new Map(records.map((record, index) => [record.id, index]));
-  for (const record of incoming) {
-    const clone = cloneSerializable(record);
-    const index = indexById.get(record.id);
-    if (index === undefined) {
-      indexById.set(record.id, records.length);
-      records.push(clone);
-    } else {
-      records[index] = clone;
-    }
-  }
-  return records;
 }
 
 function cloneSerializable<T>(value: T): T {

@@ -80,6 +80,11 @@ const { createClientStateSkeletonPatch } = require('../dist/extension/backend/ca
 const clientStateStore = require('../dist/extension/backend/capabilities/vscodeStorage/clientStateStore.js');
 const skeletonTransaction = require('../dist/extension/backend/capabilities/vscodeStorage/clientStateSkeletonTransaction.js');
 const historyStore = require('../dist/extension/backend/capabilities/vscodeStorage/conversationHistoryStore.js');
+const {
+  mergeSharedConfigurationAndWorkspaceRuntime,
+  sharedConfigurationState,
+  workspaceRuntimeState
+} = require('../dist/extension/backend/application/sharedConfigurationState.js');
 
 function folderScope(...folders) {
   return createWorkspaceScopeIdentity({ workspaceFolderUris: folders.map(MockUri.file) });
@@ -221,9 +226,59 @@ test('different workspaces isolate runtime indexes while sharing global configur
   const pathsA = createVscodeStoragePaths(workspaceScopedRuntimeRoot(configurationRoot, folderScope('/workspace/a').scopeKey), configurationRoot);
   const pathsB = createVscodeStoragePaths(workspaceScopedRuntimeRoot(configurationRoot, folderScope('/workspace/b').scopeKey), configurationRoot);
   assert.notEqual(pathsA.conversationsIndexPath, pathsB.conversationsIndexPath);
+  assert.notEqual(pathsA.runHistoryIndexPath, pathsB.runHistoryIndexPath);
   assert.notEqual(pathsA.conversationSettingsRootUri.fsPath, pathsB.conversationSettingsRootUri.fsPath);
   assert.equal(pathsA.settingsRootPath, pathsB.settingsRootPath);
+  assert.equal(pathsA.sharedConfigurationRootPath, pathsB.sharedConfigurationRootPath);
   assert.equal(pathsA.globalStoragePath, pathsB.globalStoragePath);
+});
+
+test('agents and scoped configuration are shared while conversation indexes remain workspace-local', async () => {
+  const rootPath = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-shared-configuration-'));
+  try {
+    const configurationRoot = MockUri.file(rootPath);
+    const pathsA = createVscodeStoragePaths(
+      workspaceScopedRuntimeRoot(configurationRoot, folderScope('/workspace/a').scopeKey),
+      configurationRoot
+    );
+    const pathsB = createVscodeStoragePaths(
+      workspaceScopedRuntimeRoot(configurationRoot, folderScope('/workspace/b').scopeKey),
+      configurationRoot
+    );
+    const source = createEmptyClientState();
+    source.agents.push({ id: 'agent-shared', name: 'Shared Agent', kind: 'worker', source: 'user', status: 'idle' });
+    source.workflows.push({ id: 'workflow-shared', name: 'Shared Workflow', source: 'user', createdAt: 1, updatedAt: 1 });
+    source.conversations.push({ id: 'conversation-a', title: 'Workspace A' });
+    source.toolPolicies.push({ id: 'tool-policy-conversation-a', name: 'Conversation A policy', allowedTools: ['read'] });
+    source.toolPolicyScopeLinks.push({
+      id: 'tool-policy-link-conversation-a',
+      scopeKind: 'conversation',
+      scopeId: 'conversation-a',
+      toolPolicyId: 'tool-policy-conversation-a',
+      role: 'active',
+      createdAt: 1,
+      updatedAt: 1
+    });
+
+    await saveSkeleton(pathsA, workspaceRuntimeState(source));
+    const sharedPaths = createVscodeStoragePaths(pathsA.sharedConfigurationRootUri, configurationRoot);
+    await saveSkeleton(sharedPaths, sharedConfigurationState(source));
+
+    const restoredA = mergeSharedConfigurationAndWorkspaceRuntime(await loadSkeleton(sharedPaths), await loadSkeleton(pathsA));
+    const restoredB = mergeSharedConfigurationAndWorkspaceRuntime(
+      await loadSkeleton(createVscodeStoragePaths(pathsB.sharedConfigurationRootUri, configurationRoot)),
+      await loadSkeleton(pathsB)
+    );
+
+    assert.deepEqual(restoredA.conversations.map((conversation) => conversation.id), ['conversation-a']);
+    assert.deepEqual(restoredB.conversations, []);
+    assert.deepEqual(restoredB.agents.map((agent) => agent.id), ['agent-shared']);
+    assert.deepEqual(restoredB.workflows.map((workflow) => workflow.id), ['workflow-shared']);
+    assert.deepEqual(restoredB.toolPolicies.map((policy) => policy.id), ['tool-policy-conversation-a']);
+    assert.deepEqual(restoredB.toolPolicyScopeLinks.map((link) => link.scopeId), ['conversation-a']);
+  } finally {
+    await fs.rm(rootPath, { recursive: true, force: true });
+  }
 });
 
 test('legacy partition assigns matched and unbound non-empty conversations and fully discards empty conversations', async () => {
@@ -331,10 +386,14 @@ test('data-root migration includes committed partition manifest and scoped runti
     const target = MockUri.file(path.join(tempRoot, 'target'));
     const fixture = await seedLegacyFixture(source.fsPath);
     await resolveWorkspaceRuntimeRoot(source, folderScope(fixture.workspaceA));
+    await fs.mkdir(path.join(source.fsPath, 'shared-configuration'), { recursive: true });
+    await fs.writeFile(path.join(source.fsPath, 'shared-configuration', 'sentinel.json'), '{}');
     const result = await copyStorageRootForMigration(source, target);
     assert.ok(result.copiedEntries.includes('.limcode-workspace-runtimes'));
+    assert.ok(result.copiedEntries.includes('shared-configuration'));
     assert.equal(await exists(workspaceLegacyPartitionManifestUri(target).fsPath), true);
     assert.equal(await exists(path.join(target.fsPath, '.limcode-workspace-runtimes', 'scopes')), true);
+    assert.equal(await exists(path.join(target.fsPath, 'shared-configuration', 'sentinel.json')), true);
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }

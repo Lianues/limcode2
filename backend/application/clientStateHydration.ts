@@ -1101,20 +1101,24 @@ function resolveHydratedConfigScope(
   switch (scopeKind) {
     case 'global': return { ok: true, data: {} };
     case 'conversation': {
-      const conversation = scopeId ? maps.conversations.get(scopeId) : undefined;
-      return conversation === undefined ? { ok: false } : { ok: true, data: { conversation } };
+      if (!scopeId) return { ok: false };
+      const conversation = maps.conversations.get(scopeId);
+      return { ok: true, data: conversation === undefined ? {} : { conversation } };
     }
     case 'agent': {
-      const agent = scopeId ? maps.agents.get(scopeId) : undefined;
-      return agent === undefined ? { ok: false } : { ok: true, data: { agent } };
+      if (!scopeId) return { ok: false };
+      const agent = maps.agents.get(scopeId);
+      return { ok: true, data: agent === undefined ? {} : { agent } };
     }
     case 'workflow': {
-      const workflow = scopeId ? maps.workflows.get(scopeId) : undefined;
-      return workflow === undefined ? { ok: false } : { ok: true, data: { workflow } };
+      if (!scopeId) return { ok: false };
+      const workflow = maps.workflows.get(scopeId);
+      return { ok: true, data: workflow === undefined ? {} : { workflow } };
     }
     case 'run': {
-      const run = scopeId ? maps.runs.get(scopeId) : undefined;
-      return run === undefined ? { ok: false } : { ok: true, data: { run } };
+      if (!scopeId) return { ok: false };
+      const run = maps.runs.get(scopeId);
+      return { ok: true, data: run === undefined ? {} : { run } };
     }
     default:
       return { ok: false };
@@ -1200,20 +1204,24 @@ function resolveHydratedToolPolicyScope(
     case 'global':
       return { ok: true, data: {} };
     case 'conversation': {
-      const conversation = scopeId ? maps.conversations.get(scopeId) : undefined;
-      return conversation === undefined ? { ok: false } : { ok: true, data: { conversation } };
+      if (!scopeId) return { ok: false };
+      const conversation = maps.conversations.get(scopeId);
+      return { ok: true, data: conversation === undefined ? {} : { conversation } };
     }
     case 'agent': {
-      const agent = scopeId ? maps.agents.get(scopeId) : undefined;
-      return agent === undefined ? { ok: false } : { ok: true, data: { agent } };
+      if (!scopeId) return { ok: false };
+      const agent = maps.agents.get(scopeId);
+      return { ok: true, data: agent === undefined ? {} : { agent } };
     }
     case 'workflow': {
-      const workflow = scopeId ? maps.workflows.get(scopeId) : undefined;
-      return workflow === undefined ? { ok: false } : { ok: true, data: { workflow } };
+      if (!scopeId) return { ok: false };
+      const workflow = maps.workflows.get(scopeId);
+      return { ok: true, data: workflow === undefined ? {} : { workflow } };
     }
     case 'run': {
-      const run = scopeId ? maps.runs.get(scopeId) : undefined;
-      return run === undefined ? { ok: false } : { ok: true, data: { run } };
+      if (!scopeId) return { ok: false };
+      const run = maps.runs.get(scopeId);
+      return { ok: true, data: run === undefined ? {} : { run } };
     }
     case 'agentSystem':
       return scopeId ? { ok: true, data: { agentSystemId: scopeId } } : { ok: false };
@@ -1262,20 +1270,24 @@ function resolveHydratedWorkEnvironmentPolicyScope(
     case 'global':
       return { ok: true, data: {} };
     case 'conversation': {
-      const conversation = scopeId ? maps.conversations.get(scopeId) : undefined;
-      return conversation === undefined ? { ok: false } : { ok: true, data: { conversation } };
+      if (!scopeId) return { ok: false };
+      const conversation = maps.conversations.get(scopeId);
+      return { ok: true, data: conversation === undefined ? {} : { conversation } };
     }
     case 'agent': {
-      const agent = scopeId ? maps.agents.get(scopeId) : undefined;
-      return agent === undefined ? { ok: false } : { ok: true, data: { agent } };
+      if (!scopeId) return { ok: false };
+      const agent = maps.agents.get(scopeId);
+      return { ok: true, data: agent === undefined ? {} : { agent } };
     }
     case 'workflow': {
-      const workflow = scopeId ? maps.workflows.get(scopeId) : undefined;
-      return workflow === undefined ? { ok: false } : { ok: true, data: { workflow } };
+      if (!scopeId) return { ok: false };
+      const workflow = maps.workflows.get(scopeId);
+      return { ok: true, data: workflow === undefined ? {} : { workflow } };
     }
     case 'run': {
-      const run = scopeId ? maps.runs.get(scopeId) : undefined;
-      return run === undefined ? { ok: false } : { ok: true, data: { run } };
+      if (!scopeId) return { ok: false };
+      const run = maps.runs.get(scopeId);
+      return { ok: true, data: run === undefined ? {} : { run } };
     }
     case 'agentSystem':
       return scopeId ? { ok: true, data: { agentSystemId: scopeId } } : { ok: false };

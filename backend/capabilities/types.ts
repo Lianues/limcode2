@@ -393,7 +393,10 @@ export interface RuntimePaths {
   /** 模型渠道、MCP、代理、外观等共享配置所在根。 */
   configurationRootUri: vscode.Uri;
   configurationRootPath: string;
-  /** Agent 数据根目录：<workspaceRuntimeRoot>/agents */
+  /** Agent、Workflow、配置 records 与 scope Links 的共享 skeleton 根。 */
+  sharedConfigurationRootUri: vscode.Uri;
+  sharedConfigurationRootPath: string;
+  /** Agent runtime mirror 数据根目录：<workspaceRuntimeRoot>/agents */
   agentsRootUri: vscode.Uri;
   agentsRootPath: string;
   agentsIndexUri: vscode.Uri;
@@ -688,6 +691,8 @@ export interface StorageCapability {
   isDataRootMutationActive?(): boolean;
   ensureReady(): Promise<void>;
   loadClientStateSkeleton(options?: { profile?: 'startup' | 'deferred' | 'full' }): Promise<ClientState | undefined>;
+  /** 跨工作区共享的 Agent、Workflow 与配置图 skeleton。 */
+  loadSharedConfigurationSkeleton?(options?: { profile?: 'startup' | 'deferred' | 'full' }): Promise<ClientState | undefined>;
   loadConversationDetail(
     conversationId: string,
     options?: { includeRunHistory?: boolean }
@@ -715,6 +720,10 @@ export interface StorageCapability {
   saveClientStateSkeleton(
     patch: import('./vscodeStorage/clientStateSkeletonPatch').ClientStateSkeletonPatch
   ): Promise<import('./vscodeStorage/clientStateSkeletonTransaction').ClientStateSkeletonCommitResult>;
+  /** 保存跨工作区共享的 Agent、Workflow 与配置图 skeleton。 */
+  saveSharedConfigurationSkeleton?(
+    patch: import('./vscodeStorage/clientStateSkeletonPatch').ClientStateSkeletonPatch
+  ): Promise<import('./vscodeStorage/clientStateSkeletonTransaction').ClientStateSkeletonCommitResult>;
   /** 返回存储格式实际接受的本地投影和本次 timeline+compression 统一提交序号。 */
   saveConversationRenderDetail(conversationId: string, localBase: ClientState, localNext: ClientState): Promise<ConversationTimelineSaveResult>;
   /** 返回存储格式实际接受的 timeline-only 本地投影和本次统一提交序号。 */
@@ -730,7 +739,7 @@ export interface StorageCapability {
   ): Promise<void>;
   removeConversationHistoryEntry(conversationId: string): Promise<void>;
   /** 原子提交 Conversation 及其 skeleton 关系 cascade；物理 detail cleanup 必须在其后。 */
-  deleteConversationSkeleton(conversationId: string, runIds?: readonly string[]): Promise<void>;
+  deleteConversationSkeleton(conversationId: string, runIds?: readonly string[]): Promise<{ runIds: string[] }>;
   deleteConversationData(conversationId: string): Promise<DeleteConversationDataResult>;
   saveMessageSnapshot(conversationId: string, message: import('../../shared/protocol').MessageRecord): Promise<void>;
   removeMessage(conversationId: string, messageId: string): Promise<void>;

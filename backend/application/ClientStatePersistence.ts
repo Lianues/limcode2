@@ -30,6 +30,7 @@ import { checkpointStateProjection } from '../world/modules/checkpoint/stateProj
 import { projectStateProjection } from '../world/modules/project/stateProjection';
 import { createClientStateSkeletonPatch, isClientStateSkeletonRevisionConflictError } from '../capabilities/vscodeStorage/clientStateSkeletonPatch';
 import { skeletonStoresForProfile } from '../capabilities/vscodeStorage/clientStateSkeletonStores';
+import { sharedConfigurationState, workspaceRuntimeState } from './sharedConfigurationState';
 import {
   CONVERSATION_TIMELINE_TABLE_KEYS,
   isConversationTimelineRevisionConflictError,
@@ -104,6 +105,11 @@ interface PendingRunHistoryState {
   readonly mode: ConversationRunHistorySaveMode;
 }
 
+export interface PersistedSkeletonSources {
+  readonly workspaceState?: ClientState;
+  readonly sharedConfigurationState?: ClientState;
+}
+
 interface CanonicalToolCallOverride {
   readonly rejectedLocalRevision: string;
   readonly canonicalRecord: ToolCallRecord;
@@ -118,8 +124,10 @@ export class ClientStatePersistence {
   private timelineEnabled = false;
   private skeletonEnabled = false;
   private lastPersistedSkeletonJson = '';
-  /** 本进程上次确认提交的本地 skeleton base；不能替换成包含外部 union 的磁盘全量快照。 */
+  /** 本进程上次确认提交的 workspace runtime skeleton base。 */
   private lastAcknowledgedLocalSkeletonState: ClientState | undefined;
+  /** 本进程上次确认提交的跨工作区共享配置 skeleton base。 */
+  private lastAcknowledgedSharedConfigurationState: ClientState | undefined;
   private pendingSkeletonState: ClientState | undefined;
   private readonly lastPersistedRenderDetailJson = new Map<string, string>();
   private readonly lastPublishedTimelineMetaSignature = new Map<string, string>();
@@ -177,6 +185,19 @@ export class ClientStatePersistence {
     return { ...this.persistenceStatus };
   }
 
+  private usesSharedConfigurationStorage(): boolean {
+    return typeof this.storage.saveSharedConfigurationSkeleton === 'function';
+  }
+
+  private desiredSkeletonPersistenceJson(state: ClientState): string {
+    const skeleton = skeletonPersistenceSlice(state);
+    if (!this.usesSharedConfigurationStorage()) return JSON.stringify(skeleton);
+    return splitSkeletonPersistenceJson(
+      workspaceRuntimeState(skeleton),
+      sharedConfigurationState(skeleton)
+    );
+  }
+
   public markSkeletonUnavailable(error: unknown): void {
     this.skeletonEnabled = false;
     void error;
@@ -184,10 +205,25 @@ export class ClientStatePersistence {
     // 让后续聊天消息静默不落盘。
   }
 
-  public rememberPersistedState(state: ClientState): void {
+  public rememberPersistedState(state: ClientState, sources?: PersistedSkeletonSources): void {
     const skeleton = skeletonPersistenceSlice(state);
-    this.lastAcknowledgedLocalSkeletonState = cloneClientState(skeleton);
-    this.lastPersistedSkeletonJson = JSON.stringify(skeleton);
+    if (this.usesSharedConfigurationStorage()) {
+      const desiredWorkspace = workspaceRuntimeState(skeleton);
+      const desiredSharedConfiguration = sharedConfigurationState(skeleton);
+      const persistedWorkspace = sources
+        ? skeletonPersistenceSlice(sources.workspaceState ?? createEmptyClientState())
+        : desiredWorkspace;
+      const persistedSharedConfiguration = sources
+        ? sharedConfigurationState(skeletonPersistenceSlice(sources.sharedConfigurationState ?? createEmptyClientState()))
+        : desiredSharedConfiguration;
+      this.lastAcknowledgedLocalSkeletonState = cloneClientState(persistedWorkspace);
+      this.lastAcknowledgedSharedConfigurationState = cloneClientState(persistedSharedConfiguration);
+      this.lastPersistedSkeletonJson = splitSkeletonPersistenceJson(persistedWorkspace, persistedSharedConfiguration);
+    } else {
+      this.lastAcknowledgedLocalSkeletonState = cloneClientState(skeleton);
+      this.lastAcknowledgedSharedConfigurationState = undefined;
+      this.lastPersistedSkeletonJson = JSON.stringify(skeleton);
+    }
     this.lastProjectedState = state;
     this.projectionClock = '';
     this.contributorStates = {};
@@ -199,8 +235,36 @@ export class ClientStatePersistence {
     this.markSaved();
   }
 
-  /** staged hydration 的另一个 profile 仍属于同一个 pinned snapshot，合并进本地已确认 base。 */
-  public rememberPersistedSkeletonProfile(state: ClientState, profile: 'startup' | 'deferred'): void {
+  /** staged hydration 的另一个 profile 仍属于同一组 pinned snapshot，分别合并进两个物理 base。 */
+  public rememberPersistedSkeletonProfile(
+    state: ClientState,
+    profile: 'startup' | 'deferred',
+    sources?: PersistedSkeletonSources
+  ): void {
+    if (this.usesSharedConfigurationStorage()) {
+      const desired = skeletonPersistenceSlice(state);
+      const workspaceProfile = sources
+        ? skeletonPersistenceSlice(sources.workspaceState ?? createEmptyClientState())
+        : workspaceRuntimeState(desired);
+      const sharedConfigurationProfile = sources
+        ? sharedConfigurationState(skeletonPersistenceSlice(sources.sharedConfigurationState ?? createEmptyClientState()))
+        : sharedConfigurationState(desired);
+      const workspaceBase = this.lastAcknowledgedLocalSkeletonState
+        ? cloneClientState(this.lastAcknowledgedLocalSkeletonState)
+        : createEmptyClientState();
+      const sharedConfigurationBase = this.lastAcknowledgedSharedConfigurationState
+        ? cloneClientState(this.lastAcknowledgedSharedConfigurationState)
+        : createEmptyClientState();
+      for (const store of skeletonStoresForProfile(profile)) {
+        (workspaceBase as unknown as Record<string, unknown>)[store.key] = cloneSerializable(workspaceProfile[store.key]);
+        (sharedConfigurationBase as unknown as Record<string, unknown>)[store.key] = cloneSerializable(sharedConfigurationProfile[store.key]);
+      }
+      this.lastAcknowledgedLocalSkeletonState = workspaceBase;
+      this.lastAcknowledgedSharedConfigurationState = sharedConfigurationBase;
+      this.lastPersistedSkeletonJson = splitSkeletonPersistenceJson(workspaceBase, sharedConfigurationBase);
+      return;
+    }
+
     const base = this.lastAcknowledgedLocalSkeletonState
       ? cloneClientState(this.lastAcknowledgedLocalSkeletonState)
       : createEmptyClientState();
@@ -447,14 +511,34 @@ export class ClientStatePersistence {
         throw error;
       }
     }));
-    const nextLocalSkeleton = skeletonState ? skeletonPersistenceSlice(skeletonState) : undefined;
+    const nextSkeleton = skeletonState ? skeletonPersistenceSlice(skeletonState) : undefined;
+    const usesSharedConfigurationStorage = this.usesSharedConfigurationStorage();
+    const nextLocalSkeleton = nextSkeleton
+      ? usesSharedConfigurationStorage ? workspaceRuntimeState(nextSkeleton) : nextSkeleton
+      : undefined;
+    const nextSharedConfiguration = nextSkeleton && usesSharedConfigurationStorage
+      ? sharedConfigurationState(nextSkeleton)
+      : undefined;
     const skeletonPatch = nextLocalSkeleton
       ? createClientStateSkeletonPatch(this.lastAcknowledgedLocalSkeletonState ?? createEmptyClientState(), nextLocalSkeleton)
       : undefined;
+    const sharedConfigurationPatch = nextSharedConfiguration
+      ? createClientStateSkeletonPatch(this.lastAcknowledgedSharedConfigurationState ?? createEmptyClientState(), nextSharedConfiguration)
+      : undefined;
     const skeletonTask = nextLocalSkeleton && skeletonPatch
-      ? this.storage.saveClientStateSkeleton(skeletonPatch).then(() => {
+      ? Promise.all([
+          this.storage.saveClientStateSkeleton(skeletonPatch).then(() => undefined),
+          nextSharedConfiguration && sharedConfigurationPatch
+            ? this.storage.saveSharedConfigurationSkeleton!(sharedConfigurationPatch).then(() => undefined)
+            : Promise.resolve()
+        ]).then(() => {
           this.lastAcknowledgedLocalSkeletonState = cloneClientState(nextLocalSkeleton);
-          this.lastPersistedSkeletonJson = JSON.stringify(nextLocalSkeleton);
+          this.lastAcknowledgedSharedConfigurationState = nextSharedConfiguration
+            ? cloneClientState(nextSharedConfiguration)
+            : undefined;
+          this.lastPersistedSkeletonJson = nextSharedConfiguration
+            ? splitSkeletonPersistenceJson(nextLocalSkeleton, nextSharedConfiguration)
+            : JSON.stringify(nextLocalSkeleton);
         })
       : Promise.resolve();
     try {
@@ -627,7 +711,7 @@ export class ClientStatePersistence {
     }
   }
 
-  public discardConversation(conversationId: string): void {
+  public discardConversation(conversationId: string, additionalRunIds: Iterable<string> = []): void {
     const normalizedConversationId = conversationId.trim();
     if (!normalizedConversationId) return;
 
@@ -640,19 +724,26 @@ export class ClientStatePersistence {
     this.canonicalToolCallOverrides.delete(normalizedConversationId);
     this.lastPersistedRunHistoryJson.delete(normalizedConversationId);
 
+    const stripOptions = { additionalRunIds };
     if (this.pendingSkeletonState) {
-      this.pendingSkeletonState = stripConversationFromClientState(this.pendingSkeletonState, normalizedConversationId);
+      this.pendingSkeletonState = stripConversationFromClientState(this.pendingSkeletonState, normalizedConversationId, stripOptions);
     }
     if (this.lastProjectedState) {
-      this.lastProjectedState = stripConversationFromClientState(this.lastProjectedState, normalizedConversationId);
+      this.lastProjectedState = stripConversationFromClientState(this.lastProjectedState, normalizedConversationId, stripOptions);
     }
     // 调用契约：仅在 coordinator 语义删除已 committed 后调用，届时才能推进本地 base。
     if (this.lastAcknowledgedLocalSkeletonState) {
       this.lastAcknowledgedLocalSkeletonState = stripConversationFromClientState(
         this.lastAcknowledgedLocalSkeletonState,
-        normalizedConversationId
+        normalizedConversationId,
+        stripOptions
       );
-      this.lastPersistedSkeletonJson = JSON.stringify(this.lastAcknowledgedLocalSkeletonState);
+      this.lastPersistedSkeletonJson = this.usesSharedConfigurationStorage()
+        ? splitSkeletonPersistenceJson(
+            this.lastAcknowledgedLocalSkeletonState,
+            this.lastAcknowledgedSharedConfigurationState ?? createEmptyClientState()
+          )
+        : JSON.stringify(this.lastAcknowledgedLocalSkeletonState);
     }
   }
 
@@ -717,7 +808,7 @@ export class ClientStatePersistence {
 
   private collectPendingStates(state: ClientState, force: boolean, targetConversationIds?: ReadonlySet<string>): void {
     if (this.skeletonEnabled) {
-      const skeletonJson = JSON.stringify(skeletonPersistenceSlice(state));
+      const skeletonJson = this.desiredSkeletonPersistenceJson(state);
       if (force || skeletonJson !== this.lastPersistedSkeletonJson) {
         this.pendingSkeletonState = state;
       }
@@ -1018,6 +1109,10 @@ function changedStorageTableKeys(
     for (const tableKey of keys) tableKeys.add(tableKey);
   }
   return [...tableKeys];
+}
+
+function splitSkeletonPersistenceJson(workspaceState: ClientState, sharedConfiguration: ClientState): string {
+  return JSON.stringify({ workspaceState, sharedConfiguration });
 }
 
 function skeletonPersistenceSlice(state: ClientState): ClientState {

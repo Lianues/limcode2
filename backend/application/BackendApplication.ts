@@ -78,7 +78,8 @@ import {
 } from '../world/modules/checkpoint/components';
 import { upsertDefaultWorkflowSelection } from '../world/modules/workflow/bundles';
 import { ConversationWorkflowSelection, ModelProfile, ModelProfileScopeLink, SystemPromptScopeLink, type ModelProfileScopeLinkData } from '../world/modules/workflow/components';
-import { ToolCall, ToolCallEvent } from '../world/modules/tools/components';
+import { ToolCall, ToolCallEvent, ToolPolicyScopeLink } from '../world/modules/tools/components';
+import { SkillPolicyScopeLink } from '../world/modules/skill/components';
 import { WorkEnvironmentEventType, workEnvironmentIdFromUri } from '../world/modules/workEnvironment';
 import { ConversationWorkEnvironmentLink, WorkEnvironmentPolicyScopeLink } from '../world/modules/workEnvironment/components';
 import { ConversationRuntimeContextSnapshotLink, RuntimeContextScopeLink } from '../world/modules/runtimeContext/components';
@@ -120,6 +121,7 @@ import { createRuntimeEnv, recordsForTools, schemasForTools } from './createRunt
 import { dedupeMcpToolNames } from './mcpRuntimeManager';
 import { createDefaultAgentRecord, createDefaultAgentSpawnRequest, DEFAULT_AGENT_ID } from './defaults';
 import { hydrateClientStateSkeleton, hydrateConversationDetail } from './clientStateHydration';
+import { mergeSharedConfigurationAndWorkspaceRuntime } from './sharedConfigurationState';
 import { backfillMissingToolResponsesForStatelessLoad } from './toolResponseBackfill';
 import { ClientStatePersistence } from './ClientStatePersistence';
 import { GlobalSettingsBridge, type GlobalSettingsCommitEvent } from './GlobalSettingsBridge';
@@ -554,7 +556,7 @@ export class BackendApplication {
       const entity = this.findConversationEntity(normalizedConversationId);
       const cascade = entity !== undefined
         ? this.collectConversationCascadeEntities(entity, normalizedConversationId)
-        : [];
+        : new Set<Entity>();
       const runIdsToDelete = new Set<string>();
       for (const target of cascade) {
         const run = this.world.get(target, AgentRun);
@@ -565,7 +567,9 @@ export class BackendApplication {
       // 只需撤销 deleted 标记即可恢复原内存状态，不会出现“UI 已删、磁盘未删”的半事务。
       this.deletedConversationIds.add(normalizedConversationId);
       try {
-        await this.env.storage.deleteConversationSkeleton(normalizedConversationId, [...runIdsToDelete]);
+        const deletedSkeleton = await this.env.storage.deleteConversationSkeleton(normalizedConversationId, [...runIdsToDelete]);
+        for (const runId of deletedSkeleton.runIds) runIdsToDelete.add(runId);
+        this.collectRunScopedConfigLinksByIds(runIdsToDelete, cascade);
       } catch (error) {
         this.deletedConversationIds.delete(normalizedConversationId);
         const message = `删除逻辑提交失败：${error instanceof Error ? error.message : String(error)}`;
@@ -594,7 +598,15 @@ export class BackendApplication {
       this.coldConversationHistoryEntries.delete(normalizedConversationId);
       this.removeRecentClosedConversation(normalizedConversationId);
       this.bumpConversationEvictionGeneration(normalizedConversationId);
-      this.persistence.discardConversation(normalizedConversationId);
+      this.persistence.discardConversation(normalizedConversationId, runIdsToDelete);
+      try {
+        // Workspace coordinator 已提交主体删除；随后立即清理共享配置 skeleton 中按
+        // conversation/run scope 绑定的 Link。失败时保留 pending patch，避免静默遗留。
+        await this.persistence.persistImmediately({ force: true, throwOnError: true });
+      } catch (error) {
+        errors.push(`共享配置清理失败：${error instanceof Error ? error.message : String(error)}`);
+        this.persistence.queuePersist({ delayMs: 0 });
+      }
 
       const storageResult = await this.env.storage.deleteConversationData(normalizedConversationId);
       errors.push(...storageResult.errors);
@@ -1293,10 +1305,17 @@ export class BackendApplication {
     let startupStorageHealthy = true;
     try {
       await this.env.storage.ensureReady();
-      const restored = await this.env.storage.loadClientStateSkeleton({ profile: 'startup' });
+      const [workspaceRestored, sharedConfigurationRestored] = await Promise.all([
+        this.env.storage.loadClientStateSkeleton({ profile: 'startup' }),
+        this.env.storage.loadSharedConfigurationSkeleton?.({ profile: 'startup' }) ?? Promise.resolve(undefined)
+      ]);
+      const restored = mergeSharedConfigurationAndWorkspaceRuntime(sharedConfigurationRestored, workspaceRestored);
       const hasPreHydrationMessages = this.world.query(Message).length > 0;
-      if (restored && await hydrateClientStateSkeleton(this.world, restored, { resetMessageSeq: !hasPreHydrationMessages })) {
-        this.persistence.rememberPersistedState(restored);
+      if (await hydrateClientStateSkeleton(this.world, restored, { resetMessageSeq: !hasPreHydrationMessages })) {
+        this.persistence.rememberPersistedState(restored, {
+          workspaceState: workspaceRestored,
+          sharedConfigurationState: sharedConfigurationRestored
+        });
         this.ensureVisibleConversationAgentBindings();
       } else if (this.world.query(Agent).length > 0 || this.world.query(Conversation).length > 0) {
         // Early chat.send may have created the minimal ECS target before startup skeleton finished.
@@ -1335,14 +1354,19 @@ export class BackendApplication {
   private async startDeferredClientStateSkeletonLoad(startupStorageHealthy: boolean): Promise<void> {
     let deferredStorageHealthy = true;
     try {
-      const deferred = await this.env.storage.loadClientStateSkeleton({ profile: 'deferred' });
-      if (deferred) {
-        const hydrated = await hydrateClientStateSkeleton(this.world, deferred, { allowDefaults: false, resetMessageSeq: false });
-        if (hydrated) {
-          this.persistence.rememberPersistedSkeletonProfile(deferred, 'deferred');
-          this.requestSnapshot();
-          this.conversationHistoryChangedEmitter.fire();
-        }
+      const [workspaceDeferred, sharedConfigurationDeferred] = await Promise.all([
+        this.env.storage.loadClientStateSkeleton({ profile: 'deferred' }),
+        this.env.storage.loadSharedConfigurationSkeleton?.({ profile: 'deferred' }) ?? Promise.resolve(undefined)
+      ]);
+      const deferred = mergeSharedConfigurationAndWorkspaceRuntime(sharedConfigurationDeferred, workspaceDeferred);
+      const hydrated = await hydrateClientStateSkeleton(this.world, deferred, { allowDefaults: false, resetMessageSeq: false });
+      if (hydrated) {
+        this.persistence.rememberPersistedSkeletonProfile(deferred, 'deferred', {
+          workspaceState: workspaceDeferred,
+          sharedConfigurationState: sharedConfigurationDeferred
+        });
+        this.requestSnapshot();
+        this.conversationHistoryChangedEmitter.fire();
       }
     } catch (error) {
       deferredStorageHealthy = false;
@@ -1889,6 +1913,14 @@ export class BackendApplication {
   }
 
   private collectConversationScopedConfigLinks(conversation: Entity, conversationId: string, entities: Set<Entity>): void {
+    for (const entity of this.world.query(ToolPolicyScopeLink)) {
+      const link = this.world.get(entity, ToolPolicyScopeLink);
+      if (link?.scopeKind === 'conversation' && (link.conversation === conversation || link.scopeId === conversationId)) entities.add(entity);
+    }
+    for (const entity of this.world.query(SkillPolicyScopeLink)) {
+      const link = this.world.get(entity, SkillPolicyScopeLink);
+      if (link?.scopeKind === 'conversation' && (link.conversation === conversation || link.scopeId === conversationId)) entities.add(entity);
+    }
     for (const entity of this.world.query(CheckpointPolicyScopeLink)) {
       const link = this.world.get(entity, CheckpointPolicyScopeLink);
       if (link?.scopeKind === 'conversation' && (link.conversation === conversation || link.scopeId === conversationId)) entities.add(entity);
@@ -2213,6 +2245,47 @@ export class BackendApplication {
     for (const entity of this.world.query(RunModelProfileLink)) if (runs.has(this.world.get(entity, RunModelProfileLink)?.run ?? -1)) entities.add(entity);
     for (const entity of this.world.query(RunToolPolicyLink)) if (runs.has(this.world.get(entity, RunToolPolicyLink)?.run ?? -1)) entities.add(entity);
 
+    const runIds = new Set(
+      [...runs]
+        .map((run) => this.world.get(run, AgentRun)?.id)
+        .filter((id): id is string => !!id)
+    );
+    this.collectRunScopedConfigLinksByIds(runIds, entities);
+  }
+
+  private collectRunScopedConfigLinksByIds(runIds: ReadonlySet<string>, entities: Set<Entity>): void {
+    for (const entity of this.world.query(ToolPolicyScopeLink)) {
+      const link = this.world.get(entity, ToolPolicyScopeLink);
+      if (link?.scopeKind === 'run' && runIds.has(link.scopeId ?? '')) entities.add(entity);
+    }
+    for (const entity of this.world.query(SkillPolicyScopeLink)) {
+      const link = this.world.get(entity, SkillPolicyScopeLink);
+      if (link?.scopeKind === 'run' && runIds.has(link.scopeId ?? '')) entities.add(entity);
+    }
+    for (const entity of this.world.query(CheckpointPolicyScopeLink)) {
+      const link = this.world.get(entity, CheckpointPolicyScopeLink);
+      if (link?.scopeKind === 'run' && runIds.has(link.scopeId ?? '')) entities.add(entity);
+    }
+    for (const entity of this.world.query(WorkEnvironmentPolicyScopeLink)) {
+      const link = this.world.get(entity, WorkEnvironmentPolicyScopeLink);
+      if (link?.scopeKind === 'run' && runIds.has(link.scopeId ?? '')) entities.add(entity);
+    }
+    for (const entity of this.world.query(SystemPromptScopeLink)) {
+      const link = this.world.get(entity, SystemPromptScopeLink);
+      if (link?.scopeKind === 'run' && runIds.has(link.scopeId ?? '')) entities.add(entity);
+    }
+    for (const entity of this.world.query(ModelProfileScopeLink)) {
+      const link = this.world.get(entity, ModelProfileScopeLink);
+      if (link?.scopeKind === 'run' && runIds.has(link.scopeId ?? '')) entities.add(entity);
+    }
+    for (const entity of this.world.query(RuntimeContextScopeLink)) {
+      const link = this.world.get(entity, RuntimeContextScopeLink);
+      if (link?.scopeKind === 'run' && runIds.has(link.scopeId ?? '')) entities.add(entity);
+    }
+    for (const entity of this.world.query(PlanReviewPolicyScopeLink)) {
+      const link = this.world.get(entity, PlanReviewPolicyScopeLink);
+      if (link?.scopeKind === 'run' && runIds.has(link.scopeId ?? '')) entities.add(entity);
+    }
   }
 
   private collectProjectsByConversation(): Map<Entity, { uri: string; name: string }> {

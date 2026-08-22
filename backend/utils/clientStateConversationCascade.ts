@@ -1,5 +1,4 @@
 import type { ClientState } from '../../shared/protocol';
-import { isConversationScopeLinkRecord } from '../../shared/clientStateSchema';
 
 /** 纯数据级 Conversation cascade；ECS、本地 persistence base 与磁盘 snapshot 共用同一语义。 */
 export function stripConversationFromClientState(
@@ -64,12 +63,14 @@ export function stripConversationFromClientState(
     conversationProjectLinks: state.conversationProjectLinks.filter((link) => link.conversationId !== conversationId),
     conversationWorkEnvironmentLinks: state.conversationWorkEnvironmentLinks.filter((link) => link.conversationId !== conversationId),
     conversationRuntimeContextSnapshotLinks: state.conversationRuntimeContextSnapshotLinks.filter((link) => link.conversationId !== conversationId),
-    checkpointPolicyScopeLinks: state.checkpointPolicyScopeLinks.filter((link) => !isConversationScopeLinkRecord(link, conversationId)),
-    workEnvironmentPolicyScopeLinks: state.workEnvironmentPolicyScopeLinks.filter((link) => !isConversationScopeLinkRecord(link, conversationId)),
-    systemPromptScopeLinks: state.systemPromptScopeLinks.filter((link) => !isConversationScopeLinkRecord(link, conversationId)),
-    modelProfileScopeLinks: state.modelProfileScopeLinks.filter((link) => !isConversationScopeLinkRecord(link, conversationId)),
-    runtimeContextScopeLinks: state.runtimeContextScopeLinks.filter((link) => !isConversationScopeLinkRecord(link, conversationId)),
-    planReviewPolicyScopeLinks: state.planReviewPolicyScopeLinks.filter((link) => !isConversationScopeLinkRecord(link, conversationId)),
+    toolPolicyScopeLinks: state.toolPolicyScopeLinks.filter((link) => !isRemovedConfigurationScopeLink(link, conversationId, removedRunIds)),
+    skillPolicyScopeLinks: state.skillPolicyScopeLinks.filter((link) => !isRemovedConfigurationScopeLink(link, conversationId, removedRunIds)),
+    checkpointPolicyScopeLinks: state.checkpointPolicyScopeLinks.filter((link) => !isRemovedConfigurationScopeLink(link, conversationId, removedRunIds)),
+    workEnvironmentPolicyScopeLinks: state.workEnvironmentPolicyScopeLinks.filter((link) => !isRemovedConfigurationScopeLink(link, conversationId, removedRunIds)),
+    systemPromptScopeLinks: state.systemPromptScopeLinks.filter((link) => !isRemovedConfigurationScopeLink(link, conversationId, removedRunIds)),
+    modelProfileScopeLinks: state.modelProfileScopeLinks.filter((link) => !isRemovedConfigurationScopeLink(link, conversationId, removedRunIds)),
+    runtimeContextScopeLinks: state.runtimeContextScopeLinks.filter((link) => !isRemovedConfigurationScopeLink(link, conversationId, removedRunIds)),
+    planReviewPolicyScopeLinks: state.planReviewPolicyScopeLinks.filter((link) => !isRemovedConfigurationScopeLink(link, conversationId, removedRunIds)),
     conversationCheckpointRepositoryLinks: state.conversationCheckpointRepositoryLinks.filter((link) => link.conversationId !== conversationId),
     checkpoints: state.checkpoints.filter((checkpoint) => !removedCheckpointIds.has(checkpoint.id)),
     checkpointTimelineAnchors: state.checkpointTimelineAnchors.filter((anchor) => anchor.conversationId !== conversationId && !removedCheckpointIds.has(anchor.checkpointId)),
@@ -113,4 +114,14 @@ export function stripConversationFromClientState(
     runEditPolicyLinks: state.runEditPolicyLinks.filter((link) => !removedRunIds.has(link.runId) && !removedEditPolicyIds.has(link.policyId)),
     agentRunInputRevisions: state.agentRunInputRevisions.filter((input) => !removedRunIds.has(input.runId) && input.conversationId !== conversationId && !removedRevisionIds.has(input.revisionId))
   };
+}
+
+function isRemovedConfigurationScopeLink(
+  link: { scopeKind?: unknown; scopeId?: unknown },
+  conversationId: string,
+  removedRunIds: ReadonlySet<string>
+): boolean {
+  if (link.scopeKind === 'conversation') return link.scopeId === conversationId;
+  if (link.scopeKind === 'run') return typeof link.scopeId === 'string' && removedRunIds.has(link.scopeId);
+  return false;
 }

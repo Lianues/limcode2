@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import {
   REGISTERED_STORAGE_ROOT_DIRS,
   SETTINGS_ROOT_DIR,
+  SHARED_CONFIGURATION_ROOT_DIR,
   WORKSPACE_RUNTIMES_ROOT_DIR
 } from './constants';
 import { isFileNotFoundError } from './json';
@@ -113,7 +114,7 @@ function canonicalUri(uri: WorkspaceScopeUri): string {
 async function hasLegacyRuntimeData(configurationRootUri: vscode.Uri): Promise<boolean> {
   if (await hasLegacyConversationSettings(configurationRootUri)) return true;
   for (const name of REGISTERED_STORAGE_ROOT_DIRS) {
-    if (name === SETTINGS_ROOT_DIR || name === WORKSPACE_RUNTIMES_ROOT_DIR) continue;
+    if (name === SETTINGS_ROOT_DIR || name === SHARED_CONFIGURATION_ROOT_DIR || name === WORKSPACE_RUNTIMES_ROOT_DIR) continue;
     const root = vscode.Uri.joinPath(configurationRootUri, name);
     try {
       if ((await vscode.workspace.fs.readDirectory(root)).length > 0) return true;

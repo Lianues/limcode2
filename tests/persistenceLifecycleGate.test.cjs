@@ -64,6 +64,11 @@ const { ClientStatePersistence } = require('../dist/extension/backend/applicatio
 const { StorageStateContributorsKey } = require('../dist/extension/backend/world/storageProjection/resources.js');
 const { createEmptyClientState } = require('../dist/extension/shared/clientStateSchema.js');
 const {
+  sharedConfigurationState,
+  workspaceRuntimeState
+} = require('../dist/extension/backend/application/sharedConfigurationState.js');
+const { stripConversationFromClientState } = require('../dist/extension/backend/utils/clientStateConversationCascade.js');
+const {
   ConversationTimelineRevisionConflictError,
   applyConversationTimelinePatch,
   createConversationTimelinePatch
@@ -1213,4 +1218,130 @@ test('立即 queue 会暴露 pending/saving/saved，失败后按有限退避自�
   assert.ok(phases.includes('saving'));
   assert.ok(phases.includes('error'));
   assert.equal(phases.at(-1), 'saved');
+});
+
+
+test('shared configuration and workspace runtime are persisted by separate skeleton coordinators', async () => {
+  const state = makeState('conversation-shared-config-routing');
+  state.agents.push(
+    { id: 'agent-shared', name: 'Shared Agent', kind: 'worker', source: 'user', status: 'running' },
+    { id: 'agent-mirror', name: 'Mirror Agent', kind: 'worker', source: 'builtin', status: 'running', runtimeRole: 'mirror', typeAgentId: 'worker' }
+  );
+  state.workflows.push({ id: 'workflow-shared', name: 'Shared Workflow', source: 'user', createdAt: 1, updatedAt: 1 });
+  state.toolPolicies.push({ id: 'tool-policy-conversation', name: 'Conversation policy', allowedTools: ['read'] });
+  state.toolPolicyScopeLinks.push({
+    id: 'tool-policy-link-conversation',
+    scopeKind: 'conversation',
+    scopeId: 'conversation-shared-config-routing',
+    toolPolicyId: 'tool-policy-conversation',
+    role: 'active',
+    createdAt: 1,
+    updatedAt: 1
+  });
+  const storage = makeStorage({
+    saveSharedConfigurationSkeleton: async (patch) => {
+      storage.calls.push({ kind: 'shared-configuration', patch: JSON.parse(JSON.stringify(patch)) });
+    }
+  });
+  const persistence = new ClientStatePersistence(new FakeWorld(state), storage, {}, 5);
+  persistence.enable();
+
+  await persistence.persistImmediately({ force: true, throwOnError: true });
+
+  const workspacePatch = storage.calls.find((call) => call.kind === 'skeleton').patch;
+  const sharedPatch = storage.calls.find((call) => call.kind === 'shared-configuration').patch;
+  assert.deepEqual(workspacePatch.agents.upserts.map((entry) => entry.record.id), ['agent-mirror']);
+  assert.deepEqual(workspacePatch.conversations.upserts.map((entry) => entry.record.id), ['conversation-shared-config-routing']);
+  assert.equal(workspacePatch.workflows, undefined);
+  assert.equal(workspacePatch.toolPolicies, undefined);
+  assert.equal(workspacePatch.toolPolicyScopeLinks, undefined);
+  assert.deepEqual(sharedPatch.agents.upserts.map((entry) => [entry.record.id, entry.record.status]), [['agent-shared', 'idle']]);
+  assert.deepEqual(sharedPatch.workflows.upserts.map((entry) => entry.record.id), ['workflow-shared']);
+  assert.deepEqual(sharedPatch.toolPolicies.upserts.map((entry) => entry.record.id), ['tool-policy-conversation']);
+  assert.deepEqual(sharedPatch.toolPolicyScopeLinks.upserts.map((entry) => entry.record.scopeId), ['conversation-shared-config-routing']);
+  assert.equal(sharedPatch.conversations, undefined);
+});
+
+test('existing workspace configuration is normalized into the shared skeleton', async () => {
+  const state = makeState('conversation-existing-shared-config');
+  state.agents.push({ id: 'agent-existing', name: 'Existing Agent', kind: 'worker', source: 'user', status: 'idle' });
+  state.checkpointPolicies.push({ id: 'checkpoint-policy-run', name: 'Run policy', enabled: true });
+  state.checkpointPolicyScopeLinks.push({
+    id: 'checkpoint-policy-link-run',
+    scopeKind: 'run',
+    scopeId: 'run-existing',
+    checkpointPolicyId: 'checkpoint-policy-run',
+    role: 'active',
+    createdAt: 1,
+    updatedAt: 2
+  });
+  const storage = makeStorage({
+    saveSharedConfigurationSkeleton: async (patch) => {
+      storage.calls.push({ kind: 'shared-configuration', patch: JSON.parse(JSON.stringify(patch)) });
+    }
+  });
+  const persistence = new ClientStatePersistence(new FakeWorld(state), storage, {}, 5);
+  persistence.rememberPersistedState(state, {
+    workspaceState: state,
+    sharedConfigurationState: createEmptyClientState()
+  });
+  persistence.enable();
+
+  await persistence.persistImmediately({ force: true, throwOnError: true });
+
+  const workspacePatch = storage.calls.find((call) => call.kind === 'skeleton').patch;
+  const sharedPatch = storage.calls.find((call) => call.kind === 'shared-configuration').patch;
+  assert.deepEqual(workspacePatch.agents.removes.map((entry) => entry.id), ['agent-existing']);
+  assert.deepEqual(workspacePatch.checkpointPolicies.removes.map((entry) => entry.id), ['checkpoint-policy-run']);
+  assert.deepEqual(workspacePatch.checkpointPolicyScopeLinks.removes.map((entry) => entry.id), ['checkpoint-policy-link-run']);
+  assert.deepEqual(sharedPatch.agents.upserts.map((entry) => entry.record.id), ['agent-existing']);
+  assert.deepEqual(sharedPatch.checkpointPolicies.upserts.map((entry) => entry.record.id), ['checkpoint-policy-run']);
+  assert.deepEqual(sharedPatch.checkpointPolicyScopeLinks.upserts.map((entry) => entry.record.scopeId), ['run-existing']);
+});
+
+
+
+test('conversation deletion persists removal of shared conversation and run scope links', async () => {
+  const conversationId = 'conversation-shared-scope-delete';
+  const runId = 'run-shared-scope-delete';
+  const initial = makeState(conversationId);
+  initial.toolPolicies.push({ id: 'tool-policy-delete', name: 'Delete', allowedTools: ['read'] });
+  initial.toolPolicyScopeLinks.push({
+    id: 'tool-policy-link-delete',
+    scopeKind: 'conversation',
+    scopeId: conversationId,
+    toolPolicyId: 'tool-policy-delete',
+    role: 'active',
+    createdAt: 1,
+    updatedAt: 1
+  });
+  initial.skillPolicies.push({ id: 'skill-policy-delete', name: 'Delete skill' });
+  initial.skillPolicyScopeLinks.push({
+    id: 'skill-policy-link-delete',
+    scopeKind: 'run',
+    scopeId: runId,
+    skillPolicyId: 'skill-policy-delete',
+    role: 'active',
+    createdAt: 1,
+    updatedAt: 1
+  });
+  const next = stripConversationFromClientState(initial, conversationId, { additionalRunIds: [runId] });
+  const storage = makeStorage({
+    saveSharedConfigurationSkeleton: async (patch) => {
+      storage.calls.push({ kind: 'shared-configuration', patch: JSON.parse(JSON.stringify(patch)) });
+    }
+  });
+  const persistence = new ClientStatePersistence(new FakeWorld(next), storage, {}, 5);
+  persistence.rememberPersistedState(initial, {
+    workspaceState: workspaceRuntimeState(initial),
+    sharedConfigurationState: sharedConfigurationState(initial)
+  });
+  persistence.enable();
+  persistence.discardConversation(conversationId, [runId]);
+
+  await persistence.persistImmediately({ force: true, throwOnError: true });
+
+  const sharedPatch = storage.calls.find((call) => call.kind === 'shared-configuration').patch;
+  assert.deepEqual(sharedPatch.toolPolicyScopeLinks.removes.map((entry) => entry.id), ['tool-policy-link-delete']);
+  assert.deepEqual(sharedPatch.skillPolicyScopeLinks.removes.map((entry) => entry.id), ['skill-policy-link-delete']);
 });

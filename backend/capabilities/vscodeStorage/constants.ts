@@ -36,6 +36,8 @@ export const AGENT_ANSWERS_ROOT_DIR = 'agent-answers';
 export const AGENT_ANSWER_SUBMISSION_LINKS_ROOT_DIR = 'agent-answer-submission-links';
 export const AGENT_ANSWER_TARGET_LINKS_ROOT_DIR = 'agent-answer-target-links';
 export const SETTINGS_ROOT_DIR = 'settings';
+/** Agent、Workflow、配置 records 与全部 scope Links 的跨工作区共享 skeleton。 */
+export const SHARED_CONFIGURATION_ROOT_DIR = 'shared-configuration';
 /** Workspace-scoped runtime trees plus the atomic legacy-owner record. */
 export const WORKSPACE_RUNTIMES_ROOT_DIR = '.limcode-workspace-runtimes';
 export const BACKGROUND_COMMANDS_ROOT_DIR = 'background-commands';
@@ -114,6 +116,7 @@ export const REGISTERED_STORAGE_ROOT_DIRS = [
   COMPRESSION_LLM_INVOCATIONS_ROOT_DIR,
   BACKGROUND_COMMANDS_ROOT_DIR,
   SETTINGS_ROOT_DIR,
+  SHARED_CONFIGURATION_ROOT_DIR,
   WORKSPACE_RUNTIMES_ROOT_DIR
 ] as const;
 

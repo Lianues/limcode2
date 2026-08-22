@@ -31,6 +31,7 @@ import {
   AGENT_ANSWER_SUBMISSION_LINKS_ROOT_DIR,
   AGENT_ANSWER_TARGET_LINKS_ROOT_DIR,
   SETTINGS_ROOT_DIR,
+  SHARED_CONFIGURATION_ROOT_DIR,
   BACKGROUND_COMMANDS_ROOT_DIR,
   SYSTEM_PROMPT_SCOPE_LINKS_ROOT_DIR,
   SYSTEM_PROMPTS_ROOT_DIR,
@@ -163,6 +164,8 @@ export interface VscodeStorageUris {
   settingsRootUri: vscode.Uri;
   /** Workspace runtime-local settings, currently used by conversation-specific overrides. */
   conversationSettingsRootUri: vscode.Uri;
+  /** 跨工作区共享的 Agent、Workflow 与配置图 skeleton 根。 */
+  sharedConfigurationRootUri: vscode.Uri;
   workspaceRuntimeRootUri: vscode.Uri;
   configurationRootUri: vscode.Uri;
   llmSettingsUri: vscode.Uri;
@@ -230,6 +233,7 @@ export function createVscodeStoragePaths(
   const backgroundCommands = root(workspaceRuntimeRootUri, BACKGROUND_COMMANDS_ROOT_DIR);
   const settingsRootUri = vscode.Uri.joinPath(configurationRootUri, SETTINGS_ROOT_DIR);
   const conversationSettingsRootUri = vscode.Uri.joinPath(workspaceRuntimeRootUri, SETTINGS_ROOT_DIR);
+  const sharedConfigurationRootUri = vscode.Uri.joinPath(configurationRootUri, SHARED_CONFIGURATION_ROOT_DIR);
   const llmSettingsUri = vscode.Uri.joinPath(settingsRootUri, LLM_SETTINGS_FILE);
 
   return {
@@ -240,6 +244,8 @@ export function createVscodeStoragePaths(
     workspaceRuntimeRootPath: workspaceRuntimeRootUri.fsPath,
     configurationRootUri,
     configurationRootPath: configurationRootUri.fsPath,
+    sharedConfigurationRootUri,
+    sharedConfigurationRootPath: sharedConfigurationRootUri.fsPath,
     agentsRootUri: agents.rootUri,
     agentsRootPath: agents.rootUri.fsPath,
     agentsIndexUri: agents.indexUri,

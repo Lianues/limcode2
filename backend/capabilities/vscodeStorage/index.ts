@@ -184,15 +184,25 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
   let admitted = false;
   let stagedSkeletonPin: PinnedClientStateSkeletonSnapshot | undefined;
   let stagedSkeletonOpened = false;
+  let stagedSharedConfigurationPin: PinnedClientStateSkeletonSnapshot | undefined;
+  let stagedSharedConfigurationOpened = false;
   context.subscriptions.push({ dispose: () => processLease.dispose() });
   context.subscriptions.push({
     dispose: () => {
-      const pin = stagedSkeletonPin;
+      const paths = getPaths();
+      const workspacePin = stagedSkeletonPin;
+      const sharedConfigurationPin = stagedSharedConfigurationPin;
       stagedSkeletonPin = undefined;
       stagedSkeletonOpened = false;
-      if (pin) {
-        void releaseClientStateSkeletonSnapshot(getPaths(), pin)
-          .catch((error) => console.warn('[LimCode] Failed to release staged skeleton pin during dispose.', error));
+      stagedSharedConfigurationPin = undefined;
+      stagedSharedConfigurationOpened = false;
+      if (workspacePin) {
+        void releaseClientStateSkeletonSnapshot(paths, workspacePin)
+          .catch((error) => console.warn('[LimCode] Failed to release staged workspace skeleton pin during dispose.', error));
+      }
+      if (sharedConfigurationPin) {
+        void releaseClientStateSkeletonSnapshot(sharedConfigurationPaths(paths), sharedConfigurationPin)
+          .catch((error) => console.warn('[LimCode] Failed to release staged shared-configuration skeleton pin during dispose.', error));
       }
     }
   });
@@ -449,6 +459,54 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
         }
       });
     },
+    async loadSharedConfigurationSkeleton(options) {
+      return withSharedDataRoot(async (paths) => {
+        const sharedPaths = sharedConfigurationPaths(paths);
+        const profile = options?.profile ?? 'full';
+        if (profile === 'startup') {
+          if (stagedSharedConfigurationPin) {
+            await releaseClientStateSkeletonSnapshot(sharedPaths, stagedSharedConfigurationPin);
+          }
+          stagedSharedConfigurationPin = undefined;
+          stagedSharedConfigurationOpened = false;
+          const pin = await openClientStateSkeletonSnapshot(sharedPaths, `${processLease.instanceId}:shared-configuration`);
+          try {
+            const state = pin
+              ? await loadClientStateSkeletonSnapshotFromStores(sharedPaths, pin, { profile: 'startup' })
+              : undefined;
+            stagedSharedConfigurationPin = pin;
+            stagedSharedConfigurationOpened = true;
+            return state;
+          } catch (error) {
+            if (pin) await releaseClientStateSkeletonSnapshot(sharedPaths, pin);
+            throw error;
+          }
+        }
+        if (profile === 'deferred') {
+          if (!stagedSharedConfigurationOpened) {
+            throw new Error('Deferred shared-configuration skeleton load requires a startup snapshot pin.');
+          }
+          const pin = stagedSharedConfigurationPin;
+          try {
+            if (!pin) return undefined;
+            await refreshClientStateSkeletonPin(sharedPaths, pin);
+            return loadClientStateSkeletonSnapshotFromStores(sharedPaths, pin, { profile: 'deferred' });
+          } finally {
+            if (pin) await releaseClientStateSkeletonSnapshot(sharedPaths, pin);
+            stagedSharedConfigurationPin = undefined;
+            stagedSharedConfigurationOpened = false;
+          }
+        }
+
+        const pin = await openClientStateSkeletonSnapshot(sharedPaths, `${processLease.instanceId}:shared-configuration`);
+        if (!pin) return undefined;
+        try {
+          return await loadClientStateSkeletonSnapshotFromStores(sharedPaths, pin, { profile: 'full' });
+        } finally {
+          await releaseClientStateSkeletonSnapshot(sharedPaths, pin);
+        }
+      });
+    },
     async loadConversationDetail(conversationId, options) {
       return withSharedDataRoot((paths) => {
         const includeRunHistory = options?.includeRunHistory ?? false;
@@ -472,6 +530,9 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     },
     async saveClientStateSkeleton(patch) {
       return withSharedDataRoot((paths) => saveClientStateSkeletonToStores(paths, patch));
+    },
+    async saveSharedConfigurationSkeleton(patch) {
+      return withSharedDataRoot((paths) => saveClientStateSkeletonToStores(sharedConfigurationPaths(paths), patch));
     },
     async saveConversationRenderDetail(conversationId, localBase, localNext) {
       return withSharedDataRoot(async (paths) => {
@@ -515,11 +576,9 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
         // 本地 ECS 可能尚未 hydrate 其它窗口持久化的 run；先从 canonical run history
         // 补齐 runId，避免 skeleton 中独立的 run→环境/runtime snapshot Link 成为孤儿。
         const persistedRunIds = await collectConversationRunIdsForDeletionFromStores(paths, conversationId);
-        await commitClientStateSkeletonConversationDeletion(
-          paths,
-          conversationId,
-          new Set([...(runIds ?? []), ...persistedRunIds])
-        );
+        const allRunIds = new Set([...(runIds ?? []), ...persistedRunIds]);
+        await commitClientStateSkeletonConversationDeletion(paths, conversationId, allRunIds);
+        return { runIds: [...allRunIds] };
       });
     },
     async deleteConversationData(conversationId) {
@@ -740,6 +799,10 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       });
     }
   };
+}
+
+function sharedConfigurationPaths(paths: StoragePaths): StoragePaths {
+  return createVscodeStoragePaths(paths.sharedConfigurationRootUri, paths.configurationRootUri);
 }
 
 function storageRootIdentity(paths: StoragePaths): string {

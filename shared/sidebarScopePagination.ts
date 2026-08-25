@@ -1,3 +1,10 @@
+export type SidebarHistoryContentState = 'loading' | 'empty' | 'list';
+
+export function sidebarHistoryContentState(loading: boolean, entryCount: number): SidebarHistoryContentState {
+  if (loading) return 'loading';
+  return entryCount > 0 ? 'list' : 'empty';
+}
+
 export interface SidebarScopePageStateInput {
   currentPageIndex: number;
   pageSize: number;

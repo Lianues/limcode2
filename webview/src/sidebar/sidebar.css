@@ -40,6 +40,7 @@ button {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background-color: inherit;
 }
 
 .view {
@@ -108,6 +109,10 @@ button {
   width: 15px;
   height: 15px;
   display: block;
+}
+
+.history-view {
+  background-color: inherit;
 }
 
 .section-head {
@@ -321,6 +326,58 @@ button {
   flex: 1 1 0;
   min-height: 0;
   overflow: hidden;
+  background-color: inherit;
+}
+
+.history-list-shell.is-loading .history-list {
+  visibility: hidden;
+}
+
+.history-loading-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--vscode-descriptionForeground);
+  background-color: inherit;
+}
+
+.history-loading-spinner {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
+  border-top-color: var(--vscode-foreground);
+  animation: history-loading-spin 0.8s linear infinite;
+}
+
+.history-loading-text {
+  font-size: 11px;
+  letter-spacing: 0.01em;
+}
+
+.history-loading-fade-enter-active,
+.history-loading-fade-leave-active {
+  transition: opacity 0.16s ease;
+}
+
+.history-loading-fade-enter-from,
+.history-loading-fade-leave-to {
+  opacity: 0;
+}
+
+@keyframes history-loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .history-loading-spinner {
+    animation-duration: 1.8s;
+  }
 }
 
 .history-list {

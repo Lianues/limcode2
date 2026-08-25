@@ -9,7 +9,7 @@ import {
   type OpenConversationPanelRecord
 } from '@shared/protocol';
 import { displayConversationTitle as formatConversationTitle } from '@shared/conversationTitle';
-import { sidebarScopePageIndexAfterState } from '@shared/sidebarScopePagination';
+import { sidebarHistoryContentState, sidebarScopePageIndexAfterState } from '@shared/sidebarScopePagination';
 import {
   buildConversationHistoryForest,
   flattenConversationHistoryForest,
@@ -61,6 +61,7 @@ const activeProjectFolderUri = ref<string | undefined>();
 const currentProjectScope = ref<ConversationHistoryScope>({ kind: 'unbound' });
 const openConversations = ref<OpenConversationPanelRecord[]>([]);
 const pageInfo = ref<ConversationHistoryPageInfo>();
+const historyLoading = ref(true);
 const currentWorkspaceScopeLinks = ref<ConversationHistoryPageRecord['workspaceScopeLinks']>([]);
 const scopePageIndex = ref(0);
 const renameTarget = ref<SidebarConversationHistoryEntry>();
@@ -74,7 +75,9 @@ const workspaceScopeLinkByConversationId = computed(() => new Map(
 ));
 const visibleHistoryNodes = computed(() => flattenVisibleHistoryNodes(historyForest.value, expandedConversationIds.value));
 const historyScrollbarRefreshKey = computed(() => `${entries.value.length}:${visibleHistoryNodes.value.length}`);
+const historyContentState = computed(() => sidebarHistoryContentState(historyLoading.value, entries.value.length));
 const historyCountText = computed(() => {
+  if (historyLoading.value) return '正在加载对话…';
   const total = pageInfo.value?.total ?? entries.value.length;
   const page = pageInfo.value ? `第 ${pageInfo.value.pageIndex + 1} 页` : '当前页';
   return `${total} 个对话 · ${page}`;
@@ -189,6 +192,7 @@ onMounted(() => {
       nextActiveScopeKey: activeScopeKey.value
     });
     hasReceivedSidebarState = true;
+    historyLoading.value = false;
     ensureActiveConversationAncestorsExpanded();
   });
   postSidebarMessage({ type: SIDEBAR_MESSAGE.ready });
@@ -217,6 +221,7 @@ function requestHistoryPage(
   cursor?: string,
   projectFolderUri = activeProjectFolderUri.value
 ): void {
+  historyLoading.value = true;
   postSidebarMessage({ type: SIDEBAR_MESSAGE.historyPageGet, scopeKind, projectFolderUri, cursor, limit: PAGE_SIZE });
 }
 
@@ -565,8 +570,8 @@ function historyNodeStyle(node: VisibleHistoryTreeNode): Record<string, string> 
         </div>
       </div>
 
-      <div class="history-list-shell">
-        <div ref="historyList" class="history-list" role="tree" aria-label="分级对话历史">
+      <div class="history-list-shell" :class="{ 'is-loading': historyLoading }">
+        <div ref="historyList" class="history-list" role="tree" aria-label="分级对话历史" :aria-busy="historyLoading">
           <div
             v-for="node in visibleHistoryNodes"
             :key="node.entry.id"
@@ -652,21 +657,28 @@ function historyNodeStyle(node: VisibleHistoryTreeNode): Record<string, string> 
           </div>
         </div>
         <AdvancedScrollbar
+          v-if="historyContentState === 'list'"
           class="history-edge-scrollbar"
           :scroller="historyList"
           :refresh-key="historyScrollbarRefreshKey"
         />
+        <Transition name="history-loading-fade">
+          <div v-if="historyContentState === 'loading'" class="history-loading-layer" role="status" aria-live="polite">
+            <span class="history-loading-spinner" aria-hidden="true"></span>
+            <span class="history-loading-text">正在加载对话历史...</span>
+          </div>
+        </Transition>
       </div>
 
-      <div v-if="!entries.length" class="empty-state">
+      <div v-if="historyContentState === 'empty'" class="empty-state">
         <p class="empty-state-title">暂无对话历史</p>
         <p class="empty-state-desc">点击“新对话”创建一个独立会话空间。</p>
       </div>
 
       <div class="history-pagination" aria-label="对话历史分页">
-        <button type="button" class="secondary-button" :disabled="!pageInfo?.hasPrevious" @click="previousPage">上一页</button>
+        <button type="button" class="secondary-button" :disabled="historyLoading || !pageInfo?.hasPrevious" @click="previousPage">上一页</button>
         <span>第 {{ (pageInfo?.pageIndex ?? 0) + 1 }} 页</span>
-        <button type="button" class="secondary-button" :disabled="!pageInfo?.hasNext" @click="nextPage">下一页</button>
+        <button type="button" class="secondary-button" :disabled="historyLoading || !pageInfo?.hasNext" @click="nextPage">下一页</button>
       </div>
     </section>
 

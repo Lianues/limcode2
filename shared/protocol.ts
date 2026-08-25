@@ -283,6 +283,13 @@ export interface ConversationHistoryPageRequest {
   limit?: number;
 }
 
+export interface ConversationHistoryWorkspaceScopeLinkRecord {
+  id: string;
+  conversationId: string;
+  workspaceScopeKey: string;
+  role: 'owner';
+}
+
 export interface ConversationHistoryPageInfo {
   cursor?: string;
   nextCursor?: string;
@@ -299,6 +306,8 @@ export interface ConversationHistoryPageRecord {
   entries: SidebarConversationHistoryEntry[];
   /** 独立的会话来源关系；历史列表按需解释 sourceConversationId，不嵌入条目。 */
   originLinks: ConversationOriginLinkRecord[];
+  /** 只读存储定位关系；用于从“全部”列表按原 workspace scope 打开并原位保存。 */
+  workspaceScopeLinks: ConversationHistoryWorkspaceScopeLinkRecord[];
   pageInfo: ConversationHistoryPageInfo;
 }
 

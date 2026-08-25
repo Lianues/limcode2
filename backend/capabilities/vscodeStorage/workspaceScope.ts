@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
 import * as vscode from 'vscode';
 import { WORKSPACE_RUNTIMES_ROOT_DIR } from './constants';
-import { ensureStorageDirectory } from './storageFs';
+import { isFileNotFoundError } from './json';
+import { ensureStorageDirectory, readStorageDirectory } from './storageFs';
 
-const SCOPES_DIR = 'scopes';
+export const WORKSPACE_SCOPES_DIR = 'scopes';
+const WORKSPACE_SCOPE_KEY_PATTERN = /^[a-f0-9]{64}$/;
 
 export interface WorkspaceScopeUri {
   readonly scheme?: string;
@@ -44,8 +46,31 @@ export function createWorkspaceScopeIdentity(input: WorkspaceScopeIdentityInput)
   return scopeIdentity('empty', 'empty-workspace');
 }
 
+export function workspaceRuntimeScopesRoot(configurationRootUri: vscode.Uri): vscode.Uri {
+  return vscode.Uri.joinPath(configurationRootUri, WORKSPACE_RUNTIMES_ROOT_DIR, WORKSPACE_SCOPES_DIR);
+}
+
+export function isWorkspaceScopeKey(value: string): boolean {
+  return WORKSPACE_SCOPE_KEY_PATTERN.test(value);
+}
+
 export function workspaceScopedRuntimeRoot(configurationRootUri: vscode.Uri, scopeKey: string): vscode.Uri {
-  return vscode.Uri.joinPath(configurationRootUri, WORKSPACE_RUNTIMES_ROOT_DIR, SCOPES_DIR, scopeKey);
+  if (!isWorkspaceScopeKey(scopeKey)) throw new Error(`Invalid workspace runtime scope key: ${scopeKey}`);
+  return vscode.Uri.joinPath(workspaceRuntimeScopesRoot(configurationRootUri), scopeKey);
+}
+
+export async function listWorkspaceRuntimeScopes(configurationRootUri: vscode.Uri): Promise<Array<{ scopeKey: string; rootUri: vscode.Uri }>> {
+  const scopesRoot = workspaceRuntimeScopesRoot(configurationRootUri);
+  try {
+    const entries = await readStorageDirectory(scopesRoot);
+    return entries
+      .filter(([name, type]) => isWorkspaceScopeKey(name) && (type & vscode.FileType.Directory) !== 0)
+      .map(([scopeKey]) => ({ scopeKey, rootUri: workspaceScopedRuntimeRoot(configurationRootUri, scopeKey) }))
+      .sort((left, right) => left.scopeKey.localeCompare(right.scopeKey));
+  } catch (error) {
+    if (isFileNotFoundError(error)) return [];
+    throw error;
+  }
 }
 
 /** Resolve the frozen workspace identity directly to its isolated runtime root. */

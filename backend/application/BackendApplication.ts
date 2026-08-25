@@ -36,6 +36,7 @@ import {
   ConversationFullContextPending,
   ConversationOriginLink,
   ConversationReuseLink,
+  ConversationWorkspaceScopeLink,
   LlmRequest,
   Message,
   MessageCurrentRevisionLink,
@@ -122,6 +123,7 @@ import { dedupeMcpToolNames } from './mcpRuntimeManager';
 import { createDefaultAgentRecord, createDefaultAgentSpawnRequest, DEFAULT_AGENT_ID } from './defaults';
 import { hydrateClientStateSkeleton, hydrateConversationDetail } from './clientStateHydration';
 import { mergeSharedConfigurationAndWorkspaceRuntime } from './sharedConfigurationState';
+import { conversationWorkspaceSkeletonSlice } from './conversationWorkspaceSkeleton';
 import { backfillMissingToolResponsesForStatelessLoad } from './toolResponseBackfill';
 import { ClientStatePersistence } from './ClientStatePersistence';
 import { GlobalSettingsBridge, type GlobalSettingsCommitEvent } from './GlobalSettingsBridge';
@@ -140,12 +142,20 @@ import { ConversationAttentionTracker, type ConversationAttentionRequest } from 
 import { PlanReviewAttentionTracker, collectPendingPlanReviewAttention, planReviewAttentionMessage } from './planReviewAttention';
 import { createStableId } from '../utils/stableId';
 import { findUniqueById } from '../utils/uniqueIds';
+import { workspaceRuntimeScopesRoot } from '../capabilities/vscodeStorage/workspaceScope';
 const MAX_WARM_CLOSED_CONVERSATIONS = 3;
 const USER_ATTENTION_NOTIFICATION_ACTION = '打开标签页';
 const OPEN_PANEL_COMMAND = 'limcode.openPanel';
 
 export interface CreateConversationOptions {
   projectFolderUri?: string;
+}
+
+export interface OpenConversationFromHistoryInput {
+  conversationId: string;
+  title?: string;
+  workspaceScopeKey?: string;
+  historyEntry?: SidebarConversationHistoryEntry;
 }
 
 export interface SetConversationProjectFolderInput {
@@ -223,6 +233,7 @@ export class BackendApplication {
       renderLoadedConversationIds: () => this.persistableRenderDetailConversationIds(),
       runHistoryLoadedConversationIds: () => this.runHistoryLoadedConversationDetails,
       isConversationHistorySummaryComplete: (conversationId) => this.isConversationHistorySummaryComplete(conversationId),
+      conversationWorkspaceScopes: () => this.conversationWorkspaceScopeMap(),
       onStatusChange: (status) => this.broadcastPersistenceStatus(status),
       onConversationTimelineCommitted: (metadata) => this.broadcastConversationTimelineMeta(metadata),
       onConversationTimelinePatched: (payload) => this.broadcastConversationTimelinePatch(payload)
@@ -332,6 +343,7 @@ export class BackendApplication {
     const conversation = this.world.spawn();
     this.world.add(conversation, Conversation, { id: conversationId, title, visibility: 'visible' });
     this.world.add(conversation, ConversationFullContextLoaded, { loadedAt: Date.now() });
+    this.ensureConversationWorkspaceScopeLink(conversation, this.env.storage.workspaceScopeKey);
 
     const now = Date.now();
     const origin = this.world.spawn();
@@ -394,6 +406,10 @@ export class BackendApplication {
       throughMessageId: normalizedMessageId,
       targetConversationId: conversationId
     });
+    const forkedConversation = this.findConversationEntity(conversationId);
+    if (forkedConversation !== undefined) {
+      this.ensureConversationWorkspaceScopeLink(forkedConversation, this.env.storage.workspaceScopeKey);
+    }
 
     this.renderLoadedConversationDetails.add(conversationId);
     this.runHistoryLoadedConversationDetails.add(conversationId);
@@ -408,6 +424,7 @@ export class BackendApplication {
 
   /** 侧边栏只读投影：按最近消息时间排序的对话历史列表。 */
   public getConversationHistoryEntries(): SidebarConversationHistoryEntry[] {
+    this.ensureAllConversationWorkspaceScopeLinks();
     const messagesByConversation = this.collectMessagesByConversation();
     const agentNamesByConversation = this.collectAgentNamesByConversation();
     const runSummariesByConversation = this.collectRunSummariesByConversation();
@@ -462,6 +479,56 @@ export class BackendApplication {
     return displayConversationTitle({ id: conversation.id, title: conversation.title, messages });
   }
 
+  public async openConversationFromHistory(input: OpenConversationFromHistoryInput): Promise<void> {
+    const conversationId = input.conversationId.trim();
+    if (!conversationId) throw new Error('conversationId 为空。');
+    const ownerScopeKey = input.workspaceScopeKey?.trim() || this.env.storage.workspaceScopeKey;
+
+    if (ownerScopeKey === this.env.storage.workspaceScopeKey) {
+      this.ensureConversationPlaceholder(conversationId, input.title);
+      const conversation = this.findConversationEntity(conversationId);
+      if (conversation !== undefined) this.ensureConversationWorkspaceScopeLink(conversation, ownerScopeKey);
+      if (input.historyEntry) this.coldConversationHistoryEntries.set(conversationId, { ...input.historyEntry });
+      return;
+    }
+
+    await this.waitUntilHydrated();
+    await this.deferredSkeletonReady;
+    const existing = this.findConversationEntity(conversationId);
+    if (existing !== undefined) {
+      const existingOwner = this.conversationWorkspaceScopeKeyForEntity(existing);
+      if (existingOwner !== ownerScopeKey) {
+        throw new Error(`对话 ${conversationId} 已从另一个 workspace scope 加载。`);
+      }
+      this.env.storage.bindConversationWorkspaceScope(conversationId, ownerScopeKey);
+      if (input.historyEntry) this.coldConversationHistoryEntries.set(conversationId, { ...input.historyEntry });
+      return;
+    }
+
+    const source = await this.env.storage.loadWorkspaceClientStateSkeleton(ownerScopeKey, { profile: 'full' });
+    if (!source) throw new Error('所属 workspace 的对话骨架不存在。');
+    const conversationSkeleton = conversationWorkspaceSkeletonSlice(source, conversationId);
+    if (!conversationSkeleton.conversations.some((conversation) => conversation.id === conversationId)) {
+      throw new Error('所属 workspace 中找不到该对话。');
+    }
+
+    this.env.storage.bindConversationWorkspaceScope(conversationId, ownerScopeKey);
+    this.persistence.rememberForeignWorkspaceSkeletonPersisted(ownerScopeKey, conversationSkeleton);
+    try {
+      hydrateClientStateSkeleton(this.world, conversationSkeleton, { allowDefaults: false, resetMessageSeq: false });
+      const conversation = this.findConversationEntity(conversationId);
+      if (conversation === undefined) throw new Error('对话骨架加载后未生成 Conversation 实体。');
+      this.ensureConversationWorkspaceScopeLink(conversation, ownerScopeKey);
+      if (input.historyEntry) this.coldConversationHistoryEntries.set(conversationId, { ...input.historyEntry });
+      this.requestSnapshot();
+      this.requestSnapshot(conversationId);
+      this.conversationHistoryChangedEmitter.fire();
+    } catch (error) {
+      this.env.storage.unbindConversationWorkspaceScope(conversationId);
+      throw error;
+    }
+  }
+
   public ensureConversationPlaceholder(conversationId: string, title?: string): boolean {
     const normalizedConversationId = conversationId.trim();
     if (!normalizedConversationId || this.deletedConversationIds.has(normalizedConversationId)) return false;
@@ -475,6 +542,7 @@ export class BackendApplication {
         changed = true;
       }
       if (this.ensureVisibleConversationAgentBinding(existing)) changed = true;
+      this.ensureConversationWorkspaceScopeLink(existing, this.env.storage.workspaceScopeKey);
       if (changed) {
         this.requestSnapshot();
         this.requestSnapshot(normalizedConversationId);
@@ -490,6 +558,7 @@ export class BackendApplication {
       title: normalizeConversationTitle(title ?? ''),
       visibility: 'visible'
     });
+    this.ensureConversationWorkspaceScopeLink(conversation, this.env.storage.workspaceScopeKey);
 
     const origin = this.world.spawn();
     this.world.add(origin, ConversationOriginLink, {
@@ -610,6 +679,7 @@ export class BackendApplication {
 
       const storageResult = await this.env.storage.deleteConversationData(normalizedConversationId);
       errors.push(...storageResult.errors);
+      this.env.storage.unbindConversationWorkspaceScope(normalizedConversationId);
       this.requestSnapshot();
       this.requestSnapshot(normalizedConversationId);
       this.conversationHistoryChangedEmitter.fire();
@@ -671,6 +741,10 @@ export class BackendApplication {
 
   public getConversationHistoryRootUri(): vscode.Uri {
     return this.env.storage.paths.conversationHistoryRootUri;
+  }
+
+  public getConversationHistoryWatchRootUri(): vscode.Uri {
+    return workspaceRuntimeScopesRoot(this.env.storage.paths.configurationRootUri);
   }
 
   /** Sidebar 等同步 paths 消费端用它区分“可读 provisional path”和“允许受控 I/O”。 */
@@ -847,7 +921,8 @@ export class BackendApplication {
     return this.mergeLiveConversationHistoryPage({
       ...page,
       entries: page.entries.filter((entry) => !this.deletedConversationIds.has(entry.id)),
-      originLinks: page.originLinks.filter((link) => !this.deletedConversationIds.has(link.conversationId))
+      originLinks: page.originLinks.filter((link) => !this.deletedConversationIds.has(link.conversationId)),
+      workspaceScopeLinks: page.workspaceScopeLinks.filter((link) => !this.deletedConversationIds.has(link.conversationId))
     }, scope);
   }
 
@@ -886,11 +961,27 @@ export class BackendApplication {
     for (const [conversationId, originLink] of this.collectConversationOriginLinksById()) {
       if (visibleEntryIds.has(conversationId)) originLinksByConversationId.set(conversationId, originLink);
     }
+    const workspaceScopeLinksByConversationId = new Map(
+      page.workspaceScopeLinks.map((link) => [link.conversationId, link])
+    );
+    const ownerScopes = this.conversationWorkspaceScopeMap();
+    for (const conversationId of visibleEntryIds) {
+      const workspaceScopeKey = ownerScopes.get(conversationId);
+      if (!workspaceScopeKey) continue;
+      workspaceScopeLinksByConversationId.set(conversationId, {
+        id: `conversation-workspace-scope:${workspaceScopeKey}:${conversationId}`,
+        conversationId,
+        workspaceScopeKey,
+        role: 'owner'
+      });
+    }
 
     return {
       ...page,
       entries: visibleEntries,
       originLinks: [...originLinksByConversationId.values()].filter((link) => visibleEntryIds.has(link.conversationId)),
+      workspaceScopeLinks: [...workspaceScopeLinksByConversationId.values()]
+        .filter((link) => visibleEntryIds.has(link.conversationId)),
       pageInfo: {
         ...page.pageInfo,
         total: Math.max(page.pageInfo.total, visibleEntries.length)
@@ -1316,6 +1407,7 @@ export class BackendApplication {
           workspaceState: workspaceRestored,
           sharedConfigurationState: sharedConfigurationRestored
         });
+        this.ensureAllConversationWorkspaceScopeLinks();
         this.ensureVisibleConversationAgentBindings();
       } else if (this.world.query(Agent).length > 0 || this.world.query(Conversation).length > 0) {
         // Early chat.send may have created the minimal ECS target before startup skeleton finished.
@@ -1361,6 +1453,7 @@ export class BackendApplication {
       const deferred = mergeSharedConfigurationAndWorkspaceRuntime(sharedConfigurationDeferred, workspaceDeferred);
       const hydrated = await hydrateClientStateSkeleton(this.world, deferred, { allowDefaults: false, resetMessageSeq: false });
       if (hydrated) {
+        this.ensureAllConversationWorkspaceScopeLinks();
         this.persistence.rememberPersistedSkeletonProfile(deferred, 'deferred', {
           workspaceState: workspaceDeferred,
           sharedConfigurationState: sharedConfigurationDeferred
@@ -1784,6 +1877,76 @@ export class BackendApplication {
     return this.getProjectFolderCandidates().find((candidate) => candidate.uri === normalized);
   }
 
+  private conversationWorkspaceScopeMap(): ReadonlyMap<string, string> {
+    const result = new Map<string, string>();
+    const ownerByConversation = new Map<Entity, string>();
+    for (const entity of this.world.query(ConversationWorkspaceScopeLink)) {
+      const link = this.world.get(entity, ConversationWorkspaceScopeLink);
+      if (link?.role === 'owner') ownerByConversation.set(link.conversation, link.workspaceScopeKey);
+    }
+    for (const conversationEntity of this.world.query(Conversation)) {
+      const conversation = this.world.get(conversationEntity, Conversation);
+      if (!conversation?.id) continue;
+      result.set(
+        conversation.id,
+        ownerByConversation.get(conversationEntity) ?? this.env.storage.workspaceScopeKey
+      );
+    }
+    return result;
+  }
+
+  private conversationWorkspaceScopeKeyForEntity(conversation: Entity): string {
+    const owner = this.world.query(ConversationWorkspaceScopeLink)
+      .map((entity) => this.world.get(entity, ConversationWorkspaceScopeLink))
+      .find((link) => link?.conversation === conversation && link.role === 'owner');
+    return owner?.workspaceScopeKey ?? this.env.storage.workspaceScopeKey;
+  }
+
+  private ensureConversationWorkspaceScopeLink(conversation: Entity, workspaceScopeKey: string): void {
+    const now = Date.now();
+    const matches = this.world.query(ConversationWorkspaceScopeLink)
+      .filter((entity) => this.world.get(entity, ConversationWorkspaceScopeLink)?.conversation === conversation);
+    const existing = matches[0];
+    for (const duplicate of matches.slice(1)) this.world.despawn(duplicate);
+    const conversationId = this.world.get(conversation, Conversation)?.id;
+    if (!conversationId) return;
+    if (existing !== undefined) {
+      const link = this.world.get(existing, ConversationWorkspaceScopeLink);
+      this.world.add(existing, ConversationWorkspaceScopeLink, {
+        id: link?.id ?? `conversation-workspace-scope:${conversationId}`,
+        conversation,
+        workspaceScopeKey,
+        role: 'owner',
+        createdAt: link?.createdAt ?? now,
+        updatedAt: now
+      });
+    } else {
+      const entity = this.world.spawn();
+      this.world.add(entity, ConversationWorkspaceScopeLink, {
+        id: `conversation-workspace-scope:${conversationId}`,
+        conversation,
+        workspaceScopeKey,
+        role: 'owner',
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+    this.env.storage.bindConversationWorkspaceScope(conversationId, workspaceScopeKey);
+  }
+
+  private ensureAllConversationWorkspaceScopeLinks(): void {
+    const linked = new Set<Entity>();
+    for (const entity of this.world.query(ConversationWorkspaceScopeLink)) {
+      const link = this.world.get(entity, ConversationWorkspaceScopeLink);
+      if (link?.role === 'owner') linked.add(link.conversation);
+    }
+    for (const conversation of this.world.query(Conversation)) {
+      if (!linked.has(conversation)) {
+        this.ensureConversationWorkspaceScopeLink(conversation, this.env.storage.workspaceScopeKey);
+      }
+    }
+  }
+
   private findConversationEntity(conversationId: string): Entity | undefined {
     return findUniqueById(this.world, Conversation, conversationId);
   }
@@ -1859,6 +2022,11 @@ export class BackendApplication {
 
     for (const entity of this.world.query(AgentConversationLink)) {
       const link = this.world.get(entity, AgentConversationLink);
+      if (link?.conversation === conversation) entities.add(entity);
+    }
+
+    for (const entity of this.world.query(ConversationWorkspaceScopeLink)) {
+      const link = this.world.get(entity, ConversationWorkspaceScopeLink);
       if (link?.conversation === conversation) entities.add(entity);
     }
 

@@ -28,9 +28,16 @@ import { projectChatState } from '../world/modules/chat/stateProjection';
 import { projectToolsRuntimeState } from '../world/modules/tools/stateProjection';
 import { checkpointStateProjection } from '../world/modules/checkpoint/stateProjection';
 import { projectStateProjection } from '../world/modules/project/stateProjection';
-import { createClientStateSkeletonPatch, isClientStateSkeletonRevisionConflictError } from '../capabilities/vscodeStorage/clientStateSkeletonPatch';
+import {
+  createClientStateSkeletonPatch,
+  isClientStateSkeletonRevisionConflictError
+} from '../capabilities/vscodeStorage/clientStateSkeletonPatch';
 import { skeletonStoresForProfile } from '../capabilities/vscodeStorage/clientStateSkeletonStores';
 import { sharedConfigurationState, workspaceRuntimeState } from './sharedConfigurationState';
+import {
+  mergeWorkspaceSkeletonSlices,
+  partitionWorkspaceSkeletonByConversationOwner
+} from './conversationWorkspaceSkeleton';
 import {
   CONVERSATION_TIMELINE_TABLE_KEYS,
   isConversationTimelineRevisionConflictError,
@@ -91,6 +98,8 @@ export interface ClientStatePersistenceOptions {
   isConversationHistorySummaryComplete?: (conversationId: string) => boolean;
   /** 测试/宿主可覆盖；默认直接从 ECS 投影目标 conversation 的 timeline-only 数据。 */
   projectConversationTimelineState?: (world: WorldReader, conversationId: string) => ClientState;
+  /** 当前 world 中已挂载 Conversation 的独立 owner-scope 关系。 */
+  conversationWorkspaceScopes?: () => ReadonlyMap<string, string>;
   onStatusChange?: (status: PersistenceStatusRecord) => void;
   /** conversation timeline 成功提交后发布最新 chunk index 元数据。 */
   onConversationTimelineCommitted?: (metadata: ConversationTimelineMetaRecord) => void;
@@ -128,6 +137,8 @@ export class ClientStatePersistence {
   private lastAcknowledgedLocalSkeletonState: ClientState | undefined;
   /** 本进程上次确认提交的跨工作区共享配置 skeleton base。 */
   private lastAcknowledgedSharedConfigurationState: ClientState | undefined;
+  /** 已挂载 foreign workspace scope 的 conversation-scoped skeleton base。 */
+  private readonly lastAcknowledgedForeignSkeletonStates = new Map<string, ClientState>();
   private pendingSkeletonState: ClientState | undefined;
   private readonly lastPersistedRenderDetailJson = new Map<string, string>();
   private readonly lastPublishedTimelineMetaSignature = new Map<string, string>();
@@ -192,9 +203,37 @@ export class ClientStatePersistence {
   private desiredSkeletonPersistenceJson(state: ClientState): string {
     const skeleton = skeletonPersistenceSlice(state);
     if (!this.usesSharedConfigurationStorage()) return JSON.stringify(skeleton);
-    return splitSkeletonPersistenceJson(
-      workspaceRuntimeState(skeleton),
-      sharedConfigurationState(skeleton)
+    const partitioned = this.partitionWorkspaceSkeleton(skeleton);
+    return splitPartitionedSkeletonPersistenceJson(
+      partitioned.get(this.currentWorkspaceScopeKey()) ?? createEmptyClientState(),
+      sharedConfigurationState(skeleton),
+      partitioned,
+      this.currentWorkspaceScopeKey()
+    );
+  }
+
+  private currentWorkspaceScopeKey(): string {
+    return this.storage.workspaceScopeKey || '__current_workspace__';
+  }
+
+  private conversationWorkspaceScopes(): ReadonlyMap<string, string> {
+    return this.options.conversationWorkspaceScopes?.() ?? new Map();
+  }
+
+  private partitionWorkspaceSkeleton(skeleton: ClientState): Map<string, ClientState> {
+    return partitionWorkspaceSkeletonByConversationOwner(
+      skeleton,
+      this.conversationWorkspaceScopes(),
+      this.currentWorkspaceScopeKey()
+    );
+  }
+
+  public rememberForeignWorkspaceSkeletonPersisted(workspaceScopeKey: string, state: ClientState): void {
+    if (!workspaceScopeKey || workspaceScopeKey === this.currentWorkspaceScopeKey()) return;
+    const previous = this.lastAcknowledgedForeignSkeletonStates.get(workspaceScopeKey) ?? createEmptyClientState();
+    this.lastAcknowledgedForeignSkeletonStates.set(
+      workspaceScopeKey,
+      mergeWorkspaceSkeletonSlices(previous, skeletonPersistenceSlice(state))
     );
   }
 
@@ -208,7 +247,8 @@ export class ClientStatePersistence {
   public rememberPersistedState(state: ClientState, sources?: PersistedSkeletonSources): void {
     const skeleton = skeletonPersistenceSlice(state);
     if (this.usesSharedConfigurationStorage()) {
-      const desiredWorkspace = workspaceRuntimeState(skeleton);
+      const partitioned = this.partitionWorkspaceSkeleton(skeleton);
+      const desiredWorkspace = partitioned.get(this.currentWorkspaceScopeKey()) ?? createEmptyClientState();
       const desiredSharedConfiguration = sharedConfigurationState(skeleton);
       const persistedWorkspace = sources
         ? skeletonPersistenceSlice(sources.workspaceState ?? createEmptyClientState())
@@ -218,10 +258,17 @@ export class ClientStatePersistence {
         : desiredSharedConfiguration;
       this.lastAcknowledgedLocalSkeletonState = cloneClientState(persistedWorkspace);
       this.lastAcknowledgedSharedConfigurationState = cloneClientState(persistedSharedConfiguration);
-      this.lastPersistedSkeletonJson = splitSkeletonPersistenceJson(persistedWorkspace, persistedSharedConfiguration);
+      this.lastAcknowledgedForeignSkeletonStates.clear();
+      this.lastPersistedSkeletonJson = splitPartitionedSkeletonPersistenceJson(
+        persistedWorkspace,
+        persistedSharedConfiguration,
+        new Map([[this.currentWorkspaceScopeKey(), persistedWorkspace]]),
+        this.currentWorkspaceScopeKey()
+      );
     } else {
       this.lastAcknowledgedLocalSkeletonState = cloneClientState(skeleton);
       this.lastAcknowledgedSharedConfigurationState = undefined;
+      this.lastAcknowledgedForeignSkeletonStates.clear();
       this.lastPersistedSkeletonJson = JSON.stringify(skeleton);
     }
     this.lastProjectedState = state;
@@ -261,7 +308,15 @@ export class ClientStatePersistence {
       }
       this.lastAcknowledgedLocalSkeletonState = workspaceBase;
       this.lastAcknowledgedSharedConfigurationState = sharedConfigurationBase;
-      this.lastPersistedSkeletonJson = splitSkeletonPersistenceJson(workspaceBase, sharedConfigurationBase);
+      this.lastPersistedSkeletonJson = splitPartitionedSkeletonPersistenceJson(
+        workspaceBase,
+        sharedConfigurationBase,
+        new Map([
+          [this.currentWorkspaceScopeKey(), workspaceBase],
+          ...this.lastAcknowledgedForeignSkeletonStates.entries()
+        ]),
+        this.currentWorkspaceScopeKey()
+      );
       return;
     }
 
@@ -513,33 +568,65 @@ export class ClientStatePersistence {
     }));
     const nextSkeleton = skeletonState ? skeletonPersistenceSlice(skeletonState) : undefined;
     const usesSharedConfigurationStorage = this.usesSharedConfigurationStorage();
+    const currentWorkspaceScopeKey = this.currentWorkspaceScopeKey();
+    const partitionedWorkspaceSkeleton = nextSkeleton && usesSharedConfigurationStorage
+      ? this.partitionWorkspaceSkeleton(nextSkeleton)
+      : undefined;
     const nextLocalSkeleton = nextSkeleton
-      ? usesSharedConfigurationStorage ? workspaceRuntimeState(nextSkeleton) : nextSkeleton
+      ? usesSharedConfigurationStorage
+        ? partitionedWorkspaceSkeleton?.get(currentWorkspaceScopeKey) ?? createEmptyClientState()
+        : nextSkeleton
       : undefined;
     const nextSharedConfiguration = nextSkeleton && usesSharedConfigurationStorage
       ? sharedConfigurationState(nextSkeleton)
       : undefined;
-    const skeletonPatch = nextLocalSkeleton
-      ? createClientStateSkeletonPatch(this.lastAcknowledgedLocalSkeletonState ?? createEmptyClientState(), nextLocalSkeleton)
-      : undefined;
-    const sharedConfigurationPatch = nextSharedConfiguration
-      ? createClientStateSkeletonPatch(this.lastAcknowledgedSharedConfigurationState ?? createEmptyClientState(), nextSharedConfiguration)
-      : undefined;
-    const skeletonTask = nextLocalSkeleton && skeletonPatch
-      ? Promise.all([
-          this.storage.saveClientStateSkeleton(skeletonPatch).then(() => undefined),
-          nextSharedConfiguration && sharedConfigurationPatch
-            ? this.storage.saveSharedConfigurationSkeleton!(sharedConfigurationPatch).then(() => undefined)
-            : Promise.resolve()
-        ]).then(() => {
+
+    const skeletonTask = nextLocalSkeleton
+      ? (async () => {
+          const writes: Promise<unknown>[] = [];
+          const skeletonPatch = createClientStateSkeletonPatch(
+            this.lastAcknowledgedLocalSkeletonState ?? createEmptyClientState(),
+            nextLocalSkeleton
+          );
+          writes.push(this.storage.saveClientStateSkeleton(skeletonPatch));
+
+          if (nextSharedConfiguration) {
+            const sharedConfigurationPatch = createClientStateSkeletonPatch(
+              this.lastAcknowledgedSharedConfigurationState ?? createEmptyClientState(),
+              nextSharedConfiguration
+            );
+            writes.push(this.storage.saveSharedConfigurationSkeleton!(sharedConfigurationPatch));
+          }
+
+          const nextForeignSkeletonStates = new Map<string, ClientState>();
+          for (const [scopeKey, nextForeignSkeleton] of partitionedWorkspaceSkeleton ?? []) {
+            if (scopeKey === currentWorkspaceScopeKey) continue;
+            const base = this.lastAcknowledgedForeignSkeletonStates.get(scopeKey);
+            if (!base) {
+              throw new Error(`Foreign workspace skeleton base was not primed before save: ${scopeKey}`);
+            }
+            const patch = createClientStateSkeletonPatch(base, nextForeignSkeleton);
+            writes.push(this.storage.saveWorkspaceClientStateSkeleton(scopeKey, patch));
+            nextForeignSkeletonStates.set(scopeKey, nextForeignSkeleton);
+          }
+
+          await Promise.all(writes);
           this.lastAcknowledgedLocalSkeletonState = cloneClientState(nextLocalSkeleton);
           this.lastAcknowledgedSharedConfigurationState = nextSharedConfiguration
             ? cloneClientState(nextSharedConfiguration)
             : undefined;
+          for (const [scopeKey, nextForeignSkeleton] of nextForeignSkeletonStates) {
+            this.lastAcknowledgedForeignSkeletonStates.set(scopeKey, cloneClientState(nextForeignSkeleton));
+          }
           this.lastPersistedSkeletonJson = nextSharedConfiguration
-            ? splitSkeletonPersistenceJson(nextLocalSkeleton, nextSharedConfiguration)
+            ? splitPartitionedSkeletonPersistenceJson(
+                nextLocalSkeleton,
+                nextSharedConfiguration,
+                partitionedWorkspaceSkeleton ?? new Map([[currentWorkspaceScopeKey, nextLocalSkeleton]]),
+                currentWorkspaceScopeKey
+              )
             : JSON.stringify(nextLocalSkeleton);
-        })
+        })()
       : Promise.resolve();
     try {
       // render 与 skeleton 并行；render 已先创建，因此会先预订 conversation timeline 队列。
@@ -738,10 +825,23 @@ export class ClientStatePersistence {
         normalizedConversationId,
         stripOptions
       );
+    }
+    for (const [scopeKey, foreignBase] of this.lastAcknowledgedForeignSkeletonStates) {
+      this.lastAcknowledgedForeignSkeletonStates.set(
+        scopeKey,
+        stripConversationFromClientState(foreignBase, normalizedConversationId, stripOptions)
+      );
+    }
+    if (this.lastAcknowledgedLocalSkeletonState) {
       this.lastPersistedSkeletonJson = this.usesSharedConfigurationStorage()
-        ? splitSkeletonPersistenceJson(
+        ? splitPartitionedSkeletonPersistenceJson(
             this.lastAcknowledgedLocalSkeletonState,
-            this.lastAcknowledgedSharedConfigurationState ?? createEmptyClientState()
+            this.lastAcknowledgedSharedConfigurationState ?? createEmptyClientState(),
+            new Map([
+              [this.currentWorkspaceScopeKey(), this.lastAcknowledgedLocalSkeletonState],
+              ...this.lastAcknowledgedForeignSkeletonStates.entries()
+            ]),
+            this.currentWorkspaceScopeKey()
           )
         : JSON.stringify(this.lastAcknowledgedLocalSkeletonState);
     }
@@ -1111,8 +1211,17 @@ function changedStorageTableKeys(
   return [...tableKeys];
 }
 
-function splitSkeletonPersistenceJson(workspaceState: ClientState, sharedConfiguration: ClientState): string {
-  return JSON.stringify({ workspaceState, sharedConfiguration });
+function splitPartitionedSkeletonPersistenceJson(
+  workspaceState: ClientState,
+  sharedConfiguration: ClientState,
+  partitionedWorkspaceStates: ReadonlyMap<string, ClientState>,
+  currentWorkspaceScopeKey: string
+): string {
+  const foreignWorkspaceStates = [...partitionedWorkspaceStates.entries()]
+    .filter(([scopeKey]) => scopeKey !== currentWorkspaceScopeKey)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([workspaceScopeKey, state]) => ({ workspaceScopeKey, state }));
+  return JSON.stringify({ workspaceState, sharedConfiguration, foreignWorkspaceStates });
 }
 
 function skeletonPersistenceSlice(state: ClientState): ClientState {

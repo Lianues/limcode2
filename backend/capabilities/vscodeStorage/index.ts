@@ -33,6 +33,8 @@ import { cleanupMigratedStorageRoot, copyStorageRootForMigration } from './migra
 import { createVscodeStoragePaths } from './paths';
 import {
   createWorkspaceScopeIdentity,
+  isWorkspaceScopeKey,
+  listWorkspaceRuntimeScopes,
   resolveWorkspaceRuntimeRoot,
   workspaceScopedRuntimeRoot
 } from './workspaceScope';
@@ -80,6 +82,7 @@ import {
 } from './clientStateSkeletonTransaction';
 import {
   loadConversationHistoryPageFromStore,
+  loadConversationHistoryPageFromWorkspaceStores,
   removeConversationHistoryEntryFromStore,
   upsertConversationHistoryEntryInStore
 } from './conversationHistoryStore';
@@ -171,6 +174,7 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     workspaceFolderUris: vscode.workspace.workspaceFolders?.map((folder) => folder.uri),
     storageUri: context.storageUri
   });
+  const conversationWorkspaceScopes = new Map<string, string>();
   let currentConfigurationRootUri = resolveDataRootUri(context);
   let currentPaths = createVscodeStoragePaths(
     workspaceScopedRuntimeRoot(currentConfigurationRootUri, workspaceScope.scopeKey),
@@ -218,6 +222,31 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
       );
     }
     return currentPaths;
+  }
+
+  function scopedPaths(paths: StoragePaths, scopeKey: string): StoragePaths {
+    if (!isWorkspaceScopeKey(scopeKey)) throw new Error(`Invalid workspace runtime scope key: ${scopeKey}`);
+    if (scopeKey === workspaceScope.scopeKey) return paths;
+    return createVscodeStoragePaths(
+      workspaceScopedRuntimeRoot(paths.configurationRootUri, scopeKey),
+      paths.configurationRootUri
+    );
+  }
+
+  function conversationPaths(paths: StoragePaths, conversationId: string): StoragePaths {
+    const scopeKey = conversationWorkspaceScopes.get(conversationId.trim());
+    return scopeKey ? scopedPaths(paths, scopeKey) : paths;
+  }
+
+  function attachmentCandidatePaths(paths: StoragePaths): StoragePaths[] {
+    const result = [paths];
+    const seen = new Set([workspaceScope.scopeKey]);
+    for (const scopeKey of conversationWorkspaceScopes.values()) {
+      if (seen.has(scopeKey)) continue;
+      seen.add(scopeKey);
+      result.push(scopedPaths(paths, scopeKey));
+    }
+    return result;
   }
 
   function updateCurrentPaths(configurationRootUri: vscode.Uri, nextPaths: StoragePaths, resolved: boolean): void {
@@ -405,6 +434,17 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
 
   return {
     get paths() { return getPaths(); },
+    get workspaceScopeKey() { return workspaceScope.scopeKey; },
+    bindConversationWorkspaceScope(conversationId, scopeKey) {
+      const id = conversationId.trim();
+      if (!id) throw new Error('conversationId is required for workspace scope binding.');
+      if (!isWorkspaceScopeKey(scopeKey)) throw new Error(`Invalid workspace runtime scope key: ${scopeKey}`);
+      if (scopeKey === workspaceScope.scopeKey) conversationWorkspaceScopes.delete(id);
+      else conversationWorkspaceScopes.set(id, scopeKey);
+    },
+    unbindConversationWorkspaceScope(conversationId) {
+      conversationWorkspaceScopes.delete(conversationId.trim());
+    },
     onDidChangeStorageRoot(listener) {
       storageRootChangeListeners.add(listener);
       return { dispose: () => storageRootChangeListeners.delete(listener) };
@@ -459,6 +499,25 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
         }
       });
     },
+    async loadWorkspaceClientStateSkeleton(scopeKey, options) {
+      return withSharedDataRoot(async (paths) => {
+        const targetPaths = scopedPaths(paths, scopeKey);
+        const pin = await openClientStateSkeletonSnapshot(
+          targetPaths,
+          `${processLease.instanceId}:workspace-scope:${scopeKey}`
+        );
+        if (!pin) return undefined;
+        try {
+          return await loadClientStateSkeletonSnapshotFromStores(
+            targetPaths,
+            pin,
+            { profile: options?.profile ?? 'full' }
+          );
+        } finally {
+          await releaseClientStateSkeletonSnapshot(targetPaths, pin);
+        }
+      });
+    },
     async loadSharedConfigurationSkeleton(options) {
       return withSharedDataRoot(async (paths) => {
         const sharedPaths = sharedConfigurationPaths(paths);
@@ -510,123 +569,157 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     async loadConversationDetail(conversationId, options) {
       return withSharedDataRoot((paths) => {
         const includeRunHistory = options?.includeRunHistory ?? false;
-        return loadConversationDetailFromStores(paths, conversationId, { includeRunHistory });
+        return loadConversationDetailFromStores(conversationPaths(paths, conversationId), conversationId, { includeRunHistory });
       });
     },
     async loadConversationTimelineProjectionContext(conversationId, projectionKey, chunkId) {
-      return withSharedDataRoot((paths) => loadConversationTimelineProjectionContextFromStores(paths, conversationId, projectionKey, chunkId));
+      return withSharedDataRoot((paths) => loadConversationTimelineProjectionContextFromStores(conversationPaths(paths, conversationId), conversationId, projectionKey, chunkId));
     },
     async loadConversationTimelineMeta(conversationId) {
-      return withSharedDataRoot((paths) => loadConversationTimelineMetaFromStores(paths, conversationId));
+      return withSharedDataRoot((paths) => loadConversationTimelineMetaFromStores(conversationPaths(paths, conversationId), conversationId));
     },
     async loadConversationTimelinePage(request) {
-      return withSharedDataRoot((paths) => loadConversationTimelinePageFromStores(paths, request));
+      return withSharedDataRoot((paths) => loadConversationTimelinePageFromStores(conversationPaths(paths, request.conversationId), request));
     },
     async loadConversationTimelineRange(request) {
-      return withSharedDataRoot((paths) => loadConversationTimelineRangeFromStores(paths, request));
+      return withSharedDataRoot((paths) => loadConversationTimelineRangeFromStores(conversationPaths(paths, request.conversationId), request));
     },
     async truncateConversationTimeline(request) {
-      return withSharedDataRoot((paths) => truncateConversationTimelineFromStores(paths, request));
+      return withSharedDataRoot((paths) => truncateConversationTimelineFromStores(conversationPaths(paths, request.conversationId), request));
     },
     async saveClientStateSkeleton(patch) {
       return withSharedDataRoot((paths) => saveClientStateSkeletonToStores(paths, patch));
+    },
+    async saveWorkspaceClientStateSkeleton(scopeKey, patch) {
+      return withSharedDataRoot((paths) => saveClientStateSkeletonToStores(scopedPaths(paths, scopeKey), patch));
     },
     async saveSharedConfigurationSkeleton(patch) {
       return withSharedDataRoot((paths) => saveClientStateSkeletonToStores(sharedConfigurationPaths(paths), patch));
     },
     async saveConversationRenderDetail(conversationId, localBase, localNext) {
       return withSharedDataRoot(async (paths) => {
-        return saveConversationRenderDetailToStores(paths, conversationId, localBase, localNext);
+        return saveConversationRenderDetailToStores(conversationPaths(paths, conversationId), conversationId, localBase, localNext);
       });
     },
     async saveConversationTimelineRenderDetail(conversationId, localBase, localNext) {
       return withSharedDataRoot(async (paths) => {
-        return saveConversationTimelineRenderDetailToStores(paths, conversationId, localBase, localNext);
+        return saveConversationTimelineRenderDetailToStores(conversationPaths(paths, conversationId), conversationId, localBase, localNext);
       });
     },
     async saveConversationRunHistory(conversationId, state, options) {
       return withSharedDataRoot(async (paths) => {
-        await saveConversationRunHistoryToStores(paths, conversationId, state, options);
+        await saveConversationRunHistoryToStores(conversationPaths(paths, conversationId), conversationId, state, options);
       });
     },
     async loadConversationRunHistoryPage(request) {
-      return withSharedDataRoot((paths) => loadConversationRunHistoryPageFromStores(paths, request));
+      return withSharedDataRoot((paths) => loadConversationRunHistoryPageFromStores(conversationPaths(paths, request.conversationId), request));
     },
     async loadConversationRunDetail(request) {
-      return withSharedDataRoot((paths) => loadConversationRunDetailFromStores(paths, request));
+      return withSharedDataRoot((paths) => loadConversationRunDetailFromStores(conversationPaths(paths, request.conversationId), request));
     },
     async resolveConversationRunIdForMessage(conversationId, messageId) {
-      return withSharedDataRoot((paths) => resolveConversationRunIdForMessageFromStores(paths, conversationId, messageId));
+      return withSharedDataRoot((paths) => resolveConversationRunIdForMessageFromStores(conversationPaths(paths, conversationId), conversationId, messageId));
     },
     async loadConversationHistoryPage(request) {
-      return withSharedDataRoot((paths) => loadConversationHistoryPageFromStore(paths, request));
+      return withSharedDataRoot(async (paths) => {
+        if (request.scope.kind !== 'all') {
+          return loadConversationHistoryPageFromStore(paths, request, { workspaceScopeKey: workspaceScope.scopeKey });
+        }
+        const scopes = await listWorkspaceRuntimeScopes(paths.configurationRootUri);
+        const sources = new Map(scopes.map((scope) => [scope.scopeKey, scope.rootUri]));
+        sources.set(workspaceScope.scopeKey, paths.workspaceRuntimeRootUri);
+        return loadConversationHistoryPageFromWorkspaceStores(
+          [...sources.entries()].map(([scopeKey, rootUri]) => ({
+            paths: createVscodeStoragePaths(rootUri, paths.configurationRootUri),
+            workspaceScopeKey: scopeKey,
+            preferred: scopeKey === workspaceScope.scopeKey
+          })),
+          request
+        );
+      });
     },
     async upsertConversationHistoryEntry(entry, originLink) {
       return withSharedDataRoot(async (paths) => {
-        await upsertConversationHistoryEntryInStore(paths, entry, originLink);
+        await upsertConversationHistoryEntryInStore(conversationPaths(paths, entry.id), entry, originLink);
       });
     },
     async removeConversationHistoryEntry(conversationId) {
       return withSharedDataRoot(async (paths) => {
-        await removeConversationHistoryEntryFromStore(paths, conversationId);
+        await removeConversationHistoryEntryFromStore(conversationPaths(paths, conversationId), conversationId);
       });
     },
     async deleteConversationSkeleton(conversationId, runIds) {
       return withSharedDataRoot(async (paths) => {
+        const targetPaths = conversationPaths(paths, conversationId);
         // 本地 ECS 可能尚未 hydrate 其它窗口持久化的 run；先从 canonical run history
         // 补齐 runId，避免 skeleton 中独立的 run→环境/runtime snapshot Link 成为孤儿。
-        const persistedRunIds = await collectConversationRunIdsForDeletionFromStores(paths, conversationId);
+        const persistedRunIds = await collectConversationRunIdsForDeletionFromStores(targetPaths, conversationId);
         const allRunIds = new Set([...(runIds ?? []), ...persistedRunIds]);
-        await commitClientStateSkeletonConversationDeletion(paths, conversationId, allRunIds);
+        await commitClientStateSkeletonConversationDeletion(targetPaths, conversationId, allRunIds);
         return { runIds: [...allRunIds] };
       });
     },
     async deleteConversationData(conversationId) {
       return withSharedDataRoot(async (paths) => {
-        const result: DeleteConversationDataResult = await deleteConversationDataFromStores(paths, conversationId);
-        await collectDeleteStep(result, () => removeConversationHistoryEntryFromStore(paths, conversationId), `history:${conversationId}`);
-        await collectDeleteStep(result, () => deleteStorageUri(conversationSettingsUri(paths, conversationId, 'common'), { useTrash: false }), conversationSettingsUri(paths, conversationId, 'common').fsPath, true);
-        await collectDeleteStep(result, () => deleteStorageUri(conversationSettingsUri(paths, conversationId, 'llm'), { useTrash: false }), conversationSettingsUri(paths, conversationId, 'llm').fsPath, true);
+        const targetPaths = conversationPaths(paths, conversationId);
+        const result: DeleteConversationDataResult = await deleteConversationDataFromStores(targetPaths, conversationId);
+        await collectDeleteStep(result, () => removeConversationHistoryEntryFromStore(targetPaths, conversationId), `history:${conversationId}`);
+        await collectDeleteStep(result, () => deleteStorageUri(conversationSettingsUri(targetPaths, conversationId, 'common'), { useTrash: false }), conversationSettingsUri(targetPaths, conversationId, 'common').fsPath, true);
+        await collectDeleteStep(result, () => deleteStorageUri(conversationSettingsUri(targetPaths, conversationId, 'llm'), { useTrash: false }), conversationSettingsUri(targetPaths, conversationId, 'llm').fsPath, true);
         return { ...result, ok: result.errors.length === 0 };
       });
     },
     async saveMessageSnapshot(conversationId, message) {
       return withSharedDataRoot(async (paths) => {
-        await saveMessageRecord(paths, conversationId, message);
+        await saveMessageRecord(conversationPaths(paths, conversationId), conversationId, message);
       });
     },
-    async removeMessage(_conversationId, messageId) {
+    async removeMessage(conversationId, messageId) {
       return withSharedDataRoot(async (paths) => {
-        await removeMessageRecord(paths, _conversationId, messageId);
+        await removeMessageRecord(conversationPaths(paths, conversationId), conversationId, messageId);
       });
     },
-    async saveToolCallSnapshot(_conversationId, toolCall) {
+    async saveToolCallSnapshot(conversationId, toolCall) {
       return withSharedDataRoot(async (paths) => {
-        await saveToolCallRecord(paths, _conversationId, toolCall);
+        await saveToolCallRecord(conversationPaths(paths, conversationId), conversationId, toolCall);
       });
     },
-    async appendToolCallEvent(_conversationId, event) {
+    async appendToolCallEvent(conversationId, event) {
       return withSharedDataRoot(async (paths) => {
-        await appendToolCallEventRecord(paths, _conversationId, event);
+        await appendToolCallEventRecord(conversationPaths(paths, conversationId), conversationId, event);
       });
     },
     async resolveAttachmentForClient(input) {
-      return withSharedDataRoot((paths) => resolveAttachmentForClientFromStore(paths, input));
+      return withSharedDataRoot(async (paths) => {
+        let fallback: Awaited<ReturnType<typeof resolveAttachmentForClientFromStore>> | undefined;
+        for (const candidatePaths of attachmentCandidatePaths(paths)) {
+          const result = await resolveAttachmentForClientFromStore(candidatePaths, input);
+          fallback ??= result;
+          if (result.status === 'available') return result;
+        }
+        return fallback!;
+      });
     },
     async materializeAttachmentFileUri(input) {
-      return withSharedDataRoot((paths) => materializeAttachmentFileUriFromStore(paths, input));
+      return withSharedDataRoot(async (paths) => {
+        for (const candidatePaths of attachmentCandidatePaths(paths)) {
+          const uri = await materializeAttachmentFileUriFromStore(candidatePaths, input);
+          if (uri) return uri;
+        }
+        return undefined;
+      });
     },
     async detectSystemGit() {
       return withSharedDataRoot(async () => detectSystemGitCommand());
     },
     async createShadowCheckpoint(request) {
-      return withSharedDataRoot((paths) => createShadowCheckpoint(paths, request));
+      return withSharedDataRoot((paths) => createShadowCheckpoint(conversationPaths(paths, request.conversationId), request));
     },
     async restoreShadowCheckpoint(request) {
-      return withSharedDataRoot((paths) => restoreShadowCheckpoint(paths, request));
+      return withSharedDataRoot((paths) => restoreShadowCheckpoint(conversationPaths(paths, request.conversationId), request));
     },
     async openShadowCheckpointDiff(request) {
-      return withSharedDataRoot((paths) => openShadowCheckpointDiff(paths, request));
+      return withSharedDataRoot((paths) => openShadowCheckpointDiff(conversationPaths(paths, request.conversationId), request));
     },
     async collectShadowWorktreeStats() {
       return withSharedDataRoot((paths) => collectShadowWorktreeStats(paths));
@@ -765,17 +858,18 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     },
     async loadConversationSettings(conversationId, section, options) {
       return withSharedDataRoot(async (paths) => {
-        const uri = conversationSettingsUri(paths, conversationId, section);
+        const targetPaths = conversationPaths(paths, conversationId);
+        const uri = conversationSettingsUri(targetPaths, conversationId, section);
         const result = await readJsonStrict<unknown>(uri);
         if (section === 'llm') {
           if (result.status === 'missing') {
             if (options?.initializeMissing === false) return undefined;
-            const frozen = await freezeMissingConversationLlmSettingsToCurrentGlobal(paths, conversationId, uri);
+            const frozen = await freezeMissingConversationLlmSettingsToCurrentGlobal(targetPaths, conversationId, uri);
             return { conversationId, section, settings: frozen, filePath: uri.fsPath };
           }
           if (result.status !== 'ok') throw strictConversationSettingsReadError(conversationId, section, result);
           const settings = parseConversationLlmSettings(conversationId, uri, result.value);
-          const resolved = await repairStaleConversationLlmProviderReference(paths, conversationId, uri, settings);
+          const resolved = await repairStaleConversationLlmProviderReference(targetPaths, conversationId, uri, settings);
           return { conversationId, section, settings: resolved, filePath: uri.fsPath };
         }
         if (result.status === 'missing') return undefined;
@@ -786,12 +880,13 @@ export function createVsCodeStorageCapability(context: vscode.ExtensionContext):
     },
     async saveConversationSettings(section, settings) {
       return withSharedDataRoot(async (paths) => {
-        await ensureStorageDirectory(paths.conversationSettingsRootUri);
         const conversationId = (settings as ConversationSettingsRecord | ConversationLlmSettingsRecord).conversationId;
+        const targetPaths = conversationPaths(paths, conversationId);
+        await ensureStorageDirectory(targetPaths.conversationSettingsRootUri);
         const normalized = section === 'llm'
           ? normalizeConversationLlmSettings(conversationId, settings as Partial<ConversationLlmSettingsRecord>)
           : normalizeConversationCommonSettings(conversationId, settings as Partial<ConversationSettingsRecord>);
-        const uri = conversationSettingsUri(paths, conversationId, section);
+        const uri = conversationSettingsUri(targetPaths, conversationId, section);
         await withStorageResourceLock(uri, async () => {
           await writeJson(uri, toPlainConversationSettings(normalized));
         });

@@ -103,6 +103,12 @@ Module._load = function patchedLoad(request, parent, isMain) {
 process.on('exit', () => { Module._load = originalLoad; });
 
 const { createVsCodeStorageCapability } = require('../dist/extension/backend/capabilities/vscodeStorage/index.js');
+const { createWorkspaceScopeIdentity, workspaceScopedRuntimeRoot } = require('../dist/extension/backend/capabilities/vscodeStorage/workspaceScope.js');
+const { createVscodeStoragePaths } = require('../dist/extension/backend/capabilities/vscodeStorage/paths.js');
+const { createEmptyClientState } = require('../dist/extension/shared/clientStateSchema.js');
+const { createClientStateSkeletonPatch } = require('../dist/extension/backend/capabilities/vscodeStorage/clientStateSkeletonPatch.js');
+const clientStateStore = require('../dist/extension/backend/capabilities/vscodeStorage/clientStateStore.js');
+const historyStore = require('../dist/extension/backend/capabilities/vscodeStorage/conversationHistoryStore.js');
 const { registerSidebarEntryView } = require('../dist/extension/vscode/views/SidebarEntryView.js');
 
 function deferred() {
@@ -145,6 +151,11 @@ function registerSidebarHarness(context, storage, admissionGate) {
   let postCount = 0;
   const backendApp = {
     getConversationHistoryRootUri: () => storage.paths.conversationHistoryRootUri,
+    getConversationHistoryWatchRootUri: () => MockUri.joinPath(
+      storage.paths.configurationRootUri,
+      '.limcode-workspace-runtimes',
+      'scopes'
+    ),
     isStorageReady: () => storage.isDataRootReady(),
     waitUntilStorageReady: async () => {
       await admissionGate.promise;
@@ -199,9 +210,10 @@ test('Sidebar waits for admission before any provisional write and then binds th
     await waitFor(() => storage.isDataRootReady() && watchers.length === 1, 'Sidebar watcher did not bind after storage admission');
 
     const resolvedRoot = storage.paths.conversationHistoryRootUri.fsPath;
+    const watchRoot = path.join(tempRoot, '.limcode-workspace-runtimes', 'scopes');
     assert.equal(resolvedRoot, provisionalRoot, 'admission keeps the frozen workspace scope');
-    assert.equal(watchers[0].pattern.base.fsPath, resolvedRoot);
-    assert.ok(createDirectoryCalls.includes(resolvedRoot));
+    assert.equal(watchers[0].pattern.base.fsPath, path.resolve(watchRoot));
+    assert.ok(createDirectoryCalls.includes(path.resolve(watchRoot)));
   } finally {
     context?.subscriptions.forEach((item) => item.dispose());
     vscodeMock.workspace.workspaceFolders = [];
@@ -257,13 +269,106 @@ test('a second-window Sidebar resolving behind migration fence performs no old-r
     await migration;
     await waitFor(() => storageB.isDataRootReady() && watchers.length === 1, 'second-window Sidebar did not bind after migration');
     assert.equal(storageB.paths.globalStoragePath, path.resolve(newRoot));
-    assert.equal(watchers[0].pattern.base.fsPath, storageB.paths.conversationHistoryRootUri.fsPath);
-    assert.match(watchers[0].pattern.base.fsPath, /\.limcode-workspace-runtimes[\\/]scopes[\\/]/);
+    assert.equal(
+      watchers[0].pattern.base.fsPath,
+      path.resolve(path.join(newRoot, '.limcode-workspace-runtimes', 'scopes'))
+    );
+    assert.match(watchers[0].pattern.base.fsPath, /\.limcode-workspace-runtimes[\\/]scopes$/);
   } finally {
     vscodeMock.workspace.fs.copy = originalCopy;
     releaseCopy.resolve();
     contextA?.subscriptions.forEach((item) => item.dispose());
     contextB?.subscriptions.forEach((item) => item.dispose());
+    vscodeMock.workspace.workspaceFolders = [];
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('foreign Conversation 按 owner scope 聚合、加载并原位保存', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-workspace-runtime-foreign-'));
+  let context;
+  try {
+    resetHarnessState();
+    const workspaceA = path.join(tempRoot, 'workspace-a');
+    const workspaceB = path.join(tempRoot, 'workspace-b');
+    await Promise.all([fs.mkdir(workspaceA, { recursive: true }), fs.mkdir(workspaceB, { recursive: true })]);
+    vscodeMock.workspace.workspaceFolders = [{ uri: MockUri.file(workspaceA) }];
+    context = createContext(tempRoot);
+    const storage = createVsCodeStorageCapability(context);
+    await storage.ensureReady();
+
+    const scopeB = createWorkspaceScopeIdentity({ workspaceFolderUris: [MockUri.file(workspaceB)] });
+    const pathsB = createVscodeStoragePaths(
+      workspaceScopedRuntimeRoot(MockUri.file(tempRoot), scopeB.scopeKey),
+      MockUri.file(tempRoot)
+    );
+    const conversationId = 'conversation-foreign-route';
+    const skeleton = createEmptyClientState();
+    skeleton.conversations.push({ id: conversationId, title: 'Foreign', visibility: 'visible' });
+    skeleton.projectContexts.push({ id: 'project-b', kind: 'folder', uri: MockUri.file(workspaceB).toString(), name: 'B', createdAt: 1, updatedAt: 1 });
+    skeleton.conversationProjectLinks.push({ id: 'project-link-b', conversationId, projectContextId: 'project-b', role: 'primary', createdAt: 1, updatedAt: 1 });
+    await clientStateStore.saveClientStateSkeletonToStores(
+      pathsB,
+      createClientStateSkeletonPatch(createEmptyClientState(), skeleton)
+    );
+
+    const detail = createEmptyClientState();
+    detail.messages.push({
+      id: 'message-foreign-1',
+      conversationId,
+      role: 'user',
+      content: { parts: [{ text: 'from B' }] },
+      status: 'complete',
+      createdAt: 1,
+      seq: 1
+    });
+    await clientStateStore.saveConversationRenderDetailToStores(pathsB, conversationId, createEmptyClientState(), detail);
+    await historyStore.upsertConversationHistoryEntryInStore(pathsB, {
+      id: conversationId,
+      title: 'Foreign',
+      preview: 'from B',
+      messageCount: 1,
+      status: 'complete',
+      updatedAt: 1,
+      isRunning: false,
+      projectFolderUri: MockUri.file(workspaceB).toString(),
+      projectName: 'B'
+    });
+
+    const all = await storage.loadConversationHistoryPage({ scope: { kind: 'all' }, limit: 20 });
+    assert.equal(all.entries.some((entry) => entry.id === conversationId), true);
+    assert.equal(
+      all.workspaceScopeLinks.find((link) => link.conversationId === conversationId)?.workspaceScopeKey,
+      scopeB.scopeKey
+    );
+
+    storage.bindConversationWorkspaceScope(conversationId, scopeB.scopeKey);
+    const loadedSkeleton = await storage.loadWorkspaceClientStateSkeleton(scopeB.scopeKey, { profile: 'full' });
+    assert.equal(loadedSkeleton.conversations.some((conversation) => conversation.id === conversationId), true);
+    const loadedDetail = await storage.loadConversationDetail(conversationId);
+    assert.deepEqual(loadedDetail.messages.map((message) => message.id), ['message-foreign-1']);
+
+    const nextDetail = JSON.parse(JSON.stringify(loadedDetail));
+    nextDetail.messages.push({
+      id: 'message-foreign-2',
+      conversationId,
+      role: 'model',
+      content: { parts: [{ text: 'saved to B' }] },
+      status: 'complete',
+      createdAt: 2,
+      seq: 2
+    });
+    await storage.saveConversationRenderDetail(conversationId, loadedDetail, nextDetail);
+    await storage.saveConversationSettings('common', { conversationId, name: 'Foreign settings' });
+
+    const fromB = await clientStateStore.loadConversationDetailFromStores(pathsB, conversationId);
+    const fromA = await clientStateStore.loadConversationDetailFromStores(storage.paths, conversationId);
+    assert.deepEqual(fromB.messages.map((message) => message.id), ['message-foreign-1', 'message-foreign-2']);
+    assert.equal(fromA, undefined);
+    assert.equal(await fileExists(path.join(pathsB.conversationSettingsRootUri.fsPath, `conversation-${conversationId}-common.json`)), true);
+    assert.equal(await fileExists(path.join(storage.paths.conversationSettingsRootUri.fsPath, `conversation-${conversationId}-common.json`)), false);
+  } finally {
+    context?.subscriptions.forEach((item) => item.dispose());
     vscodeMock.workspace.workspaceFolders = [];
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
@@ -281,6 +386,7 @@ test('fresh scoped root binds after ready without a root-change event and provid
     const gate = deferred();
     const sidebar = registerSidebarHarness(context, storage, gate);
     const scopedRoot = storage.paths.conversationHistoryRootUri.fsPath;
+    const watchRoot = path.resolve(path.join(tempRoot, '.limcode-workspace-runtimes', 'scopes'));
     assert.equal(context.subscriptions.includes(sidebar.provider), true, 'provider must participate in extension disposal');
 
     await delay(30);
@@ -291,8 +397,8 @@ test('fresh scoped root binds after ready without a root-change event and provid
     gate.resolve();
     await waitFor(() => storage.isDataRootReady() && watchers.length === 1, 'fresh scoped watcher did not bind after ready');
     assert.equal(storage.paths.conversationHistoryRootUri.fsPath, scopedRoot, 'fresh scope keeps the same resolved identity');
-    assert.equal(watchers[0].pattern.base.fsPath, scopedRoot);
-    assert.ok(createDirectoryCalls.includes(scopedRoot));
+    assert.equal(watchers[0].pattern.base.fsPath, watchRoot);
+    assert.ok(createDirectoryCalls.includes(watchRoot));
 
     sidebar.provider.refreshConversationHistory();
     assert.notEqual(sidebar.provider.historyRefreshTimer, undefined);

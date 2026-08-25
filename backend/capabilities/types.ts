@@ -684,6 +684,14 @@ export interface GlobalSettingsStoreResult {
 export interface StorageCapability {
   /** 当前 active data root 派生出的路径；数据目录切换后 getter 会返回新路径。 */
   readonly paths: RuntimePaths;
+  /** 当前 Extension Host 激活时冻结的 workspace runtime scope。 */
+  readonly workspaceScopeKey: string;
+  /**
+   * 将已加载 Conversation 的物理 owner scope 注册到 capability 路由表。
+   * owner 关系本身由 ECS ConversationWorkspaceScopeLink 表达；这里仅缓存路径选择。
+   */
+  bindConversationWorkspaceScope(conversationId: string, workspaceScopeKey: string): void;
+  unbindConversationWorkspaceScope(conversationId: string): void;
   /** provisional workspace root 被 owner resolution 修正，或 data root 提交切换后触发。 */
   onDidChangeStorageRoot?(listener: () => void): vscode.Disposable;
   /** 同步 paths 可读不代表业务已完成跨进程 admission；早期写入方必须检查此状态。 */
@@ -691,6 +699,11 @@ export interface StorageCapability {
   isDataRootMutationActive?(): boolean;
   ensureReady(): Promise<void>;
   loadClientStateSkeleton(options?: { profile?: 'startup' | 'deferred' | 'full' }): Promise<ClientState | undefined>;
+  /** 按明确 workspace scope 读取 runtime skeleton；用于挂载其它 scope 的 Conversation。 */
+  loadWorkspaceClientStateSkeleton(
+    workspaceScopeKey: string,
+    options?: { profile?: 'startup' | 'deferred' | 'full' }
+  ): Promise<ClientState | undefined>;
   /** 跨工作区共享的 Agent、Workflow 与配置图 skeleton。 */
   loadSharedConfigurationSkeleton?(options?: { profile?: 'startup' | 'deferred' | 'full' }): Promise<ClientState | undefined>;
   loadConversationDetail(
@@ -718,6 +731,11 @@ export interface StorageCapability {
     keepAnchor: boolean;
   }): Promise<{ conversationId: string; removedMessageIds: string[] }>;
   saveClientStateSkeleton(
+    patch: import('./vscodeStorage/clientStateSkeletonPatch').ClientStateSkeletonPatch
+  ): Promise<import('./vscodeStorage/clientStateSkeletonTransaction').ClientStateSkeletonCommitResult>;
+  /** 把 conversation-scoped runtime skeleton patch 原位写回明确 owner scope。 */
+  saveWorkspaceClientStateSkeleton(
+    workspaceScopeKey: string,
     patch: import('./vscodeStorage/clientStateSkeletonPatch').ClientStateSkeletonPatch
   ): Promise<import('./vscodeStorage/clientStateSkeletonTransaction').ClientStateSkeletonCommitResult>;
   /** 保存跨工作区共享的 Agent、Workflow 与配置图 skeleton。 */

@@ -9,6 +9,7 @@ import {
   type OpenConversationPanelRecord
 } from '@shared/protocol';
 import { displayConversationTitle as formatConversationTitle } from '@shared/conversationTitle';
+import { sidebarScopePageIndexAfterState } from '@shared/sidebarScopePagination';
 import {
   buildConversationHistoryForest,
   flattenConversationHistoryForest,
@@ -60,6 +61,7 @@ const activeProjectFolderUri = ref<string | undefined>();
 const currentProjectScope = ref<ConversationHistoryScope>({ kind: 'unbound' });
 const openConversations = ref<OpenConversationPanelRecord[]>([]);
 const pageInfo = ref<ConversationHistoryPageInfo>();
+const currentWorkspaceScopeLinks = ref<ConversationHistoryPageRecord['workspaceScopeLinks']>([]);
 const scopePageIndex = ref(0);
 const renameTarget = ref<SidebarConversationHistoryEntry>();
 const deleteTarget = ref<SidebarConversationHistoryEntry>();
@@ -67,6 +69,9 @@ const abortTarget = ref<SidebarConversationHistoryEntry>();
 const historyList = ref<HTMLElement | null>(null);
 const historyForest = computed(() => buildConversationHistoryForest(entries.value, originLinks.value));
 const originLinkByConversationId = computed(() => selectConversationOriginLinks(originLinks.value));
+const workspaceScopeLinkByConversationId = computed(() => new Map(
+  (pageInfo.value ? currentWorkspaceScopeLinks.value : []).map((link) => [link.conversationId, link])
+));
 const visibleHistoryNodes = computed(() => flattenVisibleHistoryNodes(historyForest.value, expandedConversationIds.value));
 const historyScrollbarRefreshKey = computed(() => `${entries.value.length}:${visibleHistoryNodes.value.length}`);
 const historyCountText = computed(() => {
@@ -153,10 +158,12 @@ const abortConfirmActions: ConfirmPanelAction[] = [
 let disposeMessages: (() => void) | undefined;
 let currentHistoryPageIdentity = '';
 let autoExpandedActiveConversationId: string | undefined;
+let hasReceivedSidebarState = false;
 
 onMounted(() => {
   disposeMessages = onSidebarMessage((message) => {
     if (message.type !== SIDEBAR_MESSAGE.state) return;
+    const previousActiveScopeKey = activeScopeKey.value;
     const nextScopeKind = message.activeScopeKind ?? activeScopeKind.value;
     const nextPageIdentity = historyPageIdentity(message.history);
     if (nextPageIdentity !== currentHistoryPageIdentity) {
@@ -165,6 +172,7 @@ onMounted(() => {
     }
     entries.value = Array.isArray(message.history?.entries) ? message.history.entries : [];
     originLinks.value = Array.isArray(message.history?.originLinks) ? message.history.originLinks : [];
+    currentWorkspaceScopeLinks.value = Array.isArray(message.history?.workspaceScopeLinks) ? message.history.workspaceScopeLinks : [];
     pageInfo.value = message.history?.pageInfo;
     activeScopeKind.value = nextScopeKind;
     if (message.activeProjectFolderUri !== undefined) activeProjectFolderUri.value = message.activeProjectFolderUri;
@@ -172,7 +180,15 @@ onMounted(() => {
     currentProjectScope.value = message.currentProjectScope ?? currentProjectScope.value;
     projectFolders.value = Array.isArray(message.projectFolders) ? message.projectFolders : [];
     openConversations.value = Array.isArray(message.openConversations) ? message.openConversations : [];
-    ensureActiveScopeVisible();
+    scopePageIndex.value = sidebarScopePageIndexAfterState({
+      currentPageIndex: scopePageIndex.value,
+      pageSize: SCOPE_PAGE_SIZE,
+      activeOptionIndex: scopeOptions.value.findIndex((option) => option.key === activeScopeKey.value),
+      hasReceivedState: hasReceivedSidebarState,
+      previousActiveScopeKey,
+      nextActiveScopeKey: activeScopeKey.value
+    });
+    hasReceivedSidebarState = true;
     ensureActiveConversationAncestorsExpanded();
   });
   postSidebarMessage({ type: SIDEBAR_MESSAGE.ready });
@@ -187,7 +203,13 @@ function setView(next: SidebarView): void {
 }
 
 function openConversation(entry: SidebarConversationHistoryEntry): void {
-  postSidebarMessage({ type: SIDEBAR_MESSAGE.openConversation, conversationId: entry.id, title: displayConversationTitle(entry) });
+  const workspaceScopeKey = workspaceScopeLinkByConversationId.value.get(entry.id)?.workspaceScopeKey;
+  postSidebarMessage({
+    type: SIDEBAR_MESSAGE.openConversation,
+    conversationId: entry.id,
+    title: displayConversationTitle(entry),
+    ...(workspaceScopeKey ? { workspaceScopeKey } : {})
+  });
 }
 
 function requestHistoryPage(
@@ -410,12 +432,6 @@ function middleEllipsis(value: string, maxLength: number): string {
 
 function scopeOptionKey(scopeKind: SidebarHistoryScopeKind, projectFolderUri?: string): string {
   return scopeKind === 'project' ? `project:${projectFolderUri ?? ''}` : scopeKind;
-}
-
-function ensureActiveScopeVisible(): void {
-  const index = scopeOptions.value.findIndex((option) => option.key === activeScopeKey.value);
-  if (index < 0) return;
-  scopePageIndex.value = Math.floor(index / SCOPE_PAGE_SIZE);
 }
 
 function flattenVisibleHistoryNodes(

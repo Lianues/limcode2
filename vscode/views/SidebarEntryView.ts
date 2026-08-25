@@ -32,6 +32,7 @@ interface SidebarWebviewMessage {
   scopeKind?: SidebarHistoryScopeKind;
   cursor?: string;
   limit?: number;
+  workspaceScopeKey?: string;
 }
 
 interface SidebarStateMessage {
@@ -94,11 +95,21 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider, vscode.Dis
 
     webviewView.webview.onDidReceiveMessage((message: SidebarWebviewMessage) => {
       if (message.type === OPEN_CONVERSATION_MESSAGE && message.conversationId) {
-        this.backendApp.ensureConversationPlaceholder(message.conversationId, message.title);
-        MainPanel.createOrShow(this.extensionUri, this.backendApp, {
+        const historyEntry = this.lastStateMessage?.history.entries.find((entry) => entry.id === message.conversationId);
+        void this.backendApp.openConversationFromHistory({
           conversationId: message.conversationId,
           title: message.title,
-          reuse: true
+          workspaceScopeKey: message.workspaceScopeKey,
+          historyEntry
+        }).then(() => {
+          MainPanel.createOrShow(this.extensionUri, this.backendApp, {
+            conversationId: message.conversationId,
+            title: message.title,
+            reuse: true
+          });
+        }).catch((error) => {
+          console.warn('[LimCode] Failed to open sidebar conversation.', error);
+          void vscode.window.showErrorMessage(`无法打开对话：${error instanceof Error ? error.message : String(error)}`);
         });
         return;
       }
@@ -217,7 +228,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       return;
     }
 
-    const root = this.backendApp.getConversationHistoryRootUri();
+    const root = this.backendApp.getConversationHistoryWatchRootUri();
     const rootKey = root.toString();
     if (this.historyWatcher && this.historyWatcherRoot === rootKey) return;
 
@@ -227,7 +238,7 @@ class SidebarEntryViewProvider implements vscode.WebviewViewProvider, vscode.Dis
       console.warn('[LimCode] Failed to ensure conversation history watcher root.', error);
     });
 
-    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, '**/*.json'));
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, '**/conversation-history/**/*.json'));
     const schedule = () => this.scheduleConversationHistoryRefresh();
     watcher.onDidCreate(schedule);
     watcher.onDidChange(schedule);

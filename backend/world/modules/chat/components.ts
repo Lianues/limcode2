@@ -21,6 +21,17 @@ export const Conversation = defineComponent<ConversationData>('Conversation');
 export const ConversationFullContextPending = defineComponent<{ startedAt: number }>('ConversationFullContextPending');
 export const ConversationFullContextLoaded = defineComponent<{ loadedAt: number }>('ConversationFullContextLoaded');
 
+/** Conversation 与其物理 workspace runtime owner 的运行时关系；不进入 ClientState 领域记录。 */
+export interface ConversationWorkspaceScopeLinkData {
+  id: string;
+  conversation: Entity;
+  workspaceScopeKey: string;
+  role: 'owner';
+  createdAt: number;
+  updatedAt: number;
+}
+export const ConversationWorkspaceScopeLink = defineComponent<ConversationWorkspaceScopeLinkData>('ConversationWorkspaceScopeLink');
+
 export interface ConversationReuseLinkData {
   id: string;
   key: string;

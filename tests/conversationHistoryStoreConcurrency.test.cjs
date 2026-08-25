@@ -227,6 +227,7 @@ if (process.argv[2] === '--worker') {
   const store = require('../dist/extension/backend/capabilities/vscodeStorage/conversationHistoryStore.js');
   const {
     loadConversationHistoryPageFromStore,
+    loadConversationHistoryPageFromWorkspaceStores,
     upsertConversationHistoryEntryInStore,
     removeConversationHistoryEntryFromStore,
     __conversationHistoryStoreTestHooks
@@ -861,6 +862,45 @@ if (process.argv[2] === '--worker') {
       );
     } finally {
       await removeTempRoot(tempRoot);
+    }
+  });
+
+  test('全部历史跨 workspace 聚合、去重并保留 owner scope Link', async () => {
+    const tempRootA = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-history-scope-a-'));
+    const tempRootB = await fs.mkdtemp(path.join(os.tmpdir(), 'limcode-history-scope-b-'));
+    try {
+      const pathsA = makePaths(tempRootA);
+      const pathsB = makePaths(tempRootB);
+      await upsertConversationHistoryEntryInStore(pathsA, makeEntry('conversation-a', 10, { title: 'A' }));
+      await upsertConversationHistoryEntryInStore(pathsA, makeEntry('conversation-duplicate', 15, { title: 'current wins tie' }));
+      await upsertConversationHistoryEntryInStore(pathsB, makeEntry('conversation-b', 20, { title: 'B' }));
+      await upsertConversationHistoryEntryInStore(pathsB, makeEntry('conversation-duplicate', 15, { title: 'foreign loses tie' }));
+
+      const scopeA = 'a'.repeat(64);
+      const scopeB = 'b'.repeat(64);
+      const page = await loadConversationHistoryPageFromWorkspaceStores([
+        { paths: pathsA, workspaceScopeKey: scopeA, preferred: true },
+        { paths: pathsB, workspaceScopeKey: scopeB }
+      ], { scope: { kind: 'all' }, limit: 10 });
+
+      assert.equal(page.pageInfo.total, 3);
+      assert.deepEqual(page.entries.map((entry) => entry.id), [
+        'conversation-b',
+        'conversation-duplicate',
+        'conversation-a'
+      ]);
+      assert.equal(page.entries.find((entry) => entry.id === 'conversation-duplicate').title, 'current wins tie');
+      assert.deepEqual(
+        new Map(page.workspaceScopeLinks.map((link) => [link.conversationId, link.workspaceScopeKey])),
+        new Map([
+          ['conversation-a', scopeA],
+          ['conversation-duplicate', scopeA],
+          ['conversation-b', scopeB]
+        ])
+      );
+    } finally {
+      await removeTempRoot(tempRootA);
+      await removeTempRoot(tempRootB);
     }
   });
 

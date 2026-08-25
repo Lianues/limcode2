@@ -3,6 +3,7 @@ import type {
   ConversationHistoryPageRecord,
   ConversationHistoryPageRequest,
   ConversationHistoryScope,
+  ConversationHistoryWorkspaceScopeLinkRecord,
   ConversationOriginLinkRecord,
   SidebarConversationHistoryEntry
 } from '../../../shared/protocol';
@@ -131,6 +132,12 @@ interface ConversationHistoryScopedProjection {
   originLinks: ConversationOriginLinkRecord[];
 }
 
+export interface ConversationHistoryWorkspaceStoreSource {
+  paths: StoragePaths;
+  workspaceScopeKey: string;
+  preferred?: boolean;
+}
+
 interface ConversationHistoryIndexSnapshot {
   index: ConversationHistoryIndexFile;
   uri: vscode.Uri;
@@ -157,13 +164,69 @@ export const __conversationHistoryStoreTestHooks: ConversationHistoryStoreTestHo
 
 export async function loadConversationHistoryPageFromStore(
   paths: StoragePaths,
-  request: ConversationHistoryPageRequest
+  request: ConversationHistoryPageRequest,
+  options: { workspaceScopeKey?: string } = {}
 ): Promise<ConversationHistoryPageRecord> {
   const pageSize = normalizePageSize(request.limit);
   const canonical = await loadCanonicalProjectionForUi(paths);
-  if (!canonical) return pageRecordFromScopedProjection(request, { entries: [], originLinks: [] }, pageSize);
+  if (!canonical) return pageRecordFromScopedProjection(request, { entries: [], originLinks: [] }, pageSize, []);
   const scoped = deriveScopedProjection(canonical, request.scope);
-  return pageRecordFromScopedProjection(request, scoped, pageSize);
+  const workspaceScopeLinks = options.workspaceScopeKey
+    ? scoped.entries.map((entry) => historyWorkspaceScopeLink(entry.id, options.workspaceScopeKey!))
+    : [];
+  return pageRecordFromScopedProjection(request, scoped, pageSize, workspaceScopeLinks);
+}
+
+/**
+ * 只读聚合多个 workspace runtime 的 canonical history。各 scope 继续独立写入，
+ * 这里不创建第二份全局索引，避免重新引入跨窗口写竞争。
+ */
+export async function loadConversationHistoryPageFromWorkspaceStores(
+  sources: readonly ConversationHistoryWorkspaceStoreSource[],
+  request: ConversationHistoryPageRequest
+): Promise<ConversationHistoryPageRecord> {
+  const pageSize = normalizePageSize(request.limit);
+  const loaded = await Promise.all(sources.map(async (source) => {
+    try {
+      const projection = await loadCanonicalProjectionForUi(source.paths);
+      return projection ? { source, projection } : undefined;
+    } catch (error) {
+      console.warn(`[LimCode] Failed to load conversation history for workspace scope ${source.workspaceScopeKey}.`, error);
+      return undefined;
+    }
+  }));
+
+  const selected = new Map<string, {
+    entry: SidebarConversationHistoryEntry;
+    originLink?: ConversationOriginLinkRecord;
+    workspaceScopeKey: string;
+    preferred: boolean;
+  }>();
+
+  for (const item of loaded) {
+    if (!item) continue;
+    const originLinks = selectConversationOriginLinks(item.projection.originLinks);
+    for (const entry of item.projection.entries) {
+      const candidate = {
+        entry: { ...entry },
+        originLink: originLinks.get(entry.id),
+        workspaceScopeKey: item.source.workspaceScopeKey,
+        preferred: item.source.preferred === true
+      };
+      const existing = selected.get(entry.id);
+      if (!existing || shouldPreferHistoryCandidate(candidate, existing)) selected.set(entry.id, candidate);
+    }
+  }
+
+  const projection: ConversationHistoryScopedProjection = {
+    entries: [...selected.values()].map((item) => item.entry),
+    originLinks: [...selected.values()]
+      .map((item) => item.originLink)
+      .filter((link): link is ConversationOriginLinkRecord => link !== undefined)
+      .map((link) => ({ ...link }))
+  };
+  const links = [...selected.values()].map((item) => historyWorkspaceScopeLink(item.entry.id, item.workspaceScopeKey));
+  return pageRecordFromScopedProjection(request, projection, pageSize, links);
 }
 
 export async function upsertConversationHistoryEntryInStore(
@@ -864,7 +927,8 @@ function generationCommitUri(rootUri: vscode.Uri, generation: string): vscode.Ur
 function pageRecordFromScopedProjection(
   request: ConversationHistoryPageRequest,
   projection: ConversationHistoryScopedProjection,
-  pageSize: number
+  pageSize: number,
+  workspaceScopeLinks: readonly ConversationHistoryWorkspaceScopeLinkRecord[]
 ): ConversationHistoryPageRecord {
   const forest = buildConversationHistoryForest(projection.entries, projection.originLinks);
   const pageGroups = packConversationHistoryForestIntoPages(forest, pageSize);
@@ -877,11 +941,15 @@ function pageRecordFromScopedProjection(
     .map((node) => node.originLink)
     .filter((link): link is ConversationOriginLinkRecord => link !== undefined)
     .map((link) => ({ ...link }));
+  const visibleEntryIds = new Set(entries.map((entry) => entry.id));
 
   return {
     scope: request.scope,
     entries,
     originLinks,
+    workspaceScopeLinks: workspaceScopeLinks
+      .filter((link) => visibleEntryIds.has(link.conversationId))
+      .map((link) => ({ ...link })),
     pageInfo: {
       cursor: String(pageIndex),
       ...(pageIndex > 0 ? { previousCursor: String(pageIndex - 1) } : {}),
@@ -907,6 +975,26 @@ function deriveScopedProjection(
     .filter((link) => entryIds.has(link.conversationId))
     .map((link) => ({ ...link }));
   return { entries, originLinks };
+}
+
+function historyWorkspaceScopeLink(conversationId: string, workspaceScopeKey: string): ConversationHistoryWorkspaceScopeLinkRecord {
+  return {
+    id: `conversation-workspace-scope:${workspaceScopeKey}:${conversationId}`,
+    conversationId,
+    workspaceScopeKey,
+    role: 'owner'
+  };
+}
+
+function shouldPreferHistoryCandidate(
+  candidate: { entry: SidebarConversationHistoryEntry; workspaceScopeKey: string; preferred: boolean },
+  existing: { entry: SidebarConversationHistoryEntry; workspaceScopeKey: string; preferred: boolean }
+): boolean {
+  const candidateUpdatedAt = candidate.entry.updatedAt ?? 0;
+  const existingUpdatedAt = existing.entry.updatedAt ?? 0;
+  if (candidateUpdatedAt !== existingUpdatedAt) return candidateUpdatedAt > existingUpdatedAt;
+  if (candidate.preferred !== existing.preferred) return candidate.preferred;
+  return candidate.workspaceScopeKey.localeCompare(existing.workspaceScopeKey) < 0;
 }
 
 function entryMatchesScope(entry: SidebarConversationHistoryEntry, scope: ConversationHistoryScope): boolean {

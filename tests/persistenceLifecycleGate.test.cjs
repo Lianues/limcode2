@@ -68,6 +68,7 @@ const {
   workspaceRuntimeState
 } = require('../dist/extension/backend/application/sharedConfigurationState.js');
 const { stripConversationFromClientState } = require('../dist/extension/backend/utils/clientStateConversationCascade.js');
+const { conversationWorkspaceSkeletonSlice } = require('../dist/extension/backend/application/conversationWorkspaceSkeleton.js');
 const {
   ConversationTimelineRevisionConflictError,
   applyConversationTimelinePatch,
@@ -1300,6 +1301,63 @@ test('existing workspace configuration is normalized into the shared skeleton', 
 });
 
 
+
+test('foreign Conversation skeleton 只写回 owner scope，不进入当前 workspace patch', async () => {
+  const scopeA = 'a'.repeat(64);
+  const scopeB = 'b'.repeat(64);
+  const initial = createEmptyClientState();
+  initial.conversations.push(
+    { id: 'conversation-local', title: 'Local', visibility: 'visible' },
+    { id: 'conversation-foreign', title: 'Foreign old', visibility: 'visible' }
+  );
+  initial.agentConversationLinks.push(
+    { id: 'link-local', agentId: 'agent-main', conversationId: 'conversation-local', role: 'default' },
+    { id: 'link-foreign', agentId: 'agent-main', conversationId: 'conversation-foreign', role: 'default' }
+  );
+  const ownerScopes = new Map([
+    ['conversation-local', scopeA],
+    ['conversation-foreign', scopeB]
+  ]);
+  const world = new FakeWorld(initial);
+  const storage = makeStorage({
+    workspaceScopeKey: scopeA,
+    saveSharedConfigurationSkeleton: async (patch) => {
+      storage.calls.push({ kind: 'shared-skeleton', patch: JSON.parse(JSON.stringify(patch)) });
+    },
+    saveWorkspaceClientStateSkeleton: async (workspaceScopeKey, patch) => {
+      storage.calls.push({ kind: 'foreign-skeleton', workspaceScopeKey, patch: JSON.parse(JSON.stringify(patch)) });
+    }
+  });
+  const persistence = new ClientStatePersistence(world, storage, {
+    conversationWorkspaceScopes: () => ownerScopes
+  }, 5);
+  persistence.enable();
+  const localBase = stripConversationFromClientState(workspaceRuntimeState(initial), 'conversation-foreign');
+  persistence.rememberPersistedState(initial, {
+    workspaceState: localBase,
+    sharedConfigurationState: sharedConfigurationState(initial)
+  });
+  persistence.rememberForeignWorkspaceSkeletonPersisted(
+    scopeB,
+    conversationWorkspaceSkeletonSlice(initial, 'conversation-foreign')
+  );
+
+  const next = JSON.parse(JSON.stringify(initial));
+  next.conversations.find((conversation) => conversation.id === 'conversation-foreign').title = 'Foreign new';
+  world.setState(next);
+  await persistence.persistImmediately({ force: true, throwOnError: true });
+
+  const localCall = storage.calls.find((call) => call.kind === 'skeleton');
+  const foreignCall = storage.calls.find((call) => call.kind === 'foreign-skeleton');
+  assert.ok(localCall);
+  assert.ok(foreignCall);
+  assert.equal(foreignCall.workspaceScopeKey, scopeB);
+  assert.equal(localCall.patch.conversations?.upserts?.some((item) => item.record.id === 'conversation-foreign') ?? false, false);
+  assert.deepEqual(
+    foreignCall.patch.conversations.upserts.map((item) => [item.record.id, item.record.title]),
+    [['conversation-foreign', 'Foreign new']]
+  );
+});
 
 test('conversation deletion persists removal of shared conversation and run scope links', async () => {
   const conversationId = 'conversation-shared-scope-delete';

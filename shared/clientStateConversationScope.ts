@@ -1,7 +1,17 @@
 import { CLIENT_STATE_TABLE_KEYS } from './clientStateSchema';
 import type { ClientState, ClientStateTableKey } from './protocol';
 
-type ClientStateRecord = { id: string; [key: string]: unknown };
+export type ClientStateRecord = { id: string; [key: string]: unknown };
+
+export function clientStateRecordConversationIds(
+  state: ClientState,
+  tableKey: ClientStateTableKey,
+  record: ClientStateRecord
+): Set<string> {
+  const ids = new Set<string>();
+  addRecordConversationIds(ids, tableKey, record, new ConversationReferenceIndex(state));
+  return ids;
+}
 
 export function collectChangedClientStateConversationIds(prev: ClientState, next: ClientState, tableKeys: readonly ClientStateTableKey[] = CLIENT_STATE_TABLE_KEYS): Set<string> {
   const ids = new Set<string>();

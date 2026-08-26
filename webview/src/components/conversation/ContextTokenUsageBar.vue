@@ -6,6 +6,7 @@ import {
 } from '@shared/protocol';
 import { useClientStateStore } from '@webview/stores/useClientStateStore';
 import { useConversationTimelineStore } from '@webview/stores/useConversationTimelineStore';
+import { useConversationSettingsStore } from '@webview/stores/useConversationSettingsStore';
 import { useGlobalSettingsStore } from '@webview/stores/useGlobalSettingsStore';
 import HoverTooltipPanel from '@webview/components/ui/HoverTooltipPanel.vue';
 import {
@@ -41,6 +42,7 @@ interface TokenBarSegment {
 
 const clientState = useClientStateStore();
 const conversationTimeline = useConversationTimelineStore();
+const conversationSettings = useConversationSettingsStore();
 const globalSettings = useGlobalSettingsStore();
 const root = ref<HTMLElement | null>(null);
 const expanded = ref(false);
@@ -66,9 +68,10 @@ const hasUsage = computed(() => usageItems.value.length > 0);
 const refreshKey = computed(() => usageItems.value.map((item) => `${item.id}:${item.total}:${item.ratio}`).join('|'));
 const resolvedContextUsage = computed(() => resolveContextUsage({
   messages: conversationTimeline.currentMessages,
-  llmInvocations: clientState.llmInvocations,
-  messageLlmInvocationLinks: clientState.messageLlmInvocationLinks,
+  llmInvocations: conversationTimeline.currentTimeline.state.llmInvocations,
+  messageLlmInvocationLinks: conversationTimeline.currentTimeline.state.messageLlmInvocationLinks,
   providerConfigs: globalSettings.llmProviderConfigs.configs,
+  preferredProviderConfigId: preferredProviderConfigId(),
   compressionSettings: globalSettings.llmCompression,
   compressionConfigs: globalSettings.llmCompressionConfigs.configs
 }));
@@ -439,6 +442,16 @@ function currentAgentId(): string | undefined {
   if (selection) return selection.agentId;
   return clientState.agentConversationLinks.find((link) => link.conversationId === conversationId && link.role === 'default')?.agentId
     ?? clientState.agentConversationLinks.find((link) => link.conversationId === conversationId)?.agentId;
+}
+
+function preferredProviderConfigId(): string | undefined {
+  const conversationId = clientState.currentConversationId;
+  const conversationProviderId = conversationSettings.llm.conversationId === conversationId
+    ? conversationSettings.llm.activeProviderConfigId.trim()
+    : '';
+  return conversationProviderId
+    || globalSettings.llm.activeProviderConfigId.trim()
+    || globalSettings.activeLlmProviderConfig?.id;
 }
 
 function currentWorkflowId(): string | undefined {

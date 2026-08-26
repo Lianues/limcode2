@@ -17,11 +17,15 @@ const {
   ToolState
 } = require('../dist/extension/backend/world/modules/tools/components.js');
 const {
-  CompressionBlock
+  CompressionBlock,
+  CompressionContextVariant
 } = require('../dist/extension/backend/world/modules/compression/components.js');
 const {
   CompressionEventType
 } = require('../dist/extension/backend/world/modules/compression/events.js');
+const {
+  LlmEventType
+} = require('../dist/extension/backend/world/modules/llm/events.js');
 const {
   CompressionSystem
 } = require('../dist/extension/backend/world/modules/compression/systems/CompressionSystem.js');
@@ -176,6 +180,42 @@ test('普通模型响应超过 invocation 快照阈值后无需下一条用户�
   runAutoCompression(world);
   assert.equal(blocks(world).length, 1, '同一 invocation/边界不能重复创建压缩块');
   assert.ok(user > 0);
+});
+
+test('压缩完成后立即请求持久化 conversation，避免重启只恢复 running block', () => {
+  const world = new MapWorld();
+  const conversation = addConversation(world);
+  addMessage(world, conversation, { id: 'user-1', seq: 100_000, role: 'user', parts: [{ text: '问题' }] });
+  const model = addMessage(world, conversation, { id: 'model-1', seq: 200_000, role: 'model', model: 'gpt-test', parts: [{ text: '回答' }] });
+  addCompleteInvocation(world, model);
+
+  runAutoCompression(world);
+  const blockEntity = world.query(CompressionBlock)[0];
+  const block = world.get(blockEntity, CompressionBlock);
+  assert.ok(block);
+
+  const completedAt = 3;
+  const result = runCompressionSystem(world, [{
+    type: LlmEventType.CompactDone,
+    payload: {
+      requestId: `compact-${block.id}`,
+      blockId: block.id,
+      conversationId: 'conversation-1',
+      result: {
+        contents: [{ role: 'user', parts: [{ text: 'compacted context' }] }],
+        usageMetadata: { totalTokenCount: 1_000 }
+      },
+      completedAt
+    }
+  }]);
+
+  assert.equal(world.get(blockEntity, CompressionBlock).status, 'complete');
+  assert.equal(world.query(CompressionContextVariant).length, 1);
+  assert.deepEqual(result.effects, [{
+    kind: 'storage.conversation.persist',
+    conversationId: 'conversation-1',
+    reason: 'compression_complete'
+  }]);
 });
 
 test('会话完整上下文未加载时不使用局部消息创建压缩块', () => {

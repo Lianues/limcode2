@@ -290,6 +290,15 @@ export class BackendApplication {
     });
 
     registerApplicationEffectHandlers(this.effectHandlers);
+    this.effectHandlers.register('storage.conversation.persist', (effect) => {
+      void this.persistence.persistImmediately({
+        forceConversationId: effect.conversationId,
+        throwOnError: true
+      }).catch((error) => {
+        console.warn(`[LimCode] Failed to persist conversation after ${effect.reason}: ${effect.conversationId}`, error);
+        this.persistence.queuePersist({ delayMs: 0 });
+      });
+    });
     this.registerConversationContextEffectHandler();
     this.disposables.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
       this.syncWorkEnvironmentsFromWorkspaceFolders();

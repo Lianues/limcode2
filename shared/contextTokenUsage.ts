@@ -34,6 +34,8 @@ export interface ResolveContextUsageInput {
   llmInvocations: readonly LlmInvocationRecord[];
   messageLlmInvocationLinks: readonly MessageLlmInvocationLinkRecord[];
   providerConfigs: readonly LlmProviderConfigRecord[];
+  /** invocation 快照不可用时，用当前 conversation 已选渠道消除同名模型歧义。 */
+  preferredProviderConfigId?: string;
   compressionSettings: LlmCompressionSettingsRecord;
   compressionConfigs: readonly LlmCompressionConfigRecord[];
 }
@@ -76,7 +78,11 @@ export function resolveContextUsage(input: ResolveContextUsageInput): ContextUsa
     };
   }
 
-  const fallback = providerAndModelForMessage(latest.message, input.providerConfigs);
+  const fallback = providerAndModelForMessage(
+    latest.message,
+    input.providerConfigs,
+    input.preferredProviderConfigId
+  );
   if (!fallback) {
     return {
       message: latest.message,
@@ -160,16 +166,30 @@ function invocationForMessage(
 
 function providerAndModelForMessage(
   message: MessageRecord,
-  providers: readonly LlmProviderConfigRecord[]
+  providers: readonly LlmProviderConfigRecord[],
+  preferredProviderConfigId: string | undefined
 ): { provider: LlmProviderConfigRecord; modelId: string } | undefined {
   const label = message.model?.trim();
   if (!label) return undefined;
-  const matches = providers.flatMap((provider) => provider.models
-    .filter((model) => model.id.trim() === label || model.name.trim() === label)
+
+  const preferredProviderId = preferredProviderConfigId?.trim();
+  if (preferredProviderId) {
+    const preferredProvider = providers.find((provider) => provider.id === preferredProviderId);
+    const preferredMatches = preferredProvider ? matchingModels(preferredProvider, label) : [];
+    if (preferredProvider && preferredMatches.length === 1) {
+      return { provider: preferredProvider, modelId: preferredMatches[0].id.trim() };
+    }
+  }
+
+  const matches = providers.flatMap((provider) => matchingModels(provider, label)
     .map((model) => ({ provider, modelId: model.id.trim() }))
   );
   if (matches.length === 1) return matches[0];
   return undefined;
+}
+
+function matchingModels(provider: LlmProviderConfigRecord, label: string): LlmProviderConfigRecord['models'] {
+  return provider.models.filter((model) => model.id.trim() === label || model.name.trim() === label);
 }
 
 function compressionConfigForProvider(

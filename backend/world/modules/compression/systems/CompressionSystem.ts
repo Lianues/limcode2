@@ -56,7 +56,7 @@ export const CompressionSystem = defineSystem({
       ],
       emit: [CompressionEventType.Create]
     },
-    effects: { emit: ['llm.compact', 'llm.abort'] }
+    effects: { emit: ['llm.compact', 'llm.abort', 'storage.conversation.persist'] }
   },
   run(ctx) {
     const { world, cmd } = ctx;
@@ -432,6 +432,13 @@ function completeCompressionBlock(world: WorldReader, cmd: CommandSink, payload:
     ...(payload.result.rawResponse !== undefined ? { rawResponse: payload.result.rawResponse } : {}),
     createdAt: now,
     updatedAt: now
+  });
+  // 压缩结果是后续上下文组装的唯一替代数据，不能只依赖普通 debounce 持久化。
+  // 完成后立即请求 conversation 级完整落盘，避免重启只恢复到 running block 而丢失 variant。
+  cmd.effect({
+    kind: 'storage.conversation.persist',
+    conversationId: payload.conversationId,
+    reason: 'compression_complete'
   });
 
   debugAutoCompression('compression.complete.apply', {

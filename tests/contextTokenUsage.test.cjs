@@ -159,6 +159,30 @@ test('历史 invocation 不可用时按消息实际模型匹配配置，不套�
   assert.notEqual(result.compressionTrigger.thresholdTokens, 252_000);
 });
 
+test('历史 invocation 不可用且模型显示名跨渠道重复时，使用当前 conversation 渠道消除歧义', () => {
+  const input = baseInput();
+  input.messages = [message('model-duplicate-label', 2, 'gpt-5.6-sol-codex', 123_456)];
+  const duplicate = {
+    ...provider(),
+    id: 'provider-2',
+    name: '另一个同名模型渠道',
+    contextWindowTokens: 128_000,
+    modelConfigs: []
+  };
+  input.providerConfigs = [provider(), duplicate];
+
+  const preferred = resolveContextUsage(input);
+  assert.equal(preferred.settingsSource, 'message_model');
+  assert.equal(preferred.providerConfig.id, 'provider-1');
+  assert.equal(preferred.contextWindowTokens, 372_000);
+  assert.equal(preferred.compressionTrigger.thresholdTokens, 352_000);
+
+  delete input.preferredProviderConfigId;
+  const ambiguous = resolveContextUsage(input);
+  assert.equal(ambiguous.settingsSource, 'unavailable');
+  assert.equal(ambiguous.contextWindowTokens, undefined);
+});
+
 test('manual/disabled 压缩配置不显示为自动压缩阈值', () => {
   const input = baseInput();
   input.llmInvocations = [{

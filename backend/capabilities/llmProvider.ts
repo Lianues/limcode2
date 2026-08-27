@@ -2173,6 +2173,7 @@ function installGeminiSchemaCompatibility<T>(
   format.encodeRequest = (request, stream) => {
     const encoded = encodeRequest(request, stream);
     if (nativeGemini) {
+      sanitizeNativeGeminiToolSchemas(encoded);
       sanitizeNativeGeminiPrompt(encoded);
     } else {
       sanitizeOpenAICompatibleGeminiToolSchemas(encoded);
@@ -2189,6 +2190,17 @@ function sanitizeOpenAICompatibleGeminiToolSchemas(encodedRequest: unknown): voi
   for (const tool of encodedRequest.tools) {
     if (!isRecord(tool) || !isRecord(tool.function) || tool.function.parameters === undefined) continue;
     tool.function.parameters = sanitizeGeminiFunctionSchema(tool.function.parameters);
+  }
+}
+
+function sanitizeNativeGeminiToolSchemas(encodedRequest: unknown): void {
+  if (!isRecord(encodedRequest) || !Array.isArray(encodedRequest.tools)) return;
+  for (const tool of encodedRequest.tools) {
+    if (!isRecord(tool) || !Array.isArray(tool.functionDeclarations)) continue;
+    for (const declaration of tool.functionDeclarations) {
+      if (!isRecord(declaration) || declaration.parameters === undefined) continue;
+      declaration.parameters = sanitizeGeminiFunctionSchema(declaration.parameters);
+    }
   }
 }
 

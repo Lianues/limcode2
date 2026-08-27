@@ -2,7 +2,7 @@
 
 > 日期：2026-08-27
 >
-> 基线：`Lianues/limcode2@7e18fb2`
+> 基线：`Lianues/limcode2@594149c`
 >
 > 用途：在正式提交 PR 前，本地验证 Gemini 工具调用兼容性。
 
@@ -12,7 +12,7 @@
 
 - OpenAI-compatible Gemini 3：读取并回传 Google/Vertex 的 `thought_signature` / `thoughtSignature`。
 - 原生 Gemini：把同一批并行工具调用的连续 `functionResponse` 合并到同一个 user turn。
-- 原生 Gemini：递归移除不支持的工具 JSON Schema 字段，包括 `propertyNames` 和 `multipleOf`，同时保留合法属性名与 `required`。
+- Gemini（原生以及模型名明确为 Gemini 的 OpenAI-compatible 渠道）：递归移除不支持的工具 JSON Schema 字段，包括 `propertyNames` 和 `multipleOf`，同时保留合法属性名与 `required`。
 - 非 Gemini Provider 保持原编码路径。
 
 `limcode-test` PR #4 中属于新 reliable-kernel 架构的 fork/attachment 投影修改没有移植，因为 `limcode2` 不存在对应模块。
@@ -24,7 +24,7 @@
 1. **扩展身份相同**
    VSIX 内部扩展 ID 是 `your-publisher.limcode`，版本仍是 `0.0.1`。使用 `--force` 安装会替换同 ID 的现有 LimCode 代码，并继续读取同一份 VS Code 扩展状态。
 2. **测试包包含当前 main 的全部代码**
-   它基于 `Lianues/limcode2@7e18fb2`，不只是两个 Gemini 补丁。如果当前安装包比该提交旧，测试时也会同时带入 main 上已有的存储、工作区隔离和 UI 变化。
+   它基于 `Lianues/limcode2@594149c`，不只是两个 Gemini 补丁。如果当前安装包比该提交旧，测试时也会同时带入 main 上已有的存储、工作区隔离和 UI 变化。
 3. **对话运行数据按 workspace 隔离**
    当前 main 把运行数据放在活动数据根的 `.limcode-workspace-runtimes/scopes/<workspace-sha256>/` 下。打开另一个文件夹、另一个 `.code-workspace`，或以不同方式打开同一项目时，可能进入另一个 scope，表现为历史对话为空；这不一定表示文件已被删除。
 4. **活动数据根可能不是默认目录**
@@ -87,7 +87,8 @@ code `
 
 先用新对话，最后才用历史副本：
 
-1. **原生 Gemini schema**
+1. **Gemini schema**
+   - 分别验证原生 Gemini，以及模型 ID 含 `gemini-*` 的 OpenAI-compatible 渠道。
    - 启用包含复杂 schema 的完整工具目录。
    - 预期不再出现 `Unknown name "propertyNames"` 或 `multipleOf` 相关 400。
 2. **原生 Gemini 并行工具调用**
@@ -131,10 +132,10 @@ code `
 
 - `npm run compile`
 - `npm run typecheck:webview`
-- Gemini 定向测试：5/5
-- 全量 Node 测试：369 个用例，368 passed，1 skipped，0 failed
+- Gemini 定向测试：6/6
+- 全量 Node 测试：370 个用例，369 passed，1 skipped，0 failed
 - `git diff --check`
 
-自动化覆盖了 schema dry-run、原生 Gemini 并行响应 turn、Google/Vertex snake_case/camelCase 签名、流式/非流式响应、历史缺签名 sentinel，以及非 Gemini 隔离。
+自动化覆盖了原生与 OpenAI-compatible Gemini schema dry-run、空 prompt turn 清理、原生 Gemini 并行响应 turn、Google/Vertex snake_case/camelCase 签名、流式/非流式响应、历史缺签名 sentinel，以及非 Gemini 隔离。
 
 **尚未完成真实 Gemini API 实调**：本地没有使用你的 API Key 发请求。必须以隔离实例中的人工测试结果作为提交 PR 前的最后确认。

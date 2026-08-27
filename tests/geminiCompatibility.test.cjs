@@ -219,7 +219,7 @@ test('native Gemini merges split parallel function responses only at its provide
   assert.equal(claude.body.messages[2].content.length, 1);
 });
 
-test('native Gemini removes propertyNames and multipleOf without changing other providers', async () => {
+test('native and OpenAI-compatible Gemini remove propertyNames and multipleOf without changing other models', async () => {
   const request = chatRequest('gemini-schema');
   request.tools = [{
     name: 'integer_value',
@@ -259,9 +259,65 @@ test('native Gemini removes propertyNames and multipleOf without changing other 
   assert.equal(declaration.parameters.properties.options.properties.title.type, 'string');
   assert.deepEqual(declaration.parameters.properties.options.required, ['title']);
 
-  const openaiCompatible = await dryRunLlmProvider(request, {
+  const openAICompatibleGemini = await dryRunLlmProvider(request, {
+    settings: providerConfig({
+      model: 'google/gemini-2.5-pro',
+      models: []
+    })
+  });
+  assert.doesNotMatch(openAICompatibleGemini.bodyText, /propertyNames|multipleOf/i);
+  const compatibleParameters = openAICompatibleGemini.body.tools[0].function.parameters;
+  assert.equal(compatibleParameters.properties.options.properties.title.type, 'string');
+  assert.deepEqual(compatibleParameters.properties.options.required, ['title']);
+
+  const otherOpenAICompatible = await dryRunLlmProvider(request, {
     settings: providerConfig()
   });
-  assert.match(openaiCompatible.bodyText, /propertyNames/);
-  assert.match(openaiCompatible.bodyText, /multipleOf/);
+  assert.match(otherOpenAICompatible.bodyText, /propertyNames/);
+  assert.match(otherOpenAICompatible.bodyText, /multipleOf/);
+});
+
+test('Gemini drops empty prompt turns that contain no usable parts', async () => {
+  const request = chatRequest('gemini-empty-parts');
+  request.systemInstruction = { parts: [] };
+  request.contents = [
+    { role: 'model', parts: [] },
+    {
+      role: 'model',
+      parts: [{
+        providerContext: {
+          provider: 'openai',
+          format: 'openai-responses',
+          itemType: 'message'
+        }
+      }]
+    },
+    { role: 'user', parts: [{ text: '' }] },
+    { role: 'user', parts: [{ text: 'usable prompt' }] }
+  ];
+
+  const nativeGemini = await dryRunLlmProvider(request, {
+    settings: providerConfig({
+      provider: 'gemini',
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      model: 'gemini-2.5-pro'
+    })
+  });
+  assert.equal(nativeGemini.body.systemInstruction, undefined);
+  assert.equal(nativeGemini.body.contents.length, 1);
+  assert.equal(nativeGemini.body.contents[0].parts[0].text, 'usable prompt');
+
+  const openAICompatibleGemini = await dryRunLlmProvider(request, {
+    settings: providerConfig({
+      model: 'google/gemini-2.5-pro',
+      models: []
+    })
+  });
+  assert.equal(openAICompatibleGemini.body.messages.length, 1);
+  assert.equal(openAICompatibleGemini.body.messages[0].content, 'usable prompt');
+
+  const otherOpenAICompatible = await dryRunLlmProvider(request, {
+    settings: providerConfig()
+  });
+  assert.equal(otherOpenAICompatible.body.messages.length, 4);
 });

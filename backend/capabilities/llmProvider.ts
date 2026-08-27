@@ -2147,14 +2147,20 @@ function installGeminiProviderCompatibility<T>(
   modelId: string
 ): T {
   return installGeminiOpenAICompatibleThoughtSignatures(
-    installGeminiSchemaCompatibility(provider, providerKind),
+    installGeminiSchemaCompatibility(provider, providerKind, modelId),
     providerKind,
     modelId
   );
 }
 
-function installGeminiSchemaCompatibility<T>(provider: T, providerKind: LlmProviderKind): T {
-  if (providerKind !== 'gemini') return provider;
+function installGeminiSchemaCompatibility<T>(
+  provider: T,
+  providerKind: LlmProviderKind,
+  modelId: string
+): T {
+  const nativeGemini = providerKind === 'gemini';
+  const openAICompatibleGemini = providerKind === 'openai-compatible' && isGeminiModelId(modelId);
+  if (!nativeGemini && !openAICompatibleGemini) return provider;
   const runtimeProvider = provider as T & {
     format?: {
       encodeRequest?: (request: unknown, stream: boolean) => unknown;
@@ -2166,7 +2172,13 @@ function installGeminiSchemaCompatibility<T>(provider: T, providerKind: LlmProvi
   const encodeRequest = format.encodeRequest.bind(format);
   format.encodeRequest = (request, stream) => {
     const encoded = encodeRequest(request, stream);
-    restoreGeminiToolSchemas(encoded, request);
+    if (nativeGemini) {
+      restoreGeminiToolSchemas(encoded, request);
+      sanitizeNativeGeminiPrompt(encoded);
+    } else {
+      sanitizeOpenAICompatibleGeminiToolSchemas(encoded);
+      sanitizeOpenAICompatibleGeminiPrompt(encoded);
+    }
     return encoded;
   };
   format.__limcodeGeminiSchemaCompatibility = true;
@@ -2193,6 +2205,53 @@ function restoreGeminiToolSchemas(encodedRequest: unknown, sourceRequest: unknow
       declaration.parameters = sanitizeGeminiFunctionSchema(source.parameters);
     }
   }
+}
+
+function sanitizeOpenAICompatibleGeminiToolSchemas(encodedRequest: unknown): void {
+  if (!isRecord(encodedRequest) || !Array.isArray(encodedRequest.tools)) return;
+  for (const tool of encodedRequest.tools) {
+    if (!isRecord(tool) || !isRecord(tool.function) || tool.function.parameters === undefined) continue;
+    tool.function.parameters = sanitizeGeminiFunctionSchema(tool.function.parameters);
+  }
+}
+
+function sanitizeNativeGeminiPrompt(encodedRequest: unknown): void {
+  if (!isRecord(encodedRequest)) return;
+  if (Array.isArray(encodedRequest.contents)) {
+    encodedRequest.contents = encodedRequest.contents.flatMap((content) => {
+      if (!isRecord(content) || !Array.isArray(content.parts)) return [];
+      const parts = content.parts.filter(isGeminiWirePart);
+      return parts.length > 0 ? [{ ...content, parts }] : [];
+    });
+  }
+  if (isRecord(encodedRequest.systemInstruction) && Array.isArray(encodedRequest.systemInstruction.parts)) {
+    const parts = encodedRequest.systemInstruction.parts.filter(isGeminiWirePart);
+    if (parts.length > 0) encodedRequest.systemInstruction = { ...encodedRequest.systemInstruction, parts };
+    else delete encodedRequest.systemInstruction;
+  }
+}
+
+function isGeminiWirePart(part: unknown): part is Record<string, unknown> {
+  if (!isRecord(part)) return false;
+  if ('text' in part) {
+    return typeof part.text === 'string'
+      && (part.text.length > 0 || part.thought === true || !!normalizedSignatureString(part.thoughtSignature));
+  }
+  return ['inlineData', 'fileData', 'functionCall', 'functionResponse', 'executableCode', 'codeExecutionResult']
+    .some((key) => isRecord(part[key]));
+}
+
+function sanitizeOpenAICompatibleGeminiPrompt(encodedRequest: unknown): void {
+  if (!isRecord(encodedRequest) || !Array.isArray(encodedRequest.messages)) return;
+  encodedRequest.messages = encodedRequest.messages.filter((message) => {
+    if (!isRecord(message)) return false;
+    if (typeof message.content === 'string' && message.content.length > 0) return true;
+    if (Array.isArray(message.content) && message.content.length > 0) return true;
+    if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) return true;
+    if (typeof message.reasoning_content === 'string' && message.reasoning_content.length > 0) return true;
+    if (typeof message.reasoning_signature === 'string' && message.reasoning_signature.length > 0) return true;
+    return message.role === 'tool' && typeof message.tool_call_id === 'string';
+  });
 }
 
 const GEMINI_UNSUPPORTED_SCHEMA_KEYS = new Set([
@@ -2316,8 +2375,17 @@ interface GeminiOpenAIToolCallSignatures {
   byIndex: Map<number, string>;
 }
 
+function normalizedGeminiModelId(modelId: string): string | undefined {
+  return modelId.trim().toLowerCase().match(/gemini-[a-z0-9][a-z0-9._-]*/)?.[0];
+}
+
+function isGeminiModelId(modelId: string): boolean {
+  const normalized = normalizedGeminiModelId(modelId);
+  return !!normalized && /^gemini-(?:\d|pro|flash)/.test(normalized);
+}
+
 function isGemini3ModelId(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase().match(/gemini-[a-z0-9][a-z0-9._-]*/)?.[0];
+  const normalized = normalizedGeminiModelId(modelId);
   return !!normalized && /^gemini-3(?:\.\d+)?(?:-|$)/.test(normalized);
 }
 

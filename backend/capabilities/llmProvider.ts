@@ -348,7 +348,7 @@ async function runLlmAttempt(
   const preparedRequest = await prepareLlmStartRequestMultimodal(request, options);
   const forceStreaming = isOpenAIResponsesWebSocketMode(settings);
   if (settings.stream === false && !forceStreaming) {
-    const response = await provider.chat<UnifiedLLMResponse>(toUnifiedRequest(preparedRequest, settings.generationConfig), {
+    const response = await provider.chat<UnifiedLLMResponse>(toUnifiedRequest(preparedRequest, settings.generationConfig, settings.provider), {
       inputFormat: 'unified',
       outputFormat: 'unified',
       signal
@@ -371,7 +371,7 @@ async function runLlmAttempt(
   let activeThoughtBlock: ActiveThoughtBlock | undefined;
   let retryRecoveryPending = retryRecoveryNotice !== undefined;
   try {
-    for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(toUnifiedRequest(preparedRequest, settings.generationConfig), {
+    for await (const chunk of provider.chatStream<UnifiedLLMStreamChunk>(toUnifiedRequest(preparedRequest, settings.generationConfig, settings.provider), {
       inputFormat: 'unified',
       outputFormat: 'unified',
       signal
@@ -693,7 +693,7 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
   }
 
   const preparedRequest = await prepareLlmStartRequestMultimodal(request, options);
-  const result = await dryRun.call(provider, toUnifiedRequest(preparedRequest, runtimeSettings.generationConfig), {
+  const result = await dryRun.call(provider, toUnifiedRequest(preparedRequest, runtimeSettings.generationConfig, runtimeSettings.provider), {
     inputFormat: 'unified',
     outputFormat: 'unified',
     stream: runtimeSettings.stream !== false || isOpenAIResponsesWebSocketMode(runtimeSettings),
@@ -2033,13 +2033,43 @@ function attachmentPlaceholderPart(part: InlineDataPart, reason: string): Conten
   };
 }
 
-function toUnifiedRequest(request: LlmStartRequest, generationConfig?: LlmGenerationConfigRecord): UnifiedLLMRequest {
+function toUnifiedRequest(
+  request: LlmStartRequest,
+  generationConfig?: LlmGenerationConfigRecord,
+  providerKind?: LlmProviderKind
+): UnifiedLLMRequest {
+  const contents = providerKind === 'gemini'
+    ? mergeGeminiFunctionResponseTurns(request.contents)
+    : request.contents;
   return {
-    contents: request.contents.map(toUnifiedContent),
+    contents: contents.map(toUnifiedContent),
     ...(request.systemInstruction ? { systemInstruction: { parts: request.systemInstruction.parts.map(toUnifiedPart) } } : {}),
     ...(request.tools.length === 0 ? {} : { tools: [{ functionDeclarations: request.tools.map(toUnifiedFunctionDeclaration) }] }),
     ...(nonEmptyRecord(generationConfig) ? { generationConfig } : {})
   };
+}
+
+function mergeGeminiFunctionResponseTurns(contents: readonly MessageContent[]): MessageContent[] {
+  const merged: MessageContent[] = [];
+  for (let index = 0; index < contents.length; index += 1) {
+    const content = contents[index];
+    if (content.role !== 'user' || content.parts.length === 0 || !content.parts.every(isFunctionResponsePart)) {
+      merged.push(content);
+      continue;
+    }
+    const parts: ContentPart[] = [...content.parts];
+    while (
+      index + 1 < contents.length
+      && contents[index + 1].role === 'user'
+      && contents[index + 1].parts.length > 0
+      && contents[index + 1].parts.every(isFunctionResponsePart)
+    ) {
+      parts.push(...contents[index + 1].parts);
+      index += 1;
+    }
+    merged.push(parts.length === content.parts.length ? content : { ...content, parts });
+  }
+  return merged;
 }
 
 function toUnifiedContent(content: MessageContent): UnifiedContent {
@@ -2128,7 +2158,9 @@ function installGeminiSchemaCompatibility<T>(
   providerKind: LlmProviderKind,
   modelId: string
 ): T {
-  if (providerKind !== 'openai-compatible' || !isGeminiModelId(modelId)) return provider;
+  const nativeGemini = providerKind === 'gemini';
+  const openAICompatibleGemini = providerKind === 'openai-compatible' && isGeminiModelId(modelId);
+  if (!nativeGemini && !openAICompatibleGemini) return provider;
   const runtimeProvider = provider as T & {
     format?: {
       encodeRequest?: (request: unknown, stream: boolean) => unknown;
@@ -2140,8 +2172,12 @@ function installGeminiSchemaCompatibility<T>(
   const encodeRequest = format.encodeRequest.bind(format);
   format.encodeRequest = (request, stream) => {
     const encoded = encodeRequest(request, stream);
-    sanitizeOpenAICompatibleGeminiToolSchemas(encoded);
-    sanitizeOpenAICompatibleGeminiPrompt(encoded);
+    if (nativeGemini) {
+      sanitizeNativeGeminiPrompt(encoded);
+    } else {
+      sanitizeOpenAICompatibleGeminiToolSchemas(encoded);
+      sanitizeOpenAICompatibleGeminiPrompt(encoded);
+    }
     return encoded;
   };
   format.__limcodeGeminiSchemaCompatibility = true;
@@ -2154,6 +2190,32 @@ function sanitizeOpenAICompatibleGeminiToolSchemas(encodedRequest: unknown): voi
     if (!isRecord(tool) || !isRecord(tool.function) || tool.function.parameters === undefined) continue;
     tool.function.parameters = sanitizeGeminiFunctionSchema(tool.function.parameters);
   }
+}
+
+function sanitizeNativeGeminiPrompt(encodedRequest: unknown): void {
+  if (!isRecord(encodedRequest)) return;
+  if (Array.isArray(encodedRequest.contents)) {
+    encodedRequest.contents = encodedRequest.contents.flatMap((content) => {
+      if (!isRecord(content) || !Array.isArray(content.parts)) return [];
+      const parts = content.parts.filter(isGeminiWirePart);
+      return parts.length > 0 ? [{ ...content, parts }] : [];
+    });
+  }
+  if (isRecord(encodedRequest.systemInstruction) && Array.isArray(encodedRequest.systemInstruction.parts)) {
+    const parts = encodedRequest.systemInstruction.parts.filter(isGeminiWirePart);
+    if (parts.length > 0) encodedRequest.systemInstruction = { ...encodedRequest.systemInstruction, parts };
+    else delete encodedRequest.systemInstruction;
+  }
+}
+
+function isGeminiWirePart(part: unknown): part is Record<string, unknown> {
+  if (!isRecord(part)) return false;
+  if ('text' in part) {
+    return typeof part.text === 'string'
+      && (part.text.length > 0 || part.thought === true || !!normalizedSignatureString(part.thoughtSignature));
+  }
+  return ['inlineData', 'fileData', 'functionCall', 'functionResponse', 'executableCode', 'codeExecutionResult']
+    .some((key) => isRecord(part[key]));
 }
 
 function sanitizeOpenAICompatibleGeminiPrompt(encodedRequest: unknown): void {

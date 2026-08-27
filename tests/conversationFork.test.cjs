@@ -28,6 +28,7 @@ const {
 const {
   ToolCall,
   ToolCallEvent,
+  ToolResultConsumed,
   ToolState
 } = require('../dist/extension/backend/world/modules/tools/components.js');
 const {
@@ -279,6 +280,7 @@ test('fork 对话只复制目标楼层及之前的消息，并创建独立关系
   assert.equal(targetToolCall.functionCallId, 'provider-call-1');
   assert.deepEqual(targetToolState.result, { content: 'hello' });
   assert.equal(targetToolState.status, 'success');
+  assert.equal(world.has(targetToolCallEntity, ToolResultConsumed), true);
   const targetEvents = world.query(ToolCallEvent, PartOf)
     .filter((entity) => world.get(entity, PartOf).parent === targetToolCallEntity)
     .map((entity) => world.get(entity, ToolCallEvent));

@@ -261,7 +261,7 @@ export async function startLlmProvider(
     const headers = mergeHeaders(await resolveMaybe(options.headers), settings.headers);
     const requestBody = requestBodyWithOpenAIPromptCacheKey(settings, request.conversationId);
     const webSocketConfig = openAIResponsesWebSocketConfigEntry(settings, request.conversationId);
-    const provider = unified.createLLMFromConfig({
+    const provider = installGeminiProviderCompatibility(unified.createLLMFromConfig({
       provider: settings.provider,
       model: settings.model,
       apiKey: settings.apiKey,
@@ -272,7 +272,7 @@ export async function startLlmProvider(
       ...unifiedPromptCacheConfigEntry(settings, requestBody),
       ...webSocketConfig,
       ...(proxy ? { proxy, fetch: proxyFetch } : {})
-    }, registry.llmProviders);
+    }, registry.llmProviders), settings.provider, settings.model);
 
     const retryEnabled = settings.retryOnError !== false;
     const maxRetries = normalizeRetryMaxAttempts(settings.retryMaxAttempts) ?? DEFAULT_LLM_RETRY_MAX_ATTEMPTS;
@@ -674,7 +674,7 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
   const proxyFetch = proxy ? createProxyFetch(proxy) : undefined;
   const headers = mergeHeaders(await resolveMaybe(options.headers), runtimeSettings.headers);
   const requestBody = requestBodyWithOpenAIPromptCacheKey(runtimeSettings, request.conversationId);
-  const provider = unified.createLLMFromConfig({
+  const provider = installGeminiProviderCompatibility(unified.createLLMFromConfig({
     provider: runtimeSettings.provider,
     model: runtimeSettings.model,
     apiKey: runtimeSettings.apiKey,
@@ -685,7 +685,7 @@ export async function dryRunLlmProvider(request: LlmStartRequest, options: LlmPr
     ...unifiedPromptCacheConfigEntry(runtimeSettings, requestBody),
     ...openAIResponsesWebSocketConfigEntry(runtimeSettings, request.conversationId),
     ...(proxy ? { proxy, fetch: proxyFetch } : {})
-  }, registry.llmProviders);
+  }, registry.llmProviders), runtimeSettings.provider, runtimeSettings.model);
 
   const dryRun = (provider as unknown as Partial<UnifiedDryRunCapable>).dryRun;
   if (typeof dryRun !== 'function') {
@@ -1328,7 +1328,7 @@ async function resolveSummaryProvider(
   const proxy = normalizeOptionalString(await resolveMaybe(options.proxy));
   const proxyFetch = proxy ? createProxyFetch(proxy) : undefined;
   const headers = mergeHeaders(await resolveMaybe(options.headers), settings.headers);
-  const provider = unified.createLLMFromConfig({
+  const provider = installGeminiProviderCompatibility(unified.createLLMFromConfig({
     provider: settings.provider,
     model: settings.model,
     apiKey: settings.apiKey,
@@ -1338,7 +1338,7 @@ async function resolveSummaryProvider(
     ...(settings.requestBody ? { requestBody: settings.requestBody } : {}),
     ...unifiedPromptCacheConfigEntry(settings),
     ...(proxy ? { proxy, fetch: proxyFetch } : {})
-  }, registry.llmProviders);
+  }, registry.llmProviders), settings.provider, settings.model);
   return { provider, settings, stream: settings.stream !== false };
 }
 
@@ -2109,6 +2109,317 @@ function toUnifiedFunctionDeclaration(tool: ToolSchema): UnifiedFunctionDeclarat
     description: tool.description,
     parameters
   };
+}
+
+function installGeminiProviderCompatibility<T>(
+  provider: T,
+  providerKind: LlmProviderKind,
+  modelId: string
+): T {
+  return installGeminiOpenAICompatibleThoughtSignatures(
+    installGeminiSchemaCompatibility(provider, providerKind, modelId),
+    providerKind,
+    modelId
+  );
+}
+
+function installGeminiSchemaCompatibility<T>(
+  provider: T,
+  providerKind: LlmProviderKind,
+  modelId: string
+): T {
+  if (providerKind !== 'openai-compatible' || !isGeminiModelId(modelId)) return provider;
+  const runtimeProvider = provider as T & {
+    format?: {
+      encodeRequest?: (request: unknown, stream: boolean) => unknown;
+      __limcodeGeminiSchemaCompatibility?: true;
+    };
+  };
+  const format = runtimeProvider.format;
+  if (!format || typeof format.encodeRequest !== 'function' || format.__limcodeGeminiSchemaCompatibility) return provider;
+  const encodeRequest = format.encodeRequest.bind(format);
+  format.encodeRequest = (request, stream) => {
+    const encoded = encodeRequest(request, stream);
+    sanitizeOpenAICompatibleGeminiToolSchemas(encoded);
+    sanitizeOpenAICompatibleGeminiPrompt(encoded);
+    return encoded;
+  };
+  format.__limcodeGeminiSchemaCompatibility = true;
+  return provider;
+}
+
+function sanitizeOpenAICompatibleGeminiToolSchemas(encodedRequest: unknown): void {
+  if (!isRecord(encodedRequest) || !Array.isArray(encodedRequest.tools)) return;
+  for (const tool of encodedRequest.tools) {
+    if (!isRecord(tool) || !isRecord(tool.function) || tool.function.parameters === undefined) continue;
+    tool.function.parameters = sanitizeGeminiFunctionSchema(tool.function.parameters);
+  }
+}
+
+function sanitizeOpenAICompatibleGeminiPrompt(encodedRequest: unknown): void {
+  if (!isRecord(encodedRequest) || !Array.isArray(encodedRequest.messages)) return;
+  encodedRequest.messages = encodedRequest.messages.filter((message) => {
+    if (!isRecord(message)) return false;
+    if (typeof message.content === 'string' && message.content.length > 0) return true;
+    if (Array.isArray(message.content) && message.content.length > 0) return true;
+    if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) return true;
+    if (typeof message.reasoning_content === 'string' && message.reasoning_content.length > 0) return true;
+    if (typeof message.reasoning_signature === 'string' && message.reasoning_signature.length > 0) return true;
+    return message.role === 'tool' && typeof message.tool_call_id === 'string';
+  });
+}
+
+const GEMINI_UNSUPPORTED_SCHEMA_KEYS = new Set([
+  'title',
+  'default',
+  'const',
+  '$defs',
+  'definitions',
+  '$schema',
+  'not',
+  'if',
+  'then',
+  'else',
+  'prefixItems',
+  'additionalProperties',
+  'propertyNames',
+  'multipleOf'
+]);
+
+function sanitizeGeminiFunctionSchema(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizeGeminiFunctionSchema);
+  if (!isRecord(value)) return value;
+
+  const result: Record<string, unknown> = {};
+  let stringifiedEnum = false;
+  for (const [key, child] of Object.entries(value)) {
+    if (GEMINI_UNSUPPORTED_SCHEMA_KEYS.has(key)) continue;
+    if (key === 'properties' && isRecord(child)) {
+      result.properties = Object.fromEntries(
+        Object.entries(child).map(([propertyName, propertySchema]) => [
+          propertyName,
+          sanitizeGeminiFunctionSchema(propertySchema)
+        ])
+      );
+      continue;
+    }
+    if ((key === 'anyOf' || key === 'oneOf' || key === 'allOf') && Array.isArray(child)) {
+      const otherKeys = Object.keys(value).filter((candidate) =>
+        candidate !== key && !GEMINI_UNSUPPORTED_SCHEMA_KEYS.has(candidate)
+      );
+      if (otherKeys.length === 0 && child.length > 0) {
+        const first = sanitizeGeminiFunctionSchema(child[0]);
+        if (isRecord(first)) Object.assign(result, first);
+      }
+      continue;
+    }
+    if (key === 'enum' && Array.isArray(child)) {
+      result.enum = child.map((item) => String(item));
+      stringifiedEnum = true;
+      continue;
+    }
+    result[key] = sanitizeGeminiFunctionSchema(child);
+  }
+
+  if (stringifiedEnum && (result.type === 'integer' || result.type === 'number')) result.type = 'string';
+  if (Array.isArray(result.required) && isRecord(result.properties)) {
+    const required = result.required.filter((propertyName): propertyName is string =>
+      typeof propertyName === 'string' && Object.prototype.hasOwnProperty.call(result.properties, propertyName)
+    );
+    if (required.length > 0) result.required = required;
+    else delete result.required;
+  }
+  return result;
+}
+
+const GEMINI_THOUGHT_SIGNATURE_SKIP_VALIDATOR = 'skip_thought_signature_validator';
+
+export function installGeminiOpenAICompatibleThoughtSignatures<T>(
+  provider: T,
+  providerKind: LlmProviderKind,
+  modelId: string
+): T {
+  if (providerKind !== 'openai-compatible' || !isGemini3ModelId(modelId)) return provider;
+  const runtimeProvider = provider as T & {
+    format?: {
+      encodeRequest?: (request: unknown, stream: boolean) => unknown;
+      decodeResponse?: (raw: unknown) => unknown;
+      decodeStreamChunk?: (raw: unknown, state: unknown) => unknown;
+      __limcodeGeminiOpenAIThoughtSignatures?: true;
+    };
+  };
+  const format = runtimeProvider.format;
+  if (!format || format.__limcodeGeminiOpenAIThoughtSignatures) return provider;
+
+  if (typeof format.encodeRequest === 'function') {
+    const encodeRequest = format.encodeRequest.bind(format);
+    format.encodeRequest = (request, stream) => {
+      const encoded = encodeRequest(request, stream);
+      attachGeminiOpenAIThoughtSignaturesToRequest(encoded, request);
+      return encoded;
+    };
+  }
+  if (typeof format.decodeResponse === 'function') {
+    const decodeResponse = format.decodeResponse.bind(format);
+    format.decodeResponse = (raw) => {
+      const signatures = readGeminiOpenAIToolCallSignatures(raw, false);
+      const decoded = decodeResponse(raw);
+      attachGeminiSignaturesToUnifiedCalls(decoded, signatures);
+      return decoded;
+    };
+  }
+  if (typeof format.decodeStreamChunk === 'function') {
+    const decodeStreamChunk = format.decodeStreamChunk.bind(format);
+    const streamSignatures = new WeakMap<object, GeminiOpenAIToolCallSignatures>();
+    format.decodeStreamChunk = (raw, state) => {
+      const stateKey = isRecord(state) ? state : format;
+      const signatures = streamSignatures.get(stateKey) ?? emptyGeminiOpenAIToolCallSignatures();
+      mergeGeminiOpenAIToolCallSignatures(signatures, readGeminiOpenAIToolCallSignatures(raw, true));
+      streamSignatures.set(stateKey, signatures);
+      const decoded = decodeStreamChunk(raw, state);
+      attachGeminiSignaturesToUnifiedCalls(decoded, signatures);
+      return decoded;
+    };
+  }
+  format.__limcodeGeminiOpenAIThoughtSignatures = true;
+  return provider;
+}
+
+interface GeminiOpenAIToolCallSignatures {
+  byId: Map<string, string>;
+  byIndex: Map<number, string>;
+}
+
+function normalizedGeminiModelId(modelId: string): string | undefined {
+  return modelId.trim().toLowerCase().match(/gemini-[a-z0-9][a-z0-9._-]*/)?.[0];
+}
+
+function isGeminiModelId(modelId: string): boolean {
+  const normalized = normalizedGeminiModelId(modelId);
+  return !!normalized && /^gemini-(?:\d|pro|flash)/.test(normalized);
+}
+
+function isGemini3ModelId(modelId: string): boolean {
+  const normalized = normalizedGeminiModelId(modelId);
+  return !!normalized && /^gemini-3(?:\.\d+)?(?:-|$)/.test(normalized);
+}
+
+function attachGeminiOpenAIThoughtSignaturesToRequest(encoded: unknown, source: unknown): void {
+  if (!isRecord(encoded) || !isRecord(source)) return;
+  const messages = Array.isArray(encoded.messages) ? encoded.messages.filter(isRecord) : [];
+  const encodedCallGroups = messages.flatMap((message) =>
+    message.role === 'assistant' && Array.isArray(message.tool_calls)
+      ? [message.tool_calls.filter(isRecord)]
+      : []);
+  const sourceContents = Array.isArray(source.contents) ? source.contents.filter(isRecord) : [];
+  const sourceCallGroups = sourceContents.flatMap((content) => {
+    if (content.role !== 'model' || !Array.isArray(content.parts)) return [];
+    const calls = content.parts.filter((part) => isRecord(part) && isRecord(part.functionCall));
+    return calls.length > 0 ? [calls] : [];
+  });
+
+  for (let groupIndex = 0; groupIndex < Math.min(encodedCallGroups.length, sourceCallGroups.length); groupIndex += 1) {
+    const encodedCalls = encodedCallGroups[groupIndex];
+    const sourceCalls = sourceCallGroups[groupIndex];
+    const sourceSignatures = sourceCalls.map(geminiSignatureFromUnifiedPart);
+    const transferredGroup = sourceSignatures.every((signature) => !signature);
+    for (let callIndex = 0; callIndex < Math.min(encodedCalls.length, sourceCalls.length); callIndex += 1) {
+      const signature = sourceSignatures[callIndex]
+        ?? (transferredGroup ? GEMINI_THOUGHT_SIGNATURE_SKIP_VALIDATOR : undefined);
+      if (!signature) continue;
+      const toolCall = encodedCalls[callIndex];
+      const extraContent = isRecord(toolCall.extra_content) ? toolCall.extra_content : {};
+      const google = isRecord(extraContent.google) ? extraContent.google : {};
+      const attachedSignature = normalizedSignatureString(google.thought_signature)
+        ?? normalizedSignatureString(google.thoughtSignature)
+        ?? signature;
+      toolCall.extra_content = {
+        ...extraContent,
+        google: {
+          ...google,
+          thought_signature: attachedSignature,
+          thoughtSignature: attachedSignature
+        }
+      };
+    }
+  }
+}
+
+function readGeminiOpenAIToolCallSignatures(raw: unknown, stream: boolean): GeminiOpenAIToolCallSignatures {
+  const signatures = emptyGeminiOpenAIToolCallSignatures();
+  if (!isRecord(raw) || !Array.isArray(raw.choices)) return signatures;
+  const choice = raw.choices.find(isRecord);
+  if (!choice) return signatures;
+  const rawMessage = choice[stream ? 'delta' : 'message'];
+  if (!isRecord(rawMessage) || !Array.isArray(rawMessage.tool_calls)) return signatures;
+  rawMessage.tool_calls
+    .filter((toolCall): toolCall is Record<string, unknown> => isRecord(toolCall))
+    .forEach((toolCall, ordinal) => {
+      const signature = geminiOpenAIToolCallSignature(toolCall);
+      if (!signature) return;
+      const callId = normalizedSignatureString(toolCall.id);
+      const index = typeof toolCall.index === 'number' && Number.isSafeInteger(toolCall.index)
+        ? toolCall.index
+        : ordinal;
+      if (callId) signatures.byId.set(callId, signature);
+      signatures.byIndex.set(index, signature);
+    });
+  return signatures;
+}
+
+function geminiOpenAIToolCallSignature(toolCall: Record<string, unknown>): string | undefined {
+  const extraContent = isRecord(toolCall.extra_content) ? toolCall.extra_content : undefined;
+  const google = isRecord(extraContent?.google) ? extraContent.google : undefined;
+  const vertex = isRecord(extraContent?.vertex) ? extraContent.vertex : undefined;
+  return normalizedSignatureString(google?.thought_signature)
+    ?? normalizedSignatureString(google?.thoughtSignature)
+    ?? normalizedSignatureString(vertex?.thought_signature)
+    ?? normalizedSignatureString(vertex?.thoughtSignature);
+}
+
+function attachGeminiSignaturesToUnifiedCalls(
+  decoded: unknown,
+  signatures: GeminiOpenAIToolCallSignatures
+): void {
+  if (!isRecord(decoded)) return;
+  const candidates = [
+    ...(Array.isArray(decoded.functionCalls) ? decoded.functionCalls : []),
+    ...(Array.isArray(decoded.partsDelta) ? decoded.partsDelta : []),
+    ...(isRecord(decoded.content) && Array.isArray(decoded.content.parts) ? decoded.content.parts : [])
+  ];
+  const seen = new Set<object>();
+  let ordinal = 0;
+  for (const candidate of candidates) {
+    if (!isRecord(candidate) || !isRecord(candidate.functionCall) || seen.has(candidate)) continue;
+    seen.add(candidate);
+    const callId = normalizedSignatureString(candidate.functionCall.callId);
+    const signature = (callId ? signatures.byId.get(callId) : undefined) ?? signatures.byIndex.get(ordinal);
+    ordinal += 1;
+    if (!signature) continue;
+    const existing = isRecord(candidate.thoughtSignatures) ? candidate.thoughtSignatures : {};
+    candidate.thoughtSignatures = { ...existing, gemini: signature };
+  }
+}
+
+function geminiSignatureFromUnifiedPart(part: Record<string, unknown>): string | undefined {
+  const signatures = isRecord(part.thoughtSignatures) ? part.thoughtSignatures : undefined;
+  const mapped = normalizedSignatureString(signatures?.gemini);
+  if (mapped) return mapped;
+  const portable = normalizedSignatureString(part.thoughtSignature);
+  if (!portable) return undefined;
+  return portable.startsWith('gemini:') ? portable.slice('gemini:'.length) : portable;
+}
+
+function emptyGeminiOpenAIToolCallSignatures(): GeminiOpenAIToolCallSignatures {
+  return { byId: new Map(), byIndex: new Map() };
+}
+
+function mergeGeminiOpenAIToolCallSignatures(
+  target: GeminiOpenAIToolCallSignatures,
+  source: GeminiOpenAIToolCallSignatures
+): void {
+  for (const [id, signature] of source.byId) target.byId.set(id, signature);
+  for (const [index, signature] of source.byIndex) target.byIndex.set(index, signature);
 }
 
 function emitUnifiedChunk(requestId: string, chunk: UnifiedLLMStreamChunk, emit: Emit): void {

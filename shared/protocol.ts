@@ -658,7 +658,7 @@ export function createDefaultLlmCompressionConfig(name = '默认压缩方法'): 
   return {
     id: `llm-compression-config-${createMessageId()}`,
     name,
-    kind: 'segmented_summary',
+    kind: 'llm_summary',
     trigger: {
       mode: 'token_threshold',
       thresholdUnit: 'percent',

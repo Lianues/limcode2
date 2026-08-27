@@ -66,7 +66,7 @@ const providerConfigOptions = computed<SettingsDropdownOption[]>(() => [
 ]);
 
 const activeMethodKind = computed<SelectableCompressionMethodKind>(() => {
-  const kind = props.config?.kind ?? 'segmented_summary';
+  const kind = props.config?.kind ?? 'llm_summary';
   if (kind === 'disabled' || kind === 'manual_summary') return 'llm_summary';
   return kind;
 });
